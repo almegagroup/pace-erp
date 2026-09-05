@@ -181,6 +181,7 @@ import PgiInvoiceGroupsCreatePage from "../pages/dashboard/procurement/sales/Pgi
 import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx";
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
+import DispatchReportPage from "../pages/dashboard/procurement/sales/DispatchReportPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
 import PIDocumentCreatePage from "../pages/dashboard/procurement/inventory/PIDocumentCreatePage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
@@ -219,6 +220,7 @@ import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecor
 import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
 import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatchReversalPage.jsx";
 import ConversionCostPage from "../pages/dashboard/production/ConversionCostPage.jsx";
+import AdmixCostingPage from "../pages/dashboard/production/AdmixCostingPage.jsx";
 import MtsSkuMonthlyRatePage from "../pages/dashboard/production/MtsSkuMonthlyRatePage.jsx";
 import SlocCostingGroupPage from "../pages/dashboard/production/SlocCostingGroupPage.jsx";
 import OldProcessPoPage from "../pages/dashboard/production/OldProcessPoPage.jsx";
@@ -823,6 +825,10 @@ export default function AppRouter() {
                     element={<SalesInvoiceDetailPage />}
                   />
                   <Route
+                    path="procurement/sales/dispatch-report"
+                    element={<DispatchReportPage />}
+                  />
+                  <Route
                     path="procurement/opening-stock"
                     element={<OpeningStockListPage />}
                   />
@@ -916,6 +922,7 @@ export default function AppRouter() {
                   <Route path="production/rm-pm-sale-report" element={<RmPmSaleReportPage />} />
                   <Route path="production/excess-consumption-report" element={<ExcessConsumptionReportPage />} />
                   <Route path="production/conversion-cost" element={<ConversionCostPage />} />
+                  <Route path="production/admix-costing" element={<AdmixCostingPage />} />
                   <Route path="production/mts-sku-monthly-rate" element={<MtsSkuMonthlyRatePage />} />
                   <Route path="production/sloc-costing-group" element={<SlocCostingGroupPage />} />
                   <Route path="production/sloc-costing-group/report" element={<SlocCostingGroupPage />} />

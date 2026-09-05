@@ -493,6 +493,10 @@ function picksFromExistingDo(detail) {
     batch_number: line.batch_number ?? null,
     expiry_date: line.expiry_date ?? null,
     packing_order_id: line.packing_order_id ?? null,
+    // R-01 real gap fixed (2026-09-06) -- hydrateDeliveryOrderUnified now
+    // resolves this off the line's own packing_order_id; never fall back to
+    // the raw UUID if it's somehow missing (see the grid render below).
+    packing_order_number: line.packing_order_number ?? null,
     // §136 (2026-09-04) -- re-editing an existing urgent-sourced line keeps
     // its already-saved Yes/No decision instead of forcing it blank again.
     is_urgent: Boolean(line.is_urgent),
@@ -805,7 +809,7 @@ export default function DO01CreatePage() {
                 { key: "bill_to", label: "Bill-To", width: "260px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__billTo} /> },
                 { key: "ship_to", label: "Ship-To", width: "280px", wrap: true, className: "whitespace-normal leading-4", render: (row) => <AddressCell value={row.__shipTo} /> },
                 { key: "material_display", label: "Material", width: "155px", wrap: true, className: "whitespace-normal leading-4", render: (row) => row.material_display || "—" },
-                { key: "packing_order", label: "Packing PO", width: "125px", render: (row) => row.packing_order_number || row.packing_order_id || "-" },
+                { key: "packing_order", label: "Packing PO", width: "125px", render: (row) => row.packing_order_number || "—" },
                 // §136 (2026-09-04) -- mandatory whenever this pick's Packing PO
                 // traces back to an Urgent-priority Process PO; PGI hard-blocks
                 // a same-day Tally-date mismatch unless this is Yes.
@@ -831,7 +835,7 @@ export default function DO01CreatePage() {
                 { key: "base_volume", label: "Base Volume", width: "100px", align: "right", render: (row) => formatFixed(row.base_qty) },
                 { key: "truck_packs", label: "Truck Packs", width: "105px", render: (row) => <TruckPacksInput row={row} onChange={(qty) => updatePick(row.__key, { qty })} /> },
                 { key: "qty", label: "Truck Base Qty", width: "125px", render: (row) => <TruckBaseQtyInput row={row} onChange={(qty) => updatePick(row.__key, { qty })} /> },
-                { key: "sloc", label: "Storage Location", width: "210px", render: (row) => <TruckItemLocation companyId={companyId} materialId={row.material_id} value={row.storage_location_id || row.__storageLocationId || ""} onChange={(storageLocationId) => updatePick(row.__key, { storage_location_id: storageLocationId })} /> },
+                { key: "sloc", label: "Storage Location", width: "210px", render: (row) => <TruckItemLocation companyId={companyId} materialId={row.material_id} excludeDcId={editDcId} value={row.storage_location_id || row.__storageLocationId || ""} onChange={(storageLocationId) => updatePick(row.__key, { storage_location_id: storageLocationId })} /> },
                 { key: "remove", label: "", width: "80px", render: (row) => <button type="button" onClick={() => removePick(row.__key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button> },
               ]} rows={visiblePicks} rowKey={(row) => row.__key} emptyMessage="Choose items from a selected SO or STO." />
             </ErpSectionCard>
@@ -859,10 +863,10 @@ export default function DO01CreatePage() {
   );
 }
 
-function TruckItemLocation({ companyId, materialId, value, onChange }) {
+function TruckItemLocation({ companyId, materialId, excludeDcId, value, onChange }) {
   const query = useQuery({
-    queryKey: ["procurement", "do01-storage-options", companyId, materialId],
-    queryFn: () => listDoStorageOptions({ company_id: companyId, material_id: materialId }),
+    queryKey: ["procurement", "do01-storage-options", companyId, materialId, excludeDcId],
+    queryFn: () => listDoStorageOptions({ company_id: companyId, material_id: materialId, exclude_dc_id: excludeDcId || undefined }),
     enabled: Boolean(companyId && materialId),
   });
   const options = Array.isArray(query.data?.items) ? query.data.items : [];

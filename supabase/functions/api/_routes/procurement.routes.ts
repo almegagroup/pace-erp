@@ -97,6 +97,7 @@ import {
   searchStockLedgerPackingPoNumbersHandler,
   getStockValuationHandler,
 } from "../_core/procurement/stock_reports.handlers.ts";
+import { getDispatchReportHandler } from "../_core/procurement/dispatch_report.handlers.ts";
 import {
   approvePTOHandler,
   cancelPTOHandler,
@@ -627,6 +628,8 @@ export async function dispatchProcurementRoutes(
       return await searchCurrentStockPackingPoNumbersHandler(req, ctx);
     case "GET:/api/procurement/current-stock":
       return await getCurrentStockHandler(req, ctx);
+    case "GET:/api/procurement/dispatch-report":
+      return await getDispatchReportHandler(req, ctx);
     case "GET:/api/procurement/stock-history":
       return await getStockHistoryHandler(req, ctx);
     case "GET:/api/procurement/stock-valuation":

@@ -268,3 +268,9 @@ export const getPartialReversalDetail = (p) => fetchProd("GET", "/api/production
 export const createPartialBatchReversal = (body) => fetchProd("POST", "/api/production/partial-reversals", body);
 export const listPartialBatchReversals = (p) => fetchProd("GET", "/api/production/partial-reversals", undefined, p);
 export const getPartialBatchReversal = (id) => fetchProd("GET", `/api/production/partial-reversals/${id}`);
+
+// ── AC07 Admixture Costing (read-only report) ───────────────────────────────
+export const listAc07Skus = (p) => fetchProd("GET", "/api/production/ac07/skus", undefined, p);
+export const listAc07Strokes = (p) => fetchProd("GET", "/api/production/ac07/strokes", undefined, p);
+export const listAc07Months = (p) => fetchProd("GET", "/api/production/ac07/months", undefined, p);
+export const getAc07Costing = (p) => fetchProd("GET", "/api/production/ac07/costing", undefined, p);

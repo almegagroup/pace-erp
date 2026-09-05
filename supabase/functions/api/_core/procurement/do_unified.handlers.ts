@@ -641,6 +641,11 @@ export async function listDoStorageOptionsHandler(req: Request, ctx: Procurement
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const materialId = toTrimmedString(url.searchParams.get("material_id"));
+    // Edit DO real gap fixed (2026-09-06) -- same self-reservation exclusion
+    // as prepareAndValidateDoLines's getAvailableQty call, so an unchanged
+    // line's own already-reserved qty doesn't make its current storage
+    // location silently disappear from this dropdown.
+    const excludeDcId = toTrimmedString(url.searchParams.get("exclude_dc_id")) || undefined;
     if (!companyId || !materialId) {
       return doErrorResponse(req, ctx, "DO_LOCATION_FILTERS_REQUIRED", 400, "company_id and material_id are required.");
     }
@@ -672,7 +677,7 @@ export async function listDoStorageOptionsHandler(req: Request, ctx: Procurement
       locationIds.length
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
         : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      Promise.all(locationIds.map(async (locationId) => [locationId, await getAvailableQty(companyId, locationId, materialId)] as const)),
+      Promise.all(locationIds.map(async (locationId) => [locationId, await getAvailableQty(companyId, locationId, materialId, excludeDcId)] as const)),
     ]);
     if (locationError) return doErrorResponse(req, ctx, "DO_LOCATION_LOOKUP_FAILED", 500, "Unable to resolve storage location names.");
     const locationMap = new Map(((locations ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
@@ -1043,7 +1048,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       if (soMapAllocationId) {
         allocationUsedInThisSubmission.set(soMapAllocationId, (allocationUsedInThisSubmission.get(soMapAllocationId) ?? 0) + quantity);
       }
-      const available = await getAvailableQty(companyId, storageLocationId, materialId);
+      const available = await getAvailableQty(companyId, storageLocationId, materialId, excludeDcId);
       if (quantity > available + QTY_TOL) {
         throw new Error("INSUFFICIENT_STOCK");
       }
@@ -1386,7 +1391,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
     attachMaterialDisplay(lineRows),
     locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     soLineIds.length ? serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, fg_type, per_pack_qty").in("id", soLineIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-    packingOrderIds.length ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, pack_code_id, process_order_id").in("id", packingOrderIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    packingOrderIds.length ? serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number, pack_code_id, process_order_id").in("id", packingOrderIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
   ]);
   if (sosError) throw new Error("DO_SO_LOOKUP_FAILED");
   if (stosError) throw new Error("DO_STO_LOOKUP_FAILED");
@@ -1464,6 +1469,10 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
         storage_location_display: location ? `${location.code ?? ""} — ${location.name ?? ""}`.trim() : null,
         fg_type: soLineExtra?.fg_type ?? null,
         per_pack_qty: soLineExtra?.per_pack_qty ?? null,
+        // R-01 real gap fixed (2026-09-06) -- a DO line only ever stores
+        // packing_order_id; reopening it for Edit had no po_number to show,
+        // and DO01CreatePage.jsx's display fell back to the raw UUID.
+        packing_order_number: packingOrder ? (toTrimmedString(packingOrder.po_number) || null) : null,
         packing_code: packingOrder ? (packCodeMap.get(toTrimmedString(packingOrder.pack_code_id)) ?? null) : null,
         is_urgent: packingOrder ? urgentProcessOrderIdSet.has(toTrimmedString(packingOrder.process_order_id)) : false,
       };

@@ -1034,6 +1034,10 @@ export function listSalesInvoices(params) {
   return fetchProcurement("GET", "/api/procurement/sales-invoices", undefined, params);
 }
 
+export function getDispatchReport(params) {
+  return fetchProcurement("GET", "/api/procurement/dispatch-report", undefined, params);
+}
+
 export function getSalesInvoice(id) {
   return fetchProcurement("GET", `/api/procurement/sales-invoices/${encodeURIComponent(id)}`);
 }

@@ -1781,15 +1781,34 @@ async function findDownstreamGroup(
 // got there first (one-time-use blocks the second) — the multi-line-aware
 // recompute_sfg_cost/recompute_fg_cost + this per-level grouping is what
 // makes "system corrects everything automatically" actually correct.
+//
+// `visited` guards against a real infinite loop found 2026-09-05: when one
+// SFG/FG material is produced by MULTIPLE batches that all blend into the
+// same (company, material, location, stock_type) stock_snapshot bucket
+// (§109's own known gap — snapshot has no per-batch split), correcting one
+// batch's rate makes recalculate_valuation_at_row re-walk that shared
+// bucket and report a sibling batch's own release/receipt leg as
+// "impacted" too. Chasing that leg (PASSTHROUGH) re-walks the SAME shared
+// bucket again, which then reports the FIRST batch's leg as impacted —
+// with no memory of "already corrected this exact ledger row", the two
+// (or more) sibling batches bounce corrections back and forth forever,
+// each pass reporting the same handful of impacted rows. A ledger row only
+// ever needs to be the *target* of recalculate_valuation_at_row once per
+// cascade run — once corrected, re-targeting it is always redundant
+// (the snapshot already reflects it), so skipping an already-visited
+// target is always safe, never a missed correction.
 async function cascadeRecalculate(
   roots: CascadeNode[],
   actor: string,
   reason: string,
 ): Promise<CascadeStepResult[]> {
   const results: CascadeStepResult[] = [];
+  const visited = new Set<string>();
   let levelImpacted: JsonRecord[] = [];
 
   for (const root of roots) {
+    if (visited.has(root.ledgerId)) continue;
+    visited.add(root.ledgerId);
     const { data, error } = await callRecalculateAtRow(root.ledgerId, root.newRate, actor, reason);
     if (error) {
       results.push({ ledgerId: root.ledgerId, ok: false, error });
@@ -1803,7 +1822,16 @@ async function cascadeRecalculate(
     levelImpacted.push(...((data?.impacted_rows as JsonRecord[]) ?? []));
   }
 
+  let level = 0;
   while (levelImpacted.length > 0) {
+    level += 1;
+    if (level > 200) {
+      // Defense-in-depth only — `visited` above already guarantees termination
+      // (the ledger is finite), so this should never trip. If it ever does,
+      // stop rather than loop forever and surface what's left unresolved.
+      results.push({ ledgerId: "CASCADE_LEVEL_CAP_EXCEEDED", ok: false, error: `stopped after ${level} levels` });
+      break;
+    }
     const processGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
     const packGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
     const nextRoots: CascadeNode[] = [];
@@ -1844,6 +1872,8 @@ async function cascadeRecalculate(
 
     levelImpacted = [];
     for (const node of nextRoots) {
+      if (visited.has(node.ledgerId)) continue;
+      visited.add(node.ledgerId);
       const { data, error } = await callRecalculateAtRow(node.ledgerId, node.newRate, actor, reason);
       if (error) {
         // ALREADY_DONE here means a sibling correction in this same batch already
