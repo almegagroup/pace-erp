@@ -129,18 +129,22 @@ export default function AdmixCostingPage() {
     return Number.isFinite(value) ? value : null;
   };
 
-  // PM's Wastage/OTHR (whichever basis) is reference-only -- AC06's own rate
-  // already has it baked in (confirmed 2026-09-05 against the real costing
-  // worksheet: its "Net Cost/KG" bakes in the wastage/unloading ONCE, and
-  // that Net Cost is what AC06 stores as `rate` -- nothing is re-applied
-  // downstream). Re-applying it here double-counted it, silently inflating
-  // FG Cost by ~₹0.27/pack on a real invoice until this fix.
+  // Formula always applies Wastage/OTHR on top of Rate, for RM/INT and PM
+  // alike (FLAT_OTHER = flat currency add, PERCENT = % add) -- business
+  // owner directive 2026-09-05: the formula itself is correct and uniform;
+  // any material whose AC06 Rate already has wastage baked in historically
+  // must have its own AC06 Wastage/OTHR value zeroed at the DATA level
+  // (done for CMP003/CMP006's existing PM lines), not special-cased here.
   const pmPackCost = useMemo(() => {
     if (!costing) return null;
     return costing.pm_rows.reduce((sum, row) => {
       const rate = rateFor(row);
       if (rate == null) return sum;
-      return sum + rate * Number(row.qty_per_pack ?? 0);
+      const adjustment = Number(row.wastage_other_pct ?? 0);
+      const adjustedUnitRate = row.wastage_other_mode === "FLAT_OTHER"
+        ? rate + adjustment
+        : rate * (1 + adjustment / 100);
+      return sum + adjustedUnitRate * Number(row.qty_per_pack ?? 0);
     }, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [costing, manualRates, monthId]);
@@ -224,10 +228,13 @@ export default function AdmixCostingPage() {
             external_code: row.external_code,
             rate: rateFor(row),
             wastage_other_pct: row.wastage_other_pct,
-            wastage_other_mode: row.wastage_other_mode === "FLAT_OTHER" ? "₹ flat/unit (reference only)" : "% (reference only)",
+            wastage_other_mode: row.wastage_other_mode === "FLAT_OTHER" ? "₹ flat/unit" : "%",
             qty_per_pack: row.qty_per_pack,
-            // Reference-only -- never re-applied. See pmPackCost's own comment above.
-            pm_line_cost: rateFor(row) == null ? null : rateFor(row) * Number(row.qty_per_pack ?? 0),
+            pm_line_cost: rateFor(row) == null ? null : (
+              row.wastage_other_mode === "FLAT_OTHER"
+                ? rateFor(row) + Number(row.wastage_other_pct ?? 0)
+                : rateFor(row) * (1 + Number(row.wastage_other_pct ?? 0) / 100)
+            ) * Number(row.qty_per_pack ?? 0),
           })),
           ...[
             ["RMC / kg", "rmc"], ["Conversion / kg", "conversionRate"], ["SFG Cost / kg", "sfgCost"],
@@ -406,21 +413,24 @@ export default function AdmixCostingPage() {
                     {
                       key: "wastage_other_pct", label: "Wastage / OTHR", width: "110px", align: "right",
                       render: (row) => row.wastage_other_pct == null ? "—" : row.wastage_other_mode === "FLAT_OTHER"
-                        ? <span title="Flat amount per unit, reference only — already included in Rate">₹ {fmt(row.wastage_other_pct, 2)}</span>
-                        : <span title="Reference only — already included in Rate">{fmt(row.wastage_other_pct, 2)}%</span>,
+                        ? <span title="Flat amount per unit">₹ {fmt(row.wastage_other_pct, 2)}</span>
+                        : <span>{fmt(row.wastage_other_pct, 2)}%</span>,
                     },
                     { key: "qty_per_pack", label: "Qty / Pack", width: "90px", align: "right", render: (row) => fmt(row.qty_per_pack, 4) },
                     {
                       key: "line_cost", label: "Line Cost / Pack", width: "120px", align: "right",
                       render: (row) => {
                         const rate = rateFor(row);
-                        return rate == null ? "—" : fmt(rate * Number(row.qty_per_pack ?? 0), 6);
+                        if (rate == null) return "—";
+                        const adjustment = Number(row.wastage_other_pct ?? 0);
+                        const adjustedUnitRate = row.wastage_other_mode === "FLAT_OTHER" ? rate + adjustment : rate * (1 + adjustment / 100);
+                        return fmt(adjustedUnitRate * Number(row.qty_per_pack ?? 0), 6);
                       },
                     },
                   ]}
                   emptyMessage="No PM composition available."
                 />
-                <p className="text-xs text-slate-400 mt-1">PM's Wastage/OTHR (₹ flat for Barrel, % for everything else) is reference-only — AC06's own Rate already has it baked in, so it is never re-applied here.</p>
+                <p className="text-xs text-slate-400 mt-1">PM's Wastage/OTHR (₹ flat for Barrel, % for everything else) is added on top of Rate, same as RM/INT. Materials whose Rate already includes it historically have their Wastage/OTHR set to 0 in AC06.</p>
 
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-5 mb-2">Stroke-wise Costing — side by side</h3>
                 <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${Math.min(strokeCostings.length, 3)}, minmax(300px, 1fr))` }}>
