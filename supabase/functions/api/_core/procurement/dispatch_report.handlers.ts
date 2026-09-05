@@ -348,9 +348,15 @@ export async function getDispatchReportHandler(
         net_weight: joined(lineDetails.map((entry) => entry.dc.net_weight)),
         // Driver Name + Contact Number combined into one column (business
         // owner ask) -- e.g. "Miraj (8767645020)".
+        // Verified against real prod data (2026-09-05): delivery_challan.
+        // driver_name is NULL on every real row -- despite the column name,
+        // driver_number is where this app's own DO forms actually store the
+        // driver's NAME ("MIRAJ", "KULMENDRASINGH", ...), and
+        // driver_contact_number holds the phone number. driver_name is kept
+        // as the first choice only in case a future row ever populates it.
         driver_display: joined(lineDetails.map((entry) => {
-          const name = textValue(entry.dc.driver_name);
-          const contact = textValue(entry.dc.driver_contact_number || entry.dc.driver_number);
+          const name = textValue(entry.dc.driver_name || entry.dc.driver_number);
+          const contact = textValue(entry.dc.driver_contact_number);
           if (!name && !contact) return "";
           return contact ? `${name} (${contact})`.trim() : name;
         })),
