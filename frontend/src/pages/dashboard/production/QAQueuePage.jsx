@@ -28,6 +28,8 @@ import {
   startBatch,
 } from "./prodApi.js";
 
+const CATEGORY_OPTIONS = ["ALL", "MTO", "HPS", "MTS", "MTEST"];
+
 const ERROR_MESSAGES = {
   PROD_PO_NOT_FOUND: "Process Order not found.",
   PROD_PO_QA_NOT_ALLOWED: "QA action is only allowed for STANDARD status orders.",
@@ -69,6 +71,9 @@ export default function QAQueuePage() {
   const qc = useQueryClient();
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
+  // Business owner ask (2026-09-05) -- SFG Category (po_type) filter dropdown,
+  // beside its own column in the queue table.
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
   const [expandedOrderId, setExpandedOrderId] = useState("");
   const [saving, setSaving] = useState(false);
   const [rejectOrderId, setRejectOrderId] = useState("");
@@ -199,15 +204,34 @@ export default function QAQueuePage() {
     return rows;
   }, [queueQ.data]);
 
-  const filteredQueue = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return queue;
-    return queue.filter((order) => [
+  // All-column auto-suggest search, same pattern as SO01/SO03/PR25 --
+  // built from every field the search itself matches against, so the
+  // <datalist> stays in sync with the filter automatically.
+  function searchFieldValues(order) {
+    return [
       order.po_number, order.batch_number, materialLabel(order.material),
       order.stroke_number, machineLabel(order.machine), order.planned_qty,
-      order.created_by_display, order.status,
-    ].filter(Boolean).join(" ").toLowerCase().includes(needle));
-  }, [queue, search]);
+      order.created_by_display, order.status, order.po_type,
+    ].filter(Boolean).map(String);
+  }
+  const searchOptions = useMemo(() => {
+    const values = new Set();
+    for (const order of queue) {
+      for (const value of searchFieldValues(order)) values.add(value);
+    }
+    return [...values].sort();
+  }, [queue]);
+
+  const categoryFilteredQueue = useMemo(() => {
+    if (categoryFilter === "ALL") return queue;
+    return queue.filter((order) => order.po_type === categoryFilter);
+  }, [queue, categoryFilter]);
+
+  const filteredQueue = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return categoryFilteredQueue;
+    return categoryFilteredQueue.filter((order) => searchFieldValues(order).join(" ").toLowerCase().includes(needle));
+  }, [categoryFilteredQueue, search]);
 
   const detailLines = detailQ.data?.lines ?? [];
   const releasedBatches = releasedBatchQ.data ?? [];
@@ -231,6 +255,16 @@ export default function QAQueuePage() {
               hint=""
             />
           </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">SFG Category</label>
+            <select
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+              className="h-9 rounded border border-slate-300 px-2 text-sm"
+            >
+              {CATEGORY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </div>
           <div className="min-w-[280px] flex-1">
             <QuickFilterInput
               label="Quick Search"
@@ -238,7 +272,11 @@ export default function QAQueuePage() {
               onChange={setSearch}
               placeholder="Search PO number, batch, prodshade, stroke, machine, status..."
               hint="Matches any column in the queue below."
+              inputProps={{ list: "qa-queue-search-options" }}
             />
+            <datalist id="qa-queue-search-options">
+              {searchOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
           </div>
           <div className="pb-1 text-xs text-slate-400">Auto-refreshes every 30 seconds</div>
         </div>
@@ -259,6 +297,7 @@ export default function QAQueuePage() {
               <thead>
                 <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
                   <th className="border-b px-3 py-2 text-left">PO Number</th>
+                  <th className="border-b px-3 py-2 text-left">SFG Category</th>
                   <th className="border-b px-3 py-2 text-left">Batch #</th>
                   <th className="border-b px-3 py-2 text-left">Prodshade</th>
                   <th className="border-b px-3 py-2 text-left">Stroke</th>
@@ -280,6 +319,7 @@ export default function QAQueuePage() {
                         onClick={() => setExpandedOrderId((current) => current === order.id ? "" : order.id)}
                       >
                         <td className="px-3 py-2 font-mono font-semibold text-sky-700">{order.po_number ?? "--"}</td>
+                        <td className="px-3 py-2">{order.po_type ?? "--"}</td>
                         <td className="px-3 py-2 font-mono text-slate-500">{order.batch_number ?? "—"}</td>
                         <td className="px-3 py-2">{materialLabel(order.material) || "--"}</td>
                         <td className="px-3 py-2 font-mono text-slate-500">{order.stroke_number ?? "--"}</td>
@@ -394,7 +434,7 @@ export default function QAQueuePage() {
                       </tr>
                       {expanded && (
                         <tr className="bg-slate-50/80">
-                          <td colSpan={10} className="px-4 py-4">
+                          <td colSpan={11} className="px-4 py-4">
                             {detailQ.isLoading ? (
                               <p className="text-sm text-slate-500">Loading line details...</p>
                             ) : detailQ.data?.id !== order.id ? (
