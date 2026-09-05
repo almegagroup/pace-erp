@@ -8755,5 +8755,10 @@
     "page": "frontend/src/pages/dashboard/production/AdmixCostingPage.jsx",
     "dependencyCount": 0,
     "deps": []
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/DispatchReportPage.jsx",
+    "dependencyCount": 0,
+    "deps": []
   }
 ]
