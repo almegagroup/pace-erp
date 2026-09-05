@@ -88,10 +88,14 @@ async function buildStrokeValidation(
   }
 
   const [configs, packCodes, strokes] = await Promise.all([
+    // §83.15 lock: prodshade_pack_config is intentionally GLOBAL (no
+    // company_id column at all) -- only Pack BOM itself is company-wise.
+    // Filtering this by companyId always 42703'd; a company_id column was
+    // never added here on purpose.
     fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_production").from("prodshade_pack_config")
       .select("material_id, pack_code_id, variant")
-      .eq("company_id", companyId).eq("active", true)
+      .eq("active", true)
       .order("id", { ascending: true }).range(from, to)),
     fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_production").from("pack_code_master")
