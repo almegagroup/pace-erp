@@ -53,6 +53,21 @@ function isAc06EligibleMaterial(material: Row | undefined): boolean {
   return !AC06_EXCLUDED_MATERIAL_TYPES.has(toTrimmedString(material?.material_type).toUpperCase());
 }
 
+// Default "Wastage %/OTHER" for a brand-new line, keyed off the material's
+// own type/name -- business owner directive 2026-09-05 (reverse-engineered
+// from a real manual costing worksheet that reconciled to the paisa): RM/INT
+// default to 0.5% (assumed yield/wastage on the whole dosage-weighted RM
+// cost), PM defaults to 5%, except the outer container itself (barrel/drum)
+// which defaults to 10% (unloading/handling loss is materially higher for a
+// bulky container than a label). Only a default for a first-time row --
+// existing rows keep whatever value was explicitly saved/backfilled.
+function defaultWastageOtherPct(material: Row | undefined): number {
+  const type = toTrimmedString(material?.material_type).toUpperCase();
+  if (type === "RM" || type === "INT") return 0.5;
+  if (type === "PM") return /BARREL|DRUM/i.test(toTrimmedString(material?.material_name)) ? 10 : 5;
+  return 0;
+}
+
 function rateValue(value: unknown): string | null {
   const text = toTrimmedString(value);
   return /^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text) ? text : null;
@@ -138,7 +153,7 @@ async function getMonth(ctx: ProdHandlerContext, companyId: string, rateMonth: s
   // Carry-forward copies structure/rates, but never carries verification into a new month.
   if (prior?.id) {
     const [{ data: priorLines, error: linesError }, { data: priorConfigs, error: configsError }] = await Promise.all([
-      db.from("ac06_month_line").select("source_sloc_group_id, material_id, costing_group_id, costing_group_name_snapshot, rate, excluded_from_rate_input, display_order").eq("month_id", prior.id),
+      db.from("ac06_month_line").select("source_sloc_group_id, material_id, costing_group_id, costing_group_name_snapshot, rate, wastage_other_pct, excluded_from_rate_input, display_order").eq("month_id", prior.id),
       db.from("ac06_month_group_config").select("source_sloc_group_id, costing_group_id, material_id, source_sloc_group_name_snapshot, costing_group_name_snapshot").eq("month_id", prior.id),
     ]);
     if (linesError || configsError) throw new Error("AC06_CARRY_FORWARD_READ_FAILED");
@@ -227,9 +242,11 @@ async function ensureScopeRows(ctx: ProdHandlerContext, month: Row, slocGroup: R
   const missing = materialIds.filter((id) => !existingIds.has(id));
   if (!missing.length) return;
   const now = new Date().toISOString();
+  const missingMaterials = await materialMap(missing);
   const inserts = missing.map((material_id, index) => ({
     month_id: month.id, company_id: companyId, source_sloc_group_id: slocGroupId, material_id,
-    rate: 0, verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id,
+    rate: 0, wastage_other_pct: defaultWastageOtherPct(missingMaterials.get(material_id)),
+    verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id,
     display_order: index, created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
   }));
   const { error: insertError } = await db.from("ac06_month_line").insert(inserts);
@@ -338,11 +355,23 @@ export async function saveAc06RatesHandler(req: Request, ctx: ProdHandlerContext
         const materialLabel = material.get(toTrimmedString(line.material_id))?.material_name ?? toTrimmedString(line.material_id);
         return ac06Error(req, ctx, "AC06_RATE_VALUE_INVALID", 400, `Rate "${toTrimmedString(update.rate)}" for ${materialLabel} is not a valid non-negative decimal.`);
       }
+      // Wastage %/OTHER (§ business owner 2026-09-05) rides along the same save --
+      // omitted entirely means "leave it as-is" (the grid always sends its current
+      // draft value in practice, but a bare rate-only caller shouldn't wipe it).
+      const wastageRaw = update.wastage_other_pct;
+      const wastage = wastageRaw === undefined || wastageRaw === null || wastageRaw === ""
+        ? Number(line.wastage_other_pct ?? 0)
+        : rateValue(wastageRaw);
+      if (wastage === null) {
+        const material = await materialMap([toTrimmedString(line.material_id)]);
+        const materialLabel = material.get(toTrimmedString(line.material_id))?.material_name ?? toTrimmedString(line.material_id);
+        return ac06Error(req, ctx, "AC06_WASTAGE_VALUE_INVALID", 400, `Wastage %/OTHER "${toTrimmedString(wastageRaw)}" for ${materialLabel} is not a valid non-negative decimal.`);
+      }
       const groupId = toTrimmedString(line.costing_group_id);
       const statusFields = canVerifyOwnSave
         ? { verification_status: "VERIFIED", verified_at: now, verified_by: ctx.auth_user_id }
         : { verification_status: "PENDING", verified_at: null, verified_by: null };
-      const targetQuery = db.from("ac06_month_line").update({ rate, ...statusFields, rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id);
+      const targetQuery = db.from("ac06_month_line").update({ rate, wastage_other_pct: wastage, ...statusFields, rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id);
       const { error: updateError } = groupId ? await targetQuery.eq("costing_group_id", groupId) : await targetQuery.eq("id", line.id);
       if (updateError) throw new Error("AC06_RATE_SAVE_FAILED");
     }
@@ -484,16 +513,24 @@ export async function getAc06ReportHandler(req: Request, ctx: ProdHandlerContext
       ? await db.from("ac06_month_archive_line").select("*").in("archive_id", archiveIds).eq("source_sloc_group_id_snapshot", slocGroupId).eq("excluded_from_rate_input", false)
       : { data: [], error: null };
     if (archiveLineError) throw new Error("AC06_REPORT_FAILED");
-    const materials = await materialMap(ids((liveLines ?? []).map((row: Row) => row.material_id)));
+    const materials = await materialMap([
+      ...ids((liveLines ?? []).map((row: Row) => row.material_id)),
+      ...ids((archiveLines ?? []).map((row: Row) => row.material_id)),
+    ]);
     const liveRows = (liveLines ?? []).map((line: Row) => {
       const reportMonth = byId.get(toTrimmedString(line.month_id)) as Row | undefined;
       const material = materials.get(toTrimmedString(line.material_id));
-      return { ...line, rate_month: reportMonth?.rate_month ?? null, month_status: reportMonth?.status ?? null, pace_code: material?.pace_code ?? null, material_external_code: material?.external_code ?? null, material_name: material?.material_name ?? null };
+      return { ...line, rate_month: reportMonth?.rate_month ?? null, month_status: reportMonth?.status ?? null, pace_code: material?.pace_code ?? null, material_external_code: material?.external_code ?? null, material_name: material?.material_name ?? null, material_type: material?.material_type ?? null };
     });
     const archiveRows = (archiveLines ?? []).map((line: Row) => {
       const archive = archiveById.get(toTrimmedString(line.archive_id)) as Row | undefined;
       const reportMonth = archive ? byId.get(toTrimmedString(archive.source_month_id)) as Row | undefined : undefined;
-      return { ...line, id: `archive-${line.id}`, rate_month: reportMonth?.rate_month ?? null, month_status: "CLOSED", source_sloc_group_id: line.source_sloc_group_id_snapshot, costing_group_name_snapshot: line.costing_group_name_snapshot, pace_code: line.material_code_snapshot, material_external_code: line.material_external_code_snapshot ?? null, material_name: line.material_name_snapshot };
+      // material_type isn't itself snapshotted on the archive line (only added
+      // to the live workspace originally) -- resolved live via material_id, same
+      // as every other archive report row already falls back to a live lookup
+      // for anything not explicitly snapshotted.
+      const material = materials.get(toTrimmedString(line.material_id));
+      return { ...line, id: `archive-${line.id}`, rate_month: reportMonth?.rate_month ?? null, month_status: "CLOSED", source_sloc_group_id: line.source_sloc_group_id_snapshot, costing_group_name_snapshot: line.costing_group_name_snapshot, pace_code: line.material_code_snapshot, material_external_code: line.material_external_code_snapshot ?? null, material_name: line.material_name_snapshot, material_type: material?.material_type ?? null };
     });
     // PO11-parity merged-alphabetical order (§35.12/§35.18, same rule as the
     // live workspace's rowsForDisplay): group by (costing group, else the
@@ -660,7 +697,12 @@ export async function getAc06HistoryHandler(req: Request, ctx: ProdHandlerContex
     const db = serviceRoleClient.schema("erp_production"); const { data: archive, error } = await db.from("ac06_month_archive").select("*").eq("company_id", companyId).eq("rate_month", rateMonth).maybeSingle();
     if (error) throw new Error("AC06_HISTORY_FAILED"); if (!archive) return okResponse({ data: { archive: null, rows: [] } }, ctx.request_id, req);
     const { data: rows, error: rowError } = await db.from("ac06_month_archive_line").select("*").eq("archive_id", archive.id).order("display_order");
-    if (rowError) throw new Error("AC06_HISTORY_FAILED"); return okResponse({ data: { archive, rows: rows ?? [] } }, ctx.request_id, req);
+    if (rowError) throw new Error("AC06_HISTORY_FAILED");
+    // material_type isn't snapshotted on the archive line itself -- same live
+    // fallback via material_id as the Report tab's own archive rows use.
+    const materials = await materialMap(ids((rows ?? []).map((row: Row) => row.material_id)));
+    const decoratedRows = (rows ?? []).map((row: Row) => ({ ...row, material_type: materials.get(toTrimmedString(row.material_id))?.material_type ?? null }));
+    return okResponse({ data: { archive, rows: decoratedRows } }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "AC06_HISTORY_FAILED"; return ac06Error(req, ctx, code, 500, "Unable to load closed-month history."); }
 }
 

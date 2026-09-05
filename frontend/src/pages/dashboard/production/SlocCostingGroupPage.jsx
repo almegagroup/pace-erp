@@ -57,6 +57,12 @@ function materialIdentityColumns() {
   ];
 }
 
+// Item Type (RM/PM/INT — FG/SFG never enter AC06) -- was missing from the
+// Rate Input / Report / History item tables, business owner ask 2026-09-05.
+function itemTypeColumn() {
+  return { key: "material_type", label: "Item Type", width: "70px", render: (row) => row.material_type || "-" };
+}
+
 // Shared by SLOC Group Setup's Manage Materials Included/Excluded lists and
 // Costing Group Setup's Available Item Pool/Current Members/Standalone
 // Materials -- same Name/External Code/Type/Status(+optional Action) shape
@@ -184,6 +190,7 @@ export default function SlocCostingGroupPage() {
   const [slocGroupId, setSlocGroupId] = useState("");
   const [tab, setTab] = useState("dashboard");
   const [rateDraft, setRateDraft] = useState({});
+  const [wastageDraft, setWastageDraft] = useState({});
   const [selectedForVerify, setSelectedForVerify] = useState([]);
   const [exportingRates, setExportingRates] = useState(false);
   const [slocName, setSlocName] = useState("");
@@ -391,6 +398,13 @@ export default function SlocCostingGroupPage() {
       });
       return next;
     });
+    setWastageDraft((current) => {
+      const next = { ...current };
+      rows.forEach((row) => {
+        if (!(row.id in next)) next[row.id] = String(row.wastage_other_pct ?? "0");
+      });
+      return next;
+    });
   }, [rows]);
 
   async function refresh() {
@@ -427,6 +441,7 @@ export default function SlocCostingGroupPage() {
           { key: "source_sloc_group_name", label: "Source SLOC Group", width: "160px" },
           { key: "material_name", label: "Material Name", width: "220px" },
           { key: "material_external_code", label: "External Code", width: "120px" },
+          { key: "material_type", label: "Item Type", width: "80px" },
           // "0.##########" (not "0.00") -- Excel's default General format
           // silently rounds the *displayed* decimals to fit the column, even
           // though the cell's real value is untouched; found live 2026-08-31
@@ -434,6 +449,7 @@ export default function SlocCostingGroupPage() {
           // "#" placeholders never pad with trailing zeros, so a 2-decimal
           // rate still shows as exactly "71.74", not "71.7400000000".
           { key: "rate", label: "Rate", width: "110px", align: "right", numFmt: "0.##########" },
+          { key: "wastage_other_pct", label: "Wastage %/OTHER", width: "120px", align: "right", numFmt: "0.##########" },
           { key: "verification_status", label: "Status", width: "110px" },
           { key: "lead", label: "Entry", width: "110px" },
         ],
@@ -450,6 +466,8 @@ export default function SlocCostingGroupPage() {
               return row.material_external_code || "-";
             case "rate":
               return Number(rateDraft[row.id] ?? row.rate ?? 0);
+            case "wastage_other_pct":
+              return Number(wastageDraft[row.id] ?? row.wastage_other_pct ?? 0);
             case "verification_status":
               return row.verification_status || "-";
             case "lead":
@@ -512,6 +530,22 @@ export default function SlocCostingGroupPage() {
           .filter(
             (candidate) => candidate.costing_group_id === row.costing_group_id,
           )
+          .forEach((candidate) => {
+            next[candidate.id] = value;
+          });
+      return next;
+    });
+  }
+
+  // Wastage %/OTHER -- same group-lead propagation as setGroupRate above
+  // (a Costing Group's members always share one rate, so they share this too).
+  function setGroupWastage(row, value) {
+    if (!/^\d*\.?\d*$/.test(value)) return;
+    setWastageDraft((current) => {
+      const next = { ...current, [row.id]: value };
+      if (row.costing_group_id)
+        rows
+          .filter((candidate) => candidate.costing_group_id === row.costing_group_id)
           .forEach((candidate) => {
             next[candidate.id] = value;
           });
@@ -653,7 +687,9 @@ export default function SlocCostingGroupPage() {
                     render: (row) => row.costing_group_name_snapshot || "Standalone",
                   },
                   ...materialIdentityColumns(),
+                  itemTypeColumn(),
                   { key: "rate", label: "Rate", width: "110px" },
+                  { key: "wastage_other_pct", label: "Wastage %/OTHER", width: "120px" },
                   { key: "verification_status", label: "Verification", width: "120px" },
                   { key: "month_status", label: "Month Status", width: "110px" },
                 ]}
@@ -902,6 +938,7 @@ export default function SlocCostingGroupPage() {
                                 .map((row) => ({
                                   line_id: row.id,
                                   rate: rateDraft[row.id] ?? row.rate,
+                                  wastage_other_pct: wastageDraft[row.id] ?? row.wastage_other_pct,
                                 })),
                             }),
                           )
@@ -1010,6 +1047,7 @@ export default function SlocCostingGroupPage() {
                         slocGroupNameById.get(String(row.source_sloc_group_id)) || "-",
                     },
                     ...materialIdentityColumns(),
+                    itemTypeColumn(),
                     {
                       key: "rate",
                       label: "Rate",
@@ -1030,6 +1068,26 @@ export default function SlocCostingGroupPage() {
                         ) : (
                           <span className="font-mono">
                             {rateDraft[row.id] ?? row.rate ?? "0"}
+                          </span>
+                        ),
+                    },
+                    {
+                      key: "wastage_other_pct",
+                      label: "Wastage %/OTHER",
+                      width: "130px",
+                      render: (row) =>
+                        canRate &&
+                        workspace.month?.status !== "CLOSED" &&
+                        (row.is_standalone || row.is_group_lead) ? (
+                          <input
+                            value={wastageDraft[row.id] ?? row.wastage_other_pct ?? "0"}
+                            onChange={(event) => setGroupWastage(row, event.target.value)}
+                            inputMode="decimal"
+                            className="h-8 w-24 border border-slate-300 px-2 font-mono"
+                          />
+                        ) : (
+                          <span className="font-mono">
+                            {wastageDraft[row.id] ?? row.wastage_other_pct ?? "0"}
                           </span>
                         ),
                     },
@@ -1678,7 +1736,9 @@ export default function SlocCostingGroupPage() {
                       width: "120px",
                       render: (row) => row.material_external_code_snapshot || "-",
                     },
+                    itemTypeColumn(),
                     { key: "rate", label: "Rate", width: "110px" },
+                    { key: "wastage_other_pct", label: "Wastage %/OTHER", width: "120px" },
                     { key: "verification_status", label: "Verification", width: "120px" },
                   ]}
                   rows={historyQuery.data?.rows ?? EMPTY}

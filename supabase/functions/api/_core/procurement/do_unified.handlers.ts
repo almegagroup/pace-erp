@@ -519,6 +519,12 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
           batch_number: pko.batch_number,
           fill_qty_per_pack: pko.fill_qty_per_pack,
           remaining_qty: remaining,
+          // §133.9 SKU-mismatch: this Packing PO's own physical material can
+          // legitimately differ from the SO line's ordered material (that's
+          // the whole point of the mismatch confirmation) -- the frontend
+          // needs this to build the picked DO line against the REAL material
+          // (storage-location lookup, availability check), not the ordered one.
+          material_id: toTrimmedString(pko.material_id) || null,
           document_name: toTrimmedString(pkoMaterialMap.get(toTrimmedString(pko.material_id))?.document_name) || null,
           prodshade_display: prodshade ? toTrimmedString(prodshade.material_name) || null : null,
           actual_stroke: strokeMaster ? toTrimmedString(strokeMaster.stroke_number) || null : null,
@@ -963,6 +969,17 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
           if (!foId || !validFoPkoPairSet.has(`${foId}:${packingOrderId}`)) {
             throw new Error("DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO");
           }
+          // §133.9 SKU-mismatch: once a specific Packing PO is chosen, the
+          // physically dispatched material is THAT Packing PO's own material,
+          // not necessarily the SO line's ordered material -- a confirmed
+          // mismatch means these can legitimately differ (found live
+          // 2026-09-05, FO 5158064918: SO line ordered FG-00291 "Admix
+          // sample 10 kg", actual Packing PO 9400000190 was FG-00292 "Admix
+          // sample 20 kg"). Never trust sourceLine.material_id once a real
+          // Packing PO is on the line -- storage-location lookup and the
+          // stock-availability check below must run against the real material.
+          const pkoMaterialId = pkoMaterialForValidation.get(packingOrderId);
+          if (pkoMaterialId) materialId = pkoMaterialId;
           const alreadyUsed = pkoUsedInThisSubmission.get(packingOrderId) ?? 0;
           const pkoRemaining = (pkoRemainingMap.get(packingOrderId) ?? 0) - alreadyUsed;
           if (pkoRemaining < quantity - QTY_TOL) {
