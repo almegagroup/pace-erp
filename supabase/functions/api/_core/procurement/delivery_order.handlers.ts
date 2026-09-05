@@ -356,7 +356,23 @@ export async function listDOStorageLocationOptionsHandler(req: Request, ctx: Pro
 // Exported so delivery_order_map.handlers.ts's §133.12 Page 2 consolidation
 // preview can reuse the same Unrestricted-minus-open-reservation formula
 // instead of duplicating it.
-export async function getAvailableQty(companyId: string, storageLocationId: string, materialId: string): Promise<number> {
+//
+// excludeDcId (Edit DO real gap fixed 2026-09-06): a DO being edited still
+// holds its own OPEN reservation_document rows at the moment this runs
+// (save_delivery_order_unified_atomic only cancels them INSIDE the same
+// transaction as the write, after this validation already passed) -- so
+// without this exclusion, an unchanged line's own reserved qty gets
+// double-counted as "someone else's reservation" and available reads back
+// artificially as (on_hand - self_reservation), often 0, even though nothing
+// outside this DO is actually competing for the stock. Same
+// dc_line_id-exclusion pattern as computeReservedQtyByPackingOrder above.
+export async function getAvailableQty(companyId: string, storageLocationId: string, materialId: string, excludeDcId?: string): Promise<number> {
+  let excludedDcLineIds: Set<string> | null = null;
+  if (excludeDcId) {
+    const { data } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+      .select("id").eq("dc_id", excludeDcId);
+    excludedDcLineIds = new Set(((data ?? []) as JsonRecord[]).map((row) => String(row.id)));
+  }
   const [snapshotResp, reservationResp] = await Promise.all([
     serviceRoleClient
       .schema("erp_inventory")
@@ -371,7 +387,7 @@ export async function getAvailableQty(companyId: string, storageLocationId: stri
     serviceRoleClient
       .schema("erp_production")
       .from("reservation_document")
-      .select("balance_qty")
+      .select("balance_qty, dc_line_id")
       .eq("company_id", companyId)
       .eq("storage_location_id", storageLocationId)
       .eq("material_id", materialId)
@@ -379,7 +395,9 @@ export async function getAvailableQty(companyId: string, storageLocationId: stri
   ]);
   if (snapshotResp.error || reservationResp.error) throw new Error("DO_AVAILABILITY_CHECK_FAILED");
   const onHand = Number(snapshotResp.data?.quantity ?? 0);
-  const reserved = ((reservationResp.data ?? []) as JsonRecord[]).reduce((sum, row) => sum + Number(row.balance_qty ?? 0), 0);
+  const reserved = ((reservationResp.data ?? []) as JsonRecord[])
+    .filter((row) => !excludedDcLineIds || !excludedDcLineIds.has(toTrimmedString(row.dc_line_id)))
+    .reduce((sum, row) => sum + Number(row.balance_qty ?? 0), 0);
   return Number((onHand - reserved).toFixed(6));
 }
 
