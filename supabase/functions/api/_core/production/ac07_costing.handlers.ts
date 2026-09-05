@@ -54,7 +54,7 @@ async function materialMap(materialIds: string[]): Promise<Map<string, Row>> {
   const result = new Map<string, Row>();
   if (!materialIds.length) return result;
   const rows = await fetchInChunks<Row>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
-    .select("id, pace_code, material_name, document_name, material_type, material_category, shade_code, pack_code").in("id", chunk));
+    .select("id, pace_code, external_code, material_name, document_name, material_type, material_category, shade_code, pack_code").in("id", chunk));
   for (const row of rows) result.set(toTrimmedString(row.id), row);
   return result;
 }
@@ -325,13 +325,17 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
           });
         }
       } else {
+        // ac06_month_line (live/open months) snapshots the group name as
+        // costing_group_name_snapshot -- NOT source_sloc_group_name_snapshot,
+        // which only exists on the archive table. Selecting the wrong column
+        // name here 500'd every open-month selection (found live 2026-09-05).
         const rows = await fetchInChunks<Row>(allMaterialIds, (chunk) => serviceRoleClient.schema("erp_production")
-          .from("ac06_month_line").select("material_id, rate, wastage_other_pct, source_sloc_group_name_snapshot")
+          .from("ac06_month_line").select("material_id, rate, wastage_other_pct, costing_group_name_snapshot")
           .eq("month_id", ac06MonthId).in("material_id", chunk));
         for (const row of rows) rateByMaterial.set(toTrimmedString(row.material_id), {
           rate: row.rate === null ? null : Number(row.rate),
           wastage_other_pct: Number(row.wastage_other_pct ?? 0),
-          costing_group_name: (row.source_sloc_group_name_snapshot as string) ?? null,
+          costing_group_name: (row.costing_group_name_snapshot as string) ?? null,
         });
       }
     }
@@ -342,6 +346,7 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
       return {
         material_id: materialId,
         material_name: material?.material_name ?? null,
+        external_code: material?.external_code ?? null,
         material_type: material?.material_type ?? null,
         costing_group_name: rateInfo?.costing_group_name ?? null,
         rate: rateInfo?.rate ?? null,
@@ -362,11 +367,18 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
       return {
         material_id: materialId,
         material_name: material?.material_name ?? null,
+        external_code: material?.external_code ?? null,
         costing_group_name: rateInfo?.costing_group_name ?? null,
         rate: rateInfo?.rate ?? null,
         wastage_other_pct: rateInfo?.wastage_other_pct ?? null,
         // Despite the legacy column name, a Barrel's OTHER value is a flat
         // currency amount per unit; every non-Barrel row remains percentage.
+        // Reference-only either way -- AC06's own rate already has this
+        // baked in (confirmed 2026-09-05 against the real costing worksheet:
+        // its "NET COST/KG" = D(base)+E(%wastage)+F(unloading) IS the stored
+        // rate, nothing is re-applied downstream). Re-applying it here
+        // double-counts, which is exactly what silently inflated FG Cost by
+        // ~₹0.27/pack until this fix.
         wastage_other_mode: /BARREL/i.test(toTrimmedString(material?.material_name)) ? "FLAT_OTHER" : "PERCENT",
         qty_per_pack: Number(line.qty ?? line.qty_per_pack ?? 1),
       };

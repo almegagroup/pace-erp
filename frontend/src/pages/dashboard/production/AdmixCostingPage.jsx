@@ -129,16 +129,18 @@ export default function AdmixCostingPage() {
     return Number.isFinite(value) ? value : null;
   };
 
+  // PM's Wastage/OTHR (whichever basis) is reference-only -- AC06's own rate
+  // already has it baked in (confirmed 2026-09-05 against the real costing
+  // worksheet: its "Net Cost/KG" bakes in the wastage/unloading ONCE, and
+  // that Net Cost is what AC06 stores as `rate` -- nothing is re-applied
+  // downstream). Re-applying it here double-counted it, silently inflating
+  // FG Cost by ~₹0.27/pack on a real invoice until this fix.
   const pmPackCost = useMemo(() => {
     if (!costing) return null;
     return costing.pm_rows.reduce((sum, row) => {
       const rate = rateFor(row);
       if (rate == null) return sum;
-      const adjustment = Number(row.wastage_other_pct ?? 0);
-      const adjustedUnitRate = row.wastage_other_mode === "FLAT_OTHER"
-        ? rate + adjustment
-        : rate * (1 + adjustment / 100);
-      return sum + adjustedUnitRate * Number(row.qty_per_pack ?? 0);
+      return sum + rate * Number(row.qty_per_pack ?? 0);
     }, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [costing, manualRates, monthId]);
@@ -185,8 +187,9 @@ export default function AdmixCostingPage() {
           { key: "section", label: "Section", width: "100px" },
           { key: "costing_group_name", label: "Costing Group", width: "140px" },
           { key: "material_type", label: "Type", width: "70px" },
-          { key: "material_name", label: "Item", width: "260px" },
-          { key: "rate", label: "Rate", width: "120px", align: "right", numFmt: "0.##########" },
+          { key: "material_name", label: "Item", width: "220px" },
+          { key: "external_code", label: "External Code", width: "110px" },
+          { key: "rate", label: "Rate", width: "110px", align: "right", numFmt: "0.##########" },
           { key: "wastage_other_pct", label: "Wastage / OTHR", width: "120px", align: "right", numFmt: "0.##########" },
           { key: "wastage_other_mode", label: "Basis", width: "95px" },
           { key: "qty_per_pack", label: "Qty / Pack", width: "100px", align: "right", numFmt: "0.##########" },
@@ -202,6 +205,7 @@ export default function AdmixCostingPage() {
             costing_group_name: row.costing_group_name || "Standalone",
             material_type: row.material_type,
             material_name: row.material_name,
+            external_code: row.external_code,
             rate: rateFor(row),
             wastage_other_pct: row.wastage_other_pct,
             wastage_other_mode: "%",
@@ -217,15 +221,13 @@ export default function AdmixCostingPage() {
             costing_group_name: row.costing_group_name || "Standalone",
             material_type: "PM",
             material_name: row.material_name,
+            external_code: row.external_code,
             rate: rateFor(row),
             wastage_other_pct: row.wastage_other_pct,
-            wastage_other_mode: row.wastage_other_mode === "FLAT_OTHER" ? "₹ flat/unit" : "%",
+            wastage_other_mode: row.wastage_other_mode === "FLAT_OTHER" ? "₹ flat/unit (reference only)" : "% (reference only)",
             qty_per_pack: row.qty_per_pack,
-            pm_line_cost: rateFor(row) == null ? null : (
-              row.wastage_other_mode === "FLAT_OTHER"
-                ? rateFor(row) + Number(row.wastage_other_pct ?? 0)
-                : rateFor(row) * (1 + Number(row.wastage_other_pct ?? 0) / 100)
-            ) * Number(row.qty_per_pack ?? 0),
+            // Reference-only -- never re-applied. See pmPackCost's own comment above.
+            pm_line_cost: rateFor(row) == null ? null : rateFor(row) * Number(row.qty_per_pack ?? 0),
           })),
           ...[
             ["RMC / kg", "rmc"], ["Conversion / kg", "conversionRate"], ["SFG Cost / kg", "sfgCost"],
@@ -341,29 +343,30 @@ export default function AdmixCostingPage() {
                 <ErpDenseGrid
                   rowKey={(row) => row.material_id}
                   rows={costing.rm_int_rows}
-                  maxHeight="360px"
+                  maxHeight="280px"
                   columns={[
-                    { key: "costing_group_name", label: "Costing Group", width: "140px", render: (row) => row.costing_group_name || <span className="italic text-slate-400">Standalone</span> },
-                    { key: "material_type", label: "Type", width: "60px" },
-                    { key: "material_name", label: "Item", width: "260px" },
+                    { key: "costing_group_name", label: "Group", width: "100px", render: (row) => row.costing_group_name || <span className="italic text-slate-400">Standalone</span> },
+                    { key: "material_type", label: "Type", width: "50px" },
+                    { key: "material_name", label: "Item", width: "220px" },
+                    { key: "external_code", label: "Ext. Code", width: "90px", render: (row) => row.external_code || "—" },
                     {
-                      key: "rate", label: "Rate", width: "130px", align: "right",
+                      key: "rate", label: "Rate", width: "100px", align: "right",
                       render: (row) => monthId
                         ? fmt(row.rate, 6)
                         : (
-                          <input type="number" step="any" className="w-28 border border-sky-400 bg-sky-50 rounded px-1.5 py-0.5 text-right font-mono text-sky-800 font-semibold"
+                          <input type="number" step="any" className="w-24 border border-sky-400 bg-sky-50 rounded px-1.5 py-0.5 text-right font-mono text-sky-800 font-semibold"
                             placeholder="0.00" value={manualRates[row.material_id] ?? ""}
                             onChange={(e) => setManualRates((c) => ({ ...c, [row.material_id]: e.target.value }))} />
                         ),
                     },
-                    { key: "wastage_other_pct", label: "Wastage %", width: "110px", align: "right", render: (row) => row.wastage_other_pct == null ? "—" : `${fmt(row.wastage_other_pct, 2)}%` },
+                    { key: "wastage_other_pct", label: "Wastage %", width: "90px", align: "right", render: (row) => row.wastage_other_pct == null ? "—" : `${fmt(row.wastage_other_pct, 2)}%` },
                     ...strokeCostings.flatMap((item) => [
                       {
-                        key: `dosage_${item.strokeId}`, label: `Stroke ${item.strokeNumber} Dosage%`, width: "130px", align: "right",
+                        key: `dosage_${item.strokeId}`, label: `Stroke ${item.strokeNumber} Dosage%`, width: "110px", align: "right",
                         render: (row) => fmt(row.dosage_by_stroke?.[item.strokeId], 4),
                       },
                       {
-                        key: `line_cost_${item.strokeId}`, label: `Stroke ${item.strokeNumber} Line Cost/KG`, width: "155px", align: "right",
+                        key: `line_cost_${item.strokeId}`, label: `Stroke ${item.strokeNumber} Cost/KG`, width: "130px", align: "right",
                         render: (row) => {
                           const rate = rateFor(row);
                           const dosage = Number(row.dosage_by_stroke?.[item.strokeId] ?? 0);
@@ -375,7 +378,7 @@ export default function AdmixCostingPage() {
                   emptyMessage="No RM/INT lines for the selected strokes."
                 />
 
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-5 mb-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-4 mb-2">
                   PM — {costing.pack_code_info?.pack_name ?? costing.sku.pack_code}
                   {costing.pm_source === "category_fallback" && (
                     <span className="ml-2 font-normal normal-case text-amber-700">(no packing history for this SKU — using {costing.pm_source_sku_pace_code}'s composition, same category + pack code)</span>
@@ -385,40 +388,39 @@ export default function AdmixCostingPage() {
                 <ErpDenseGrid
                   rowKey={(row) => row.material_id}
                   rows={costing.pm_rows}
+                  maxHeight="none"
                   columns={[
-                    { key: "costing_group_name", label: "Costing Group", width: "140px", render: (row) => row.costing_group_name || <span className="italic text-slate-400">Standalone</span> },
-                    { key: "material_name", label: "Item", width: "260px" },
+                    { key: "costing_group_name", label: "Group", width: "100px", render: (row) => row.costing_group_name || <span className="italic text-slate-400">Standalone</span> },
+                    { key: "material_name", label: "Item", width: "220px" },
+                    { key: "external_code", label: "Ext. Code", width: "90px", render: (row) => row.external_code || "—" },
                     {
-                      key: "rate", label: "Rate", width: "130px", align: "right",
+                      key: "rate", label: "Rate", width: "100px", align: "right",
                       render: (row) => monthId
                         ? fmt(row.rate, 6)
                         : (
-                          <input type="number" step="any" className="w-28 border border-sky-400 bg-sky-50 rounded px-1.5 py-0.5 text-right font-mono text-sky-800 font-semibold"
+                          <input type="number" step="any" className="w-24 border border-sky-400 bg-sky-50 rounded px-1.5 py-0.5 text-right font-mono text-sky-800 font-semibold"
                             placeholder="0.00" value={manualRates[row.material_id] ?? ""}
                             onChange={(e) => setManualRates((c) => ({ ...c, [row.material_id]: e.target.value }))} />
                         ),
                     },
                     {
-                      key: "wastage_other_pct", label: "Wastage / OTHR", width: "130px", align: "right",
+                      key: "wastage_other_pct", label: "Wastage / OTHR", width: "110px", align: "right",
                       render: (row) => row.wastage_other_pct == null ? "—" : row.wastage_other_mode === "FLAT_OTHER"
-                        ? <span title="Flat OTHER amount per Barrel unit">₹ {fmt(row.wastage_other_pct, 2)}</span>
-                        : <span>{fmt(row.wastage_other_pct, 2)}%</span>,
+                        ? <span title="Flat amount per unit, reference only — already included in Rate">₹ {fmt(row.wastage_other_pct, 2)}</span>
+                        : <span title="Reference only — already included in Rate">{fmt(row.wastage_other_pct, 2)}%</span>,
                     },
-                    { key: "qty_per_pack", label: "Qty / Pack", width: "100px", align: "right", render: (row) => fmt(row.qty_per_pack, 4) },
+                    { key: "qty_per_pack", label: "Qty / Pack", width: "90px", align: "right", render: (row) => fmt(row.qty_per_pack, 4) },
                     {
-                      key: "line_cost", label: "Line Cost / Pack", width: "130px", align: "right",
+                      key: "line_cost", label: "Line Cost / Pack", width: "120px", align: "right",
                       render: (row) => {
                         const rate = rateFor(row);
-                        if (rate == null) return "—";
-                        const adjustment = Number(row.wastage_other_pct ?? 0);
-                        const adjustedUnitRate = row.wastage_other_mode === "FLAT_OTHER" ? rate + adjustment : rate * (1 + adjustment / 100);
-                        return fmt(adjustedUnitRate * Number(row.qty_per_pack ?? 0), 6);
+                        return rate == null ? "—" : fmt(rate * Number(row.qty_per_pack ?? 0), 6);
                       },
                     },
                   ]}
                   emptyMessage="No PM composition available."
                 />
-                <p className="text-xs text-slate-400 mt-1">Barrel OTHR is a flat ₹ amount per unit (not a percentage); other PM values are percentages. Values come directly from the selected AC06 month.</p>
+                <p className="text-xs text-slate-400 mt-1">PM's Wastage/OTHR (₹ flat for Barrel, % for everything else) is reference-only — AC06's own Rate already has it baked in, so it is never re-applied here.</p>
 
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-5 mb-2">Stroke-wise Costing — side by side</h3>
                 <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${Math.min(strokeCostings.length, 3)}, minmax(300px, 1fr))` }}>
