@@ -364,8 +364,16 @@ function SourceItemsDrawer({ visible, sourceType, sourceRef, picks, onClose, onA
       so_line_id: isSo ? (row.source_kind === "SO_MAP_ALLOCATION" ? null : row.id) : null,
       so_map_allocation_id: isSo && row.source_kind === "SO_MAP_ALLOCATION" ? row.so_map_allocation_id : null,
       sto_line_id: !isSo ? row.id : null,
-      material_id: row.material_id,
-      material_display: row.material_display,
+      // §133.9 SKU-mismatch: a picked Packing PO's own material can
+      // legitimately differ from the SO line's ordered material (row) --
+      // the physical material is what drives the Storage Location lookup
+      // (TruckItemLocation below) and must match what the server will
+      // actually validate/save. Found live 2026-09-05 (FO 5158064918):
+      // Storage Location came back empty because this always sent the SO
+      // line's ordered material (zero stock under that SKU), never the
+      // Packing PO's real one.
+      material_id: option?.material_id || row.material_id,
+      material_display: option?.document_name || row.material_display,
       line_material_type: row.line_material_type,
       fg_type: row.fg_type ?? null,
       batch_number: option?.batch_number || row.batch_number || null,
