@@ -23050,15 +23050,31 @@ must start from this now-fixed version (ideally extract a shared `TransporterPic
 used by DO/GRN/SO05 alike, rather than copy-pasting the picker a fourth time) — do not resurrect
 the pre-fix mouse-only/state-losing behavior.
 
-### 134.5 — Page 3: Invoice Details (page slot confirmed — 2026-09-06, full spec deferred)
+### 134.5 — Page 3: Invoice Details (🔶 field list building up, 2026-09-06 — NOT fully locked yet)
 
-**Page 3 will hold the Invoice details of the return that came in** — business owner confirmed the
-page's identity/position in the sequence, but asked to defer the actual field-level design
-("etay Return-er Invoice details sob bosabo, seta niye ektu pore alochona korchi" — this page will
-carry all the Invoice details of the return, we'll discuss that in more depth shortly). Do not
-design this page's fields/behavior yet — wait for that follow-up discussion. This picks up
-directly the company-scoped found/wrong-company/not-found Invoice validation logic originally
-sketched for the abandoned Invoice-first Page 1 draft (§134.3), which needs a home here.
+**Page 3 holds the Invoice details of the return that came in.** Field list disclosed so far, in
+this order (business owner, 2026-09-06 — more still to come, explicitly flagged incomplete below):
+
+1. **Invoice Number** — the Sender's own (original dispatch) invoice number.
+2. **Invoice Date**.
+3. **Additional Fields** — an extensible mechanism: if there are extra fields needed beyond the
+   fixed set on this page, a **category** can be created for them, and those categories are
+   **reusable** (across returns, not a one-off per document). No existing PACE mechanism matches
+   this yet (checked — no `additional_field`/`field_category`/`custom_field` table or pattern
+   anywhere in the codebase) — this will be a **new** category-based extensible-field mechanism,
+   design still to come.
+4. **Payment Terms**.
+5. **Freight** — a **FOR / To Pay** choice (mirrors the Freight Term concept already used on
+   PGI/Invoice per §113.15). **FOR** = settled, nothing further to resolve. **To Pay** = needs its
+   own resolution mechanism, **not yet explained** — business owner: "seta niche resolve hobe
+   bolchi" (I'll explain how that gets resolved, separately).
+6. **Values** — deferred entirely: "segulo kal bolbo" (I'll cover that next time).
+
+**Still explicitly incomplete — do not implement or lock:** the To-Pay Freight resolution
+mechanism (point 5) and the Values fields (point 6) are named but not yet designed. This section
+graduates to "✅ LOCKED" only once both are filled in and business owner confirms the full page.
+This also still needs to absorb the company-scoped found/wrong-company/not-found Invoice
+validation logic originally sketched for the abandoned Invoice-first Page 1 draft (§134.3).
 
 ### 134.6 — Still open, to be locked next
 
