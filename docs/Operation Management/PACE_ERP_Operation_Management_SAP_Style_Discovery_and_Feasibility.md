@@ -23050,14 +23050,23 @@ must start from this now-fixed version (ideally extract a shared `TransporterPic
 used by DO/GRN/SO05 alike, rather than copy-pasting the picker a fourth time) — do not resurrect
 the pre-fix mouse-only/state-losing behavior.
 
-### 134.5 — Still open, to be locked next
+### 134.5 — Page 3: Invoice Details (page slot confirmed — 2026-09-06, full spec deferred)
 
-Page 3 onward: how (and how many) Invoices get linked to one Return Receipt now that address and
-Invoice are fully decoupled (§134.3) — including the company-scoped found/wrong-company/not-found
-validation originally sketched for the abandoned Invoice-first Page 1 draft, which still needs a
-home on whichever page actually does the linking; where/how IBN fits into the flow (confirmed
-NOT on Page 1, still unplaced); value/rate capture per §134.1 item 3; line-level SKU/Batch/Qty
-detail per items 4-5; how the P651-P658 movement family maps onto whichever page actually posts;
-and the pack-type-change resolution from §83.6 item 2. None of this is decided yet. Do not
-implement anything from this section until it carries a "✅ LOCKED" tag with a page-by-page spec,
+**Page 3 will hold the Invoice details of the return that came in** — business owner confirmed the
+page's identity/position in the sequence, but asked to defer the actual field-level design
+("etay Return-er Invoice details sob bosabo, seta niye ektu pore alochona korchi" — this page will
+carry all the Invoice details of the return, we'll discuss that in more depth shortly). Do not
+design this page's fields/behavior yet — wait for that follow-up discussion. This picks up
+directly the company-scoped found/wrong-company/not-found Invoice validation logic originally
+sketched for the abandoned Invoice-first Page 1 draft (§134.3), which needs a home here.
+
+### 134.6 — Still open, to be locked next
+
+Page 3's own detailed spec (deferred per §134.5 above) — how (and how many) Invoices get linked to
+one Return Receipt now that address and Invoice are fully decoupled (§134.3); where/how IBN fits
+into the flow (confirmed NOT on Page 1, still unplaced); value/rate capture per §134.1 item 3;
+line-level SKU/Batch/Qty detail per items 4-5; how the P651-P658 movement family maps onto
+whichever page actually posts; and the pack-type-change resolution from §83.6 item 2. None of this
+is decided yet. Do not implement anything from this section until it carries a "✅ LOCKED" tag with
+a page-by-page spec,
 matching how every other SO0x page in §133 was locked before Codex/Claude touched code.
