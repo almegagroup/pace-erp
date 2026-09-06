@@ -62,7 +62,11 @@ export async function materialMap(materialIds: string[]): Promise<Map<string, Ro
   return result;
 }
 
-async function packCodeRow(packCode: string): Promise<Row | null> {
+// Exported for manual_costing_rate.handlers.ts (AC08) -- it needs the real
+// bom_required flag to decide whether PM lines are relevant, not a
+// hardcoded pack code literal (599 is actually the NON-fixed/optional-PM
+// case; a Fixed-BOM code like 450 is the one that genuinely has PM lines).
+export async function packCodeRow(packCode: string): Promise<Row | null> {
   if (!packCode) return null;
   const { data, error } = await serviceRoleClient.schema("erp_production").from("pack_code_master")
     .select("pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code")

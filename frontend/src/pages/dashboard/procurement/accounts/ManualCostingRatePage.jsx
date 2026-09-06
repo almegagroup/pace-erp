@@ -5,8 +5,10 @@
  *          exists for these, so Accounts hand-enters a rate per material here.
  *          Row click/Enter opens an AC01-style center drawer: RM/INT lines
  *          (SO Stroke dosage% + Actual/Production Stroke dosage% side by
- *          side, unioned like AC07), PM lines too when the SKU's pack code is
- *          599/Barrel, each with a blank manual Rate field. Save writes to
+ *          side, unioned like AC07), PM lines too when the SKU's pack code
+ *          is a real Fixed-BOM pack (corrected 2026-09-07 -- 599 is
+ *          actually the NON-fixed/optional-PM code, not the trigger),
+ *          each with a blank manual Rate field. Save writes to
  *          erp_procurement.manual_costing_rate_entry, case-by-case per SO
  *          line -- never a shared company+material rate (business owner,
  *          explicit, 2026-09-07).
@@ -213,7 +215,15 @@ export default function ManualCostingRatePage() {
 
             {detail.include_pm ? (
               <div>
-                <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">PM — Pack Code 599 (Barrel)</h3>
+                <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  PM — Pack Code {detail.pack_code || "—"}
+                  {detail.pm_source === "actual_packing_order" && (
+                    <span className="ml-2 font-normal normal-case text-slate-400">(from Packing PO {detail.packing_po_number || "—"}'s own actual lines — variable-fill pack, no fixed composition)</span>
+                  )}
+                  {(detail.pm_source === "own_pack_bom" || detail.pm_source === "own_packing_history" || detail.pm_source === "category_fallback") && (
+                    <span className="ml-2 font-normal normal-case text-slate-400">(from Pack BOM)</span>
+                  )}
+                </h3>
                 <ErpDenseGrid
                   rowKey={(row) => row.material_id}
                   rows={detail.pm_rows}
@@ -228,7 +238,7 @@ export default function ManualCostingRatePage() {
                 />
               </div>
             ) : (
-              <p className="text-xs text-slate-400">Pack code is {detail.pack_code || "—"} (not 599) — PM lines are not part of this entry.</p>
+              <p className="text-xs text-slate-400">No pack code found for this SKU — PM lines are not part of this entry.</p>
             )}
           </div>
         )}

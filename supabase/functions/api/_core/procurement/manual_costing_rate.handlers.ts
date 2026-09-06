@@ -5,9 +5,16 @@
  *          has no AC06 month to draw RM/INT/PM rates from at all. This page lists
  *          exactly those dispatched MTO/HPS lines and lets Accounts hand-enter a
  *          rate per material (RM/INT from BOTH the SO's own declared stroke and
- *          the stroke actually used in production, unioned like AC07 does; PM
- *          lines too when the SKU's pack code is 599/Barrel), saved case-by-case
- *          into erp_procurement.manual_costing_rate_entry (never a shared
+ *          the stroke actually used in production, unioned like AC07 does).
+ *          PM lines always show, but the SOURCE depends on the SKU's pack
+ *          code (business owner, 2026-09-07): a Fixed-BOM pack
+ *          (pack_code_master.bom_required=true) uses that Pack BOM's own
+ *          composition (AC07's resolvePmComposition); a non-fixed/
+ *          variable-fill pack (599/000/001, bom_required=false) has no
+ *          single fixed composition, so PM comes straight from the REAL PM
+ *          lines on the specific Packing PO actually dispatched for this SO
+ *          line -- not a generic guess. Saved case-by-case into
+ *          erp_procurement.manual_costing_rate_entry (never a shared
  *          company+material rate -- business owner, explicit, 2026-09-07).
  * Authority: Backend
  */
@@ -19,7 +26,7 @@ import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
-import { materialMap, resolvePmComposition } from "../production/ac07_costing.handlers.ts";
+import { materialMap, packCodeRow, resolvePmComposition } from "../production/ac07_costing.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ManualCostingHandlerContext = {
@@ -31,6 +38,35 @@ type ManualCostingHandlerContext = {
 
 const RESOURCE = "ACC_MANUAL_COSTING_RATE";
 const FG_TYPES = ["MTO", "HPS"];
+
+// Real PM lines off the ONE specific Packing PO actually dispatched for this
+// SO line -- used only for non-fixed/variable-fill pack codes (599/000/001),
+// where there's no single Pack BOM composition to fall back on (a 599 barrel's
+// actual fill/container count varies per batch). Same qty-per-pack math as
+// AC07's own mostRecentPackingPoPmLines(), just scoped to a KNOWN PO id
+// instead of searching for "this SKU's most recent FINAL Packing PO".
+async function actualPackingOrderPmLines(packingOrder: JsonRecord): Promise<JsonRecord[]> {
+  const packingOrderId = textValue(packingOrder.id);
+  if (!packingOrderId) return [];
+  const { data: allLines, error: lineErr } = await serviceRoleClient.schema("erp_production")
+    .from("packing_order_line")
+    .select("line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty")
+    .eq("packing_order_id", packingOrderId);
+  if (lineErr) throw new Error("MCR_PACKING_PO_LINE_LOOKUP_FAILED");
+  const pmLines = ((allLines ?? []) as JsonRecord[]).filter((row) => row.line_type === "PM");
+  if (pmLines.length === 0) return [];
+
+  const packCount = Number(packingOrder.num_packs ?? 0);
+  return pmLines.map((line) => {
+    const materialId = textValue(line.actual_material_id) || textValue(line.material_id);
+    const actualQty = Number(line.actual_qty ?? line.total_qty ?? 0);
+    const storedQtyPerPack = Number(line.qty_per_pack ?? 0);
+    return {
+      material_id: materialId,
+      qty: packCount > 0 ? actualQty / packCount : storedQtyPerPack,
+    };
+  });
+}
 
 function textValue(value: unknown): string {
   return String(value ?? "").trim();
@@ -124,7 +160,7 @@ async function resolveCandidates(companyId: string, onlySoLineId?: string): Prom
   const packingOrderIds = uniqueValues([...firstDcLineBySoLine.values()].map((row) => row.packing_order_id));
   const packingOrders = await fetchInChunks<JsonRecord>(packingOrderIds, (chunk) => serviceRoleClient
     .schema("erp_production").from("packing_order")
-    .select("id, po_number, process_order_id").in("id", chunk));
+    .select("id, po_number, process_order_id, num_packs, actual_qty_kg").in("id", chunk));
   const packingById = new Map(packingOrders.map((row) => [textValue(row.id), row]));
 
   const processOrderIds = uniqueValues(packingOrders.map((row) => row.process_order_id));
@@ -264,16 +300,29 @@ export async function getManualCostingRowHandler(req: Request, ctx: ManualCostin
       return matches.reduce((sum, row) => sum + Number(row.dosage_pct ?? 0), 0);
     }
 
-    // 599/Barrel only, per business owner's explicit scoping (2026-09-07) --
-    // reuses AC07's own own-BOM/packing-history/category-fallback chain
-    // unchanged so this never drifts from AC07's PM sourcing.
+    // PM always shows (given a real pack code); the SOURCE branches on
+    // bom_required -- corrected live 2026-09-07, see file header comment.
+    // Fixed-BOM: AC07's own Pack BOM resolution (composition doesn't vary
+    // per instance). Non-fixed (599/000/001): the REAL PM lines off the
+    // exact Packing PO this SO line actually dispatched from, since fill
+    // varies per batch and a generic guess would be wrong.
     const packCode = textValue(candidate.material.pack_code);
-    const includePm = packCode === "599";
-    let pmComposition: { lines: JsonRecord[] } = { lines: [] };
+    const packCodeInfo = await packCodeRow(packCode);
+    const isFixedBom = packCodeInfo?.bom_required === true;
+    const includePm = Boolean(packCode);
+    let pmLinesRaw: JsonRecord[] = [];
+    let pmSource: string | null = null;
     if (includePm) {
-      pmComposition = await resolvePmComposition(textValue(candidate.soLine.material_id), candidate.material);
+      if (isFixedBom) {
+        const pmComposition = await resolvePmComposition(textValue(candidate.soLine.material_id), candidate.material);
+        pmLinesRaw = pmComposition.lines;
+        pmSource = pmComposition.source;
+      } else if (candidate.packingOrder) {
+        pmLinesRaw = await actualPackingOrderPmLines(candidate.packingOrder);
+        pmSource = "actual_packing_order";
+      }
     }
-    const pmMaterialIds = uniqueValues(pmComposition.lines.map((row) => row.material_id));
+    const pmMaterialIds = uniqueValues(pmLinesRaw.map((row) => row.material_id));
     const pmMaterials = await materialMap(pmMaterialIds);
 
     const { data: existingRateRows, error: rateErr } = await serviceRoleClient
@@ -294,7 +343,7 @@ export async function getManualCostingRowHandler(req: Request, ctx: ManualCostin
         rate: existingRateByMaterial.get(materialId) ?? null,
       };
     });
-    const pmRows = pmComposition.lines.map((line) => {
+    const pmRows = pmLinesRaw.map((line) => {
       const materialId = textValue(line.material_id);
       const material = pmMaterials.get(materialId);
       return {
@@ -313,6 +362,7 @@ export async function getManualCostingRowHandler(req: Request, ctx: ManualCostin
         item: [textValue(candidate.material.pace_code), textValue(candidate.material.material_name)].filter(Boolean).join(" — "),
         pack_code: packCode,
         include_pm: includePm,
+        pm_source: pmSource,
         batch_number: textValue(candidate.dcLine.batch_number),
         packing_po_number: textValue(candidate.packingOrder?.po_number),
         so_stroke_number: declaredStroke || null,
