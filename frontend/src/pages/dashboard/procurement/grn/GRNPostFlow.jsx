@@ -206,9 +206,11 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [transporterId, setTransporterId] = useState(_saved.transporterId ?? (geLine.csn_transporter_id ?? ""));
   const [transporterSearch, setTransporterSearch] = useState("");
   const [transporterName, setTransporterName] = useState(_saved.transporterName ?? (geLine.csn_transporter_name ?? ""));
+  const [transporterHighlight, setTransporterHighlight] = useState(-1);
   const [lastMileTransporterId, setLastMileTransporterId] = useState(_saved.lastMileTransporterId ?? "");
   const [lastMileTransporterSearch, setLastMileTransporterSearch] = useState("");
   const [lastMileTransporterName, setLastMileTransporterName] = useState(_saved.lastMileTransporterName ?? "");
+  const [lastMileTransporterHighlight, setLastMileTransporterHighlight] = useState(-1);
   const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number ?? ""));
   const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
   const [hsnCode, setHsnCode] = useState(_saved.hsnCode ?? (geLine.hsn_code ?? ""));
@@ -249,6 +251,20 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     queryFn: () => listTransporters({ search: transporterSearchTrimmed, company_id: geHeader.company_id, limit: 20 }),
   });
   const transporterResults = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.data ?? []);
+  // §137 (2026-09-06) -- dropdown was mouse-only, down-arrow key did nothing.
+  // Stale index (from a previous keystroke/result-set) is clamped at render.
+  const safeTransporterHighlight = transporterHighlight >= 0 && transporterHighlight < transporterResults.length ? transporterHighlight : -1;
+  function pickTransporter(t) { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setTransporterSearch(""); }
+  function handleTransporterSearchChange(e) { setTransporterSearch(e.target.value); setTransporterHighlight(-1); }
+  function handleTransporterSearchKeyDown(e) {
+    if (transporterSearchTrimmed.length < 2 || transporterResults.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setTransporterHighlight((c) => (c + 1) % transporterResults.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setTransporterHighlight((c) => (c - 1 + transporterResults.length) % transporterResults.length); }
+    else if (e.key === "Enter") {
+      const pick = transporterResults[safeTransporterHighlight] ?? (transporterResults.length === 1 ? transporterResults[0] : null);
+      if (pick) { e.preventDefault(); pickTransporter(pick); }
+    } else if (e.key === "Escape") { setTransporterSearch(""); }
+  }
 
   const [debouncedLastMileTransporterSearch, setDebouncedLastMileTransporterSearch] = useState("");
   const lastMileDebounceRef = useRef(null);
@@ -266,6 +282,18 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     queryFn: () => listTransporters({ search: lastMileTransporterSearchTrimmed, company_id: geHeader.company_id, limit: 20 }),
   });
   const lastMileTransporterResults = Array.isArray(lastMileTransporterQuery.data) ? lastMileTransporterQuery.data : (lastMileTransporterQuery.data?.data ?? []);
+  const safeLastMileTransporterHighlight = lastMileTransporterHighlight >= 0 && lastMileTransporterHighlight < lastMileTransporterResults.length ? lastMileTransporterHighlight : -1;
+  function pickLastMileTransporter(t) { setLastMileTransporterId(t.id); setLastMileTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setLastMileTransporterSearch(""); }
+  function handleLastMileTransporterSearchChange(e) { setLastMileTransporterSearch(e.target.value); setLastMileTransporterHighlight(-1); }
+  function handleLastMileTransporterSearchKeyDown(e) {
+    if (lastMileTransporterSearchTrimmed.length < 2 || lastMileTransporterResults.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setLastMileTransporterHighlight((c) => (c + 1) % lastMileTransporterResults.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setLastMileTransporterHighlight((c) => (c - 1 + lastMileTransporterResults.length) % lastMileTransporterResults.length); }
+    else if (e.key === "Enter") {
+      const pick = lastMileTransporterResults[safeLastMileTransporterHighlight] ?? (lastMileTransporterResults.length === 1 ? lastMileTransporterResults[0] : null);
+      if (pick) { e.preventDefault(); pickLastMileTransporter(pick); }
+    } else if (e.key === "Escape") { setLastMileTransporterSearch(""); }
+  }
 
   // Expiry calculation preview
   const expiryCalculated = (() => {
@@ -645,7 +673,8 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                         type="text"
                         placeholder="Type 2+ characters to search transporter master…"
                         value={transporterSearch}
-                        onChange={(e) => setTransporterSearch(e.target.value)}
+                        onChange={handleTransporterSearchChange}
+                        onKeyDown={handleTransporterSearchKeyDown}
                         className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
                       />
                       {transporterSearchTrimmed.length >= 2 && (
@@ -668,11 +697,12 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                               )}
                             </div>
                           )}
-                          {transporterResults.map((t) => (
+                          {transporterResults.map((t, index) => (
                             <button
                               key={t.id}
-                              onClick={() => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setTransporterSearch(""); }}
-                              className="w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0"
+                              onMouseEnter={() => setTransporterHighlight(index)}
+                              onClick={() => pickTransporter(t)}
+                              className={`w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0 ${index === safeTransporterHighlight ? "bg-sky-100" : ""}`}
                             >
                               <span className="font-mono text-xs text-slate-500">{t.transporter_code}</span>
                               <span className="ml-2 font-medium">{t.transporter_name}</span>
@@ -704,7 +734,8 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                         type="text"
                         placeholder="Type 2+ characters to search transporter master…"
                         value={lastMileTransporterSearch}
-                        onChange={(e) => setLastMileTransporterSearch(e.target.value)}
+                        onChange={handleLastMileTransporterSearchChange}
+                        onKeyDown={handleLastMileTransporterSearchKeyDown}
                         className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
                       />
                       {lastMileTransporterSearchTrimmed.length >= 2 && (
@@ -727,11 +758,12 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                               )}
                             </div>
                           )}
-                          {lastMileTransporterResults.map((t) => (
+                          {lastMileTransporterResults.map((t, index) => (
                             <button
                               key={t.id}
-                              onClick={() => { setLastMileTransporterId(t.id); setLastMileTransporterName(`${t.transporter_code} — ${t.transporter_name}`); setLastMileTransporterSearch(""); }}
-                              className="w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0"
+                              onMouseEnter={() => setLastMileTransporterHighlight(index)}
+                              onClick={() => pickLastMileTransporter(t)}
+                              className={`w-full text-left px-3 py-2 text-sm hover:bg-sky-50 border-b border-slate-100 last:border-0 ${index === safeLastMileTransporterHighlight ? "bg-sky-100" : ""}`}
                             >
                               <span className="font-mono text-xs text-slate-500">{t.transporter_code}</span>
                               <span className="ml-2 font-medium">{t.transporter_name}</span>

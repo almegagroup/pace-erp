@@ -75,72 +75,6 @@ function reportError(
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
-async function buildStrokeValidation(
-  companyId: string,
-  materials: JsonRecord[],
-): Promise<{
-  prodshadeBySkuMaterialId: Map<string, string>;
-  validStrokeKeys: Set<string>;
-}> {
-  const fgMaterials = materials.filter((row) => upperValue(row.material_type) === "FG");
-  if (fgMaterials.length === 0) {
-    return { prodshadeBySkuMaterialId: new Map(), validStrokeKeys: new Set() };
-  }
-
-  const [configs, packCodes, strokes] = await Promise.all([
-    // §83.15 lock: prodshade_pack_config is intentionally GLOBAL (no
-    // company_id column at all) -- only Pack BOM itself is company-wise.
-    // Filtering this by companyId always 42703'd; a company_id column was
-    // never added here on purpose.
-    fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
-      .schema("erp_production").from("prodshade_pack_config")
-      .select("material_id, pack_code_id, variant")
-      .eq("active", true)
-      .order("id", { ascending: true }).range(from, to)),
-    fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
-      .schema("erp_production").from("pack_code_master")
-      .select("id, pack_code").eq("active", true)
-      .order("id", { ascending: true }).range(from, to)),
-    fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
-      .schema("erp_production").from("stroke_master")
-      .select("id, prodshade_material_id, stroke_number")
-      .eq("company_id", companyId).eq("status", "APPROVED")
-      .order("id", { ascending: true }).range(from, to)),
-  ]);
-
-  const prodshadeIds = uniqueValues(configs.map((row) => row.material_id));
-  const prodshades = await fetchInChunks<JsonRecord>(prodshadeIds, (chunk) => serviceRoleClient
-    .schema("erp_master").from("material_master").select("id, external_code").in("id", chunk));
-  const packById = new Map(packCodes.map((row) => [textValue(row.id), textValue(row.pack_code)]));
-  const prodshadeById = new Map(prodshades.map((row) => [textValue(row.id), textValue(row.external_code)]));
-  const prodshadeIdBySkuKey = new Map<string, string>();
-  for (const config of configs) {
-    const key = upperValue(`${prodshadeById.get(textValue(config.material_id)) ?? ""}${packById.get(textValue(config.pack_code_id)) ?? ""}${textValue(config.variant)}`);
-    if (key) prodshadeIdBySkuKey.set(key, textValue(config.material_id));
-  }
-
-  const prodshadeBySkuMaterialId = new Map<string, string>();
-  for (const material of fgMaterials) {
-    const skuKey = upperValue(material.external_code || material.material_name);
-    const prodshadeId = prodshadeIdBySkuKey.get(skuKey);
-    if (prodshadeId) prodshadeBySkuMaterialId.set(textValue(material.id), prodshadeId);
-  }
-
-  const strokeIds = uniqueValues(strokes.map((row) => row.id));
-  const applicability = await fetchInChunks<JsonRecord>(strokeIds, (chunk) => serviceRoleClient
-    .schema("erp_production").from("stroke_po_type_applicability")
-    .select("stroke_master_id, target_po_type")
-    .eq("is_active", true).in("target_po_type", ["MTO", "HPS"]).in("stroke_master_id", chunk));
-  const strokeById = new Map(strokes.map((row) => [textValue(row.id), row]));
-  const validStrokeKeys = new Set<string>();
-  for (const row of applicability) {
-    const stroke = strokeById.get(textValue(row.stroke_master_id));
-    if (!stroke) continue;
-    validStrokeKeys.add(`${textValue(stroke.prodshade_material_id)}|${upperValue(row.target_po_type)}|${upperValue(stroke.stroke_number)}`);
-  }
-  return { prodshadeBySkuMaterialId, validStrokeKeys };
-}
-
 export async function getDispatchReportHandler(
   req: Request,
   ctx: DispatchReportHandlerContext,
@@ -258,7 +192,6 @@ export async function getDispatchReportHandler(
       .schema("erp_master").from("fg_parent_company")
       .select("id, company_name").in("id", chunk));
     const parentById = new Map(parents.map((row) => [textValue(row.id), textValue(row.company_name)]));
-    const { prodshadeBySkuMaterialId, validStrokeKeys } = await buildStrokeValidation(companyId, materials);
 
     const invoiceById = new Map(invoices.map((row) => [textValue(row.id), row]));
     const groups = new Map<string, JsonRecord[]>();
@@ -284,12 +217,21 @@ export async function getDispatchReportHandler(
         const transporter = transporterById.get(textValue(dc.transporter_id));
         const declaredStroke = textValue(soLine.declared_stroke_number);
         const fgType = upperValue(soLine.fg_type);
-        const prodshadeId = prodshadeBySkuMaterialId.get(materialId) ?? "";
+        const actualStroke = strokeById.get(textValue(process.stroke_master_id)) ?? "";
+        // Business owner ask (2026-09-07) -- flag a mismatch whenever the SO's
+        // own declared stroke differs from what actually got produced/dispatched,
+        // not only when the declared number doesn't exist as a stroke at all
+        // (the old validStrokeKeys check, since removed) -- a real, approved
+        // stroke that simply isn't the one this batch was made from is just as
+        // much a mismatch as a typo'd/nonexistent stroke number; comparing
+        // straight against this line's own actualStroke catches both. MTEST has
+        // no SO Stroke concept at all (declaredStroke stays blank for it), so it
+        // never flags -- gated to MTO/HPS same as before.
         const invalidStroke = Boolean(
-          prodshadeId && declaredStroke && ["MTO", "HPS"].includes(fgType)
-          && !validStrokeKeys.has(`${prodshadeId}|${fgType}|${upperValue(declaredStroke)}`),
+          declaredStroke && ["MTO", "HPS"].includes(fgType)
+          && upperValue(declaredStroke) !== upperValue(actualStroke),
         );
-        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, invalidStroke };
+        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke };
       });
 
       const strokeEntryMap = new Map<string, StrokeEntry>();
@@ -325,7 +267,7 @@ export async function getDispatchReportHandler(
         external_code: textValue(material.external_code),
         so_stroke: soStrokeEntries.map((entry) => entry.value).join("\n"),
         so_stroke_entries: soStrokeEntries,
-        actual_stroke: joined(lineDetails.map((entry) => strokeById.get(textValue(entry.process.stroke_master_id)))),
+        actual_stroke: joined(lineDetails.map((entry) => entry.actualStroke)),
         item_category: textValue(material.material_category),
         taxable: rounded(lines.reduce((sum, line) => sum + numberValue(line.taxable_value), 0)),
         cgst: rounded(lines.reduce((sum, line) => sum + numberValue(line.cgst_amount), 0)),

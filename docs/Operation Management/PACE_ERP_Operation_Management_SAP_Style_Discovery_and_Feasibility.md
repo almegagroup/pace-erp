@@ -22910,3 +22910,179 @@ pre-existing baseline errors across unrelated procurement files). `eslint` clean
 CI guards + `dependency-provisioning-check.mjs --strict-manifest` exit 0 (manifest also backfilled
 two pre-existing gaps for `SO01Page.jsx` — `listSalesOrderFgSkuOptions` was missing too, not just
 the new stroke-check endpoint).
+
+---
+
+## 134 — Sales Return (customer return of dispatched FG) — DESIGN IN PROGRESS (started 2026-09-06)
+
+**Unblocks §83.6's "Customer Return + Pack-Type-Change Reversal — BLOCKED on Dispatch design"
+(2026-07-12 lock).** That note paused Return Receipt design until Dispatch (L5) had its own formal
+session — §113/§133 (SO01-03, DO, PGI/Invoice, dispatch_reco) now cover that ground, so this
+session resumes the two mandatory items §83.6 left open: Return Receipt + QA Usage Decision, and
+Pack-Type-Change Reversal. Read §83.6 first — it already locked the reusable `P651`-`P658`
+movement-type family (Customer Return Receipt → Blocked, then Blocked→Unrestricted /
+Blocked→QA / Blocked-confirm, each with its own reversal) and the still-open pack-type-change
+question (does a returned SKU always dissolve to RM/PM like PR19, or can it stop at SFG and feed a
+new pack-type Packing PO directly) — neither is re-litigated here, both carry forward as-is.
+
+### 134.1 — Business curve (business owner, 2026-09-06) — five real-world complications that break
+the naive "just enter the Invoice Number and everything auto-fills" assumption
+
+1. **Return address ≠ dispatch address.** The goods can come back from a different location than
+   the one they were shipped to — Return Receipt cannot assume Ship-To = Bill-To = original
+   dispatch address; the return's own address must be capturable/overridable independently, never
+   auto-locked from the referenced Invoice/DO.
+2. **Pre-PACE dispatches can still return.** A return can reference a dispatch that happened
+   *before* PACE went live — no PACE Invoice Number, no Tally Invoice Number, no DO, no
+   `dispatch_reco` row exists for it at all. Return Receipt must work with **zero** system
+   reference (manual Customer/SKU/Batch/Qty entry), not just as an Invoice-linked flow.
+3. **A return can itself be billed as a fresh sale, at a different value.** The party/depot can
+   choose to sell the returned material back to PACE on their own commercial terms, rather than a
+   pure reversal of the original dispatch — so Return Receipt cannot assume the return's value is
+   always "= the original dispatch rate, reversed." Two distinct value bases must both be
+   representable.
+4. **Partial return is the norm, not the exception.** Returned qty can be anywhere from 0 up to
+   (and including) the full originally-dispatched qty — never assume 1:1.
+5. **Pack type/SKU can change between dispatch and return.** Physically dispatched in one pack
+   type (e.g. Tanker) but received back and unloaded into a different one (e.g. Barrel/IBC) — the
+   FG SKU code itself encodes pack type (§83.15's naming convention), so the *received* SKU can
+   differ from the *dispatched* SKU for the same physical material. This is the concrete, real
+   version of §83.6 item 2's "pack-type-change" open question — not a hypothetical edge case.
+
+**Design implication (not yet fully worked out, carried into the next lock):** Return Receipt
+needs (a) an optional, not mandatory, link to an existing Invoice/DO/`dispatch_reco` row — when
+present it pre-fills but never locks Ship-To/address/SKU/rate; when absent (pre-PACE or otherwise
+untracked), every field is manual entry with no system cross-check; and (b) its own independent
+value/rate capture, separate from whatever the linked dispatch's own rate was, to cover point 3.
+
+### 134.2 — Page identity (LOCKED — 2026-09-06)
+
+Verified live against `erp_menu.menu_master`/`menu_tree` (not assumed): a **"Returns & Claims"**
+sidebar group (`GRP_ACL_RETURNS`) already exists, currently holding three Procurement-module pages
+— `PROC_RTV_LIST` "Return to Vendor" (**PO08**), `PROC_DEBIT_NOTE_LIST` "Debit Notes" (**PO09**),
+`PROC_EXCHANGE_REF_LIST` "Exchange References" (**PO10**). Confirms the established convention in
+this codebase: **tx_code prefix follows the owning module, sidebar group is independent** (same
+pattern already used for IN12/IN13 sitting under the QA sidebar group with an IN prefix).
+
+Sales Return is a Sales-module concept (driven by SO/DO/Invoice, the customer-facing mirror of
+RTV's vendor-facing return) — so:
+- **Page name:** "Sales Return"
+- **tx_code:** **SO05** (continues SO01 Sales Order / SO02 Sales Invoice / SO03 Delivery Order /
+  SO04 Dispatch Report)
+- **Sidebar group:** "Returns & Claims" (`GRP_ACL_RETURNS`) — alongside RTV/Debit Notes/Exchange
+  References, where a business user would naturally look for any return/claim page regardless of
+  which module owns it underneath.
+
+### 134.3 — Page 1: Sending Location Resolution (✅ LOCKED — 2026-09-06)
+
+**Why Page 1 resolves address first, not the Invoice — and why it never references any specific
+Invoice at all (revised mid-discussion, superseding an initial Invoice-first draft).** §134.1
+items 1 and 2 both point at the same conclusion: the Invoice/DO is not a reliable anchor (may not
+exist at all for a pre-PACE dispatch; even when it exists, the return's own address can
+legitimately differ from it). An initial draft still tried to make Page 1 match against an Invoice
+Number, with a "Different Address" override — but business owner identified a real gap in that:
+one physical return shipment can carry material from **multiple different Invoices at once**
+(e.g. one truck consolidating several dispatches' worth of returns), and a DO-style "one
+destination, many source documents" reuse doesn't fit either, because this page still needs to
+work with **zero** Invoice references at all (the pre-PACE case). The clean resolution: **Page 1
+resolves only the Sending Location/Party — no Invoice involved whatsoever.** Invoice linking (one
+or many, optional) becomes a later page's concern, entirely decoupled from address resolution.
+
+**Page 1 has exactly one field group: Return Type**, driving Sending Location resolution. Reuses
+SO01's existing per-type resolver (`resolveBillToShipTo()` in `sales_order.handlers.ts`,
+§133.8-B) as-is, not a new mechanism — same options as SO01's Dispatch Type, minus
+`DEPENDENT_NO_INBOUND` (dropped: business owner confirmed this page has no relationship with
+IBN/Inbound tracking at all — SO01 only uses that type to toggle IBN-required on the *original*
+SO, which is irrelevant here; its Direct/Depot sub-type split collapses into using
+`DEPENDENT_DIRECT`/`DEPENDENT_DEPOT` directly):
+
+| Return Type | Sending Location resolves via |
+|---|---|
+| **Dependent (Direct)** | Parent Company → VDC (filtered to that Parent Company's `dispatch_type='DIRECT'` VDCs) → a specific dependent Customer Address under that VDC |
+| **Dependent (Depot)** | Parent Company → Depot Code (filtered to `dispatch_type='DEPOT'`) — the Depot record's own address/state/GST *is* the Sending Address directly, no further pick |
+| **Independent Party** | Customer (MM04) → one of that Customer's own registered Addresses |
+| **Independent Party (Asian Billed)** | **Two addresses, not one** (corrected mid-discussion — an initial draft wrongly treated this identically to plain Independent Party): (a) **Sending Address** — Customer + its own Address, same physical resolution as Independent Party; **plus** (b) **Asian-side Address** — Parent Company, then a choice of **VDC** / **DC (Depot)** / **NONE** (mirrors SO01's own `ASIAN_BILLED_CHOICES`, §133.20): VDC → that VDC's address, DC → that Depot's address, NONE → the Parent Company's own address |
+| **STO (Inter-company)** | Sending Company (another PACE company, from Companies master) — its own registered address, not a customer at all |
+
+**Prerequisite (business owner, 2026-09-06):** whatever gets selected as the Sending Party/Address
+must already exist in MM04 (Customer Master) beforehand — this page has no inline "+New Party"
+shortcut. If the returning party/address isn't in MM04 yet, that has to be created there first, as
+its own separate step.
+
+### 134.4 — Page 2: Transporter Details (✅ LOCKED — 2026-09-06)
+
+**Page 2 resolves the Transporter/vehicle header, reusing DO (SO03) Create's existing
+resolve-or-create mechanism as-is** — same TransporterPicker search-by-name/code, auto-fill if
+found, or an inline "Add to Transporter Master →" jump if not found, no new mechanism invented
+for this page.
+
+**Header field set (LOCKED, no more for now):** the same fields DO already captures — Vehicle
+Number, Transporter, LR Number, LR Date, Gross Weight (Net Weight derived), Driver Number,
+Driver Contact Number. Business owner: "Ei je Header gulo DO te ache, sei guloi ei Return e rakha
+jabe, tar besi ar dorkar nei, dorkar hole pore vaba jabe" (whatever headers DO already has are
+enough for Return too — no more needed now, revisit later only if a real need shows up).
+
+**Two real bugs surfaced and fixed in DO/GRN's own transporter picker while designing this page**
+(business owner raised them specifically so SO05's own picker doesn't inherit the same defects
+when it gets built) — both fixed same day, 2026-09-06:
+
+1. **Dropdown was mouse-only — Down-arrow did nothing.** `TransporterPicker` in
+   `DO01CreatePage.jsx` and the two hand-rolled transporter/last-mile-transporter dropdowns in
+   `GRNPostFlow.jsx` had `onClick` on each result row but no `onKeyDown` on the search input at
+   all — arrow keys were inert, only a mouse click could pick a row. Fixed in all three pickers:
+   ArrowUp/ArrowDown moves a highlighted row (wrapping), Enter selects the highlighted row (or the
+   sole result if only one match), Escape clears the search.
+2. **`DO01CreatePage.jsx`'s "Add to Transporter Master" wiped the whole in-progress DO form.**
+   `handleAddTransporterToMaster()` called plain `openScreen("PROC_TRANSPORTER_MASTER")` with no
+   state saved first — every screen in `SCREEN_REGISTRY` is `keepAlive:false`, so pushing a new
+   screen fully unmounts the current one, and popping back remounts it from scratch with default
+   state. Every already-typed field (vehicle number, LR number, picked source lines, everything)
+   was lost, not just the transporter. Fixed by reusing the exact pattern `GRNPostFlow.jsx`'s own
+   `goToTransporterMasterPreservingForm()` already implements correctly — stash the whole form
+   into the current screen's own stack-entry context (`updateActiveScreenContext({ do01FormValues:
+   {...} })`) immediately before navigating away, then read it back
+   (`getActiveScreenContext()?.do01FormValues`) at the next mount to reseed every field. **GRN
+   itself did NOT have this data-loss bug** — its own context-preservation was already correctly
+   built; only its keyboard-nav gap (bug 1 above) was real there.
+
+**Implication for SO05's build:** when Page 2 actually gets implemented, its transporter picker
+must start from this now-fixed version (ideally extract a shared `TransporterPicker` component
+used by DO/GRN/SO05 alike, rather than copy-pasting the picker a fourth time) — do not resurrect
+the pre-fix mouse-only/state-losing behavior.
+
+### 134.5 — Page 3: Invoice Details (🔶 field list building up, 2026-09-06 — NOT fully locked yet)
+
+**Page 3 holds the Invoice details of the return that came in.** Field list disclosed so far, in
+this order (business owner, 2026-09-06 — more still to come, explicitly flagged incomplete below):
+
+1. **Invoice Number** — the Sender's own (original dispatch) invoice number.
+2. **Invoice Date**.
+3. **Additional Fields** — an extensible mechanism: if there are extra fields needed beyond the
+   fixed set on this page, a **category** can be created for them, and those categories are
+   **reusable** (across returns, not a one-off per document). No existing PACE mechanism matches
+   this yet (checked — no `additional_field`/`field_category`/`custom_field` table or pattern
+   anywhere in the codebase) — this will be a **new** category-based extensible-field mechanism,
+   design still to come.
+4. **Payment Terms**.
+5. **Freight** — a **FOR / To Pay** choice (mirrors the Freight Term concept already used on
+   PGI/Invoice per §113.15). **FOR** = settled, nothing further to resolve. **To Pay** = needs its
+   own resolution mechanism, **not yet explained** — business owner: "seta niche resolve hobe
+   bolchi" (I'll explain how that gets resolved, separately).
+6. **Values** — deferred entirely: "segulo kal bolbo" (I'll cover that next time).
+
+**Still explicitly incomplete — do not implement or lock:** the To-Pay Freight resolution
+mechanism (point 5) and the Values fields (point 6) are named but not yet designed. This section
+graduates to "✅ LOCKED" only once both are filled in and business owner confirms the full page.
+This also still needs to absorb the company-scoped found/wrong-company/not-found Invoice
+validation logic originally sketched for the abandoned Invoice-first Page 1 draft (§134.3).
+
+### 134.6 — Still open, to be locked next
+
+Page 3's own detailed spec (deferred per §134.5 above) — how (and how many) Invoices get linked to
+one Return Receipt now that address and Invoice are fully decoupled (§134.3); where/how IBN fits
+into the flow (confirmed NOT on Page 1, still unplaced); value/rate capture per §134.1 item 3;
+line-level SKU/Batch/Qty detail per items 4-5; how the P651-P658 movement family maps onto
+whichever page actually posts; and the pack-type-change resolution from §83.6 item 2. None of this
+is decided yet. Do not implement anything from this section until it carries a "✅ LOCKED" tag with
+a page-by-page spec,
+matching how every other SO0x page in §133 was locked before Codex/Claude touched code.
