@@ -99,6 +99,14 @@ async function requireWriteAccess(req: Request, ctx: ManualCostingHandlerContext
   const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE, "WRITE");
   return allowed ? null : mcrError(req, ctx, "MCR_FORBIDDEN", 403, "You do not have Manual Costing Rate write access for this company.");
 }
+// WRITE = first-time rate entry for this SO line; EDIT = changing a rate
+// this SO line already has saved (business owner, 2026-09-07 -- "View Write
+// Edit shob Accounts-er kache" tier setup was ACL-only until now, nothing
+// actually distinguished the two actions at the route level).
+async function requireEditAccess(req: Request, ctx: ManualCostingHandlerContext, companyId: string): Promise<Response | null> {
+  const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE, "EDIT");
+  return allowed ? null : mcrError(req, ctx, "MCR_FORBIDDEN", 403, "You do not have Manual Costing Rate edit access for this company.");
+}
 
 type Candidate = {
   soLine: JsonRecord;
@@ -388,8 +396,6 @@ export async function saveManualCostingRatesHandler(req: Request, ctx: ManualCos
     const companyId = textValue(body.company_id);
     if (!companyId) return mcrError(req, ctx, "MCR_COMPANY_REQUIRED", 400, "company_id is required.");
     await assertCompanyScope(ctx, companyId);
-    const accessError = await requireWriteAccess(req, ctx, companyId);
-    if (accessError) return accessError;
 
     const entries = Array.isArray(body.entries) ? (body.entries as JsonRecord[]) : [];
     const rows = entries
@@ -401,6 +407,19 @@ export async function saveManualCostingRatesHandler(req: Request, ctx: ManualCos
     // in this company before writing anything against it.
     const candidates = await resolveCandidates(companyId, soLineId);
     if (!candidates[0]) return mcrError(req, ctx, "MCR_ROW_NOT_FOUND", 404, "This Manual-costing row was not found for the selected company.");
+
+    // WRITE for this SO line's first-ever rate entry, EDIT once at least one
+    // material already has a saved rate here (the frontend locks the drawer
+    // the same way -- read-only until "Edit" is clicked).
+    const { data: existingForThisLine, error: existingErr } = await serviceRoleClient
+      .schema("erp_procurement").from("manual_costing_rate_entry")
+      .select("id").eq("sales_order_line_id", soLineId).limit(1);
+    if (existingErr) throw new Error("MCR_EXISTING_RATE_LOOKUP_FAILED");
+    const isEdit = (existingForThisLine ?? []).length > 0;
+    const accessError = isEdit
+      ? await requireEditAccess(req, ctx, companyId)
+      : await requireWriteAccess(req, ctx, companyId);
+    if (accessError) return accessError;
 
     const now = new Date().toISOString();
     const { error } = await serviceRoleClient.schema("erp_procurement").from("manual_costing_rate_entry")
