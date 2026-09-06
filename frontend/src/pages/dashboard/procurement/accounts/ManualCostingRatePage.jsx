@@ -66,7 +66,12 @@ export default function ManualCostingRatePage() {
     queryKey: ["manual-costing-row-detail", drawerSoLineId, effectiveCompanyId],
     queryFn: () => getManualCostingRow(drawerSoLineId, { company_id: effectiveCompanyId }),
     enabled: drawerOpen,
-    select: (data) => data?.data ?? null,
+    // §8A checklist pattern #15 (API-client double-unwrap) -- getManualCostingRowHandler
+    // returns okResponse({ data: {...} }), and fetchProcurement's own shape-dependent
+    // unwrap already resolves that down to the bare detail object (no "total" key, so
+    // it takes the payload.data branch) -- selecting `.data` again here always yielded
+    // undefined, so `detail` stayed null forever and the drawer never left "Loading...".
+    select: (data) => data ?? null,
   });
   const detail = detailQ.data ?? null;
 
