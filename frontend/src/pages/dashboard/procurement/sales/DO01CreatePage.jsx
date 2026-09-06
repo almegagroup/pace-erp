@@ -24,7 +24,7 @@ import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreenWithContext, popScreen, openScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreenWithContext, popScreen, openScreen, getActiveScreenContext, updateActiveScreenContext } from "../../../../navigation/screenStackEngine.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
@@ -86,6 +86,7 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [panelRect, setPanelRect] = useState(null);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
   const wrapperRef = useRef(null);
   const debounceRef = useRef(null);
 
@@ -102,6 +103,36 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
     enabled: open,
   });
   const results = Array.isArray(transporterQuery.data) ? transporterQuery.data : (transporterQuery.data?.data ?? transporterQuery.data?.items ?? []);
+
+  // §137 (2026-09-06) -- dropdown was mouse-only, down-arrow did nothing.
+  // A stale index from a previous keystroke/result-set is clamped away here
+  // (derived at render, not an effect) rather than reset separately.
+  const safeHighlightIndex = highlightIndex >= 0 && highlightIndex < results.length ? highlightIndex : -1;
+
+  function handleSearchInputChange(event) {
+    setSearch(event.target.value);
+    setHighlightIndex(-1);
+  }
+
+  function handleSearchKeyDown(event) {
+    if (!open || results.length === 0) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightIndex((current) => (current + 1) % results.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightIndex((current) => (current - 1 + results.length) % results.length);
+    } else if (event.key === "Enter") {
+      const pick = results[safeHighlightIndex] ?? (results.length === 1 ? results[0] : null);
+      if (pick) {
+        event.preventDefault();
+        onSelect(pick);
+        setSearch("");
+      }
+    } else if (event.key === "Escape") {
+      setSearch("");
+    }
+  }
 
   useLayoutEffect(() => {
     if (!open) return undefined;
@@ -135,7 +166,8 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
         type="text"
         placeholder="Type 2+ characters to search transporter master…"
         value={search}
-        onChange={(event) => setSearch(event.target.value)}
+        onChange={handleSearchInputChange}
+        onKeyDown={handleSearchKeyDown}
         className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
       />
       {open && panelRect &&
@@ -155,12 +187,13 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
                 )}
               </div>
             )}
-            {results.map((t) => (
+            {results.map((t, index) => (
               <button
                 key={t.id}
                 type="button"
+                onMouseEnter={() => setHighlightIndex(index)}
                 onClick={() => { onSelect(t); setSearch(""); }}
-                className="block w-full border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-sky-50"
+                className={`block w-full border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-sky-50 ${index === safeHighlightIndex ? "bg-sky-100" : ""}`}
               >
                 <span className="font-mono text-[10px] text-slate-500">{t.transporter_code}</span> {t.transporter_name}
               </button>
@@ -522,23 +555,36 @@ export default function DO01CreatePage() {
     enabled: isEditMode,
   });
 
-  const [page, setPage] = useState(1);
-  const [companyId, setCompanyId] = useState(defaultCompanyId);
-  const [picks, setPicks] = useState([]);
-  const [selectedSources, setSelectedSources] = useState([]);
+  // §137 (2026-09-06) -- "Add to Transporter Master" used to be a plain
+  // openScreen() push with no context saved first, so this whole page
+  // (every already-typed header/truck-row field) got wiped on return --
+  // the screen stack unmounts a non-keepAlive screen on push and remounts
+  // it fresh on pop. Same fix already proven in GRNPostFlow.jsx's
+  // goToTransporterMasterPreservingForm(): stash the full form into this
+  // screen's own stack-entry context right before navigating away, and
+  // read it back here at mount time.
+  const _saved = getActiveScreenContext()?.do01FormValues ?? {};
+  const hasSavedDraft = Object.keys(_saved).length > 0;
+
+  const [page, setPage] = useState(_saved.page ?? 1);
+  const [companyId, setCompanyId] = useState(_saved.companyId ?? defaultCompanyId);
+  const [picks, setPicks] = useState(_saved.picks ?? []);
+  const [selectedSources, setSelectedSources] = useState(_saved.selectedSources ?? []);
   const [showSoDrawer, setShowSoDrawer] = useState(false);
   const [showStoDrawer, setShowStoDrawer] = useState(false);
   const [pickingSourceRef, setPickingSourceRef] = useState(null);
   const [pickingSourceType, setPickingSourceType] = useState(null);
-  const [header, setHeader] = useState({ vehicle_number: "", lr_number: "", lr_date: "", gross_weight: "", driver_number: "", driver_contact_number: "", remarks: "" });
-  const [transporterId, setTransporterId] = useState("");
-  const [transporterName, setTransporterName] = useState("");
+  const [header, setHeader] = useState(_saved.header ?? { vehicle_number: "", lr_number: "", lr_date: "", gross_weight: "", driver_number: "", driver_contact_number: "", remarks: "" });
+  const [transporterId, setTransporterId] = useState(_saved.transporterId ?? "");
+  const [transporterName, setTransporterName] = useState(_saved.transporterName ?? "");
   const [saving, setSaving] = useState(false);
   const [truckSearch, setTruckSearch] = useState("");
   const [exportingTruckRows, setExportingTruckRows] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [editSeeded, setEditSeeded] = useState(false);
+  // A restored draft already has everything the edit-seed effect below would
+  // otherwise fetch+overwrite it with -- start "seeded" so that effect skips.
+  const [editSeeded, setEditSeeded] = useState(hasSavedDraft);
 
   useEffect(() => {
     if (!isEditMode || editSeeded || !editQuery.data) return;
@@ -571,6 +617,11 @@ export default function DO01CreatePage() {
   }, [isEditMode, editSeeded, editQuery.data]);
 
   function handleAddTransporterToMaster() {
+    updateActiveScreenContext({
+      do01FormValues: {
+        page, companyId, picks, selectedSources, header, transporterId, transporterName,
+      },
+    });
     openScreen("PROC_TRANSPORTER_MASTER");
   }
 
