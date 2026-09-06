@@ -5,8 +5,10 @@
  *          exists for these, so Accounts hand-enters a rate per material here.
  *          Row click/Enter opens an AC01-style center drawer: RM/INT lines
  *          (SO Stroke dosage% + Actual/Production Stroke dosage% side by
- *          side, unioned like AC07), PM lines too when the SKU's pack code is
- *          599/Barrel, each with a blank manual Rate field. Save writes to
+ *          side, unioned like AC07), PM lines too when the SKU's pack code
+ *          is a real Fixed-BOM pack (corrected 2026-09-07 -- 599 is
+ *          actually the NON-fixed/optional-PM code, not the trigger),
+ *          each with a blank manual Rate field. Save writes to
  *          erp_procurement.manual_costing_rate_entry, case-by-case per SO
  *          line -- never a shared company+material rate (business owner,
  *          explicit, 2026-09-07).
@@ -79,14 +81,24 @@ export default function ManualCostingRatePage() {
   // existing rate (if any) each time the drawer opens on a new row.
   const [draftRates, setDraftRates] = useState({});
   const [seededSoLineId, setSeededSoLineId] = useState("");
+  // Business owner ask (2026-09-07) -- once a rate is saved, fields lock
+  // read-only; "Edit" unlocks them again. A fresh (never-saved) row opens
+  // already editable, since there's nothing to protect yet.
+  const [editing, setEditing] = useState(false);
   if (detail && seededSoLineId !== drawerSoLineId) {
     const seeded = {};
+    let hasExisting = false;
     for (const row of [...detail.rm_int_rows, ...detail.pm_rows]) {
       seeded[row.material_id] = row.rate != null ? String(row.rate) : "";
+      if (row.rate != null) hasExisting = true;
     }
     setDraftRates(seeded);
+    setEditing(!hasExisting);
     setSeededSoLineId(drawerSoLineId);
   }
+  const hasAnyExistingRate = detail
+    ? [...detail.rm_int_rows, ...detail.pm_rows].some((row) => row.rate != null)
+    : false;
 
   function openDrawer(row) {
     setDrawerSoLineId(row.so_line_id);
@@ -95,6 +107,7 @@ export default function ManualCostingRatePage() {
     setDrawerSoLineId("");
     setSeededSoLineId("");
     setDraftRates({});
+    setEditing(false);
   }
 
   const [saving, setSaving] = useState(false);
@@ -117,6 +130,7 @@ export default function ManualCostingRatePage() {
     try {
       await saveManualCostingRates(drawerSoLineId, { company_id: effectiveCompanyId, entries });
       toast("Rates saved.");
+      setEditing(false);
       await qc.invalidateQueries({ queryKey: ["manual-costing-rows", effectiveCompanyId] });
       await qc.invalidateQueries({ queryKey: ["manual-costing-row-detail", drawerSoLineId, effectiveCompanyId] });
     } catch (err) {
@@ -133,7 +147,8 @@ export default function ManualCostingRatePage() {
     return (
       <input
         type="number" step="any" min="0"
-        className="h-7 w-24 border border-sky-400 bg-sky-50 px-1.5 text-right font-mono text-xs font-semibold text-sky-800 outline-none"
+        disabled={!editing}
+        className={`h-7 w-24 border px-1.5 text-right font-mono text-xs font-semibold outline-none ${editing ? "border-sky-400 bg-sky-50 text-sky-800" : "border-slate-200 bg-slate-100 text-slate-500"}`}
         placeholder="0.00"
         value={draftRates[row.material_id] ?? ""}
         onChange={(e) => setDraftRates((current) => ({ ...current, [row.material_id]: e.target.value }))}
@@ -172,10 +187,17 @@ export default function ManualCostingRatePage() {
         width="min(1100px, calc(100vw - 24px))"
         actions={
           <>
-            <button type="button" onClick={() => void handleSave()} disabled={saving || !detail}
-              className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
-              {saving ? "Saving..." : "Save"}
-            </button>
+            {editing ? (
+              <button type="button" onClick={() => void handleSave()} disabled={saving || !detail}
+                className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+                {saving ? "Saving..." : "Save"}
+              </button>
+            ) : hasAnyExistingRate ? (
+              <button type="button" onClick={() => setEditing(true)} disabled={!detail}
+                className="h-8 border border-amber-600 bg-amber-50 px-4 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50">
+                Edit
+              </button>
+            ) : null}
             <button type="button" onClick={closeDrawer} className="h-8 border border-slate-300 bg-white px-4 text-sm text-slate-700 hover:bg-slate-50">
               Close
             </button>
@@ -191,6 +213,11 @@ export default function ManualCostingRatePage() {
               <span>Packing PO: <b>{detail.packing_po_number || "—"}</b></span>
               <span>SO Stroke: <b>{detail.so_stroke_number || "—"}</b>{detail.so_stroke_number && !detail.so_stroke_found ? <span className="ml-1 text-rose-600">(not in Stroke Master — dosage blank until it's added)</span> : null}</span>
               <span>Production Stroke: <b>{detail.actual_stroke_number || "—"}</b></span>
+              {hasAnyExistingRate ? (
+                <span className={`ml-auto rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${editing ? "bg-amber-50 text-amber-700" : "bg-slate-200 text-slate-600"}`}>
+                  {editing ? "Editing" : "Saved — read-only"}
+                </span>
+              ) : null}
             </div>
 
             <div>
@@ -213,7 +240,15 @@ export default function ManualCostingRatePage() {
 
             {detail.include_pm ? (
               <div>
-                <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">PM — Pack Code 599 (Barrel)</h3>
+                <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  PM — Pack Code {detail.pack_code || "—"}
+                  {detail.pm_source === "actual_packing_order" && (
+                    <span className="ml-2 font-normal normal-case text-slate-400">(from Packing PO {detail.packing_po_number || "—"}'s own actual lines — variable-fill pack, no fixed composition)</span>
+                  )}
+                  {(detail.pm_source === "own_pack_bom" || detail.pm_source === "own_packing_history" || detail.pm_source === "category_fallback") && (
+                    <span className="ml-2 font-normal normal-case text-slate-400">(from Pack BOM)</span>
+                  )}
+                </h3>
                 <ErpDenseGrid
                   rowKey={(row) => row.material_id}
                   rows={detail.pm_rows}
@@ -228,7 +263,7 @@ export default function ManualCostingRatePage() {
                 />
               </div>
             ) : (
-              <p className="text-xs text-slate-400">Pack code is {detail.pack_code || "—"} (not 599) — PM lines are not part of this entry.</p>
+              <p className="text-xs text-slate-400">No pack code found for this SKU — PM lines are not part of this entry.</p>
             )}
           </div>
         )}
