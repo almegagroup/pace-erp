@@ -99,6 +99,11 @@ import {
 } from "../_core/procurement/stock_reports.handlers.ts";
 import { getDispatchReportHandler } from "../_core/procurement/dispatch_report.handlers.ts";
 import {
+  listManualCostingRowsHandler,
+  getManualCostingRowHandler,
+  saveManualCostingRatesHandler,
+} from "../_core/procurement/manual_costing_rate.handlers.ts";
+import {
   approvePTOHandler,
   cancelPTOHandler,
   createPTOHandler,
@@ -630,6 +635,8 @@ export async function dispatchProcurementRoutes(
       return await getCurrentStockHandler(req, ctx);
     case "GET:/api/procurement/dispatch-report":
       return await getDispatchReportHandler(req, ctx);
+    case "GET:/api/procurement/manual-costing-rows":
+      return await listManualCostingRowsHandler(req, ctx);
     case "GET:/api/procurement/stock-history":
       return await getStockHistoryHandler(req, ctx);
     case "GET:/api/procurement/stock-valuation":
@@ -1219,6 +1226,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getDeliveryOrderHandler(req, ctx);
+  }
+
+  // AC08 -- Manual Costing Rate Entry detail + save, per SO line.
+  if (/^\/api\/procurement\/manual-costing-rows\/[^/]+\/rates$/.test(pathname) && req.method === "POST") {
+    return await saveManualCostingRatesHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/manual-costing-rows\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getManualCostingRowHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/delivery-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {

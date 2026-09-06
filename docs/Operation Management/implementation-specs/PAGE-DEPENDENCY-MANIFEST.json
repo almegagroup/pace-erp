@@ -8760,5 +8760,10 @@
     "page": "frontend/src/pages/dashboard/procurement/sales/DispatchReportPage.jsx",
     "dependencyCount": 0,
     "deps": []
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/ManualCostingRatePage.jsx",
+    "dependencyCount": 0,
+    "deps": []
   }
 ]

@@ -171,6 +171,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
+  "GET:/api/procurement/manual-costing-rows":         { skipAcl: false, resourceCode: "ACC_MANUAL_COSTING_RATE", action: "VIEW" },
   // §133.13 -- Additional Cost Category master, scoped to the Invoice/PGI
   // page's own drawer only (no separate master page/ACL resource).
   "GET:/api/procurement/additional-cost-categories":  { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
@@ -676,6 +677,16 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/ac06\/costing-groups\/[^/]+$/,
     methods: { PATCH: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" }, DELETE: { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "DELETE" } },
+  },
+
+  // ── AC08 Manual Costing Rate Entry ──────────────────────────────────────
+  {
+    pattern: /^\/api\/procurement\/manual-costing-rows\/[^/]+\/rates$/,
+    methods: { POST: { skipAcl: false, resourceCode: "ACC_MANUAL_COSTING_RATE", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/manual-costing-rows\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "ACC_MANUAL_COSTING_RATE", action: "VIEW" } },
   },
 
   // ── PO ───────────────────────────────────────────────────────────────────

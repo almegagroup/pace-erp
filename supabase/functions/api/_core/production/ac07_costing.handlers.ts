@@ -50,7 +50,10 @@ async function requireAc07View(req: Request, ctx: ProdHandlerContext, companyId:
   return allowed ? null : ac07Error(req, ctx, "AC07_FORBIDDEN", 403, "You do not have Admixture Costing access for the selected company.");
 }
 
-async function materialMap(materialIds: string[]): Promise<Map<string, Row>> {
+// Exported so manual_costing_rate.handlers.ts (AC08) can reuse the exact same
+// PM-composition resolution for its own RM/INT+PM rate-entry drawer, instead
+// of re-deriving the own-BOM / packing-history / category-fallback chain.
+export async function materialMap(materialIds: string[]): Promise<Map<string, Row>> {
   const result = new Map<string, Row>();
   if (!materialIds.length) return result;
   const rows = await fetchInChunks<Row>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
@@ -83,7 +86,7 @@ async function resolveProdshade(sku: Row): Promise<Row | null> {
 // fall back to real Packing PO history: this exact SKU's own most recent
 // batch first, and only if this SKU has never been packed, a different SKU
 // sharing the same material_category + pack_code.
-async function resolvePmComposition(skuMaterialId: string, sku: Row): Promise<{ source: string; sourceSkuPaceCode: string | null; lines: Row[]; perPackQtyFixed: number | null }> {
+export async function resolvePmComposition(skuMaterialId: string, sku: Row): Promise<{ source: string; sourceSkuPaceCode: string | null; lines: Row[]; perPackQtyFixed: number | null }> {
   const db = serviceRoleClient.schema("erp_production");
 
   const { data: ownBom, error: bomErr } = await db.from("pack_bom")
