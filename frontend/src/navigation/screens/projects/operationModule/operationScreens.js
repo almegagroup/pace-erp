@@ -1010,6 +1010,15 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // AC08 -- Manual Costing Rate Entry, GRP_ACL_ACCOUNTS.
+  ACC_MANUAL_COSTING_RATE: {
+    screen_code: "ACC_MANUAL_COSTING_RATE",
+    route: "/dashboard/procurement/accounts/manual-costing-rates",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   ACC_MTS_SKU_MONTHLY_RATE: {
     screen_code: "ACC_MTS_SKU_MONTHLY_RATE",
     route: "/dashboard/production/mts-sku-monthly-rate",

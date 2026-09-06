@@ -1038,6 +1038,17 @@ export function getDispatchReport(params) {
   return fetchProcurement("GET", "/api/procurement/dispatch-report", undefined, params);
 }
 
+// AC08 -- Manual Costing Rate Entry
+export function listManualCostingRows(params) {
+  return fetchProcurement("GET", "/api/procurement/manual-costing-rows", undefined, params);
+}
+export function getManualCostingRow(soLineId, params) {
+  return fetchProcurement("GET", `/api/procurement/manual-costing-rows/${encodeURIComponent(soLineId)}`, undefined, params);
+}
+export function saveManualCostingRates(soLineId, data) {
+  return fetchProcurement("POST", `/api/procurement/manual-costing-rows/${encodeURIComponent(soLineId)}/rates`, data);
+}
+
 export function getSalesInvoice(id) {
   return fetchProcurement("GET", `/api/procurement/sales-invoices/${encodeURIComponent(id)}`);
 }
