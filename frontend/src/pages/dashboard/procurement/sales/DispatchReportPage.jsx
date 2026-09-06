@@ -96,6 +96,12 @@ function getColumnFilterText(column, row) {
   return raw == null ? "" : String(raw);
 }
 
+// Same invalid-flag StrokeCell already renders (⚠, red text) -- a row counts
+// as a mismatch the moment any one of its SO Stroke entries is invalid.
+function rowHasStrokeMismatch(row) {
+  return Array.isArray(row.so_stroke_entries) && row.so_stroke_entries.some((entry) => entry.invalid);
+}
+
 const GRID_COLUMNS = [
   { key: "month_year", label: "Month-Year", width: "90px" },
   { key: "invoice_number", label: "PACE Invoice #", width: "130px", render: (r) => r.invoice_number || "—" },
@@ -210,11 +216,20 @@ export default function DispatchReportPage() {
     return [...values].sort();
   }, [rows]);
   const hasActiveSearch = globalSearch.trim().length > 0;
+  // Business owner ask (2026-09-06) -- a checkbox that narrows the grid down
+  // to only the rows StrokeCell already flags as a mismatch (some entry in
+  // so_stroke_entries has invalid=true), on top of the existing free-text
+  // search rather than replacing it.
+  const [mismatchOnly, setMismatchOnly] = useState(false);
+  const mismatchRowCount = useMemo(() => rows.filter(rowHasStrokeMismatch).length, [rows]);
   const filteredRows = useMemo(() => {
     const needle = globalSearch.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) => GRID_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
-  }, [rows, globalSearch]);
+    return rows.filter((row) => {
+      if (mismatchOnly && !rowHasStrokeMismatch(row)) return false;
+      if (!needle) return true;
+      return GRID_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle));
+    });
+  }, [rows, globalSearch, mismatchOnly]);
 
   function updateFilter(key, value) {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -231,12 +246,14 @@ export default function DispatchReportPage() {
     setSubmittedParams(null);
     setError("");
     setGlobalSearch("");
+    setMismatchOnly(false);
     setPage(1);
   }
 
   function handleExecute() {
     setError("");
     setGlobalSearch("");
+    setMismatchOnly(false);
     if (!effectiveCompanyId) {
       setError("Select a company first.");
       return;
@@ -424,7 +441,7 @@ export default function DispatchReportPage() {
               <span className="text-xs text-slate-500">
                 {reportQ.isLoading
                   ? "Loading..."
-                  : hasActiveSearch
+                  : hasActiveSearch || mismatchOnly
                     ? `${filteredRows.length} of ${rows.length} row${rows.length === 1 ? "" : "s"} (filtered)`
                     : `${rows.length} row${rows.length === 1 ? "" : "s"}`}
               </span>
@@ -445,6 +462,10 @@ export default function DispatchReportPage() {
                   Clear
                 </button>
               ) : null}
+              <label className="ml-2 flex h-8 items-center gap-1.5 whitespace-nowrap rounded border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700">
+                <input type="checkbox" checked={mismatchOnly} onChange={(e) => setMismatchOnly(e.target.checked)} />
+                Stroke Mismatch only ({mismatchRowCount})
+              </label>
             </div>
             <ErpDenseGrid
               columns={GRID_COLUMNS}
