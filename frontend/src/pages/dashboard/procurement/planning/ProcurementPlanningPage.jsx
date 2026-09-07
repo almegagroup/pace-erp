@@ -1237,12 +1237,27 @@ export default function ProcurementPlanningPage() {
     }
   }, [companyId, defaultCompanyId, runtimeContext, searchParams]);
 
+  // Deep-link sync only -- must react to real navigation (searchParams
+  // changing), never to the user's own month-picker edit. Two bugs fixed
+  // together here:
+  // 1. getMonthValue("") falls back to the CURRENT month (by design, for
+  //    the picker's own initial value) -- treating that fallback as "the
+  //    route wants this month" overwrote the user's selection on every
+  //    change: pick a month -> planMonth changes -> effect re-fires -> no
+  //    ?plan_month in the URL -> routeMonth defaults to current month ->
+  //    forced right back to current month. Fixed by doing nothing when
+  //    the URL param is absent.
+  // 2. `planMonth` was in the dependency array, so even WITH a real
+  //    ?plan_month in the URL (e.g. arrived via openPlanningReport's deep
+  //    link), the effect re-ran on every subsequent picker change and
+  //    fought it back to that stale URL value. Depend only on
+  //    `searchParams` -- react to actual navigation, not to local state
+  //    this same effect doesn't own.
   useEffect(() => {
-    const routeMonth = getMonthValue(searchParams.get("plan_month") || "");
-    if (routeMonth && routeMonth !== planMonth) {
-      setPlanMonth(routeMonth);
-    }
-  }, [planMonth, searchParams]);
+    const rawRouteMonth = searchParams.get("plan_month");
+    if (!rawRouteMonth) return;
+    setPlanMonth(getMonthValue(rawRouteMonth));
+  }, [searchParams]);
 
   useEffect(() => {
     if (!showFullReport) return;

@@ -238,6 +238,15 @@ export default function POListPage() {
                   },
                 },
                 {
+                  key: "items_display",
+                  label: "Items",
+                  render: (row) => (
+                    <span className="block max-w-[260px] truncate" title={row.items_display || ""}>
+                      {row.items_display || "-"}
+                    </span>
+                  ),
+                },
+                {
                   key: "company_name",
                   label: "Company",
                   render: (row) => companyMap.get(row.company_id)?.company_name || row.company_id || "-",
