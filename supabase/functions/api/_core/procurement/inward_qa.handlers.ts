@@ -138,9 +138,23 @@ async function fetchQaDocument(qaDocumentId: string): Promise<QaDocumentRow> {
   return data as QaDocumentRow;
 }
 
-function assertQaCompanyScope(ctx: QAHandlerContext, qaDocument: QaDocumentRow): void {
-  const scopedCompanyId = getCompanyScope(ctx);
-  if (scopedCompanyId && String(qaDocument.company_id) !== scopedCompanyId) {
+// Was comparing against ctx.context.companyId (the session's current active
+// company, e.g. the top-bar selection) instead of validating against the
+// document's own company via the shared assertCompanyScope helper -- every
+// other handler in this codebase uses assertCompanyScope(ctx, record.company_id)
+// for exactly this "act on an existing record" check. That local check meant
+// a multi-company user (including ACL-MASTER) could browse another of their
+// own companies' QA queue via this page's own Company filter (the list
+// endpoint already validates company_id correctly, per-request) but then get
+// a false 403 on every row action, because the session's active company
+// never changed even though the row genuinely belongs to a company they have
+// real access to. assertCompanyScope checks erp_map.user_companies (the
+// document's own company, not the session default) and already carries the
+// SA/GA/admin-bypass -- no session/header plumbing needed here at all.
+async function assertQaCompanyScope(ctx: QAHandlerContext, qaDocument: QaDocumentRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, String(qaDocument.company_id ?? ""));
+  } catch {
     throw new ApiError(403, "QA document is outside company scope");
   }
 }
@@ -189,7 +203,7 @@ async function fetchQaMaterialFields(materialId: string): Promise<{ pace_code: s
 
 async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContext): Promise<JsonRecord> {
   const qaDocument = await fetchQaDocument(qaDocumentId);
-  assertQaCompanyScope(ctx, qaDocument);
+  await assertQaCompanyScope(ctx, qaDocument);
 
   const [testLinesResp, decisionLines, materialFields] = await Promise.all([
     serviceRoleClient
@@ -518,7 +532,7 @@ export async function addTestLineHandler(
     }
 
     const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
+    await assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
       throw new ApiError(409, "QA document is read-only");
     }
@@ -614,7 +628,7 @@ export async function updateTestLineHandler(
     }
 
     const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
+    await assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
       throw new ApiError(409, "QA document is read-only");
     }
@@ -701,7 +715,7 @@ export async function deleteTestLineHandler(
     }
 
     const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
+    await assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
       throw new ApiError(409, "Cannot delete test line after decision is made");
     }
@@ -754,7 +768,7 @@ export async function submitUsageDecisionHandler(
     }
 
     const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
+    await assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
       throw new ApiError(400, "QA document is not eligible for decision");
     }
