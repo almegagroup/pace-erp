@@ -368,13 +368,24 @@ async function fetchSto(stoId: string): Promise<StoRow> {
   return data as StoRow;
 }
 
-function assertStoVisibleToContext(ctx: ProcurementHandlerContext, sto: StoRow): void {
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (
-    scopedCompanyId
-    && scopedCompanyId !== toTrimmedString(sto.sending_company_id)
-    && scopedCompanyId !== toTrimmedString(sto.receiving_company_id)
-  ) {
+// Was comparing against the session's active company instead of validating
+// real company membership via the shared assertCompanyScope helper -- same
+// bug class fixed in inward_qa/sfg_qa/rtv/invoice_verification/landed_cost/
+// sales_order/pto handlers: a multi-company user whose active session
+// company wasn't sending/receiving (but who is genuinely a member of one of
+// them) would 403. Passes if the caller has real membership on EITHER
+// company (mirrors the original sending-OR-receiving intent), and still
+// carries assertCompanyScope's own SA/GA/admin bypass.
+async function assertStoVisibleToContext(ctx: ProcurementHandlerContext, sto: StoRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(sto.sending_company_id));
+    return;
+  } catch {
+    // fall through to receiving company check
+  }
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(sto.receiving_company_id));
+  } catch {
     throw new Error("STO_SCOPE_VIOLATION");
   }
 }
@@ -429,7 +440,7 @@ async function getStoAmendmentLog(stoId: string): Promise<JsonRecord[]> {
 async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promise<JsonRecord> {
   const sto = await fetchSto(stoId);
   if (ctx) {
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
   }
   const [lines, dcResp, gateExitResp, approvalLog, amendmentLog] = await Promise.all([
     fetchStoLines(stoId),
@@ -1400,7 +1411,7 @@ export async function updateSTOHandler(
     const stoId = getIdFromPath(req);
     const body = await parseBody(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
 
     if (!["DRAFT", "CREATED"].includes(toUpperTrimmedString(sto.status))) {
       return stoErrorResponse(req, ctx, "STO_NOT_EDITABLE", 400, "Only DRAFT or CREATED STO can be updated.");
@@ -1512,7 +1523,7 @@ export async function cancelSTOHandler(
     const body = await parseBody(req);
     const reason = toTrimmedString(body.cancellation_reason);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
 
     if (!reason) {
       return stoErrorResponse(req, ctx, "STO_CANCEL_REASON_REQUIRED", 400, "cancellation_reason is required.");
@@ -1587,7 +1598,7 @@ export async function knockOffSTOLineHandler(
     }
 
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
     if (!["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(toUpperTrimmedString(sto.status))) {
       return stoErrorResponse(req, ctx, "STO_LINE_KNOCK_OFF_BLOCKED", 400, "STO line can only be knocked off before dispatch.");
     }
@@ -1701,7 +1712,7 @@ export async function confirmSTOHandler(
     const stoId = getIdFromPath(req);
     const body = await parseBody(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
 
     if (toUpperTrimmedString(sto.status) !== "DRAFT") {
       return stoErrorResponse(req, ctx, "STO_CONFIRM_BLOCKED", 422, "Only DRAFT STO can be confirmed.");
@@ -1757,7 +1768,7 @@ export async function approveSTOHandler(
     const stoId = getIdFromPath(req);
     const body = await parseBody(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
     await assertStoApproverRole(ctx, toTrimmedString(sto.sending_company_id), toTrimmedString(sto.created_by));
 
     if (toUpperTrimmedString(sto.status) !== "PENDING_APPROVAL") {
@@ -1819,7 +1830,7 @@ export async function rejectSTOHandler(
     }
 
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
     await assertStoApproverRole(ctx, toTrimmedString(sto.sending_company_id), toTrimmedString(sto.created_by));
 
     if (toUpperTrimmedString(sto.status) !== "PENDING_APPROVAL") {
@@ -1877,7 +1888,7 @@ export async function amendSTOHandler(
     const stoId = getIdFromPath(req);
     const body = await parseBody(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
 
     const currentStatus = toUpperTrimmedString(sto.status);
     if (currentStatus !== "CREATED" && currentStatus !== "PENDING_APPROVAL") {
@@ -2071,7 +2082,7 @@ export async function approveSTOAmendmentHandler(
     const stoId = getIdFromPath(req);
     const body = await parseBody(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
     await assertStoApproverRole(ctx, toTrimmedString(sto.sending_company_id), toTrimmedString(sto.created_by));
 
     const { data: pendingLogs, error: logError } = await serviceRoleClient
@@ -2153,7 +2164,7 @@ export async function dispatchSTOHandler(
     const stoId = getIdFromPath(req);
     const body = await parseBody(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
 
     if (toUpperTrimmedString(sto.status) !== "CREATED") {
       return stoErrorResponse(req, ctx, "STO_DISPATCH_BLOCKED", 400, "Only CREATED STO can be dispatched.");
@@ -2414,7 +2425,7 @@ export async function confirmSTOReceiptHandler(
     assertProcurementReadRole(ctx);
     const stoId = getIdFromPath(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
 
     const { data: grn, error: grnError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -2496,7 +2507,7 @@ export async function closeSTOHandler(
     assertProcurementReadRole(ctx);
     const stoId = getIdFromPath(req);
     const sto = await fetchSto(stoId);
-    assertStoVisibleToContext(ctx, sto);
+    await assertStoVisibleToContext(ctx, sto);
 
     if (toUpperTrimmedString(sto.status) !== "RECEIVED") {
       return stoErrorResponse(req, ctx, "STO_CLOSE_BLOCKED", 400, "Only RECEIVED STO can be closed.");

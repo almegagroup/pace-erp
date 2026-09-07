@@ -128,9 +128,15 @@ async function fetchLandedCost(lcId: string): Promise<LandedCostRow> {
   return data as LandedCostRow;
 }
 
-function assertLcVisibleToContext(ctx: ProcurementHandlerContext, lc: LandedCostRow): void {
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (scopedCompanyId && scopedCompanyId !== toTrimmedString(lc.company_id)) {
+// Was comparing against the session's active company instead of validating
+// real company membership via the shared assertCompanyScope(ctx,
+// record.company_id) helper -- same bug class fixed in inward_qa/sfg_qa/rtv/
+// invoice_verification handlers: a multi-company user browsing another of
+// their own companies' Landed Cost queue would 403 on the detail/action.
+async function assertLcVisibleToContext(ctx: ProcurementHandlerContext, lc: LandedCostRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(lc.company_id));
+  } catch {
     throw new Error("LC_SCOPE_VIOLATION");
   }
 }
@@ -156,7 +162,7 @@ async function hydrateLandedCost(
 ): Promise<JsonRecord> {
   const lc = await fetchLandedCost(lcId);
   if (ctx) {
-    assertLcVisibleToContext(ctx, lc);
+    await assertLcVisibleToContext(ctx, lc);
   }
   const lines = await fetchLandedCostLines(lcId);
   return { ...lc, lines };
@@ -281,7 +287,7 @@ export async function addLCLineHandler(
     const lcId = getIdFromPath(req);
     const body = await parseBody(req);
     const lc = await fetchLandedCost(lcId);
-    assertLcVisibleToContext(ctx, lc);
+    await assertLcVisibleToContext(ctx, lc);
 
     if (toUpperTrimmedString(lc.status) !== "DRAFT") {
       return lcErrorResponse(req, ctx, "LC_NOT_EDITABLE", 400, "Only DRAFT landed cost documents can accept lines.");
@@ -337,7 +343,7 @@ export async function updateLCLineHandler(
     const lineId = getLineIdFromPath(req);
     const body = await parseBody(req);
     const lc = await fetchLandedCost(lcId);
-    assertLcVisibleToContext(ctx, lc);
+    await assertLcVisibleToContext(ctx, lc);
 
     if (toUpperTrimmedString(lc.status) !== "DRAFT") {
       return lcErrorResponse(req, ctx, "LC_LINE_UPDATE_BLOCKED", 400, "Only DRAFT landed cost documents can update lines.");
@@ -397,7 +403,7 @@ export async function deleteLCLineHandler(
     const lcId = getIdFromPath(req);
     const lineId = getLineIdFromPath(req);
     const lc = await fetchLandedCost(lcId);
-    assertLcVisibleToContext(ctx, lc);
+    await assertLcVisibleToContext(ctx, lc);
 
     if (toUpperTrimmedString(lc.status) !== "DRAFT") {
       return lcErrorResponse(req, ctx, "LC_LINE_DELETE_BLOCKED", 400, "Only DRAFT landed cost documents can delete lines.");
@@ -430,7 +436,7 @@ export async function postLandedCostHandler(
     assertAccountsRole(ctx);
     const lcId = getIdFromPath(req);
     const lc = await fetchLandedCost(lcId);
-    assertLcVisibleToContext(ctx, lc);
+    await assertLcVisibleToContext(ctx, lc);
 
     if (toUpperTrimmedString(lc.status) !== "DRAFT") {
       return lcErrorResponse(req, ctx, "LC_POST_BLOCKED", 400, "Only DRAFT landed cost documents can be posted.");

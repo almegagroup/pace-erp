@@ -480,9 +480,15 @@ async function fetchSalesInvoice(invoiceId: string): Promise<SalesInvoiceRow> {
   return data as SalesInvoiceRow;
 }
 
-function assertInvoiceVisibleToContext(ctx: ProcurementHandlerContext, invoice: SalesInvoiceRow): void {
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (scopedCompanyId && scopedCompanyId !== toTrimmedString(invoice.company_id)) {
+// Was comparing against the session's active company instead of validating
+// real company membership via the shared assertCompanyScope(ctx,
+// record.company_id) helper -- same bug class fixed in inward_qa/sfg_qa/rtv/
+// invoice_verification/landed_cost handlers: a multi-company user browsing
+// another of their own companies' Sales Invoice would 403 on the detail/action.
+async function assertInvoiceVisibleToContext(ctx: ProcurementHandlerContext, invoice: SalesInvoiceRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(invoice.company_id));
+  } catch {
     throw new Error("SALES_INVOICE_SCOPE_VIOLATION");
   }
 }
@@ -508,7 +514,7 @@ async function hydrateSalesInvoice(
 ): Promise<JsonRecord> {
   const invoice = await fetchSalesInvoice(invoiceId);
   if (ctx) {
-    assertInvoiceVisibleToContext(ctx, invoice);
+    await assertInvoiceVisibleToContext(ctx, invoice);
   }
   const lines = await fetchSalesInvoiceLines(invoiceId);
   // §133.13 -- additional cost lines live in their own table (a variable-
@@ -1920,7 +1926,7 @@ export async function postSalesInvoiceHandler(
     assertProcurementReadRole(ctx);
     const invoiceId = getIdFromPath(req);
     const invoice = await fetchSalesInvoice(invoiceId);
-    assertInvoiceVisibleToContext(ctx, invoice);
+    await assertInvoiceVisibleToContext(ctx, invoice);
 
     if (toUpperTrimmedString(invoice.status) !== "DRAFT") {
       return salesErrorResponse(req, ctx, "SALES_INVOICE_POST_BLOCKED", 400, "Only DRAFT sales invoices can be posted.");

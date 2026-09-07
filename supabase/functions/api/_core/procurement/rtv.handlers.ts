@@ -131,9 +131,17 @@ async function fetchRtv(rtvId: string): Promise<RtvRow> {
   return data as RtvRow;
 }
 
-function assertRtvVisibleToContext(ctx: ProcurementHandlerContext, rtv: RtvRow): void {
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (scopedCompanyId && scopedCompanyId !== toTrimmedString(rtv.company_id)) {
+// Was comparing against the session's active company (ctx.context.companyId)
+// instead of validating real company membership via the shared
+// assertCompanyScope(ctx, record.company_id) helper -- same bug class fixed
+// in inward_qa.handlers.ts/sfg_qa.handlers.ts's assertQaCompanyScope: a
+// multi-company user browsing another of their own companies' RTV via a
+// page's own Company filter would 403 on the detail/action, even though
+// they genuinely have access to that RTV's own company.
+async function assertRtvVisibleToContext(ctx: ProcurementHandlerContext, rtv: RtvRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(rtv.company_id));
+  } catch {
     throw new Error("RTV_SCOPE_VIOLATION");
   }
 }
@@ -156,7 +164,7 @@ async function fetchRtvLines(rtvId: string): Promise<RtvLineRow[]> {
 async function hydrateRtv(rtvId: string, ctx?: ProcurementHandlerContext): Promise<JsonRecord> {
   const rtv = await fetchRtv(rtvId);
   if (ctx) {
-    assertRtvVisibleToContext(ctx, rtv);
+    await assertRtvVisibleToContext(ctx, rtv);
   }
   const [lines, dnResp, exrResp] = await Promise.all([
     fetchRtvLines(rtvId),
@@ -438,7 +446,7 @@ export async function addRTVLineHandler(
     const rtvId = getIdFromPath(req);
     const body = await parseBody(req);
     const rtv = await fetchRtv(rtvId);
-    assertRtvVisibleToContext(ctx, rtv);
+    await assertRtvVisibleToContext(ctx, rtv);
 
     if (toUpperTrimmedString(rtv.status) !== "CREATED") {
       return rtvErrorResponse(req, ctx, "RTV_NOT_EDITABLE", 400, "Only CREATED RTV can accept lines.");
@@ -507,7 +515,7 @@ export async function postRTVHandler(
     );
 
     const rtv = await fetchRtv(rtvId);
-    assertRtvVisibleToContext(ctx, rtv);
+    await assertRtvVisibleToContext(ctx, rtv);
     if (toUpperTrimmedString(rtv.status) !== "CREATED") {
       return rtvErrorResponse(req, ctx, "RTV_POST_BLOCKED", 400, "Only CREATED RTV can be posted.");
     }
@@ -738,7 +746,7 @@ export async function createDebitNoteHandler(
     }
 
     const rtv = await fetchRtv(rtvId);
-    assertRtvVisibleToContext(ctx, rtv);
+    await assertRtvVisibleToContext(ctx, rtv);
     if (toUpperTrimmedString(rtv.settlement_mode) !== "DEBIT_NOTE") {
       return rtvErrorResponse(req, ctx, "DN_SETTLEMENT_MODE_INVALID", 400, "RTV settlement_mode must be DEBIT_NOTE.");
     }
@@ -912,8 +920,14 @@ export async function getDebitNoteHandler(
     if (error || !data) {
       return rtvErrorResponse(req, ctx, "DN_NOT_FOUND", 404, "Debit note not found.");
     }
-    const dnScopedCompanyId = await getCompanyScope(ctx);
-    if (dnScopedCompanyId && dnScopedCompanyId !== toTrimmedString(data.company_id)) {
+    // Same fix as assertRtvVisibleToContext above -- validate against this
+    // debit note's own company via erp_map.user_companies, not the session's
+    // active company (getCompanyScope() with no requestedCompanyId just
+    // returns that session default, which can legitimately differ for a
+    // multi-company user browsing another of their own companies).
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(data.company_id));
+    } catch {
       return rtvErrorResponse(req, ctx, "DN_SCOPE_VIOLATION", 403, "Debit note is outside company scope.");
     }
 
@@ -1083,7 +1097,7 @@ export async function createExchangeRefHandler(
     }
 
     const rtv = await fetchRtv(rtvId);
-    assertRtvVisibleToContext(ctx, rtv);
+    await assertRtvVisibleToContext(ctx, rtv);
     if (toUpperTrimmedString(rtv.settlement_mode) !== "EXCHANGE") {
       return rtvErrorResponse(req, ctx, "EXR_SETTLEMENT_MODE_INVALID", 400, "RTV settlement_mode must be EXCHANGE.");
     }

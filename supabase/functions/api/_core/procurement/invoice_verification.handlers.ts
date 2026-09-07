@@ -125,9 +125,15 @@ async function fetchIv(ivId: string): Promise<IvRow> {
   return data as IvRow;
 }
 
-function assertIvVisibleToContext(ctx: ProcurementHandlerContext, iv: IvRow): void {
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (scopedCompanyId && scopedCompanyId !== toTrimmedString(iv.company_id)) {
+// Was comparing against the session's active company instead of validating
+// real company membership via the shared assertCompanyScope(ctx,
+// record.company_id) helper -- same bug class fixed in inward_qa/sfg_qa/rtv
+// handlers: a multi-company user browsing another of their own companies'
+// Invoice Verification queue would 403 on the detail/action.
+async function assertIvVisibleToContext(ctx: ProcurementHandlerContext, iv: IvRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(iv.company_id));
+  } catch {
     throw new Error("IV_SCOPE_VIOLATION");
   }
 }
@@ -150,7 +156,7 @@ async function fetchIvLines(ivId: string): Promise<IvLineRow[]> {
 async function hydrateIv(ivId: string, ctx?: ProcurementHandlerContext): Promise<JsonRecord> {
   const iv = await fetchIv(ivId);
   if (ctx) {
-    assertIvVisibleToContext(ctx, iv);
+    await assertIvVisibleToContext(ctx, iv);
   }
   const lines = await fetchIvLines(ivId);
   return { ...iv, lines };
@@ -389,7 +395,7 @@ export async function addIVLineHandler(
     const ivId = getIdFromPath(req);
     const body = await parseBody(req);
     const iv = await fetchIv(ivId);
-    assertIvVisibleToContext(ctx, iv);
+    await assertIvVisibleToContext(ctx, iv);
 
     if (toUpperTrimmedString(iv.status) !== "DRAFT") {
       return ivErrorResponse(req, ctx, "IV_NOT_EDITABLE", 400, "Only DRAFT IV can accept lines.");
@@ -482,7 +488,7 @@ export async function removeIVLineHandler(
     const ivId = getIdFromPath(req);
     const lineId = getLineIdFromPath(req);
     const iv = await fetchIv(ivId);
-    assertIvVisibleToContext(ctx, iv);
+    await assertIvVisibleToContext(ctx, iv);
 
     if (toUpperTrimmedString(iv.status) !== "DRAFT") {
       return ivErrorResponse(req, ctx, "IV_LINE_REMOVE_BLOCKED", 400, "Only DRAFT IV can remove lines.");
@@ -515,7 +521,7 @@ export async function runMatchHandler(
     assertAccountsRole(ctx);
     const ivId = getIdFromPath(req);
     const iv = await fetchIv(ivId);
-    assertIvVisibleToContext(ctx, iv);
+    await assertIvVisibleToContext(ctx, iv);
 
     const lines = await fetchIvLines(ivId);
     if (lines.length === 0) {
@@ -641,7 +647,7 @@ export async function postIVHandler(
     assertAccountsRole(ctx);
     const ivId = getIdFromPath(req);
     const iv = await fetchIv(ivId);
-    assertIvVisibleToContext(ctx, iv);
+    await assertIvVisibleToContext(ctx, iv);
 
     if (toUpperTrimmedString(iv.status) !== "MATCHED") {
       return ivErrorResponse(req, ctx, "IV_POST_BLOCKED", 400, "Only MATCHED IV can be posted.");
