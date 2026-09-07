@@ -304,6 +304,57 @@ async function enrichPoReferenceDisplays(input: {
   };
 }
 
+// PO01 (list) needs each row's own item names shown inline -- §8A "list
+// endpoint must have accurate display data, no per-row detail call". Bulk
+// fetch every visible PO's lines + material names in two round trips (page
+// size is capped at 50, so a plain .in() is safely bounded -- §8E's own
+// small-list exception, no fetchInChunks needed).
+async function attachPoItemsSummary(pos: PurchaseOrderRow[]): Promise<PurchaseOrderRow[]> {
+  const poIds = uniqueTrimmedStrings(pos.map((row) => row.id));
+  if (poIds.length === 0) return pos;
+
+  const { data: lineRows, error: lineError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order_line")
+    .select("po_id, material_id, display_order")
+    .in("po_id", poIds)
+    .order("display_order", { ascending: true });
+  if (lineError) throw new Error("PROCUREMENT_PO_LIST_ITEMS_LOOKUP_FAILED");
+
+  const materialIds = uniqueTrimmedStrings(((lineRows ?? []) as PurchaseOrderLineRow[]).map((row) => row.material_id));
+  const { data: materialRows, error: materialError } = materialIds.length > 0
+    ? await serviceRoleClient
+      .schema("erp_master")
+      .from("material_master")
+      .select("id, pace_code, material_name")
+      .in("id", materialIds)
+    : { data: [] as JsonRecord[], error: null };
+  if (materialError) throw new Error("PROCUREMENT_PO_LIST_ITEMS_LOOKUP_FAILED");
+
+  const materialNameById = new Map<string, string>(
+    ((materialRows ?? []) as Array<{ id: string; pace_code: string | null; material_name: string | null }>)
+      .map((row) => [toTrimmedString(row.id), toTrimmedString(row.material_name) || toTrimmedString(row.pace_code)]),
+  );
+
+  const itemNamesByPoId = new Map<string, string[]>();
+  for (const line of (lineRows ?? []) as PurchaseOrderLineRow[]) {
+    const poId = toTrimmedString(line.po_id);
+    const materialName = materialNameById.get(toTrimmedString(line.material_id));
+    if (!poId || !materialName) continue;
+    if (!itemNamesByPoId.has(poId)) itemNamesByPoId.set(poId, []);
+    itemNamesByPoId.get(poId)!.push(materialName);
+  }
+
+  return pos.map((row) => {
+    const items = itemNamesByPoId.get(toTrimmedString(row.id)) ?? [];
+    return {
+      ...row,
+      items_display: items.join(", "),
+      items_count: items.length,
+    };
+  });
+}
+
 function procurementErrorResponse(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1582,9 +1633,10 @@ export async function listPOsHandler(
     }
 
     const enrichedList = await enrichPoReferenceDisplays({ pos: (data as PurchaseOrderRow[] | null) ?? [] });
+    const posWithItems = await attachPoItemsSummary(enrichedList.pos ?? []);
 
     return okResponse({
-      data: await enrichProcurementUserDisplays(enrichedList.pos ?? []),
+      data: await enrichProcurementUserDisplays(posWithItems),
       total: count ?? 0,
     }, ctx.request_id, req);
   } catch (err) {
