@@ -103,6 +103,7 @@ function rowHasStrokeMismatch(row) {
 }
 
 const GRID_COLUMNS = [
+  { key: "company_code", label: "Company Code", width: "100px", render: (r) => r.company_code || "—" },
   { key: "month_year", label: "Month-Year", width: "90px" },
   { key: "invoice_number", label: "PACE Invoice #", width: "130px", render: (r) => r.invoice_number || "—" },
   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px" },

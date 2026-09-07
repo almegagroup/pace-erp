@@ -103,6 +103,7 @@ import {
   getManualCostingRowHandler,
   saveManualCostingRatesHandler,
 } from "../_core/procurement/manual_costing_rate.handlers.ts";
+import { getBatchCostingReportHandler } from "../_core/procurement/batch_costing_report.handlers.ts";
 import {
   approvePTOHandler,
   cancelPTOHandler,
@@ -635,6 +636,8 @@ export async function dispatchProcurementRoutes(
       return await getCurrentStockHandler(req, ctx);
     case "GET:/api/procurement/dispatch-report":
       return await getDispatchReportHandler(req, ctx);
+    case "GET:/api/procurement/batch-costing-report":
+      return await getBatchCostingReportHandler(req, ctx);
     case "GET:/api/procurement/manual-costing-rows":
       return await listManualCostingRowsHandler(req, ctx);
     case "GET:/api/procurement/stock-history":

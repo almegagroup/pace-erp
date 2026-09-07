@@ -95,6 +95,14 @@ export async function getDispatchReportHandler(
     }
     await assertCompanyScope(ctx, companyId);
 
+    // Business owner ask (2026-09-07) -- an explicit Company Code column,
+    // extreme left. The whole report is already scoped to one company_id
+    // (query param), so this is a single lookup, same value on every row.
+    const { data: companyRow, error: companyErr } = await serviceRoleClient
+      .schema("erp_master").from("companies").select("company_code").eq("id", companyId).maybeSingle();
+    if (companyErr) throw new Error("DISPATCH_REPORT_COMPANY_LOOKUP_FAILED");
+    const companyCode = textValue((companyRow as JsonRecord | null)?.company_code);
+
     const invoices = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_procurement").from("sales_invoice")
       .select("id, invoice_number, invoice_date, company_id, dc_id, so_id, sto_id, status, tally_invoice_number, tally_invoice_date, inbound_number, fo_id, fo_number, bill_to_name, ship_to_name")
@@ -245,6 +253,7 @@ export async function getDispatchReportHandler(
       const tallyDate = textValue(invoice.tally_invoice_date);
       return {
         row_key: rowKey,
+        company_code: companyCode,
         month_year: monthYear(tallyDate),
         type: joined(lineDetails.map((entry) => entry.soLine.line_material_type || material.material_type)),
         fg_type: joined(lineDetails.map((entry) => entry.soLine.fg_type)),
