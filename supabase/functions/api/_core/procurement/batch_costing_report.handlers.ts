@@ -418,7 +418,7 @@ export async function getBatchCostingReportHandler(req: Request, ctx: BatchCosti
       let perPackQtyForPm = perPackQty;
       if (packCode) {
         if (isFixedBom) {
-          const pmComposition = await resolvePmComposition(textValue(soLine.material_id), material);
+          const pmComposition = await resolvePmComposition(textValue(material.id), material);
           pmLinesRaw = pmComposition.lines;
           if (pmComposition.perPackQtyFixed != null) perPackQtyForPm = pmComposition.perPackQtyFixed;
         } else if (packingOrder) {
