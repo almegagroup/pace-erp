@@ -147,6 +147,7 @@ import DebitNoteDetailPage from "../pages/dashboard/procurement/rtv/DebitNoteDet
 import ExchangeRefListPage from "../pages/dashboard/procurement/rtv/ExchangeRefListPage.jsx";
 import AC01Page from "../pages/dashboard/procurement/accounts/AC01Page.jsx";
 import ManualCostingRatePage from "../pages/dashboard/procurement/accounts/ManualCostingRatePage.jsx";
+import BatchCostingReportPage from "../pages/dashboard/procurement/accounts/BatchCostingReportPage.jsx";
 import IVCreatePage from "../pages/dashboard/procurement/accounts/IVCreatePage.jsx";
 import IVDetailPage from "../pages/dashboard/procurement/accounts/IVDetailPage.jsx";
 import BlockedIVListPage from "../pages/dashboard/procurement/accounts/BlockedIVListPage.jsx";
@@ -780,6 +781,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/accounts/manual-costing-rates"
                     element={<ManualCostingRatePage />}
+                  />
+                  <Route
+                    path="procurement/accounts/batch-costing-report"
+                    element={<BatchCostingReportPage />}
                   />
                   <Route
                     path="procurement/sales-orders"

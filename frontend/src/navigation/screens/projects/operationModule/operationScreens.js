@@ -1019,6 +1019,15 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // AC09 -- Batch Costing Report, GRP_ACL_ACCOUNTS.
+  ACC_BATCH_COSTING_REPORT: {
+    screen_code: "ACC_BATCH_COSTING_REPORT",
+    route: "/dashboard/procurement/accounts/batch-costing-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   ACC_MTS_SKU_MONTHLY_RATE: {
     screen_code: "ACC_MTS_SKU_MONTHLY_RATE",
     route: "/dashboard/production/mts-sku-monthly-rate",

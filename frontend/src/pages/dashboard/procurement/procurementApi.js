@@ -1038,6 +1038,11 @@ export function getDispatchReport(params) {
   return fetchProcurement("GET", "/api/procurement/dispatch-report", undefined, params);
 }
 
+// AC09 -- Batch Costing Report
+export function getBatchCostingReport(params) {
+  return fetchProcurement("GET", "/api/procurement/batch-costing-report", undefined, params);
+}
+
 // AC08 -- Manual Costing Rate Entry
 export function listManualCostingRows(params) {
   return fetchProcurement("GET", "/api/procurement/manual-costing-rows", undefined, params);

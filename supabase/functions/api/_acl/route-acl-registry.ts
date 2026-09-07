@@ -171,6 +171,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
+  "GET:/api/procurement/batch-costing-report":        { skipAcl: false, resourceCode: "ACC_BATCH_COSTING_REPORT", action: "VIEW" },
   "GET:/api/procurement/manual-costing-rows":         { skipAcl: false, resourceCode: "ACC_MANUAL_COSTING_RATE", action: "VIEW" },
   // §133.13 -- Additional Cost Category master, scoped to the Invoice/PGI
   // page's own drawer only (no separate master page/ACL resource).
