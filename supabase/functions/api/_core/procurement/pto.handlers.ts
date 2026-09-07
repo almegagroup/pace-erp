@@ -99,13 +99,24 @@ function assertProcurementReadRole(_ctx: ProcurementHandlerContext): void {
 // belonging to a different company's transfer. Mirrors sto.handlers.ts's
 // assertStoVisibleToContext — same rationale, source/target instead of
 // sending/receiving.
-function assertPtoVisibleToContext(ctx: ProcurementHandlerContext, pto: PtoRow): void {
-  const scopedCompanyId = toTrimmedString(ctx.context.companyId);
-  if (
-    scopedCompanyId
-    && scopedCompanyId !== toTrimmedString(pto.source_company_id)
-    && scopedCompanyId !== toTrimmedString(pto.target_company_id)
-  ) {
+// Was comparing against the session's active company instead of validating
+// real company membership via the shared assertCompanyScope helper -- same
+// bug class fixed in inward_qa/sfg_qa/rtv/invoice_verification/landed_cost/
+// sales_order handlers: a multi-company user whose active session company
+// wasn't source/target (but who is genuinely a member of one of them) would
+// 403. Passes if the caller has real membership on EITHER company (mirrors
+// the original source-OR-target intent), and still carries assertCompanyScope's
+// own SA/GA/admin bypass.
+async function assertPtoVisibleToContext(ctx: ProcurementHandlerContext, pto: PtoRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(pto.source_company_id));
+    return;
+  } catch {
+    // fall through to target company check
+  }
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(pto.target_company_id));
+  } catch {
     throw new Error("PTO_SCOPE_VIOLATION");
   }
 }
@@ -521,7 +532,7 @@ export async function approvePTOHandler(
     assertProcurementReadRole(ctx);
     const ptoId = new URL(req.url).pathname.split("/")[4] ?? "";
     const pto = await fetchPto(ptoId);
-    assertPtoVisibleToContext(ctx, pto);
+    await assertPtoVisibleToContext(ctx, pto);
     await assertPtoApproverRole(ctx, toTrimmedString(pto.source_company_id), toTrimmedString(pto.created_by));
     if (toUpperTrimmedString(pto.status) !== "DRAFT") {
       return ptoErrorResponse(req, ctx, "PTO_INVALID_STATUS", 400, "Only DRAFT PTO can be approved.");

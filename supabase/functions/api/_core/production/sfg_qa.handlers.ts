@@ -8,6 +8,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -173,9 +174,16 @@ async function fetchQaDocument(qaDocumentId: string): Promise<QaDocumentRow> {
   return data as QaDocumentRow;
 }
 
-function assertQaCompanyScope(ctx: ProdHandlerContext, qaDocument: QaDocumentRow): void {
-  const scopedCompanyId = getCompanyScope(ctx);
-  if (scopedCompanyId && String(qaDocument.company_id) !== scopedCompanyId) {
+// Same fix as inward_qa.handlers.ts's assertQaCompanyScope (this file is a
+// direct clone of it) -- was comparing against the session's active company
+// (ctx.context.companyId) instead of validating real company membership via
+// the shared assertCompanyScope(ctx, doc.company_id) helper, so a
+// multi-company user browsing another of their own companies' SFG QA queue
+// via this page's own Company filter would 403 on every row action.
+async function assertQaCompanyScope(ctx: ProdHandlerContext, qaDocument: QaDocumentRow): Promise<void> {
+  try {
+    await assertCompanyScope(ctx, String(qaDocument.company_id ?? ""));
+  } catch {
     throw new ApiError(403, "SFG QA document is outside company scope");
   }
 }
@@ -253,7 +261,7 @@ async function fetchProcessOrdersByIds(processOrderIds: string[]): Promise<Map<s
 
 async function fetchQaDocumentDetails(qaDocumentId: string, ctx: ProdHandlerContext): Promise<JsonRecord> {
   const qaDocument = await fetchQaDocument(qaDocumentId);
-  assertQaCompanyScope(ctx, qaDocument);
+  await assertQaCompanyScope(ctx, qaDocument);
 
   const processOrderMap = await fetchProcessOrdersByIds([String(qaDocument.process_order_id)]);
   const processOrder = processOrderMap.get(String(qaDocument.process_order_id));
@@ -522,7 +530,7 @@ export async function addSfgQaTestLineHandler(req: Request, ctx: ProdHandlerCont
     }
 
     const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
+    await assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
       throw new ApiError(409, "SFG QA document is read-only");
     }
@@ -607,7 +615,7 @@ export async function updateSfgQaTestLineHandler(req: Request, ctx: ProdHandlerC
     }
 
     const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
+    await assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
       throw new ApiError(409, "SFG QA document is read-only");
     }
@@ -685,7 +693,7 @@ export async function submitSfgQaDecisionHandler(req: Request, ctx: ProdHandlerC
     }
 
     const qaDocument = await fetchQaDocument(qaDocumentId);
-    assertQaCompanyScope(ctx, qaDocument);
+    await assertQaCompanyScope(ctx, qaDocument);
     if (!QA_DOC_MUTABLE_STATUSES.has(toUpperTrimmedString(qaDocument.status))) {
       throw new ApiError(400, "SFG QA document is not eligible for result recording");
     }
