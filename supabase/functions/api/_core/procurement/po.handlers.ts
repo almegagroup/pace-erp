@@ -439,20 +439,19 @@ async function getUserRoleCode(userId: string): Promise<string | null> {
 // check runs. A company that has configured rows but none scoped to this
 // particular creator falls back to DIRECTOR, same as the fully-unconfigured
 // case — so a plain company-wide/DIRECTOR-only setup keeps working untouched.
-async function assertProcurementHeadRole(
+// Shared by assertProcurementHeadRole (throws) and canActAsProcurementHead
+// (boolean query, used to decide whether to show a PENDING_APPROVAL PO's
+// Edit action to a specific viewer without leaking a 403 to non-approvers).
+async function resolveProcurementHeadEligibility(
   ctx: ProcurementHandlerContext,
   companyId: string,
   createdBy?: string | null,
-): Promise<void> {
-  if (hasBlanketApprovalOverride(ctx)) {
-    return; // SA/GA always retain override authority, regardless of approver_map config.
-  }
-
+): Promise<{ isConfiguredApprover: boolean; selfApprovalBlocked: boolean }> {
   const rules = await loadPoApproverRules(companyId);
   let isConfiguredApprover: boolean;
 
   if (rules.length === 0) {
-    isConfiguredApprover = hasBlanketApprovalOverride(ctx); // no approver_map row configured yet — fall back to blanket override approvers.
+    isConfiguredApprover = false; // no approver_map row configured yet, and blanket-override already handled by the caller.
   } else {
     const creatorRoleCode = createdBy ? await getUserRoleCode(createdBy) : null;
     const scopedRules = pickScopedApproverRules(
@@ -470,16 +469,49 @@ async function assertProcurementHeadRole(
         roleCode: ctx.roleCode,
         approverWorkContextIds: await loadApproverWorkContextIds(serviceRoleClient, ctx.auth_user_id, companyId),
       })
-      : hasBlanketApprovalOverride(ctx); // configured rows exist, but none scoped to this creator — fall back to blanket override approvers.
+      : false; // configured rows exist, but none scoped to this creator, and blanket-override already handled by the caller.
   }
+
+  return {
+    isConfiguredApprover,
+    selfApprovalBlocked: Boolean(createdBy) && createdBy === ctx.auth_user_id,
+  };
+}
+
+async function assertProcurementHeadRole(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  createdBy?: string | null,
+): Promise<void> {
+  if (hasBlanketApprovalOverride(ctx)) {
+    return; // SA/GA always retain override authority, regardless of approver_map config.
+  }
+
+  const { isConfiguredApprover, selfApprovalBlocked } = await resolveProcurementHeadEligibility(ctx, companyId, createdBy);
 
   if (!isConfiguredApprover) {
     throw new Error("PROCUREMENT_HEAD_REQUIRED");
   }
 
-  if (createdBy && createdBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
+  if (selfApprovalBlocked) {
     throw new Error("PROCUREMENT_SELF_APPROVAL_FORBIDDEN");
   }
+}
+
+// Non-throwing counterpart of assertProcurementHeadRole — same authority
+// rule, used purely to decide UI visibility (e.g. whether this viewer should
+// see an Edit action on a PENDING_APPROVAL PO). The write path always
+// re-checks via assertProcurementHeadRole; this never substitutes for it.
+async function canActAsProcurementHead(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  createdBy?: string | null,
+): Promise<boolean> {
+  if (hasBlanketApprovalOverride(ctx)) {
+    return true;
+  }
+  const { isConfiguredApprover, selfApprovalBlocked } = await resolveProcurementHeadEligibility(ctx, companyId, createdBy);
+  return isConfiguredApprover && !selfApprovalBlocked;
 }
 
 // §112 — must validate, not just resolve a fallback: an explicitly-requested
@@ -1685,12 +1717,20 @@ export async function getPOHandler(
 
     const enrichedDetail = await enrichPoReferenceDisplays({ po, lines });
 
+    // Only relevant while PENDING_APPROVAL -- lets the frontend show the Edit
+    // action to this PO's actual approver without ever showing it (and then
+    // 403ing) to every other viewer who can merely open this detail page.
+    const canEditPendingApproval = toUpperTrimmedString(po.status) === "PENDING_APPROVAL"
+      ? await canActAsProcurementHead(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by))
+      : false;
+
     return okResponse({
       data: await enrichProcurementUserDisplays({
         ...(enrichedDetail.po ?? po),
         lines: enrichedDetail.lines ?? lines,
         approval_log: approvalLogResult.data ?? [],
         amendment_log: amendmentLogResult.data ?? [],
+        can_edit_pending_approval: canEditPendingApproval,
       }),
     }, ctx.request_id, req);
   } catch (err) {
@@ -1718,8 +1758,16 @@ export async function updatePOHandler(
     } catch {
       return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (toUpperTrimmedString(po.status) !== "DRAFT") {
-      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_DRAFT", 422, "Only DRAFT PO can be updated");
+    const currentStatus = toUpperTrimmedString(po.status);
+    if (currentStatus !== "DRAFT" && currentStatus !== "PENDING_APPROVAL") {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_DRAFT", 422, "Only DRAFT or PENDING_APPROVAL PO can be updated");
+    }
+    if (currentStatus === "PENDING_APPROVAL") {
+      // While pending approval, editing is restricted to this PO's own
+      // approver (same authority as approvePOHandler/rejectPOHandler) --
+      // otherwise the creator or any other viewer could freely rewrite a PO
+      // that's sitting in someone else's approval queue.
+      await assertProcurementHeadRole(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by));
     }
 
     const vendorId = toTrimmedString(body.vendor_id || po.vendor_id);
@@ -1826,11 +1874,13 @@ export async function updatePOHandler(
     const status =
       code === "PROCUREMENT_PO_NOT_FOUND" || code === "PROCUREMENT_PAYMENT_TERM_NOT_FOUND"
         ? 404
-        : code.includes("NOT_DRAFT")
-          ? 422
-          : code.includes("REQUIRED") || code.includes("INVALID")
-            ? 400
-            : 500;
+        : code === "COMPANY_SCOPE_VIOLATION" || code === "PROCUREMENT_HEAD_REQUIRED" || code === "PROCUREMENT_SELF_APPROVAL_FORBIDDEN"
+          ? 403
+          : code.includes("NOT_DRAFT")
+            ? 422
+            : code.includes("REQUIRED") || code.includes("INVALID")
+              ? 400
+              : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order update failed");
   }
 }

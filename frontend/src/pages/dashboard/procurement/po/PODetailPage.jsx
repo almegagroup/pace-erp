@@ -527,7 +527,17 @@ export default function PODetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        ...(po?.status === "DRAFT" ? [{ key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: saving }] : []),
+        // PENDING_APPROVAL Edit is deliberately narrower than the DRAFT case:
+        // it only appears for this PO's own configured approver
+        // (can_edit_pending_approval, computed server-side by
+        // getPOHandler/canActAsProcurementHead) -- otherwise every viewer who
+        // can open this page (not just approvers) would see an Edit button
+        // that 403s for them. Same fields, same modal, same submit path as
+        // DRAFT edit; the backend (updatePOHandler) re-checks approver
+        // authority independently regardless of this flag.
+        ...(po?.status === "DRAFT" || (po?.status === "PENDING_APPROVAL" && po?.can_edit_pending_approval)
+          ? [{ key: "edit", label: "Edit", tone: "neutral", onClick: openEditModal, disabled: saving }]
+          : []),
         ...(po?.status === "DRAFT" ? [{ key: "confirm", label: saving ? "Confirming..." : "Confirm", tone: "primary", onClick: () => void handleConfirm(), disabled: saving }] : []),
         // Multi-item PO create is actually one purchase_order row per
         // material, bundled under one po_order_group -- but before this,
@@ -734,7 +744,9 @@ export default function PODetailPage() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 p-4">
           <div className="w-full max-w-5xl border border-slate-300 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <h2 className="text-sm font-semibold text-slate-900">Edit Draft Purchase Order</h2>
+              <h2 className="text-sm font-semibold text-slate-900">
+                {po?.status === "PENDING_APPROVAL" ? "Edit Purchase Order (Pending Approval)" : "Edit Draft Purchase Order"}
+              </h2>
               <button type="button" onClick={closeEditModal} className="border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700">
                 Close
               </button>
