@@ -316,9 +316,9 @@ async function attachPoItemsSummary(pos: PurchaseOrderRow[]): Promise<PurchaseOr
   const { data: lineRows, error: lineError } = await serviceRoleClient
     .schema("erp_procurement")
     .from("purchase_order_line")
-    .select("po_id, material_id, display_order")
+    .select("po_id, material_id, line_number")
     .in("po_id", poIds)
-    .order("display_order", { ascending: true });
+    .order("line_number", { ascending: true });
   if (lineError) throw new Error("PROCUREMENT_PO_LIST_ITEMS_LOOKUP_FAILED");
 
   const materialIds = uniqueTrimmedStrings(((lineRows ?? []) as PurchaseOrderLineRow[]).map((row) => row.material_id));
