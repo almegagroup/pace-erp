@@ -159,6 +159,12 @@ export default function StrokeMasterPage() {
   const prodshadeOptions = (prodshadeMaterialsByType[form.material_type] ?? []).map((m) => ({
     value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
   }));
+  // Existing Prodshade's Description is its own Material Master document_name --
+  // pulled from the list, never re-typed, so a user picking an existing SFG/INT
+  // can't accidentally save a different description than what Master already has.
+  const prodshadeDocumentNameById = new Map(
+    (prodshadeMaterialsByType[form.material_type] ?? []).map((m) => [String(m.id), m.document_name || ""]),
+  );
 
   const createCheckStrokes = createCompanyStrokesQ.data ?? [];
   const normalizedStrokeNumber = String(form.stroke_number ?? "").trim();
@@ -269,12 +275,15 @@ export default function StrokeMasterPage() {
   // Default Storage Location from that prior entry — user can still override.
   function handleProdshadeSelect(materialId) {
     setForm((f) => {
-      if (f.default_storage_location_id) return { ...f, prodshade_material_id: materialId };
       const prior = createCheckStrokes.find((s) => String(s.prodshade_material_id ?? "") === String(materialId));
+      const documentName = prodshadeDocumentNameById.get(String(materialId)) ?? "";
       return {
         ...f,
         prodshade_material_id: materialId,
-        default_storage_location_id: prior?.default_storage_location_id ? String(prior.default_storage_location_id) : f.default_storage_location_id,
+        default_storage_location_id: f.default_storage_location_id
+          ? f.default_storage_location_id
+          : (prior?.default_storage_location_id ? String(prior.default_storage_location_id) : f.default_storage_location_id),
+        description: documentName,
       };
     });
   }
@@ -628,11 +637,11 @@ export default function StrokeMasterPage() {
               <div className="flex flex-col gap-1.5">
                 <div className="flex gap-3 text-xs text-slate-600">
                   <label className="flex items-center gap-1">
-                    <input type="radio" name="prodshade_mode" checked={form.prodshade_mode === "existing"} onChange={() => setForm((f) => ({ ...f, prodshade_mode: "existing", prod_code: "", shade_code: "" }))} />
+                    <input type="radio" name="prodshade_mode" checked={form.prodshade_mode === "existing"} onChange={() => setForm((f) => ({ ...f, prodshade_mode: "existing", prod_code: "", shade_code: "", description: "" }))} />
                     Existing
                   </label>
                   <label className="flex items-center gap-1">
-                    <input type="radio" name="prodshade_mode" checked={form.prodshade_mode === "new"} onChange={() => setForm((f) => ({ ...f, prodshade_mode: "new", prodshade_material_id: "" }))} />
+                    <input type="radio" name="prodshade_mode" checked={form.prodshade_mode === "new"} onChange={() => setForm((f) => ({ ...f, prodshade_mode: "new", prodshade_material_id: "", description: "" }))} />
                     Create new
                   </label>
                 </div>
@@ -667,7 +676,16 @@ export default function StrokeMasterPage() {
               />
             </Field>
             <Field label="Description">
-              <input className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Optional" />
+              <input
+                className={`border rounded px-2 py-1.5 text-sm h-7 w-full ${
+                  form.prodshade_mode === "existing" ? "border-slate-200 bg-slate-50 text-slate-600" : "border-slate-300"
+                }`}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Optional"
+                readOnly={form.prodshade_mode === "existing"}
+                title={form.prodshade_mode === "existing" ? "Pulled from the selected Prodshade's own Material Master document name" : undefined}
+              />
             </Field>
             <Field label="Communication Date" required>
               <input type="date" min={COMMUNICATION_DATE_BOUNDS.min} max={COMMUNICATION_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm h-7 w-full" value={form.communication_date} onChange={(e) => setForm((f) => ({ ...f, communication_date: e.target.value }))} />
