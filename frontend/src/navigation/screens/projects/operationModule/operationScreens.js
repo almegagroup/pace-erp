@@ -1028,6 +1028,15 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // AC10 -- Reco Data, GRP_ACL_ACCOUNTS.
+  ACC_RECO_DATA: {
+    screen_code: "ACC_RECO_DATA",
+    route: "/dashboard/procurement/accounts/reco-data",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   ACC_MTS_SKU_MONTHLY_RATE: {
     screen_code: "ACC_MTS_SKU_MONTHLY_RATE",
     route: "/dashboard/production/mts-sku-monthly-rate",

@@ -23103,7 +23103,7 @@ is decided yet. Do not implement anything from this section until it carries a "
 a page-by-page spec,
 matching how every other SO0x page in §133 was locked before Codex/Claude touched code.
 
-## 135 — RECO DATA Report (Accounts) — 🔶 field list/rules building up, 2026-09-08 (NOT fully locked yet)
+## 135 — RECO DATA Report (Accounts) — ✅ DESIGN LOCKED 2026-09-08, IMPLEMENTATION IN PROGRESS
 
 **Purpose:** a report surfacing the actual `process_order_line_reco`/`packing_order_line_reco`/
 `dispatch_reco` data — this is the entire reason those three reco tables were built in the first
@@ -23203,5 +23203,217 @@ established for SO04/IN02/PR24, and **Page 1 is a verbatim reuse of SO04's own S
 - **Dispatch Category** chips — RPS / SRPS / FRPS / FSRPS
 - Execute / Reset actions
 
-Page 2 (this report's own output grid — columns/rules from §135.2-135.4 above) is still to be
-designed.
+### 135.6 — Page 2 (Reco Data grid) — ✅ LOCKED (2026-09-08)
+
+Row source: `dispatch_reco` is the base (already a flat, pre-joined table per invoice+material —
+no need to re-derive from `sales_invoice_line`/`delivery_challan_line` the way AC09/SO04 do,
+since §133.18 already wrote that join once at PGI time). Three distinct row shapes appear in the
+same grid, distinguished by a `section` tag (`DISPATCH` / `PARTIAL_REVERSAL` / `RPS`) driving row
+background, not a separate page/table:
+
+**A. DISPATCH rows (the normal case — every FG/RM/PM/INT line of every posted invoice in range):**
+- One row per `(process_order_id or packing_order_id, material_id)` inside a dispatch group —
+  i.e. **`PRODUCTION` and `COR6_CORRECTION` `process_order_line_reco`/`packing_order_line_reco`
+  rows for the same material are net-summed into ONE row**, not shown as two rows (§135.4's
+  netting rule extended to `COR6_CORRECTION`, confirmed against the real BM05698 example this
+  session — the batch's COR6 correction landed in `dispatch_reco` as a second raw row for the
+  same material, and the locked behavior is to fold it into the same row the un-corrected
+  production already occupies, full-row amber background as the correction marker, not a
+  separate PREV-style section since a COR6 correction is the *same* dispatch's own data getting
+  fixed, unlike a Partial Reversal which is a distinct later event).
+- `is_voided=true` rows (CORS'd/dead) are excluded entirely (§135.4).
+- FG/SKU rows get the `FG` badge (internal `row_type` stays `SKU` to match AC09's own convention,
+  §104-era naming — only the rendered badge label changed to "FG", never re-use the literal
+  string "SKU" as visible text). RM/PM/INT rows get their own respective badges.
+
+**B. PARTIAL_REVERSAL rows ("PREV" section) — one amber-flagged sub-block per Tally-date-range
+Partial Reversal event (PR19), keyed by `reversal_document_number`/batch:**
+- Reuses the SAME `PACE Doc #` the reversal posted against (`reference_document_number` on the
+  reco row, which is the Process/Packing PO's own reco document — **not** a new number) and the
+  SAME Tally Invoice Date the original dispatch used (a Partial Reversal has no invoice of its
+  own — it corrects an already-invoiced batch's genealogy, it does not re-invoice) — confirmed
+  against the real CMP003 110 KG walkthrough (Process PO `9300000028` / Batch `EV02625` / Packing
+  PO `9400000022` / Reversal Doc `9600000001`).
+  - **Populated:** Company Code, PACE Doc # (reused), Tally Invoice Date (reused), Process PO
+    Number, Batch Number, Packing PO Number, PO Type, Type badge, PACE Code, Item Name, External
+    Code, Costing Group, Actual Qty, AP Approved Qty (both negative — the reversed amount).
+  - **Blank (structurally absent for this row shape, never a derived/guessed value):** Tally
+    Invoice Number, Invoice Number, Inbound Number, SO Stroke (**no SO/FO involved in a
+    reversal — do not populate this even when a "Standard—SO Stroke" value could technically be
+    derived; caught live this session as a real mistake and reverted**), FO Number, Standard Qty
+    (a reversal has no "standard" of its own — it only ever carries Actual/AP-Approved deltas),
+    Invoice Total columns, Dispatch/Pack Qty columns.
+  - **Dispatch Category** shows the literal `"PREV"` (not one of the real SO dispatch_category
+    values) so the column itself signals the row shape even before the amber background is
+    noticed — matches how the RPS row shape (below) also overloads this same column with `"RPS"`.
+  - **Standard—Dispatched Stroke stays populated** (derived from the batch's own real production
+    data via `process_order_line_reco.stroke_number`, independent of any SO) — only the
+    **SO-Stroke-derived** "Standard" figure is suppressed, not the batch's own stroke identity.
+
+**C. RPS rows ("Shape 2" passthrough, §133.18) — a plain RM/PM/INT line with no
+`packing_order_id`/no batch, only ever fires for `dispatch_category='RPS'` AND a Bill-To-Asian-Paints
+`dispatch_type`:**
+  - **Dispatch Category** shows `"RPS"`.
+  - **Populated:** Company Code, Tally Invoice Number/Date, Invoice Number, Inbound Number, Type
+    badge (RM/PM/INT only — RPS never carries an FG/SKU row), PACE Code, Item Name, External Code,
+    Costing Group, Dispatch Qty (kg) (for RPS this is the material's own dispatched qty, not a
+    denormalized whole-PO figure — confirmed identical to AP Approved Qty on every real row), AP
+    Approved Qty.
+  - **Blank:** Process PO/Batch/Packing PO/PO Type (no production document backs an RPS line —
+    confirmed live, `process_order_id`/`packing_order_id` are both `NULL` on every real RPS
+    `dispatch_reco` row), SO Stroke, FO Number, Standard Qty, Actual Qty (confirmed against real
+    prod data this session — genuinely `NULL` on every real RPS row), **and also Invoice Total Qty
+    (kg) / Invoice Total Pack Qty** (corrected against real data, 2026-09-09: those two columns
+    are a "how much FG/pack this invoice moved" concept, which has no meaning for an RPS invoice —
+    RPS has no packing order at all, confirmed live: prod's one real RPS invoice, `9200000191`,
+    carries 6 RM lines and zero packing-order linkage of any kind).
+
+**Full column list, left to right (30 columns) — PACE Code and Item Name are ALWAYS two separate
+columns, never combined into one "CODE — Name" string (a repeat mistake this session, corrected
+every time it recurred — locked here so it cannot recur in the real build):**
+
+| # | Column | Source | Notes |
+|---|--------|--------|-------|
+| 1 | Company Code | `companies.company_code` | single lookup, same value every row (report is single-company like AC09/SO04) |
+| 2 | Month-Year | derived from Tally Invoice Date (DISPATCH/RPS) or the reused date (PREV) | e.g. "Sep 2026" |
+| 3 | Tally Invoice Number | `dispatch_reco.tally_invoice_number` | blank for PREV |
+| 4 | Tally Invoice Date | `dispatch_reco.tally_invoice_date` | reused (not blank) for PREV |
+| 5 | PACE Invoice/Doc # | `dispatch_reco.invoice_number` (DISPATCH/RPS) or `reference_document_number` (PREV) | |
+| 6 | Inbound Number (IBN) | `dispatch_reco.inbound_number` | blank for PREV |
+| 7 | Dispatch Category | `dispatch_reco.dispatch_category`, or literal `"PREV"`/`"RPS"` | see row-shape rules above |
+| 8 | FO Number | `dispatch_reco.fo_number` | blank for PREV/RPS |
+| 9 | SO Stroke | derived, `plan_feed.ordered_stroke_number` via `fo_id` (§135.3) — MTEST rule: if the linked FO has no ordered stroke, show the batch's own Actual Dispatch Stroke instead (MTEST's SO and Actual stroke are the same formulation by definition, §108-era MTEST design) | always blank for PREV; blank for RPS (no FO) |
+| 10 | Actual Dispatch Stroke | `process_order_line_reco.stroke_number` via `process_order_id` (§135.3) | blank for RPS |
+| 11 | Process PO Number | `dispatch_reco.process_order_number` | reused for PREV; blank for RPS |
+| 12 | Batch Number | `dispatch_reco.batch_number` | reused for PREV; blank for RPS |
+| 13 | Packing PO Number | `dispatch_reco.packing_order_number` | reused for PREV; blank for RPS |
+| 14 | PO Type | `dispatch_reco.po_type` (MTO/HPS/MTS/MTEST) | reused for PREV; blank for RPS |
+| 15 | Type | badge: FG / RM / PM / INT (`line_material_type`, "SKU"→"FG" label only) | |
+| 16 | PACE Code | `material_master.pace_code` | own column, never merged with Item Name |
+| 17 | Item Name | `material_master.material_name` | own column |
+| 18 | External Code | `material_master.external_code` | |
+| 19 | Costing Group | `ac06_month_line.costing_group_name_snapshot` resolved by (company, material, rate_month = Tally Invoice Date's month) via `ac06_month` → `ac06_month_line`; blank if the material isn't in any costing group that month (standalone material, own name shown instead — same "standalone vs grouped" rule as AC09) | |
+| 20 | Dosage % | `process_order_line_reco.dosage_pct` (RM/PM/INT lines only) | blank for FG/SKU rows and for RPS (RPS has no process_order_line_reco link) |
+| 21 | Invoice Total Qty (kg) | SUM of `dispatch_qty_kg` across every FG/SKU row on the SAME `invoice_id` (whole-invoice total, not per-material — business owner's own correction this session: "invoice e total koto kg" means the invoice's grand total, not this line's own qty) | same value repeated on every row of that invoice; blank for PREV |
+| 22 | Invoice Total Pack Qty | SUM of pack counts across the same invoice's FG/SKU rows (via the linked `delivery_challan_line`/`packing_order` `num_packs`) | same value repeated per invoice; blank for PREV |
+| 23 | Dispatch Qty (kg) | `dispatch_reco.dispatch_qty_kg`, net-summed per §135.6-A | **no "this Packing PO" suffix — plain label** (business owner ask) |
+| 24 | Pack Qty | this line's own pack count | plain label, same reasoning as #23 |
+| 25 | Standard Qty (kg) | `dispatch_reco.standard_qty`, net-summed | blank for PREV |
+| 26 | Actual Qty (kg) | `dispatch_reco.actual_qty`, net-summed | blank for RPS |
+| 27 | AP Approved Qty (kg) | `dispatch_reco.ap_approved_qty`, net-summed | always populated where the row shape allows it (this is the billing figure) |
+| 28 | Variance (Actual − AP Approved) | computed, **color only, never appended text** (e.g. never "53.406 ≠ Actual" as a string — the whole point of this rule is the value stays a pure downloadable number, Excel-safe, §135.6 Excel-safety rule below) | |
+| 29 | SO/STO Number | `dispatch_reco.so_number` | blank for PREV/RPS-without-SO |
+| 30 | Row flag (internal, not a visible column) | `section` + a boolean `is_corrected` (COR6 netted) used purely to drive row background — never rendered as cell text | |
+
+**Excel-safety rule (LOCKED, applies to every colored cell in this report):** a cell's visible
+render (background color / badge) and its exported value must be kept structurally separate —
+the numeric columns (#21-28) always export as a pure number, coloring is carried by row/cell
+background only, matching AC09/SO04's existing `downloadColoredExcelFile` pattern
+(`render()` for the on-screen badge/color vs `excelValue()`/`copyValue()` for the raw number).
+No cell may ever contain an appended annotation string mixed with a numeric value — confirmed as
+a hard rule this session after two separate mock iterations violated it (`"110.000 (RM+INT)"`,
+`"53.406 ≠ Actual"`) and were corrected.
+
+**Row background convention (matches AC09's own established row-tint pattern, not new):**
+- DISPATCH, un-corrected: default row background.
+- DISPATCH, COR6-netted: full-row amber wash (not a border-only accent — a border-only accent on
+  just the first cell was tried first and found invisible on horizontal scroll; corrected to a
+  full-row tint).
+- PARTIAL_REVERSAL: full-row amber wash (same tint family as COR6 — both signal "this row's
+  quantity was corrected after the original production event", just via a different mechanism).
+- RPS: a distinct row tint from PREV/COR6 (RPS is not a correction, it is a legitimately
+  different dispatch shape — must not be visually confused with the correction rows).
+
+### 135.7 — Page 3 ("Reco Summary Data") — ✅ LOCKED (2026-09-08)
+
+Reached via a **"Summary"** button placed next to Page 2's existing "Execute Again" button (same
+row, not a separate page navigation with its own filters) — opens a full-page report, NOT a modal.
+
+- **Title:** the Page 2 title's "Reco Data — <date range>" line becomes **"Reco Summary Data —
+  <same date range>"** on this page (same header pattern, title word swapped, date range carried
+  over unchanged).
+- **Filters row:** Material Type dropdown (RM/PM/INT/SFG/FG) + an all-column type-ahead search
+  bar, same shape as Page 2's own search (not a new filter mechanism).
+- **Grouping key:** `(Company, Item)` — where "Item" for a costing-grouped material is the
+  **Costing Group name**, and for a standalone material is that material's own name (never mixed
+  — a standalone material never gets folded into any group's total, and a grouped material's
+  individual name never appears as its own summary line once it belongs to a group. Same
+  "standalone vs grouped" partition AC09 already uses).
+- **MTEST / RPS / PREV rows are kept in their own separate summary buckets, never blended into
+  the normal MTO/HPS/MTS totals** — confirmed by business owner's own two live-data challenges
+  this session (Biotreat showing blank, then CMP006 MTEST showing blank) that turned out to be
+  real filter/data gaps requiring exactly this separation, not bugs to paper over by merging
+  buckets.
+- **Columns (8):** Company, Costing Group / Item Name, External Code, Total Dispatch Qty (kg),
+  Total Standard Qty (kg), Total Actual Qty (kg), Total AP Approved Qty (kg), Net Variance —
+  each a SUM of Page 2's own already-netted (COR6-folded, PREV-summed) row values for that
+  grouping key, computed client-side off the same Page 2 result set for the selected date range
+  (no separate backend aggregation endpoint — Page 1's 366-day cap already bounds the row count
+  to something safe to sum in the browser, same assumption SO04/AC09 already make for their own
+  in-browser totals).
+
+### 135.9 — Real-data verification pass, prod (2026-09-09) — 3 real bugs caught before ship
+
+Business owner's explicit instruction after the first implementation pass: verify every
+calculation against real Prod data, not dev, before calling this done. Three genuine bugs
+surfaced this way (all fixed in the same pass, none were design errors — all were implementation
+mistakes made while translating the locked design into code):
+
+1. **`dispatch_reco.po_type` is the PACKING PO's own type family (PMTO/PHPS/PMTS/PTEST), not the
+   Process PO family (MTO/HPS/MTS/MTEST)** — confirmed live: every real `dispatch_reco` row shows
+   `PMTO`/`PHPS`/`PTEST` only, never bare `MTO`/`HPS`/`MTEST`. Meanwhile
+   `process_order_line_reco.po_type` (the PARTIAL_REVERSAL row source) uses the OTHER, clean
+   family. An unnormalized `po_type === "MTEST"` check — the exact shape the MTEST SO-Stroke
+   fallback (§135.6-A) and the Page 1 FG Type chip filter both need — silently matched zero real
+   rows, which is precisely the live symptom business owner had already reported this session
+   ("CMP006 er MTEST dispatch hoyeche... data blank keno?"). Fixed with a `normalizeFgType()`
+   lookup (`PMTO→MTO`, `PHPS→HPS`, `PMTS→MTS`, `PTEST→MTEST`, matching CLAUDE.md §83.2's own
+   P-prefix convention) applied at every `po_type` read, so the column reads consistently as the
+   clean MTO/HPS/MTS/MTEST family regardless of which source table a row came from.
+2. **`dispatch_qty_kg` is a constant, denormalized per-(invoice, packing PO) value, repeated
+   identically on every RM/PM/INT line of that group** — confirmed against real COR6-duplicated
+   rows (e.g. two rows both showing `dispatch_qty_kg=3220`, `10000`, etc., while only
+   `actual_qty`/`ap_approved_qty` genuinely differ between the pair). The first implementation
+   pass summed `dispatch_qty_kg` across every row in a net-summed group exactly like
+   Standard/Actual/AP-Approved — silently doubling it whenever a COR6 correction produced a
+   second raw row. Fixed: `dispatch_qty_kg` is now taken once per group (from any one of its
+   rows), never accumulated.
+3. **`dispatch_reco` carries NO FG/SKU row at all** — confirmed live: `line_material_type` across
+   every real row is only ever `RM`/`PM`/`INT` (zero `SKU` rows exist; `packing_order_line_reco`
+   itself has no `line_material_type` column, only a `sku_material_id` HEADER field — the FG
+   identity was never meant to be its own reco line). The first implementation pass computed
+   "Invoice Total Qty/Pack" by filtering for a `SKU` row that can never exist, so those two
+   columns were unconditionally blank. Fixed: Invoice Total Qty/Pack are now summed from each
+   DISTINCT (invoice, packing PO) pair's own `dispatch_qty_kg`/`packing_order.num_packs` (both of
+   which are already the right per-PO figures, present on every RM/PM/INT row of that group) —
+   and, per the same verification, these two columns are correctly left blank for RPS rows (RPS
+   has no packing order at all, confirmed on the one real RPS invoice in prod, `9200000191`).
+
+Also verified and confirmed correct as originally designed (no fix needed): RPS rows'
+`standard_qty`/`actual_qty`/`process_order_number`/`packing_order_number` are genuinely `NULL` on
+every real row (6 rows total in prod, all under invoice `9200000191`); the 110 KG CMP003 Partial
+Reversal walkthrough's PACE-Doc-#/Tally-Date reuse fallback behaves correctly even when
+`dispatch_reco` has zero rows for that batch (a real edge case — this particular reversed batch
+was an Opening-genealogy synthetic batch that was never actually dispatched before being
+reversed); `ac06_month`/`ac06_month_line`'s CLOSED-month handling needed the same
+archive-table branch AC09's own resolver already uses (`ac06_month_archive`/
+`ac06_month_archive_line`) — added during this same pass since a live CLOSED month row was found
+in prod (`2026-08-01`) and the first implementation pass had only ever read the live
+`ac06_month_line` table.
+
+### 135.8 — Implementation notes (LOCKED — 2026-09-08)
+
+- **No schema/migration change required** — every source table (`dispatch_reco`,
+  `process_order_line_reco`, `packing_order_line_reco`, `ac06_month_line`/`ac06_month`,
+  `plan_feed`) already exists with every column this design needs.
+- **ACL/menu registration only** — tx_code `AC10`, resource_code `ACC_RECO_DATA`,
+  `GRP_ACL_ACCOUNTS` group, VIEW action only (read-only report, no write path) — via the standard
+  4-step MCP sequence (CLAUDE.md §8 "ACL Menu Registration").
+- **Backend:** new `supabase/functions/api/_core/procurement/reco_data.handlers.ts`, one handler
+  `getRecoDataHandler`, route `GET /api/procurement/reco-data`, modeled on
+  `dispatch_report.handlers.ts`'s filter/date-range/company-scope shape but reading `dispatch_reco`
+  as the primary source (simpler than AC09/SO04's raw multi-hop join, since `dispatch_reco` is
+  already flattened) plus the PARTIAL_REVERSAL/RPS augmentation queries described in §135.6.
+- **Frontend:** new `RecoDataPage.jsx` (Page 1 + Page 2, `ErpDenseGrid`) and
+  `RecoSummaryDataPage.jsx` (Page 3), new `getRecoData()` in `procurementApi.js`, route + screen
+  registry entries following the AC09 (`ACC_BATCH_COSTING_REPORT`) pattern exactly.
