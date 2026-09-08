@@ -127,6 +127,7 @@ import {
   qaApproveProcessOrderHandler,
   qaRejectProcessOrderHandler,
   managerApproveProcessOrderHandler,
+  managerRejectProcessOrderHandler,
   startBatchHandler,
   finalizeProcessOrderHandler,
   verifyProcessOrderHandler,
@@ -549,6 +550,10 @@ export async function dispatchProductionRoutes(
   // §136 (2026-09-04) — Urgent-only gate between QA_APPROVED and Start Batch.
   if (/^\/api\/production\/process-orders\/[^/]+\/manager-approve$/.test(pathname) && req.method === "POST") {
     return await managerApproveProcessOrderHandler(req, ctx);
+  }
+  // §136 follow-up (2026-09-08) — Manager Reject, symmetric to Manager Approve.
+  if (/^\/api\/production\/process-orders\/[^/]+\/manager-reject$/.test(pathname) && req.method === "POST") {
+    return await managerRejectProcessOrderHandler(req, ctx);
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/start-batch$/.test(pathname) && req.method === "POST") {
     return await startBatchHandler(req, ctx);

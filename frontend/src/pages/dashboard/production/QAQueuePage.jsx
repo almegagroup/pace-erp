@@ -23,6 +23,7 @@ import {
   listBatchNumbers,
   listProcessOrders,
   managerApproveProcessOrder,
+  managerRejectProcessOrder,
   qaApproveProcessOrder,
   qaRejectProcessOrder,
   startBatch,
@@ -34,6 +35,8 @@ const ERROR_MESSAGES = {
   PROD_PO_NOT_FOUND: "Process Order not found.",
   PROD_PO_QA_NOT_ALLOWED: "QA action is only allowed for STANDARD status orders.",
   PROD_QA_REJECT_REASON_MISSING: "Rejection reason is required.",
+  PROD_MANAGER_REJECT_REASON_MISSING: "Rejection reason is required.",
+  PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE: "Manager decision only applies to Urgent Process Orders.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
   PROD_BATCH_SERIES_NOT_FOUND: "Batch number series not configured for this company/type.",
   PROD_BATCH_RELEASED_AVAILABLE: "Released batch numbers are available. Pick one or skip to generate new.",
@@ -78,6 +81,10 @@ export default function QAQueuePage() {
   const [saving, setSaving] = useState(false);
   const [rejectOrderId, setRejectOrderId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
+  // §136 follow-up (2026-09-08) -- same modal serves QA Reject (STANDARD, kills the
+  // order before any decision) and Manager Reject (Urgent order awaiting Manager
+  // decision) -- this tracks which API call to make on confirm.
+  const [rejectMode, setRejectMode] = useState("qa");
   const [startBatchOrder, setStartBatchOrder] = useState(null);
   // §136 (2026-09-04) -- Normal/Urgent choice at QA Approve time, per order
   // (only meaningful before that order is actually approved).
@@ -151,6 +158,9 @@ export default function QAQueuePage() {
     }
   }
 
+  // §136 follow-up (2026-09-08) -- symmetric to Manager Approve: same CANCELLED
+  // decision as QA Reject, business owner directive, just a separate reason field
+  // so the audit trail can tell a QA rejection apart from a Manager one.
   async function handleReject() {
     if (!rejectOrderId) return;
     if (!rejectReason.trim()) {
@@ -159,10 +169,12 @@ export default function QAQueuePage() {
     }
     setSaving(true);
     try {
-      await qaRejectProcessOrder(rejectOrderId, { reason: rejectReason.trim() });
-      toast("Process Order rejected.");
+      const reject = rejectMode === "manager" ? managerRejectProcessOrder : qaRejectProcessOrder;
+      await reject(rejectOrderId, { reason: rejectReason.trim() });
+      toast(rejectMode === "manager" ? "Process Order rejected by Manager." : "Process Order rejected.");
       setRejectOrderId("");
       setRejectReason("");
+      setRejectMode("qa");
       qc.invalidateQueries({ queryKey: ["qa-queue"] });
       qc.invalidateQueries({ queryKey: ["qa-queue-detail", rejectOrderId] });
     } catch (error) {
@@ -369,6 +381,7 @@ export default function QAQueuePage() {
                                   onClick={() => {
                                     setRejectOrderId(order.id);
                                     setRejectReason("");
+                                    setRejectMode("qa");
                                   }}
                                   disabled={saving}
                                   className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
@@ -378,15 +391,31 @@ export default function QAQueuePage() {
                               </>
                             )}
                             {/* §136 (2026-09-04) -- Urgent-only gate; Start Batch stays hidden
-                                for this status+priority combo until Manager Approval clears it. */}
+                                for this status+priority combo until Manager Approval clears it.
+                                §136 follow-up (2026-09-08) -- Manager Reject sits beside it, same
+                                gate, cancels the order outright (business owner: same decision as
+                                QA Reject). */}
                             {order.status === "QA_APPROVED" && order.priority === "URGENT" && (
-                              <button
-                                onClick={() => handleManagerApprove(order.id)}
-                                disabled={saving}
-                                className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-                              >
-                                Manager Approve
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => handleManagerApprove(order.id)}
+                                  disabled={saving}
+                                  className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                                >
+                                  Manager Approve
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setRejectOrderId(order.id);
+                                    setRejectReason("");
+                                    setRejectMode("manager");
+                                  }}
+                                  disabled={saving}
+                                  className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                >
+                                  Manager Reject
+                                </button>
+                              </>
                             )}
                             {/* §136 follow-up (2026-09-08): MTEST has no QA_APPROVED step, so
                                 an Urgent MTEST PO is still STANDARD here — Manager Approve gates
@@ -394,13 +423,26 @@ export default function QAQueuePage() {
                                 (also skipsQaApproval) never carries a priority, so it always
                                 falls through to the direct Start Batch branch below. */}
                             {order.status === "STANDARD" && skipsQaApproval(order.po_type) && order.po_type === "MTEST" && order.priority === "URGENT" ? (
-                              <button
-                                onClick={() => handleManagerApprove(order.id)}
-                                disabled={saving}
-                                className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-                              >
-                                Manager Approve
-                              </button>
+                              <>
+                                <button
+                                  onClick={() => handleManagerApprove(order.id)}
+                                  disabled={saving}
+                                  className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                                >
+                                  Manager Approve
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setRejectOrderId(order.id);
+                                    setRejectReason("");
+                                    setRejectMode("manager");
+                                  }}
+                                  disabled={saving}
+                                  className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                >
+                                  Manager Reject
+                                </button>
+                              </>
                             ) : order.status === "STANDARD" && skipsQaApproval(order.po_type) && (
                               <>
                                 <button
@@ -414,6 +456,7 @@ export default function QAQueuePage() {
                                   onClick={() => {
                                     setRejectOrderId(order.id);
                                     setRejectReason("");
+                                    setRejectMode("qa");
                                   }}
                                   disabled={saving}
                                   className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
@@ -497,10 +540,11 @@ export default function QAQueuePage() {
 
       <ModalBase
         visible={Boolean(rejectOrderId)}
-        title="Reject Process PO"
+        title={rejectMode === "manager" ? "Manager Reject Process PO" : "Reject Process PO"}
         onEscape={() => {
           setRejectOrderId("");
           setRejectReason("");
+          setRejectMode("qa");
         }}
         actions={(
           <>
@@ -508,6 +552,7 @@ export default function QAQueuePage() {
               onClick={() => {
                 setRejectOrderId("");
                 setRejectReason("");
+                setRejectMode("qa");
               }}
               className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600"
             >

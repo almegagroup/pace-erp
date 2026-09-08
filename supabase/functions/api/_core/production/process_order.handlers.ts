@@ -2351,6 +2351,72 @@ export async function managerApproveProcessOrderHandler(req: Request, ctx: ProdH
   }
 }
 
+// §136 follow-up (2026-09-08) — Manager Reject, the symmetric counterpart to Manager
+// Approve. Business owner directive: same decision as QA Reject (CANCELLED, open
+// reservations released) — just captured under manager_rejection_reason/
+// manager_decided_by instead of QA's own fields, so the audit trail can tell a QA
+// quality rejection apart from a Manager's own business/urgency call. Same access
+// gate as Manager Approve (PROD_QA_QUEUE:MANAGER_APPROVE) — it is the other half of
+// the same decision, not a QA action.
+export async function managerRejectProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    if (!id) return poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required");
+
+    const po = await fetchProcessOrder(id);
+    if (!po) return poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found");
+    try {
+      await assertCompanyScope(ctx, String(po.company_id ?? ""));
+    } catch {
+      return poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "MANAGER_APPROVE"))) {
+      return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Manager Approval access for this company.");
+    }
+    if (po.priority !== "URGENT") {
+      return poErr(req, ctx, "PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE", 422, "Manager Reject only applies to Urgent Process Orders.");
+    }
+    const requiredStatus = po.po_type === "MTEST" ? "STANDARD" : "QA_APPROVED";
+    if (po.status !== requiredStatus) {
+      return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected ${requiredStatus}, got ${po.status}`);
+    }
+
+    const body = await parseBody(req);
+    const reason = toTrimmedString(body.reason);
+    if (!reason) {
+      return poErr(req, ctx, "PROD_MANAGER_REJECT_REASON_MISSING", 400, "reason required");
+    }
+
+    const now = new Date().toISOString();
+    const { error } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .update({
+        status: "CANCELLED",
+        manager_rejection_reason: reason,
+        manager_decided_by: ctx.auth_user_id,
+        manager_decided_at: now,
+        prune_reason: reason,
+        pruned_by: ctx.auth_user_id,
+        pruned_at: now,
+        last_updated_at: now,
+        last_updated_by: ctx.auth_user_id,
+      })
+      .eq("id", id);
+    if (error) {
+      console.error("[process_order.managerRejectProcessOrder] update failed:", JSON.stringify(error));
+      throw new Error("PROD_PO_MANAGER_REJECT_FAILED");
+    }
+
+    await cancelOpenReservationsForProcessOrder(id, ctx.auth_user_id, now);
+
+    return okResponse({ id, status: "CANCELLED" }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_MANAGER_REJECT_FAILED";
+    return poErr(req, ctx, code, 500, "Manager reject failed");
+  }
+}
+
 export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     // ACL-gated via route-acl-registry (PROD_QA_QUEUE:APPROVE) — no longer a

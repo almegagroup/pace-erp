@@ -186,6 +186,8 @@ export const qaApproveProcessOrder = (id, body) => fetchProd("POST", `/api/produ
 export const qaRejectProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/qa-reject`, body);
 // §136 (2026-09-04) -- Urgent-only gate between QA_APPROVED and Start Batch.
 export const managerApproveProcessOrder = (id) => fetchProd("POST", `/api/production/process-orders/${id}/manager-approve`);
+// §136 follow-up (2026-09-08) -- Manager Reject, symmetric to Manager Approve.
+export const managerRejectProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/manager-reject`, body);
 export const startBatch = (id, body, poType) => fetchProd(
   "POST",
   `/api/production/process-orders/${id}/${poType === "MTEST" ? "start-batch-mtest" : "start-batch"}`,

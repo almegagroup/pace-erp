@@ -1583,6 +1583,12 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "MANAGER_APPROVE" } },
   },
   {
+    // §136 follow-up (2026-09-08) — Manager Reject, the other half of the same
+    // decision as Manager Approve above — same resource:action, not a QA action.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/manager-reject$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROD_QA_QUEUE", action: "MANAGER_APPROVE" } },
+  },
+  {
     // Was PROD_BATCH_RELEASE (shared with PR17's "release a voided batch
     // number" — a QA/Manager-tier oversight function). Split onto its own
     // resource code (2026-07-29) — Start Batch is Production's own action,
