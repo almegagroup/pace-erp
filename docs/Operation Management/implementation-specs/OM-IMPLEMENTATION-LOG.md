@@ -112,6 +112,35 @@
 
 ---
 
+### 2026-09-09 — AC10 R-04 correction (IN_PROGRESS)
+
+The AC10 rollout initially mixed function DDL with operational version creation,
+capture and snapshot/menu regeneration in one migration. This violated R-04.
+Corrected the same-session migration `20260908190039_ac10_exact_role_or_accounts_acl.sql`
+to contain only `CREATE OR REPLACE FUNCTION acl.generate_acl_snapshot(...)`.
+Moved operational SQL and its assertions into `AC10-ACL-MCP-ROLLOUT.sql`, a separate
+per-environment MCP runbook. It records work already executed; it was not rerun
+during cleanup. The attempted statements-metadata update matched zero rows;
+remote migration records remain unchanged. Runtime ACL data is unchanged.
+
+User challenged the need for any function change. Re-reading PROD-ACL-Access-Decisions
+Basic Rule #6 establishes L3_MANAGER as Plant Head in MANAGEMENT; older pages use
+context-scoped capabilities. The initial handoff instead said the four roles get
+access regardless of department. Whether AC10 follows the established Plant Head
+context model needs resolution before reverting the function without changing
+the requested access contract. No user-specific override or manual snapshot patch
+was substituted.
+
+Migration integrity before deletion: dev/prod both 542 files, `in_sync=true`.
+The business owner subsequently explicitly requested deletion of the local migration
+file; it was deleted before any commit. Dev/prod still retain the applied function
+and migration record, so migration history now differs from the repository.
+Runtime ACL behavior and activated snapshots remain unchanged. History cleanup
+and any decision to revert the function remain open; this entry does not claim
+that the migration has been rolled back in either database.
+
+---
+
 ## Gate-11 - Foundation DB (erp_inventory schema)
 
 **Spec File:** OM-GATE-11-Foundation-DB-Spec.md

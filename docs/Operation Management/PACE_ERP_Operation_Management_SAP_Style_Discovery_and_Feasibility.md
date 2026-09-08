@@ -23427,8 +23427,25 @@ the named 4 (`L1_MANAGER`, `L2_USER`, `L3_USER`, `L4_USER` checked) now resolve 
 (correctly locked out — previously would have inherited access via the broad
 `CAP_PROC_ACCOUNTS` role grant). `L2_AUDITOR` has no live dev test user to click-test with, but is
 confirmed present in `acl.role_capabilities` for the new capability the same way the other 3 are.
-**Prod:** this exact 4-step MCP sequence (new capability + 2 grant tables + capability_menu_actions
-swap + version bump/capture/snapshot) still needs to run before prod deploy — not yet done.
+**Prod completed and corrected (2026-09-09):** the capability/grants/initial rollout were already
+present when checked, but the live engine requires role AND work-context grants, not OR;
+there were zero AC10 decisions in the active prod snapshots. The earlier interpretation and
+dev verification above were therefore insufficient to establish the requested access policy.
+The applied database change adds an AC10-only candidate path using exact assigned-role
+grants OR work-context grants. Its local migration file
+`20260908190039_ac10_exact_role_or_accounts_acl.sql` was subsequently deleted at the
+business owner's request. The function and migration record remain in dev/prod;
+local/remote migration history reconciliation remains open.
+Other capabilities retain existing intersection/inheritance and deny precedence. Exact-role
+matching prevents non-Accounts L4_MANAGER inheriting L3_MANAGER access.
+New prod versions: CMP003/CMP006 v105, CMP010 v50, CMP014 v23; all captured, generated,
+activated, and per-user ACL menu snapshots rebuilt. All live role/context cases passed,
+including real L2_AUDITOR users, Accounts L1_USER/L2_USER/L3_USER/L4_USER/L2_MANAGER,
+and non-Accounts L4_MANAGER denial. ACL-MASTER (DIRECTOR) also resolves ALLOW.
+Non-AC10 decisions are identical before/after; menu visibility mismatches are zero.
+Prod has Accounts contexts in CMP003/CMP006/CMP014 only; CMP010 has no Accounts context
+to grant (its L2_AUDITOR is allowed). No department/work-context was invented.
+Verification was database/snapshot based, not an interactive browser sign-in test.
 
 ### 135.8 — Implementation notes (LOCKED — 2026-09-08)
 
