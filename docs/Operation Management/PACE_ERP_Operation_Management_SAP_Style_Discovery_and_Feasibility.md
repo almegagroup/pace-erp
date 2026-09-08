@@ -23401,6 +23401,35 @@ archive-table branch AC09's own resolver already uses (`ac06_month_archive`/
 in prod (`2026-08-01`) and the first implementation pass had only ever read the live
 `ac06_month_line` table.
 
+### 135.10 — AC10 access scope narrowed to a dedicated capability (LOCKED — 2026-09-09)
+
+Initial rollout (§135.8) reused `CAP_PROC_ACCOUNTS` — the same capability every AC01-AC09 page
+already uses — which is granted to **all 11 roles** (`L1_USER` through `DIRECTOR`) via
+`acl.role_capabilities`. Business owner's explicit instruction: only **Accounts department staff
+(any rank) plus `L3_MANAGER`/`L1_AUDITOR`/`L2_AUDITOR`/`DIRECTOR` regardless of department** should
+see this specific report — "tar baire karo dekhar dorkar nei" (nobody outside those needs to see
+it) — narrower than the broad Accounts-menu default.
+
+**Fix: a dedicated capability, not a reuse.** `CAP_ACC_RECO_DATA` (new), granted via TWO paths
+(mirroring the same dual role+work-context mechanism `CAP_PROC_ACCOUNTS` itself already uses for
+"Accounts department, any rank" — confirmed live before building this, not assumed):
+- `acl.role_capabilities`: exactly `DIRECTOR`, `L3_MANAGER`, `L1_AUDITOR`, `L2_AUDITOR` — these 4
+  get access regardless of department.
+- `acl.work_context_capabilities`: all 4 companies' `ACCOUNTS` work context
+  (`DEPT_DPT020`/`030`/`040`/`050`) — Accounts department staff at ANY rank also get access.
+- `acl.capability_menu_actions` for `ACC_RECO_DATA` swapped from `CAP_PROC_ACCOUNTS` to
+  `CAP_ACC_RECO_DATA` (VIEW only).
+- Re-captured + re-snapshotted (ACL version bump, all 4 active companies) after the swap.
+
+**Verified live (2026-09-09):** real dev users with `DIRECTOR`/`L1_AUDITOR`/`L3_MANAGER` still
+resolve `ACC_RECO_DATA:VIEW=ALLOW` in `precomputed_acl_view`; real dev users with any role OUTSIDE
+the named 4 (`L1_MANAGER`, `L2_USER`, `L3_USER`, `L4_USER` checked) now resolve no row at all
+(correctly locked out — previously would have inherited access via the broad
+`CAP_PROC_ACCOUNTS` role grant). `L2_AUDITOR` has no live dev test user to click-test with, but is
+confirmed present in `acl.role_capabilities` for the new capability the same way the other 3 are.
+**Prod:** this exact 4-step MCP sequence (new capability + 2 grant tables + capability_menu_actions
+swap + version bump/capture/snapshot) still needs to run before prod deploy — not yet done.
+
 ### 135.8 — Implementation notes (LOCKED — 2026-09-08)
 
 - **No schema/migration change required** — every source table (`dispatch_reco`,
