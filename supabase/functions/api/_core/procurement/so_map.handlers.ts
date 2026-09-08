@@ -76,9 +76,15 @@ function getMapQuantityPresentation(line: JsonRecord): { mode: "ORDER_QTY" | "PA
   return { mode: "ORDER_QTY", uom: toTrimmedString(line.uom_code) || "KG", perPackQty: null };
 }
 
+// Same rule delivery_order.handlers.ts's own fetchLockedLineIds() already
+// locks: delivery_challan_line rows are never deleted on cancel (append-
+// only audit trail), so a CANCELLED DO's line still exists here -- a plain
+// existence check would keep this allocation permanently locked even after
+// its only DO is cancelled. A CANCELLED parent must not count as "has a DO".
 async function hasDoForAllocation(allocationId: string): Promise<boolean> {
   const { data, error } = await serviceRoleClient.schema("erp_procurement")
-    .from("delivery_challan_line").select("id").eq("so_map_allocation_id", allocationId).limit(1);
+    .from("delivery_challan_line").select("id, delivery_challan!inner(status)")
+    .eq("so_map_allocation_id", allocationId).neq("delivery_challan.status", "CANCELLED").limit(1);
   if (error) throw new Error("SO_MAP_DO_LOCK_LOOKUP_FAILED");
   return (data ?? []).length > 0;
 }

@@ -66,6 +66,11 @@ const EMPTY_PROCESS = {
   planned_start_date: "",
   mts_segment_code: "",
   mtest_segment_code: "",
+  // §136 follow-up (2026-09-08): MTEST has no separate QA_APPROVED step to pick
+  // Priority at (QA is the only actor, this Standard-creation IS the approval) —
+  // so for MTEST only, Priority is captured right here. Ignored server-side for
+  // every other po_type, which still sets Priority later at QA Approve (PR16).
+  priority: "NORMAL",
 };
 
 const EMPTY_PACKING = {
@@ -952,6 +957,7 @@ export default function ProductionPOCreatePage() {
         stroke_master_id: processForm.stroke_master_id,
         planned_qty_kg: Number(processForm.planned_qty_kg),
         planned_start_date: processForm.planned_start_date || undefined,
+        priority: processForm.po_type === "MTEST" ? processForm.priority : undefined,
         line_location_overrides: previewRowsWithAvailability
           .filter((row) => (row.storage_location_id && row.storage_location_id !== row.default_storage_location_id) || row.actual_material_id)
           .map((row) => ({
@@ -1216,15 +1222,31 @@ export default function ProductionPOCreatePage() {
                       />
                     </div>
                   ) : processForm.po_type === "MTEST" ? (
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs font-medium text-slate-600">Family Segment <span className="text-rose-500">*</span></label>
-                      <ErpComboboxField
-                        value={processForm.mtest_segment_code}
-                        onChange={(value) => updateProcess("mtest_segment_code", value)}
-                        options={MTEST_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
-                        placeholder="-- Select family segment --"
-                      />
-                    </div>
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">Family Segment <span className="text-rose-500">*</span></label>
+                        <ErpComboboxField
+                          value={processForm.mtest_segment_code}
+                          onChange={(value) => updateProcess("mtest_segment_code", value)}
+                          options={MTEST_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
+                          placeholder="-- Select family segment --"
+                        />
+                      </div>
+                      {/* §136 follow-up (2026-09-08): MTEST has no separate QA_APPROVED
+                          step, so Priority is picked here at Standard creation instead —
+                          Urgent still routes through Manager Approval before Start Batch. */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">Priority</label>
+                        <select
+                          value={processForm.priority}
+                          onChange={(event) => updateProcess("priority", event.target.value)}
+                          className="h-9 rounded border border-slate-300 px-2 text-sm"
+                        >
+                          <option value="NORMAL">Normal</option>
+                          <option value="URGENT">Urgent</option>
+                        </select>
+                      </div>
+                    </>
                   ) : (
                     <div className="flex flex-col gap-1">
                       <label className="text-xs font-medium text-slate-600">Segment</label>
