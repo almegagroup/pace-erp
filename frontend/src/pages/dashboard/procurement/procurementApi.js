@@ -1043,6 +1043,11 @@ export function getBatchCostingReport(params) {
   return fetchProcurement("GET", "/api/procurement/batch-costing-report", undefined, params);
 }
 
+// AC10 -- Reco Data
+export function getRecoData(params) {
+  return fetchProcurement("GET", "/api/procurement/reco-data", undefined, params);
+}
+
 // AC08 -- Manual Costing Rate Entry
 export function listManualCostingRows(params) {
   return fetchProcurement("GET", "/api/procurement/manual-costing-rows", undefined, params);
