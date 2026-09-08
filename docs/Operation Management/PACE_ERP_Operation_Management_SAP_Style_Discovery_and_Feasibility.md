@@ -22484,7 +22484,23 @@ number** (global auto-increment)-গুলো real chronological order-এর �
 strict enforcement থেকে যায়।
 
 **Business owner confirmed (2026-08-28, asked directly): এখনই দরকার নেই।** Mechanism-টা 7
-September 2026 থেকে কার্যকর হওয়ার কথা — এখনো সময় আছে, later build করা যাবে।
+September 2026 থেকে কার্যকর হওয়ার কথা — এখনো সময় আছে, later build করা যাবে। **(পরে সেই একই দিনে,
+"Implementation round" অংশে দেখো — শেষ পর্যন্ত সাথে সাথেই বানানো হয়েছিল, নিচের correction-ও দেখো।)**
+
+> **⚠️ সংশোধন (2026-09-04, business owner — কোডে করা হয়েছিল কিন্তু এই doc-এ কখনো লেখা হয়নি,
+> 2026-09-08-এ live-verify করার সময় ধরা পড়ে): উপরের schedule stale — Phase 2 zero-width-এ
+> collapse করে Phase 3 এখন 15 September না, বরং 2026-09-08 থেকেই শুরু।** Grace Period (Phase 2)
+> সম্পূর্ণ তুলে দিয়ে Phase 1-এর নিজের শেষ তারিখেই মিশিয়ে দেওয়া হয়েছে — তাই Phase 3 (permanent
+> strict same-day enforcement) এখন **8 September 2026** থেকে শুরু, 16 September না। এটা ইচ্ছাকৃতভাবে
+> নতুন **Urgent-dispatch exception**-এর (DO line-এর `urgent_dispatch_decision=YES` হলে গোটা group
+> Tally Invoice Date-এ পোস্ট হয়, same-day rule বাইপাস করে) সাথে একই দিনে লক করা হয়েছিল — Urgent
+> exception ছাড়া একা Phase 3 আগে আনলে প্রতিটা বৈধ Urgent dispatch-ই ভুলভাবে block হয়ে যেত, তাই দুটো
+> একসাথেই ship হয়েছে। কোড: `_shared/dispatchBackfillPosting.ts`-এর `PHASE_1_END`/`PHASE_2_END` দুটোই
+> `"2026-09-07"` (তাই Phase 2-এর width শূন্য)। **Live-verified 2026-09-08:** `do_unified.handlers.ts`
+> (`postPgiInvoiceGroupsHandler`)-এ `assertPhase3PostingDateMatch()` সত্যিই wired আছে, IST-correct
+> `todayIsoInKolkata()` ব্যবহার করে, mismatch হলে `PGI_BACKFILL_WINDOW_CLOSED_DATE_MISMATCH` (400)
+> ছোঁড়ে readable message-সহ (frontend `err.message` দেখায়, raw code না) — **অর্থাৎ আজ (2026-09-08)
+> থেকে block টা সত্যিই সক্রিয়**, নিচের মূল টেবিলের "15 September" তারিখ অনুসরণ করলে ভুল ধারণা হবে।
 
 ---
 
