@@ -2957,6 +2957,23 @@ async function fetchActiveMapAllocationsForSo(soId: string): Promise<JsonRecord[
   return (data ?? []) as JsonRecord[];
 }
 
+// Real gap found live 2026-09-08 (business owner audit): cancelSalesOrderUnifiedHandler
+// force-released every ACTIVE sales_order_map_allocation for this SO unconditionally --
+// nothing checked whether a live (non-cancelled) DO already draws from one of this SO's
+// own lines. Cancelling an SO that already has a real Delivery Order (possibly already
+// dispatched/invoiced) would silently flip that live DO's own so_map_allocation_id
+// reference to a RELEASED allocation. Same CANCELLED-exclusion convention as
+// so_map.handlers.ts's hasDoForAllocation() and plan_feed.handlers.ts's
+// getBlockingDeliveryOrdersForSoLines() -- a CANCELLED DO never blocks, any other DO does.
+async function hasActiveDoForSoLines(soLineIds: string[]): Promise<boolean> {
+  if (soLineIds.length === 0) return false;
+  const { data, error } = await serviceRoleClient.schema("erp_procurement")
+    .from("delivery_challan_line").select("id, delivery_challan!inner(status)")
+    .in("so_line_id", soLineIds).neq("delivery_challan.status", "CANCELLED").limit(1);
+  if (error) throw new Error("SO_CANCEL_DO_LOCK_LOOKUP_FAILED");
+  return (data ?? []).length > 0;
+}
+
 // §136 (2026-09-03, business owner "professional standard" relock,
 // supersedes §133.10's older per-field lock list) — Company/Dispatch Type/
 // Material Types are NEVER read from body here (these decide the whole
@@ -3202,14 +3219,15 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
 const QTY_TOL_SO_EDIT = 0.0001;
 
 // §133.10 — Cancel cascades: release every ACTIVE SO-Map allocation, then
-// set status=CANCELLED. Once DO exists for the unified flow, an open
-// (non-invoiced) DO must be cancelled first — that check will extend here.
+// set status=CANCELLED. Blocked while any of this SO's own lines still has a
+// live (non-cancelled) DO against it -- cancel that DO first (found live
+// 2026-09-08, this was a real gap: the check below was only ever a comment).
 export async function cancelSalesOrderUnifiedHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const soId = getIdFromPath(req);
     if (!soId) return salesErrorResponse(req, ctx, "SO_ID_MISSING", 400, "SO id required.");
     const body = await parseBody(req);
-    const { so } = await fetchUnifiedSoWithLines(soId);
+    const { so, lines } = await fetchUnifiedSoWithLines(soId);
     const soCompanyId = toTrimmedString(so.company_id);
     try {
       await assertCompanyScope(ctx, soCompanyId);
@@ -3221,6 +3239,9 @@ export async function cancelSalesOrderUnifiedHandler(req: Request, ctx: Procurem
     }
     if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(so.status))) {
       return salesErrorResponse(req, ctx, "SO_ALREADY_TERMINAL", 400, "This SO is already Cancelled/Closed.");
+    }
+    if (await hasActiveDoForSoLines(lines.map((line) => toTrimmedString(line.id)))) {
+      return salesErrorResponse(req, ctx, "SO_CANCEL_DO_LOCKED", 409, "This SO has a Delivery Order against it — cancel that DO first.");
     }
 
     const { error: releaseError } = await serviceRoleClient
