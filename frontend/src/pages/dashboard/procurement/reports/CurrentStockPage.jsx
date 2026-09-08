@@ -73,6 +73,19 @@ function toggleValue(list, targetValue) {
     : [...list, targetValue];
 }
 
+// Excel needs the raw number for these (so it stays calculable in the
+// workbook), never the "0.000"-formatted display string formatQuantity()
+// produces for the on-screen grid — see downloadColoredExcelFile's own
+// getCellValue doc comment for why.
+const NUMERIC_COLUMN_KEYS = new Set([
+  "unrestricted_qty",
+  "reserved_qty",
+  "net_available_qty",
+  "qi_qty",
+  "blocked_qty",
+  "intransit_qty",
+]);
+
 export default function CurrentStockPage() {
   const { runtimeContext } = useMenu();
   // Business decision (2026-08-04): single company at a time, never multi —
@@ -164,6 +177,7 @@ export default function CurrentStockPage() {
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
+  const [exporting, setExporting] = useState(false);
   // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views,
   // like Process PO's step pages or SAP MB52/ZMB51's Execute -> report screen
   // — never both visible at once.
@@ -224,6 +238,33 @@ export default function CurrentStockPage() {
     }
   }
 
+  // Same pattern as AC01's Export Excel (downloadColoredExcelFile, dynamic
+  // import so exceljs never enters this page's own bundle until Export is
+  // actually clicked). Exports whatever columns are currently visible via
+  // the Columns drawer -- what you see is what you get.
+  async function handleExportExcel() {
+    setExporting(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      const exportColumns = gridColumns.map((column) => ({
+        ...column,
+        numFmt: NUMERIC_COLUMN_KEYS.has(column.key) ? "0.000" : undefined,
+      }));
+      await downloadColoredExcelFile({
+        fileName: `current_stock_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        sheetName: "Current Stock",
+        columns: exportColumns,
+        rows,
+        getCellValue: (row, column) =>
+          NUMERIC_COLUMN_KEYS.has(column.key) ? Number(row?.[column.key] ?? 0) : (row?.[column.key] ?? "—"),
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "CURRENT_STOCK_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // Esc / shell Back / browser Back from the output grid returns to the
   // filter page instead of leaving the screen entirely (§ shell back
   // interceptor — the shell's Escape handling runs in the capture phase,
@@ -277,6 +318,12 @@ export default function CurrentStockPage() {
                 key: "columns",
                 label: "Columns",
                 onClick: () => setColumnsOpen(true),
+              },
+              {
+                key: "export",
+                label: exporting ? "Exporting..." : "Export Excel",
+                onClick: () => void handleExportExcel(),
+                disabled: exporting || rows.length === 0,
               },
               {
                 key: "search",
