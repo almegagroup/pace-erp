@@ -388,7 +388,20 @@ export default function QAQueuePage() {
                                 Manager Approve
                               </button>
                             )}
-                            {order.status === "STANDARD" && skipsQaApproval(order.po_type) && (
+                            {/* §136 follow-up (2026-09-08): MTEST has no QA_APPROVED step, so
+                                an Urgent MTEST PO is still STANDARD here — Manager Approve gates
+                                Start Batch, same as Urgent MTO/HPS does from QA_APPROVED. MTS
+                                (also skipsQaApproval) never carries a priority, so it always
+                                falls through to the direct Start Batch branch below. */}
+                            {order.status === "STANDARD" && skipsQaApproval(order.po_type) && order.po_type === "MTEST" && order.priority === "URGENT" ? (
+                              <button
+                                onClick={() => handleManagerApprove(order.id)}
+                                disabled={saving}
+                                className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                              >
+                                Manager Approve
+                              </button>
+                            ) : order.status === "STANDARD" && skipsQaApproval(order.po_type) && (
                               <>
                                 <button
                                   onClick={() => setStartBatchOrder(order)}

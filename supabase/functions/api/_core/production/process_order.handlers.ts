@@ -1769,9 +1769,17 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const plannedStartDate = toTrimmedString(body.planned_start_date) || null;
     const notes = toTrimmedString(body.notes);
     const lineOverrideMap = buildLineOverrideMap(body.line_location_overrides);
+    // §136 follow-up (2026-09-08) — MTEST has no separate QA_APPROVED step to set
+    // Priority at (§131.1: QA is the only actor, Standard creation IS the approval),
+    // so for MTEST only, Priority is captured right here at creation instead. Every
+    // other po_type keeps setting it later at qaApproveProcessOrderHandler, unchanged.
+    const priorityInput = poType === "MTEST" ? (toUpperTrimmedString(body.priority) || "NORMAL") : null;
 
     if (!companyId || !VALID_PO_TYPES.has(poType) || !VALID_SEGMENTS.has(segmentCode) || !materialId || !plannedQty) {
       return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id, po_type, segment_code, material_id, planned_qty required");
+    }
+    if (priorityInput && !["NORMAL", "URGENT"].includes(priorityInput)) {
+      return poErr(req, ctx, "PROD_PO_PRIORITY_INVALID", 400, "priority must be NORMAL or URGENT");
     }
     if (plannedStartDate && !isManualDocumentDateWithinPastWindow(plannedStartDate)) {
       return poErr(req, ctx, "PROD_PO_PLANNED_START_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_PAST_DATE_WINDOW_MESSAGE);
@@ -1919,6 +1927,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         planned_qty: plannedQty,
         notes: notes || null,
         status: "STANDARD",
+        ...(priorityInput ? { priority: priorityInput } : {}),
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_at: now,
@@ -2310,8 +2319,12 @@ export async function managerApproveProcessOrderHandler(req: Request, ctx: ProdH
     if (po.priority !== "URGENT") {
       return poErr(req, ctx, "PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE", 422, "Manager Approval only applies to Urgent Process Orders.");
     }
-    if (po.status !== "QA_APPROVED") {
-      return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected QA_APPROVED, got ${po.status}`);
+    // §136 follow-up (2026-09-08): MTEST never passes through QA_APPROVED (§131.1) —
+    // its Priority is set at creation instead (createProcessOrderHandler), so an Urgent
+    // MTEST PO is still at STANDARD when it reaches Manager Approval, not QA_APPROVED.
+    const requiredStatus = po.po_type === "MTEST" ? "STANDARD" : "QA_APPROVED";
+    if (po.status !== requiredStatus) {
+      return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected ${requiredStatus}, got ${po.status}`);
     }
 
     const now = new Date().toISOString();
@@ -2418,13 +2431,19 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Start Batch access for this company.");
     }
 
-    // §131.1 (2026-08-26): MTEST joins MTS in skipping the QA_APPROVED gate — QA is the
-    // only actor on an MTEST PO end to end, so there is no separate "QA approves" step to wait for.
+    // §131.1 (2026-08-26): MTS skips the QA_APPROVED gate entirely — QA is not even the
+    // actor there, so there is no separate "QA approves" step to wait for, ever.
     // §136 (2026-09-04): an URGENT MTO/HPS PO must clear Manager Approval first —
     // MANAGER_APPROVED replaces QA_APPROVED as the required status for it specifically.
-    const requiredStatus = (po.po_type === "MTS" || po.po_type === "MTEST")
+    // §136 follow-up (2026-09-08): MTEST also has no QA_APPROVED step (§131.1 — QA is the
+    // only actor, Standard creation IS the approval), but an URGENT MTEST PO still needs
+    // Manager Approval before Start Batch, same as URGENT MTO/HPS — the required status
+    // just starts from STANDARD instead of QA_APPROVED, since MTEST never passes through it.
+    const requiredStatus = po.po_type === "MTS"
       ? "STANDARD"
-      : (po.priority === "URGENT" ? "MANAGER_APPROVED" : "QA_APPROVED");
+      : po.po_type === "MTEST"
+        ? (po.priority === "URGENT" ? "MANAGER_APPROVED" : "STANDARD")
+        : (po.priority === "URGENT" ? "MANAGER_APPROVED" : "QA_APPROVED");
     if (po.status !== requiredStatus) {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Must be ${requiredStatus} to start batch`);
     }
