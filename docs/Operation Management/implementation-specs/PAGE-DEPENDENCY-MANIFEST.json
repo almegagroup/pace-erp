@@ -8770,5 +8770,10 @@
     "page": "frontend/src/pages/dashboard/procurement/accounts/BatchCostingReportPage.jsx",
     "dependencyCount": 0,
     "deps": []
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/RecoDataPage.jsx",
+    "dependencyCount": 0,
+    "deps": []
   }
 ]
