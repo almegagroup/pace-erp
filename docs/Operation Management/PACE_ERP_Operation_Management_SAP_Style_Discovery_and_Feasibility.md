@@ -23102,3 +23102,88 @@ whichever page actually posts; and the pack-type-change resolution from §83.6 i
 is decided yet. Do not implement anything from this section until it carries a "✅ LOCKED" tag with
 a page-by-page spec,
 matching how every other SO0x page in §133 was locked before Codex/Claude touched code.
+
+## 135 — RECO DATA Report (Accounts) — 🔶 field list/rules building up, 2026-09-08 (NOT fully locked yet)
+
+**Purpose:** a report surfacing the actual `process_order_line_reco`/`packing_order_line_reco`/
+`dispatch_reco` data — this is the entire reason those three reco tables were built in the first
+place (§104's Stock-vs-AP-Reco two-layer model, §106 Phase 3, §133.18's dispatch_reco write) but
+nothing has ever displayed them. Business owner's own framing: Process PO carries 3 parallel
+columns — **Standard / Actual / AP Approved** — and **Dispatch/billing must run off AP-Approved
+qty**, not Actual, so this report is the first real consumer of that distinction.
+
+### 135.1 — Page identity (LOCKED — 2026-09-08)
+
+Verified live against `erp_menu.menu_master` in both dev and prod (not assumed) — Accounts group
+(`GRP_ACL_ACCOUNTS`) currently runs AC01 through AC09 (Invoice Verifications, Blocked Invoices,
+Landed Costs, Conversion Cost Config, MTS SKU Monthly Rate, SLoc Costing Group, Admixture Costing,
+Manual Costing Rate Entry, Batch Costing Report — dev is missing AC07, prod has it; either way the
+highest number in use anywhere is AC09).
+- **Report name:** "RECO DATA"
+- **tx_code:** **AC10**
+- **Sidebar group:** "Accounts" (`GRP_ACL_ACCOUNTS`)
+
+### 135.2 — MTEST inclusion confirmed (verified live, 2026-09-08 — not assumed from the design docs)
+
+Checked both code and real prod data before assuming MTEST behaves like MTO/HPS here:
+- `process_order.handlers.ts`: MTEST's Final internally calls `runProcessOrderVerify()` (§131.1,
+  "Final absorbs Verify"), and that function's own reco-skip check is `po_type === "MTS"` only —
+  MTEST is never excluded. **Live prod: 552 real `process_order_line_reco` rows with
+  `po_type='MTEST'`, `source_txn_type='PRODUCTION'`.**
+- `packing_order.handlers.ts`: the PM-lines-for-reco filter skips only `po_type === "PMTS"` —
+  PTEST (MTEST's packing type) is never excluded. **Live prod: 100 `packing_order_line_reco` rows
+  with `po_type='PTEST'`** (same "zero rows for pack_code 000/599 with no PM lines" rule applies
+  here as everywhere else — not MTEST-specific).
+- `do_unified.handlers.ts`'s `computeDispatchRecoRows()` is entirely po_type-agnostic — Shape 1
+  fires off `line.packing_order_id` alone, no po_type filter anywhere in the function. **Live
+  prod: 605 `dispatch_reco` rows with `po_type='PTEST'`.**
+
+**Conclusion: MTEST's production and dispatch both flow into the reco tables exactly like MTO/HPS
+— this report needs no special-casing to include MTEST.** (Only pure MTS is excluded everywhere,
+per its own separate quarterly/formulation-based costing, §108.4 — unrelated to MTEST.)
+
+One loose end found and explicitly left alone (business owner, 2026-09-08): `process_order.handlers.ts`'s
+COR6-correction reco-skip comment claims "MTS/INT/MTEST" are all excluded, but the actual code only
+checks `["MTS", "INT"]` — MTEST is NOT skipped there either, consistent with Verify's own behavior.
+The code (not the comment) is almost certainly correct; **no fix requested**, noted here only so a
+future reader doesn't trust the stale comment text.
+
+### 135.3 — SO/Ordered Stroke is NOT a dispatch_reco column — must be derived (LOCKED — 2026-09-08)
+
+Checked `dispatch_reco`'s actual column list live — no stroke field exists on it at all. This
+report must derive both sides itself, same mismatch-check shape SO04's `buildStrokeValidation()`
+already does elsewhere:
+- **Ordered Stroke** — `erp_production.plan_feed.ordered_stroke_number`, joined via `fo_id`
+  (`dispatch_reco.fo_id` already carries this). Only meaningful for FO-linked dispatches
+  (MTO/HPS/MTEST) — a plain RPS dispatch with no FO has nothing to compare against.
+- **Actual Stroke** — `process_order_line_reco.stroke_number` (already denormalized onto that
+  table per line, joined via `process_order_id`), or equivalently
+  `process_order.stroke_master_id → stroke_master.stroke_number` — either path lands on the same
+  value.
+
+### 135.4 — CORS vs Partial Reversal must be handled differently, not both as "raw rows" (LOCKED — 2026-09-08)
+
+Business owner's own challenge: a Process/Packing PO that has been **CORS-reversed is not real
+production anymore** and must not be counted as such in this report — but the mechanism differs
+by reversal type, so a single naive read of the reco tables would get this wrong two different ways:
+
+1. **CORS (full-document reversal)** — per §83.4's existing lock, CORS **voids** the batch's
+   original `PRODUCTION` reco rows (`is_voided=true`, `voided_at` set) rather than deleting them —
+   history is preserved but the rows are marked dead. **This report must filter `is_voided=false`
+   everywhere it reads `process_order_line_reco`/`packing_order_line_reco`** — exactly the same
+   filter `computeDispatchRecoRows()` already applies for its own ratio computation (§133.18) — so
+   a CORS'd/dead batch is excluded entirely, never shown as if it were live production.
+2. **Partial Reversal (PR19)** — confirmed by direct example this session (§ the CMP003 110 KG
+   batch walkthrough) — does the opposite: it never voids anything, it **appends** new rows with
+   `source_txn_type='PARTIAL_REVERSAL'` carrying negative Standard/Actual/AP-Approved quantities
+   that net against the original `PRODUCTION` rows (`is_voided` stays `false` on both). **This
+   report must NET-SUM `PRODUCTION` + `PARTIAL_REVERSAL` (and any future `RETURN`/
+   `COR6_CORRECTION` source_txn_type) per grouping key (process_order_id/packing_order_id +
+   material_id)** to arrive at the true effective Standard/Actual/AP-Approved figure — listing raw
+   unaggregated rows would show a fully-reversed batch as both "110 KG produced" and "110 KG
+   reversed" side by side instead of the correct net (0, or whatever partial amount remains).
+
+**Not yet decided:** exact row grain for the report (per material line vs. per batch summary),
+which columns/filters appear, and how a partially-reversed batch's residual (non-zero) balance
+should be visually flagged. Do not implement until this section carries a "✅ LOCKED" tag with a
+full field/column list, matching every other report design in this doc.
