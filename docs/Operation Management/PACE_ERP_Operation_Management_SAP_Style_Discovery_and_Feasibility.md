@@ -23187,3 +23187,21 @@ by reversal type, so a single naive read of the reco tables would get this wrong
 which columns/filters appear, and how a partially-reversed batch's residual (non-zero) balance
 should be visually flagged. Do not implement until this section carries a "✅ LOCKED" tag with a
 full field/column list, matching every other report design in this doc.
+
+### 135.5 — Page 1 is identical to SO04's Selection Screen (LOCKED — 2026-09-08)
+
+Business owner: this report follows the same Page 1 (Filters) / Page 2 (Output Grid) split already
+established for SO04/IN02/PR24, and **Page 1 is a verbatim reuse of SO04's own Selection Screen**
+(`DispatchReportPage.jsx`) — same fields, same behavior, nothing new:
+- **Company** (`TransactionCompanySelector`)
+- **Tally Invoice Date** range (mandatory, max 366-day span)
+- **Material** (multi-value picker)
+- **Type** chips — RM / PM / INT / SFG / FG
+- **FG Type** chips — MTO / HPS / MTS / MTEST
+- **Dispatch Type** chips — Dependent(Direct) / Dependent(Depot) / Independent Party / Independent
+  Party(Asian Billed) / Dependent(No Inbound) / STO
+- **Dispatch Category** chips — RPS / SRPS / FRPS / FSRPS
+- Execute / Reset actions
+
+Page 2 (this report's own output grid — columns/rules from §135.2-135.4 above) is still to be
+designed.
