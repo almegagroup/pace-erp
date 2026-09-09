@@ -2095,18 +2095,38 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
     if (packLineRecoError) throw new Error("DISPATCH_RECO_PACK_LINE_RECO_LOOKUP_FAILED");
     const procMap = new Map(((procRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
+    // Batch totals per metric, keyed by process_order_id -- the correct
+    // denominator for each of Standard/Actual/AP-Approved is that metric's
+    // OWN batch-wide sum (live from process_order_line_reco, so any
+    // COR6/PR19 correction already nets in), never the batch's real actual
+    // yield used uniformly for all three. Standard is a fixed recipe figure
+    // that must never be diluted by real-yield variance; only Actual/
+    // AP-Approved are real-world quantities where that denominator belongs.
+    const procMetricTotals = new Map<string, { std: number; actual: number; ap: number }>();
+    for (const reco of (procLineRecoRows ?? []) as JsonRecord[]) {
+      const key = toTrimmedString(reco.process_order_id);
+      const entry = procMetricTotals.get(key) ?? { std: 0, actual: 0, ap: 0 };
+      entry.std += Number(reco.standard_qty ?? 0);
+      entry.actual += Number(reco.actual_qty ?? 0);
+      entry.ap += Number(reco.ap_approved_qty ?? 0);
+      procMetricTotals.set(key, entry);
+    }
+
     for (const line of batchLines) {
       const pko = pkoMap.get(line.packing_order_id as string);
       if (!pko) continue;
       const proc = procMap.get(toTrimmedString(pko.process_order_id));
       const pkoActualQtyKg = Number(pko.actual_qty_kg ?? 0);
-      const procActualQty = proc ? Number(proc.actual_qty ?? 0) : 0;
-      const packingPoRatio = procActualQty > 0 ? pkoActualQtyKg / procActualQty : 0;
       const invoiceRatioKg = pkoActualQtyKg > 0 ? line.quantity / pkoActualQtyKg : 0;
       const fillQtyPerPack = Number(pko.fill_qty_per_pack ?? 0);
       const dispatchedPacks = fillQtyPerPack > 0 ? line.quantity / fillQtyPerPack : 0;
       const numPacks = Number(pko.num_packs ?? 0);
       const invoiceRatioPacks = numPacks > 0 ? dispatchedPacks / numPacks : 0;
+
+      const metricTotals = procMetricTotals.get(toTrimmedString(pko.process_order_id)) ?? { std: 0, actual: 0, ap: 0 };
+      const packingPoRatioStd = metricTotals.std > 0 ? pkoActualQtyKg / metricTotals.std : 0;
+      const packingPoRatioActual = metricTotals.actual > 0 ? pkoActualQtyKg / metricTotals.actual : 0;
+      const packingPoRatioAp = metricTotals.ap > 0 ? pkoActualQtyKg / metricTotals.ap : 0;
 
       for (const reco of ((procLineRecoRows ?? []) as JsonRecord[]).filter((r) => toTrimmedString(r.process_order_id) === toTrimmedString(pko.process_order_id))) {
         rows.push({
@@ -2115,9 +2135,9 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
           process_order_id: toTrimmedString(pko.process_order_id) || null, process_order_number: (proc?.po_number as string) ?? null, batch_number: toTrimmedString(pko.batch_number) || null,
           packing_order_id: String(pko.id), packing_order_number: toTrimmedString(pko.po_number) || null, po_type: toTrimmedString(pko.po_type) || null,
           dispatch_qty_kg: line.quantity, material_id: toTrimmedString(reco.material_id), line_material_type: toTrimmedString(reco.line_material_type),
-          standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
-          actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
-          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
+          standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatioStd * invoiceRatioKg).toFixed(6)),
+          actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatioActual * invoiceRatioKg).toFixed(6)),
+          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatioAp * invoiceRatioKg).toFixed(6)),
           is_asian_billed: true, // Shape 1 only ever exists for a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own FG production.
         });
       }
