@@ -299,10 +299,19 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     const companyCode = textValue((companyRow as JsonRecord | null)?.company_code);
 
     // ---- A. DISPATCH + RPS rows, sourced from dispatch_reco (§135.6-A/-C) ----
+    // §135.6-D (2026-09-10): NOT filtered on is_voided anymore. A reversed
+    // dispatch must still show in its OWN historical period (the receivable
+    // was already recognized there) -- is_voided/voided_at stay write-only
+    // audit markers now, never used to exclude a row from this report.
+    // A PGI reversal instead writes a SEPARATE negative mirror row (same
+    // material/PO/invoice identity, reversal_of_id pointing back to the
+    // original, own tally_invoice_date = the reversal's own date) so the
+    // set-off lands in the period the reversal actually happened in --
+    // mirrors the already-locked PARTIAL_REVERSAL pattern below (section B).
     const dispatchRecoRows = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_production").from("dispatch_reco")
-      .select("id, invoice_id, invoice_number, invoice_date, tally_invoice_number, tally_invoice_date, inbound_number, dc_id, dc_number, source_type, so_id, so_number, fo_id, fo_number, dispatch_category, process_order_id, process_order_number, batch_number, packing_order_id, packing_order_number, po_type, dispatch_qty_kg, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, is_voided, is_asian_billed")
-      .eq("company_id", companyId).eq("is_voided", false)
+      .select("id, invoice_id, invoice_number, invoice_date, tally_invoice_number, tally_invoice_date, inbound_number, dc_id, dc_number, source_type, so_id, so_number, fo_id, fo_number, dispatch_category, process_order_id, process_order_number, batch_number, packing_order_id, packing_order_number, po_type, dispatch_qty_kg, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, is_voided, is_asian_billed, reversal_of_id")
+      .eq("company_id", companyId)
       .gte("tally_invoice_date", dateFrom).lte("tally_invoice_date", dateTo)
       .order("tally_invoice_date", { ascending: true }).order("id", { ascending: true }).range(from, to));
 
@@ -406,6 +415,14 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // row (e.g. 3220/3220, 10000/10000) -- so it is taken ONCE per group,
     // never summed; only Standard/Actual/AP-Approved genuinely vary between
     // the original and the correction and must be net-summed.
+    // §135.6-D: a reversal_of_id row (negative mirror, own later
+    // tally_invoice_date) must NEVER fold into the same group as its
+    // original -- its dispatch_qty_kg is deliberately NOT the same constant
+    // (it's negated), so the "take dispatch_qty_kg once" rule above would
+    // silently discard the negative value and leave a misleading row (full
+    // positive Dispatch Qty, ~zero Standard/Actual/AP). Reversal rows key
+    // off their own id instead of the shared invoice/PO/material tuple, so
+    // each always renders as its own distinct line in its own period.
     type DispatchGroup = {
       rows: JsonRecord[];
       dispatch_qty_kg: number;
@@ -415,9 +432,12 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     };
     const dispatchGroups = new Map<string, DispatchGroup>();
     for (const row of dispatchRecoRows) {
-      const key = [
-        textValue(row.invoice_id), textValue(row.process_order_id), textValue(row.packing_order_id), textValue(row.material_id),
-      ].join("|");
+      const isReversal = Boolean(textValue(row.reversal_of_id));
+      const key = isReversal
+        ? `REV|${textValue(row.id)}`
+        : [
+          textValue(row.invoice_id), textValue(row.process_order_id), textValue(row.packing_order_id), textValue(row.material_id),
+        ].join("|");
       const group = dispatchGroups.get(key) ?? { rows: [], dispatch_qty_kg: numberValue(row.dispatch_qty_kg), standard_qty: null, actual_qty: null, ap_approved_qty: null };
       group.rows.push(row);
       const std = nullableNumber(row.standard_qty);
@@ -528,7 +548,10 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       return {
         row_kind: "LINE",
         section,
-        is_corrected: group.rows.length > 1,
+        // §135.6-D: a reversal_of_id row is a net-off credit, same visual
+        // treatment (amber) as a COR6-netted line -- both mean "don't read
+        // this as a first-pass dispatch figure without checking why".
+        is_corrected: group.rows.length > 1 || Boolean(sample.reversal_of_id),
         is_asian_billed: sample.is_asian_billed !== false,
         company_code: companyCode,
         month_year: monthYear(sample.tally_invoice_date),
