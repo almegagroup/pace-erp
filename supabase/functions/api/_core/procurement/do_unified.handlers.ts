@@ -2002,11 +2002,16 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 //      shared ratio -- a batch's Standard and Actual/AP-Approved totals can
 //      differ, verified against real prod data, §133.14 Section E).
 //   2. A plain RM/PM/INT line with no packing_order_id, when this group's
-//      SO is dispatch_category=RPS AND its dispatch_type identifies the
-//      Bill-To as Asian Paints (§133.18-locked: Dependent Direct/Depot/
-//      No-Inbound or Independent-Party-Asian-billed) -- straight
-//      pass-through, ap_approved_qty = dispatch qty, no ratio, no batch.
-// STO groups, and a plain (non-Asian) RPS dispatch, get nothing here.
+//      SO is dispatch_category=RPS -- straight pass-through, ap_approved_qty
+//      = dispatch qty, no ratio, no batch. Whether the Bill-To is Asian
+//      Paints (§133.18-locked set: Dependent Direct/Depot/No-Inbound or
+//      Independent-Party-Asian-billed) no longer gates whether the row gets
+//      written at all -- it only sets is_asian_billed (§135.12, corrected
+//      2026-09-09: a plain INDEPENDENT_PARTY RM/PM/INT sale is a real sale
+//      too, just not one Asian Paints is billed for -- omitting it from
+//      dispatch_reco entirely hid real dispatched quantity from every
+//      downstream reco consumer, not just AC10).
+// STO groups get nothing here (RPS/Shape 2 is an SO-only concept).
 const ASIAN_BILLED_DISPATCH_TYPES = new Set(["DEPENDENT_DIRECT", "DEPENDENT_DEPOT", "DEPENDENT_NO_INBOUND", "INDEPENDENT_PARTY_ASIAN_BILLED"]);
 const DISPATCH_RECO_MATERIAL_TYPES = new Set(["RM", "PM", "INT"]);
 
@@ -2028,6 +2033,7 @@ type DispatchRecoLine = {
   standard_qty: number | null;
   actual_qty: number | null;
   ap_approved_qty: number | null;
+  is_asian_billed: boolean;
 };
 
 async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<DispatchRecoLine[]> {
@@ -2044,8 +2050,8 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
   const batchLines = group.lines.filter((l) => l.packing_order_id);
   const plainLines = group.lines.filter((l) => !l.packing_order_id);
 
-  // Shape 2 -- simple RPS-Asian-billed passthrough.
-  if (dispatchCategory === "RPS" && isAsianBilled) {
+  // Shape 2 -- simple RPS passthrough, any Bill-To (§135.12).
+  if (dispatchCategory === "RPS") {
     for (const line of plainLines) {
       if (!line.line_material_type || !DISPATCH_RECO_MATERIAL_TYPES.has(line.line_material_type)) continue;
       rows.push({
@@ -2055,6 +2061,7 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
         packing_order_id: null, packing_order_number: null, po_type: null,
         dispatch_qty_kg: line.quantity, material_id: line.material_id, line_material_type: line.line_material_type,
         standard_qty: null, actual_qty: null, ap_approved_qty: line.quantity,
+        is_asian_billed: isAsianBilled,
       });
     }
   }
@@ -2111,6 +2118,7 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
           standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
           actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
           ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
+          is_asian_billed: true, // Shape 1 only ever exists for a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own FG production.
         });
       }
       for (const reco of ((packLineRecoRows ?? []) as JsonRecord[]).filter((r) => toTrimmedString(r.packing_order_id) === String(pko.id))) {
@@ -2123,6 +2131,7 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
           standard_qty: Number((Number(reco.standard_qty ?? 0) * invoiceRatioPacks).toFixed(6)),
           actual_qty: Number((Number(reco.actual_qty ?? 0) * invoiceRatioPacks).toFixed(6)),
           ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * invoiceRatioPacks).toFixed(6)),
+          is_asian_billed: true,
         });
       }
     }

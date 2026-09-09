@@ -230,6 +230,14 @@ type RecoRow = {
   row_kind: "FG_SUMMARY" | "LINE";
   section: "DISPATCH" | "PARTIAL_REVERSAL" | "RPS";
   is_corrected: boolean;
+  // §135.12: whether this dispatch is billed to Asian Paints at all -- a
+  // plain INDEPENDENT_PARTY RM/PM/INT sale is a real sale with no AP
+  // reconciliation concept behind it. Read straight off dispatch_reco's own
+  // is_asian_billed column; always true for DISPATCH/PARTIAL_REVERSAL rows
+  // in practice (both only ever exist for a batch-linked MTO/HPS/MTEST FG
+  // dispatch, which is inherently Asian Paints' own production) -- the
+  // real variation is on RPS rows.
+  is_asian_billed: boolean;
   company_code: string;
   month_year: string;
   pace_doc_number: string;
@@ -293,7 +301,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // ---- A. DISPATCH + RPS rows, sourced from dispatch_reco (§135.6-A/-C) ----
     const dispatchRecoRows = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_production").from("dispatch_reco")
-      .select("id, invoice_id, invoice_number, invoice_date, tally_invoice_number, tally_invoice_date, inbound_number, dc_id, dc_number, source_type, so_id, so_number, fo_id, fo_number, dispatch_category, process_order_id, process_order_number, batch_number, packing_order_id, packing_order_number, po_type, dispatch_qty_kg, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, is_voided")
+      .select("id, invoice_id, invoice_number, invoice_date, tally_invoice_number, tally_invoice_date, inbound_number, dc_id, dc_number, source_type, so_id, so_number, fo_id, fo_number, dispatch_category, process_order_id, process_order_number, batch_number, packing_order_id, packing_order_number, po_type, dispatch_qty_kg, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, is_voided, is_asian_billed")
       .eq("company_id", companyId).eq("is_voided", false)
       .gte("tally_invoice_date", dateFrom).lte("tally_invoice_date", dateTo)
       .order("tally_invoice_date", { ascending: true }).order("id", { ascending: true }).range(from, to));
@@ -521,6 +529,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         row_kind: "LINE",
         section,
         is_corrected: group.rows.length > 1,
+        is_asian_billed: sample.is_asian_billed !== false,
         company_code: companyCode,
         month_year: monthYear(sample.tally_invoice_date),
         pace_doc_number: textValue(sample.invoice_number),
@@ -573,6 +582,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           row_kind: "FG_SUMMARY",
           section: line.section,
           is_corrected: false,
+          is_asian_billed: line.is_asian_billed,
           company_code: line.company_code,
           month_year: line.month_year,
           pace_doc_number: line.pace_doc_number,
@@ -650,6 +660,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           row_kind: "LINE",
           section: "PARTIAL_REVERSAL",
           is_corrected: false,
+          is_asian_billed: true, // PR19 only ever corrects a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own production.
           company_code: companyCode,
           month_year: monthYear(original?.tally_invoice_date ?? ""),
           pace_doc_number: original?.pace_doc_number ?? textValue(row.reference_document_number),
@@ -698,6 +709,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           row_kind: "LINE",
           section: "PARTIAL_REVERSAL",
           is_corrected: false,
+          is_asian_billed: true, // PR19 only ever corrects a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own production.
           company_code: companyCode,
           month_year: monthYear(original?.tally_invoice_date ?? ""),
           pace_doc_number: original?.pace_doc_number ?? textValue(row.reference_document_number),
