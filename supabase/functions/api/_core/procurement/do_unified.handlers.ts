@@ -2095,20 +2095,27 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
     if (packLineRecoError) throw new Error("DISPATCH_RECO_PACK_LINE_RECO_LOOKUP_FAILED");
     const procMap = new Map(((procRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
-    // Batch totals per metric, keyed by process_order_id -- the correct
-    // denominator for each of Standard/Actual/AP-Approved is that metric's
-    // OWN batch-wide sum (live from process_order_line_reco, so any
-    // COR6/PR19 correction already nets in), never the batch's real actual
-    // yield used uniformly for all three. Standard is a fixed recipe figure
-    // that must never be diluted by real-yield variance; only Actual/
-    // AP-Approved are real-world quantities where that denominator belongs.
-    const procMetricTotals = new Map<string, { std: number; actual: number; ap: number }>();
+    // Batch totals per metric, keyed by process_order_id -- live from
+    // process_order_line_reco, so any COR6/PR19 correction already nets in.
+    // Standard gets its OWN denominator (its own batch-wide sum) because it
+    // is a fixed recipe figure that must never be diluted by real-yield
+    // variance. Actual and AP-Approved deliberately share ONE denominator
+    // (Actual's own batch total, i.e. the batch's real yield) rather than
+    // AP getting its own -- AP-Approved is a per-line YES/NO/PARTIAL
+    // adjustment layered on top of Actual, not an independent physical
+    // quantity with its own "share of the batch". Giving it a separate
+    // ratio broke the YES invariant (ap_approved_qty === actual_qty) the
+    // moment a batch was split across a partial dispatch: a YES line's
+    // batch-level equality no longer held once each side was scaled by a
+    // different fraction. Sharing Actual's ratio preserves that identity
+    // at every granularity, and NO/PARTIAL lines still diverge from Actual
+    // proportionally, exactly as they should.
+    const procMetricTotals = new Map<string, { std: number; actual: number }>();
     for (const reco of (procLineRecoRows ?? []) as JsonRecord[]) {
       const key = toTrimmedString(reco.process_order_id);
-      const entry = procMetricTotals.get(key) ?? { std: 0, actual: 0, ap: 0 };
+      const entry = procMetricTotals.get(key) ?? { std: 0, actual: 0 };
       entry.std += Number(reco.standard_qty ?? 0);
       entry.actual += Number(reco.actual_qty ?? 0);
-      entry.ap += Number(reco.ap_approved_qty ?? 0);
       procMetricTotals.set(key, entry);
     }
 
@@ -2123,10 +2130,9 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
       const numPacks = Number(pko.num_packs ?? 0);
       const invoiceRatioPacks = numPacks > 0 ? dispatchedPacks / numPacks : 0;
 
-      const metricTotals = procMetricTotals.get(toTrimmedString(pko.process_order_id)) ?? { std: 0, actual: 0, ap: 0 };
+      const metricTotals = procMetricTotals.get(toTrimmedString(pko.process_order_id)) ?? { std: 0, actual: 0 };
       const packingPoRatioStd = metricTotals.std > 0 ? pkoActualQtyKg / metricTotals.std : 0;
       const packingPoRatioActual = metricTotals.actual > 0 ? pkoActualQtyKg / metricTotals.actual : 0;
-      const packingPoRatioAp = metricTotals.ap > 0 ? pkoActualQtyKg / metricTotals.ap : 0;
 
       for (const reco of ((procLineRecoRows ?? []) as JsonRecord[]).filter((r) => toTrimmedString(r.process_order_id) === toTrimmedString(pko.process_order_id))) {
         rows.push({
@@ -2137,7 +2143,7 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
           dispatch_qty_kg: line.quantity, material_id: toTrimmedString(reco.material_id), line_material_type: toTrimmedString(reco.line_material_type),
           standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatioStd * invoiceRatioKg).toFixed(6)),
           actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatioActual * invoiceRatioKg).toFixed(6)),
-          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatioAp * invoiceRatioKg).toFixed(6)),
+          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatioActual * invoiceRatioKg).toFixed(6)),
           is_asian_billed: true, // Shape 1 only ever exists for a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own FG production.
         });
       }
