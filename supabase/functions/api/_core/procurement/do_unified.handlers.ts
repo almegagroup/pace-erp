@@ -2002,11 +2002,16 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 //      shared ratio -- a batch's Standard and Actual/AP-Approved totals can
 //      differ, verified against real prod data, §133.14 Section E).
 //   2. A plain RM/PM/INT line with no packing_order_id, when this group's
-//      SO is dispatch_category=RPS AND its dispatch_type identifies the
-//      Bill-To as Asian Paints (§133.18-locked: Dependent Direct/Depot/
-//      No-Inbound or Independent-Party-Asian-billed) -- straight
-//      pass-through, ap_approved_qty = dispatch qty, no ratio, no batch.
-// STO groups, and a plain (non-Asian) RPS dispatch, get nothing here.
+//      SO is dispatch_category=RPS -- straight pass-through, ap_approved_qty
+//      = dispatch qty, no ratio, no batch. Whether the Bill-To is Asian
+//      Paints (§133.18-locked set: Dependent Direct/Depot/No-Inbound or
+//      Independent-Party-Asian-billed) no longer gates whether the row gets
+//      written at all -- it only sets is_asian_billed (§135.12, corrected
+//      2026-09-09: a plain INDEPENDENT_PARTY RM/PM/INT sale is a real sale
+//      too, just not one Asian Paints is billed for -- omitting it from
+//      dispatch_reco entirely hid real dispatched quantity from every
+//      downstream reco consumer, not just AC10).
+// STO groups get nothing here (RPS/Shape 2 is an SO-only concept).
 const ASIAN_BILLED_DISPATCH_TYPES = new Set(["DEPENDENT_DIRECT", "DEPENDENT_DEPOT", "DEPENDENT_NO_INBOUND", "INDEPENDENT_PARTY_ASIAN_BILLED"]);
 const DISPATCH_RECO_MATERIAL_TYPES = new Set(["RM", "PM", "INT"]);
 
@@ -2028,6 +2033,7 @@ type DispatchRecoLine = {
   standard_qty: number | null;
   actual_qty: number | null;
   ap_approved_qty: number | null;
+  is_asian_billed: boolean;
 };
 
 async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<DispatchRecoLine[]> {
@@ -2044,8 +2050,8 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
   const batchLines = group.lines.filter((l) => l.packing_order_id);
   const plainLines = group.lines.filter((l) => !l.packing_order_id);
 
-  // Shape 2 -- simple RPS-Asian-billed passthrough.
-  if (dispatchCategory === "RPS" && isAsianBilled) {
+  // Shape 2 -- simple RPS passthrough, any Bill-To (§135.12).
+  if (dispatchCategory === "RPS") {
     for (const line of plainLines) {
       if (!line.line_material_type || !DISPATCH_RECO_MATERIAL_TYPES.has(line.line_material_type)) continue;
       rows.push({
@@ -2055,6 +2061,7 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
         packing_order_id: null, packing_order_number: null, po_type: null,
         dispatch_qty_kg: line.quantity, material_id: line.material_id, line_material_type: line.line_material_type,
         standard_qty: null, actual_qty: null, ap_approved_qty: line.quantity,
+        is_asian_billed: isAsianBilled,
       });
     }
   }
@@ -2088,18 +2095,38 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
     if (packLineRecoError) throw new Error("DISPATCH_RECO_PACK_LINE_RECO_LOOKUP_FAILED");
     const procMap = new Map(((procRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
+    // Batch totals per metric, keyed by process_order_id -- the correct
+    // denominator for each of Standard/Actual/AP-Approved is that metric's
+    // OWN batch-wide sum (live from process_order_line_reco, so any
+    // COR6/PR19 correction already nets in), never the batch's real actual
+    // yield used uniformly for all three. Standard is a fixed recipe figure
+    // that must never be diluted by real-yield variance; only Actual/
+    // AP-Approved are real-world quantities where that denominator belongs.
+    const procMetricTotals = new Map<string, { std: number; actual: number; ap: number }>();
+    for (const reco of (procLineRecoRows ?? []) as JsonRecord[]) {
+      const key = toTrimmedString(reco.process_order_id);
+      const entry = procMetricTotals.get(key) ?? { std: 0, actual: 0, ap: 0 };
+      entry.std += Number(reco.standard_qty ?? 0);
+      entry.actual += Number(reco.actual_qty ?? 0);
+      entry.ap += Number(reco.ap_approved_qty ?? 0);
+      procMetricTotals.set(key, entry);
+    }
+
     for (const line of batchLines) {
       const pko = pkoMap.get(line.packing_order_id as string);
       if (!pko) continue;
       const proc = procMap.get(toTrimmedString(pko.process_order_id));
       const pkoActualQtyKg = Number(pko.actual_qty_kg ?? 0);
-      const procActualQty = proc ? Number(proc.actual_qty ?? 0) : 0;
-      const packingPoRatio = procActualQty > 0 ? pkoActualQtyKg / procActualQty : 0;
       const invoiceRatioKg = pkoActualQtyKg > 0 ? line.quantity / pkoActualQtyKg : 0;
       const fillQtyPerPack = Number(pko.fill_qty_per_pack ?? 0);
       const dispatchedPacks = fillQtyPerPack > 0 ? line.quantity / fillQtyPerPack : 0;
       const numPacks = Number(pko.num_packs ?? 0);
       const invoiceRatioPacks = numPacks > 0 ? dispatchedPacks / numPacks : 0;
+
+      const metricTotals = procMetricTotals.get(toTrimmedString(pko.process_order_id)) ?? { std: 0, actual: 0, ap: 0 };
+      const packingPoRatioStd = metricTotals.std > 0 ? pkoActualQtyKg / metricTotals.std : 0;
+      const packingPoRatioActual = metricTotals.actual > 0 ? pkoActualQtyKg / metricTotals.actual : 0;
+      const packingPoRatioAp = metricTotals.ap > 0 ? pkoActualQtyKg / metricTotals.ap : 0;
 
       for (const reco of ((procLineRecoRows ?? []) as JsonRecord[]).filter((r) => toTrimmedString(r.process_order_id) === toTrimmedString(pko.process_order_id))) {
         rows.push({
@@ -2108,9 +2135,10 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
           process_order_id: toTrimmedString(pko.process_order_id) || null, process_order_number: (proc?.po_number as string) ?? null, batch_number: toTrimmedString(pko.batch_number) || null,
           packing_order_id: String(pko.id), packing_order_number: toTrimmedString(pko.po_number) || null, po_type: toTrimmedString(pko.po_type) || null,
           dispatch_qty_kg: line.quantity, material_id: toTrimmedString(reco.material_id), line_material_type: toTrimmedString(reco.line_material_type),
-          standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
-          actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
-          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
+          standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatioStd * invoiceRatioKg).toFixed(6)),
+          actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatioActual * invoiceRatioKg).toFixed(6)),
+          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatioAp * invoiceRatioKg).toFixed(6)),
+          is_asian_billed: true, // Shape 1 only ever exists for a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own FG production.
         });
       }
       for (const reco of ((packLineRecoRows ?? []) as JsonRecord[]).filter((r) => toTrimmedString(r.packing_order_id) === String(pko.id))) {
@@ -2123,6 +2151,7 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
           standard_qty: Number((Number(reco.standard_qty ?? 0) * invoiceRatioPacks).toFixed(6)),
           actual_qty: Number((Number(reco.actual_qty ?? 0) * invoiceRatioPacks).toFixed(6)),
           ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * invoiceRatioPacks).toFixed(6)),
+          is_asian_billed: true,
         });
       }
     }

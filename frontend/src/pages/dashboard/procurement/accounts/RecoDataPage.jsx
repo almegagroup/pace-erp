@@ -186,6 +186,12 @@ export default function RecoDataPage() {
   const [submittedParams, setSubmittedParams] = useState(null);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1); // 1 = filters, 2 = grid, 3 = summary
+  // §135.12 -- a plain INDEPENDENT_PARTY RM/PM/INT sale is a real dispatch
+  // with no Asian Paints reconciliation behind it. On by default (matches
+  // the report's original AP-only scope); unticking on either Page 2 or
+  // Page 3 reveals everything, including non-AP-billed sales -- one shared
+  // toggle, visible on both pages.
+  const [excludeNonApBilled, setExcludeNonApBilled] = useState(true);
 
   const materialsQuery = useMaterialOptionsQuery(
     { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: effectiveCompanyId },
@@ -212,9 +218,8 @@ export default function RecoDataPage() {
     const fgTypeFilter = new Set(filters.fgTypes);
     const dispatchTypeFilter = new Set(filters.dispatchTypes);
     const dispatchCategoryFilter = new Set(filters.dispatchCategories);
-    if (materialFilter.size === 0 && typeFilter.size === 0 && fgTypeFilter.size === 0
-      && dispatchTypeFilter.size === 0 && dispatchCategoryFilter.size === 0) return allRows;
     return allRows.filter((row) => {
+      if (excludeNonApBilled && row.is_asian_billed === false) return false;
       if (materialFilter.size > 0 && !materialFilter.has(row.material_id)) return false;
       if (typeFilter.size > 0 && !typeFilter.has(row.type_badge)) return false;
       if (fgTypeFilter.size > 0 && !fgTypeFilter.has((row.fg_type || "").toUpperCase())) return false;
@@ -222,7 +227,7 @@ export default function RecoDataPage() {
       if (dispatchTypeFilter.size > 0 && !dispatchTypeFilter.has((row.dispatch_type || "").toUpperCase())) return false;
       return true;
     });
-  }, [allRows, filters.materialValues, filters.types, filters.fgTypes, filters.dispatchTypes, filters.dispatchCategories]);
+  }, [allRows, excludeNonApBilled, filters.materialValues, filters.types, filters.fgTypes, filters.dispatchTypes, filters.dispatchCategories]);
 
   const [globalSearch, setGlobalSearch] = useState("");
   function getColumnFilterText(column, row) {
@@ -311,6 +316,7 @@ export default function RecoDataPage() {
     setGlobalSearch("");
     setSummarySearch("");
     setSummaryMaterialType("");
+    setExcludeNonApBilled(true);
     setPage(1);
   }
   function handleExecute() {
@@ -414,6 +420,10 @@ export default function RecoDataPage() {
                 placeholder="Search across every column..."
                 className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
               />
+              <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                <input type="checkbox" checked={excludeNonApBilled} onChange={(e) => setExcludeNonApBilled(e.target.checked)} />
+                Exclude non-AP-billed
+              </label>
               <span className="text-xs text-slate-500">{filteredSummaryRows.length} line{filteredSummaryRows.length === 1 ? "" : "s"}</span>
             </div>
             <ErpDenseGrid
@@ -559,6 +569,10 @@ export default function RecoDataPage() {
               <datalist id="reco-data-search-options">
                 {globalSearchOptions.map((option) => <option key={option} value={option} />)}
               </datalist>
+              <label className="flex items-center gap-1.5 whitespace-nowrap text-xs text-slate-600">
+                <input type="checkbox" checked={excludeNonApBilled} onChange={(e) => setExcludeNonApBilled(e.target.checked)} />
+                Exclude non-AP-billed
+              </label>
               {hasActiveSearch ? (
                 <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
                   Clear

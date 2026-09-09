@@ -585,6 +585,13 @@ export default function ProductionPOVerifyPage() {
                                   value={row.material_id}
                                   onChange={(value) => {
                                     const selected = (materialQ.materials ?? []).find((material) => material.id === value);
+                                    const isDuplicate = value && rows.some((other) => other.key !== row.key && other.material_id === value);
+                                    if (isDuplicate) {
+                                      const proceed = window.confirm(
+                                        `${materialLabel(selected) || "This material"} is already added as another line on this order. Add it again as a separate line?`
+                                      );
+                                      if (!proceed) return;
+                                    }
                                     updateRow(row.key, {
                                       material_id: value,
                                       material_label: materialLabel(selected),
