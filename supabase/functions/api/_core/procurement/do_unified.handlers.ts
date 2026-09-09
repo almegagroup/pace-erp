@@ -2188,13 +2188,20 @@ export async function previewInvoiceGroupsHandler(req: Request, ctx: Procurement
       return doErrorResponse(req, ctx, "DO_NOT_READY_FOR_PGI", 400, "Only a CREATED or DISPATCHED delivery order can be viewed here.");
     }
 
-    // A dispatched DO is a read-only invoice-group view. Match its already
-    // posted invoice to the same SO/STO and FO bucket that generated it.
-    const { data: invoiceRows, error: invoiceError } = dcStatus === "DISPATCHED"
-      ? await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
-        .select("id, invoice_number, invoice_date, status, so_id, sto_id, fo_id, tally_invoice_number, tally_invoice_date, inbound_number, e_way_bill_applicable, e_way_bill_number, freight_to_pay, freight_included, freight_amount, freight_mode, freight_rate, freight_gst_included, freight_gst_treatment, freight_gst_rate, additional_cost_total, round_off_amount, total_invoice_value, remarks")
-        .eq("dc_id", dcId)
-      : { data: [] as JsonRecord[], error: null };
+    // §133.13 note (2026-09-09 fix): a multi-group DO can have SOME of its
+    // groups already POSTED while the DC itself is still CREATED -- either
+    // the normal "post one group at a time" flow, or a partial failure
+    // (comment on postPgiInvoiceGroupsHandler: DC only flips to DISPATCHED
+    // once every group succeeds, but the earlier groups that DID succeed are
+    // already real, posted invoices). This lookup must therefore run for ANY
+    // dcStatus this handler accepts (CREATED or DISPATCHED) -- gating it to
+    // DISPATCHED-only meant a genuinely-posted group's own Tally Invoice
+    // Number/Date/IBN never came back while the DC sat at CREATED, so
+    // re-opening that group (e.g. found by searching its own Tally Invoice
+    // Number) showed those exact fields blank, as if wiped.
+    const { data: invoiceRows, error: invoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+      .select("id, invoice_number, invoice_date, status, so_id, sto_id, fo_id, tally_invoice_number, tally_invoice_date, inbound_number, e_way_bill_applicable, e_way_bill_number, freight_to_pay, freight_included, freight_amount, freight_mode, freight_rate, freight_gst_included, freight_gst_treatment, freight_gst_rate, additional_cost_total, round_off_amount, total_invoice_value, remarks")
+      .eq("dc_id", dcId);
     if (invoiceError) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUPS_FETCH_FAILED", 500, "Unable to load posted invoice groups.");
     const invoiceHistory = (invoiceRows ?? []) as JsonRecord[];
     const viewGroups = groups.map((group) => {

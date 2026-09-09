@@ -345,14 +345,18 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
           <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Tally / e-Way Bill</div>
           <div className="grid gap-3 md:grid-cols-2">
             <ErpDenseFormRow label="Tally Invoice Number" required>
-              <input value={input.tally_invoice_number} onChange={(e) => onChange({ tally_invoice_number: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              {/* 2026-09-09 fix -- same field shape reopens for every group with no
+                  name/autocomplete of its own; a per-group name stops Chrome from
+                  offering (and effectively carrying over) another group's just-typed
+                  value here, same fix as the Page 2 grid's own copies of this field. */}
+              <input name={`pgi-drawer-tally-number-${group.group_key}`} autoComplete="off" value={input.tally_invoice_number} onChange={(e) => onChange({ tally_invoice_number: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Tally Invoice Date" required>
-              <input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={input.tally_invoice_date} onChange={(e) => onChange({ tally_invoice_date: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+              <input name={`pgi-drawer-tally-date-${group.group_key}`} autoComplete="off" type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={input.tally_invoice_date} onChange={(e) => onChange({ tally_invoice_date: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
             </ErpDenseFormRow>
             {group.ibn_required ? (
               <ErpDenseFormRow label="Inbound Number (IBN)" required>
-                <input value={input.inbound_number} onChange={(e) => onChange({ inbound_number: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
+                <input name={`pgi-drawer-ibn-${group.group_key}`} autoComplete="off" value={input.inbound_number} onChange={(e) => onChange({ inbound_number: e.target.value })} className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500" />
               </ErpDenseFormRow>
             ) : null}
             <div className="grid gap-1 text-xs font-semibold text-slate-700">
@@ -769,6 +773,14 @@ export default function PgiInvoiceGroupsCreatePage() {
                     { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
                       return <input
+                        // 2026-09-09 fix -- these grid cells have no name/autocomplete of their
+                        // own, and every row's Inbound/Tally box is structurally identical, so
+                        // Chrome's own form-field-similarity autofill was offering (and, once
+                        // accepted/observed, effectively mirroring) one row's just-typed value
+                        // into another row's box. A per-row unique name + autoComplete="off"
+                        // stops the browser from treating these as "the same repeated field".
+                        name={`pgi-ibn-${row.group_key}`}
+                        autoComplete="off"
                         value={row.ibn_required ? (input?.inbound_number || "") : ""}
                         disabled={(isViewMode && !row.cancelled_invoice) || !row.ibn_required}
                         onChange={(event) => updateGroupInput(row.group_key, { inbound_number: event.target.value })}
@@ -778,11 +790,11 @@ export default function PgiInvoiceGroupsCreatePage() {
                     } },
                     { key: "tally_invoice_number", label: "Tally Invoice Number", width: "140px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      return <input disabled={isViewMode && !row.cancelled_invoice} value={input?.tally_invoice_number || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_number: event.target.value })} placeholder="Required" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
+                      return <input name={`pgi-tally-number-${row.group_key}`} autoComplete="off" disabled={isViewMode && !row.cancelled_invoice} value={input?.tally_invoice_number || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_number: event.target.value })} placeholder="Required" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
                     } },
                     { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px", render: (row) => {
                       const input = groupInputs[row.group_key];
-                      return <input disabled={isViewMode && !row.cancelled_invoice} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
+                      return <input name={`pgi-tally-date-${row.group_key}`} autoComplete="off" disabled={isViewMode && !row.cancelled_invoice} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
                     } },
                     { key: "total", label: "Invoice Total", width: "120px", align: "right", render: (row) => {
                       const input = groupInputs[row.group_key] || defaultGroupInput(row);
