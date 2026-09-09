@@ -23427,8 +23427,113 @@ the named 4 (`L1_MANAGER`, `L2_USER`, `L3_USER`, `L4_USER` checked) now resolve 
 (correctly locked out — previously would have inherited access via the broad
 `CAP_PROC_ACCOUNTS` role grant). `L2_AUDITOR` has no live dev test user to click-test with, but is
 confirmed present in `acl.role_capabilities` for the new capability the same way the other 3 are.
-**Prod:** this exact 4-step MCP sequence (new capability + 2 grant tables + capability_menu_actions
-swap + version bump/capture/snapshot) still needs to run before prod deploy — not yet done.
+**Prod completed and corrected (2026-09-09):** the capability/grants/initial rollout were already
+present when checked, but the live engine requires role AND work-context grants, not OR;
+there were zero AC10 decisions in the active prod snapshots. The earlier interpretation and
+dev verification above were therefore insufficient to establish the requested access policy.
+The applied database change adds an AC10-only candidate path using exact assigned-role
+grants OR work-context grants. Its local migration file
+`20260908190039_ac10_exact_role_or_accounts_acl.sql` was subsequently deleted at the
+business owner's request. The function and migration record remain in dev/prod;
+local/remote migration history reconciliation remains open.
+Other capabilities retain existing intersection/inheritance and deny precedence. Exact-role
+matching prevents non-Accounts L4_MANAGER inheriting L3_MANAGER access.
+New prod versions: CMP003/CMP006 v105, CMP010 v50, CMP014 v23; all captured, generated,
+activated, and per-user ACL menu snapshots rebuilt. All live role/context cases passed,
+including real L2_AUDITOR users, Accounts L1_USER/L2_USER/L3_USER/L4_USER/L2_MANAGER,
+and non-Accounts L4_MANAGER denial. ACL-MASTER (DIRECTOR) also resolves ALLOW.
+Non-AC10 decisions are identical before/after; menu visibility mismatches are zero.
+Prod has Accounts contexts in CMP003/CMP006/CMP014 only; CMP010 has no Accounts context
+to grant (its L2_AUDITOR is allowed). No department/work-context was invented.
+Verification was database/snapshot based, not an interactive browser sign-in test.
+
+### 135.11 — Page 2/Page 3 rebuilt against the locked mock, real gaps found (LOCKED — 2026-09-09)
+
+Business owner asked for a direct, line-by-line comparison between the actual locked mock
+(`reco_data_mock.html`) and the §135.6/§135.7 write-up + the real implementation — they did not
+match. §135.6/§135.7 above were written from memory while consolidating the design, not by
+re-reading the mock file itself, and drifted from it in several real, confirmed ways. This section
+is the correction; §135.6/§135.7's prose stays as history but their column tables are superseded
+by the list below wherever they conflict.
+
+**Page 2 — real column order (30 columns, verbatim from the mock's own `<thead>`), left to right:**
+Company · Month-Year · PACE Doc # · Tally Invoice # · Tally Inv. Date · IBN · FO # ·
+**Dispatch Type** · Dispatch Cat. · Type (badge) · **FG Type** · PACE Code · Item Name ·
+**Document Name** · External Code · Costing Group · Process PO # · Batch # · Packing PO # ·
+SO Stroke · Actual Stroke · Dispatch Qty (kg) — Invoice Total · Pack Qty — Invoice Total ·
+Dispatch Qty (kg) · Pack Qty · Dosage % / Qty per Pack · **Standard Qty — SO Stroke** ·
+**Standard Qty — Dispatched Stroke** · Actual Qty · AP Approved Qty.
+
+**Five real gaps found and fixed in this pass:**
+1. **Column order was reshuffled** in the first build (SO Stroke/Process PO# moved much earlier,
+   Invoice-Total columns moved) — reordered to match the mock exactly.
+2. **"Dispatch Type" column was missing entirely** — `dispatch_reco` has no such column itself;
+   fixed by resolving it via `dispatch_reco.so_id → sales_order.dispatch_type` (same source
+   `dispatch_report.handlers.ts`/SO04 already uses).
+3. **"FG Type" was missing as its own column** — the first build folded it into a differently-named
+   "PO Type" column in the wrong position. Now a first-class `fg_type` field (same
+   `normalizeFgType()` value), positioned exactly where the mock has it.
+4. **"Document Name" was missing entirely** — `material_master.document_name` was already being
+   fetched (`materialMap()` returns it) but never exposed in the row shape. Added.
+5. **Only ONE "Standard Qty" column existed; the mock locks TWO** — "Standard Qty — SO Stroke"
+   (what Standard would have been under the SO's own declared-stroke recipe) and "Standard Qty —
+   Dispatched Stroke" (the batch's real `process_order_line_reco.standard_qty`, under whatever
+   stroke actually produced it — identical to AC09's own SO-Stroke-vs-Actual-Stroke split, applied
+   to quantity instead of cost). The common case (SO Stroke = Actual Stroke, true for every real
+   dispatch checked this session) shows the same value in both columns. The mismatch case
+   (SO Stroke ≠ Actual Stroke) re-derives "Standard — SO Stroke" from that stroke's own
+   `stroke_line` dosage% × the batch's real `process_order.actual_qty` output —
+   **⚠️ this branch is structurally built but unverified against live data**: real
+   `sales_order_line.declared_stroke_number` mismatches exist in prod (that's what AC09 itself
+   reports on), but under this report's own locked stroke source
+   (`plan_feed.ordered_stroke_number`, §135.3), zero real mismatches exist today to test the
+   re-derivation against. Falls back to the Dispatched-Stroke value (never a false zero) if the SO
+   stroke's own `stroke_master`/`stroke_line` rows can't be resolved.
+6. **Two columns were invented that don't exist in the mock at all** — "Variance" and "SO/STO #".
+   Removed; a mismatch between Actual and AP Approved is now shown the mock's own way — a
+   background/inline flag on the AP Approved cell itself, never a separate numeric column.
+
+**The single biggest structural miss: no FG summary row.** The mock synthesizes one extra row per
+dispatch group — the group's own FG SKU identity, with that group's RM+INT lines (PM excluded)
+summed into both Standard columns/Actual/AP-Approved. The first build skipped this because
+`dispatch_reco` itself has no SKU/FG line (true, verified) — but the mock never claimed dispatch_reco
+had one; it builds the FG row itself, client-side in the mock, from a separate `sku` identity object.
+The real fix: `packing_order.material_id` **is** the FG SKU header field (confirmed live,
+2026-09-09, against the mock's own real example — PO `9400000151` → material FG-00299/6764MC49599/
+"MAXIMOPLAST PC 200", exactly matching the mock's hand-entered data) — so the handler now
+synthesizes this row itself per `(invoice, process PO, packing PO)` group, tagged `row_kind:
+"FG_SUMMARY"` so the frontend can bold/tint it distinctly from its own constituent lines.
+
+**Row-shape corrections:**
+- **RPS rows:** "Dispatch Qty (kg)" (the per-line column, not Invoice Total) is now forced blank —
+  confirmed the mock deliberately leaves it blank ("only AP Approved is ever populated" for RPS)
+  even though the raw `dispatch_reco.dispatch_qty_kg` does carry a real value for these rows.
+- **PARTIAL_REVERSAL rows:** "Standard Qty — Dispatched Stroke" is now populated (from that reco
+  row's own real, negated `standard_qty` — confirmed live it exists on the row) — the first build
+  had dropped Standard entirely for PREV, regressing an explicit earlier correction this session
+  ("PREV e Standard o add koro"). "Standard Qty — SO Stroke" stays blank always for PREV (no
+  SO/FO attached to a reversal, matching the earlier, still-correct lock).
+- **Costing Group wording:** an ungrouped RM/PM/INT material now shows the literal `"Standalone"`
+  (AC09's own convention, and the mock's), not a blank dash. The synthesized FG row's Costing
+  Group always shows `"n/a — FG"` (Costing Group is an RM/PM/INT, AC06-only concept).
+- **Dosage % / Qty per Pack** is one shared column, per the mock: RM/INT show dosage% (unchanged),
+  PM shows that packing PO's own qty-per-pack (`actual_qty ÷ num_packs`, previously not computed
+  at all), FG blank.
+
+**Page 3 — structural rebuild, not a column tweak.** The first build grouped by
+`(Company, Bucket, Item)`, producing a **separate row per bucket** (MTEST/RPS/PREV each their own
+row). The locked mock groups by **`(Company, PACE Code)` only — one row per material**, with every
+bucket as its own column on that same row: Company, Costing Group Name, Item Name, External Code,
+**SO Standard**, **Dispatch Standard**, Dispatch Actual, Dispatch APL Approved, **MTEST Standard**,
+**MTEST Actual**, **Dispatched RPS**, **PREV** (12 columns total). The mock's own footnote states
+this explicitly — a material appearing in both a real dispatch and a Partial Reversal lands on
+**one row**, its Dispatch and PREV columns filled independently. Rebuilt to match: computed
+client-side from Page 2's own `LINE` rows (excluding the synthesized `FG_SUMMARY` rows, to avoid
+double-counting), same "no separate backend aggregation" approach as originally locked (§135.7).
+PREV's own bucket sums `ap_approved_qty` (matching the mock's own aggregation code exactly — its
+footnote flags this as worth a second look later, "confirm this is the right one of the two to
+carry into a single PREV column," left as-is per the mock's own current lock, not re-litigated
+here).
 
 ### 135.8 — Implementation notes (LOCKED — 2026-09-08)
 

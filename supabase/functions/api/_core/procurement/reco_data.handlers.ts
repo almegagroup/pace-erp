@@ -18,7 +18,13 @@
  *          packing_order_id) already exist in dispatch_reco as-is and need no
  *          special handling beyond passing their own dispatch_category
  *          through.
- *          Full design: feasibility doc Section 135.
+ *          Every dispatch group (invoice + process/packing PO) also gets a
+ *          synthesized FG summary row -- dispatch_reco itself carries no
+ *          SKU/FG line (verified live), so the FG identity + RM/INT totals
+ *          are built here from the packing order's own header material_id.
+ *          Full design: feasibility doc Section 135, locked mock
+ *          reco_data_mock.html (column order/row shapes are copied from that
+ *          mock verbatim, not re-derived).
  * Authority: Backend
  */
 
@@ -41,6 +47,8 @@ type RecoDataHandlerContext = {
 
 const RESOURCE = "ACC_RECO_DATA";
 const MAX_RANGE_DAYS = 366;
+const STANDALONE_LABEL = "Standalone"; // AC09's own wording for an ungrouped material.
+const FG_COSTING_GROUP_LABEL = "n/a — FG"; // Costing Group is an RM/PM/INT (AC06) concept only.
 
 function textValue(value: unknown): string {
   return String(value ?? "").trim();
@@ -89,12 +97,13 @@ function typeBadge(lineMaterialType: unknown): string {
 // process_order_line_reco.po_type stores the PROCESS PO family
 // (MTO/HPS/MTS/MTEST) -- two different tables, two different vocabularies
 // for the "same" concept. Normalized here to the Process PO family
-// (CLAUDE.md §83.2's own P-prefix convention) so po_type reads consistently
-// across every row shape in this report, and so the MTEST SO-Stroke
-// fallback (§135.6-A) and the FG Type filter both match real data instead
-// of silently matching nothing (the exact live bug this normalization
-// fixes -- an unnormalized po_type==="MTEST" check never matched a single
-// real dispatch_reco row, since dispatch_reco only ever stores "PTEST").
+// (CLAUDE.md §83.2's own P-prefix convention) so "FG Type" reads
+// consistently across every row shape in this report, and so the MTEST
+// SO-Stroke fallback and the Page 1 FG Type filter both match real data
+// instead of silently matching nothing (the exact live bug this
+// normalization fixes -- an unnormalized po_type==="MTEST" check never
+// matched a single real dispatch_reco row, since dispatch_reco only ever
+// stores "PTEST").
 const FG_TYPE_MAP: Record<string, string> = { PMTO: "MTO", PHPS: "HPS", PMTS: "MTS", PTEST: "MTEST" };
 function normalizeFgType(poType: unknown): string {
   const v = upperValue(poType);
@@ -156,40 +165,104 @@ async function resolveCostingGroupNames(
   return result;
 }
 
+// SO-Stroke re-derivation for a genuine stroke mismatch (SO Stroke != Actual
+// Stroke -- the same population AC09 exists to report on, per its own
+// declared_stroke_number-based check). "Standard Qty -- Dispatched Stroke"
+// is simply the batch's own real process_order_line_reco.standard_qty (it
+// IS the dosage-weighted standard under whatever stroke actually produced
+// the batch). "Standard Qty -- SO Stroke" asks a different, hypothetical
+// question -- what would Standard have been under the SO's OWN declared
+// stroke's recipe, at this batch's real output quantity -- so it needs the
+// SO stroke's own stroke_line dosage% and the process order's own actual_qty
+// (its real output).
+// ⚠️ UNVERIFIED against live data: live prod (2026-09-09) has zero real
+// dispatch with a plan_feed.ordered_stroke_number/actual-stroke mismatch
+// (the §135.3-locked "SO Stroke" source) to test this branch against --
+// real mismatches DO exist in prod, but only under sales_order_line.
+// declared_stroke_number (AC09's own source), a different column the
+// locked §135.3 design deliberately did not choose. Falls back to the
+// Dispatched-Stroke value (never a hard error, never a false zero) if the
+// SO stroke's own stroke_master/stroke_line rows can't be resolved.
+type SoStrokeResolution = {
+  strokeMasterIdByProcessOrder: Map<string, string>;
+  dosageByStrokeMaterial: Map<string, number>; // key = `${stroke_master_id}|${material_id}`
+};
+
+async function resolveSoStrokeStandardOverrides(
+  companyId: string,
+  cases: Array<{ processOrderId: string; prodshadeMaterialId: string; poType: string; soStroke: string }>,
+): Promise<SoStrokeResolution> {
+  const strokeMasterIdByProcessOrder = new Map<string, string>();
+  const dosageByStrokeMaterial = new Map<string, number>();
+  if (cases.length === 0) return { strokeMasterIdByProcessOrder, dosageByStrokeMaterial };
+
+  const strokeKeyToCases = new Map<string, typeof cases>();
+  for (const c of cases) {
+    const key = `${c.prodshadeMaterialId}|${c.soStroke}|${c.poType}`;
+    strokeKeyToCases.set(key, [...(strokeKeyToCases.get(key) ?? []), c]);
+  }
+
+  const lookups = await Promise.all([...strokeKeyToCases.entries()].map(async ([key, group]) => {
+    const [prodshadeMaterialId, soStroke, poType] = key.split("|");
+    const { data, error } = await serviceRoleClient.schema("erp_production").from("stroke_master")
+      .select("id").eq("company_id", companyId).eq("prodshade_material_id", prodshadeMaterialId)
+      .eq("stroke_number", soStroke).eq("po_type", poType).eq("status", "APPROVED").maybeSingle();
+    if (error) throw new Error("RECO_DATA_SO_STROKE_LOOKUP_FAILED");
+    return { strokeMasterId: data?.id ? textValue(data.id) : "", cases: group };
+  }));
+
+  for (const { strokeMasterId, cases: group } of lookups) {
+    if (!strokeMasterId) continue;
+    for (const c of group) strokeMasterIdByProcessOrder.set(c.processOrderId, strokeMasterId);
+  }
+
+  const strokeMasterIds = uniqueValues(lookups.map((l) => l.strokeMasterId));
+  const lines = await fetchInChunks<JsonRecord>(strokeMasterIds, (chunk) => serviceRoleClient.schema("erp_production")
+    .from("stroke_line").select("stroke_master_id, material_id, dosage_pct").in("stroke_master_id", chunk));
+  for (const row of lines) {
+    dosageByStrokeMaterial.set(`${textValue(row.stroke_master_id)}|${textValue(row.material_id)}`, numberValue(row.dosage_pct));
+  }
+
+  return { strokeMasterIdByProcessOrder, dosageByStrokeMaterial };
+}
+
 type RecoRow = {
+  row_kind: "FG_SUMMARY" | "LINE";
   section: "DISPATCH" | "PARTIAL_REVERSAL" | "RPS";
   is_corrected: boolean;
   company_code: string;
   month_year: string;
+  pace_doc_number: string;
   tally_invoice_number: string;
   tally_invoice_date: string;
-  pace_doc_number: string;
   inbound_number: string;
-  dispatch_category: string;
   fo_number: string;
-  so_stroke: string;
-  actual_stroke: string;
+  dispatch_type: string;
+  dispatch_category: string;
+  type_badge: string;
+  fg_type: string;
+  pace_code: string;
+  item_name: string;
+  document_name: string;
+  external_code: string;
+  costing_group: string;
   process_order_number: string;
   batch_number: string;
   packing_order_number: string;
-  po_type: string;
-  type_badge: string;
-  pace_code: string;
-  item_name: string;
-  external_code: string;
-  costing_group: string;
-  dosage_pct: number | null;
+  so_stroke: string;
+  actual_stroke: string;
   invoice_total_qty_kg: number | null;
   invoice_total_pack_qty: number | null;
   dispatch_qty_kg: number | null;
   pack_qty: number | null;
-  standard_qty: number | null;
+  dosage_or_qty: number | null;
+  standard_qty_so_stroke: number | null;
+  standard_qty_dispatched_stroke: number | null;
   actual_qty: number | null;
   ap_approved_qty: number | null;
-  variance: number | null;
-  so_number: string;
   invoice_id: string;
   material_id: string;
+  group_key: string;
 };
 
 // GET /api/procurement/reco-data
@@ -230,17 +303,21 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // AFTER the batch was already dispatched/invoiced, so it never reaches
     // dispatch_reco at all. Filtered on last_updated_at (the only
     // append-timestamp these append-only tables carry) since there is no
-    // dedicated posting-date column (§135.6-B).
+    // dedicated posting-date column (§135.6-B). standard_qty IS selected --
+    // process_order_line_reco/packing_order_line_reco carry a real (negated)
+    // standard_qty on the PARTIAL_REVERSAL row too, confirmed live -- only
+    // the SO-Stroke *derivation* is meaningless for a reversal (no SO/FO
+    // attached), not the Dispatched-Stroke figure itself.
     const rangeStart = `${dateFrom}T00:00:00.000Z`;
     const rangeEnd = `${dateTo}T23:59:59.999Z`;
     const [processReversalRows, packingReversalRows] = await Promise.all([
       fetchAllRows<JsonRecord>((from, to) => serviceRoleClient.schema("erp_production").from("process_order_line_reco")
-        .select("id, company_id, po_number, batch_number, po_type, process_order_id, material_id, line_material_type, actual_qty, ap_approved_qty, source_txn_type, reference_document_number, last_updated_at")
+        .select("id, company_id, po_number, batch_number, po_type, process_order_id, material_id, line_material_type, standard_qty, actual_qty, ap_approved_qty, source_txn_type, reference_document_number, last_updated_at")
         .eq("company_id", companyId).eq("source_txn_type", "PARTIAL_REVERSAL").eq("is_voided", false)
         .gte("last_updated_at", rangeStart).lte("last_updated_at", rangeEnd)
         .order("last_updated_at", { ascending: true }).range(from, to)),
       fetchAllRows<JsonRecord>((from, to) => serviceRoleClient.schema("erp_production").from("packing_order_line_reco")
-        .select("id, company_id, po_number, batch_number, po_type, packing_order_id, material_id, actual_qty, ap_approved_qty, source_txn_type, reference_document_number, last_updated_at")
+        .select("id, company_id, po_number, batch_number, po_type, packing_order_id, material_id, standard_qty, actual_qty, ap_approved_qty, source_txn_type, reference_document_number, last_updated_at")
         .eq("company_id", companyId).eq("source_txn_type", "PARTIAL_REVERSAL").eq("is_voided", false)
         .gte("last_updated_at", rangeStart).lte("last_updated_at", rangeEnd)
         .order("last_updated_at", { ascending: true }).range(from, to)),
@@ -265,18 +342,29 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       ...packingReversalRows.map((row) => row.packing_order_id),
     ]);
     const foIds = uniqueValues(dispatchRecoRows.map((row) => row.fo_id));
+    const soIds = uniqueValues(dispatchRecoRows.map((row) => row.so_id));
 
-    const [materials, processLineRecoRows, packingOrders, feeds] = await Promise.all([
-      materialMap(materialIds),
+    const [processLineRecoRows, packingOrders, feeds, salesOrders, processOrderHeaders] = await Promise.all([
       fetchInChunks<JsonRecord>(processOrderIds, (chunk) => serviceRoleClient.schema("erp_production")
         .from("process_order_line_reco")
         .select("process_order_id, material_id, stroke_number, dosage_pct, line_material_type, source_txn_type, is_voided")
         .eq("is_voided", false).in("process_order_id", chunk)),
       fetchInChunks<JsonRecord>(packingOrderIds, (chunk) => serviceRoleClient.schema("erp_production")
-        .from("packing_order").select("id, num_packs").in("id", chunk)),
+        .from("packing_order").select("id, num_packs, material_id").in("id", chunk)),
       fetchInChunks<JsonRecord>(foIds, (chunk) => serviceRoleClient.schema("erp_production")
         .from("plan_feed").select("id, ordered_stroke_number").in("id", chunk)),
+      fetchInChunks<JsonRecord>(soIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+        .from("sales_order").select("id, dispatch_type").in("id", chunk)),
+      fetchInChunks<JsonRecord>(processOrderIds, (chunk) => serviceRoleClient.schema("erp_production")
+        .from("process_order").select("id, material_id, actual_qty, po_type").in("id", chunk)),
     ]);
+
+    // FG material identity (packing_order.material_id is the FG SKU header
+    // field -- confirmed live, 2026-09-09 -- dispatch_reco itself never
+    // carries an SKU line).
+    const fgMaterialIdByPackingOrderId = new Map(packingOrders.map((row) => [textValue(row.id), textValue(row.material_id)]));
+    const allFgMaterialIds = uniqueValues(packingOrders.map((row) => row.material_id));
+    const materials = await materialMap([...materialIds, ...allFgMaterialIds]);
 
     const strokeByProcessOrderId = new Map<string, string>();
     const dosageByKey = new Map<string, number>(); // `${process_order_id}|${material_id}` -> dosage_pct, PRODUCTION only
@@ -291,11 +379,15 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     }
     const packCountByPackingOrderId = new Map(packingOrders.map((row) => [textValue(row.id), numberValue(row.num_packs)]));
     const orderedStrokeByFoId = new Map(feeds.map((row) => [textValue(row.id), textValue(row.ordered_stroke_number)]));
+    const dispatchTypeBySoId = new Map(salesOrders.map((row) => [textValue(row.id), textValue(row.dispatch_type)]));
+    const processOrderById = new Map(processOrderHeaders.map((row) => [textValue(row.id), row]));
 
     const monthsInRange = uniqueValues([
       ...dispatchRecoRows.map((row) => firstOfMonth(row.tally_invoice_date)),
     ]);
     const costingGroupByKey = await resolveCostingGroupNames(companyId, monthsInRange, materialIds);
+    const costingGroupLabel = (materialId: string, tallyDate: unknown): string =>
+      costingGroupByKey.get(`${firstOfMonth(tallyDate)}|${materialId}`) || STANDALONE_LABEL;
 
     // ---- Net-sum dispatch_reco rows per (invoice, process/packing PO, material) --
     // A COR6 correction that landed before PGI produces a SECOND raw
@@ -331,7 +423,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
 
     // Invoice-level totals (§135.6 #21/#22). Verified against real prod data
     // (2026-09-09): dispatch_reco carries NO "SKU"/FG row at all -- the FG
-    // identity is a header field on packing_order (sku_material_id), never
+    // identity is a header field on packing_order (material_id), never
     // its own dispatch_reco line -- so "whole invoice total" is the SUM of
     // each DISTINCT (invoice, packing PO)'s own dispatch_qty_kg/pack count,
     // not a filter on line_material_type (dispatch_qty_kg is already the
@@ -351,6 +443,47 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       invoiceTotalPack.set(invoiceId, (invoiceTotalPack.get(invoiceId) ?? 0) + packCount);
     }
 
+    // ---- SO-Stroke mismatch cases: collect once per (process order), not
+    // per line -- the stroke lookup is shared by every RM/INT material in
+    // that batch. See resolveSoStrokeStandardOverrides() header comment.
+    const mismatchProcessOrderIds = new Set<string>();
+    for (const [, group] of dispatchGroups) {
+      const sample = group.rows[0];
+      const processOrderId = textValue(sample.process_order_id);
+      if (!processOrderId) continue;
+      const foId = textValue(sample.fo_id);
+      const soStroke = orderedStrokeByFoId.get(foId) ?? "";
+      const actualStroke = strokeByProcessOrderId.get(processOrderId) ?? "";
+      if (soStroke && actualStroke && upperValue(soStroke) !== upperValue(actualStroke)) {
+        mismatchProcessOrderIds.add(processOrderId);
+      }
+    }
+    const processOrderIdToFoId = new Map<string, string>();
+    for (const [, group] of dispatchGroups) {
+      const sample = group.rows[0];
+      const poId = textValue(sample.process_order_id);
+      if (poId && !processOrderIdToFoId.has(poId)) processOrderIdToFoId.set(poId, textValue(sample.fo_id));
+    }
+    const soStrokeMismatchCases = [...mismatchProcessOrderIds].map((processOrderId) => {
+      const header = processOrderById.get(processOrderId);
+      const foId = processOrderIdToFoId.get(processOrderId) ?? "";
+      return {
+        processOrderId,
+        prodshadeMaterialId: textValue(header?.material_id),
+        poType: normalizeFgType(header?.po_type),
+        soStroke: orderedStrokeByFoId.get(foId) ?? "",
+      };
+    }).filter((c) => c.prodshadeMaterialId && c.soStroke);
+    const soStrokeResolution = await resolveSoStrokeStandardOverrides(companyId, soStrokeMismatchCases);
+    function resolveSoStrokeStandard(processOrderId: string, materialId: string, fallback: number | null): number | null {
+      const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
+      if (!strokeMasterId) return fallback;
+      const outputQty = numberValue(processOrderById.get(processOrderId)?.actual_qty);
+      const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
+      if (dosage === undefined) return fallback; // material not in the SO stroke's own recipe -- keep the dispatched-stroke figure rather than a false zero.
+      return rounded((dosage / 100) * outputQty, 6);
+    }
+
     const dispatchRows: RecoRow[] = [...dispatchGroups.values()].map((group) => {
       const sample = group.rows[0];
       const materialId = textValue(sample.material_id);
@@ -358,54 +491,137 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       const processOrderId = textValue(sample.process_order_id);
       const packingOrderId = textValue(sample.packing_order_id);
       const isSku = upperValue(sample.line_material_type) === "SKU";
+      const isPm = upperValue(sample.line_material_type) === "PM";
       const foId = textValue(sample.fo_id);
       const orderedStroke = orderedStrokeByFoId.get(foId) ?? "";
       const actualStroke = strokeByProcessOrderId.get(processOrderId) ?? "";
+      const fgType = normalizeFgType(sample.po_type);
       // MTEST: SO and Actual stroke are the same formulation by definition
       // (§108-era MTEST design) -- fall back to Actual when no ordered
       // stroke exists on the FO instead of leaving SO Stroke blank.
-      const soStroke = orderedStroke || (normalizeFgType(sample.po_type) === "MTEST" ? actualStroke : "");
+      const soStroke = orderedStroke || (fgType === "MTEST" ? actualStroke : "");
       const invoiceId = textValue(sample.invoice_id);
-      const dispatchQty = rounded(group.dispatch_qty_kg, 6);
-      const standardQty = group.standard_qty === null ? null : rounded(group.standard_qty, 6);
+      const section: RecoRow["section"] = upperValue(sample.dispatch_category).startsWith("RPS") || (!processOrderId && !packingOrderId) ? "RPS" : "DISPATCH";
+      const dispatchQty = section === "RPS" ? null : rounded(group.dispatch_qty_kg, 6); // RPS: no "dispatch" concept, blank per locked mock.
+      const standardDispatchedStroke = group.standard_qty === null ? null : rounded(group.standard_qty, 6);
       const actualQty = group.actual_qty === null ? null : rounded(group.actual_qty, 6);
       const apApprovedQty = group.ap_approved_qty === null ? null : rounded(group.ap_approved_qty, 6);
+      // PM composition never depends on stroke -- both Standard columns are
+      // identical for PM. For RM/INT, only differ on a genuine mismatch.
+      const standardSoStroke = isSku || section === "RPS" ? null
+        : isPm ? standardDispatchedStroke
+        : (!soStroke || upperValue(soStroke) === upperValue(actualStroke))
+          ? standardDispatchedStroke
+          : resolveSoStrokeStandard(processOrderId, materialId, standardDispatchedStroke);
+      const packCount = packCountByPackingOrderId.get(packingOrderId) ?? null;
+      const dosageOrQty = isSku ? null
+        : isPm ? (packCount ? rounded((group.actual_qty ?? 0) / packCount, 6) : null)
+        : dosageByKey.get(`${processOrderId}|${materialId}`) ?? null;
       return {
-        section: upperValue(sample.dispatch_category).startsWith("RPS") || (!processOrderId && !packingOrderId) ? "RPS" : "DISPATCH",
+        row_kind: "LINE",
+        section,
         is_corrected: group.rows.length > 1,
         company_code: companyCode,
         month_year: monthYear(sample.tally_invoice_date),
+        pace_doc_number: textValue(sample.invoice_number),
         tally_invoice_number: textValue(sample.tally_invoice_number),
         tally_invoice_date: textValue(sample.tally_invoice_date),
-        pace_doc_number: textValue(sample.invoice_number),
         inbound_number: textValue(sample.inbound_number),
-        dispatch_category: textValue(sample.dispatch_category),
         fo_number: textValue(sample.fo_number),
-        so_stroke: soStroke,
-        actual_stroke: actualStroke,
+        dispatch_type: dispatchTypeBySoId.get(textValue(sample.so_id)) ?? "",
+        dispatch_category: textValue(sample.dispatch_category),
+        type_badge: typeBadge(sample.line_material_type),
+        fg_type: fgType,
+        pace_code: textValue(material?.pace_code),
+        item_name: textValue(material?.material_name),
+        document_name: textValue(material?.document_name),
+        external_code: textValue(material?.external_code),
+        costing_group: costingGroupLabel(materialId, sample.tally_invoice_date),
         process_order_number: textValue(sample.process_order_number),
         batch_number: textValue(sample.batch_number),
         packing_order_number: textValue(sample.packing_order_number),
-        po_type: normalizeFgType(sample.po_type),
-        type_badge: typeBadge(sample.line_material_type),
-        pace_code: textValue(material?.pace_code),
-        item_name: textValue(material?.material_name),
-        external_code: textValue(material?.external_code),
-        costing_group: costingGroupByKey.get(`${firstOfMonth(sample.tally_invoice_date)}|${materialId}`) ?? "",
-        dosage_pct: isSku ? null : dosageByKey.get(`${processOrderId}|${materialId}`) ?? null,
+        so_stroke: soStroke,
+        actual_stroke: actualStroke,
         invoice_total_qty_kg: invoiceId && packingOrderId ? rounded(invoiceTotalQty.get(invoiceId) ?? 0, 6) : null,
         invoice_total_pack_qty: invoiceId && packingOrderId ? rounded(invoiceTotalPack.get(invoiceId) ?? 0, 6) : null,
         dispatch_qty_kg: dispatchQty,
-        pack_qty: packingOrderId ? (packCountByPackingOrderId.get(packingOrderId) ?? null) : null,
-        standard_qty: standardQty,
+        pack_qty: packCount,
+        dosage_or_qty: dosageOrQty,
+        standard_qty_so_stroke: standardSoStroke,
+        standard_qty_dispatched_stroke: standardDispatchedStroke,
         actual_qty: actualQty,
         ap_approved_qty: apApprovedQty,
-        variance: actualQty !== null && apApprovedQty !== null ? rounded(actualQty - apApprovedQty, 6) : null,
-        so_number: textValue(sample.so_number),
         invoice_id: invoiceId,
         material_id: materialId,
+        group_key: `${invoiceId}|${processOrderId}|${packingOrderId}`,
       };
     });
+
+    // ---- FG summary row per dispatch group (locked mock's "sku-row") ----
+    // Aggregates that group's own RM+INT lines (PM excluded, matching the
+    // mock's own aggregation) into Standard(both)/Actual/AP-Approved totals,
+    // carries the FG SKU's own identity (packing_order.material_id).
+    const fgSummaryByGroupKey = new Map<string, RecoRow>();
+    for (const line of dispatchRows) {
+      if (line.section === "RPS") continue; // RPS has no packing order/FG identity at all.
+      const packingOrderId = line.group_key.split("|")[2] ?? "";
+      const fgMaterialId = fgMaterialIdByPackingOrderId.get(packingOrderId) ?? "";
+      let summary = fgSummaryByGroupKey.get(line.group_key);
+      if (!summary) {
+        const fgMaterial = materials.get(fgMaterialId);
+        summary = {
+          row_kind: "FG_SUMMARY",
+          section: line.section,
+          is_corrected: false,
+          company_code: line.company_code,
+          month_year: line.month_year,
+          pace_doc_number: line.pace_doc_number,
+          tally_invoice_number: line.tally_invoice_number,
+          tally_invoice_date: line.tally_invoice_date,
+          inbound_number: line.inbound_number,
+          fo_number: line.fo_number,
+          dispatch_type: line.dispatch_type,
+          dispatch_category: line.dispatch_category,
+          type_badge: "FG",
+          fg_type: line.fg_type,
+          pace_code: textValue(fgMaterial?.pace_code),
+          item_name: textValue(fgMaterial?.material_name),
+          document_name: textValue(fgMaterial?.document_name),
+          external_code: textValue(fgMaterial?.external_code),
+          costing_group: FG_COSTING_GROUP_LABEL,
+          process_order_number: line.process_order_number,
+          batch_number: line.batch_number,
+          packing_order_number: line.packing_order_number,
+          so_stroke: line.so_stroke,
+          actual_stroke: line.actual_stroke,
+          invoice_total_qty_kg: line.invoice_total_qty_kg,
+          invoice_total_pack_qty: line.invoice_total_pack_qty,
+          dispatch_qty_kg: line.dispatch_qty_kg,
+          pack_qty: line.pack_qty,
+          dosage_or_qty: null,
+          standard_qty_so_stroke: null,
+          standard_qty_dispatched_stroke: null,
+          actual_qty: null,
+          ap_approved_qty: null,
+          invoice_id: line.invoice_id,
+          material_id: fgMaterialId,
+          group_key: line.group_key,
+        };
+        fgSummaryByGroupKey.set(line.group_key, summary);
+      }
+      if (line.type_badge === "RM" || line.type_badge === "INT") {
+        summary.standard_qty_so_stroke = (summary.standard_qty_so_stroke ?? 0) + (line.standard_qty_so_stroke ?? 0);
+        summary.standard_qty_dispatched_stroke = (summary.standard_qty_dispatched_stroke ?? 0) + (line.standard_qty_dispatched_stroke ?? 0);
+        summary.actual_qty = (summary.actual_qty ?? 0) + (line.actual_qty ?? 0);
+        summary.ap_approved_qty = (summary.ap_approved_qty ?? 0) + (line.ap_approved_qty ?? 0);
+      }
+    }
+    for (const summary of fgSummaryByGroupKey.values()) {
+      if (summary.standard_qty_so_stroke !== null) summary.standard_qty_so_stroke = rounded(summary.standard_qty_so_stroke, 6);
+      if (summary.standard_qty_dispatched_stroke !== null) summary.standard_qty_dispatched_stroke = rounded(summary.standard_qty_dispatched_stroke, 6);
+      if (summary.actual_qty !== null) summary.actual_qty = rounded(summary.actual_qty, 6);
+      if (summary.ap_approved_qty !== null) summary.ap_approved_qty = rounded(summary.ap_approved_qty, 6);
+    }
 
     // ---- C. PARTIAL_REVERSAL rows (§135.6-B) ----
     // Borrow the ORIGINAL dispatch's PACE Doc # + Tally Invoice Date for
@@ -415,14 +631,10 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // when no matching original dispatch row is in this same date window.
     const originalByProcessMaterial = new Map<string, RecoRow>();
     const originalByPackingMaterial = new Map<string, RecoRow>();
-    for (const [key, group] of dispatchGroups) {
-      const [invoiceId, processOrderId, packingOrderId, materialId] = key.split("|");
-      const built = dispatchRows.find((r) => r.invoice_id === invoiceId && r.material_id === materialId
-        && r.process_order_number === textValue(group.rows[0].process_order_number)
-        && r.packing_order_number === textValue(group.rows[0].packing_order_number));
-      if (!built) continue;
-      if (processOrderId) originalByProcessMaterial.set(`${processOrderId}|${materialId}`, built);
-      if (packingOrderId) originalByPackingMaterial.set(`${packingOrderId}|${materialId}`, built);
+    for (const line of dispatchRows) {
+      const [, processOrderId, packingOrderId] = line.group_key.split("|");
+      if (processOrderId) originalByProcessMaterial.set(`${processOrderId}|${line.material_id}`, line);
+      if (packingOrderId) originalByPackingMaterial.set(`${packingOrderId}|${line.material_id}`, line);
     }
 
     const reversalRows: RecoRow[] = [
@@ -431,92 +643,103 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         const materialId = textValue(row.material_id);
         const material = materials.get(materialId);
         const original = originalByProcessMaterial.get(`${processOrderId}|${materialId}`);
+        const standardQty = nullableNumber(row.standard_qty);
         const actualQty = nullableNumber(row.actual_qty);
         const apApprovedQty = nullableNumber(row.ap_approved_qty);
-        return {
-          section: "PARTIAL_REVERSAL" as const,
+        const rev: RecoRow = {
+          row_kind: "LINE",
+          section: "PARTIAL_REVERSAL",
           is_corrected: false,
           company_code: companyCode,
           month_year: monthYear(original?.tally_invoice_date ?? ""),
+          pace_doc_number: original?.pace_doc_number ?? textValue(row.reference_document_number),
           tally_invoice_number: "",
           tally_invoice_date: original?.tally_invoice_date ?? "",
-          pace_doc_number: original?.pace_doc_number ?? textValue(row.reference_document_number),
           inbound_number: "",
-          dispatch_category: "PREV",
           fo_number: "",
-          so_stroke: "",
-          actual_stroke: strokeByProcessOrderId.get(processOrderId) ?? "",
+          dispatch_type: "",
+          dispatch_category: "PREV",
+          type_badge: typeBadge(row.line_material_type),
+          fg_type: original?.fg_type ?? normalizeFgType(row.po_type),
+          pace_code: textValue(material?.pace_code),
+          item_name: textValue(material?.material_name),
+          document_name: textValue(material?.document_name),
+          external_code: textValue(material?.external_code),
+          costing_group: original?.costing_group ?? STANDALONE_LABEL,
           process_order_number: textValue(row.po_number),
           batch_number: textValue(row.batch_number),
           packing_order_number: "",
-          po_type: normalizeFgType(row.po_type),
-          type_badge: typeBadge(row.line_material_type),
-          pace_code: textValue(material?.pace_code),
-          item_name: textValue(material?.material_name),
-          external_code: textValue(material?.external_code),
-          costing_group: original?.costing_group ?? "",
-          dosage_pct: null,
+          so_stroke: "", // no SO/FO attached to a reversal -- always blank (§135.6-B, corrected earlier this session).
+          actual_stroke: original?.actual_stroke ?? strokeByProcessOrderId.get(processOrderId) ?? "",
           invoice_total_qty_kg: null,
           invoice_total_pack_qty: null,
           dispatch_qty_kg: null,
           pack_qty: null,
-          standard_qty: null,
+          dosage_or_qty: null,
+          standard_qty_so_stroke: null,
+          standard_qty_dispatched_stroke: standardQty === null ? null : rounded(standardQty, 6),
           actual_qty: actualQty === null ? null : rounded(actualQty, 6),
           ap_approved_qty: apApprovedQty === null ? null : rounded(apApprovedQty, 6),
-          variance: actualQty !== null && apApprovedQty !== null ? rounded(actualQty - apApprovedQty, 6) : null,
-          so_number: "",
           invoice_id: "",
           material_id: materialId,
+          group_key: `PREV|${textValue(row.id)}`,
         };
+        return rev;
       }),
       ...packingReversalRows.map((row) => {
         const packingOrderId = textValue(row.packing_order_id);
         const materialId = textValue(row.material_id);
         const material = materials.get(materialId);
         const original = originalByPackingMaterial.get(`${packingOrderId}|${materialId}`);
+        const standardQty = nullableNumber(row.standard_qty);
         const actualQty = nullableNumber(row.actual_qty);
         const apApprovedQty = nullableNumber(row.ap_approved_qty);
-        return {
-          section: "PARTIAL_REVERSAL" as const,
+        const rev: RecoRow = {
+          row_kind: "LINE",
+          section: "PARTIAL_REVERSAL",
           is_corrected: false,
           company_code: companyCode,
           month_year: monthYear(original?.tally_invoice_date ?? ""),
+          pace_doc_number: original?.pace_doc_number ?? textValue(row.reference_document_number),
           tally_invoice_number: "",
           tally_invoice_date: original?.tally_invoice_date ?? "",
-          pace_doc_number: original?.pace_doc_number ?? textValue(row.reference_document_number),
           inbound_number: "",
-          dispatch_category: "PREV",
           fo_number: "",
-          so_stroke: "",
-          actual_stroke: original?.actual_stroke ?? "",
+          dispatch_type: "",
+          dispatch_category: "PREV",
+          type_badge: "PM",
+          fg_type: original?.fg_type ?? normalizeFgType(row.po_type),
+          pace_code: textValue(material?.pace_code),
+          item_name: textValue(material?.material_name),
+          document_name: textValue(material?.document_name),
+          external_code: textValue(material?.external_code),
+          costing_group: original?.costing_group ?? STANDALONE_LABEL,
           process_order_number: original?.process_order_number ?? "",
           batch_number: textValue(row.batch_number),
           packing_order_number: textValue(row.po_number),
-          po_type: normalizeFgType(row.po_type),
-          type_badge: "PM",
-          pace_code: textValue(material?.pace_code),
-          item_name: textValue(material?.material_name),
-          external_code: textValue(material?.external_code),
-          costing_group: original?.costing_group ?? "",
-          dosage_pct: null,
+          so_stroke: "",
+          actual_stroke: original?.actual_stroke ?? "",
           invoice_total_qty_kg: null,
           invoice_total_pack_qty: null,
           dispatch_qty_kg: null,
           pack_qty: null,
-          standard_qty: null,
+          dosage_or_qty: null,
+          standard_qty_so_stroke: null,
+          standard_qty_dispatched_stroke: standardQty === null ? null : rounded(standardQty, 6),
           actual_qty: actualQty === null ? null : rounded(actualQty, 6),
           ap_approved_qty: apApprovedQty === null ? null : rounded(apApprovedQty, 6),
-          variance: actualQty !== null && apApprovedQty !== null ? rounded(actualQty - apApprovedQty, 6) : null,
-          so_number: "",
           invoice_id: "",
           material_id: materialId,
+          group_key: `PREV|${textValue(row.id)}`,
         };
+        return rev;
       }),
     ];
 
-    const allRows = [...dispatchRows, ...reversalRows];
+    const allRows = [...fgSummaryByGroupKey.values(), ...dispatchRows, ...reversalRows];
     allRows.sort((left, right) => textValue(left.tally_invoice_date).localeCompare(textValue(right.tally_invoice_date))
-      || textValue(left.pace_doc_number).localeCompare(textValue(right.pace_doc_number), undefined, { numeric: true })
+      || left.group_key.localeCompare(right.group_key)
+      || (left.row_kind === right.row_kind ? 0 : left.row_kind === "FG_SUMMARY" ? -1 : 1)
       || textValue(left.item_name).localeCompare(textValue(right.item_name)));
 
     return okResponse({ data: allRows }, ctx.request_id, req);
