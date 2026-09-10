@@ -651,14 +651,30 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           ? standardDispatchedStroke
           : resolveSoStrokeStandard(processOrderId, materialId);
       const packCount = packCountByPackingOrderId.get(packingOrderId) ?? null;
-      const dosageOrQty = isSku ? null
+      // §135.6-P (2026-09-10, business owner, found live -- invoice
+      // 9200000223, a batch dispatched AND reversed within the same report
+      // window): dosage_or_qty/dosage_pct_so_stroke are read from a plain
+      // material+recipe lookup (dosageByKey/dosageByStrokeMaterial), which
+      // knows nothing about reversal sign -- a reversal-mirror line
+      // (reversal_of_id set) would otherwise carry the SAME positive dosage%
+      // as its original, so when both land in the same window their sum
+      // doubled a clean 100% recipe to 200% while Standard/Actual/AP
+      // correctly netted to 0. Negate dosage here too, same sign convention
+      // as every quantity column on a reversal row -- a reversal alone in
+      // its own later period then correctly shows as a negative dosage
+      // credit, and one landing in the same window as its original nets
+      // cleanly to 0, consistent either way.
+      const isReversalLine = Boolean(sample.reversal_of_id);
+      const dosageOrQtyRaw = isSku ? null
         : isPm ? (packCount ? rounded((group.actual_qty ?? 0) / packCount, 6) : null)
         : dosageByKey.get(`${processOrderId}|${materialId}`) ?? null;
-      const dosageSoStroke = isSku || section === "RPS" ? null
-        : isPm ? dosageOrQty // PM composition never depends on stroke.
+      const dosageOrQty = isReversalLine && dosageOrQtyRaw !== null ? -dosageOrQtyRaw : dosageOrQtyRaw;
+      const dosageSoStrokeRaw = isSku || section === "RPS" ? null
+        : isPm ? dosageOrQtyRaw // PM composition never depends on stroke.
         : (!soStroke || upperValue(soStroke) === upperValue(actualStroke))
-          ? dosageOrQty
+          ? dosageOrQtyRaw
           : resolveSoStrokeDosage(processOrderId, materialId);
+      const dosageSoStroke = isReversalLine && dosageSoStrokeRaw !== null ? -dosageSoStrokeRaw : dosageSoStrokeRaw;
       const skuLabel = materialLabel(fgMaterialIdByPackingOrderId.get(packingOrderId) ?? "");
       const actualProdshadeLabel = materialLabel(textValue(processOrderById.get(processOrderId)?.material_id));
       return {
@@ -866,6 +882,10 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         summary.standard_qty_dispatched_stroke = (summary.standard_qty_dispatched_stroke ?? 0) + (line.standard_qty_dispatched_stroke ?? 0);
         summary.actual_qty = (summary.actual_qty ?? 0) + (line.actual_qty ?? 0);
         summary.ap_approved_qty = (summary.ap_approved_qty ?? 0) + (line.ap_approved_qty ?? 0);
+        // §135.6-P: dosage_or_qty/dosage_pct_so_stroke are now correctly
+        // negated on a reversal line (see dispatchRows above) -- a plain
+        // sum here nets a same-window original+reversal pair to 0, same as
+        // every quantity column, with no dedup logic needed.
         summary.dosage_or_qty = (summary.dosage_or_qty ?? 0) + (line.dosage_or_qty ?? 0);
         summary.dosage_pct_so_stroke = (summary.dosage_pct_so_stroke ?? 0) + (line.dosage_pct_so_stroke ?? 0);
       }
