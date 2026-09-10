@@ -405,15 +405,19 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // resolving for the new "Actual Prodshade" column.
     const allProdshadeMaterialIds = uniqueValues(processOrderHeaders.map((row) => row.material_id));
     const materials = await materialMap([...materialIds, ...allFgMaterialIds, ...allProdshadeMaterialIds]);
-    // §135.6-F correction (2026-09-10, business owner): SKU/Prodshade
-    // labels use External Code (the item code) + Item Name -- NOT PACE
-    // Code/Document Name (those are this report's separate, already-
-    // existing columns for the row's OWN material, a different concept).
+    // §135.6-F correction, round 2 (2026-09-10, business owner): SKU/
+    // Actual Prodshade show ONLY the External Code -- no name appended.
+    // The first attempt (External Code + Item Name) surfaced a real
+    // Material Master data gap: several FG/SFG materials have
+    // material_name literally set to a copy of their own external_code
+    // (not a real descriptive name), so that version showed the same
+    // code twice with a hyphen between ("6763SQ60000 — 6763SQ60000").
+    // Business owner does not want the name here at all regardless --
+    // just the bare code, once.
     function materialLabel(materialId: string): string {
       const m = materials.get(materialId);
       if (!m) return "";
-      const name = textValue(m.material_name);
-      return name ? `${textValue(m.external_code) || "—"} — ${name}` : textValue(m.external_code);
+      return textValue(m.external_code);
     }
 
     const strokeByProcessOrderId = new Map<string, string>();
