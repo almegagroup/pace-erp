@@ -259,11 +259,23 @@ type RecoRow = {
   packing_order_number: string;
   so_stroke: string;
   actual_stroke: string;
+  // §135.6-F (2026-09-10): the FG SKU this line belongs to, and the real
+  // prodshade material attached to its batch's own Packing PO -- both
+  // repeated on EVERY line (not just the FG_SUMMARY row) so a filtered/
+  // sorted Excel view never loses which SKU/prodshade a row belongs to.
+  sku_label: string;
+  actual_prodshade_label: string;
   invoice_total_qty_kg: number | null;
   invoice_total_pack_qty: number | null;
   dispatch_qty_kg: number | null;
   pack_qty: number | null;
   dosage_or_qty: number | null;
+  // §135.6-F: dosage_or_qty (above) is the ACTUAL/dispatched stroke's own
+  // dosage% (or PM qty-per-pack) -- this is the SO stroke's OWN dosage% for
+  // the same material, separate column, same RM/INT-only scope. Equal to
+  // dosage_or_qty whenever SO Stroke == Actual Stroke (the common case);
+  // only genuinely differs on a real mismatch.
+  dosage_pct_so_stroke: number | null;
   standard_qty_so_stroke: number | null;
   standard_qty_dispatched_stroke: number | null;
   actual_qty: number | null;
@@ -381,7 +393,17 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // carries an SKU line).
     const fgMaterialIdByPackingOrderId = new Map(packingOrders.map((row) => [textValue(row.id), textValue(row.material_id)]));
     const allFgMaterialIds = uniqueValues(packingOrders.map((row) => row.material_id));
-    const materials = await materialMap([...materialIds, ...allFgMaterialIds]);
+    // §135.6-F: process_order.material_id is the batch's REAL prodshade
+    // (what production actually made, per Packing PO) -- also needs
+    // resolving for the new "Actual Prodshade" column.
+    const allProdshadeMaterialIds = uniqueValues(processOrderHeaders.map((row) => row.material_id));
+    const materials = await materialMap([...materialIds, ...allFgMaterialIds, ...allProdshadeMaterialIds]);
+    function materialLabel(materialId: string): string {
+      const m = materials.get(materialId);
+      if (!m) return "";
+      const name = textValue(m.document_name) || textValue(m.material_name);
+      return name ? `${textValue(m.pace_code) || "—"} — ${name}` : textValue(m.pace_code);
+    }
 
     const strokeByProcessOrderId = new Map<string, string>();
     const dosageByKey = new Map<string, number>(); // `${process_order_id}|${material_id}` -> dosage_pct, PRODUCTION only
@@ -511,6 +533,16 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       if (dosage === undefined) return fallback; // material not in the SO stroke's own recipe -- keep the dispatched-stroke figure rather than a false zero.
       return rounded((dosage / 100) * outputQty, 6);
     }
+    // §135.6-F: raw SO-stroke dosage% (not the derived qty above) for the
+    // new "Dosage % — SO Stroke" column. Same fallback rule: no mismatch,
+    // or material absent from the SO stroke's own recipe -> use the
+    // dispatched-stroke dosage rather than a false blank/zero.
+    function resolveSoStrokeDosage(processOrderId: string, materialId: string, fallback: number | null): number | null {
+      const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
+      if (!strokeMasterId) return fallback;
+      const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
+      return dosage === undefined ? fallback : dosage;
+    }
 
     const dispatchRows: RecoRow[] = [...dispatchGroups.values()].map((group) => {
       const sample = group.rows[0];
@@ -545,6 +577,13 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       const dosageOrQty = isSku ? null
         : isPm ? (packCount ? rounded((group.actual_qty ?? 0) / packCount, 6) : null)
         : dosageByKey.get(`${processOrderId}|${materialId}`) ?? null;
+      const dosageSoStroke = isSku || section === "RPS" ? null
+        : isPm ? dosageOrQty // PM composition never depends on stroke.
+        : (!soStroke || upperValue(soStroke) === upperValue(actualStroke))
+          ? dosageOrQty
+          : resolveSoStrokeDosage(processOrderId, materialId, dosageOrQty);
+      const skuLabel = materialLabel(fgMaterialIdByPackingOrderId.get(packingOrderId) ?? "");
+      const actualProdshadeLabel = materialLabel(textValue(processOrderById.get(processOrderId)?.material_id));
       return {
         row_kind: "LINE",
         section,
@@ -574,11 +613,14 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         packing_order_number: textValue(sample.packing_order_number),
         so_stroke: soStroke,
         actual_stroke: actualStroke,
+        sku_label: skuLabel,
+        actual_prodshade_label: actualProdshadeLabel,
         invoice_total_qty_kg: invoiceId && packingOrderId ? rounded(invoiceTotalQty.get(invoiceId) ?? 0, 6) : null,
         invoice_total_pack_qty: invoiceId && packingOrderId ? rounded(invoiceTotalPack.get(invoiceId) ?? 0, 6) : null,
         dispatch_qty_kg: dispatchQty,
         pack_qty: packCount,
         dosage_or_qty: dosageOrQty,
+        dosage_pct_so_stroke: dosageSoStroke,
         standard_qty_so_stroke: standardSoStroke,
         standard_qty_dispatched_stroke: standardDispatchedStroke,
         actual_qty: actualQty,
@@ -627,11 +669,17 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           packing_order_number: line.packing_order_number,
           so_stroke: line.so_stroke,
           actual_stroke: line.actual_stroke,
+          sku_label: line.sku_label,
+          actual_prodshade_label: line.actual_prodshade_label,
           invoice_total_qty_kg: line.invoice_total_qty_kg,
           invoice_total_pack_qty: line.invoice_total_pack_qty,
           dispatch_qty_kg: line.dispatch_qty_kg,
           pack_qty: line.pack_qty,
+          // §135.6-F: SUM of this group's own RM+INT lines' dosage% (should
+          // land close to 100% -- the recipe's own dosage total), not left
+          // blank like the locked mock's other FG-row-blank fields.
           dosage_or_qty: null,
+          dosage_pct_so_stroke: null,
           standard_qty_so_stroke: null,
           standard_qty_dispatched_stroke: null,
           actual_qty: null,
@@ -647,6 +695,8 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         summary.standard_qty_dispatched_stroke = (summary.standard_qty_dispatched_stroke ?? 0) + (line.standard_qty_dispatched_stroke ?? 0);
         summary.actual_qty = (summary.actual_qty ?? 0) + (line.actual_qty ?? 0);
         summary.ap_approved_qty = (summary.ap_approved_qty ?? 0) + (line.ap_approved_qty ?? 0);
+        summary.dosage_or_qty = (summary.dosage_or_qty ?? 0) + (line.dosage_or_qty ?? 0);
+        summary.dosage_pct_so_stroke = (summary.dosage_pct_so_stroke ?? 0) + (line.dosage_pct_so_stroke ?? 0);
       }
     }
     for (const summary of fgSummaryByGroupKey.values()) {
@@ -654,6 +704,8 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       if (summary.standard_qty_dispatched_stroke !== null) summary.standard_qty_dispatched_stroke = rounded(summary.standard_qty_dispatched_stroke, 6);
       if (summary.actual_qty !== null) summary.actual_qty = rounded(summary.actual_qty, 6);
       if (summary.ap_approved_qty !== null) summary.ap_approved_qty = rounded(summary.ap_approved_qty, 6);
+      if (summary.dosage_or_qty !== null) summary.dosage_or_qty = rounded(summary.dosage_or_qty, 4);
+      if (summary.dosage_pct_so_stroke !== null) summary.dosage_pct_so_stroke = rounded(summary.dosage_pct_so_stroke, 4);
     }
 
     // ---- C. PARTIAL_REVERSAL rows (§135.6-B) ----
@@ -705,11 +757,14 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           packing_order_number: "",
           so_stroke: "", // no SO/FO attached to a reversal -- always blank (§135.6-B, corrected earlier this session).
           actual_stroke: original?.actual_stroke ?? strokeByProcessOrderId.get(processOrderId) ?? "",
+          sku_label: original?.sku_label ?? "",
+          actual_prodshade_label: original?.actual_prodshade_label ?? materialLabel(textValue(processOrderById.get(processOrderId)?.material_id)),
           invoice_total_qty_kg: null,
           invoice_total_pack_qty: null,
           dispatch_qty_kg: null,
           pack_qty: null,
           dosage_or_qty: null,
+          dosage_pct_so_stroke: null,
           standard_qty_so_stroke: null,
           standard_qty_dispatched_stroke: standardQty === null ? null : rounded(standardQty, 6),
           actual_qty: actualQty === null ? null : rounded(actualQty, 6),
@@ -754,11 +809,14 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           packing_order_number: textValue(row.po_number),
           so_stroke: "",
           actual_stroke: original?.actual_stroke ?? "",
+          sku_label: original?.sku_label ?? materialLabel(fgMaterialIdByPackingOrderId.get(packingOrderId) ?? ""),
+          actual_prodshade_label: original?.actual_prodshade_label ?? "",
           invoice_total_qty_kg: null,
           invoice_total_pack_qty: null,
           dispatch_qty_kg: null,
           pack_qty: null,
           dosage_or_qty: null,
+          dosage_pct_so_stroke: null,
           standard_qty_so_stroke: null,
           standard_qty_dispatched_stroke: standardQty === null ? null : rounded(standardQty, 6),
           actual_qty: actualQty === null ? null : rounded(actualQty, 6),
