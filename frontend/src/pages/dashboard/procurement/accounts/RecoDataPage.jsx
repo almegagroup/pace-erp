@@ -129,6 +129,7 @@ const GRID_COLUMNS = [
   { key: "invoice_total_pack_qty", label: "Pack Qty — Invoice Total", align: "right", width: "130px", render: (r) => fmtQty(r.invoice_total_pack_qty, 0), excelValue: numericExcelValue("invoice_total_pack_qty") },
   { key: "dispatch_qty_kg", label: "Dispatch Qty (kg)", align: "right", width: "115px", render: (r) => fmtQty(r.dispatch_qty_kg), excelValue: numericExcelValue("dispatch_qty_kg") },
   { key: "pack_qty", label: "Pack Qty", align: "right", width: "80px", render: (r) => fmtQty(r.pack_qty, 0), excelValue: numericExcelValue("pack_qty") },
+  { key: "rps_qty", label: "RPS Qty (kg)", align: "right", width: "110px", render: (r) => fmtQty(r.rps_qty), excelValue: numericExcelValue("rps_qty") },
   { key: "dosage_pct_so_stroke", label: "Dosage % — SO Stroke", align: "right", width: "120px", render: (r) => <DosageOrQtyCell row={r} field="dosage_pct_so_stroke" />, excelValue: numericExcelValue("dosage_pct_so_stroke") },
   { key: "dosage_or_qty", label: "Dosage % / Qty per Pack", align: "right", width: "140px", render: (r) => <DosageOrQtyCell row={r} />, excelValue: numericExcelValue("dosage_or_qty") },
   { key: "standard_qty_so_stroke", label: "Standard Qty — SO Stroke", align: "right", width: "140px", render: (r) => fmtQty(r.standard_qty_so_stroke), excelValue: numericExcelValue("standard_qty_so_stroke") },

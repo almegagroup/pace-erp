@@ -269,6 +269,13 @@ type RecoRow = {
   invoice_total_pack_qty: number | null;
   dispatch_qty_kg: number | null;
   pack_qty: number | null;
+  // §135.6-I (2026-09-10): a plain RPS line (no batch/SKU behind it) had
+  // NO clearly-labeled quantity column at all -- dispatch_qty_kg is
+  // deliberately blank for RPS (no "dispatch batch" concept, per locked
+  // mock), leaving its real quantity buried in AP Approved Qty with no
+  // visible context. Own column, same sign convention as every other
+  // qty column here (negative on a reversal mirror row).
+  rps_qty: number | null;
   dosage_or_qty: number | null;
   // §135.6-F: dosage_or_qty (above) is the ACTUAL/dispatched stroke's own
   // dosage% (or PM qty-per-pack) -- this is the SO stroke's OWN dosage% for
@@ -410,12 +417,24 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     }
 
     const strokeByProcessOrderId = new Map<string, string>();
-    const dosageByKey = new Map<string, number>(); // `${process_order_id}|${material_id}` -> dosage_pct, PRODUCTION only
+    // §135.6-G fix (2026-09-10): dosage_pct -> `${process_order_id}|${material_id}`.
+    // Was PRODUCTION-only, excluding OPENING-origin batches (§104.9 "Old
+    // Process PO" genealogy) even though their own write path (opening_
+    // genealogy.handlers.ts) resolves dosage_pct correctly, same as
+    // PRODUCTION does -- verified live (batch BM5688, WATER: dosage_pct=
+    // 60.21, source_txn_type='OPENING', simply never read here). No such
+    // restriction exists for strokeByProcessOrderId right above -- this
+    // was an inconsistency, not an intentional design choice. COR6_
+    // CORRECTION/PARTIAL_REVERSAL stay excluded -- those are correction
+    // DELTA rows (can be negative, represent a change not a recipe %), a
+    // different concept from "this batch's own recipe dosage".
+    const DOSAGE_SOURCE_TYPES = new Set(["PRODUCTION", "OPENING"]);
+    const dosageByKey = new Map<string, number>();
     for (const row of processLineRecoRows) {
       const poId = textValue(row.process_order_id);
       const stroke = textValue(row.stroke_number);
       if (stroke && !strokeByProcessOrderId.has(poId)) strokeByProcessOrderId.set(poId, stroke);
-      if (upperValue(row.source_txn_type) === "PRODUCTION") {
+      if (DOSAGE_SOURCE_TYPES.has(upperValue(row.source_txn_type))) {
         const dosage = nullableNumber(row.dosage_pct);
         if (dosage !== null) dosageByKey.set(`${poId}|${textValue(row.material_id)}`, dosage);
       }
@@ -623,6 +642,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         invoice_total_pack_qty: invoiceId && packingOrderId ? rounded(invoiceTotalPack.get(invoiceId) ?? 0, 6) : null,
         dispatch_qty_kg: dispatchQty,
         pack_qty: packCount,
+        rps_qty: section === "RPS" ? apApprovedQty : null,
         dosage_or_qty: dosageOrQty,
         dosage_pct_so_stroke: dosageSoStroke,
         standard_qty_so_stroke: standardSoStroke,
@@ -679,6 +699,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           invoice_total_pack_qty: line.invoice_total_pack_qty,
           dispatch_qty_kg: line.dispatch_qty_kg,
           pack_qty: line.pack_qty,
+          rps_qty: null, // RPS has no batch/FG-summary identity at all -- never reaches this row shape.
           // §135.6-F: SUM of this group's own RM+INT lines' dosage% (should
           // land close to 100% -- the recipe's own dosage total), not left
           // blank like the locked mock's other FG-row-blank fields.
@@ -767,6 +788,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           invoice_total_pack_qty: null,
           dispatch_qty_kg: null,
           pack_qty: null,
+          rps_qty: null, // PR19 only ever corrects a batch-linked dispatch -- RPS has no batch, never reaches this row shape.
           dosage_or_qty: null,
           dosage_pct_so_stroke: null,
           standard_qty_so_stroke: null,
@@ -819,6 +841,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           invoice_total_pack_qty: null,
           dispatch_qty_kg: null,
           pack_qty: null,
+          rps_qty: null, // PR19 only ever corrects a batch-linked dispatch -- RPS has no batch, never reaches this row shape.
           dosage_or_qty: null,
           dosage_pct_so_stroke: null,
           standard_qty_so_stroke: null,
