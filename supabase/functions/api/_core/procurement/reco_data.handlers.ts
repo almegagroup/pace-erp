@@ -405,15 +405,19 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // resolving for the new "Actual Prodshade" column.
     const allProdshadeMaterialIds = uniqueValues(processOrderHeaders.map((row) => row.material_id));
     const materials = await materialMap([...materialIds, ...allFgMaterialIds, ...allProdshadeMaterialIds]);
-    // §135.6-F correction (2026-09-10, business owner): SKU/Prodshade
-    // labels use External Code (the item code) + Item Name -- NOT PACE
-    // Code/Document Name (those are this report's separate, already-
-    // existing columns for the row's OWN material, a different concept).
+    // §135.6-F correction, round 2 (2026-09-10, business owner): SKU/
+    // Actual Prodshade show ONLY the External Code -- no name appended.
+    // The first attempt (External Code + Item Name) surfaced a real
+    // Material Master data gap: several FG/SFG materials have
+    // material_name literally set to a copy of their own external_code
+    // (not a real descriptive name), so that version showed the same
+    // code twice with a hyphen between ("6763SQ60000 — 6763SQ60000").
+    // Business owner does not want the name here at all regardless --
+    // just the bare code, once.
     function materialLabel(materialId: string): string {
       const m = materials.get(materialId);
       if (!m) return "";
-      const name = textValue(m.material_name);
-      return name ? `${textValue(m.external_code) || "—"} — ${name}` : textValue(m.external_code);
+      return textValue(m.external_code);
     }
 
     const strokeByProcessOrderId = new Map<string, string>();
@@ -548,21 +552,31 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       };
     }).filter((c) => c.prodshadeMaterialId && c.soStroke);
     const soStrokeResolution = await resolveSoStrokeStandardOverrides(companyId, soStrokeMismatchCases);
+    // §135.6-J fix (2026-09-10, business owner): when the SO's declared
+    // stroke doesn't resolve to a real, APPROVED stroke_master row at all
+    // (!strokeMasterId), this used to silently fall back to the
+    // Dispatched-Stroke's own figure -- showing a real number next to the
+    // "SO Stroke" label with no indication it doesn't actually correspond
+    // to that stroke (the label stays whatever plan_feed.ordered_stroke_
+    // number says, regardless of whether it resolves -- see so_stroke
+    // above). That silently misrepresented a genuine data gap ("this SO
+    // stroke doesn't exist") as if it were a legitimate figure. Now blank
+    // in that case; the dosage/standard-qty value legitimately belongs to
+    // the material-not-in-this-stroke's-recipe case only (kept as-is --
+    // the stroke itself IS real there, just doesn't use this material).
     function resolveSoStrokeStandard(processOrderId: string, materialId: string, fallback: number | null): number | null {
       const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
-      if (!strokeMasterId) return fallback;
+      if (!strokeMasterId) return null;
       const outputQty = numberValue(processOrderById.get(processOrderId)?.actual_qty);
       const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
       if (dosage === undefined) return fallback; // material not in the SO stroke's own recipe -- keep the dispatched-stroke figure rather than a false zero.
       return rounded((dosage / 100) * outputQty, 6);
     }
     // §135.6-F: raw SO-stroke dosage% (not the derived qty above) for the
-    // new "Dosage % — SO Stroke" column. Same fallback rule: no mismatch,
-    // or material absent from the SO stroke's own recipe -> use the
-    // dispatched-stroke dosage rather than a false blank/zero.
+    // "Dosage % — SO Stroke" column. Same null-vs-fallback rule as above.
     function resolveSoStrokeDosage(processOrderId: string, materialId: string, fallback: number | null): number | null {
       const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
-      if (!strokeMasterId) return fallback;
+      if (!strokeMasterId) return null;
       const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
       return dosage === undefined ? fallback : dosage;
     }
