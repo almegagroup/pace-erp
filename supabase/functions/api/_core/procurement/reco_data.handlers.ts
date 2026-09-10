@@ -398,11 +398,15 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // resolving for the new "Actual Prodshade" column.
     const allProdshadeMaterialIds = uniqueValues(processOrderHeaders.map((row) => row.material_id));
     const materials = await materialMap([...materialIds, ...allFgMaterialIds, ...allProdshadeMaterialIds]);
+    // §135.6-F correction (2026-09-10, business owner): SKU/Prodshade
+    // labels use External Code (the item code) + Item Name -- NOT PACE
+    // Code/Document Name (those are this report's separate, already-
+    // existing columns for the row's OWN material, a different concept).
     function materialLabel(materialId: string): string {
       const m = materials.get(materialId);
       if (!m) return "";
-      const name = textValue(m.document_name) || textValue(m.material_name);
-      return name ? `${textValue(m.pace_code) || "—"} — ${name}` : textValue(m.pace_code);
+      const name = textValue(m.material_name);
+      return name ? `${textValue(m.external_code) || "—"} — ${name}` : textValue(m.external_code);
     }
 
     const strokeByProcessOrderId = new Map<string, string>();
