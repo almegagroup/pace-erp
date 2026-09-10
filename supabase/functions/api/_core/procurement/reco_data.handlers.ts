@@ -552,21 +552,31 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       };
     }).filter((c) => c.prodshadeMaterialId && c.soStroke);
     const soStrokeResolution = await resolveSoStrokeStandardOverrides(companyId, soStrokeMismatchCases);
+    // §135.6-J fix (2026-09-10, business owner): when the SO's declared
+    // stroke doesn't resolve to a real, APPROVED stroke_master row at all
+    // (!strokeMasterId), this used to silently fall back to the
+    // Dispatched-Stroke's own figure -- showing a real number next to the
+    // "SO Stroke" label with no indication it doesn't actually correspond
+    // to that stroke (the label stays whatever plan_feed.ordered_stroke_
+    // number says, regardless of whether it resolves -- see so_stroke
+    // above). That silently misrepresented a genuine data gap ("this SO
+    // stroke doesn't exist") as if it were a legitimate figure. Now blank
+    // in that case; the dosage/standard-qty value legitimately belongs to
+    // the material-not-in-this-stroke's-recipe case only (kept as-is --
+    // the stroke itself IS real there, just doesn't use this material).
     function resolveSoStrokeStandard(processOrderId: string, materialId: string, fallback: number | null): number | null {
       const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
-      if (!strokeMasterId) return fallback;
+      if (!strokeMasterId) return null;
       const outputQty = numberValue(processOrderById.get(processOrderId)?.actual_qty);
       const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
       if (dosage === undefined) return fallback; // material not in the SO stroke's own recipe -- keep the dispatched-stroke figure rather than a false zero.
       return rounded((dosage / 100) * outputQty, 6);
     }
     // §135.6-F: raw SO-stroke dosage% (not the derived qty above) for the
-    // new "Dosage % — SO Stroke" column. Same fallback rule: no mismatch,
-    // or material absent from the SO stroke's own recipe -> use the
-    // dispatched-stroke dosage rather than a false blank/zero.
+    // "Dosage % — SO Stroke" column. Same null-vs-fallback rule as above.
     function resolveSoStrokeDosage(processOrderId: string, materialId: string, fallback: number | null): number | null {
       const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
-      if (!strokeMasterId) return fallback;
+      if (!strokeMasterId) return null;
       const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
       return dosage === undefined ? fallback : dosage;
     }

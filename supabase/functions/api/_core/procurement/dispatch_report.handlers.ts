@@ -167,7 +167,7 @@ export async function getDispatchReportHandler(
     const processOrderIds = uniqueValues(packingOrders.map((row) => row.process_order_id));
     const processOrders = await fetchInChunks<JsonRecord>(processOrderIds, (chunk) => serviceRoleClient
       .schema("erp_production").from("process_order")
-      .select("id, stroke_master_id")
+      .select("id, stroke_master_id, material_id")
       .in("id", chunk));
     const processById = new Map(processOrders.map((row) => [textValue(row.id), row]));
     const strokeMasterIds = uniqueValues(processOrders.map((row) => row.stroke_master_id));
@@ -175,6 +175,39 @@ export async function getDispatchReportHandler(
       .schema("erp_production").from("stroke_master")
       .select("id, stroke_number").in("id", chunk));
     const strokeById = new Map(actualStrokes.map((row) => [textValue(row.id), textValue(row.stroke_number)]));
+
+    // §135.6-J fix (2026-09-10, business owner): the SO Stroke mismatch
+    // flag must mean "this declared stroke doesn't exist as a real,
+    // APPROVED stroke_master recipe for this prodshade" -- NOT "declared
+    // differs from actual/dispatched" (that was a 2026-09-07 change,
+    // since reverted; a real declared stroke that simply isn't the one
+    // this batch happened to be made from is not a data-integrity
+    // problem, only a genuinely nonexistent/typo'd stroke number is).
+    // Pre-pass to collect every distinct (prodshade, declared stroke,
+    // fg_type) triple needing an existence check, one batched query,
+    // before the real per-line pass below uses the result.
+    const strokeExistsKeys = new Set<string>();
+    for (const line of invoiceLines) {
+      const dcLine = dcLineById.get(textValue(line.dc_line_id)) ?? {};
+      const soLine = soLineById.get(textValue(line.so_line_id || dcLine.so_line_id)) ?? {};
+      const packing = packingById.get(textValue(dcLine.packing_order_id)) ?? {};
+      const process = processById.get(textValue(packing.process_order_id)) ?? {};
+      const declaredStroke = textValue(soLine.declared_stroke_number);
+      const fgType = upperValue(soLine.fg_type);
+      const prodshadeMaterialId = textValue(process.material_id);
+      if (declaredStroke && prodshadeMaterialId && ["MTO", "HPS"].includes(fgType)) {
+        strokeExistsKeys.add(`${prodshadeMaterialId}|${declaredStroke.toUpperCase()}|${fgType}`);
+      }
+    }
+    const strokeExists = new Set<string>();
+    await Promise.all([...strokeExistsKeys].map(async (key) => {
+      const [prodshadeMaterialId, strokeNumber, poType] = key.split("|");
+      const { data, error } = await serviceRoleClient.schema("erp_production").from("stroke_master")
+        .select("id").eq("company_id", companyId).eq("prodshade_material_id", prodshadeMaterialId).eq("stroke_number", strokeNumber)
+        .eq("po_type", poType).eq("status", "APPROVED").maybeSingle();
+      if (error) throw new Error("DISPATCH_REPORT_STROKE_EXISTS_LOOKUP_FAILED");
+      if (data) strokeExists.add(key);
+    }));
 
     const allocationIds = uniqueValues(dcLines.map((row) => row.so_map_allocation_id));
     const allocations = await fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient
@@ -226,18 +259,19 @@ export async function getDispatchReportHandler(
         const declaredStroke = textValue(soLine.declared_stroke_number);
         const fgType = upperValue(soLine.fg_type);
         const actualStroke = strokeById.get(textValue(process.stroke_master_id)) ?? "";
-        // Business owner ask (2026-09-07) -- flag a mismatch whenever the SO's
-        // own declared stroke differs from what actually got produced/dispatched,
-        // not only when the declared number doesn't exist as a stroke at all
-        // (the old validStrokeKeys check, since removed) -- a real, approved
-        // stroke that simply isn't the one this batch was made from is just as
-        // much a mismatch as a typo'd/nonexistent stroke number; comparing
-        // straight against this line's own actualStroke catches both. MTEST has
-        // no SO Stroke concept at all (declaredStroke stays blank for it), so it
-        // never flags -- gated to MTO/HPS same as before.
+        const prodshadeMaterialId = textValue(process.material_id);
+        // §135.6-J fix (2026-09-10, business owner correction, reverts the
+        // 2026-09-07 change above this comment): flag means "this declared
+        // stroke isn't a real, APPROVED stroke_master recipe for this
+        // prodshade" -- an existence check, not a declared-vs-actual
+        // equality check. A real, approved stroke that simply isn't the one
+        // this batch happened to be made from is NOT a data-integrity
+        // problem on its own and must not flag. MTEST has no SO Stroke
+        // concept at all (declaredStroke stays blank for it), so it never
+        // flags -- gated to MTO/HPS same as before.
         const invalidStroke = Boolean(
-          declaredStroke && ["MTO", "HPS"].includes(fgType)
-          && upperValue(declaredStroke) !== upperValue(actualStroke),
+          declaredStroke && prodshadeMaterialId && ["MTO", "HPS"].includes(fgType)
+          && !strokeExists.has(`${prodshadeMaterialId}|${declaredStroke.toUpperCase()}|${fgType}`),
         );
         return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke };
       });
