@@ -1994,13 +1994,14 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
 //   1. A line with a resolved packing_order_id (§133.18 -- only ever set
 //      for an MTO/HPS/MTEST FG/SFG dispatch drawing from a specific batch)
 //      gets the full 2-level ratio chain: packingPoRatio (this Packing PO's
-//      own draw ÷ its Process PO batch's total actual output, §104.7) x
-//      invoiceRatio (this dispatch's qty ÷ that Packing PO's own total
-//      output -- KG-based for RM/INT, pack-count-based for PM, since PM
-//      consumption scales per-pack not per-KG). Standard/Actual/AP-Approved
-//      are each their own independent multiplication (never a single
-//      shared ratio -- a batch's Standard and Actual/AP-Approved totals can
-//      differ, verified against real prod data, §133.14 Section E).
+//      own packed qty ÷ the SUM of every FINAL Packing PO's own packed qty
+//      drawn from the SAME batch -- §135.6-E, 2026-09-10, ONE shared ratio
+//      for Standard/Actual/AP-Approved alike) x invoiceRatio (this
+//      dispatch's qty ÷ that Packing PO's own total output -- KG-based for
+//      RM/INT, pack-count-based for PM, since PM consumption scales
+//      per-pack not per-KG). See computeDispatchRecoRows()'s own inline
+//      comment for the full "why" -- supersedes the 2026-09-09 design
+//      where each metric divided by its own raw batch total.
 //   2. A plain RM/PM/INT line with no packing_order_id, when this group's
 //      SO is dispatch_category=RPS -- straight pass-through, ap_approved_qty
 //      = dispatch qty, no ratio, no batch. Whether the Bill-To is Asian
@@ -2077,7 +2078,7 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
     const pkoMap = new Map(((pkoRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
     const processOrderIds = [...new Set(((pkoRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.process_order_id)).filter(Boolean))];
-    const [{ data: procRows, error: procError }, { data: procLineRecoRows, error: procLineRecoError }, { data: packLineRecoRows, error: packLineRecoError }] = await Promise.all([
+    const [{ data: procRows, error: procError }, { data: procLineRecoRows, error: procLineRecoError }, { data: packLineRecoRows, error: packLineRecoError }, { data: allPkoForProcessOrders, error: allPkoError }] = await Promise.all([
       processOrderIds.length
         ? serviceRoleClient.schema("erp_production").from("process_order").select("id, po_number, actual_qty").in("id", processOrderIds)
         : Promise.resolve({ data: [] as JsonRecord[], error: null }),
@@ -2089,42 +2090,69 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
       serviceRoleClient.schema("erp_production").from("packing_order_line_reco")
         .select("packing_order_id, material_id, standard_qty, actual_qty, ap_approved_qty")
         .in("packing_order_id", pkoIds).eq("is_voided", false),
+      // §135.6-E (2026-09-10): ALL FINAL Packing POs drawn from this SAME
+      // batch, not just the ones referenced by THIS invoice group -- a
+      // batch can be split across multiple invoices/DOs, and the shared
+      // ratio below needs the batch's TRUE total packed qty regardless of
+      // how many of those Packing POs happen to be in scope right now.
+      processOrderIds.length
+        ? serviceRoleClient.schema("erp_production").from("packing_order")
+            .select("process_order_id, actual_qty_kg").in("process_order_id", processOrderIds).eq("status", "FINAL")
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     ]);
     if (procError) throw new Error("DISPATCH_RECO_PROCESS_ORDER_LOOKUP_FAILED");
     if (procLineRecoError) throw new Error("DISPATCH_RECO_PROCESS_LINE_RECO_LOOKUP_FAILED");
     if (packLineRecoError) throw new Error("DISPATCH_RECO_PACK_LINE_RECO_LOOKUP_FAILED");
+    if (allPkoError) throw new Error("DISPATCH_RECO_BATCH_PACKED_QTY_LOOKUP_FAILED");
     const procMap = new Map(((procRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
-    // Batch totals per metric, keyed by process_order_id -- live from
-    // process_order_line_reco, so any COR6/PR19 correction already nets in.
-    // Each of Standard/Actual/AP-Approved gets its OWN denominator (its own
-    // batch-wide sum), never another metric's total or the batch's real
-    // yield borrowed across metrics. This is what guarantees, for every
-    // metric independently, that summing a dispatch's line-level breakup
-    // reproduces exactly the dispatch quantity that was actually shipped
-    // (business owner locked this 2026-09-09, feasibility Section C/F) --
-    // Standard/Actual/AP-Approved are each (this line's own batch total
-    // share) x (dispatch qty), full stop.
+    // §135.6-E (2026-09-10, supersedes the 2026-09-09 per-metric-total
+    // design below) -- ONE shared ratio per Packing PO, same for
+    // Standard/Actual/AP-Approved alike: (this Packing PO's own packed
+    // qty) / (SUM of every FINAL Packing PO's own packed qty drawn from
+    // this SAME batch). Replaces each metric dividing by its own raw
+    // batch-wide total (std/actual/ap summed from process_order_line_reco).
     //
-    // A real tension was found and deliberately resolved here: giving
-    // AP-Approved its own total (instead of sharing Actual's) means a
-    // clean "YES" line (ap_approved_qty === actual_qty at the batch level)
-    // can show the two diverging at dispatch granularity whenever some
-    // OTHER line in the same batch has a NO/PARTIAL variance -- verified
-    // live via AC10 (batch BM05687, material VISFLOW). That was traded
-    // off deliberately: dispatch-quantity reconciliation is the more
-    // fundamental, universally-expected property for an invoice-level
-    // report (every metric's breakup should sum to what was shipped), and
-    // is worth more than the narrower per-line YES identity holding at
-    // every possible granularity.
-    const procMetricTotals = new Map<string, { std: number; actual: number; ap: number }>();
-    for (const reco of (procLineRecoRows ?? []) as JsonRecord[]) {
-      const key = toTrimmedString(reco.process_order_id);
-      const entry = procMetricTotals.get(key) ?? { std: 0, actual: 0, ap: 0 };
-      entry.std += Number(reco.standard_qty ?? 0);
-      entry.actual += Number(reco.actual_qty ?? 0);
-      entry.ap += Number(reco.ap_approved_qty ?? 0);
-      procMetricTotals.set(key, entry);
+    // Why the 2026-09-09 design broke down: a Process PO's real output
+    // (process_order.actual_qty, which process_order_line_reco's own
+    // actual/ap totals are built from) and what its Packing PO(s) actually
+    // PACKED (packing_order.actual_qty_kg) can genuinely differ -- e.g. a
+    // small in-process residue that never got packed. Dividing Actual/AP
+    // by the batch's raw PRODUCED total (instead of what was PACKED)
+    // caused two real, verified problems: (a) a clean "YES" line (actual
+    // === ap_approved at batch level) could show the two diverging at
+    // dispatch level whenever any OTHER line in the batch had ANY
+    // approval variance or recipe-deviation, purely from the mismatched
+    // denominators -- verified live via AC10 (batch BM05687, VISFLOW;
+    // batch BM05689/BM05694, several clean RM lines); (b) when a batch's
+    // real output was split across MULTIPLE Packing POs and not 100% of
+    // it got packed, a material's true consumption could partially
+    // vanish from AC10 entirely -- verified live (batch BMAM0926/00012:
+    // material with true actual_qty=0.466kg summed to only 0.4236kg
+    // across its two real dispatches, ~9% silently missing).
+    //
+    // Dividing by "sum of packed across every PO from this batch" instead
+    // guarantees, by construction (numerator and denominator share the
+    // same basis), that summing ANY metric's dispatch-level breakup
+    // across every Packing PO drawn from a batch reproduces EXACTLY that
+    // metric's own batch total -- no material ever silently vanishes, and
+    // a clean YES line stays equal at dispatch level too, regardless of
+    // what any other line in the batch does. Deliberate trade-off
+    // (business owner confirmed 2026-09-10, after being shown both a
+    // single-Packing-PO and a synthetic multi-Packing-PO-with-variance
+    // worked example): when a batch's real output isn't 100% packed, the
+    // unpacked portion's own material cost is absorbed proportionally
+    // into whatever WAS packed and dispatched, rather than disappearing
+    // from AP billing with no home. This does NOT reintroduce the
+    // original 2026-08-28 bug (Standard diluted by real yield variance)
+    // -- that bug came from dividing by process_order.actual_qty (a
+    // SINGLE number unrelated to what got packed); dividing by "sum of
+    // packed across this batch's own Packing POs" always sums to exactly
+    // 1.0 across those POs by construction, whatever the real yield was.
+    const packedQtyByProcessOrder = new Map<string, number>();
+    for (const row of (allPkoForProcessOrders ?? []) as JsonRecord[]) {
+      const key = toTrimmedString(row.process_order_id);
+      packedQtyByProcessOrder.set(key, (packedQtyByProcessOrder.get(key) ?? 0) + Number(row.actual_qty_kg ?? 0));
     }
 
     for (const line of batchLines) {
@@ -2138,10 +2166,8 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
       const numPacks = Number(pko.num_packs ?? 0);
       const invoiceRatioPacks = numPacks > 0 ? dispatchedPacks / numPacks : 0;
 
-      const metricTotals = procMetricTotals.get(toTrimmedString(pko.process_order_id)) ?? { std: 0, actual: 0, ap: 0 };
-      const packingPoRatioStd = metricTotals.std > 0 ? pkoActualQtyKg / metricTotals.std : 0;
-      const packingPoRatioActual = metricTotals.actual > 0 ? pkoActualQtyKg / metricTotals.actual : 0;
-      const packingPoRatioAp = metricTotals.ap > 0 ? pkoActualQtyKg / metricTotals.ap : 0;
+      const sumPackedQty = packedQtyByProcessOrder.get(toTrimmedString(pko.process_order_id)) ?? 0;
+      const packingPoRatio = sumPackedQty > 0 ? pkoActualQtyKg / sumPackedQty : 0;
 
       for (const reco of ((procLineRecoRows ?? []) as JsonRecord[]).filter((r) => toTrimmedString(r.process_order_id) === toTrimmedString(pko.process_order_id))) {
         rows.push({
@@ -2150,9 +2176,9 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
           process_order_id: toTrimmedString(pko.process_order_id) || null, process_order_number: (proc?.po_number as string) ?? null, batch_number: toTrimmedString(pko.batch_number) || null,
           packing_order_id: String(pko.id), packing_order_number: toTrimmedString(pko.po_number) || null, po_type: toTrimmedString(pko.po_type) || null,
           dispatch_qty_kg: line.quantity, material_id: toTrimmedString(reco.material_id), line_material_type: toTrimmedString(reco.line_material_type),
-          standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatioStd * invoiceRatioKg).toFixed(6)),
-          actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatioActual * invoiceRatioKg).toFixed(6)),
-          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatioAp * invoiceRatioKg).toFixed(6)),
+          standard_qty: Number((Number(reco.standard_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
+          actual_qty: Number((Number(reco.actual_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
+          ap_approved_qty: Number((Number(reco.ap_approved_qty ?? 0) * packingPoRatio * invoiceRatioKg).toFixed(6)),
           is_asian_billed: true, // Shape 1 only ever exists for a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own FG production.
         });
       }
