@@ -2124,16 +2124,43 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
     // for AC10's PGI-reversal period set-off. This DOES reintroduce the
     // BMAM0926/00012 "9% missing" shape -- that is now understood as
     // correct (unbilled residue, not vanished data), not a bug.
+    // §135.6-M (2026-09-10, found while root-causing a real AC10 discrepancy
+    // report): process_order_line_reco is APPEND-ON-CORS by design (see
+    // opening comment) -- more than one row can legitimately share the same
+    // (process_order_id, material_id) at once (an original Verify line PLUS
+    // a later COR6 correction line, both is_voided=false, together
+    // representing that material's TRUE batch total). The per-material
+    // totals below already SUM across every such row correctly. But the
+    // per-row loop further down used to iterate procLineRecoRows RAW
+    // (one push per underlying row), so a material with 2 active rows
+    // produced 2 SEPARATE dispatch_reco rows instead of one correctly
+    // combined row -- harmless in principle (both rows' values still sum to
+    // the right total), but a backfill/recompute that doesn't also
+    // correctly re-derive EACH row's own share breaks that guarantee (found
+    // exactly this: a stale backfill pass had left both rows showing the
+    // SAME wrong value). Grouping by material_id first and computing ONE
+    // ratio per material removes the ambiguity entirely -- exactly one
+    // dispatch_reco row per material per Packing PO line, always.
+    const rmIntByProcessOrder = new Map<string, Map<string, { type: string; standard: number; actual: number; ap: number }>>();
     const rmIntTotalsByProcessOrder = new Map<string, { standard: number; actual: number; ap: number }>();
     for (const reco of (procLineRecoRows ?? []) as JsonRecord[]) {
       const type = toTrimmedString(reco.line_material_type);
       if (type !== "RM" && type !== "INT") continue;
-      const key = toTrimmedString(reco.process_order_id);
-      const totals = rmIntTotalsByProcessOrder.get(key) ?? { standard: 0, actual: 0, ap: 0 };
+      const poKey = toTrimmedString(reco.process_order_id);
+      const materialId = toTrimmedString(reco.material_id);
+      const byMaterial = rmIntByProcessOrder.get(poKey) ?? new Map();
+      const materialTotals = byMaterial.get(materialId) ?? { type, standard: 0, actual: 0, ap: 0 };
+      materialTotals.standard += Number(reco.standard_qty ?? 0);
+      materialTotals.actual += Number(reco.actual_qty ?? 0);
+      materialTotals.ap += Number(reco.ap_approved_qty ?? 0);
+      byMaterial.set(materialId, materialTotals);
+      rmIntByProcessOrder.set(poKey, byMaterial);
+
+      const totals = rmIntTotalsByProcessOrder.get(poKey) ?? { standard: 0, actual: 0, ap: 0 };
       totals.standard += Number(reco.standard_qty ?? 0);
       totals.actual += Number(reco.actual_qty ?? 0);
       totals.ap += Number(reco.ap_approved_qty ?? 0);
-      rmIntTotalsByProcessOrder.set(key, totals);
+      rmIntTotalsByProcessOrder.set(poKey, totals);
     }
 
     for (const line of batchLines) {
@@ -2146,19 +2173,18 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
       const invoiceRatioPacks = numPacks > 0 ? dispatchedPacks / numPacks : 0;
 
       const rmIntTotals = rmIntTotalsByProcessOrder.get(toTrimmedString(pko.process_order_id)) ?? { standard: 0, actual: 0, ap: 0 };
+      const rmIntMaterials = rmIntByProcessOrder.get(toTrimmedString(pko.process_order_id)) ?? new Map();
 
-      for (const reco of ((procLineRecoRows ?? []) as JsonRecord[]).filter((r) => toTrimmedString(r.process_order_id) === toTrimmedString(pko.process_order_id))) {
-        const type = toTrimmedString(reco.line_material_type);
-        if (type !== "RM" && type !== "INT") continue;
-        const standardRatio = rmIntTotals.standard > 0 ? Number(reco.standard_qty ?? 0) / rmIntTotals.standard : 0;
-        const actualRatio = rmIntTotals.actual > 0 ? Number(reco.actual_qty ?? 0) / rmIntTotals.actual : 0;
-        const apRatio = rmIntTotals.ap > 0 ? Number(reco.ap_approved_qty ?? 0) / rmIntTotals.ap : 0;
+      for (const [materialId, item] of rmIntMaterials) {
+        const standardRatio = rmIntTotals.standard > 0 ? item.standard / rmIntTotals.standard : 0;
+        const actualRatio = rmIntTotals.actual > 0 ? item.actual / rmIntTotals.actual : 0;
+        const apRatio = rmIntTotals.ap > 0 ? item.ap / rmIntTotals.ap : 0;
         rows.push({
           so_id: group.so_id, so_number: group.document_number, fo_id: group.fo_id, fo_number: group.fo_number,
           dispatch_category: dispatchCategory,
           process_order_id: toTrimmedString(pko.process_order_id) || null, process_order_number: (proc?.po_number as string) ?? null, batch_number: toTrimmedString(pko.batch_number) || null,
           packing_order_id: String(pko.id), packing_order_number: toTrimmedString(pko.po_number) || null, po_type: toTrimmedString(pko.po_type) || null,
-          dispatch_qty_kg: line.quantity, material_id: toTrimmedString(reco.material_id), line_material_type: type,
+          dispatch_qty_kg: line.quantity, material_id: materialId, line_material_type: item.type,
           standard_qty: Number((standardRatio * line.quantity).toFixed(6)),
           actual_qty: Number((actualRatio * line.quantity).toFixed(6)),
           ap_approved_qty: Number((apRatio * line.quantity).toFixed(6)),
