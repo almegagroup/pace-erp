@@ -186,6 +186,14 @@ async function resolveCostingGroupNames(
 type SoStrokeResolution = {
   strokeMasterIdByProcessOrder: Map<string, string>;
   dosageByStrokeMaterial: Map<string, number>; // key = `${stroke_master_id}|${material_id}`
+  // §135.6-N (2026-09-10, business owner, AC07's own "multiple stroke side
+  // by side" pattern): the FULL set of RM/INT material_ids that belong to
+  // each resolved SO stroke's own recipe -- needed to add a row for a
+  // material that's in the SO stroke's recipe but was never actually
+  // dispatched (0 Actual/AP-Approved), the same way AC07's dosage_by_stroke
+  // union shows every material from every selected stroke side by side,
+  // 0/blank wherever a given stroke's own recipe doesn't carry it.
+  materialIdsByStrokeMaster: Map<string, string[]>;
 };
 
 async function resolveSoStrokeStandardOverrides(
@@ -194,7 +202,8 @@ async function resolveSoStrokeStandardOverrides(
 ): Promise<SoStrokeResolution> {
   const strokeMasterIdByProcessOrder = new Map<string, string>();
   const dosageByStrokeMaterial = new Map<string, number>();
-  if (cases.length === 0) return { strokeMasterIdByProcessOrder, dosageByStrokeMaterial };
+  const materialIdsByStrokeMaster = new Map<string, string[]>();
+  if (cases.length === 0) return { strokeMasterIdByProcessOrder, dosageByStrokeMaterial, materialIdsByStrokeMaster };
 
   const strokeKeyToCases = new Map<string, typeof cases>();
   for (const c of cases) {
@@ -220,10 +229,13 @@ async function resolveSoStrokeStandardOverrides(
   const lines = await fetchInChunks<JsonRecord>(strokeMasterIds, (chunk) => serviceRoleClient.schema("erp_production")
     .from("stroke_line").select("stroke_master_id, material_id, dosage_pct").in("stroke_master_id", chunk));
   for (const row of lines) {
-    dosageByStrokeMaterial.set(`${textValue(row.stroke_master_id)}|${textValue(row.material_id)}`, numberValue(row.dosage_pct));
+    const strokeMasterId = textValue(row.stroke_master_id);
+    const materialId = textValue(row.material_id);
+    dosageByStrokeMaterial.set(`${strokeMasterId}|${materialId}`, numberValue(row.dosage_pct));
+    materialIdsByStrokeMaster.set(strokeMasterId, [...(materialIdsByStrokeMaster.get(strokeMasterId) ?? []), materialId]);
   }
 
-  return { strokeMasterIdByProcessOrder, dosageByStrokeMaterial };
+  return { strokeMasterIdByProcessOrder, dosageByStrokeMaterial, materialIdsByStrokeMaster };
 }
 
 type RecoRow = {
@@ -552,6 +564,16 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       };
     }).filter((c) => c.prodshadeMaterialId && c.soStroke);
     const soStrokeResolution = await resolveSoStrokeStandardOverrides(companyId, soStrokeMismatchCases);
+    // §135.6-N: an SO stroke's own material can be one this batch never
+    // touched at all (no dispatch_reco/process_order_line_reco row for it
+    // anywhere), so it may be entirely absent from `materials` above --
+    // fetch anything still missing before the union-row synthesis below
+    // needs to label it.
+    const soStrokeMaterialIds = uniqueValues([...soStrokeResolution.materialIdsByStrokeMaster.values()].flat());
+    const missingSoStrokeMaterialIds = soStrokeMaterialIds.filter((id) => !materials.has(id));
+    if (missingSoStrokeMaterialIds.length) {
+      for (const [id, row] of await materialMap(missingSoStrokeMaterialIds)) materials.set(id, row);
+    }
     // §135.6-J fix (2026-09-10, business owner): when the SO's declared
     // stroke doesn't resolve to a real, APPROVED stroke_master row at all
     // (!strokeMasterId), this used to silently fall back to the
@@ -561,24 +583,42 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     // number says, regardless of whether it resolves -- see so_stroke
     // above). That silently misrepresented a genuine data gap ("this SO
     // stroke doesn't exist") as if it were a legitimate figure. Now blank
-    // in that case; the dosage/standard-qty value legitimately belongs to
-    // the material-not-in-this-stroke's-recipe case only (kept as-is --
-    // the stroke itself IS real there, just doesn't use this material).
-    function resolveSoStrokeStandard(processOrderId: string, materialId: string, fallback: number | null): number | null {
+    // in that case.
+    // §135.6-N fix (2026-09-10, business owner, supersedes this function's
+    // OWN 2026-09-10-morning "material not in this stroke's own recipe --
+    // keep the dispatched-stroke figure" fallback): that fallback borrowed
+    // the ACTUAL stroke's own dosage/qty into the "SO Stroke" column
+    // whenever a material wasn't in the SO stroke's own recipe -- fine for
+    // a near-identical recipe missing one substitute material, but for two
+    // genuinely different formulations (verified live: MTEST batch,
+    // CMP006, SO Stroke "1" vs Actual Stroke "12", completely different
+    // ingredient lists) it silently mixed two unrelated recipes' figures
+    // into one column, landing anywhere from ~81% to ~101.6% instead of a
+    // meaningful number. AC07's own "multiple stroke side by side" pattern
+    // (dosage_by_stroke in ac07_costing.handlers.ts) is the correct model:
+    // each stroke's own dosage/qty column reflects ONLY that stroke's own
+    // recipe -- blank, not borrowed, wherever a material isn't in it. Every
+    // material genuinely in the SO stroke's own recipe already gets its own
+    // row (§135.6-N's union-row synthesis above, for materials this batch
+    // never actually dispatched), so blank here is never a "missing data"
+    // gap -- it correctly means "this material isn't part of the SO
+    // stroke's own formulation at all".
+    function resolveSoStrokeStandard(processOrderId: string, materialId: string): number | null {
       const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
       if (!strokeMasterId) return null;
       const outputQty = numberValue(processOrderById.get(processOrderId)?.actual_qty);
       const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
-      if (dosage === undefined) return fallback; // material not in the SO stroke's own recipe -- keep the dispatched-stroke figure rather than a false zero.
+      if (dosage === undefined) return null; // material not in the SO stroke's own recipe -- blank, never borrowed from elsewhere.
       return rounded((dosage / 100) * outputQty, 6);
     }
-    // §135.6-F: raw SO-stroke dosage% (not the derived qty above) for the
-    // "Dosage % — SO Stroke" column. Same null-vs-fallback rule as above.
-    function resolveSoStrokeDosage(processOrderId: string, materialId: string, fallback: number | null): number | null {
+    // §135.6-F/§135.6-N: raw SO-stroke dosage% (not the derived qty above)
+    // for the "Dosage % — SO Stroke" column. Same blank-not-borrowed rule
+    // as resolveSoStrokeStandard above -- see its header comment.
+    function resolveSoStrokeDosage(processOrderId: string, materialId: string): number | null {
       const strokeMasterId = soStrokeResolution.strokeMasterIdByProcessOrder.get(processOrderId);
       if (!strokeMasterId) return null;
       const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
-      return dosage === undefined ? fallback : dosage;
+      return dosage === undefined ? null : dosage;
     }
 
     const dispatchRows: RecoRow[] = [...dispatchGroups.values()].map((group) => {
@@ -609,7 +649,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         : isPm ? standardDispatchedStroke
         : (!soStroke || upperValue(soStroke) === upperValue(actualStroke))
           ? standardDispatchedStroke
-          : resolveSoStrokeStandard(processOrderId, materialId, standardDispatchedStroke);
+          : resolveSoStrokeStandard(processOrderId, materialId);
       const packCount = packCountByPackingOrderId.get(packingOrderId) ?? null;
       const dosageOrQty = isSku ? null
         : isPm ? (packCount ? rounded((group.actual_qty ?? 0) / packCount, 6) : null)
@@ -618,7 +658,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         : isPm ? dosageOrQty // PM composition never depends on stroke.
         : (!soStroke || upperValue(soStroke) === upperValue(actualStroke))
           ? dosageOrQty
-          : resolveSoStrokeDosage(processOrderId, materialId, dosageOrQty);
+          : resolveSoStrokeDosage(processOrderId, materialId);
       const skuLabel = materialLabel(fgMaterialIdByPackingOrderId.get(packingOrderId) ?? "");
       const actualProdshadeLabel = materialLabel(textValue(processOrderById.get(processOrderId)?.material_id));
       return {
@@ -668,6 +708,98 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         group_key: `${invoiceId}|${processOrderId}|${packingOrderId}`,
       };
     });
+
+    // ---- §135.6-N: SO-Stroke-only materials, added as their own rows ----
+    // AC07's own "multiple stroke side by side" pattern (dosage_by_stroke in
+    // ac07_costing.handlers.ts): the material LIST must be the UNION of the
+    // SO stroke's own recipe and the Actual/Dispatched stroke's own recipe,
+    // not just whichever materials actually got dispatched. Business owner:
+    // "erokom hotei pare je kono stroke e kono item nei takhon sei stroke e
+    // oi Item ta 0 ... jegulo similar noy segulo jar stroke er under e
+    // dosage dekhabe, fole dujoner e total 100 but je jar ingidient niye" --
+    // a material the SO stroke's recipe carries but this batch never
+    // actually touched (Actual Stroke doesn't use it) previously had NO row
+    // here at all, so its SO-Stroke dosage% never entered the Dosage%/
+    // Standard-Qty-SO-Stroke sum no matter how the per-material fallback
+    // (resolveSoStrokeDosage/resolveSoStrokeStandard, both unchanged above)
+    // was tuned -- that fallback only ever ran for materials that already
+    // had a real dispatch row, i.e. the ACTUAL stroke's own material set.
+    // Each stroke's own dosage%/Standard-Qty column now sums to that
+    // stroke's own 100% independently, since every one of its own materials
+    // gets a row (0 Actual/AP-Approved when this batch never consumed it) --
+    // no more mixing two unrelated recipes' percentages into one
+    // meaningless total.
+    const sampleLineByGroupKey = new Map<string, RecoRow>();
+    const existingRmIntMaterialsByGroupKey = new Map<string, Set<string>>();
+    for (const line of dispatchRows) {
+      if (line.section === "RPS") continue;
+      if (!sampleLineByGroupKey.has(line.group_key)) sampleLineByGroupKey.set(line.group_key, line);
+      if (line.type_badge === "RM" || line.type_badge === "INT") {
+        const set = existingRmIntMaterialsByGroupKey.get(line.group_key) ?? new Set<string>();
+        set.add(line.material_id);
+        existingRmIntMaterialsByGroupKey.set(line.group_key, set);
+      }
+    }
+    for (const [processOrderId, strokeMasterId] of soStrokeResolution.strokeMasterIdByProcessOrder) {
+      const strokeMaterialIds = soStrokeResolution.materialIdsByStrokeMaster.get(strokeMasterId) ?? [];
+      if (!strokeMaterialIds.length) continue;
+      const outputQty = numberValue(processOrderById.get(processOrderId)?.actual_qty);
+      for (const [groupKey, sample] of sampleLineByGroupKey) {
+        if (!groupKey.startsWith(`${sample.invoice_id}|${processOrderId}|`)) continue;
+        const existingMaterialIds = existingRmIntMaterialsByGroupKey.get(groupKey) ?? new Set<string>();
+        for (const materialId of strokeMaterialIds) {
+          if (existingMaterialIds.has(materialId)) continue; // already has its own real dispatch row -- the existing per-material fallback logic handles it.
+          const dosage = soStrokeResolution.dosageByStrokeMaterial.get(`${strokeMasterId}|${materialId}`);
+          if (dosage === undefined) continue;
+          const material = materials.get(materialId);
+          const materialType = upperValue(material?.material_type);
+          if (materialType !== "RM" && materialType !== "INT") continue; // union is RM/INT-only, same scope as the FG summary sum below.
+          dispatchRows.push({
+            row_kind: "LINE",
+            section: sample.section,
+            is_corrected: false,
+            is_asian_billed: sample.is_asian_billed,
+            company_code: sample.company_code,
+            month_year: sample.month_year,
+            pace_doc_number: sample.pace_doc_number,
+            tally_invoice_number: sample.tally_invoice_number,
+            tally_invoice_date: sample.tally_invoice_date,
+            inbound_number: sample.inbound_number,
+            fo_number: sample.fo_number,
+            dispatch_type: sample.dispatch_type,
+            dispatch_category: sample.dispatch_category,
+            type_badge: materialType,
+            fg_type: sample.fg_type,
+            pace_code: textValue(material?.pace_code),
+            item_name: textValue(material?.material_name),
+            document_name: textValue(material?.document_name),
+            external_code: textValue(material?.external_code),
+            costing_group: costingGroupLabel(materialId, sample.tally_invoice_date),
+            process_order_number: sample.process_order_number,
+            batch_number: sample.batch_number,
+            packing_order_number: sample.packing_order_number,
+            so_stroke: sample.so_stroke,
+            actual_stroke: sample.actual_stroke,
+            sku_label: sample.sku_label,
+            actual_prodshade_label: sample.actual_prodshade_label,
+            invoice_total_qty_kg: sample.invoice_total_qty_kg,
+            invoice_total_pack_qty: sample.invoice_total_pack_qty,
+            dispatch_qty_kg: sample.dispatch_qty_kg,
+            pack_qty: sample.pack_qty,
+            rps_qty: null,
+            dosage_or_qty: null, // this material was never in the Actual/Dispatched stroke's own recipe -- a genuine gap, not a fallback case.
+            dosage_pct_so_stroke: dosage,
+            standard_qty_so_stroke: rounded((dosage / 100) * outputQty, 6),
+            standard_qty_dispatched_stroke: null,
+            actual_qty: 0, // genuinely never issued/consumed in this batch -- a known zero, not a missing figure.
+            ap_approved_qty: 0,
+            invoice_id: sample.invoice_id,
+            material_id: materialId,
+            group_key: groupKey,
+          });
+        }
+      }
+    }
 
     // ---- FG summary row per dispatch group (locked mock's "sku-row") ----
     // Aggregates that group's own RM+INT lines (PM excluded, matching the
