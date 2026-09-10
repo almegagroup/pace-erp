@@ -2037,6 +2037,29 @@ type DispatchRecoLine = {
   is_asian_billed: boolean;
 };
 
+// §135.6-O: "largest remainder" rounding -- round every entry to 6 decimals
+// normally, then force the single LARGEST raw value to absorb whatever
+// residual is left so the group sums EXACTLY to `target`, not just closely.
+// Same technique commonly used to split an invoice/tax total across line
+// items. Callers must skip this entirely (not call it) when there is no
+// real basis to derive from (e.g. a zero total) -- it always forces the
+// total to exactly `target`, which is only correct when target genuinely
+// belongs to this set of materials.
+function roundWithResidual(rawByMaterial: Map<string, number>, target: number): Map<string, number> {
+  const rounded = new Map<string, number>();
+  for (const [materialId, raw] of rawByMaterial) rounded.set(materialId, Number(raw.toFixed(6)));
+  if (rawByMaterial.size === 0) return rounded;
+  let largestMaterialId = "";
+  let largestValue = -Infinity;
+  for (const [materialId, raw] of rawByMaterial) {
+    if (raw > largestValue) { largestValue = raw; largestMaterialId = materialId; }
+  }
+  let sumOfOthers = 0;
+  for (const [materialId, value] of rounded) if (materialId !== largestMaterialId) sumOfOthers += value;
+  rounded.set(largestMaterialId, Number((target - sumOfOthers).toFixed(6)));
+  return rounded;
+}
+
 async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<DispatchRecoLine[]> {
   if (group.source_type !== "SALES_ORDER" || !group.so_id) return [];
 
@@ -2175,19 +2198,50 @@ async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<Dispatc
       const rmIntTotals = rmIntTotalsByProcessOrder.get(toTrimmedString(pko.process_order_id)) ?? { standard: 0, actual: 0, ap: 0 };
       const rmIntMaterials = rmIntByProcessOrder.get(toTrimmedString(pko.process_order_id)) ?? new Map();
 
+      // §135.6-O (2026-09-10, business owner): rounding each material's own
+      // share to 6 decimals independently leaves the GROUP's own total a
+      // few millionths of a kg off the real Dispatch Qty (mathematically
+      // unavoidable when N numbers are each rounded independently and then
+      // summed -- verified live, ~0.000001-0.000002kg on real batches).
+      // Business owner: the RM+INT total must equal Dispatch Qty EXACTLY,
+      // not just closely. Standard "largest remainder" rounding (the same
+      // technique used to split an invoice/tax total across line items so
+      // the parts sum exactly to the whole): round every material
+      // normally, then force the single LARGEST material's own value to
+      // absorb whatever residual is left, so the group's total reconciles
+      // exactly while every other material keeps its own honestly rounded
+      // share. Applied to Standard/Actual/AP-Approved independently (each
+      // metric's own "largest" material can differ under real variance).
+      // NOT applied to Dosage % -- that column stays the raw entered
+      // process_order_line_reco.dosage_pct figure, a different (planning)
+      // concept from these actuals-derived quantities, deliberately left
+      // untouched.
+      const rawStandard = new Map<string, number>();
+      const rawActual = new Map<string, number>();
+      const rawAp = new Map<string, number>();
       for (const [materialId, item] of rmIntMaterials) {
         const standardRatio = rmIntTotals.standard > 0 ? item.standard / rmIntTotals.standard : 0;
         const actualRatio = rmIntTotals.actual > 0 ? item.actual / rmIntTotals.actual : 0;
         const apRatio = rmIntTotals.ap > 0 ? item.ap / rmIntTotals.ap : 0;
+        rawStandard.set(materialId, standardRatio * line.quantity);
+        rawActual.set(materialId, actualRatio * line.quantity);
+        rawAp.set(materialId, apRatio * line.quantity);
+      }
+      const zeroMap = (raw: Map<string, number>) => new Map([...raw.keys()].map((id) => [id, 0]));
+      const roundedStandard = rmIntTotals.standard > 0 ? roundWithResidual(rawStandard, line.quantity) : zeroMap(rawStandard);
+      const roundedActual = rmIntTotals.actual > 0 ? roundWithResidual(rawActual, line.quantity) : zeroMap(rawActual);
+      const roundedAp = rmIntTotals.ap > 0 ? roundWithResidual(rawAp, line.quantity) : zeroMap(rawAp);
+
+      for (const [materialId, item] of rmIntMaterials) {
         rows.push({
           so_id: group.so_id, so_number: group.document_number, fo_id: group.fo_id, fo_number: group.fo_number,
           dispatch_category: dispatchCategory,
           process_order_id: toTrimmedString(pko.process_order_id) || null, process_order_number: (proc?.po_number as string) ?? null, batch_number: toTrimmedString(pko.batch_number) || null,
           packing_order_id: String(pko.id), packing_order_number: toTrimmedString(pko.po_number) || null, po_type: toTrimmedString(pko.po_type) || null,
           dispatch_qty_kg: line.quantity, material_id: materialId, line_material_type: item.type,
-          standard_qty: Number((standardRatio * line.quantity).toFixed(6)),
-          actual_qty: Number((actualRatio * line.quantity).toFixed(6)),
-          ap_approved_qty: Number((apRatio * line.quantity).toFixed(6)),
+          standard_qty: roundedStandard.get(materialId) ?? 0,
+          actual_qty: roundedActual.get(materialId) ?? 0,
+          ap_approved_qty: roundedAp.get(materialId) ?? 0,
           is_asian_billed: true, // Shape 1 only ever exists for a batch-linked MTO/HPS/MTEST FG dispatch -- always Asian Paints' own FG production.
         });
       }
