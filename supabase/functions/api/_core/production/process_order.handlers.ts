@@ -3420,7 +3420,23 @@ async function runProcessOrderVerify(
       referenceDocumentId: String(po.id),
     }, "QI_RELEASE"));
 
-    const strokeNumber = toTrimmedString((po.stroke as JsonRecord | null)?.stroke_number) || null;
+    // §135.9 (2026-09-10 fix): `po` is fetched via fetchProcessOrder()'s `select("*")` --
+    // no `stroke` relation embed -- so `po.stroke` was always undefined here and this
+    // line always wrote NULL, for every real PRODUCTION-origin reco row ever written
+    // (verified live: 2619 of 2619 PRODUCTION rows had stroke_number=NULL, while
+    // OPENING/PARTIAL_REVERSAL rows -- which each do their own explicit stroke_master
+    // lookup -- were correctly populated). Explicit lookup instead, matching the
+    // pattern already used elsewhere in this codebase (packing_order.handlers.ts,
+    // sfg_qa.handlers.ts) for the same cross-schema (erp_production) relation.
+    const strokeMasterId = toTrimmedString(po.stroke_master_id) || null;
+    let strokeNumber: string | null = null;
+    if (strokeMasterId) {
+      const { data: strokeRow, error: strokeLookupError } = await serviceRoleClient
+        .schema("erp_production").from("stroke_master")
+        .select("stroke_number").eq("id", strokeMasterId).maybeSingle();
+      if (strokeLookupError) throw new Error("PROD_PO_VERIFY_STROKE_LOOKUP_FAILED");
+      strokeNumber = toTrimmedString((strokeRow as JsonRecord | null)?.stroke_number) || null;
+    }
     // §108.2 item 5 — MTS has no Approved/AP-Approved reco workflow at all (its real
     // costing is dispatch-triggered, formulation-based, quarterly — feasibility §108.4);
     // writing production-time reco rows here would just be dead, unused data. Skip the
