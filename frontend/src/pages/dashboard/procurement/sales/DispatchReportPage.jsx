@@ -96,10 +96,14 @@ function getColumnFilterText(column, row) {
   return raw == null ? "" : String(raw);
 }
 
-// Same invalid-flag StrokeCell already renders (⚠, red text) -- a row counts
-// as a mismatch the moment any one of its SO Stroke entries is invalid.
+// §135.6-K (2026-09-10, business owner): "mismatch" (declared != actual) is
+// broader than "invalid" (declared stroke doesn't exist in Stroke Master at
+// all) -- this filter surfaces every declared/actual divergence, flagged or
+// not. The red ⚠ marker stays reserved for `invalid` only (StrokeCell,
+// unchanged) so a reviewer can tell "real mismatch, but a valid stroke" apart
+// from "genuinely nonexistent stroke" within the same filtered view.
 function rowHasStrokeMismatch(row) {
-  return Array.isArray(row.so_stroke_entries) && row.so_stroke_entries.some((entry) => entry.invalid);
+  return Array.isArray(row.so_stroke_entries) && row.so_stroke_entries.some((entry) => entry.mismatch);
 }
 
 const GRID_COLUMNS = [
@@ -217,10 +221,11 @@ export default function DispatchReportPage() {
     return [...values].sort();
   }, [rows]);
   const hasActiveSearch = globalSearch.trim().length > 0;
-  // Business owner ask (2026-09-06) -- a checkbox that narrows the grid down
-  // to only the rows StrokeCell already flags as a mismatch (some entry in
-  // so_stroke_entries has invalid=true), on top of the existing free-text
-  // search rather than replacing it.
+  // Business owner ask (2026-09-06, semantics corrected 2026-09-10 §135.6-K)
+  // -- a checkbox that narrows the grid down to every declared/actual stroke
+  // divergence (rowHasStrokeMismatch, entry.mismatch), not just the invalid
+  // (genuinely-nonexistent-stroke) subset -- on top of the existing
+  // free-text search rather than replacing it.
   const [mismatchOnly, setMismatchOnly] = useState(false);
   const mismatchRowCount = useMemo(() => rows.filter(rowHasStrokeMismatch).length, [rows]);
   const filteredRows = useMemo(() => {

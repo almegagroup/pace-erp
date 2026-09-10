@@ -20,7 +20,7 @@ type DispatchReportHandlerContext = {
   roleCode: string;
 };
 
-type StrokeEntry = { value: string; invalid: boolean };
+type StrokeEntry = { value: string; invalid: boolean; mismatch: boolean };
 
 function textValue(value: unknown): string {
   return String(value ?? "").trim();
@@ -273,7 +273,17 @@ export async function getDispatchReportHandler(
           declaredStroke && prodshadeMaterialId && ["MTO", "HPS"].includes(fgType)
           && !strokeExists.has(`${prodshadeMaterialId}|${declaredStroke.toUpperCase()}|${fgType}`),
         );
-        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke };
+        // §135.6-K (2026-09-10, business owner): "mismatch" (declared !=
+        // actual) is a broader, separate state from "invalid" (declared
+        // stroke doesn't exist at all) -- the mismatch-only filter should
+        // surface every declared/actual divergence, while the red ⚠ marker
+        // stays reserved for the narrower invalid case (StrokeCell renders
+        // it off `invalid`, unchanged). A row can be a mismatch without
+        // being invalid (declared stroke is real, just not this batch's).
+        const mismatchStroke = Boolean(
+          declaredStroke && actualStroke && upperValue(declaredStroke) !== upperValue(actualStroke),
+        );
+        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke, mismatchStroke };
       });
 
       const strokeEntryMap = new Map<string, StrokeEntry>();
@@ -281,7 +291,11 @@ export async function getDispatchReportHandler(
         if (!detail.declaredStroke) continue;
         const key = upperValue(detail.declaredStroke);
         const existing = strokeEntryMap.get(key);
-        strokeEntryMap.set(key, { value: detail.declaredStroke, invalid: Boolean(existing?.invalid || detail.invalidStroke) });
+        strokeEntryMap.set(key, {
+          value: detail.declaredStroke,
+          invalid: Boolean(existing?.invalid || detail.invalidStroke),
+          mismatch: Boolean(existing?.mismatch || detail.mismatchStroke),
+        });
       }
       const soStrokeEntries = [...strokeEntryMap.values()];
       const tallyDate = textValue(invoice.tally_invoice_date);
