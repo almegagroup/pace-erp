@@ -43,7 +43,7 @@ import {
 } from "../om/omApi.js";
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 import { GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
-import { formatPreciseNumber, multiplyPreciseValues, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
+import { formatPreciseNumber, formatStockQty, multiplyPreciseValues, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 import { getManualPastDateBounds, isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
@@ -442,7 +442,7 @@ export default function ProductionPOCreatePage() {
   const mtestSfgOptions = useMemo(
     () => (mtestSfgOptionsQ.data ?? []).map((row) => ({
       value: `${row.prodshade_material_id}|${row.stroke_master_id}`,
-      label: `${materialLabel(row.prodshade) || "Prodshade"} — Stroke ${row.stroke_number || "--"} (${qtyFmt(row.available_qty)} KG available)`,
+      label: `${materialLabel(row.prodshade) || "Prodshade"} — Stroke ${row.stroke_number || "--"} (${formatStockQty(row.available_qty)} KG available)`,
     })),
     [mtestSfgOptionsQ.data],
   );
@@ -1434,7 +1434,7 @@ export default function ProductionPOCreatePage() {
                               <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.standard_qty, "0")}</td>
                               <td className="border-b border-slate-100 px-3 py-2">P261</td>
                               <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
-                                {formatPreciseNumber(row.available_qty, "--")}
+                                {formatStockQty(row.available_qty)}
                               </td>
                             </tr>
                           );
@@ -1724,7 +1724,7 @@ export default function ProductionPOCreatePage() {
                                     emptyStateLabel={packingStorageQ.isLoading ? "Loading storage locations..." : "No storage locations"}
                                   />
                                 </td>
-                                <td className="px-3 py-2 text-right font-mono">{line.available_qty == null ? "--" : qtyFmt(line.available_qty)}</td>
+                                <td className="px-3 py-2 text-right font-mono">{formatStockQty(line.available_qty)}</td>
                                 <td className={`px-3 py-2 text-right font-mono ${line.short > 0 ? "text-rose-600 font-semibold" : ""}`}>{line.short > 0 ? qtyFmt(line.short) : "--"}</td>
                                 <td className="px-3 py-2 text-xs text-slate-500">{line.group_label || "--"}</td>
                               </tr>
@@ -1794,7 +1794,7 @@ export default function ProductionPOCreatePage() {
                                     emptyStateLabel={packingStorageQ.isLoading ? "Loading storage locations..." : "No storage locations"}
                                   />
                                 </td>
-                                <td className="px-3 py-2 text-right font-mono">{line.available_qty == null ? "--" : qtyFmt(line.available_qty)}</td>
+                                <td className="px-3 py-2 text-right font-mono">{formatStockQty(line.available_qty)}</td>
                                 <td className={`px-3 py-2 text-right font-mono ${line.short > 0 ? "text-rose-600 font-semibold" : ""}`}>{line.short > 0 ? qtyFmt(line.short) : "--"}</td>
                                 <td className="px-3 py-2">
                                   <input

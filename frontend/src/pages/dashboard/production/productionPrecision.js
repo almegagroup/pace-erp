@@ -55,3 +55,18 @@ export function formatSum(sum, fallback = "--") {
   if (!Number.isFinite(sum)) return fallback;
   return formatPreciseNumber(Number(sum.toFixed(6)), fallback);
 }
+
+// available_qty is a computed stock balance (stock_snapshot, via many WAR-driven
+// postings and unit conversions over time) -- never a value the user typed -- so unlike
+// dosage_pct/standard_qty it has no "original precision" worth preserving.
+// formatPreciseNumber's artifact-detection regex only strips noise shaped as a long
+// run of trailing 0s/9s, so a genuinely-computed value like 370.598208 passes through
+// unchanged even though it's far more precision than useful for an "Available" reference
+// column. Round to 3dp to match the rest of the ERP's stock-quantity display convention
+// (see CurrentStockPage.jsx's formatQuantity / PartialBatchReversalPage.jsx's fmt).
+export function formatStockQty(value, fallback = "--") {
+  if (value === null || value === undefined || value === "") return fallback;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return fallback;
+  return amount.toFixed(3);
+}
