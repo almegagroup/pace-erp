@@ -6,7 +6,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS consignment_note_sto_line_unique ON erp_procur
 GRANT SELECT, INSERT ON erp_procurement.sto_approval_log TO service_role;
 GRANT SELECT, INSERT, UPDATE ON erp_procurement.sto_amendment_log TO service_role;
 
-CREATE OR REPLACE FUNCTION erp_procurement.create_sto_atomic(p_header jsonb, p_lines jsonb)
+CREATE OR REPLACE FUNCTION erp_procurement."create_sto_atomic"(p_header jsonb, p_lines jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
 DECLARE h erp_procurement.stock_transfer_order; l jsonb; lid uuid; c erp_procurement.consignment_note;
 BEGIN
@@ -42,11 +42,12 @@ BEGIN
     END IF;
   END LOOP;
   RETURN to_jsonb(h);
-END $fn$;
-REVOKE ALL ON FUNCTION erp_procurement.create_sto_atomic(jsonb,jsonb) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION erp_procurement.create_sto_atomic(jsonb,jsonb) TO service_role;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION erp_procurement."create_sto_atomic"(jsonb,jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION erp_procurement."create_sto_atomic"(jsonb,jsonb) TO service_role;
 
-CREATE OR REPLACE FUNCTION erp_procurement.transition_sto_atomic(p_sto_id uuid,p_from_status text,p_to_status text,p_actor uuid,p_remarks text,p_csns jsonb)
+CREATE OR REPLACE FUNCTION erp_procurement."transition_sto_atomic"(p_sto_id uuid,p_from_status text,p_to_status text,p_actor uuid,p_remarks text,p_csns jsonb)
 RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
 DECLARE h erp_procurement.stock_transfer_order; c jsonb; cid uuid;
 BEGIN
@@ -77,9 +78,10 @@ BEGIN
     INSERT INTO erp_procurement.sto_approval_log(sto_id,action,from_status,to_status,remarks,actioned_by)
     VALUES(h.id,CASE WHEN p_to_status='PENDING_APPROVAL' THEN 'ESCALATED' ELSE 'APPROVED' END,p_from_status,p_to_status,p_remarks,p_actor);
   END IF;
-END $fn$;
-REVOKE ALL ON FUNCTION erp_procurement.transition_sto_atomic(uuid,text,text,uuid,text,jsonb) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION erp_procurement.transition_sto_atomic(uuid,text,text,uuid,text,jsonb) TO service_role;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION erp_procurement."transition_sto_atomic"(uuid,text,text,uuid,text,jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION erp_procurement."transition_sto_atomic"(uuid,text,text,uuid,text,jsonb) TO service_role;
 
 -- Recompute from active DO lines, never increment/decrement a cached total.
 -- Deferred triggers see the final edit/cancel/PGI state and roll back with it.
@@ -103,7 +105,8 @@ BEGIN
   UPDATE erp_procurement.stock_transfer_order SET status=CASE WHEN EXISTS
     (SELECT 1 FROM erp_procurement.stock_transfer_order_line WHERE sto_id=h.id AND dispatched_qty>0) THEN 'DISPATCHED' ELSE 'CREATED' END,
     last_updated_at=now() WHERE id=h.id AND status IN ('CREATED','DISPATCHED');
-END $fn$;
+END;
+$fn$;
 REVOKE ALL ON FUNCTION erp_procurement.sync_sto_dispatch(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION erp_procurement.sync_sto_dispatch(uuid) TO service_role;
 
@@ -119,7 +122,8 @@ BEGIN
     THEN RAISE EXCEPTION 'DO_STO_COMPANY_OR_MATERIAL_MISMATCH'; END IF;
   IF h.status NOT IN ('CREATED','DISPATCHED') OR l.line_status <> 'OPEN' THEN RAISE EXCEPTION 'DO_SOURCE_NOT_DISPATCHABLE'; END IF;
   RETURN NEW;
-END $fn$;
+END;
+$fn$;
 CREATE TRIGGER sto_do_line_guard BEFORE INSERT OR UPDATE OF sto_line_id,quantity,material_id,dc_id ON erp_procurement.delivery_challan_line
 FOR EACH ROW EXECUTE FUNCTION erp_procurement.sto_do_line_guard();
 
@@ -140,7 +144,8 @@ BEGIN
     END LOOP;
   END IF;
   RETURN NULL;
-END $fn$;
+END;
+$fn$;
 CREATE CONSTRAINT TRIGGER sto_do_line_dispatch AFTER INSERT OR UPDATE OR DELETE ON erp_procurement.delivery_challan_line
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION erp_procurement.sto_do_dispatch_trigger();
 CREATE CONSTRAINT TRIGGER sto_do_header_dispatch AFTER UPDATE ON erp_procurement.delivery_challan
