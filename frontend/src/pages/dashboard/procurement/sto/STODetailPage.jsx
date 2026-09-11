@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
-import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 import ErpScreenScaffold, {
   ErpFieldPreview,
   ErpSectionCard,
@@ -17,7 +16,7 @@ import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcure
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
-import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
@@ -28,7 +27,6 @@ import {
   closeSTO,
   confirmSTO,
   confirmSTOReceipt,
-  dispatchSTO,
   getSTO,
   knockOffSTOLine,
   listCSNs,
@@ -36,6 +34,7 @@ import {
   updateSTO,
   updateGateExitWeight,
 } from "../procurementApi.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 const FREIGHT_TERM_OPTIONS = [
@@ -124,8 +123,8 @@ export default function STODetailPage() {
   const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
   const id = routeId && routeId !== ":id" && routeId !== "id" ? routeId : (screenContext.id || "");
   const { runtimeContext } = useMenu();
+  const navigate = useNavigate();
   const [tareWeight, setTareWeight] = useState("");
-  const [locationDrafts, setLocationDrafts] = useState({});
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(buildEditState(null));
   const [amendmentOpen, setAmendmentOpen] = useState(false);
@@ -244,21 +243,14 @@ export default function STODetailPage() {
     String(selectedCompanyId || "") === String(detail?.receiving_company_id || "");
   const canClose = String(detail?.status || "").toUpperCase() === "RECEIVED";
   const canCancel = ["DRAFT", "PENDING_APPROVAL", "CREATED"].includes(String(detail?.status || "").toUpperCase());
-  const canDispatch = String(detail?.status || "").toUpperCase() === "CREATED";
+  const canDispatch = ["CREATED", "DISPATCHED"].includes(String(detail?.status || "").toUpperCase())
+    && String(selectedCompanyId || "") === String(detail?.sending_company_id || "");
   const canReject = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && !hasPendingAmendment;
   const canApproveSto = String(detail?.status || "").toUpperCase() === "PENDING_APPROVAL" && !hasPendingAmendment;
   const showTareForm =
     String(detail?.status || "").toUpperCase() === "DISPATCHED" &&
     isBulkLike(detail?.sto_type) &&
     latestGateExit;
-  const linesMissingLocations = useMemo(
-    () =>
-      (detail?.lines ?? []).filter(
-        (line) => line.line_status !== "KNOCKED_OFF" && (!line.sending_storage_location_id || !line.receiving_storage_location_id)
-      ),
-    [detail?.lines]
-  );
-  const locationSetupRequired = canDispatch && linesMissingLocations.length > 0;
   const grnSummaryRows = useMemo(
     () =>
       Array.isArray(detail?.lines)
@@ -295,20 +287,6 @@ export default function STODetailPage() {
   }, [detail?.gate_exit_outbound]);
 
   useEffect(() => {
-    setLocationDrafts(
-      Object.fromEntries(
-        (detail?.lines ?? []).map((line) => [
-          line.id,
-          {
-            sending_storage_location_id: line.sending_storage_location_id || "",
-            receiving_storage_location_id: line.receiving_storage_location_id || "",
-          },
-        ])
-      )
-    );
-  }, [detail?.lines]);
-
-  useEffect(() => {
     if (!detail) return;
     setEditForm(buildEditState(detail));
     setAmendmentForm(buildAmendmentState(detail));
@@ -340,62 +318,9 @@ export default function STODetailPage() {
     }
   }
 
-  async function saveDispatchLocations() {
-    if (!detail) return false;
-    const missingDraft = (detail.lines ?? []).some((line) => {
-      const draft = locationDrafts[line.id] || {};
-      return !draft.sending_storage_location_id || !draft.receiving_storage_location_id;
-    });
-    if (missingDraft) {
-      setError("Set sending and receiving storage locations for every STO line.");
-      return false;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      await updateSTO(detail.id, {
-        lines: (detail.lines ?? []).map((line) => ({
-          id: line.id,
-          sending_storage_location_id: locationDrafts[line.id]?.sending_storage_location_id || null,
-          receiving_storage_location_id: locationDrafts[line.id]?.receiving_storage_location_id || null,
-        })),
-      });
-      setNotice("Dispatch locations saved.");
-      await refreshDetailQueries();
-      return true;
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_STO_ACTION_FAILED");
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDispatch() {
-    if (!detail) return;
-    if (locationSetupRequired) {
-      const saved = await saveDispatchLocations();
-      if (!saved) return;
-    }
-    const lineMessages = (detail.lines ?? []).filter((line) => line.line_status !== "KNOCKED_OFF").map((line) => {
-      const materialName =
-        materialMap.get(line.material_id)?.material_name ||
-        materialMap.get(line.material_id)?.material_code ||
-        line.material_id;
-      const availableQty =
-        line.available_qty !== undefined && line.available_qty !== null
-          ? line.available_qty
-          : "Unknown";
-      const warning =
-        line.available_qty !== undefined &&
-        Number(line.quantity || 0) > Number(line.available_qty || 0)
-          ? ` WARNING: Insufficient stock for ${materialName}.`
-          : "";
-      return `${materialName} | Required: ${line.quantity} | Available: ${availableQty}.${warning}`;
-    });
-    const confirmed = await openActionConfirm({ eyebrow: "STO", title: "Dispatch this STO?", message: lineMessages.join("\n"), confirmLabel: "Dispatch" });
-    if (!confirmed) return;
-    await runAction(() => dispatchSTO(detail.id, {}), "STO dispatched successfully.");
+  function handleDispatch() {
+    openScreen(OPERATION_SCREENS.PROC_DO_CREATE.screen_code);
+    navigate("/dashboard/procurement/delivery-orders/create");
   }
 
   async function handleCancel() {
@@ -610,7 +535,7 @@ export default function STODetailPage() {
         ...(canApproveSto ? [{ key: "approve", label: saving ? "Approving..." : "Approve STO", tone: "primary", onClick: () => void handleApprove(), disabled: saving }] : []),
         ...(canApproveAmendment ? [{ key: "approve-amendment", label: saving ? "Approving..." : "Approve Amendment", tone: "primary", onClick: () => void handleApproveAmendment(), disabled: saving }] : []),
         ...(canReject ? [{ key: "reject", label: "Reject STO", tone: "danger", onClick: () => void handleReject(), disabled: saving }] : []),
-        ...(canDispatch ? [{ key: "dispatch", label: saving ? "Dispatching..." : "Dispatch", tone: "primary", onClick: () => void handleDispatch(), disabled: saving }] : []),
+        ...(canDispatch ? [{ key: "dispatch", label: "Create DO (SO03)", tone: "primary", onClick: () => void handleDispatch(), disabled: saving }] : []),
         ...(canConfirmReceipt ? [{ key: "confirm-receipt", label: saving ? "Confirming..." : "Confirm Receipt", tone: "primary", onClick: () => void handleConfirmReceipt(), disabled: saving }] : []),
         ...(canClose ? [{ key: "close", label: saving ? "Closing..." : "Close STO", tone: "neutral", onClick: () => void handleClose(), disabled: saving }] : []),
         ...(canCancel ? [{ key: "cancel", label: "Cancel", tone: "danger", onClick: () => void handleCancel(), disabled: saving }] : []),
@@ -781,71 +706,6 @@ export default function STODetailPage() {
               ) : null}
             </div>
           </ErpSectionCard>
-
-          {locationSetupRequired ? (
-            <ErpSectionCard eyebrow="Dispatch Prep" title="Set storage locations before dispatch">
-              <div className="grid gap-3">
-                {(detail.lines ?? []).map((line) => {
-                  const materialLabel =
-                    materialMap.get(line.material_id)?.material_name ||
-                    materialMap.get(line.material_id)?.material_code ||
-                    line.material_id ||
-                    "—";
-                  return (
-                    <div key={line.id} className="grid gap-3 rounded border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[180px_1fr_1fr]">
-                      <div className="text-sm font-semibold text-slate-900">
-                        Line {line.line_number}: {materialLabel}
-                      </div>
-                      <div className="grid gap-1 text-xs font-semibold text-slate-700">
-                        <span>Sending Location</span>
-                        <LocationSelect
-                          companyId={detail.sending_company_id}
-                          projectCode="PRJ009"
-                          value={locationDrafts[line.id]?.sending_storage_location_id || ""}
-                          onChange={(idValue) =>
-                            setLocationDrafts((current) => ({
-                              ...current,
-                              [line.id]: {
-                                ...(current[line.id] || {}),
-                                sending_storage_location_id: idValue || "",
-                              },
-                            }))
-                          }
-                        />
-                      </div>
-                      <div className="grid gap-1 text-xs font-semibold text-slate-700">
-                        <span>Receiving Location</span>
-                        <LocationSelect
-                          companyId={detail.receiving_company_id}
-                          projectCode="PRJ009"
-                          value={locationDrafts[line.id]?.receiving_storage_location_id || ""}
-                          onChange={(idValue) =>
-                            setLocationDrafts((current) => ({
-                              ...current,
-                              [line.id]: {
-                                ...(current[line.id] || {}),
-                                receiving_storage_location_id: idValue || "",
-                              },
-                            }))
-                          }
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={() => void saveDispatchLocations()}
-                    className="border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50"
-                  >
-                    Save Locations
-                  </button>
-                </div>
-              </div>
-            </ErpSectionCard>
-          ) : null}
 
           {(latestDc || latestGateExit) ? (
             <ErpSectionCard eyebrow="Dispatch Result" title="Dispatch documents">

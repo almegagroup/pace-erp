@@ -10,7 +10,7 @@
  *          designed for SALES_ORDER/STO source types, never wired up until
  *          now), (2) locks the source SO/STO line (derived — §113.5, no
  *          new column), (3) for STO-sourced lines, auto-syncs the linked
- *          CSN's dispatch_qty via upsertCsnDispatch(), mirroring
+ *          CSN's dispatch_qty via transactional DO triggers, mirroring
  *          gate_entry.handlers.ts's upsertCsnArrival() on the receiving
  *          side.
  * Authority: Backend
@@ -406,82 +406,6 @@ export async function getAvailableQty(companyId: string, storageLocationId: stri
 // vendor/inter-plant inbound, never SO/customer sales). Business judgment on
 // any remainder (new balance CSN vs knock-off) stays manual in CSN Tracker
 // (§ design lock) — this only captures the accurate dispatched qty.
-async function upsertCsnDispatch(stoId: string, materialId: string, dispatchQty: number, actionedBy: string): Promise<void> {
-  const { data: csn, error: csnError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("consignment_note")
-    .select("id, status, total_dispatch_qty")
-    .eq("sto_id", stoId)
-    .eq("material_id", materialId)
-    .in("status", ["ORD", "TRN", "GED"])
-    .maybeSingle();
-  if (csnError) throw new Error("DO_CSN_LOOKUP_FAILED");
-  if (!csn) return; // Not every STO line is CSN-linked — nothing to sync.
-
-  const currentStatus = toUpperTrimmedString(csn.status);
-  const nextStatus = currentStatus === "ORD" ? "TRN" : currentStatus;
-  const totalDispatchQty = Number(csn.total_dispatch_qty ?? 0);
-
-  const { error: updateError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("consignment_note")
-    .update({
-      status: nextStatus,
-      dispatch_qty: dispatchQty,
-      total_dispatch_qty: Number((totalDispatchQty + dispatchQty).toFixed(6)),
-      last_updated_at: new Date().toISOString(),
-      last_updated_by: actionedBy,
-    })
-    .eq("id", String(csn.id));
-  if (updateError) throw new Error("DO_CSN_DISPATCH_SYNC_FAILED");
-}
-
-// §133.12 -- shared by cancelDeliveryOrderHandler and do_unified.handlers.ts's
-// updateDeliveryOrderUnifiedHandler (Edit tears down its own old lines
-// before re-validating a fresh set, exactly like a cancel would). Resolved
-// PER LINE via sto_line_id -> its own sto_id, not a DO header's sto_id (a
-// §133.12 multi-source/MIXED DO never populates that column) -- works
-// identically for old and new-style DOs since every STO line still carries
-// its own sto_line_id regardless of how many other sources the same DO also
-// drew from. Throws Error(code) -- caller's own catch block maps it.
-export async function undoCsnDispatchForLines(lineRows: JsonRecord[], actionedBy: string, nowIso: string): Promise<void> {
-  const stoLineIds = [...new Set(lineRows.map((row) => toTrimmedString(row.sto_line_id)).filter(Boolean))];
-  if (stoLineIds.length === 0) return;
-
-  const { data: stoLineRows, error: stoLineLookupError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("stock_transfer_order_line")
-    .select("id, sto_id")
-    .in("id", stoLineIds);
-  if (stoLineLookupError) throw new Error("DO_STO_LINE_LOOKUP_FAILED");
-  const stoIdByLineId = new Map(((stoLineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.sto_id)]));
-
-  for (const row of lineRows) {
-    const stoLineId = toTrimmedString(row.sto_line_id);
-    if (!stoLineId) continue;
-    const stoId = stoIdByLineId.get(stoLineId);
-    const materialId = toTrimmedString(row.material_id);
-    const quantity = Number(row.quantity ?? 0);
-    if (!stoId || !materialId || quantity <= 0) continue;
-    const { data: csn, error: csnError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .select("id, total_dispatch_qty")
-      .eq("sto_id", stoId)
-      .eq("material_id", materialId)
-      .in("status", ["ORD", "TRN", "GED"])
-      .maybeSingle();
-    if (csnError) throw new Error("DO_CSN_LOOKUP_FAILED");
-    if (!csn) continue;
-    const nextTotal = Math.max(0, Number(csn.total_dispatch_qty ?? 0) - quantity);
-    const { error: csnUpdateError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .update({ total_dispatch_qty: Number(nextTotal.toFixed(6)), last_updated_by: actionedBy, last_updated_at: nowIso })
-      .eq("id", String(csn.id));
-    if (csnUpdateError) throw new Error("DO_CSN_DISPATCH_UNDO_FAILED");
-  }
-}
 
 export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
@@ -739,7 +663,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
       }
 
       if (!isSalesOrder) {
-        await upsertCsnDispatch(sourceId, String(sourceLine.material_id), quantity, ctx.auth_user_id);
+        // CSN dispatch is synchronized by the transactional DO triggers.
       }
     }
 
@@ -815,7 +739,7 @@ export async function cancelDeliveryOrderHandler(req: Request, ctx: ProcurementH
       return doErrorResponse(req, ctx, "DO_CANCEL_FAILED", 500, "Unable to cancel delivery order.");
     }
 
-    await undoCsnDispatchForLines(lineRows, ctx.auth_user_id, nowIso);
+    // The atomic cancellation also recomputes linked CSN dispatch totals.
 
     // Legacy hydrator -- fine for old single-source DOs; for a §133.12
     // multi-source DO this just shows blank customer/ship-to fields (no

@@ -141,6 +141,26 @@ that the migration has been rolled back in either database.
 
 ---
 
+### 2026-09-11 — STO sending workflow (DONE in code/dev; production rollout pending)
+
+Business-owner scope: receiving locations do not yet use PACE. GE/GRN/receipt backfill is excluded. Sending company owns SO03 DO, SO02 invoice and P601 stock OUT for both New/Legacy and Independent/Distribution STOs.
+
+- Fixed missing STO audit-table backend grants through schema migrations; replaced separate header/line/Distribution-CSN writes with `create_sto_atomic` and status/audit/Independent-CSN writes with `transition_sto_atomic`.
+- Legacy form now supports both types, preserves legacy number and delivery type, and opens the saved draft when auto-confirm fails. Duplicate numbers return 409 with recovery guidance.
+- Added exact `consignment_note.sto_line_id` linkage. Distribution transforms the existing Sub-CSN, keeps mother/PO trace and a source snapshot, resets the new dispatch leg, and uses STO commercial data in the tracker. Atomic cancellation restores its prior source state. Independent CSNs remain per line, including repeated materials.
+- Unified DO now snapshots STO transfer price/GST. Submission validation accounts for sibling lines against STO quantity and material/location availability. Transactional DO triggers validate sender/material/UOM and recompute CSN/STO dispatch totals on create/edit/cancel/PGI; no increment/decrement drift.
+- Invoice completion/reversal now touches only the invoice's own DO-line reservations; tested a sibling DO against the same STO line. The final completion definition derives quantity from invoice lines and validates company/DO/source ownership, supporting pre-existing API payloads.
+- Retired direct STO stock posting. Detail action opens SO03; receiving location setup is no longer a dispatch prerequisite. Detail loads unified DOs through `delivery_challan_source`. Lowered stock-posting guard baseline from 13 to 12.
+- Dev applied migration versions (local filenames match MCP-recorded versions): `20260911112001`, `20260911112900`, `20260911113237`. R-04 operational mapping is separate in `STO-SENDING-MCP-ROLLOUT.sql`; ran in dev, three existing CSNs mapped unambiguously, remaining unmapped=0.
+
+Validation: `scripts/sto-do-commercial-test.cjs` runs the real DO validator (3000 x 72.20 = 216600, 18% GST = 38988; split limits and wrong sender rejected). `scripts/sto-sending-workflow-test.sql` passed in dev as service_role with complete rollback: partial create/confirm failures, repeated-material CSNs, partial dispatch, edit, over-dispatch, sibling reservations, multi-group invoice failure rollback, sender stock OUT/reversal, cancellation, Distribution reuse/restore. Leftover test STOs=0. Changed-page ESLint, JSX guard, stock-posting guard, TS syntax compilation and frontend production build passed. Build retains existing GRN duplicate-prop and chunk-size warnings. Supabase security advisor listed no findings on the added functions (existing unrelated findings retained).
+
+Production has not received these migrations or new API/frontend code. Roll out DB and application together through the normal main deployment; then run the operational mapping separately against prod. Review the existing `ACP/PO87/2026-27` draft and confirm via the normal UI; do not recreate/delete it. No production stock, invoice, CSN, GRN or ACL data was changed in this implementation.
+
+One development migration attempt was blocked by automatic approval review for an insufficiently specific reservation predicate. It was narrowed to company, DO and source-line ownership; the revised change was accepted and passed the sibling-reservation regression. There is no remaining approval block.
+
+---
+
 ## Gate-11 - Foundation DB (erp_inventory schema)
 
 **Spec File:** OM-GATE-11-Foundation-DB-Spec.md

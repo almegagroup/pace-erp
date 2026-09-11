@@ -919,6 +919,8 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     // but that's a Plan Feed-side invariant this handler shouldn't silently
     // depend on -- this makes the <= check exact regardless.
     const allocationUsedInThisSubmission = new Map<string, number>();
+    const stoUsedInThisSubmission = new Map<string, number>();
+    const stockUsedInThisSubmission = new Map<string, number>();
 
     // SO ids referenced (directly or via an allocation) + STO ids, for the
     // new delivery_challan_source rows (§133.12) and company-scope re-check
@@ -1053,9 +1055,11 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       } else if (stoLineId) {
         const sourceLine = stoLineMap.get(stoLineId);
         if (!sourceLine) throw new Error("DO_SOURCE_LINE_NOT_FOUND");
+        // STO commercial values use the same base-UOM snapshot as SO lines.
+        salesSourceLine = { ...sourceLine, rate: sourceLine.transfer_price, rate_basis: "BASE_UOM" };
         materialId = toTrimmedString(sourceLine.material_id);
         uomCode = toTrimmedString(sourceLine.uom_code);
-        remaining = Number(sourceLine.balance_qty ?? 0) - (drawnByStoLine.get(stoLineId) ?? 0);
+        remaining = Number(sourceLine.quantity ?? 0) - (drawnByStoLine.get(stoLineId) ?? 0) - (stoUsedInThisSubmission.get(stoLineId) ?? 0);
         sourceType = "STO";
         sourceId = toTrimmedString(sourceLine.sto_id);
       } else {
@@ -1068,11 +1072,14 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       if (soMapAllocationId) {
         allocationUsedInThisSubmission.set(soMapAllocationId, (allocationUsedInThisSubmission.get(soMapAllocationId) ?? 0) + quantity);
       }
-      const available = await getAvailableQty(companyId, storageLocationId, materialId, excludeDcId);
+      const stockKey = `${storageLocationId}|${materialId}`;
+      const available = await getAvailableQty(companyId, storageLocationId, materialId, excludeDcId) - (stockUsedInThisSubmission.get(stockKey) ?? 0);
       if (quantity > available + QTY_TOL) {
         throw new Error("INSUFFICIENT_STOCK");
       }
 
+      stockUsedInThisSubmission.set(stockKey, (stockUsedInThisSubmission.get(stockKey) ?? 0) + quantity);
+      if (stoLineId) stoUsedInThisSubmission.set(stoLineId, (stoUsedInThisSubmission.get(stoLineId) ?? 0) + quantity);
       if (sourceType === "SALES_ORDER") soIdsForSources.add(sourceId); else stoIdsForSources.add(sourceId);
       const rawRate = Number(salesSourceLine?.rate ?? 0);
       const rateBasis = toUpperTrimmedString(salesSourceLine?.rate_basis);
@@ -2772,7 +2779,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       });
 
       const reservationsPayload = group.lines
-        .map((line) => ({ source_line_id: line.so_line_id || line.sto_line_id, issued_qty: line.quantity }))
+        .map((line) => ({ dc_line_id: line.dc_line_id, source_line_id: line.so_line_id || line.sto_line_id, issued_qty: line.quantity }))
         .filter((r) => r.source_line_id);
 
       // §133.14 Part B -- computed fresh per group, written in the same
