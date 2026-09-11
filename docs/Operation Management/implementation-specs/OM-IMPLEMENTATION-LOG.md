@@ -112,6 +112,14 @@
 
 ---
 
+### 2026-09-11 — SO01 FG SKU search: remove truncated master-list dependency
+
+- **Root cause verified in prod, CMP006:** active SKU `6765SS06599` (`FG-00379`) and its active mapping/configuration/approved MTO applicability exist. The old unpaged all-company `material_company_ext` lookup stopped at PostgREST's 1,000 rows, excluding this mapping before FG eligibility ran. Packing PO finalization was not the failing condition.
+- **Code fix:** FG search now filters the material master on the server with active mapping joins before pagination. A cursor traverses own-company matches first, then other-company matches without duplicates. Each request resolves only candidate SKUs and their possible prodshade/configuration relationships. Related stroke/applicability/conversion lookups also paginate, with bounded ID batches. MTO/HPS/MTS shared-stroke eligibility and MTEST rules are preserved.
+- **UI:** per-row React Query infinite search, debounced typing, automatic loading on scroll/keyboard, continuation across empty eligibility pages, error/retry feedback, and selected SKU metadata retained independently of subsequent searches. No Next-page control or 1,000-SKU ceiling. Existing local combobox consumers retain local filtering.
+- **Verification:** actual revised handler run locally against prod using GET-only requests: `6765SS06599` and `6765SS06000` both returned for CMP006/MTO; mapping anti-join and literal special-character search succeeded. This was verification, not an API deployment. Regression script `scripts/so01-fg-sku-search-test.cjs` covers >1,000 mappings, SKUs and approved strokes, full cursor traversal, shared types, variants, company scope, conversion metadata and errors. Headless browser verified scroll through an empty page, typing, two independent rows, stale-response isolation, keyboard selection and error retry. Deno handler check, frontend production build and repository CI guards pass. Focused lint has the two pre-existing set-state-in-effect errors in the shared combobox; no new lint violations.
+- **R-04 / rollout:** code only; no schema, migration, ACL or operational-data change. Deploy both backend API and frontend for the updated paged response contract. Production deployment is pending.
+
 ### 2026-09-09 — AC10 R-04 correction (IN_PROGRESS)
 
 The AC10 rollout initially mixed function DDL with operational version creation,

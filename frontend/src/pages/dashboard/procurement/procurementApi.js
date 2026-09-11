@@ -50,7 +50,7 @@ async function fetchProcurement(method, path, body, params) {
   const payload = json.data;
 
   if (payload && typeof payload === "object" && "data" in payload) {
-    if ("total" in payload) {
+    if ("total" in payload || "next_cursor" in payload) {
       return payload;
     }
     return payload.data;

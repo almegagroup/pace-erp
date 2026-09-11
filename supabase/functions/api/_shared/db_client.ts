@@ -14,7 +14,7 @@
 // because PostgrestQueryBuilder is itself PromiseLike<PostgrestResponse<any>> and
 // TypeScript's method-parameter bivariance makes the two PromiseLike instantiations
 // structurally compatible.
-export type DbQueryBuilder = PromiseLike<{ data: any; error: any }> & {
+export type DbQueryBuilder = PromiseLike<{ data: any; error: any; count?: number | null }> & {
   select: (...args: unknown[]) => DbQueryBuilder;
   insert: (...args: unknown[]) => DbQueryBuilder;
   upsert: (...args: unknown[]) => DbQueryBuilder;
@@ -22,11 +22,15 @@ export type DbQueryBuilder = PromiseLike<{ data: any; error: any }> & {
   delete: (...args: unknown[]) => DbQueryBuilder;
   eq: (...args: unknown[]) => DbQueryBuilder;
   neq: (...args: unknown[]) => DbQueryBuilder;
+  gte: (...args: unknown[]) => DbQueryBuilder;
+  lte: (...args: unknown[]) => DbQueryBuilder;
   in: (...args: unknown[]) => DbQueryBuilder;
   is: (...args: unknown[]) => DbQueryBuilder;
   not: (...args: unknown[]) => DbQueryBuilder;
+  or: (...args: unknown[]) => DbQueryBuilder;
   order: (...args: unknown[]) => DbQueryBuilder;
   limit: (...args: unknown[]) => DbQueryBuilder;
+  range: (...args: unknown[]) => DbQueryBuilder;
   maybeSingle: (...args: unknown[]) => Promise<{ data: any; error: any }>;
   single: (...args: unknown[]) => Promise<{ data: any; error: any }>;
 };
