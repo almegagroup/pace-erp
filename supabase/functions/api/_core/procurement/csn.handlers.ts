@@ -1077,6 +1077,7 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const portMap = new Map((portResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const companyMap = new Map((companyResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
   const poLineMap = new Map((poLineResult.data ?? []).map((row: Record<string, unknown>) => [toTrimmedString(row.id), row]));
+  const stoLineById = new Map(((stoLineResult.data ?? []) as Record<string, unknown>[]).map((line) => [String(line.id), line]));
   const stoLineMap = new Map(
     ((stoLineResult.data ?? []) as Record<string, unknown>[]).map((row) => {
       const key = [
@@ -1118,7 +1119,7 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
     const consigneeCompany = companyMap.get(toTrimmedString(row.consignee_company_id)) as Record<string, unknown> | undefined;
     const owningCompany = companyMap.get(toTrimmedString(row.company_id)) as Record<string, unknown> | undefined;
     const poLine = poLineMap.get(toTrimmedString(row.po_line_id)) as Record<string, unknown> | undefined;
-    const stoLine = stoLineMap.get([
+    const stoLine = stoLineById.get(toTrimmedString(row.sto_line_id)) ?? stoLineMap.get([
       toTrimmedString(row.sto_id),
       toTrimmedString(row.material_id),
       toTrimmedString(row.po_uom_code),
@@ -1179,8 +1180,8 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       material_name: material?.material_name ?? null,
       material_code: material?.pace_code ?? null,
       base_uom_code: material?.base_uom_code ?? null,
-      po_rate: poLine?.unit_rate ?? stoLine?.transfer_price ?? row.transfer_price ?? null,
-      currency_code: toTrimmedString(poLine?.currency_code) || toTrimmedString(stoLine?.currency_code) || toTrimmedString(stoLine?.transfer_price_currency) || null,
+      po_rate: row.sto_id ? (stoLine?.transfer_price ?? null) : (poLine?.unit_rate ?? row.transfer_price ?? null),
+      currency_code: row.sto_id ? (toTrimmedString(stoLine?.currency_code) || toTrimmedString(stoLine?.transfer_price_currency) || null) : (toTrimmedString(poLine?.currency_code) || null),
       balance_qty: balanceQty,
       transporter_name: transporter?.transporter_name ?? row.transporter_name_freetext ?? row.domestic_transporter_freetext ?? null,
       transporter_code: transporter?.transporter_code ?? null,

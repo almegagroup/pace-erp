@@ -49,7 +49,6 @@ const BASELINE = {
   "supabase/functions/api/_core/procurement/pto.handlers.ts": 1,
   "supabase/functions/api/_core/procurement/rtv.handlers.ts": 3,
   "supabase/functions/api/_core/procurement/sales_order.handlers.ts": 1,
-  "supabase/functions/api/_core/procurement/sto.handlers.ts": 1,
   "supabase/functions/api/_core/production/packing_order.handlers.ts": 1,
   // partial_reversal.handlers.ts migrated to post_document (2026-09-01,
   // complete_partial_batch_reversal) -- no more raw post_stock_movement calls, so it

@@ -264,7 +264,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
     () => (Array.isArray(receivingCostCenterQuery.data?.data) ? receivingCostCenterQuery.data.data : []),
     [receivingCostCenterQuery.data?.data]
   );
-  const isConsignmentSto = !openingMode && form.sto_type === "CONSIGNMENT_DISTRIBUTION";
+  const isConsignmentSto = form.sto_type === "CONSIGNMENT_DISTRIBUTION";
   const defaultPaymentTermId = String(lastPaymentTermQuery.data?.payment_term_id || "");
 
   const companyOptions = useMemo(
@@ -485,7 +485,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
     setNotice("");
     try {
       const payload = {
-        sto_type: openingMode ? "INTER_PLANT" : form.sto_type,
+        sto_type: form.sto_type,
         ...(openingMode ? { sto_number: form.sto_number.trim(), sto_date: form.sto_date || null, is_opening_sto: true } : {}),
         sending_company_id: form.sending_company_id,
         receiving_company_id: form.receiving_company_id,
@@ -514,8 +514,14 @@ export default function StoCreateFormPage({ openingMode = false }) {
       };
       const created = await createSTO(payload);
 
-      if (openingMode) {
-        await confirmSTO(created?.id, { approval_required: false });
+      if (openingMode && created?.status === "DRAFT") {
+        try {
+          await confirmSTO(created?.id, { approval_required: false });
+        } catch (confirmError) {
+          openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code);
+          navigate(`/dashboard/procurement/stos/${encodeURIComponent(created.id)}`);
+          throw new Error(`STO ${created.sto_number} was saved as Draft. Confirm it from the detail page. ${confirmError.message}`);
+        }
         setNotice(`Opening STO ${created?.sto_number || form.sto_number.trim()} created and confirmed.`);
         openScreen(OPERATION_SCREENS.PROC_STO_LIST.screen_code);
         navigate("/dashboard/procurement/stos");
@@ -734,7 +740,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
           <div className="grid gap-4">
             <ErpSectionCard eyebrow="STO Header" title={openingMode ? "Legacy transfer basics" : "Transfer basics"}>
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-                {openingMode ? (
+                {openingMode && (
                   <label className="grid gap-1 text-xs font-semibold text-slate-700">
                     Legacy STO Number <span className="text-rose-500">*</span>
                     <input
@@ -743,7 +749,8 @@ export default function StoCreateFormPage({ openingMode = false }) {
                       className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                     />
                   </label>
-                ) : (
+                )}
+                {(
                   <label className="grid gap-1 text-xs font-semibold text-slate-700">
                     STO Type <span className="text-rose-500">*</span>
                     <select

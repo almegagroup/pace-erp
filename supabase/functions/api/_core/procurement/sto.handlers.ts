@@ -12,7 +12,6 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
-import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
@@ -437,6 +436,16 @@ async function getStoAmendmentLog(stoId: string): Promise<JsonRecord[]> {
   return (data as JsonRecord[] | null) ?? [];
 }
 
+async function fetchStoDeliveryChallans(stoId: string) {
+  const { data: sources, error } = await serviceRoleClient.schema("erp_procurement")
+    .from("delivery_challan_source").select("dc_id").eq("source_type", "STO").eq("source_id", stoId);
+  if (error) throw new Error("STO_DC_SOURCE_FETCH_FAILED");
+  const ids = [...new Set((sources ?? []).map((row) => String(row.dc_id)))];
+  let query = serviceRoleClient.schema("erp_procurement").from("delivery_challan").select("*");
+  query = ids.length ? query.or(`sto_id.eq.${stoId},id.in.(${ids.join(",")})`) : query.eq("sto_id", stoId);
+  return await query.order("created_at", { ascending: false });
+}
+
 async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promise<JsonRecord> {
   const sto = await fetchSto(stoId);
   if (ctx) {
@@ -444,12 +453,7 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
   }
   const [lines, dcResp, gateExitResp, approvalLog, amendmentLog] = await Promise.all([
     fetchStoLines(stoId),
-    serviceRoleClient
-      .schema("erp_procurement")
-      .from("delivery_challan")
-      .select("*")
-      .eq("sto_id", stoId)
-      .order("created_at", { ascending: false }),
+    fetchStoDeliveryChallans(stoId),
     serviceRoleClient
       .schema("erp_procurement")
       .from("gate_exit_outbound")
@@ -471,51 +475,6 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
     approval_log: approvalLog,
     amendment_log: amendmentLog,
   });
-}
-
-async function hasPhysicalInventoryBlock(
-  materialId: string,
-  storageLocationId: string,
-  stockType: string,
-): Promise<boolean> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("physical_inventory_block")
-    .select("id")
-    .eq("material_id", materialId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("stock_type", stockType)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error("MATERIAL_POSTING_BLOCK_LOOKUP_FAILED");
-  }
-
-  return Boolean(data?.id);
-}
-
-async function getSnapshotForLine(companyId: string, line: StoLineRow): Promise<JsonRecord> {
-  const sendingLocationId = toTrimmedString(line.sending_storage_location_id);
-  if (!sendingLocationId) {
-    throw new Error("STO_SENDING_LOCATION_REQUIRED");
-  }
-
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("stock_snapshot")
-    .select("*")
-    .eq("company_id", companyId)
-    .eq("storage_location_id", sendingLocationId)
-    .eq("material_id", String(line.material_id))
-    .eq("stock_type_code", "UNRESTRICTED")
-    .is("batch_id", null)
-    .maybeSingle();
-
-  if (error || !data) {
-    throw new Error("INSUFFICIENT_STOCK");
-  }
-
-  return data;
 }
 
 async function getSubCsnById(csnId: string, companyId: string): Promise<JsonRecord> {
@@ -774,6 +733,7 @@ function buildCsnForInterPlantStoLine(input: {
     po_id: null,
     po_line_id: null,
     sto_id: input.sto.id,
+    sto_line_id: input.line.id,
     po_qty: Number(input.line.quantity ?? 0),
     dispatch_qty: 0,
     po_uom_code: input.line.uom_code,
@@ -787,75 +747,36 @@ function buildCsnForInterPlantStoLine(input: {
   };
 }
 
-async function createCsnForSto(
-  sto: StoRow,
-  stoLines: StoLineRow[],
-  actionedBy: string,
-  deliveryTypeInput?: string,
-): Promise<void> {
-  if (toUpperTrimmedString(sto.sto_type) !== "INTER_PLANT") {
-    return;
+async function prepareCsnsForSto(sto: StoRow, lines: StoLineRow[], actor: string): Promise<JsonRecord[]> {
+  if (sto.sto_type !== "INTER_PLANT") return [];
+  const company = await getCompanyRow(toTrimmedString(sto.sending_company_id));
+  const terms = await getPaymentTermRowsByIds(lines.map((line) => toTrimmedString(line.payment_term_id)));
+  return await Promise.all(lines.map(async (line) => buildCsnForInterPlantStoLine({
+    sto, line, actionedBy: actor, csnNumber: await generateProcurementDocNumber("CSN"),
+    deliveryType: toUpperTrimmedString(sto.delivery_type) || "STANDARD",
+    sendingCompanyHasGst: Boolean(toTrimmedString(company?.gst_number)),
+    lcRequired: toUpperTrimmedString(terms.get(toTrimmedString(line.payment_term_id))?.payment_method) === "LC",
+  })));
+}
+
+async function transitionSto(sto: StoRow, nextStatus: string, actor: string, remarks: string | null): Promise<void> {
+  const csns = nextStatus === "CREATED" ? await prepareCsnsForSto(sto, await fetchStoLines(String(sto.id)), actor) : [];
+  const { error } = await serviceRoleClient.schema("erp_procurement").rpc("transition_sto_atomic", {
+    p_sto_id: sto.id, p_from_status: sto.status, p_to_status: nextStatus,
+    p_actor: actor, p_remarks: remarks, p_csns: csns,
+  });
+  if (error) { console.error("STO_TRANSITION_FAILED", error); throw new Error(error.message); }
+}
+
+async function persistSto(header: JsonRecord, lines: JsonRecord[]): Promise<StoRow> {
+  const { data, error } = await serviceRoleClient.schema("erp_procurement").rpc("create_sto_atomic", {
+    p_header: header, p_lines: lines,
+  });
+  if (error) {
+    console.error("STO_CREATE_DATABASE_ERROR", error);
+    throw new Error(error.code === "23505" ? "STO_NUMBER_ALREADY_EXISTS" : error.message);
   }
-
-  const sendingCompany = await getCompanyRow(toTrimmedString(sto.sending_company_id));
-  const sendingCompanyHasGst = Boolean(toTrimmedString(sendingCompany?.gst_number));
-  const deliveryType = toUpperTrimmedString(deliveryTypeInput || sto.delivery_type || "STANDARD") || "STANDARD";
-  const stoId = toTrimmedString(sto.id);
-  const paymentTermById = await getPaymentTermRowsByIds(
-    stoLines.map((line) => toTrimmedString(line.payment_term_id)),
-  );
-  const lineKeys = stoLines.map((line) => ({
-    line,
-    key: JSON.stringify([
-      toTrimmedString(line.material_id),
-      toTrimmedString(line.uom_code),
-      Number(line.quantity ?? 0),
-    ]),
-  }));
-  const { data: existingRows, error: existingError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("consignment_note")
-    .select("material_id, po_uom_code, po_qty")
-    .eq("sto_id", stoId);
-  if (existingError) {
-    throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
-  }
-  const existingKeys = new Set(
-    ((existingRows as JsonRecord[] | null) ?? []).map((row) =>
-      JSON.stringify([
-        toTrimmedString(row.material_id),
-        toTrimmedString(row.po_uom_code),
-        Number(row.po_qty ?? 0),
-      ])
-    ),
-  );
-
-  await Promise.all(
-    lineKeys
-      .filter(({ key }) => !existingKeys.has(key))
-      .map(async ({ line }) => {
-        const paymentTermId = toTrimmedString(line.payment_term_id);
-        const paymentTerm = paymentTermId ? paymentTermById.get(paymentTermId) ?? null : null;
-        const payload = buildCsnForInterPlantStoLine({
-          sto,
-          line,
-          csnNumber: await generateProcurementDocNumber("CSN"),
-          actionedBy,
-          deliveryType,
-          sendingCompanyHasGst,
-          lcRequired: toUpperTrimmedString(paymentTerm?.payment_method) === "LC",
-        });
-
-        const { error } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .insert(payload);
-
-        if (error) {
-          throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
-        }
-      }),
-  );
+  return data as StoRow;
 }
 
 async function inactivateLinkedCsnsForSto(input: {
@@ -870,6 +791,7 @@ async function inactivateLinkedCsnsForSto(input: {
   // line-scoped knock-off must narrow by material to avoid touching a
   // sibling line's CSN for a different material on the same STO.
   materialId?: string;
+  stoLineId?: string;
 }): Promise<void> {
   let query = serviceRoleClient
     .schema("erp_procurement")
@@ -878,7 +800,7 @@ async function inactivateLinkedCsnsForSto(input: {
     .eq("sto_id", input.stoId)
     .in("status", input.eligibleStatuses ?? ["ORD", "TRN", "GED"]);
   if (input.materialId) {
-    query = query.eq("material_id", input.materialId);
+    query = input.stoLineId ? query.eq("sto_line_id", input.stoLineId) : query.eq("material_id", input.materialId);
   }
   const { data: rows, error: fetchError } = await query;
 
@@ -925,9 +847,13 @@ async function buildConsignmentStoFromSubCsns(input: {
   remarks: string | null;
   lineConfigs: Map<string, JsonRecord>;
   actionedBy: string;
+  openingNumber?: string;
+  deliveryType?: string;
 }): Promise<StoRow> {
   let sto: StoRow | null = null;
   let nextLineNumber = 1;
+  const payloads: JsonRecord[] = [];
+  if (new Set(input.csnIds).size !== input.csnIds.length) throw new Error("CSN_SELECTION_DUPLICATE");
 
   // DEPENDENT: this transform incrementally creates one STO header and line ordering from prior CSN-linked state, so iteration order is significant.
   for (const csnId of input.csnIds) {
@@ -964,33 +890,15 @@ async function buildConsignmentStoFromSubCsns(input: {
     }
 
     if (!sto) {
-      const stoNumber = await generateCompanyDocNumber(input.receivingCompanyId, "STO");
-      const stoGroupNumber = await generatePrintGroupNumber();
-      const { data: createdSto, error: stoError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("stock_transfer_order")
-        .insert({
-          sto_number: stoNumber,
-          sto_date: input.stoDate,
-          sto_type: "CONSIGNMENT_DISTRIBUTION",
-          sending_company_id: input.sendingCompanyId,
-          receiving_company_id: input.receivingCompanyId,
-          sending_cost_center_id: input.sendingCostCenterId,
-          receiving_cost_center_id: input.receivingCostCenterId,
-          related_csn_id: csnId,
-          status: "CREATED",
-          remarks: input.remarks || `Auto-created from sub CSN ${subCsn.csn_number ?? csnId}`,
-          group_number: stoGroupNumber,
-          created_by: input.actionedBy,
-          last_updated_by: input.actionedBy,
-        })
-        .select("*")
-        .single();
-
-      if (stoError || !createdSto) {
-        throw new Error("STO_TRANSFORM_CREATE_FAILED");
-      }
-      sto = createdSto as StoRow;
+      sto = {
+        sto_number: input.openingNumber || await generateCompanyDocNumber(input.receivingCompanyId, "STO"),
+        sto_date: input.stoDate, sto_type: "CONSIGNMENT_DISTRIBUTION",
+        sending_company_id: input.sendingCompanyId, receiving_company_id: input.receivingCompanyId,
+        sending_cost_center_id: input.sendingCostCenterId, receiving_cost_center_id: input.receivingCostCenterId,
+        related_csn_id: csnId, status: "CREATED", is_opening_sto: Boolean(input.openingNumber),
+        delivery_type: input.deliveryType || "STANDARD", remarks: input.remarks,
+        group_number: await generatePrintGroupNumber(), created_by: input.actionedBy, last_updated_by: input.actionedBy,
+      };
     }
 
     const lineConfig = input.lineConfigs.get(csnId) ?? {};
@@ -999,11 +907,8 @@ async function buildConsignmentStoFromSubCsns(input: {
       throw new Error("STO_LINE_INVALID");
     }
 
-    const { error: lineError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("stock_transfer_order_line")
-      .insert({
-        sto_id: sto.id,
+    payloads.push({
+        source_csn_id: csnId,
         line_number: nextLineNumber,
         material_id: subCsn.material_id,
         sending_storage_location_id: lineConfig.sending_storage_location_id ?? null,
@@ -1016,6 +921,7 @@ async function buildConsignmentStoFromSubCsns(input: {
         payment_term_id: lineConfig.payment_term_id,
         freight_term: lineConfig.freight_term,
         gst_terms: lineConfig.gst_terms,
+        gst_rate: lineConfig.gst_rate,
         remarks: lineConfig.remarks,
         has_rebate: lineConfig.has_rebate,
         rebate_rate: lineConfig.rebate_rate,
@@ -1023,28 +929,7 @@ async function buildConsignmentStoFromSubCsns(input: {
         rebate_remarks: lineConfig.rebate_remarks,
         expected_delivery_date: lineConfig.expected_delivery_date,
         balance_qty: dispatchQty,
-      });
-
-    if (lineError) {
-      throw new Error("STO_TRANSFORM_LINE_FAILED");
-    }
-
-    const { error: csnUpdateError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("consignment_note")
-      .update({
-        sto_id: sto.id,
-        company_id: input.receivingCompanyId,
-        vendor_id: input.sendingCompanyId,
-        consignee_company_id: null,
-        last_updated_at: new Date().toISOString(),
-        last_updated_by: input.actionedBy,
-      })
-      .eq("id", csnId);
-
-    if (csnUpdateError) {
-      throw new Error("CSN_STO_LINK_FAILED");
-    }
+    });
 
     nextLineNumber += 1;
   }
@@ -1053,7 +938,7 @@ async function buildConsignmentStoFromSubCsns(input: {
     throw new Error("STO_TRANSFORM_FAILED");
   }
 
-  return sto;
+  return await persistSto(sto, payloads);
 }
 
 export async function createSTOHandler(
@@ -1087,9 +972,9 @@ export async function createSTOHandler(
       return stoErrorResponse(req, ctx, "STO_COST_CENTER_INVALID", 400, "A selected STO cost center was not found.");
     }
 
-    if (isOpeningSto && stoType !== "INTER_PLANT") {
-      return stoErrorResponse(req, ctx, "STO_OPENING_REQUIRES_INTER_PLANT", 400, "Opening STOs must use INTER_PLANT sto_type.");
-    }
+    if (sendingCompanyId === receivingCompanyId) throw new Error("STO_COMPANIES_MUST_DIFFER");
+    const openingStoNumber = toTrimmedString(body.sto_number);
+    if (isOpeningSto && !openingStoNumber) throw new Error("PROCUREMENT_OPENING_STO_NUMBER_REQUIRED");
 
     const preparedLines: PreparedStoLine[] = [];
     for (let index = 0; index < lines.length; index += 1) {
@@ -1115,6 +1000,8 @@ export async function createSTOHandler(
 
       const sto = await buildConsignmentStoFromSubCsns({
         csnIds,
+        openingNumber: isOpeningSto ? openingStoNumber : undefined,
+        deliveryType,
         sendingCompanyId,
         receivingCompanyId,
         sendingCostCenterId,
@@ -1128,46 +1015,19 @@ export async function createSTOHandler(
       return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
     }
 
-    const openingStoNumber = toTrimmedString(body.sto_number);
-    if (isOpeningSto && !openingStoNumber) {
-      return stoErrorResponse(req, ctx, "PROCUREMENT_OPENING_STO_NUMBER_REQUIRED", 400, "Opening STO number is required.");
-    }
-
-    const stoNumber = isOpeningSto
-      ? openingStoNumber
-      : await generateCompanyDocNumber(receivingCompanyId, "STO");
-    const stoGroupNumber = await generatePrintGroupNumber();
-    const { data: sto, error: stoError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("stock_transfer_order")
-      .insert({
-        sto_number: stoNumber,
-        sto_date: stoDate,
-        sto_type: stoType,
-        sending_company_id: sendingCompanyId,
-        receiving_company_id: receivingCompanyId,
-        sending_cost_center_id: sendingCostCenterId,
-        receiving_cost_center_id: receivingCostCenterId,
-        related_csn_id: relatedCsnId,
-        status: "DRAFT",
-        is_opening_sto: isOpeningSto,
-        remarks: toTrimmedString(body.remarks) || null,
-        group_number: stoGroupNumber,
-        created_by: ctx.auth_user_id,
-        last_updated_by: ctx.auth_user_id,
-      })
-      .select("*")
-      .single();
-
-    if (stoError || !sto) {
-      return stoErrorResponse(req, ctx, "STO_CREATE_FAILED", 500, "Unable to create STO.");
-    }
-
+    const header = {
+      sto_number: isOpeningSto ? openingStoNumber : await generateCompanyDocNumber(receivingCompanyId, "STO"),
+      sto_date: stoDate, sto_type: stoType, sending_company_id: sendingCompanyId,
+      receiving_company_id: receivingCompanyId, sending_cost_center_id: sendingCostCenterId,
+      receiving_cost_center_id: receivingCostCenterId, related_csn_id: relatedCsnId,
+      status: "DRAFT", is_opening_sto: isOpeningSto, delivery_type: deliveryType,
+      remarks: toTrimmedString(body.remarks) || null, group_number: await generatePrintGroupNumber(),
+      created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id,
+    };
     const linePayload = [];
     for (let index = 0; index < preparedLines.length; index += 1) {
       const line = preparedLines[index];
       linePayload.push({
-        sto_id: sto.id,
         line_number: index + 1,
         material_id: line.material_id,
         sending_storage_location_id: line.sending_storage_location_id ?? null,
@@ -1192,30 +1052,14 @@ export async function createSTOHandler(
       });
     }
 
-    const { error: lineError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("stock_transfer_order_line")
-      .insert(linePayload);
-
-    if (lineError) {
-      return stoErrorResponse(req, ctx, "STO_LINE_CREATE_FAILED", 500, "Unable to create STO lines.");
-    }
-
-    // CSN must not exist before the STO is actually approved -- matches
-    // PO exactly (createCsnsForPo only runs from confirmPOHandler's
-    // no-approval branch and approvePOHandler, never createPOHandler).
-    // This used to fire right here at raw creation, which meant an
-    // INTER_PLANT STO could have a live CSN while still sitting in DRAFT
-    // -- caught 2026-07-30, business owner correction. confirmSTOHandler's
-    // own no-approval-required branch and approveSTOHandler already call
-    // createCsnForSto at the right time; this was the only premature call.
+    const sto = await persistSto(header, linePayload);
 
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_CREATE_FAILED";
     console.error("STO_CREATE_HANDLER_ERROR", code, error);
-    const status = code.includes("INVALID") ? 400 : 500;
-    return stoErrorResponse(req, ctx, code, status, code);
+    const status = code === "STO_NUMBER_ALREADY_EXISTS" ? 409 : /INVALID|REQUIRED|DUPLICATE|MISMATCH|MUST_DIFFER|ALREADY_LINKED/.test(code) ? 400 : 500;
+    return stoErrorResponse(req, ctx, code, status, code === "STO_NUMBER_ALREADY_EXISTS" ? "An STO with this number already exists. Open that STO to review or confirm it instead of creating another." : code);
   }
 }
 
@@ -1532,34 +1376,10 @@ export async function cancelSTOHandler(
       return stoErrorResponse(req, ctx, "STO_CANCEL_BLOCKED", 400, "STO cannot be cancelled after receipt or final closure.");
     }
 
-    const { error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("stock_transfer_order")
-      .update({
-        status: "CANCELLED",
-        cancellation_reason: reason,
-        cancelled_at: new Date().toISOString(),
-        cancelled_by: ctx.auth_user_id,
-        last_updated_at: new Date().toISOString(),
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("id", stoId);
-
-    if (error) {
-      return stoErrorResponse(req, ctx, "STO_CANCEL_FAILED", 500, "Unable to cancel STO.");
-    }
-
-    try {
-      await inactivateLinkedCsnsForSto({
-        stoId,
-        reasonCode: "CAN",
-        reason,
-        actionedBy: ctx.auth_user_id,
-        clearStoLink: toUpperTrimmedString(sto.sto_type) === "CONSIGNMENT_DISTRIBUTION",
-      });
-    } catch (_csnError) {
-      return stoErrorResponse(req, ctx, "STO_CANCEL_FAILED", 500, "Unable to inactivate linked CSNs for cancelled STO.");
-    }
+    const { error } = await serviceRoleClient.schema("erp_procurement").rpc("cancel_sto_atomic", {
+      p_sto_id: stoId, p_reason: reason, p_actor: ctx.auth_user_id,
+    });
+    if (error) throw new Error(error.message);
 
     return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
   } catch (error) {
@@ -1636,6 +1456,7 @@ export async function knockOffSTOLineHandler(
       await inactivateLinkedCsnsForSto({
         stoId,
         materialId: toTrimmedString(targetLine.material_id),
+        stoLineId: lineId,
         reasonCode: "KOF",
         reason,
         actionedBy: ctx.auth_user_id,
@@ -1720,37 +1541,7 @@ export async function confirmSTOHandler(
 
     const requiresApproval = body.approval_required === true;
     const nextStatus = requiresApproval ? "PENDING_APPROVAL" : "CREATED";
-    const nowIso = new Date().toISOString();
-    const { data: updatedSto, error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("stock_transfer_order")
-      .update({
-        status: nextStatus,
-        approved_by: nextStatus === "CREATED" ? ctx.auth_user_id : null,
-        approved_at: nextStatus === "CREATED" ? nowIso : null,
-        last_updated_at: nowIso,
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("id", stoId)
-      .select("*")
-      .single();
-
-    if (error || !updatedSto) {
-      throw new Error("STO_CONFIRM_FAILED");
-    }
-
-    if (nextStatus === "PENDING_APPROVAL") {
-      await insertStoApprovalLog({
-        stoId,
-        action: "ESCALATED",
-        fromStatus: "DRAFT",
-        toStatus: "PENDING_APPROVAL",
-        remarks: toTrimmedString(body.remarks) || null,
-        actionedBy: ctx.auth_user_id,
-      });
-    } else {
-      await createCsnForSto(updatedSto as StoRow, await fetchStoLines(stoId), ctx.auth_user_id);
-    }
+    await transitionSto(sto, nextStatus, ctx.auth_user_id, toTrimmedString(body.remarks) || null);
 
     return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
   } catch (error) {
@@ -1775,34 +1566,7 @@ export async function approveSTOHandler(
       return stoErrorResponse(req, ctx, "STO_APPROVAL_STATE_INVALID", 422, "STO is not pending approval.");
     }
 
-    const nowIso = new Date().toISOString();
-    const { data: updatedSto, error } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("stock_transfer_order")
-      .update({
-        status: "CREATED",
-        approved_by: ctx.auth_user_id,
-        approved_at: nowIso,
-        last_updated_at: nowIso,
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("id", stoId)
-      .select("*")
-      .single();
-
-    if (error || !updatedSto) {
-      throw new Error("STO_APPROVE_FAILED");
-    }
-
-    await insertStoApprovalLog({
-      stoId,
-      action: "APPROVED",
-      fromStatus: "PENDING_APPROVAL",
-      toStatus: "CREATED",
-      remarks: toTrimmedString(body.remarks) || null,
-      actionedBy: ctx.auth_user_id,
-    });
-    await createCsnForSto(updatedSto as StoRow, await fetchStoLines(stoId), ctx.auth_user_id);
+    await transitionSto(sto, "CREATED", ctx.auth_user_id, toTrimmedString(body.remarks) || null);
     return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_APPROVE_FAILED";
@@ -2155,215 +1919,13 @@ export async function approveSTOAmendmentHandler(
   }
 }
 
-export async function dispatchSTOHandler(
-  req: Request,
-  ctx: ProcurementHandlerContext,
-): Promise<Response> {
-  try {
-    assertProcurementReadRole(ctx);
-    const stoId = getIdFromPath(req);
-    const body = await parseBody(req);
-    const sto = await fetchSto(stoId);
-    await assertStoVisibleToContext(ctx, sto);
-
-    if (toUpperTrimmedString(sto.status) !== "CREATED") {
-      return stoErrorResponse(req, ctx, "STO_DISPATCH_BLOCKED", 400, "Only CREATED STO can be dispatched.");
-    }
-
-    // KNOCKED_OFF lines (knockOffSTOLineHandler) must never reach dispatch --
-    // matches closeSTOHandler's own existing KNOCKED_OFF-is-resolved
-    // treatment on the other end of the lifecycle.
-    const lines = (await fetchStoLines(stoId)).filter(
-      (line) => toUpperTrimmedString(line.line_status) !== "KNOCKED_OFF",
-    );
-    if (lines.length === 0) {
-      return stoErrorResponse(req, ctx, "STO_EMPTY", 400, "STO has no lines to dispatch (all lines knocked off).");
-    }
-
-    const dispatchedLineResults: Array<{ line: StoLineRow; stockDocumentId: string }> = [];
-    let totalDispatchQty = 0;
-
-    // §106: one Material Document (MBLNR+MJAHR) for the whole dispatch event; the STO
-    // business number becomes the reference. Shared by every line's ledger item.
-    const stoMatDoc = await generateMaterialDocNumber(String(sto.sending_company_id));
-
-    // DEPENDENT: each STO dispatch line posts stock and updates dispatch totals that the following lines must observe in sequence.
-    for (const line of lines) {
-      const snapshot = await getSnapshotForLine(String(sto.sending_company_id), line);
-      const requiredQty = parsePositiveNumber(line.quantity) ?? 0;
-      const availableQty = parseNullableNumber(snapshot.quantity) ?? 0;
-      if (availableQty < requiredQty) {
-        return stoErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, `Insufficient stock for STO line ${line.line_number}.`);
-      }
-
-      const postingBlocked = await hasPhysicalInventoryBlock(
-        String(line.material_id),
-        String(line.sending_storage_location_id),
-        "UNRESTRICTED",
-      );
-      if (postingBlocked) {
-        return stoErrorResponse(
-          req,
-          ctx,
-          "MATERIAL_POSTING_BLOCKED",
-          409,
-          "Material has an active physical inventory count in progress.",
-        );
-      }
-
-      const posting = await serviceRoleClient
-        .schema("erp_inventory")
-        .rpc("post_stock_movement", {
-          p_document_number: sto.sto_number,
-          p_document_date: sto.sto_date,
-          p_posting_date: todayIsoDate(),
-          p_movement_type_code: "STO_ISSUE",
-          p_company_id: sto.sending_company_id,
-          p_storage_location_id: line.sending_storage_location_id,
-          p_material_id: line.material_id,
-          p_quantity: requiredQty,
-          p_base_uom_code: line.uom_code,
-          p_unit_value: parseNullableNumber(snapshot.valuation_rate) ?? 0,
-          p_stock_type_code: "UNRESTRICTED",
-          p_direction: "OUT",
-          p_posted_by: ctx.auth_user_id,
-          p_reversal_of_id: null,
-          p_material_doc_number: stoMatDoc.docNumber,
-          p_material_doc_year: stoMatDoc.docYear,
-          p_reference_document_number: sto.sto_number,
-          p_reference_document_type: "STO",
-          p_reference_document_id: sto.id ?? null,
-        });
-
-      if (posting.error || !Array.isArray(posting.data) || posting.data.length === 0) {
-        return stoErrorResponse(req, ctx, "STO_DISPATCH_POST_FAILED", 500, "Unable to post STO issue movement.");
-      }
-
-      const stockDocumentId = String(posting.data[0].stock_document_id);
-      const issuedQty = requiredQty;
-      const balanceQty = Number(((parsePositiveNumber(line.quantity) ?? 0) - issuedQty).toFixed(6));
-      const lineStatus = balanceQty <= 0 ? "RECEIVED" : "OPEN";
-
-      const { error: lineUpdateError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .from("stock_transfer_order_line")
-        .update({
-          dispatched_qty: issuedQty,
-          balance_qty: balanceQty,
-          line_status: lineStatus,
-          last_updated_at: new Date().toISOString(),
-        })
-        .eq("id", String(line.id));
-
-      if (lineUpdateError) {
-        return stoErrorResponse(req, ctx, "STO_LINE_DISPATCH_UPDATE_FAILED", 500, "Unable to update STO line dispatch state.");
-      }
-
-      dispatchedLineResults.push({ line, stockDocumentId });
-      totalDispatchQty += issuedQty;
-    }
-
-    const dcNumber = await generateProcurementDocNumber("DC");
-    const { data: dc, error: dcError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("delivery_challan")
-      .insert({
-        dc_number: dcNumber,
-        dc_date: todayIsoDate(),
-        dc_type: "STO",
-        selling_company_id: sto.sending_company_id,
-        receiving_company_id: sto.receiving_company_id,
-        sto_id: stoId,
-        delivery_address: toTrimmedString(body.delivery_address) || null,
-        transporter_id: toTrimmedString(body.transporter_id) || null,
-        transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
-        vehicle_number: toTrimmedString(body.vehicle_number) || null,
-        lr_number: toTrimmedString(body.lr_number) || null,
-        driver_name: toTrimmedString(body.driver_name) || null,
-        status: "AUTO_GENERATED",
-        total_value: dispatchedLineResults.reduce((sum, item) => sum + ((parseNullableNumber(item.line.transfer_price) ?? 0) * (parsePositiveNumber(item.line.quantity) ?? 0)), 0),
-        remarks: toTrimmedString(body.remarks) || null,
-      })
-      .select("*")
-      .single();
-
-    if (dcError || !dc) {
-      return stoErrorResponse(req, ctx, "STO_DC_CREATE_FAILED", 500, "Unable to create delivery challan.");
-    }
-
-    const dcLinePayload = dispatchedLineResults.map(({ line, stockDocumentId }, index) => ({
-      dc_id: dc.id,
-      line_number: index + 1,
-      material_id: line.material_id,
-      sto_line_id: line.id,
-      quantity: line.quantity,
-      uom_code: line.uom_code,
-      unit_value: line.transfer_price,
-      line_total: (parseNullableNumber(line.transfer_price) ?? 0) * (parsePositiveNumber(line.quantity) ?? 0),
-      stock_document_id: stockDocumentId,
-    }));
-
-    const { error: dcLineError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("delivery_challan_line")
-      .insert(dcLinePayload);
-
-    if (dcLineError) {
-      return stoErrorResponse(req, ctx, "STO_DC_LINE_CREATE_FAILED", 500, "Unable to create delivery challan lines.");
-    }
-
-    const gxoNumber = await generateProcurementDocNumber("GXO");
-    const { error: gateExitError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("gate_exit_outbound")
-      .insert({
-        exit_number: gxoNumber,
-        exit_date: todayIsoDate(),
-        exit_time: toTrimmedString(body.exit_time) || null,
-        exit_type: "STO",
-        company_id: sto.sending_company_id,
-        sto_id: stoId,
-        dc_id: dc.id,
-        vehicle_number: toTrimmedString(body.vehicle_number) || "STO-VEHICLE",
-        driver_name: toTrimmedString(body.driver_name) || null,
-        gate_staff_id: ctx.auth_user_id,
-        transporter_id: toTrimmedString(body.transporter_id) || null,
-        transporter_freetext: toTrimmedString(body.transporter_name_freetext) || null,
-        lr_number: toTrimmedString(body.lr_number) || null,
-        rst_number: toTrimmedString(body.rst_number) || null,
-        gross_weight: parseNullableNumber(body.gross_weight),
-        tare_weight: parseNullableNumber(body.tare_weight),
-        net_weight: parseNullableNumber(body.gross_weight) !== null && parseNullableNumber(body.tare_weight) !== null
-          ? Number(((parseNullableNumber(body.gross_weight) ?? 0) - (parseNullableNumber(body.tare_weight) ?? 0)).toFixed(6))
-          : null,
-        dispatch_qty: totalDispatchQty,
-        remarks: toTrimmedString(body.remarks) || null,
-      });
-
-    if (gateExitError) {
-      return stoErrorResponse(req, ctx, "STO_GXO_CREATE_FAILED", 500, "Unable to create outbound gate exit.");
-    }
-
-    const { error: stoUpdateError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("stock_transfer_order")
-      .update({
-        status: "DISPATCHED",
-        last_updated_at: new Date().toISOString(),
-        last_updated_by: ctx.auth_user_id,
-      })
-      .eq("id", stoId);
-
-    if (stoUpdateError) {
-      return stoErrorResponse(req, ctx, "STO_DISPATCH_STATUS_FAILED", 500, "Unable to update STO status.");
-    }
-
-    return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
-  } catch (error) {
-    const code = error instanceof Error ? error.message : "STO_DISPATCH_FAILED";
-    const status = code === "INSUFFICIENT_STOCK" || code.includes("REQUIRED") ? 400 : code === "STO_NOT_FOUND" ? 404 : 500;
-    return stoErrorResponse(req, ctx, code, status, code);
-  }
+// Dispatch belongs to SO03 DO -> SO02 invoice/PGI. The retired direct
+// posting route must not create a second stock issue for the same STO.
+export async function dispatchSTOHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  const sto = await fetchSto(getIdFromPath(req));
+  await assertCompanyScope(ctx, toTrimmedString(sto.sending_company_id));
+  return stoErrorResponse(req, ctx, "STO_DISPATCH_USE_SO03", 409,
+    "Create a Delivery Order in SO03 for the sending company, then post its invoice in SO02.");
 }
 
 export async function updateGateExitOutboundWeightHandler(
