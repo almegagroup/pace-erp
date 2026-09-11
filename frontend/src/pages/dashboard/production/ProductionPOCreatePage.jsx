@@ -637,7 +637,12 @@ export default function ProductionPOCreatePage() {
       // availability-check table, it never affected what actually got created.
       return strokeLines.map((line) => {
       const selectedStorageLocationId = lineLocationOverrides[line.material_id] || line.default_storage_location_id || "";
-      const plannedQty = (Number(line.dosage_pct ?? 0) / 100) * Number(processForm.planned_qty_kg || 0);
+      // dosage_pct/batch qty are never round binary fractions (e.g. 60.079), so the raw
+      // product carries IEEE-754 residue (6007.900000000001). Round to 6dp -- the same
+      // precision ceiling PRODUCTION_DECIMAL_STEP already uses for entered values -- since
+      // this is a computed quantity, not something the user typed (see formatSum's note).
+      const rawPlannedQty = (Number(line.dosage_pct ?? 0) / 100) * Number(processForm.planned_qty_kg || 0);
+      const plannedQty = Number(rawPlannedQty.toFixed(6));
       const alternateOptions = [];
       const seenAlternateIds = new Set();
 
