@@ -248,6 +248,53 @@ async function reversePoLineReceipt(poLineId: string, deltaQty: number): Promise
   if (error) throw new Error("PO_LINE_RECEIPT_REVERSE_FAILED");
 }
 
+// §133 gap found 2026-09-11 (Codex root-cause audit): an STO-sourced GRN
+// never updated the STO line's own receipt balance at all -- mirrors
+// updatePoLineReceipt/reversePoLineReceipt above, one difference being the
+// STO line CHECK constraint has no PARTIALLY_RECEIVED status (only
+// OPEN/RECEIVED/KNOCKED_OFF), so a partial receipt simply stays OPEN --
+// that already matches listOpenSTOsForGEHandler's own OPEN-only picker
+// filter, so a partially-received STO line keeps showing up for the next GE/GRN.
+async function fetchStoLineBundle(stoLineId: string): Promise<{ stoLine: JsonRecord; sto: JsonRecord }> {
+  const { data: stoLine, error: stoLineError } = await serviceRoleClient
+    .schema("erp_procurement").from("stock_transfer_order_line").select("*").eq("id", stoLineId).single();
+  if (stoLineError || !stoLine) throw new Error("STO_LINE_NOT_FOUND");
+  const { data: sto, error: stoError } = await serviceRoleClient
+    .schema("erp_procurement").from("stock_transfer_order").select("*").eq("id", String(stoLine.sto_id)).single();
+  if (stoError || !sto) throw new Error("STO_NOT_FOUND");
+  return { stoLine: stoLine as JsonRecord, sto: sto as JsonRecord };
+}
+
+async function updateStoLineReceipt(stoLineId: string, deltaQty: number): Promise<void> {
+  const { stoLine } = await fetchStoLineBundle(stoLineId);
+  const quantity = parsePositiveNumber(stoLine.quantity) ?? 0;
+  const currentReceivedQty = parseNullableNumber(stoLine.received_qty) ?? 0;
+  const nextReceivedQty = Number((currentReceivedQty + deltaQty).toFixed(6));
+  const nextBalanceQty = Number(Math.max(0, quantity - nextReceivedQty).toFixed(6));
+  const lineStatus = nextBalanceQty <= 0 ? "RECEIVED" : "OPEN";
+
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement").from("stock_transfer_order_line")
+    .update({ received_qty: nextReceivedQty, balance_qty: nextBalanceQty, line_status: lineStatus, last_updated_at: new Date().toISOString() })
+    .eq("id", stoLineId);
+  if (error) throw new Error("STO_LINE_RECEIPT_UPDATE_FAILED");
+}
+
+async function reverseStoLineReceipt(stoLineId: string, deltaQty: number): Promise<void> {
+  const { stoLine } = await fetchStoLineBundle(stoLineId);
+  const quantity = parsePositiveNumber(stoLine.quantity) ?? 0;
+  const currentReceivedQty = parseNullableNumber(stoLine.received_qty) ?? 0;
+  const nextReceivedQty = Number(Math.max(0, currentReceivedQty - deltaQty).toFixed(6));
+  const nextBalanceQty = Number(Math.min(quantity, quantity - nextReceivedQty).toFixed(6));
+  const lineStatus = nextBalanceQty <= 0 ? "RECEIVED" : "OPEN";
+
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement").from("stock_transfer_order_line")
+    .update({ received_qty: nextReceivedQty, balance_qty: nextBalanceQty, line_status: lineStatus, last_updated_at: new Date().toISOString() })
+    .eq("id", stoLineId);
+  if (error) throw new Error("STO_LINE_RECEIPT_REVERSE_FAILED");
+}
+
 async function resolveVendorName(vendorId: string | null): Promise<{ vendor_code: string | null; vendor_name: string | null }> {
   if (!vendorId) return { vendor_code: null, vendor_name: null };
   const { data } = await serviceRoleClient
@@ -296,6 +343,26 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
   ]);
 
   if (geResp.error) throw new Error("GRN_GATE_ENTRY_FETCH_FAILED");
+
+  // STO-sourced GRN: no vendor_master row exists for the sending company
+  // (see the create-side comment), so the counterparty is shown via the
+  // STO/sending-company lookup here instead of vendor_code/vendor_name.
+  let stoNumber: string | null = null;
+  let sendingCompanyName: string | null = null;
+  if (grn.sto_line_id) {
+    const { data: stoLine } = await serviceRoleClient.schema("erp_procurement")
+      .from("stock_transfer_order_line").select("sto_id").eq("id", String(grn.sto_line_id)).maybeSingle();
+    if (stoLine?.sto_id) {
+      const { data: sto } = await serviceRoleClient.schema("erp_procurement")
+        .from("stock_transfer_order").select("sto_number, sending_company_id").eq("id", String(stoLine.sto_id)).maybeSingle();
+      stoNumber = sto?.sto_number ?? null;
+      if (sto?.sending_company_id) {
+        const { data: company } = await serviceRoleClient.schema("erp_master")
+          .from("companies").select("company_code, company_name").eq("id", String(sto.sending_company_id)).maybeSingle();
+        sendingCompanyName = company ? `${company.company_code ?? ""} — ${company.company_name ?? ""}`.trim() : null;
+      }
+    }
+  }
 
   let materialData: JsonRecord | null = null;
   if (isNewStyle && grn.material_id) {
@@ -346,6 +413,8 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     ...grn,
     vendor_code: vendorResult.vendor_code,
     vendor_name: vendorResult.vendor_name,
+    sto_number: stoNumber,
+    sending_company_name: sendingCompanyName,
     pace_code: materialData?.pace_code ?? null,
     material_name: materialData?.material_name ?? null,
     external_sku: materialData?.external_sku ?? null,
@@ -644,6 +713,23 @@ export async function createAndPostGRNFromLineHandler(
       vendorId = toTrimmedString(poData.vendor_id) || null;
     }
 
+    // §133 gap found 2026-09-11 -- an STO-sourced GE line had no rate
+    // fallback at all (poRate below stayed null unless the user typed one
+    // in), and the STO line itself was never linked on the GRN row, so the
+    // STO's own receipt balance never advanced. vendor_id is deliberately
+    // left null here (not set to the sending company's id) -- goods_receipt.
+    // vendor_id has no FK and resolveVendorName() only ever looks up
+    // erp_master.vendor_master, so a company id there would silently resolve
+    // to nothing anyway; the sending company shows via the STO itself
+    // (hydrateGrn below), not by overloading the vendor field.
+    let stoLineData: JsonRecord | null = null;
+    let stoData: JsonRecord | null = null;
+    if (geLine.sto_line_id) {
+      const bundle = await fetchStoLineBundle(String(geLine.sto_line_id));
+      stoLineData = bundle.stoLine;
+      stoData = bundle.sto;
+    }
+
     // Receipt calculations
     const geQty = parsePositiveNumber(geLine.ge_qty) ?? 0;
     const receivedQty = parseNullableNumber(body.received_qty) ?? geQty;
@@ -684,7 +770,7 @@ export async function createAndPostGRNFromLineHandler(
 
     // Accounts
     const rateConfirmed = body.rate_confirmed === true;
-    const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate);
+    const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate) ?? parseNullableNumber(stoLineData?.transfer_price);
     const invoiceRate = parseNullableNumber(body.invoice_rate);
     const effectiveGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
     // grn_rate is quoted per the PO/transaction UOM (e.g. per PKT) — stock is
@@ -759,6 +845,7 @@ export async function createAndPostGRNFromLineHandler(
         gate_entry_line_id: gateEntryLineId,
         po_id: poId,
         po_line_id: geLine.po_line_id ?? null,
+        sto_line_id: geLine.sto_line_id ?? null,
         material_id: geLine.material_id,
         storage_location_id: storageLocationId,
         movement_type_code: "P101",
@@ -902,6 +989,12 @@ export async function createAndPostGRNFromLineHandler(
         error: geLineUpdate.error,
       }));
       throw new Error("GRN_GATE_ENTRY_LINE_UPDATE_FAILED");
+    }
+
+    // STO line update -- §133 gap fix, same shape as the PO branch below.
+    if (geLine.sto_line_id) {
+      debugStep = "UPDATE_STO_LINE_RECEIPT";
+      await updateStoLineReceipt(String(geLine.sto_line_id), receivedQty);
     }
 
     // PO line update
@@ -1321,6 +1414,7 @@ export async function reverseGRNHandler(
       }
 
       if (grn.po_line_id) await reversePoLineReceipt(String(grn.po_line_id), receivedQty);
+      if (grn.sto_line_id) await reverseStoLineReceipt(String(grn.sto_line_id), receivedQty);
 
       await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
         .update({ grn_posted: false }).eq("id", String(grn.gate_entry_line_id));
