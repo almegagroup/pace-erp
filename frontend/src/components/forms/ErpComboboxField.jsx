@@ -77,6 +77,16 @@ export default function ErpComboboxField({
   inputProps = {},
   disabled = false,
   dropdownZIndex = 1000200,
+  // Optional remote-search mode; existing local comboboxes keep their behavior.
+  onSearchChange,
+  onOpenChange,
+  onLoadMore,
+  hasMore = false,
+  loading = false,
+  remoteSearch = false,
+  selectedOptionLabel,
+  statusLabel,
+
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -98,7 +108,7 @@ export default function ErpComboboxField({
 
   // Filtered list (only when open and query is non-empty)
   const filtered = open
-    ? query.trim() === ""
+    ? remoteSearch || query.trim() === ""
       ? allOptions
       : allOptions.filter(
           (opt) =>
@@ -108,7 +118,18 @@ export default function ErpComboboxField({
 
   // Label currently shown in the collapsed input
   const selectedLabel =
-    allOptions.find((opt) => opt.value === value)?.label ?? placeholder;
+    allOptions.find((opt) => opt.value === value)?.label ?? selectedOptionLabel ?? placeholder;
+
+  useEffect(() => { onSearchChange?.(query); }, [query, onSearchChange]);
+  useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
+
+  const panelReady = Boolean(panelRect);
+
+  // Continue across an eligibility-empty page or fill a short panel. No page button.
+  useEffect(() => {
+    if (!open || !hasMore || loading || !listRef.current) return;
+    if (listRef.current.scrollHeight - listRef.current.scrollTop <= listRef.current.clientHeight + 40) onLoadMore?.();
+  }, [open, panelReady, hasMore, loading, filtered.length, onLoadMore]);
 
   // Keep highlightIndex in bounds when filtered list changes
   useEffect(() => {
@@ -232,6 +253,7 @@ export default function ErpComboboxField({
       case "ArrowDown":
         event.preventDefault();
         event.stopPropagation();
+        if (highlightIndex >= filtered.length - 2 && hasMore && !loading) onLoadMore?.();
         setHighlightIndex((prev) => Math.min(prev + 1, filtered.length - 1));
         break;
       case "ArrowUp":
@@ -291,6 +313,11 @@ export default function ErpComboboxField({
           <ul
             ref={listRef}
             role="listbox"
+            aria-busy={loading}
+            onScroll={(event) => {
+              const list = event.currentTarget;
+              if (hasMore && !loading && list.scrollHeight - list.scrollTop - list.clientHeight < 40) onLoadMore?.();
+            }}
             style={{ position: "fixed", top: panelRect.top, left: panelRect.left, width: panelRect.width, zIndex: dropdownZIndex }}
             className="max-h-48 overflow-y-auto border border-slate-400 bg-white shadow-md"
           >
@@ -318,6 +345,11 @@ export default function ErpComboboxField({
                 </div>
               </li>
             ))}
+            {(loading || statusLabel || (remoteSearch && options.length === 0)) && (
+              <li role="presentation" className="px-2 py-2 text-xs text-slate-500">
+                {loading ? "Searching…" : statusLabel || emptyStateLabel}
+              </li>
+            )}
           </ul>,
           document.body,
         )}

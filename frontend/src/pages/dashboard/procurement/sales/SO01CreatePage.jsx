@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import SalesOrderFgSkuPicker from "./SalesOrderFgSkuPicker.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -29,7 +30,7 @@ import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
 import { listAc06ApprovedMonths } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
-import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderFgSkuOptions, listSalesOrderStrokeCheckOptions } from "../procurementApi.js";
+import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderStrokeCheckOptions } from "../procurementApi.js";
 
 // §133.7 — 5 fixed dispatch types.
 const DISPATCH_TYPE_OPTIONS = [
@@ -279,18 +280,12 @@ export default function SO01CreatePage() {
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
   const materials = useMemo(() => materialQuery.materials ?? [], [materialQuery.materials]);
   const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);
-  const fgSkuQuery = useQuery({
-    queryKey: ["so01-fg-sku-options", companyId],
-    queryFn: () => listSalesOrderFgSkuOptions({ company_id: companyId }),
-    enabled: Boolean(companyId && materialTypes.includes("FG")),
-    staleTime: 60_000,
-  });
-  const fgSkusByType = useMemo(() => Object.fromEntries(
-    FG_TYPE_OPTIONS.map(({ value: fgType }) => [fgType, (fgSkuQuery.data ?? []).filter((entry) => entry.fg_type === fgType)]),
-  ), [fgSkuQuery.data]);
+  // Keep selected metadata independent of each row's current search results.
+  const [selectedFgSkus, setSelectedFgSkus] = useState({});
   const fgSkuMap = useMemo(() => new Map(
-    Object.values(fgSkusByType).flat().map((entry) => [entry.id, entry]),
-  ), [fgSkusByType]);
+    Object.values(selectedFgSkus).filter((entry) => entry.__companyId === companyId)
+      .map((entry) => [entry.id, entry]),
+  ), [selectedFgSkus, companyId]);
   // §133.21 — SO01 MTO/HPS FG-line Stroke Number red-dot check. Fetched once
   // per company (small reference set), checked client-side per line —
   // mirrors this file's own AC06-approved-months pattern.
@@ -456,15 +451,7 @@ export default function SO01CreatePage() {
     );
   }
 
-  function materialOptionsFor(materialType, fgType = "") {
-    if (materialType === "FG") {
-      return (fgSkusByType[fgType] ?? []).map((entry) => ({
-        value: entry.id,
-        label: [entry.pace_code, entry.external_code, entry.document_name || entry.material_name]
-          .filter(Boolean)
-          .join(" | "),
-      }));
-    }
+  function materialOptionsFor(materialType) {
     return materials
       .filter((entry) => String(entry.material_type || "").toUpperCase() === materialType)
       .map((entry) => ({
@@ -475,8 +462,11 @@ export default function SO01CreatePage() {
       }));
   }
 
-  function handleMaterialSelect(key, materialId) {
-    const material = fgSkuMap.get(materialId) ?? materialMap.get(materialId);
+  function handleMaterialSelect(key, materialId, selectedSku) {
+    if (selectedSku) setSelectedFgSkus((current) => ({
+      ...current, [`${companyId}|${materialId}`]: { ...selectedSku, __companyId: companyId },
+    }));
+    const material = selectedSku ?? fgSkuMap.get(materialId) ?? materialMap.get(materialId);
     updateLine(key, {
       material_id: materialId,
       uom_code: material?.base_uom_code || "",
@@ -580,7 +570,9 @@ export default function SO01CreatePage() {
           {line.__manualSku ? (
             textInput(line.manual_sku_name, (value) => updateLine(line.__key, { manual_sku_name: value }), { placeholder: "Type SKU name" })
           ) : (
-            <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor("FG", line.fg_type)} blankLabel={line.fg_type ? "Select SKU" : "Select FG Type first"} />
+            <SalesOrderFgSkuPicker key={`${companyId}|${line.fg_type}`} companyId={companyId} fgType={line.fg_type}
+                value={line.material_id} selectedSku={fgSkuMap.get(line.material_id)}
+                onChange={(value, sku) => handleMaterialSelect(line.__key, value, sku)} />
           )}
           <button
             type="button"
