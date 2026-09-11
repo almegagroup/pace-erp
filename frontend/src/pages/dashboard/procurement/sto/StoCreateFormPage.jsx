@@ -10,6 +10,7 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templa
 import { MASTER_PICKER_FETCH_LIMIT, useCostCentersQuery, useMaterialOptionsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import { formatCompanyLabel } from "../../../../shared/companyDisplay.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
@@ -270,7 +271,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
     () =>
       companies.map((entry) => ({
         value: entry.id,
-        label: entry.company_name || entry.company_code || entry.id,
+        label: entry.company_code || entry.company_name ? formatCompanyLabel(entry) : entry.id,
       })),
     [companies]
   );
