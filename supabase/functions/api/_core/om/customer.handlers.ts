@@ -17,6 +17,7 @@ import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 import { gstStateCodeFromGstNumber, gstStateCodeFromState } from "../../_shared/gstStateCodes.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -587,38 +588,64 @@ export async function listCustomersHandler(
       }
     }
 
-    let query = serviceRoleClient
-      .schema("erp_master")
-      .from("customer_master")
-      .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(offset, offset + limit - 1);
+    // deno-lint-ignore no-explicit-any
+    function applyCustomerFilters(q: any) {
+      let query = q;
+      if (customerType) {
+        query = query.eq("customer_type", customerType);
+      }
+      if (foCustomerType) {
+        query = foCustomerType === "MTEST"
+          ? query.in("fo_customer_type", ["MTEST", "ZTEST"])
+          : query.eq("fo_customer_type", foCustomerType);
+      }
+      if (statusFilter) {
+        query = query.eq("status", statusFilter);
+      }
+      if (search) {
+        query = query.or(`customer_code.ilike.%${search}%,customer_name.ilike.%${search}%`);
+      }
+      return query;
+    }
+
+    let allRows: Record<string, unknown>[];
+    let total: number;
 
     if (scopedCustomerIds) {
-      query = query.in("id", scopedCustomerIds);
-    }
-    if (customerType) {
-      query = query.eq("customer_type", customerType);
-    }
-    if (foCustomerType) {
-      query = foCustomerType === "MTEST"
-        ? query.in("fo_customer_type", ["MTEST", "ZTEST"])
-        : query.eq("fo_customer_type", foCustomerType);
-    }
-    if (statusFilter) {
-      query = query.eq("status", statusFilter);
-    }
-    if (search) {
-      query = query.or(`customer_code.ilike.%${search}%,customer_name.ilike.%${search}%`);
+      // §8E — scopedCustomerIds is every customer mapped to the caller's
+      // companies and can grow past the ~400-id safe URL-length cliff (found
+      // live 2026-09-11: a 1350-row bulk customer import in another session
+      // pushed a company's mapped-customer count high enough that the old
+      // single `.in("id", scopedCustomerIds)` call built a GET URL too long
+      // to reach PostgREST at all -- same root cause as the IN02/PR24 500s,
+      // see _shared/chunkedIn.ts). Chunk the id list, apply the same filters
+      // per chunk, then sort/paginate in memory.
+      const rows = await fetchInChunks<Record<string, unknown>>(scopedCustomerIds, (idChunk) => {
+        const q = serviceRoleClient.schema("erp_master").from("customer_master").select("*").in("id", idChunk);
+        return applyCustomerFilters(q);
+      });
+      rows.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+      total = rows.length;
+      allRows = rows.slice(offset, offset + limit);
+    } else {
+      let query = serviceRoleClient
+        .schema("erp_master")
+        .from("customer_master")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+      query = applyCustomerFilters(query);
+
+      const { data, error, count } = await query;
+      if (error) {
+        throw new Error("OM_CUSTOMER_LIST_FAILED");
+      }
+      allRows = (data ?? []) as Record<string, unknown>[];
+      total = count ?? 0;
     }
 
-    const { data, error, count } = await query;
-    if (error) {
-      throw new Error("OM_CUSTOMER_LIST_FAILED");
-    }
-
-    const enriched = await enrichCustomerRows((data ?? []) as Record<string, unknown>[]);
-    return okResponse({ data: enriched, total: count ?? 0 }, ctx.request_id, req);
+    const enriched = await enrichCustomerRows(allRows);
+    return okResponse({ data: enriched, total }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_CUSTOMER_LIST_FAILED";
     const status = code === "MANAGER_OR_SA_REQUIRED" ? 403 : 500;
