@@ -937,7 +937,12 @@ export async function updateStrokeMasterHandler(
     }
 
     // Replace all lines
-    await serviceRoleClient.schema("erp_production").from("stroke_line").delete().eq("stroke_master_id", id);
+    const { error: delErr } = await serviceRoleClient.schema("erp_production").from("stroke_line")
+      .delete().eq("stroke_master_id", id);
+    if (delErr) {
+      console.error("[stroke_master.updateStrokeMaster] line delete failed:", JSON.stringify(delErr));
+      throw new Error("PROD_STROKE_LINE_DELETE_FAILED");
+    }
     if (lines.length > 0) {
       const { error: lErr } = await serviceRoleClient.schema("erp_production").from("stroke_line")
         .insert(buildLineRows(id, lines));
@@ -1076,7 +1081,12 @@ export async function rejectStrokeMasterHandler(
       existing.created_by as string | null | undefined,
     );
 
-    await serviceRoleClient.schema("erp_production").from("stroke_line").delete().eq("stroke_master_id", id);
+    const { error: lineDelErr } = await serviceRoleClient.schema("erp_production").from("stroke_line")
+      .delete().eq("stroke_master_id", id);
+    if (lineDelErr) {
+      console.error("[stroke_master.rejectStrokeMaster] line delete failed:", JSON.stringify(lineDelErr));
+      throw new Error("PROD_STROKE_LINE_DELETE_FAILED");
+    }
     const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master").delete().eq("id", id);
     if (error) {
       console.error("[stroke_master.rejectStrokeMaster] delete failed:", JSON.stringify(error));
