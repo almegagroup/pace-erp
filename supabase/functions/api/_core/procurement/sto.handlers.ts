@@ -1989,13 +1989,23 @@ export async function confirmSTOReceiptHandler(
     const sto = await fetchSto(stoId);
     await assertStoVisibleToContext(ctx, sto);
 
+    // §133 gap found 2026-09-11: this used to roll up received qty from
+    // goods_receipt_line rows tagged with sto_line_id -- but grn.handlers.ts's
+    // "new design: 1 GE line -> 1 GRN" (current, active create path) never
+    // inserts into goods_receipt_line at all; that roll-up always iterated
+    // zero rows for real data, then still unconditionally stamped RECEIVED
+    // regardless of actual balance. grn.handlers.ts's updateStoLineReceipt()
+    // already keeps stock_transfer_order_line's received_qty/balance_qty/
+    // line_status correct at GRN post/reverse time (§133 fix, same day) --
+    // this handler now only needs to gate the header status transition on
+    // that already-correct state, same pattern as closeSTOHandler's
+    // hasOpenBalance check below.
     const { data: grn, error: grnError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("goods_receipt")
-      .select("*")
+      .select("id")
       .eq("sto_id", stoId)
       .eq("status", "POSTED")
-      .order("posted_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
@@ -2006,37 +2016,14 @@ export async function confirmSTOReceiptHandler(
       return stoErrorResponse(req, ctx, "STO_RECEIPT_GRN_MISSING", 400, "No POSTED GRN found for this STO.");
     }
 
-    const { data: grnLines, error: grnLineError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt_line")
-      .select("*")
-      .eq("grn_id", String(grn.id))
-      .not("sto_line_id", "is", null);
-
-    if (grnLineError) {
-      return stoErrorResponse(req, ctx, "STO_RECEIPT_LINE_FETCH_FAILED", 500, "Unable to fetch STO GRN lines.");
-    }
-
-    // DEPENDENT: each linked GRN line rolls received quantity into STO balances, so later iterations must read prior committed totals.
-    for (const grnLine of grnLines ?? []) {
-      const stoLineId = toTrimmedString((grnLine as JsonRecord).sto_line_id);
-      if (!stoLineId) continue;
-      const stoLine = (await fetchStoLines(stoId)).find((line) => String(line.id) === stoLineId);
-      if (!stoLine) continue;
-      const receivedQty = parsePositiveNumber((grnLine as JsonRecord).received_qty) ?? 0;
-      const totalReceivedQty = Number(((parseNullableNumber(stoLine.received_qty) ?? 0) + receivedQty).toFixed(6));
-      const balanceQty = Number(((parsePositiveNumber(stoLine.quantity) ?? 0) - totalReceivedQty).toFixed(6));
-      const lineStatus = balanceQty <= 0 ? "RECEIVED" : "OPEN";
-      await serviceRoleClient
-        .schema("erp_procurement")
-        .from("stock_transfer_order_line")
-        .update({
-          received_qty: totalReceivedQty,
-          balance_qty: balanceQty < 0 ? 0 : balanceQty,
-          line_status: lineStatus,
-          last_updated_at: new Date().toISOString(),
-        })
-        .eq("id", stoLineId);
+    const lines = await fetchStoLines(stoId);
+    const hasOpenBalance = lines.some((line) => {
+      const balanceQty = parseNullableNumber(line.balance_qty) ?? 0;
+      const lineStatus = toUpperTrimmedString(line.line_status);
+      return balanceQty > 0 && lineStatus !== "KNOCKED_OFF";
+    });
+    if (hasOpenBalance) {
+      return stoErrorResponse(req, ctx, "STO_RECEIPT_BALANCE_REMAINING", 400, "All STO lines must be fully received or knocked off before confirming receipt.");
     }
 
     const { error: updateError } = await serviceRoleClient
@@ -2056,7 +2043,7 @@ export async function confirmSTOReceiptHandler(
     return okResponse(await hydrateSto(stoId, ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_RECEIPT_CONFIRM_FAILED";
-    const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_RECEIPT_GRN_MISSING" ? 400 : 500;
+    const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_RECEIPT_GRN_MISSING" || code === "STO_RECEIPT_BALANCE_REMAINING" ? 400 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
   }
 }

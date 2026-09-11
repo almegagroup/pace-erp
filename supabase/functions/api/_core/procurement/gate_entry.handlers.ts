@@ -414,6 +414,62 @@ export async function createGateEntryHandler(
         }
       }
 
+      // §133 gap found 2026-09-11 (Codex root-cause audit): the STO branch
+      // used to accept sto_id/sto_line_id straight from the client with no
+      // ownership/scope/status check at all -- unlike the PO branch above,
+      // which validates company scope, open status, and CSN/line linkage.
+      // Any caller who could reach this endpoint could stamp any STO id onto
+      // a Gate Entry for a company that STO never targeted.
+      if (stoLineId) {
+        const { data: stoLine, error: stoLineError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("stock_transfer_order_line")
+          .select("id, sto_id, line_status")
+          .eq("id", stoLineId)
+          .maybeSingle();
+        if (stoLineError || !stoLine) {
+          return procurementErrorResponse(req, ctx, "GE_STO_LINE_NOT_FOUND", 404, `Line ${index + 1}'s STO line was not found.`);
+        }
+        const resolvedStoId = String(stoLine.sto_id);
+        if (stoId && stoId !== resolvedStoId) {
+          return procurementErrorResponse(req, ctx, "GE_STO_LINE_MISMATCH", 400, `Line ${index + 1}'s STO line does not belong to the referenced STO.`);
+        }
+
+        const csnHasStoReference = Boolean(csnId);
+        let activeStoCsn: CsnRow | null = null;
+        if (csnHasStoReference) {
+          try {
+            activeStoCsn = await fetchActiveCsnForGateEntry(csnId);
+          } catch (error) {
+            const code = error instanceof Error ? error.message : "CSN_NOT_OPEN";
+            const message = code === "CSN_NOT_FOUND" ? "Selected CSN was not found." : "Selected CSN is no longer open for Gate Entry.";
+            return procurementErrorResponse(req, ctx, code, code === "CSN_NOT_FOUND" ? 404 : 400, message);
+          }
+          if (toTrimmedString(activeStoCsn.sto_id) !== resolvedStoId) {
+            return procurementErrorResponse(req, ctx, "GE_CSN_STO_MISMATCH", 400, `Line ${index + 1} selected CSN does not belong to the referenced STO.`);
+          }
+        }
+        if (!csnHasStoReference && toUpperTrimmedString(stoLine.line_status) !== "OPEN") {
+          return procurementErrorResponse(req, ctx, "GE_STO_LINE_NOT_OPEN", 400, `Line ${index + 1}'s STO line is not open for Gate Entry.`);
+        }
+
+        const { data: sto, error: stoError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("stock_transfer_order")
+          .select("id, receiving_company_id, status")
+          .eq("id", resolvedStoId)
+          .maybeSingle();
+        if (stoError || !sto) {
+          return procurementErrorResponse(req, ctx, "GE_STO_NOT_FOUND", 404, `Line ${index + 1}'s STO was not found.`);
+        }
+        if (String(sto.receiving_company_id) !== companyId) {
+          return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `STO on line ${index + 1} is outside company scope.`);
+        }
+        if (!["CREATED", "DISPATCHED"].includes(toUpperTrimmedString(sto.status))) {
+          return procurementErrorResponse(req, ctx, "GE_STO_NOT_OPEN", 400, `Line ${index + 1}'s STO is not open for receiving.`);
+        }
+      }
+
       if (stoId || stoLineId) {
         geType = "INBOUND_STO";
       }
