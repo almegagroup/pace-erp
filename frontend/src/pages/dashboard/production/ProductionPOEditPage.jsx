@@ -25,7 +25,7 @@ import {
   cancelPackingOrder,
 } from "./prodApi.js";
 import { listMachines } from "../om/omApi.js";
-import { formatPreciseNumber, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
+import { formatPreciseNumber, formatStockQty, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const EDIT_TABS = ["Process PO", "Packing PO"];
 
@@ -848,7 +848,7 @@ function ProcessPoEditTab() {
                           <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.standard_qty, "0")}</td>
                           <td className="border-b border-slate-100 px-3 py-2">P261</td>
                           <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
-                            {formatPreciseNumber(row.available_qty, "--")}
+                            {formatStockQty(row.available_qty)}
                           </td>
                         </tr>
                       );

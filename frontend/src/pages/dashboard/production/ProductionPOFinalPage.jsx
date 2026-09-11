@@ -26,7 +26,7 @@ import {
   listPackingOrders,
   listPackingSfgBatches,
 } from "./prodApi.js";
-import { formatPreciseNumber, formatSum, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
+import { formatPreciseNumber, formatStockQty, formatSum, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
 const FINAL_TABS = ["Process PO", "Packing PO"];
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }));
@@ -555,7 +555,7 @@ function PackingPoFinalTab() {
                                 <td className="px-3 py-2 font-mono">{batch.batch_number}</td>
                                 <td className="px-3 py-2 font-mono">{batch.source_po_number || "--"}</td>
                                 <td className="px-3 py-2">{machineLabelSimple(batch.machine) || "--"}</td>
-                                <td className="px-3 py-2 text-right font-mono">{qtyFmt(batch.available_qty)}</td>
+                                <td className="px-3 py-2 text-right font-mono">{formatStockQty(batch.available_qty)}</td>
                                 <td className="px-3 py-2 text-right font-mono">{qtyFmt(sfgRequiredQty)}</td>
                                 <td className={`px-3 py-2 font-semibold ${rowShort > 0 ? "text-rose-600" : "text-emerald-600"}`}>
                                   {rowShort > 0 ? `Short ${qtyFmt(rowShort)}` : "OK"}
