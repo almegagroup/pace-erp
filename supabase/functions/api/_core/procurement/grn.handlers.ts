@@ -851,6 +851,7 @@ export async function createAndPostGRNFromLineHandler(
         gate_entry_line_id: gateEntryLineId,
         po_id: poId,
         po_line_id: geLine.po_line_id ?? null,
+        sto_id: stoData?.id ?? null,
         sto_line_id: geLine.sto_line_id ?? null,
         material_id: geLine.material_id,
         storage_location_id: storageLocationId,
