@@ -138,7 +138,12 @@ export default function OldProcessPoPage() {
   // Auto-derive RM/INT from the Stroke: qty = dosage% × output qty (§104.9 "auto-derive, editable").
   const derivedLines = useMemo(() => strokeLines.map((line, idx) => {
     const key = `stroke:${line.id || idx}:${line.material_id}`;
-    const standardQty = (num(line.dosage_pct) / 100) * num(outputQty);
+    // dosage_pct/batch qty are never round binary fractions (e.g. 60.079), so the raw
+    // product carries IEEE-754 residue (6007.900000000001). Round to 6dp -- the same
+    // precision ceiling PRODUCTION_DECIMAL_STEP already uses for entered values -- since
+    // this is a computed quantity, not something the user typed (see formatSum's note).
+    // Matters more here than a display fix: this becomes the default actual_qty posted.
+    const standardQty = Number(((num(line.dosage_pct) / 100) * num(outputQty)).toFixed(6));
     const edit = lineEdits[key] ?? {};
     const actualQty = edit.actual_qty !== undefined && edit.actual_qty !== "" ? num(edit.actual_qty) : standardQty;
     const approved = edit.approved_status ?? "YES";

@@ -93,7 +93,11 @@ function computeStandardQty(dosagePct, batchQty, fallbackQty) {
   const dosageValue = Number(dosagePct ?? 0);
   const batchQtyValue = Number(batchQty || 0);
   if (dosageValue > 0 && batchQtyValue > 0) {
-    return (dosageValue / 100) * batchQtyValue;
+    // dosage_pct/batch qty are never round binary fractions (e.g. 60.079), so the raw
+    // product carries IEEE-754 residue (6007.900000000001). Round to 6dp -- the same
+    // precision ceiling PRODUCTION_DECIMAL_STEP already uses for entered values -- since
+    // this is a computed quantity, not something the user typed (see formatSum's note).
+    return Number(((dosageValue / 100) * batchQtyValue).toFixed(6));
   }
   return Number(fallbackQty ?? 0);
 }
