@@ -143,6 +143,23 @@ that the migration has been rolled back in either database.
 
 ### 2026-09-11 — STO sending workflow (DONE in code/dev; production rollout pending)
 
+Deployment follow-up: GitHub Actions run `34596541091` failed at statement 6 of
+`20260911112001` with SQLSTATE 42601, `cannot insert multiple commands into a
+prepared statement`. The pinned CLI 2.75.0 misidentifies `atomic` inside an
+unquoted function name as BEGIN ATOMIC (upstream issue
+https://github.com/supabase/cli/issues/5020; verified against v2.75.0
+`pkg/parser/state.go`). Quoted the existing lowercase function identifiers in
+the two affected migration files; names, signatures and runtime behavior are
+unchanged. Also normalized seven function endings to `END;` before `$fn$;`;
+that formatting change alone would not fix the identifier parser bug.
+Added `sto-migration-cli-compat-test.mjs` to CI: the original reproduction is
+detected, the quoted reproduction and all three STO files pass. Dev catalog
+checks confirm quoted/unquoted identifiers resolve to the same functions.
+Prod read-only check found no `create_sto_atomic` function or STO delivery_type
+column after the failed run. No migration-history repair or business-data
+mutation was performed for this fix. A new deployment of the corrected files
+is required; rerunning the old failed commit would retain the bug.
+
 Business-owner scope: receiving locations do not yet use PACE. GE/GRN/receipt backfill is excluded. Sending company owns SO03 DO, SO02 invoice and P601 stock OUT for both New/Legacy and Independent/Distribution STOs.
 
 - Fixed missing STO audit-table backend grants through schema migrations; replaced separate header/line/Distribution-CSN writes with `create_sto_atomic` and status/audit/Independent-CSN writes with `transition_sto_atomic`.

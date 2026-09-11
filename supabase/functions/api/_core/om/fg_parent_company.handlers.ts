@@ -391,6 +391,13 @@ export async function updateDepotCodeHandler(req: Request, ctx: OmHandlerContext
       if (!code) return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "code cannot be empty.");
       updates.code = code;
     }
+    if (body.dispatch_type !== undefined) {
+      const dispatchType = toUpperTrimmedString(body.dispatch_type);
+      if (dispatchType !== "DIRECT" && dispatchType !== "DEPOT") {
+        return mm05Error(req, ctx, "MM05_INVALID_INPUT", 400, "dispatch_type must be DIRECT or DEPOT.");
+      }
+      updates.dispatch_type = dispatchType;
+    }
     if (body.description !== undefined) updates.description = toTrimmedString(body.description) || null;
     if (body.address_line !== undefined) updates.address_line = toTrimmedString(body.address_line) || null;
     if (body.state !== undefined) {

@@ -249,7 +249,7 @@ END;
 $function$;
 
 -- Cancellation and CSN restoration must be one operation, before dispatch only.
-CREATE OR REPLACE FUNCTION erp_procurement.cancel_sto_atomic(p_sto_id uuid,p_reason text,p_actor uuid)
+CREATE OR REPLACE FUNCTION erp_procurement."cancel_sto_atomic"(p_sto_id uuid,p_reason text,p_actor uuid)
 RETURNS void LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
 DECLARE h erp_procurement.stock_transfer_order; c erp_procurement.consignment_note; source erp_procurement.consignment_note;
 BEGIN
@@ -274,9 +274,10 @@ BEGIN
   END LOOP;
   UPDATE erp_procurement.stock_transfer_order SET status='CANCELLED',cancellation_reason=p_reason,cancelled_at=now(),
     cancelled_by=p_actor,last_updated_at=now(),last_updated_by=p_actor WHERE id=h.id;
-END $fn$;
-REVOKE ALL ON FUNCTION erp_procurement.cancel_sto_atomic(uuid,text,uuid) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION erp_procurement.cancel_sto_atomic(uuid,text,uuid) TO service_role;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION erp_procurement."cancel_sto_atomic"(uuid,text,uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION erp_procurement."cancel_sto_atomic"(uuid,text,uuid) TO service_role;
 
 -- No stale edit or knock-off can race an active DO on this source line.
 CREATE OR REPLACE FUNCTION erp_procurement.guard_sto_line_change()
@@ -288,7 +289,8 @@ BEGIN
     AND EXISTS(SELECT 1 FROM erp_procurement.delivery_challan_line dl JOIN erp_procurement.delivery_challan d ON d.id=dl.dc_id
       WHERE dl.sto_line_id=NEW.id AND d.status<>'CANCELLED') THEN RAISE EXCEPTION 'STO_LINE_HAS_ACTIVE_DO'; END IF;
   RETURN NEW;
-END $fn$;
+END;
+$fn$;
 CREATE TRIGGER sto_line_change_guard BEFORE UPDATE ON erp_procurement.stock_transfer_order_line
 FOR EACH ROW EXECUTE FUNCTION erp_procurement.guard_sto_line_change();
 REVOKE ALL ON FUNCTION erp_procurement.guard_sto_line_change() FROM PUBLIC, anon, authenticated;

@@ -28,6 +28,9 @@ jobs:
       - name: Stock posting guard
         run: node scripts/stock-posting-guard.mjs
 
+      - name: STO migration CLI compatibility
+        run: node scripts/sto-migration-cli-compat-test.mjs
+
       # Fails if any handler reads a caller-supplied company_id (body or query)
       # without validating it against the caller's own companies (11-bug #2/#11).
       - name: Company scope guard
