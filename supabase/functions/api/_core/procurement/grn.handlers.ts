@@ -295,13 +295,24 @@ async function reverseStoLineReceipt(stoLineId: string, deltaQty: number): Promi
   if (error) throw new Error("STO_LINE_RECEIPT_REVERSE_FAILED");
 }
 
+// §133 -- vendor_id has no FK, and for an STO-sourced (inter-company) GRN
+// it holds the sending company's id, not a vendor_master row (same
+// convention consignment_note.vendor_id already uses -- csn.handlers.ts's
+// enrichTrackerRows() falls back to erp_master.companies exactly this way).
+// Try vendor_master first, then companies, so both PO- and STO-sourced
+// GRNs display a real counterparty name instead of blank.
 async function resolveVendorName(vendorId: string | null): Promise<{ vendor_code: string | null; vendor_name: string | null }> {
   if (!vendorId) return { vendor_code: null, vendor_name: null };
-  const { data } = await serviceRoleClient
+  const { data: vendor } = await serviceRoleClient
     .schema("erp_master").from("vendor_master")
     .select("vendor_code, vendor_name")
     .eq("id", vendorId).maybeSingle();
-  return { vendor_code: data?.vendor_code ?? null, vendor_name: data?.vendor_name ?? null };
+  if (vendor) return { vendor_code: vendor.vendor_code ?? null, vendor_name: vendor.vendor_name ?? null };
+  const { data: company } = await serviceRoleClient
+    .schema("erp_master").from("companies")
+    .select("company_code, company_name")
+    .eq("id", vendorId).maybeSingle();
+  return { vendor_code: company?.company_code ?? null, vendor_name: company?.company_name ?? null };
 }
 
 async function resolveStorageLocationName(slocId: string | null): Promise<{ location_code: string | null; location_name: string | null }> {
@@ -344,23 +355,17 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
 
   if (geResp.error) throw new Error("GRN_GATE_ENTRY_FETCH_FAILED");
 
-  // STO-sourced GRN: no vendor_master row exists for the sending company
-  // (see the create-side comment), so the counterparty is shown via the
-  // STO/sending-company lookup here instead of vendor_code/vendor_name.
+  // STO-sourced GRN: vendor_code/vendor_name already resolve the sending
+  // company via resolveVendorName()'s vendor_master->companies fallback;
+  // this just adds the STO number itself for traceability.
   let stoNumber: string | null = null;
-  let sendingCompanyName: string | null = null;
   if (grn.sto_line_id) {
     const { data: stoLine } = await serviceRoleClient.schema("erp_procurement")
       .from("stock_transfer_order_line").select("sto_id").eq("id", String(grn.sto_line_id)).maybeSingle();
     if (stoLine?.sto_id) {
       const { data: sto } = await serviceRoleClient.schema("erp_procurement")
-        .from("stock_transfer_order").select("sto_number, sending_company_id").eq("id", String(stoLine.sto_id)).maybeSingle();
+        .from("stock_transfer_order").select("sto_number").eq("id", String(stoLine.sto_id)).maybeSingle();
       stoNumber = sto?.sto_number ?? null;
-      if (sto?.sending_company_id) {
-        const { data: company } = await serviceRoleClient.schema("erp_master")
-          .from("companies").select("company_code, company_name").eq("id", String(sto.sending_company_id)).maybeSingle();
-        sendingCompanyName = company ? `${company.company_code ?? ""} — ${company.company_name ?? ""}`.trim() : null;
-      }
     }
   }
 
@@ -414,7 +419,6 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     vendor_code: vendorResult.vendor_code,
     vendor_name: vendorResult.vendor_name,
     sto_number: stoNumber,
-    sending_company_name: sendingCompanyName,
     pace_code: materialData?.pace_code ?? null,
     material_name: materialData?.material_name ?? null,
     external_sku: materialData?.external_sku ?? null,
@@ -715,19 +719,21 @@ export async function createAndPostGRNFromLineHandler(
 
     // §133 gap found 2026-09-11 -- an STO-sourced GE line had no rate
     // fallback at all (poRate below stayed null unless the user typed one
-    // in), and the STO line itself was never linked on the GRN row, so the
-    // STO's own receipt balance never advanced. vendor_id is deliberately
-    // left null here (not set to the sending company's id) -- goods_receipt.
-    // vendor_id has no FK and resolveVendorName() only ever looks up
-    // erp_master.vendor_master, so a company id there would silently resolve
-    // to nothing anyway; the sending company shows via the STO itself
-    // (hydrateGrn below), not by overloading the vendor field.
+    // in), the STO line was never linked on the GRN row (so the STO's own
+    // receipt balance never advanced), and vendor_id stayed null (business
+    // owner, 2026-09-11: follow the same convention consignment_note.
+    // vendor_id already uses for STO-sourced CSNs -- store the sending
+    // company's id there too; resolveVendorName() now falls back from
+    // vendor_master to companies exactly like csn.handlers.ts's
+    // enrichTrackerRows() does, so PO->vendor / STO->sending company both
+    // resolve through the same vendor_name/vendor_code fields).
     let stoLineData: JsonRecord | null = null;
     let stoData: JsonRecord | null = null;
     if (geLine.sto_line_id) {
       const bundle = await fetchStoLineBundle(String(geLine.sto_line_id));
       stoLineData = bundle.stoLine;
       stoData = bundle.sto;
+      vendorId = toTrimmedString(stoData.sending_company_id) || null;
     }
 
     // Receipt calculations
