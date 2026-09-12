@@ -116,6 +116,20 @@ function extractIdentifiersFromExpr(expr) {
 const tableColumns = new Map(); // "schema.table" -> Set(colname lowercase)
 const flags = [];
 
+// These two superseded migrations re-created plant-aware stock-movement
+// overloads after plant_id had been removed from inventory tables. The
+// overloads had no callers and were explicitly dropped by the August 30
+// cleanup migrations. Keep the exact historical facts documented here while
+// ensuring newly introduced unknown-column references still fail the scan.
+const DOCUMENTED_HISTORICAL_EXCEPTIONS = new Set([
+  "20260709025725_stock_document_item_number.sql|INSERT column unknown|erp_inventory.stock_document|plant_id",
+  "20260709025725_stock_document_item_number.sql|INSERT column unknown|erp_inventory.stock_ledger|plant_id",
+  "20260709025725_stock_document_item_number.sql|INSERT column unknown|erp_inventory.stock_snapshot|plant_id",
+  "20260712013000_gate27_batch_number_persistence.sql|INSERT column unknown|erp_inventory.stock_document|plant_id",
+  "20260712013000_gate27_batch_number_persistence.sql|INSERT column unknown|erp_inventory.stock_ledger|plant_id",
+  "20260712013000_gate27_batch_number_persistence.sql|INSERT column unknown|erp_inventory.stock_snapshot|plant_id",
+]);
+
 function normTable(raw) {
   return raw.replace(/"/g, "").trim().toLowerCase();
 }
@@ -209,13 +223,21 @@ for (const file of files) {
   }
 }
 
-if (flags.length === 0) {
-  console.log(`OK — scanned ${files.length} migration files, no unknown-column references found (regex-based, not exhaustive; verify manually).`);
+const actionableFlags = flags.filter((flag) => !DOCUMENTED_HISTORICAL_EXCEPTIONS.has(
+  `${flag.file}|${flag.kind}|${flag.table}|${flag.column}`,
+));
+
+if (actionableFlags.length === 0) {
+  if (flags.length > 0) {
+    console.log(`OK — scanned ${files.length} migration files; ignored ${flags.length} documented historical legacy-overload reference(s).`);
+  } else {
+    console.log(`OK — scanned ${files.length} migration files, no unknown-column references found (regex-based, not exhaustive; verify manually).`);
+  }
   process.exit(0);
 }
 
-console.log(`Found ${flags.length} potential column-ordering issue(s) across ${files.length} migration files:\n`);
-for (const f of flags) {
+console.log(`Found ${actionableFlags.length} potential column-ordering issue(s) across ${files.length} migration files:\n`);
+for (const f of actionableFlags) {
   console.log(`  ${f.file}\n    ${f.kind}: ${f.table}.${f.column}\n`);
 }
 process.exit(1);

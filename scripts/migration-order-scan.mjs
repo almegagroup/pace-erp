@@ -47,10 +47,14 @@ const BUILTIN = new Set([
 const known = new Set(BUILTIN);
 const flags = [];
 
-function stripComments(sql) {
+function stripCommentsAndLiterals(sql) {
+  // REFERENCES is meaningful to this scanner only in DDL. Do not let prose in
+  // COMMENT ... IS '...' values or function bodies masquerade as an FK.
   return sql
     .replace(/--.*$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "");
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "")
+    .replace(/'(?:''|[^'])*'/g, "''");
 }
 
 function normalizeTableRef(raw) {
@@ -67,7 +71,7 @@ const REFERENCES_RE = /REFERENCES\s+([a-zA-Z_][\w."]*)/gi;
 
 for (const file of files) {
   const rawSql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-  const sql = stripComments(rawSql);
+  const sql = stripCommentsAndLiterals(rawSql);
 
   // Tables newly created IN THIS FILE become known immediately for the
   // remainder of this same file (self-references inside the same CREATE
