@@ -177,30 +177,18 @@ function makeKey() {
 function defaultGroupInput(group) {
   const posted = group.posted_invoice || {};
   const postedTaxByDcLineId = new Map((posted.lines || []).map((line) => [line.dc_line_id, line]));
-  const hasPostedInvoice = Boolean(group.posted_invoice?.id);
-  const hasLegacyStoDefaults = group.source_type === "STO" && !hasPostedInvoice && Boolean(group.legacy_sto_gst_treatment);
-  const legacyFreightToPay = hasLegacyStoDefaults && ["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"].includes(String(group.freight_term || "").toUpperCase());
   return {
     tally_invoice_number: posted.tally_invoice_number || "",
     tally_invoice_date: posted.tally_invoice_date || "",
     inbound_number: posted.inbound_number || "",
     e_way_bill_applicable: posted.e_way_bill_applicable === true,
     e_way_bill_number: posted.e_way_bill_number || "",
-    // The approved legacy conversion default is To Pay when the old STO is
-    // Freight Separate/At Actuals. It remains editable before posting.
-    freight: { to_pay: posted.freight_to_pay === true || legacyFreightToPay, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "", tax_method: posted.freight_tax_method || "" },
-    // Legacy STOs retain an old GST treatment but no rate. The old treatment
-    // is only a prefill; the new invoice still owns its tax values. Business
-    // has set 18% as the legacy default, while the address-driven backend
-    // resolves CGST+SGST versus IGST.
+    freight: { to_pay: posted.freight_to_pay === true, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "", tax_method: posted.freight_tax_method || "" },
+    // Blank is deliberate. A legacy DO line's 0% snapshot is not a GST
+    // decision; Accounts must explicitly choose even a valid 0% outcome.
     sto_tax_lines: group.source_type === "STO" ? (group.lines || []).map((line) => {
       const postedTax = postedTaxByDcLineId.get(line.dc_line_id);
-      const legacyDefault = group.legacy_sto_gst_treatment || "";
-      return {
-        dc_line_id: line.dc_line_id,
-        gst_treatment: postedTax?.gst_treatment || legacyDefault,
-        gst_rate: postedTax?.gst_rate ?? (legacyDefault ? "18" : ""),
-      };
+      return { dc_line_id: line.dc_line_id, gst_treatment: postedTax?.gst_treatment || "", gst_rate: postedTax?.gst_rate ?? "" };
     }) : [],
     selected_sto_tax_line_ids: [],
     additional_costs: [],
