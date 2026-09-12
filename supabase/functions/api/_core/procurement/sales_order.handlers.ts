@@ -2607,6 +2607,8 @@ function fgSkuSearchPattern(value: string): string {
   return JSON.stringify(value.replace(/[\\%_*]/g, "\\$&"));
 }
 
+const SO_FG_SKU_MIN_SEARCH_LENGTH = 3;
+
 export async function listSalesOrderFgSkuOptionsHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -2622,6 +2624,12 @@ export async function listSalesOrderFgSkuOptionsHandler(
     const cursor = params.get("cursor") || "own:0";
     if (!FG_TYPES.has(fgTypeFilter) || search.length > 100 || !/^(own|other):\d{1,9}$/.test(cursor)) {
       return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "Invalid FG type, search or cursor.");
+    }
+    // This endpoint applies several production-eligibility checks after the
+    // material lookup. It must never use an empty/very-short term to walk the
+    // full FG master just because a user opened the SO01 dropdown.
+    if (search.length < SO_FG_SKU_MIN_SEARCH_LENGTH) {
+      return okResponse({ data: [], next_cursor: null }, ctx.request_id, req);
     }
     const [phase, offsetText] = cursor.split(":");
     const offset = Number(offsetText);
@@ -2651,48 +2659,47 @@ export async function listSalesOrderFgSkuOptionsHandler(
     const packCodes = [...new Set(skuRows.map((row) => toTrimmedString(row.pack_code)).filter(Boolean))];
     if (packCodes.length === 0) return respond([]);
 
-    const { data: packs, error: packsError } = await serviceRoleClient
-      .schema("erp_production").from("pack_code_master")
-      .select("id, pack_code, pack_type, outer_uom_code").in("pack_code", packCodes).eq("active", true);
+    // These three branches depend only on the bounded material page. Run them
+    // together so a keystroke does not wait for independent network round trips.
+    const [packsResult, prodshadePages, conversions] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_production").from("pack_code_master")
+        .select("id, pack_code, pack_type, outer_uom_code").in("pack_code", packCodes).eq("active", true),
+      (async () => {
+        const prefixes = new Set<string>();
+        for (const sku of skuRows) {
+          const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
+          const pack = toUpperTrimmedString(sku.pack_code);
+          for (let at = key.indexOf(pack, 1); pack && at > 0; at = key.indexOf(pack, at + 1)) {
+            prefixes.add(key.slice(0, at));
+          }
+        }
+        const prefixList = [...prefixes];
+        return (await Promise.all(Array.from({ length: Math.ceil(prefixList.length / 20) }, (_, index) => {
+          const filter = prefixList.slice(index * 20, index * 20 + 20)
+            .map((prefix) => `external_code.ilike.${fgSkuSearchPattern(prefix)}`).join(",");
+          return readFgSkuRows((from, to) => serviceRoleClient.schema("erp_master")
+            .from("material_master").select("id, external_code").or(filter).order("id").range(from, to),
+          "SO_FG_PRODSHADE_LOOKUP_FAILED");
+        }))).flat();
+      })(),
+      readFgSkuRows((from, to) => serviceRoleClient
+        .schema("erp_master").from("material_uom_conversion")
+        .select("material_id, from_uom_code, conversion_factor, variable_conversion")
+        .in("material_id", skuRows.map((row) => toTrimmedString(row.id)))
+        .eq("to_uom_code", "KG").eq("active", true).order("id").range(from, to),
+      "SO_FG_CONVERSION_LOOKUP_FAILED"),
+    ]);
+    const { data: packs, error: packsError } = packsResult;
     if (packsError) throw new Error("SO_FG_PACK_CODE_LOOKUP_FAILED");
     const packByCode = new Map(((packs ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.pack_code), row]));
 
     // A SKU key is prodshade + pack code + optional variant. Resolve only
     // possible prefixes of this page, then confirm against the real active config.
-    const prefixes = new Set<string>();
-    for (const sku of skuRows) {
-      const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
-      const pack = toUpperTrimmedString(sku.pack_code);
-      for (let at = key.indexOf(pack, 1); pack && at > 0; at = key.indexOf(pack, at + 1)) {
-        prefixes.add(key.slice(0, at));
-      }
-    }
-    const prodshades: JsonRecord[] = [];
-    const prefixList = [...prefixes];
-    for (let i = 0; i < prefixList.length; i += 20) {
-      const filter = prefixList.slice(i, i + 20).map((prefix) => `external_code.ilike.${fgSkuSearchPattern(prefix)}`).join(",");
-      prodshades.push(...await readFgSkuRows((from, to) => serviceRoleClient.schema("erp_master")
-        .from("material_master").select("id, external_code").or(filter).order("id").range(from, to),
-        "SO_FG_PRODSHADE_LOOKUP_FAILED"));
-    }
+    const prodshades = prodshadePages as JsonRecord[];
     const prodshadeIds = [...new Set(prodshades.map((row) => toTrimmedString(row.id)))];
-    const configRows: JsonRecord[] = [];
-    for (let i = 0; i < prodshadeIds.length; i += 50) {
-      configRows.push(...await readFgSkuRows((from, to) => serviceRoleClient.schema("erp_production")
-        .from("prodshade_pack_config")
-        .select("material_id, pack_code_id, variant, pack_code:pack_code_master!pack_code_id(pack_code)")
-        .eq("active", true).in("material_id", prodshadeIds.slice(i, i + 50))
-        .in("pack_code_id", [...packByCode.values()].map((pack) => toTrimmedString(pack.id)))
-        .order("id").range(from, to), "SO_FG_PRODSHADE_LOOKUP_FAILED"));
-    }
+    const packIds = [...packByCode.values()].map((pack) => toTrimmedString(pack.id));
     const prodshadeById = new Map(((prodshades ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-    const prodshadeBySkuKey = new Map<string, string>();
-    for (const config of configRows) {
-      const pack = (config.pack_code ?? {}) as JsonRecord;
-      const prodshade = prodshadeById.get(toTrimmedString(config.material_id));
-      const key = toUpperTrimmedString(`${toTrimmedString(prodshade?.external_code)}${toTrimmedString(pack.pack_code)}${toTrimmedString(config.variant)}`);
-      if (key) prodshadeBySkuKey.set(key, toTrimmedString(config.material_id));
-    }
 
     // Found live 2026-09-02 (CMP006, Prodshade "6763HG43"/MAXIMOPLAST PC300):
     // this used to check stroke_master.po_type directly, which only ever
@@ -2704,34 +2711,44 @@ export async function listSalesOrderFgSkuOptionsHandler(
     // silently never appeared in SO01's dropdown even though Production had
     // already done everything right. is_active on that table is this
     // mechanism's own source of truth for "usable for this PO Type now."
-    const strokes: JsonRecord[] = [];
-    for (let i = 0; i < prodshadeIds.length; i += 50) {
-      strokes.push(...await readFgSkuRows((from, to) => serviceRoleClient.schema("erp_production")
+    const configRequests = Array.from({ length: Math.ceil(prodshadeIds.length / 50) }, (_, index) =>
+      readFgSkuRows((from, to) => serviceRoleClient.schema("erp_production")
+        .from("prodshade_pack_config")
+        .select("material_id, pack_code_id, variant, pack_code:pack_code_master!pack_code_id(pack_code)")
+        .eq("active", true).in("material_id", prodshadeIds.slice(index * 50, index * 50 + 50))
+        .in("pack_code_id", packIds).order("id").range(from, to), "SO_FG_PRODSHADE_LOOKUP_FAILED"));
+    const strokeRequests = Array.from({ length: Math.ceil(prodshadeIds.length / 50) }, (_, index) =>
+      readFgSkuRows((from, to) => serviceRoleClient.schema("erp_production")
         .from("stroke_master").select("id, prodshade_material_id")
         .eq("company_id", companyId).eq("status", "APPROVED")
-        .in("prodshade_material_id", prodshadeIds.slice(i, i + 50)).order("id").range(from, to),
-        "SO_FG_STROKE_LOOKUP_FAILED"));
+        .in("prodshade_material_id", prodshadeIds.slice(index * 50, index * 50 + 50)).order("id").range(from, to),
+      "SO_FG_STROKE_LOOKUP_FAILED"));
+    const [configPages, strokePages] = await Promise.all([
+      Promise.all(configRequests),
+      Promise.all(strokeRequests),
+    ]);
+    const configRows = configPages.flat() as JsonRecord[];
+    const strokes = strokePages.flat() as JsonRecord[];
+    const prodshadeBySkuKey = new Map<string, string>();
+    for (const config of configRows) {
+      const pack = (config.pack_code ?? {}) as JsonRecord;
+      const prodshade = prodshadeById.get(toTrimmedString(config.material_id));
+      const key = toUpperTrimmedString(`${toTrimmedString(prodshade?.external_code)}${toTrimmedString(pack.pack_code)}${toTrimmedString(config.variant)}`);
+      if (key) prodshadeBySkuKey.set(key, toTrimmedString(config.material_id));
     }
     const prodshadeByStrokeId = new Map(strokes.map((row) => [toTrimmedString(row.id), toTrimmedString(row.prodshade_material_id)]));
     const strokeIds = [...prodshadeByStrokeId.keys()];
-    const applicabilities: JsonRecord[] = [];
-    for (let i = 0; i < strokeIds.length; i += 50) {
-      applicabilities.push(...await readFgSkuRows((from, to) => serviceRoleClient.schema("erp_production")
+    const applicabilityRequests = Array.from({ length: Math.ceil(strokeIds.length / 50) }, (_, index) =>
+      readFgSkuRows((from, to) => serviceRoleClient.schema("erp_production")
         .from("stroke_po_type_applicability").select("stroke_master_id, target_po_type")
-        .eq("is_active", true).in("stroke_master_id", strokeIds.slice(i, i + 50))
+        .eq("is_active", true).in("stroke_master_id", strokeIds.slice(index * 50, index * 50 + 50))
         .eq("target_po_type", fgTypeFilter).order("stroke_master_id").order("target_po_type").range(from, to),
-        "SO_FG_STROKE_LOOKUP_FAILED"));
-    }
+      "SO_FG_STROKE_LOOKUP_FAILED"));
+    const applicabilities = (await Promise.all(applicabilityRequests)).flat() as JsonRecord[];
     const validStrokeKeys = new Set(((applicabilities ?? []) as JsonRecord[]).map((row) =>
       `${prodshadeByStrokeId.get(toTrimmedString(row.stroke_master_id)) ?? ""}|${toUpperTrimmedString(row.target_po_type)}`,
     ));
 
-    const conversions = await readFgSkuRows((from, to) => serviceRoleClient
-      .schema("erp_master").from("material_uom_conversion")
-      .select("material_id, from_uom_code, conversion_factor, variable_conversion")
-      .in("material_id", skuRows.map((row) => toTrimmedString(row.id)))
-      .eq("to_uom_code", "KG").eq("active", true).order("id").range(from, to),
-      "SO_FG_CONVERSION_LOOKUP_FAILED");
     const conversionsBySku = new Map<string, JsonRecord[]>();
     for (const conversion of (conversions ?? []) as JsonRecord[]) {
       const id = toTrimmedString(conversion.material_id);
