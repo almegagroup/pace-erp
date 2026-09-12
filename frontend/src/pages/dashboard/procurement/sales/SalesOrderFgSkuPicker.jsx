@@ -9,6 +9,15 @@ const labelFor = (sku) => sku
   ? [sku.pace_code, sku.external_code, sku.document_name || sku.material_name].filter(Boolean).join(" | ")
   : undefined;
 
+// The paged endpoint returns { data, next_cursor }. During a rolling frontend /
+// backend deployment an older API instance can still return the former bare
+// array response, which must remain usable instead of making every valid SKU
+// look unavailable in SO01.
+function rowsForSkuPage(page) {
+  if (Array.isArray(page)) return page;
+  return Array.isArray(page?.data) ? page.data : [];
+}
+
 export default function SalesOrderFgSkuPicker({ companyId, fgType, value, selectedSku, onChange }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -37,7 +46,7 @@ export default function SalesOrderFgSkuPicker({ companyId, fgType, value, select
     if (hasNextPage && !isFetching && !isError && canSearch && !pendingSearch) fetchNextPage();
   }, [fetchNextPage, hasNextPage, isFetching, isError, canSearch, pendingSearch]);
   const skus = pendingSearch ? [] : [...new Map(
-    (query.data?.pages ?? []).flatMap((page) => page.data).map((sku) => [sku.id, sku]),
+    (query.data?.pages ?? []).flatMap(rowsForSkuPage).map((sku) => [sku.id, sku]),
   ).values()];
   const statusLabel = isError
     ? "SKU search failed. Please retry."
