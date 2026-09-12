@@ -61,9 +61,9 @@ function formatDate(value) {
   const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-GB");
 }
-function itemTaxBreakup(line, gstType) {
-  const rate = toNumber(line.gst_rate);
-  const amount = toNumber(line.gst_amount);
+function itemTaxBreakup(line, gstType, resolvedTax = null) {
+  const rate = resolvedTax?.gst_rate ?? toNumber(line.gst_rate);
+  const amount = resolvedTax?.gst_amount ?? toNumber(line.gst_amount);
   if (gstType === "CGST_SGST") {
     return [
       { label: "CGST", rate: rate / 2, amount: amount / 2 },
@@ -72,10 +72,66 @@ function itemTaxBreakup(line, gstType) {
   }
   return [{ label: "IGST", rate, amount }];
 }
-function hsnTaxRows(group) {
+function resolveStoTaxPreview(group, input) {
+  const entries = new Map((input?.sto_tax_lines || []).map((entry) => [entry.dc_line_id, entry]));
+  const lines = (group.lines || []).map((line) => {
+    const entry = entries.get(line.dc_line_id);
+    const rate = entry?.gst_rate === "" || entry?.gst_rate == null ? null : Number(entry.gst_rate);
+    const treatment = entry?.gst_treatment === "INCLUSIVE" || entry?.gst_treatment === "EXCLUSIVE" ? entry.gst_treatment : null;
+    const gross = toNumber(line.quantity) * toNumber(line.unit_value);
+    if (!treatment || !Number.isFinite(rate) || rate < 0) {
+      return { line, gst_rate: 0, gst_amount: 0, taxable_value: gross, line_total: gross, freight_taxable_allocation: 0 };
+    }
+    const taxable = treatment === "INCLUSIVE" ? gross / (1 + rate / 100) : gross;
+    const gst = treatment === "INCLUSIVE" ? gross - taxable : taxable * (rate / 100);
+    return { line, gst_rate: rate, gst_amount: gst, taxable_value: taxable, line_total: treatment === "INCLUSIVE" ? gross : taxable + gst, freight_taxable_allocation: 0 };
+  });
+  const freight = input?.freight || {};
+  const amount = toNumber(freight.amount);
+  const method = freight.tax_method;
+  let extraFreight = 0;
+  const freightDisplay = freight.included && !freight.to_pay && amount > 0 ? amount : 0;
+  let separateFreightTaxable = 0;
+  let separateFreightGst = 0;
+  if (freight.included && !freight.to_pay && amount > 0) {
+    if (method === "ADD_TO_TAXABLE_VALUE") {
+      const materialTaxable = lines.reduce((sum, line) => sum + line.taxable_value, 0);
+      let remaining = amount;
+      lines.forEach((line, index) => {
+        const allocation = index === lines.length - 1 ? remaining : Number((amount * line.taxable_value / materialTaxable).toFixed(4));
+        remaining = Number((remaining - allocation).toFixed(4));
+        const freightGst = allocation * (line.gst_rate / 100);
+        line.taxable_value += allocation;
+        line.freight_taxable_allocation = allocation;
+        line.gst_amount += freightGst;
+        line.line_total += allocation + freightGst;
+      });
+    } else if (method === "TAX_SEPARATELY") {
+      const freightRate = toNumber(freight.gst_rate);
+      if (freight.gst_treatment === "INCLUSIVE") {
+        separateFreightTaxable = amount / (1 + freightRate / 100);
+        separateFreightGst = amount - separateFreightTaxable;
+      } else {
+        separateFreightTaxable = amount;
+        separateFreightGst = amount * (freightRate / 100);
+      }
+    } else if (method === "NO_GST") {
+      extraFreight = amount;
+    }
+  }
+  const taxable = lines.reduce((sum, line) => sum + line.taxable_value, 0) + separateFreightTaxable;
+  const gst = lines.reduce((sum, line) => sum + line.gst_amount, 0) + separateFreightGst;
+  return { lines, taxable, gst, extraFreight, freightDisplay };
+}
+
+function hsnTaxRows(group, input) {
   const rows = new Map();
-  for (const line of group.lines || []) {
-    const rate = toNumber(line.gst_rate);
+  const previewLines = group.source_type === "STO"
+    ? resolveStoTaxPreview(group, input).lines
+    : (group.lines || []).map((line) => ({ line, gst_rate: toNumber(line.gst_rate), gst_amount: toNumber(line.gst_amount), taxable_value: toNumber(line.quantity) * toNumber(line.unit_value) }));
+  for (const previewLine of previewLines) {
+    const { line } = previewLine;
+    const rate = toNumber(previewLine.gst_rate);
     const key = `${line.hsn_code || "—"}:${rate}`;
     const current = rows.get(key) || {
       hsn_code: line.hsn_code || "—",
@@ -85,12 +141,12 @@ function hsnTaxRows(group) {
       sgst_amount: 0,
       igst_amount: 0,
     };
-    current.taxable_value += toNumber(line.quantity) * toNumber(line.unit_value);
+    current.taxable_value += toNumber(previewLine.taxable_value);
     if (group.gst_type === "CGST_SGST") {
-      current.cgst_amount += toNumber(line.gst_amount) / 2;
-      current.sgst_amount += toNumber(line.gst_amount) / 2;
+      current.cgst_amount += toNumber(previewLine.gst_amount) / 2;
+      current.sgst_amount += toNumber(previewLine.gst_amount) / 2;
     } else {
-      current.igst_amount += toNumber(line.gst_amount);
+      current.igst_amount += toNumber(previewLine.gst_amount);
     }
     rows.set(key, current);
   }
@@ -120,13 +176,21 @@ function makeKey() {
 
 function defaultGroupInput(group) {
   const posted = group.posted_invoice || {};
+  const postedTaxByDcLineId = new Map((posted.lines || []).map((line) => [line.dc_line_id, line]));
   return {
     tally_invoice_number: posted.tally_invoice_number || "",
     tally_invoice_date: posted.tally_invoice_date || "",
     inbound_number: posted.inbound_number || "",
     e_way_bill_applicable: posted.e_way_bill_applicable === true,
     e_way_bill_number: posted.e_way_bill_number || "",
-    freight: { to_pay: posted.freight_to_pay === true, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "" },
+    freight: { to_pay: posted.freight_to_pay === true, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "", tax_method: posted.freight_tax_method || "" },
+    // Blank is deliberate. A legacy DO line's 0% snapshot is not a GST
+    // decision; Accounts must explicitly choose even a valid 0% outcome.
+    sto_tax_lines: group.source_type === "STO" ? (group.lines || []).map((line) => {
+      const postedTax = postedTaxByDcLineId.get(line.dc_line_id);
+      return { dc_line_id: line.dc_line_id, gst_treatment: postedTax?.gst_treatment || "", gst_rate: postedTax?.gst_rate ?? "" };
+    }) : [],
+    selected_sto_tax_line_ids: [],
     additional_costs: [],
     // Found live 2026-09-03 (business owner) -- SO01's own per-line Round
     // Off never carried through here; this field always started blank
@@ -155,6 +219,19 @@ function AddressCell({ party }) {
 // recalculated Total Value" is a UI convenience, never trusted for the
 // actual posting).
 function computeGroupPreviewTotal(group, input) {
+  if (group.source_type === "STO") {
+    const sto = resolveStoTaxPreview(group, input);
+    const additionalTotal = (input.additional_costs || []).reduce((sum, ac) => {
+      const amount = toNumber(ac.amount);
+      if (!ac.gst_included) return sum + amount;
+      const rate = toNumber(ac.gst_rate);
+      const gstAmt = ac.gst_treatment === "INCLUSIVE" ? amount - amount / (1 + rate / 100) : amount * (rate / 100);
+      return sum + (ac.gst_treatment === "EXCLUSIVE" ? amount + gstAmt : amount);
+    }, 0);
+    const preRound = sto.taxable + sto.gst + sto.extraFreight + additionalTotal;
+    const roundOff = toNumber(input.round_off_amount);
+    return { preRound, total: Number((preRound + roundOff).toFixed(2)), roundOff, freightContribution: sto.freightDisplay, additionalTotal, taxableValue: sto.taxable, gstAmount: sto.gst };
+  }
   const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
   const freight = input.freight || {};
   let freightContribution = 0;
@@ -217,6 +294,26 @@ function groupInputValidationMessage(group, input) {
   }
   if (group.ibn_required && !input.inbound_number.trim()) return "Inbound Number (IBN) is required for this invoice group.";
 
+  if (group.source_type === "STO") {
+    const taxLines = input.sto_tax_lines || [];
+    if (taxLines.length !== (group.lines || []).length || taxLines.some((line) => !line.dc_line_id || !["INCLUSIVE", "EXCLUSIVE"].includes(line.gst_treatment) || line.gst_rate === "" || !Number.isFinite(Number(line.gst_rate)) || Number(line.gst_rate) < 0)) {
+      return "Select GST treatment and a valid GST rate for every STO item. Explicit 0% is allowed.";
+    }
+    const freight = input.freight || {};
+    const term = String(group.freight_term || "").toUpperCase();
+    if (term === "FOR") {
+      if (freight.to_pay || freight.included) return "FOR freight is already in the material rate; no separate freight can be added.";
+    } else if (freight.to_pay) {
+      if (!["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS"].includes(term)) return "To Pay freight is available only for Freight Separate and Freight at Actuals.";
+    } else {
+      if (!freight.included || !(toNumber(freight.amount) > 0)) return term === "EX_TRANSPORTER_GODOWN" ? "Enter the required first-mile freight amount." : "Enter the freight amount or mark freight To Pay.";
+      if (!["ADD_TO_TAXABLE_VALUE", "TAX_SEPARATELY", "NO_GST"].includes(freight.tax_method)) return "Choose how the STO freight is taxed.";
+      if (freight.tax_method === "TAX_SEPARATELY" && (!["INCLUSIVE", "EXCLUSIVE"].includes(freight.gst_treatment) || freight.gst_rate === "" || !Number.isFinite(Number(freight.gst_rate)) || Number(freight.gst_rate) < 0)) {
+        return "Choose freight GST treatment and a valid freight GST rate.";
+      }
+    }
+  }
+
   const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
   if (freightEligible && input.freight?.included && !input.freight?.to_pay) {
     const freightValue = input.freight.mode === "RATE" ? input.freight.rate : input.freight.amount;
@@ -229,6 +326,62 @@ function groupInputValidationMessage(group, input) {
   return "";
 }
 
+function StoItemTaxResolution({ group, input, onChange }) {
+  const [applyTreatment, setApplyTreatment] = useState("EXCLUSIVE");
+  const [applyRate, setApplyRate] = useState("");
+  const selectedIds = new Set(input.selected_sto_tax_line_ids || []);
+  const taxLines = input.sto_tax_lines || [];
+  const updateTaxLines = (next) => onChange({ sto_tax_lines: next });
+  const updateOne = (dcLineId, patch) => updateTaxLines(taxLines.map((line) => line.dc_line_id === dcLineId ? { ...line, ...patch } : line));
+  const applyTo = (lineIds) => {
+    if (applyRate === "" || !Number.isFinite(Number(applyRate)) || Number(applyRate) < 0) return;
+    updateTaxLines(taxLines.map((line) => lineIds.has(line.dc_line_id) ? { ...line, gst_treatment: applyTreatment, gst_rate: applyRate } : line));
+  };
+  const toggleSelected = (dcLineId) => {
+    const next = new Set(selectedIds);
+    if (next.has(dcLineId)) next.delete(dcLineId); else next.add(dcLineId);
+    onChange({ selected_sto_tax_line_ids: [...next] });
+  };
+
+  return (
+    <div className="grid gap-3 border border-sky-300 bg-sky-50 p-3">
+      <div>
+        <div className="text-xs font-bold uppercase tracking-[0.06em] text-sky-950">STO Item GST Resolution</div>
+        <div className="mt-1 text-xs text-sky-900">Rate is fixed from the STO. Select GST treatment and total GST rate here; the system derives CGST/SGST or IGST from sender and receiver states.</div>
+      </div>
+      <div className="grid gap-2 md:grid-cols-[160px_140px_auto_auto] md:items-end">
+        <label className="grid gap-1 text-xs font-semibold text-slate-700"><span>Treatment</span><select value={applyTreatment} onChange={(event) => setApplyTreatment(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm"><option value="EXCLUSIVE">Exclusive</option><option value="INCLUSIVE">Inclusive</option></select></label>
+        <label className="grid gap-1 text-xs font-semibold text-slate-700"><span>Total GST Rate %</span><input type="number" min="0" step="0.01" value={applyRate} onChange={(event) => setApplyRate(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm" /></label>
+        <button type="button" onClick={() => applyTo(new Set((group.lines || []).map((line) => line.dc_line_id)))} className="h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950">Apply to all</button>
+        <button type="button" disabled={selectedIds.size === 0} onClick={() => applyTo(selectedIds)} className="h-8 border border-sky-700 bg-white px-3 text-xs font-semibold text-sky-950 disabled:opacity-50">Apply selected ({selectedIds.size})</button>
+      </div>
+      <div className="overflow-x-auto border border-sky-200 bg-white">
+        <table className="min-w-full border-collapse text-xs"><thead className="bg-slate-100"><tr><th className="border border-slate-300 p-2"><input type="checkbox" aria-label="Select all STO tax lines" checked={(group.lines || []).length > 0 && selectedIds.size === (group.lines || []).length} onChange={(event) => onChange({ selected_sto_tax_line_ids: event.target.checked ? (group.lines || []).map((line) => line.dc_line_id) : [] })} /></th><th className="border border-slate-300 p-2 text-left">Material</th><th className="border border-slate-300 p-2 text-right">Rate</th><th className="border border-slate-300 p-2">Treatment</th><th className="border border-slate-300 p-2">GST Rate %</th></tr></thead><tbody>{(group.lines || []).map((line) => {
+          const entry = taxLines.find((candidate) => candidate.dc_line_id === line.dc_line_id) || { gst_treatment: "", gst_rate: "" };
+          return <tr key={line.dc_line_id}><td className="border border-slate-300 p-2 text-center"><input type="checkbox" aria-label={`Select tax line ${line.dc_line_id}`} checked={selectedIds.has(line.dc_line_id)} onChange={() => toggleSelected(line.dc_line_id)} /></td><td className="border border-slate-300 p-2">{invoiceLineDescription(line)}</td><td className="border border-slate-300 p-2 text-right">{formatFixed(line.unit_value, 4)} / {line.uom_code}</td><td className="border border-slate-300 p-1"><select value={entry.gst_treatment} onChange={(event) => updateOne(line.dc_line_id, { gst_treatment: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2"><option value="">Select</option><option value="EXCLUSIVE">Exclusive</option><option value="INCLUSIVE">Inclusive</option></select></td><td className="border border-slate-300 p-1"><input type="number" min="0" step="0.01" value={entry.gst_rate} onChange={(event) => updateOne(line.dc_line_id, { gst_rate: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-right" /></td></tr>;
+        })}</tbody></table>
+      </div>
+    </div>
+  );
+}
+
+function StoFreightResolution({ group, input, onFreightChange }) {
+  const freight = input.freight || {};
+  const term = String(group.freight_term || "").toUpperCase();
+  const toPayAllowed = term === "FREIGHT_SEPARATE" || term === "FREIGHT_AT_ACTUALS";
+  if (term === "FOR") {
+    return <div className="border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700"><strong>Freight Term: FOR.</strong> Freight is already included in the STO material rate, so SO02 has no separate freight or freight-tax input.</div>;
+  }
+  const amountLabel = term === "FREIGHT_SEPARATE" ? "Agreed separate freight amount" : term === "FREIGHT_AT_ACTUALS" ? "Actual transporter freight amount" : "First-mile freight amount (to transporter godown)";
+  return (
+    <div className="grid gap-3 border border-sky-300 bg-sky-50 p-3">
+      <div><div className="text-xs font-bold uppercase tracking-[0.06em] text-sky-950">STO Freight — {term}</div><div className="mt-1 text-xs text-sky-900">{term === "EX_TRANSPORTER_GODOWN" ? "Only the sending location to transporter-godown leg belongs on this invoice." : "This freight decision belongs to this STO invoice group only."}</div></div>
+      {toPayAllowed ? <div className="grid gap-1 text-xs font-semibold text-slate-700"><span>Freight settlement</span><div className="flex gap-2"><button type="button" onClick={() => onFreightChange({ to_pay: true, included: false, amount: "", tax_method: "" })} className={`px-3 py-2 text-xs font-semibold ${freight.to_pay ? "border border-emerald-700 bg-emerald-100 text-emerald-900" : "border border-slate-300 bg-white text-slate-700"}`}>To Pay</button><button type="button" onClick={() => onFreightChange({ to_pay: false, included: true })} className={`px-3 py-2 text-xs font-semibold ${!freight.to_pay ? "border border-sky-700 bg-sky-100 text-sky-950" : "border border-slate-300 bg-white text-slate-700"}`}>Add to invoice</button></div></div> : null}
+      {!freight.to_pay ? <div className="grid gap-3 md:grid-cols-2"><ErpDenseFormRow label={amountLabel} required><input type="number" min="0" step="0.01" value={freight.amount} onChange={(event) => onFreightChange({ included: true, amount: event.target.value })} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900" /></ErpDenseFormRow><ErpDenseFormRow label="Freight tax method" required><select value={freight.tax_method} onChange={(event) => onFreightChange({ included: true, tax_method: event.target.value })} className="h-9 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900"><option value="">Select method</option><option value="ADD_TO_TAXABLE_VALUE">Add to taxable value</option><option value="TAX_SEPARATELY">Freight taxed separately</option><option value="NO_GST">No GST on freight</option></select></ErpDenseFormRow>{freight.tax_method === "TAX_SEPARATELY" ? <><ErpDenseFormRow label="Freight GST treatment" required><select value={freight.gst_treatment} onChange={(event) => onFreightChange({ gst_treatment: event.target.value })} className="h-9 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900"><option value="EXCLUSIVE">Exclusive</option><option value="INCLUSIVE">Inclusive</option></select></ErpDenseFormRow><ErpDenseFormRow label="Freight GST rate %" required><input type="number" min="0" step="0.01" value={freight.gst_rate} onChange={(event) => onFreightChange({ gst_rate: event.target.value })} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900" /></ErpDenseFormRow></> : null}</div> : <div className="text-xs font-semibold text-slate-700">Freight is To Pay. No freight amount or freight GST will be added to this seller invoice.</div>}
+    </div>
+  );
+}
+
 function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFreightChange, onAddAdditionalCost, onUpdateAdditionalCost, onRemoveAdditionalCost, categories, onCategoryCreated, onClose, onSaveNext, hasNext, readOnly }) {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [creatingCategory, setCreatingCategory] = useState(false);
@@ -239,7 +392,16 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
     ? toNumber(group.posted_invoice.total_invoice_value)
     : totals.total;
   const categoryOptions = categories.map((c) => ({ value: c.id, label: c.category_name }));
-  const taxRows = hsnTaxRows(group);
+  const stoTaxPreview = group.source_type === "STO" ? resolveStoTaxPreview(group, input) : null;
+  const taxRows = hsnTaxRows(group, input);
+  const previewTaxableValue = group.source_type === "STO" ? totals.taxableValue : group.total_taxable_value;
+  const hsnCgstAmount = taxRows.reduce((sum, row) => sum + toNumber(row.cgst_amount), 0);
+  const hsnSgstAmount = taxRows.reduce((sum, row) => sum + toNumber(row.sgst_amount), 0);
+  const hsnIgstAmount = taxRows.reduce((sum, row) => sum + toNumber(row.igst_amount), 0);
+  const freightOnlyGst = group.source_type === "STO" ? Math.max(0, toNumber(totals.gstAmount) - hsnCgstAmount - hsnSgstAmount - hsnIgstAmount) : 0;
+  const previewCgstAmount = group.source_type === "STO" ? hsnCgstAmount + (group.gst_type === "CGST_SGST" ? freightOnlyGst / 2 : 0) : group.total_cgst_amount;
+  const previewSgstAmount = group.source_type === "STO" ? hsnSgstAmount + (group.gst_type === "CGST_SGST" ? freightOnlyGst / 2 : 0) : group.total_sgst_amount;
+  const previewIgstAmount = group.source_type === "STO" ? hsnIgstAmount + (group.gst_type === "IGST" ? freightOnlyGst : 0) : group.total_igst_amount;
 
   function handleSaveNext() {
     if (readOnly) {
@@ -324,10 +486,11 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
               <thead className="bg-slate-800 text-white"><tr><th className="border border-slate-500 p-2 text-left">Sl. No.</th><th className="border border-slate-500 p-2 text-left">Description of Goods</th><th className="border border-slate-500 p-2 text-left">HSN/SAC</th><th className="border border-slate-500 p-2 text-right">Quantity</th><th className="border border-slate-500 p-2 text-right">Pack Qty</th><th className="border border-slate-500 p-2 text-right">Rate</th><th className="border border-slate-500 p-2 text-left">Per</th><th className="border border-slate-500 p-2 text-right">Amount</th></tr></thead>
               {group.lines.map((line, index) => {
                 const rateDisplay = invoiceLineRateDisplay(line);
+                const resolvedTax = stoTaxPreview?.lines.find((entry) => entry.line.dc_line_id === line.dc_line_id) || null;
                 return (
                 <tbody key={line.dc_line_id}>
                   <tr><td className="border border-slate-300 p-2 align-top">{index + 1}</td><td className="border border-slate-300 p-2 align-top"><strong>{invoiceLineDescription(line)}</strong>{line.batch_number ? <div className="mt-1 text-slate-500">Batch: {line.batch_number}</div> : null}</td><td className="border border-slate-300 p-2 align-top">{line.hsn_code || "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(line.quantity, 3)}</td><td className="border border-slate-300 p-2 text-right align-top">{line.pack_qty != null ? formatFixed(line.pack_qty, 3) : "—"}</td><td className="border border-slate-300 p-2 text-right align-top">{formatFixed(rateDisplay.rate, 4)}</td><td className="border border-slate-300 p-2 align-top">{rateDisplay.per}</td><td className="border border-slate-300 p-2 text-right align-top font-semibold">{formatFixed(toNumber(line.quantity) * toNumber(line.unit_value))}</td></tr>
-                  {itemTaxBreakup(line, group.gst_type).map((tax) => <tr key={`${line.dc_line_id}-${tax.label}`}><td className="border-x border-slate-300" /><td colSpan="5" className="border-x border-slate-300 px-2 py-1 text-right italic">Output {tax.label} @ {formatFixed(tax.rate, 2)}%</td><td className="border-x border-slate-300 p-1">{tax.label}</td><td className="border-x border-slate-300 p-1 text-right font-semibold">{formatFixed(tax.amount)}</td></tr>)}
+                  {itemTaxBreakup(line, group.gst_type, resolvedTax).map((tax) => <tr key={`${line.dc_line_id}-${tax.label}`}><td className="border-x border-slate-300" /><td colSpan="5" className="border-x border-slate-300 px-2 py-1 text-right italic">Output {tax.label} @ {formatFixed(tax.rate, 2)}%</td><td className="border-x border-slate-300 p-1">{tax.label}</td><td className="border-x border-slate-300 p-1 text-right font-semibold">{formatFixed(tax.amount)}</td></tr>)}
                 </tbody>
                 );
               })}
@@ -374,7 +537,10 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
           </div>
         </div>
 
-        {freightEligible ? (
+        {group.source_type === "STO" ? <StoItemTaxResolution group={group} input={input} onChange={onChange} /> : null}
+        {group.source_type === "STO" ? <StoFreightResolution group={group} input={input} onFreightChange={onFreightChange} /> : null}
+
+        {group.source_type !== "STO" && freightEligible ? (
           <div className="grid gap-2 border border-slate-200 p-3">
             <div className="text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">Freight</div>
             <div className="grid gap-1 text-xs font-semibold text-slate-700">
@@ -465,13 +631,13 @@ function InvoiceGroupDrawer({ group, input, dc, paymentTermLabel, onChange, onFr
         </div>
 
         <div className="grid gap-1 text-sm text-slate-800 md:w-[28rem] md:justify-self-end">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Taxable Value</span><span className="font-mono">{formatFixed(group.total_taxable_value)}</span></div>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Taxable Value</span><span className="font-mono">{formatFixed(previewTaxableValue)}</span></div>
           {group.gst_type === "CGST_SGST" ? (
             <>
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">CGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_cgst_amount)}</span></div>
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">SGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_sgst_amount)}</span></div>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">CGST (item-wise rate)</span><span className="font-mono">{formatFixed(previewCgstAmount)}</span></div>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">SGST (item-wise rate)</span><span className="font-mono">{formatFixed(previewSgstAmount)}</span></div>
             </>
-          ) : <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">IGST (item-wise rate)</span><span className="font-mono">{formatFixed(group.total_igst_amount)}</span></div>}
+          ) : <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">IGST (item-wise rate)</span><span className="font-mono">{formatFixed(previewIgstAmount)}</span></div>}
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Freight</span><span className="font-mono">{input.freight.to_pay ? "TO PAY (Customer)" : formatFixed(totals.freightContribution)}</span></div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-8"><span className="min-w-0 text-slate-500">Other Invoice Adjustment</span><span className="font-mono">{formatFixed(totals.additionalTotal)}</span></div>
           <label className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-x-8"><span className="min-w-0 text-slate-500">Round Off</span><input type="number" step="0.01" value={input.round_off_amount} onChange={(event) => onChange({ round_off_amount: event.target.value })} placeholder="0.00" className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-right font-mono text-xs text-slate-900 outline-none focus:border-sky-500" /></label>
@@ -596,6 +762,7 @@ export default function PgiInvoiceGroupsCreatePage() {
       const payloadGroups = groups.filter((group) => !groupKeys || groupKeys.includes(group.group_key)).map((group) => {
         const input = groupInputs[group.group_key] || defaultGroupInput(group);
         const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
+        const isStoGroup = group.source_type === "STO";
         return {
           group_key: group.group_key,
           tally_invoice_number: input.tally_invoice_number,
@@ -603,16 +770,28 @@ export default function PgiInvoiceGroupsCreatePage() {
           inbound_number: input.inbound_number || undefined,
           e_way_bill_applicable: input.e_way_bill_applicable,
           e_way_bill_number: input.e_way_bill_number || undefined,
-          freight: (freightEligible && input.freight.included) ? {
+          freight: isStoGroup ? {
             to_pay: input.freight.to_pay === true,
-            included: true,
-            mode: input.freight.mode,
-            amount: input.freight.mode === "AD_HOC" ? Number(input.freight.amount) : undefined,
-            rate: input.freight.mode === "RATE" ? Number(input.freight.rate) : undefined,
-            gst_included: input.freight.gst_included,
-            gst_treatment: input.freight.gst_treatment,
-            gst_rate: input.freight.gst_included ? Number(input.freight.gst_rate) : undefined,
-          } : { to_pay: input.freight.to_pay === true, included: false },
+            included: input.freight.included === true,
+            amount: input.freight.included ? Number(input.freight.amount) : undefined,
+            gst_treatment: input.freight.tax_method === "TAX_SEPARATELY" ? input.freight.gst_treatment : undefined,
+            gst_rate: input.freight.tax_method === "TAX_SEPARATELY" ? Number(input.freight.gst_rate) : undefined,
+            tax_method: input.freight.tax_method || undefined,
+          } : (freightEligible && input.freight.included) ? {
+              to_pay: input.freight.to_pay === true,
+              included: true,
+              mode: input.freight.mode,
+              amount: input.freight.mode === "AD_HOC" ? Number(input.freight.amount) : undefined,
+              rate: input.freight.mode === "RATE" ? Number(input.freight.rate) : undefined,
+              gst_included: input.freight.gst_included,
+              gst_treatment: input.freight.gst_treatment,
+              gst_rate: input.freight.gst_included ? Number(input.freight.gst_rate) : undefined,
+            } : { to_pay: input.freight.to_pay === true, included: false },
+          sto_tax_lines: isStoGroup ? (input.sto_tax_lines || []).map((line) => ({
+            dc_line_id: line.dc_line_id,
+            gst_treatment: line.gst_treatment,
+            gst_rate: Number(line.gst_rate),
+          })) : undefined,
           additional_costs: (input.additional_costs || []).map((ac) => ({
             category_id: ac.category_id,
             amount: Number(ac.amount),

@@ -30,10 +30,6 @@ const FREIGHT_TERM_OPTIONS = [
   { value: "FREIGHT_AT_ACTUALS", label: "Freight at Actuals" },
   { value: "EX_TRANSPORTER_GODOWN", label: "Ex Transporter Godown" },
 ];
-const GST_TERM_OPTIONS = [
-  { value: "INCLUSIVE", label: "GST Inclusive" },
-  { value: "EXCLUSIVE", label: "GST Exclusive" },
-];
 const REBATE_BASIS_OPTIONS = [
   { value: "BASE_UOM", label: "Base UOM" },
   { value: "PO_UOM", label: "PO UOM" },
@@ -49,8 +45,6 @@ function createEmptyLine(defaultPaymentTermId = "") {
     currency_code: "INR",
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
-    gst_terms: "",
-    gst_rate: "",
     remarks: "",
     has_rebate: false,
     rebate_rate: "",
@@ -81,34 +75,9 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
       }
     >
       <div className="grid gap-4">
-        <label className="grid gap-1 text-xs font-semibold text-slate-700">
-          GST Terms
-          <select
-            value={line.gst_terms}
-            onChange={(event) => onChange({ gst_terms: event.target.value })}
-            className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-          >
-            <option value="">Select GST terms</option>
-            {GST_TERM_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-
-        {/* §113.15 -- STO never had a GST rate source anywhere (no column on
-            this line, no material-master GST field either); captured here
-            so DO/Invoice can compute GST amount for STO the same way SO does. */}
-        <label className="grid gap-1 text-xs font-semibold text-slate-700">
-          GST Rate (%)
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={line.gst_rate}
-            onChange={(event) => onChange({ gst_rate: event.target.value })}
-            className="h-9 w-full border border-slate-300 bg-[#fffef7] px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-          />
-        </label>
+        <div className="border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
+          Item GST is selected by Accounts in SO02 Invoice Preparation. It is not an STO-entry field.
+        </div>
 
         <label className="grid gap-1 text-xs font-semibold text-slate-700">
           Remarks
@@ -440,7 +409,6 @@ export default function StoCreateFormPage({ openingMode = false }) {
       currency_code: row.currency_code || "INR",
       payment_term_id: row.payment_term_id || defaultPaymentTermId || "",
       freight_term: row.freight_term || "FOR",
-      gst_terms: row.gst_terms || "",
       expected_delivery_date: row.expected_delivery_date || "",
       has_rebate: row.has_rebate === true,
       rebate_rate: row.rebate_rate != null ? String(row.rebate_rate) : "",
@@ -502,8 +470,6 @@ export default function StoCreateFormPage({ openingMode = false }) {
           currency_code: line.currency_code || "INR",
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
-          gst_terms: line.gst_terms || null,
-          gst_rate: line.gst_rate !== "" ? Number(line.gst_rate) : null,
           remarks: line.remarks.trim() || null,
           has_rebate: line.has_rebate,
           rebate_rate: line.has_rebate && line.rebate_rate !== "" ? Number(line.rebate_rate) : null,

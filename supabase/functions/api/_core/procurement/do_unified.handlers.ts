@@ -47,6 +47,7 @@ const QTY_TOL = 0.0001;
 // uses (not exported there, small enough to duplicate rather than widen
 // that file's export surface for one Set).
 const EXCLUSIVE_FREIGHT_TERMS = new Set(["FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS", "EX_TRANSPORTER_GODOWN"]);
+const STO_FREIGHT_TERMS = new Set(["FOR", "FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS", "EX_TRANSPORTER_GODOWN"]);
 const GST_TREATMENTS = new Set(["INCLUSIVE", "EXCLUSIVE"]);
 
 function toTrimmedString(value: unknown): string {
@@ -1092,7 +1093,10 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         : rateBasis === "FIXED" && sourceBaseQty > 0
           ? rawRate / sourceBaseQty
           : rawRate;
-      const gstRate = Number(salesSourceLine?.gst_rate ?? 0);
+      // GST for an STO is deliberately unresolved at DO creation.  The
+      // selling/accounts user makes the explicit tax decision in SO02; a
+      // historical 0% snapshot must never impersonate that decision.
+      const gstRate = sourceType === "STO" ? 0 : Number(salesSourceLine?.gst_rate ?? 0);
       const gstAmount = Number((unitValue * quantity * gstRate / 100).toFixed(4));
       // §133.21 -- freeze exactly what the SO line was entered as, for
       // display only (see PreparedDoLine comment above).
@@ -1686,11 +1690,12 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
   const soMapAllocationIds = [...new Set(lines.filter((l) => !toTrimmedString(l.sto_line_id) && toTrimmedString(l.so_map_allocation_id)).map((l) => toTrimmedString(l.so_map_allocation_id)))];
 
   const [stoLineRows, soLineRows, mapAllocRows] = await Promise.all([
-    stoLineIds.length ? fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line").select("id, sto_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    stoLineIds.length ? fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line").select("id, sto_id, payment_term_id, freight_term").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     soLineIds.length ? fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, hsn_code, round_off_amount").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     soMapAllocationIds.length ? fetchInChunks<JsonRecord>(soMapAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, so_id, fo_id, customer_address_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
   const stoLineToSto = new Map(stoLineRows.map((r) => [String(r.id), toTrimmedString(r.sto_id)]));
+  const stoLineById = new Map(stoLineRows.map((r) => [String(r.id), r]));
   const soLineToSo = new Map(soLineRows.map((r) => [String(r.id), toTrimmedString(r.so_id)]));
   const soLineById = new Map(soLineRows.map((r) => [String(r.id), r]));
   const foIdsForShipTo = [...new Set(mapAllocRows.map((r) => toTrimmedString(r.fo_id)).filter(Boolean))];
@@ -1834,9 +1839,14 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         display_uom_code: toTrimmedString(line.display_uom_code) || null,
         pack_qty: line.pack_qty != null ? Number(line.pack_qty) : null,
         pack_uom_code: toTrimmedString(line.pack_uom_code) || null,
-        gst_rate: line.gst_rate != null ? Number(line.gst_rate) : null,
-        gst_amount: Number(line.gst_amount ?? 0),
-        line_total: Number(line.line_total ?? 0),
+        // STO DO lines can carry old GST columns for compatibility, but they
+        // are never an SO02 tax decision.  Returning null/zero here prevents
+        // a legacy 0% snapshot from being mistaken for an exemption.
+        gst_rate: toTrimmedString(line.sto_line_id) ? null : (line.gst_rate != null ? Number(line.gst_rate) : null),
+        gst_amount: toTrimmedString(line.sto_line_id) ? 0 : Number(line.gst_amount ?? 0),
+        line_total: toTrimmedString(line.sto_line_id)
+          ? Number((Number(line.quantity ?? 0) * Number(line.unit_value ?? 0)).toFixed(4))
+          : Number(line.line_total ?? 0),
         batch_number: toTrimmedString(line.batch_number) || null,
         storage_location_id: toTrimmedString(line.storage_location_id),
         so_line_id: toTrimmedString(line.so_line_id) || null,
@@ -1869,6 +1879,17 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       documentNumber = (stoRow?.sto_number as string) ?? null;
       documentDate = (stoRow?.sto_date as string) ?? null;
       sourceDisplayNumber = documentNumber;
+      const stoCommercialLines = bucket.lines
+        .map((line) => stoLineById.get(toTrimmedString(line.sto_line_id)))
+        .filter((line): line is JsonRecord => Boolean(line));
+      const freightTerms = [...new Set(stoCommercialLines.map((line) => toUpperTrimmedString(line.freight_term)).filter(Boolean))];
+      if (freightTerms.length !== 1) {
+        throw new Error(freightTerms.length === 0 ? "STO_FREIGHT_TERM_MISSING" : "STO_FREIGHT_TERM_CONFLICT");
+      }
+      freightTerm = freightTerms[0];
+      const paymentTerms = [...new Set(stoCommercialLines.map((line) => toTrimmedString(line.payment_term_id)).filter(Boolean))];
+      if (paymentTerms.length > 1) throw new Error("STO_PAYMENT_TERM_CONFLICT");
+      paymentTermId = paymentTerms[0] || null;
       const company = stoRow ? receivingCompanyMap.get(toTrimmedString(stoRow.receiving_company_id)) : null;
       if (company) {
         const companyDetail: ProcPartyDetail = {
@@ -2305,10 +2326,22 @@ export async function previewInvoiceGroupsHandler(req: Request, ctx: Procurement
     // re-opening that group (e.g. found by searching its own Tally Invoice
     // Number) showed those exact fields blank, as if wiped.
     const { data: invoiceRows, error: invoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
-      .select("id, invoice_number, invoice_date, status, so_id, sto_id, fo_id, tally_invoice_number, tally_invoice_date, inbound_number, e_way_bill_applicable, e_way_bill_number, freight_to_pay, freight_included, freight_amount, freight_mode, freight_rate, freight_gst_included, freight_gst_treatment, freight_gst_rate, additional_cost_total, round_off_amount, total_invoice_value, remarks")
+      .select("id, invoice_number, invoice_date, status, so_id, sto_id, fo_id, tally_invoice_number, tally_invoice_date, inbound_number, e_way_bill_applicable, e_way_bill_number, freight_to_pay, freight_included, freight_amount, freight_mode, freight_rate, freight_gst_included, freight_gst_treatment, freight_gst_rate, freight_tax_method, freight_amount_basis, freight_taxable_value, freight_cgst_amount, freight_sgst_amount, freight_igst_amount, additional_cost_total, round_off_amount, total_invoice_value, remarks")
       .eq("dc_id", dcId);
     if (invoiceError) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUPS_FETCH_FAILED", 500, "Unable to load posted invoice groups.");
     const invoiceHistory = (invoiceRows ?? []) as JsonRecord[];
+    const invoiceIds = invoiceHistory.map((invoice) => toTrimmedString(invoice.id)).filter(Boolean);
+    const { data: postedInvoiceLines, error: postedInvoiceLinesError } = invoiceIds.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_invoice_line")
+        .select("invoice_id, dc_line_id, gst_treatment, gst_rate, cgst_rate, sgst_rate, igst_rate, taxable_value, freight_taxable_allocation, cgst_amount, sgst_amount, igst_amount, line_total")
+        .in("invoice_id", invoiceIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (postedInvoiceLinesError) return doErrorResponse(req, ctx, "PGI_INVOICE_GROUPS_FETCH_FAILED", 500, "Unable to load posted invoice line tax values.");
+    const invoiceLinesByInvoiceId = new Map<string, JsonRecord[]>();
+    for (const line of (postedInvoiceLines ?? []) as JsonRecord[]) {
+      const invoiceId = toTrimmedString(line.invoice_id);
+      invoiceLinesByInvoiceId.set(invoiceId, [...(invoiceLinesByInvoiceId.get(invoiceId) ?? []), line]);
+    }
     const viewGroups = groups.map((group) => {
       const matchingInvoices = invoiceHistory.filter((row) =>
         toTrimmedString(row.so_id) === toTrimmedString(group.so_id)
@@ -2316,7 +2349,11 @@ export async function previewInvoiceGroupsHandler(req: Request, ctx: Procurement
         && toTrimmedString(row.fo_id) === toTrimmedString(group.fo_id));
       const postedInvoice = matchingInvoices.find((row) => toUpperTrimmedString(row.status) === "POSTED") ?? null;
       const cancelledInvoice = matchingInvoices.find((row) => toUpperTrimmedString(row.status) === "CANCELLED") ?? null;
-      return { ...group, posted_invoice: postedInvoice, cancelled_invoice: cancelledInvoice };
+      return {
+        ...group,
+        posted_invoice: postedInvoice ? { ...postedInvoice, lines: invoiceLinesByInvoiceId.get(toTrimmedString(postedInvoice.id)) ?? [] } : null,
+        cancelled_invoice: cancelledInvoice,
+      };
     });
     return okResponse({
       dc_id: dcId,
@@ -2329,7 +2366,7 @@ export async function previewInvoiceGroupsHandler(req: Request, ctx: Procurement
     const code = error instanceof Error ? error.message : "PGI_INVOICE_GROUPS_PREVIEW_FAILED";
     const status = code === "DO_NOT_FOUND" ? 404
       : code === "COMPANY_SCOPE_VIOLATION" ? 403
-      : code.includes("REQUIRED") || code.includes("MISSING") || code === "DO_EMPTY" || code === "DO_NOT_READY_FOR_PGI" ? 400
+      : code.includes("REQUIRED") || code.includes("MISSING") || code.includes("CONFLICT") || code === "DO_EMPTY" || code === "DO_NOT_READY_FOR_PGI" ? 400
       : 500;
     return doErrorResponse(req, ctx, code, status, code);
   }
@@ -2351,7 +2388,15 @@ type InvoiceGroupInput = {
     gst_included?: boolean;
     gst_treatment?: "INCLUSIVE" | "EXCLUSIVE";
     gst_rate?: number;
+    // STO-only: item-GST authority stays in SO02, and freight has an
+    // explicit commercial method instead of borrowing an SO freight rule.
+    tax_method?: "ADD_TO_TAXABLE_VALUE" | "TAX_SEPARATELY" | "NO_GST";
   };
+  sto_tax_lines?: Array<{
+    dc_line_id: string;
+    gst_treatment: "INCLUSIVE" | "EXCLUSIVE";
+    gst_rate: number;
+  }>;
   additional_costs?: Array<{
     category_id: string;
     amount: number;
@@ -2361,6 +2406,254 @@ type InvoiceGroupInput = {
   }>;
   remarks?: string;
 };
+
+type ResolvedStoInvoiceLine = {
+  line_number: number;
+  so_line_id: string | null;
+  dc_line_id: string;
+  material_id: string;
+  quantity: number;
+  uom_code: string;
+  rate: number;
+  display_rate_basis: string | null;
+  display_rate: number | null;
+  display_uom_code: string | null;
+  pack_qty: number | null;
+  pack_uom_code: string | null;
+  gst_treatment: "INCLUSIVE" | "EXCLUSIVE";
+  gst_rate: number;
+  cgst_rate: number;
+  sgst_rate: number;
+  igst_rate: number;
+  taxable_value: number;
+  freight_taxable_allocation: number;
+  cgst_amount: number | null;
+  sgst_amount: number | null;
+  igst_amount: number | null;
+  line_total: number;
+};
+
+type ResolvedStoCommercials = {
+  lines: ResolvedStoInvoiceLine[];
+  freight_to_pay: boolean;
+  freight_included: boolean;
+  freight_amount: number | null;
+  freight_mode: "AD_HOC" | null;
+  freight_gst_included: boolean;
+  freight_gst_treatment: "INCLUSIVE" | "EXCLUSIVE" | null;
+  freight_gst_rate: number | null;
+  freight_gst_amount: number | null;
+  freight_tax_method: "ADD_TO_TAXABLE_VALUE" | "TAX_SEPARATELY" | "NO_GST" | null;
+  freight_amount_basis: "AGREED_SEPARATE" | "ACTUAL_TRANSPORTER" | "FIRST_MILE" | "TO_PAY" | "FOR_INCLUDED";
+  freight_taxable_value: number;
+  freight_cgst_amount: number;
+  freight_sgst_amount: number;
+  freight_igst_amount: number;
+  total_taxable_value: number;
+  total_cgst_amount: number;
+  total_sgst_amount: number;
+  total_igst_amount: number;
+  total_gst_amount: number;
+  freight_invoice_contribution: number;
+};
+
+function parseExplicitGstRate(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Number(parsed.toFixed(4)) : null;
+}
+
+function splitGstForGroup(gstType: "CGST_SGST" | "IGST", amount: number): { cgst: number; sgst: number; igst: number } {
+  if (gstType === "CGST_SGST") {
+    const cgst = Number((amount / 2).toFixed(4));
+    return { cgst, sgst: Number((amount - cgst).toFixed(4)), igst: 0 };
+  }
+  return { cgst: 0, sgst: 0, igst: Number(amount.toFixed(4)) };
+}
+
+// The STO commercial calculation intentionally lives in SO02's server path.
+// It never reads delivery_challan_line.gst_* because old values (especially
+// 0%) are snapshots without a user tax decision.  The same result is sent to
+// the atomic posting function, so preview and persisted invoice values share
+// one authoritative calculation.
+function resolveStoInvoiceCommercials(group: ProcInvoiceGroup, input: InvoiceGroupInput): ResolvedStoCommercials {
+  const submittedTaxes = Array.isArray(input.sto_tax_lines) ? input.sto_tax_lines : [];
+  const taxByDcLineId = new Map<string, { gst_treatment: "INCLUSIVE" | "EXCLUSIVE"; gst_rate: number }>();
+  for (const submitted of submittedTaxes) {
+    const dcLineId = toTrimmedString(submitted.dc_line_id);
+    const treatment = GST_TREATMENTS.has(String(submitted.gst_treatment)) ? submitted.gst_treatment : null;
+    const rate = parseExplicitGstRate(submitted.gst_rate);
+    if (!dcLineId || !treatment || rate === null || taxByDcLineId.has(dcLineId)) {
+      throw new Error("STO_SO02_ITEM_GST_INVALID");
+    }
+    taxByDcLineId.set(dcLineId, { gst_treatment: treatment, gst_rate: rate });
+  }
+  if (taxByDcLineId.size !== group.lines.length || group.lines.some((line) => !taxByDcLineId.has(line.dc_line_id))) {
+    throw new Error("STO_SO02_ITEM_GST_REQUIRED");
+  }
+
+  const lines: ResolvedStoInvoiceLine[] = group.lines.map((line, index) => {
+    const tax = taxByDcLineId.get(line.dc_line_id)!;
+    const grossValue = Number((line.quantity * line.unit_value).toFixed(4));
+    const taxable = tax.gst_treatment === "INCLUSIVE"
+      ? Number((grossValue / (1 + tax.gst_rate / 100)).toFixed(4))
+      : grossValue;
+    const gstAmount = tax.gst_treatment === "INCLUSIVE"
+      ? Number((grossValue - taxable).toFixed(4))
+      : Number((taxable * tax.gst_rate / 100).toFixed(4));
+    const split = splitGstForGroup(group.gst_type, gstAmount);
+    return {
+      line_number: index + 1,
+      so_line_id: line.so_line_id,
+      dc_line_id: line.dc_line_id,
+      material_id: line.material_id,
+      quantity: line.quantity,
+      uom_code: line.uom_code,
+      rate: line.unit_value,
+      display_rate_basis: line.display_rate_basis,
+      display_rate: line.display_rate,
+      display_uom_code: line.display_uom_code,
+      pack_qty: line.pack_qty,
+      pack_uom_code: line.pack_uom_code,
+      gst_treatment: tax.gst_treatment,
+      gst_rate: tax.gst_rate,
+      cgst_rate: group.gst_type === "CGST_SGST" ? Number((tax.gst_rate / 2).toFixed(4)) : 0,
+      sgst_rate: group.gst_type === "CGST_SGST" ? Number((tax.gst_rate / 2).toFixed(4)) : 0,
+      igst_rate: group.gst_type === "IGST" ? tax.gst_rate : 0,
+      taxable_value: taxable,
+      freight_taxable_allocation: 0,
+      cgst_amount: group.gst_type === "CGST_SGST" ? split.cgst : null,
+      sgst_amount: group.gst_type === "CGST_SGST" ? split.sgst : null,
+      igst_amount: group.gst_type === "IGST" ? split.igst : null,
+      line_total: tax.gst_treatment === "INCLUSIVE" ? grossValue : Number((taxable + gstAmount).toFixed(4)),
+    };
+  });
+
+  const freightTerm = toUpperTrimmedString(group.freight_term);
+  if (!STO_FREIGHT_TERMS.has(freightTerm)) {
+    throw new Error("STO_FREIGHT_TERM_INVALID");
+  }
+  const freight = input.freight ?? {};
+  const freightToPayRequested = freight.to_pay === true;
+  const freightIncludedRequested = freight.included === true;
+  let freightToPay = false;
+  let freightIncluded = false;
+  let freightAmount: number | null = null;
+  let freightTaxMethod: ResolvedStoCommercials["freight_tax_method"] = null;
+  let freightAmountBasis: ResolvedStoCommercials["freight_amount_basis"] = "FOR_INCLUDED";
+  let freightGstTreatment: "INCLUSIVE" | "EXCLUSIVE" | null = null;
+  let freightGstRate: number | null = null;
+  let freightGstAmount: number | null = null;
+  let freightTaxableValue = 0;
+  let freightCgstAmount = 0;
+  let freightSgstAmount = 0;
+  let freightIgstAmount = 0;
+  let freightInvoiceContribution = 0;
+
+  if (freightTerm === "FOR") {
+    if (freightToPayRequested || freightIncludedRequested) throw new Error("STO_FOR_FREIGHT_NOT_ALLOWED");
+  } else {
+    const toPayAllowed = freightTerm === "FREIGHT_SEPARATE" || freightTerm === "FREIGHT_AT_ACTUALS";
+    if (freightToPayRequested) {
+      if (!toPayAllowed) throw new Error("STO_FREIGHT_TO_PAY_NOT_ALLOWED");
+      freightToPay = true;
+      freightAmountBasis = "TO_PAY";
+    } else {
+      if (!freightIncludedRequested) throw new Error("STO_FREIGHT_AMOUNT_REQUIRED");
+      freightIncluded = true;
+      freightAmount = parsePositiveNumber(freight.amount);
+      if (!freightAmount) throw new Error("STO_FREIGHT_AMOUNT_REQUIRED");
+      freightAmountBasis = freightTerm === "FREIGHT_SEPARATE"
+        ? "AGREED_SEPARATE"
+        : freightTerm === "FREIGHT_AT_ACTUALS"
+          ? "ACTUAL_TRANSPORTER"
+          : freightTerm === "EX_TRANSPORTER_GODOWN"
+            ? "FIRST_MILE"
+            : "FOR_INCLUDED";
+      const submittedMethod = String(freight.tax_method ?? "");
+      if (!["ADD_TO_TAXABLE_VALUE", "TAX_SEPARATELY", "NO_GST"].includes(submittedMethod)) {
+        throw new Error("STO_FREIGHT_TAX_METHOD_REQUIRED");
+      }
+      freightTaxMethod = submittedMethod as ResolvedStoCommercials["freight_tax_method"];
+      if (freightTaxMethod === "ADD_TO_TAXABLE_VALUE") {
+        const materialTaxableTotal = lines.reduce((sum, line) => sum + line.taxable_value, 0);
+        if (!(materialTaxableTotal > 0)) throw new Error("STO_FREIGHT_ALLOCATION_INVALID");
+        let remainingFreight = freightAmount;
+        lines.forEach((line, index) => {
+          const allocation = index === lines.length - 1
+            ? Number(remainingFreight.toFixed(4))
+            : Number((freightAmount! * line.taxable_value / materialTaxableTotal).toFixed(4));
+          remainingFreight = Number((remainingFreight - allocation).toFixed(4));
+          const freightGst = Number((allocation * line.gst_rate / 100).toFixed(4));
+          const split = splitGstForGroup(group.gst_type, freightGst);
+          line.taxable_value = Number((line.taxable_value + allocation).toFixed(4));
+          line.freight_taxable_allocation = allocation;
+          line.cgst_amount = line.cgst_amount === null ? null : Number((line.cgst_amount + split.cgst).toFixed(4));
+          line.sgst_amount = line.sgst_amount === null ? null : Number((line.sgst_amount + split.sgst).toFixed(4));
+          line.igst_amount = line.igst_amount === null ? null : Number((line.igst_amount + split.igst).toFixed(4));
+          line.line_total = Number((line.line_total + allocation + freightGst).toFixed(4));
+          freightCgstAmount = Number((freightCgstAmount + split.cgst).toFixed(4));
+          freightSgstAmount = Number((freightSgstAmount + split.sgst).toFixed(4));
+          freightIgstAmount = Number((freightIgstAmount + split.igst).toFixed(4));
+        });
+        freightTaxableValue = freightAmount;
+        freightGstAmount = Number((freightCgstAmount + freightSgstAmount + freightIgstAmount).toFixed(4));
+        freightInvoiceContribution = Number((freightAmount + freightGstAmount).toFixed(4));
+      } else if (freightTaxMethod === "TAX_SEPARATELY") {
+        freightGstTreatment = GST_TREATMENTS.has(String(freight.gst_treatment)) ? freight.gst_treatment! : null;
+        freightGstRate = parseExplicitGstRate(freight.gst_rate);
+        if (!freightGstTreatment || freightGstRate === null) throw new Error("STO_FREIGHT_GST_REQUIRED");
+        freightTaxableValue = freightGstTreatment === "INCLUSIVE"
+          ? Number((freightAmount / (1 + freightGstRate / 100)).toFixed(4))
+          : freightAmount;
+        freightGstAmount = freightGstTreatment === "INCLUSIVE"
+          ? Number((freightAmount - freightTaxableValue).toFixed(4))
+          : Number((freightTaxableValue * freightGstRate / 100).toFixed(4));
+        const split = splitGstForGroup(group.gst_type, freightGstAmount);
+        freightCgstAmount = split.cgst;
+        freightSgstAmount = split.sgst;
+        freightIgstAmount = split.igst;
+        freightInvoiceContribution = freightGstTreatment === "INCLUSIVE"
+          ? freightAmount
+          : Number((freightAmount + freightGstAmount).toFixed(4));
+      } else {
+        freightInvoiceContribution = freightAmount;
+      }
+    }
+  }
+
+  const totalTaxableValue = Number((lines.reduce((sum, line) => sum + line.taxable_value, 0) + (freightTaxMethod === "TAX_SEPARATELY" ? freightTaxableValue : 0)).toFixed(4));
+  const lineCgst = lines.reduce((sum, line) => sum + Number(line.cgst_amount ?? 0), 0);
+  const lineSgst = lines.reduce((sum, line) => sum + Number(line.sgst_amount ?? 0), 0);
+  const lineIgst = lines.reduce((sum, line) => sum + Number(line.igst_amount ?? 0), 0);
+  const totalCgstAmount = Number((lineCgst + (freightTaxMethod === "TAX_SEPARATELY" ? freightCgstAmount : 0)).toFixed(4));
+  const totalSgstAmount = Number((lineSgst + (freightTaxMethod === "TAX_SEPARATELY" ? freightSgstAmount : 0)).toFixed(4));
+  const totalIgstAmount = Number((lineIgst + (freightTaxMethod === "TAX_SEPARATELY" ? freightIgstAmount : 0)).toFixed(4));
+  const totalGstAmount = Number((totalCgstAmount + totalSgstAmount + totalIgstAmount).toFixed(4));
+
+  return {
+    lines,
+    freight_to_pay: freightToPay,
+    freight_included: freightIncluded,
+    freight_amount: freightAmount,
+    freight_mode: freightIncluded ? "AD_HOC" : null,
+    freight_gst_included: freightTaxMethod === "TAX_SEPARATELY",
+    freight_gst_treatment: freightGstTreatment,
+    freight_gst_rate: freightGstRate,
+    freight_gst_amount: freightGstAmount,
+    freight_tax_method: freightTaxMethod,
+    freight_amount_basis: freightAmountBasis,
+    freight_taxable_value: freightTaxableValue,
+    freight_cgst_amount: freightCgstAmount,
+    freight_sgst_amount: freightSgstAmount,
+    freight_igst_amount: freightIgstAmount,
+    total_taxable_value: totalTaxableValue,
+    total_cgst_amount: totalCgstAmount,
+    total_sgst_amount: totalSgstAmount,
+    total_igst_amount: totalIgstAmount,
+    total_gst_amount: totalGstAmount,
+    freight_invoice_contribution: freightInvoiceContribution,
+  };
+}
 
 // Cancelling is append-only: each original P601 receives a matching P602,
 // while invoice/reconciliation records retain their audit history.  The RPC
@@ -2598,12 +2891,10 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       const eWayBillApplicable = input.e_way_bill_applicable === true;
       const eWayBillNumber = eWayBillApplicable ? (toTrimmedString(input.e_way_bill_number) || null) : null;
 
-      const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
-      const freightInput = input.freight ?? {};
-      // To-pay freight belongs to the customer/carrier settlement, never to
-      // this sales invoice. Ignore any attempted amount from a crafted payload.
-      const freightToPay = freightEligible && freightInput.to_pay === true;
-      const freightIncluded = freightEligible && !freightToPay && freightInput.included === true;
+      const isStoCommercialGroup = group.source_type === "STO";
+      let stoCommercials: ResolvedStoCommercials | null = null;
+      let freightToPay = false;
+      let freightIncluded = false;
       let freightMode: "AD_HOC" | "RATE" | null = null;
       let freightRate: number | null = null;
       let freightAmount: number | null = null;
@@ -2611,28 +2902,58 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       let freightGstTreatment: "INCLUSIVE" | "EXCLUSIVE" | null = null;
       let freightGstRate: number | null = null;
       let freightGstAmount: number | null = null;
-      if (freightIncluded) {
-        freightMode = freightInput.mode === "RATE" ? "RATE" : "AD_HOC";
-        if (freightMode === "RATE") {
-          freightRate = parsePositiveNumber(freightInput.rate);
-          if (!freightRate) return doErrorResponse(req, ctx, "PGI_INVOICE_FREIGHT_RATE_REQUIRED", 400, `Freight rate is required for ${group.document_number}.${alreadyPostedNote}`);
-          freightAmount = Number((freightRate * group.net_weight).toFixed(4));
-        } else {
-          freightAmount = parsePositiveNumber(freightInput.amount);
-          if (!freightAmount) return doErrorResponse(req, ctx, "PGI_INVOICE_FREIGHT_AMOUNT_REQUIRED", 400, `Freight amount is required for ${group.document_number}.${alreadyPostedNote}`);
+      let freightInvoiceContribution = 0;
+      if (isStoCommercialGroup) {
+        try {
+          stoCommercials = resolveStoInvoiceCommercials(group, input);
+        } catch (commercialError) {
+          const code = commercialError instanceof Error ? commercialError.message : "STO_SO02_COMMERCIAL_INVALID";
+          return doErrorResponse(req, ctx, code, 400, `${code} (${group.document_number}).${alreadyPostedNote}`);
         }
-        freightGstIncluded = freightInput.gst_included === true;
-        if (freightGstIncluded) {
-          freightGstTreatment = GST_TREATMENTS.has(String(freightInput.gst_treatment)) ? (freightInput.gst_treatment as "INCLUSIVE" | "EXCLUSIVE") : "EXCLUSIVE";
-          freightGstRate = parsePositiveNumber(freightInput.gst_rate) ?? 0;
-          freightGstAmount = freightGstTreatment === "INCLUSIVE"
-            ? Number((freightAmount - freightAmount / (1 + freightGstRate / 100)).toFixed(4))
-            : Number((freightAmount * (freightGstRate / 100)).toFixed(4));
+        freightToPay = stoCommercials.freight_to_pay;
+        freightIncluded = stoCommercials.freight_included;
+        freightMode = stoCommercials.freight_mode;
+        freightAmount = stoCommercials.freight_amount;
+        freightGstIncluded = stoCommercials.freight_gst_included;
+        freightGstTreatment = stoCommercials.freight_gst_treatment;
+        freightGstRate = stoCommercials.freight_gst_rate;
+        freightGstAmount = stoCommercials.freight_gst_amount;
+        // Freight included in assessable value, or taxed separately, is
+        // already represented in STO totals below. Only a non-taxable
+        // freight amount remains an extra contribution to the invoice.
+        freightInvoiceContribution = stoCommercials.freight_tax_method === "NO_GST"
+          ? stoCommercials.freight_invoice_contribution
+          : 0;
+      } else {
+        const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
+        const freightInput = input.freight ?? {};
+        // To-pay freight belongs to the customer/carrier settlement, never to
+        // this sales invoice. Ignore any attempted amount from a crafted payload.
+        freightToPay = freightEligible && freightInput.to_pay === true;
+        freightIncluded = freightEligible && !freightToPay && freightInput.included === true;
+        if (freightIncluded) {
+          freightMode = freightInput.mode === "RATE" ? "RATE" : "AD_HOC";
+          if (freightMode === "RATE") {
+            freightRate = parsePositiveNumber(freightInput.rate);
+            if (!freightRate) return doErrorResponse(req, ctx, "PGI_INVOICE_FREIGHT_RATE_REQUIRED", 400, `Freight rate is required for ${group.document_number}.${alreadyPostedNote}`);
+            freightAmount = Number((freightRate * group.net_weight).toFixed(4));
+          } else {
+            freightAmount = parsePositiveNumber(freightInput.amount);
+            if (!freightAmount) return doErrorResponse(req, ctx, "PGI_INVOICE_FREIGHT_AMOUNT_REQUIRED", 400, `Freight amount is required for ${group.document_number}.${alreadyPostedNote}`);
+          }
+          freightGstIncluded = freightInput.gst_included === true;
+          if (freightGstIncluded) {
+            freightGstTreatment = GST_TREATMENTS.has(String(freightInput.gst_treatment)) ? (freightInput.gst_treatment as "INCLUSIVE" | "EXCLUSIVE") : "EXCLUSIVE";
+            freightGstRate = parsePositiveNumber(freightInput.gst_rate) ?? 0;
+            freightGstAmount = freightGstTreatment === "INCLUSIVE"
+              ? Number((freightAmount - freightAmount / (1 + freightGstRate / 100)).toFixed(4))
+              : Number((freightAmount * (freightGstRate / 100)).toFixed(4));
+          }
         }
+        freightInvoiceContribution = freightIncluded
+          ? Number(((freightAmount ?? 0) + (freightGstIncluded && freightGstTreatment === "EXCLUSIVE" ? (freightGstAmount ?? 0) : 0)).toFixed(4))
+          : 0;
       }
-      const freightInvoiceContribution = freightIncluded
-        ? Number(((freightAmount ?? 0) + (freightGstIncluded && freightGstTreatment === "EXCLUSIVE" ? (freightGstAmount ?? 0) : 0)).toFixed(4))
-        : 0;
 
       const additionalCostInputs = Array.isArray(input.additional_costs) ? input.additional_costs : [];
       const additionalCostLines = additionalCostInputs.map((ac) => {
@@ -2653,7 +2974,12 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       }
       const additionalCostTotal = Number(additionalCostLines.reduce((sum, ac) => sum + ac.line_total, 0).toFixed(4));
 
-      const preRoundValue = group.total_taxable_value + group.total_gst_amount + freightInvoiceContribution + additionalCostTotal;
+      const resolvedTaxableValue = stoCommercials?.total_taxable_value ?? group.total_taxable_value;
+      const resolvedCgstAmount = stoCommercials?.total_cgst_amount ?? group.total_cgst_amount;
+      const resolvedSgstAmount = stoCommercials?.total_sgst_amount ?? group.total_sgst_amount;
+      const resolvedIgstAmount = stoCommercials?.total_igst_amount ?? group.total_igst_amount;
+      const resolvedGstAmount = stoCommercials?.total_gst_amount ?? group.total_gst_amount;
+      const preRoundValue = resolvedTaxableValue + resolvedGstAmount + freightInvoiceContribution + additionalCostTotal;
       const roundOffAmount = Number((parseNullableNumber(input.round_off_amount) ?? 0).toFixed(4));
       const totalInvoiceValue = Number((preRoundValue + roundOffAmount).toFixed(2));
 
@@ -2749,7 +3075,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       const invoiceId = crypto.randomUUID();
       const invoiceDate = todayIsoDate();
 
-      const invoiceLinesPayload = group.lines.map((line, lineIndex) => {
+      const invoiceLinesPayload = stoCommercials?.lines ?? group.lines.map((line, lineIndex) => {
         const taxableValue = Number((line.quantity * line.unit_value).toFixed(4));
         const cgstAmount = group.gst_type === "CGST_SGST" ? Number((line.gst_amount / 2).toFixed(4)) : null;
         const sgstAmount = group.gst_type === "CGST_SGST" ? Number((line.gst_amount / 2).toFixed(4)) : null;
@@ -2770,7 +3096,12 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           pack_qty: line.pack_qty,
           pack_uom_code: line.pack_uom_code,
           taxable_value: taxableValue,
+          gst_treatment: null,
           gst_rate: line.gst_rate,
+          cgst_rate: group.gst_type === "CGST_SGST" && line.gst_rate !== null ? Number((line.gst_rate / 2).toFixed(4)) : 0,
+          sgst_rate: group.gst_type === "CGST_SGST" && line.gst_rate !== null ? Number((line.gst_rate / 2).toFixed(4)) : 0,
+          igst_rate: group.gst_type === "IGST" ? line.gst_rate : 0,
+          freight_taxable_allocation: 0,
           cgst_amount: cgstAmount,
           sgst_amount: sgstAmount,
           igst_amount: igstAmount,
@@ -2830,6 +3161,13 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           freight_gst_treatment: freightGstTreatment,
           freight_gst_rate: freightGstRate,
           freight_gst_amount: freightGstAmount,
+          source_freight_term: isStoCommercialGroup ? group.freight_term : null,
+          freight_tax_method: stoCommercials?.freight_tax_method ?? null,
+          freight_amount_basis: stoCommercials?.freight_amount_basis ?? null,
+          freight_taxable_value: stoCommercials?.freight_taxable_value ?? null,
+          freight_cgst_amount: stoCommercials?.freight_cgst_amount ?? null,
+          freight_sgst_amount: stoCommercials?.freight_sgst_amount ?? null,
+          freight_igst_amount: stoCommercials?.freight_igst_amount ?? null,
           additional_cost_total: additionalCostTotal,
           round_off_amount: roundOffAmount,
           inbound_number: inboundNumber || null,
@@ -2838,11 +3176,11 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
           fo_date: group.fo_date,
           e_way_bill_applicable: eWayBillApplicable,
           e_way_bill_number: eWayBillNumber,
-          total_taxable_value: group.total_taxable_value,
-          total_cgst_amount: group.total_cgst_amount,
-          total_sgst_amount: group.total_sgst_amount,
-          total_igst_amount: group.total_igst_amount,
-          total_gst_amount: group.total_gst_amount,
+          total_taxable_value: resolvedTaxableValue,
+          total_cgst_amount: resolvedCgstAmount,
+          total_sgst_amount: resolvedSgstAmount,
+          total_igst_amount: resolvedIgstAmount,
+          total_gst_amount: resolvedGstAmount,
           total_invoice_value: totalInvoiceValue,
           posted_by: ctx.auth_user_id,
           remarks: toTrimmedString(input.remarks) || null,
@@ -2869,7 +3207,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
     const code = error instanceof Error ? error.message : "PGI_INVOICE_GROUPS_POST_FAILED";
     const status = code === "DO_NOT_FOUND" ? 404
       : code === "COMPANY_SCOPE_VIOLATION" ? 403
-      : code.includes("REQUIRED") || code.includes("INVALID") || code.includes("NOT_READY") || code === "INSUFFICIENT_STOCK" || code === "DO_EMPTY" || code.includes("MISSING") || code.includes("MISMATCH") ? 400
+      : code.includes("REQUIRED") || code.includes("INVALID") || code.includes("NOT_READY") || code === "INSUFFICIENT_STOCK" || code === "DO_EMPTY" || code.includes("MISSING") || code.includes("MISMATCH") || code.includes("CONFLICT") ? 400
       : 500;
     return doErrorResponse(req, ctx, code, status, code);
   }

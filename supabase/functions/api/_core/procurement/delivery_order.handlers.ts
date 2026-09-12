@@ -958,7 +958,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       .schema("erp_procurement")
       .from("delivery_challan")
       .select("*", { count: "exact" })
-      .in("dc_type", ["SALES", "STO"]);
+      .in("dc_type", ["SALES", "STO", "MIXED"]);
     if (orderedIds) {
       query = query.in("id", orderedIds);
     } else {
@@ -1006,11 +1006,22 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const materialTypeById = new Map(lineMaterialRows.map((row) => [String(row.id), toTrimmedString(row.material_type)]));
     const fgTypeBySoLineId = new Map(lineSoLineRows.map((row) => [String(row.id), toTrimmedString(row.fg_type)]));
     const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
-    // STO-sourced DO rows have no customer_id at all (customer_id is only
-    // ever set for dc_type SALES, per createDeliveryOrderHandler) -- the
-    // "Customer" column was showing a bare "—" for every STO row instead of
-    // the counterparty that's actually relevant there, the receiving company.
-    const receivingCompanyIds = [...new Set(rows.map((row) => toTrimmedString(row.receiving_company_id)).filter(Boolean))];
+    // Unified DOs own their source through delivery_challan_source; the
+    // nullable legacy receiving_company_id header cannot identify the STO
+    // counterparty. Resolve every linked STO before building the SO02 queue.
+    const linkedStoIds = [...new Set([
+      ...rows.map((row) => toTrimmedString(row.sto_id)),
+      ...(sourceLinks ?? []).filter((link: JsonRecord) => link.source_type === "STO").map((link: JsonRecord) => toTrimmedString(link.source_id)),
+    ].filter(Boolean))];
+    const { data: linkedStoCounterparties, error: linkedStoCounterpartiesError } = linkedStoIds.length
+      ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, receiving_company_id").in("id", linkedStoIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (linkedStoCounterpartiesError) return doErrorResponse(req, ctx, "DO_STO_COUNTERPARTY_LOOKUP_FAILED", 500, "Unable to resolve STO receiving company.");
+    const receivingCompanyIdByStoId = new Map(((linkedStoCounterparties ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.receiving_company_id)]));
+    const receivingCompanyIds = [...new Set([
+      ...rows.map((row) => toTrimmedString(row.receiving_company_id)),
+      ...[...receivingCompanyIdByStoId.values()],
+    ].filter(Boolean))];
     const [{ data: customers }, { data: receivingCompanies }] = await Promise.all([
       customerIds.length
         ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
@@ -1034,7 +1045,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, customer_po_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required, dispatch_category").in("id", soIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       stoIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", stoIds)
+        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, receiving_company_id").in("id", stoIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       transporterIds.length
         ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_code, transporter_name").in("id", transporterIds)
@@ -1079,6 +1090,9 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const sto = stoMap.get(toTrimmedString(row.sto_id));
       const effectiveSos = sourceSos.length ? sourceSos : (so ? [so] : []);
       const effectiveStos = sourceStos.length ? sourceStos : (sto ? [sto] : []);
+      const linkedReceivingCompany = effectiveStos
+        .map((entry) => receivingCompanyMap.get(toTrimmedString(entry.receiving_company_id) || receivingCompanyIdByStoId.get(toTrimmedString(entry.id)) || ""))
+        .find(Boolean) ?? receivingCompany;
       // SO01 stores the user-entered external SO number as customer_po_number.
       // In operational dispatch lists that is the business-facing SO number;
       // internal PACE so_number remains available in the source record.
@@ -1099,7 +1113,20 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       // distinct from Dispatch Category (which is SO-line-composition-based,
       // not DO-line-based -- a DO can legitimately draw only a subset of its
       // source SO's material types).
-      const dispatchCategoryDisplay = [...new Set(effectiveSos.map((entry) => toTrimmedString(entry.dispatch_category)).filter(Boolean))].join(" + ") || null;
+      const soDispatchCategories = effectiveSos.map((entry) => toTrimmedString(entry.dispatch_category)).filter(Boolean);
+      const stoMaterialTypes = new Set(lineSnapshots.map((line) => toUpperTrimmedString(materialTypeById.get(toTrimmedString(line.material_id)))).filter(Boolean));
+      const stoDispatchCategory = effectiveStos.length
+        ? (stoMaterialTypes.has("RM") || stoMaterialTypes.has("PM") || stoMaterialTypes.has("INT"))
+          ? "RPS"
+          : stoMaterialTypes.has("FG") && stoMaterialTypes.has("SFG")
+            ? "FSRPS"
+            : stoMaterialTypes.has("FG")
+              ? "FRPS"
+              : stoMaterialTypes.has("SFG")
+                ? "SRPS"
+                : null
+        : null;
+      const dispatchCategoryDisplay = [...new Set([...soDispatchCategories, ...(stoDispatchCategory ? [stoDispatchCategory] : [])])].join(" + ") || null;
       const totalQty = lineSnapshots.reduce((sum, line) => sum + Number(line.quantity ?? 0), 0);
       const totalPackQty = lineSnapshots.reduce((sum, line) => sum + Number(line.pack_qty ?? 0), 0);
       const fgTypeDisplay = [...new Set(lineSnapshots.map((line) => {
@@ -1115,7 +1142,11 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         ...row,
         source_display: sourceTypes.join(" + ") || (row.sales_order_id ? "SALES_ORDER" : row.sto_id ? "STO" : null),
         source_document_number: sourceDocuments.join(" | ") || null,
-        customer_display: customerDisplay || billTo,
+        customer_display: customer
+          ? customerDisplay
+          : linkedReceivingCompany
+            ? `To: ${linkedReceivingCompany.company_code ?? linkedReceivingCompany.company_name ?? ""}`.trim()
+            : customerDisplay || billTo,
         bill_to_display: billTo,
         ship_to_display: shipTo,
         ibn_required: effectiveSos.some((entry) => Boolean(entry.ibn_required)),
