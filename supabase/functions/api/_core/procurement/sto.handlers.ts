@@ -46,8 +46,6 @@ type PreparedStoLine = {
   currency_code: string;
   payment_term_id: string;
   freight_term: string;
-  gst_terms: string | null;
-  gst_rate: number | null;
   remarks: string | null;
   has_rebate: boolean;
   rebate_rate: number | null;
@@ -64,13 +62,13 @@ const STO_STATUSES = new Set(["DRAFT", "PENDING_APPROVAL", "CREATED", "DISPATCHE
 const STO_LINE_STATUSES = new Set(["OPEN", "RECEIVED", "KNOCKED_OFF"]);
 const DELIVERY_TYPES = new Set(["STANDARD", "BULK", "TANKER"]);
 const CURRENCY_CODES = new Set(["INR", "USD"]);
+const STO_FREIGHT_TERMS = new Set(["FOR", "FREIGHT_SEPARATE", "FREIGHT_AT_ACTUALS", "EX_TRANSPORTER_GODOWN"]);
 const MUTABLE_STO_AMENDMENT_FIELDS = new Set([
   "quantity",
   "transfer_price",
   "expected_delivery_date",
   "payment_term_id",
   "freight_term",
-  "gst_terms",
   "remarks",
   "sending_cost_center_id",
   "receiving_cost_center_id",
@@ -604,7 +602,7 @@ function parseStoLineInput(
   const uomCode = toTrimmedString(line.uom_code) || toTrimmedString(options?.fallbackUomCode);
   const transferPrice = parsePositiveNumber(line.transfer_price);
   const paymentTermId = toTrimmedString(line.payment_term_id);
-  const freightTerm = toTrimmedString(line.freight_term);
+  const freightTerm = toUpperTrimmedString(line.freight_term);
   const hasRebate = line.has_rebate === true;
   const rebateRate = parseNullableNumber(line.rebate_rate);
   const rebateBasis = toTrimmedString(line.rebate_rate_uom_basis) || null;
@@ -614,6 +612,9 @@ function parseStoLineInput(
   }
   if (!uomCode) {
     throw new Error(`Each STO line requires a UOM code. (line ${index + 1})`);
+  }
+  if (!STO_FREIGHT_TERMS.has(freightTerm)) {
+    throw new Error(`Each STO line requires a valid freight term. (line ${index + 1})`);
   }
   if (hasRebate && (!rebateRate || !rebateBasis)) {
     throw new Error(`Each rebate-enabled STO line requires a rebate rate and basis. (line ${index + 1})`);
@@ -630,8 +631,6 @@ function parseStoLineInput(
     })(),
     payment_term_id: paymentTermId,
     freight_term: freightTerm,
-    gst_terms: toTrimmedString(line.gst_terms) || null,
-    gst_rate: parseNullableNumber(line.gst_rate),
     remarks: toTrimmedString(line.remarks) || null,
     has_rebate: hasRebate,
     rebate_rate: hasRebate ? rebateRate : null,
@@ -920,8 +919,9 @@ async function buildConsignmentStoFromSubCsns(input: {
         currency_code: lineConfig.currency_code,
         payment_term_id: lineConfig.payment_term_id,
         freight_term: lineConfig.freight_term,
-        gst_terms: lineConfig.gst_terms,
-        gst_rate: lineConfig.gst_rate,
+        gst_terms: null,
+        gst_rate: null,
+        gst_amount: null,
         remarks: lineConfig.remarks,
         has_rebate: lineConfig.has_rebate,
         rebate_rate: lineConfig.rebate_rate,
@@ -986,6 +986,11 @@ export async function createSTOHandler(
         return stoErrorResponse(req, ctx, "STO_LINE_INVALID", 400, code);
       }
     }
+    // Freight is resolved at invoice-group level.  One STO must therefore
+    // carry one unambiguous freight term; never silently take the first line.
+    if (new Set(preparedLines.map((line) => line.freight_term)).size !== 1) {
+      return stoErrorResponse(req, ctx, "STO_FREIGHT_TERM_CONFLICT", 400, "Every line in one STO must have the same freight term.");
+    }
 
     if (stoType === "CONSIGNMENT_DISTRIBUTION") {
       const csnIds = preparedLines.map((line) => line.source_csn_id).filter(Boolean) as string[];
@@ -1039,9 +1044,11 @@ export async function createSTOHandler(
         currency_code: line.currency_code,
         payment_term_id: line.payment_term_id,
         freight_term: line.freight_term,
-        gst_terms: line.gst_terms,
-        gst_rate: line.gst_rate,
-        gst_amount: line.gst_rate ? Number((line.quantity * line.transfer_price * line.gst_rate / 100).toFixed(4)) : null,
+        // Item GST is decided in SO02 at invoice preparation, never by the
+        // STO creator.  Keep compatibility columns empty for new documents.
+        gst_terms: null,
+        gst_rate: null,
+        gst_amount: null,
         remarks: line.remarks,
         has_rebate: line.has_rebate,
         rebate_rate: line.rebate_rate,
@@ -1274,6 +1281,26 @@ export async function updateSTOHandler(
       last_updated_by: ctx.auth_user_id,
     };
 
+    if (Array.isArray(body.lines)) {
+      const { data: existingLines, error: existingLinesError } = await serviceRoleClient
+        .schema("erp_procurement").from("stock_transfer_order_line")
+        .select("id, freight_term").eq("sto_id", stoId);
+      if (existingLinesError) return stoErrorResponse(req, ctx, "STO_LINE_FETCH_FAILED", 500, "Unable to validate STO freight terms.");
+      const proposedTerms = new Map(((existingLines ?? []) as JsonRecord[])
+        .map((line) => [toTrimmedString(line.id), toUpperTrimmedString(line.freight_term)]));
+      for (const line of body.lines as JsonRecord[]) {
+        const lineId = toTrimmedString(line.id);
+        if (!lineId || !proposedTerms.has(lineId)) return stoErrorResponse(req, ctx, "STO_LINE_NOT_FOUND", 400, "An STO line no longer exists.");
+        if (line.freight_term !== undefined) {
+          const freightTerm = toUpperTrimmedString(line.freight_term);
+          if (!STO_FREIGHT_TERMS.has(freightTerm)) return stoErrorResponse(req, ctx, "STO_FREIGHT_TERM_INVALID", 400, "Each STO line needs a valid freight term.");
+          proposedTerms.set(lineId, freightTerm);
+        }
+      }
+      const freightTerms = [...new Set([...proposedTerms.values()].filter(Boolean))];
+      if (freightTerms.length !== 1) return stoErrorResponse(req, ctx, "STO_FREIGHT_TERM_CONFLICT", 400, "Every line in one STO must have the same freight term.");
+    }
+
     const { error: headerError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
@@ -1312,21 +1339,7 @@ export async function updateSTOHandler(
             })()
             : undefined,
           payment_term_id: line.payment_term_id !== undefined ? (toTrimmedString(line.payment_term_id) || null) : undefined,
-          freight_term: line.freight_term !== undefined ? (toTrimmedString(line.freight_term) || null) : undefined,
-          gst_terms: line.gst_terms !== undefined ? (toTrimmedString(line.gst_terms) || null) : undefined,
-          gst_rate: line.gst_rate !== undefined ? parseNullableNumber(line.gst_rate) : undefined,
-          // Edit forms always resubmit the whole line (qty/rate/payment_term/
-          // freight_term are already required together per handleSubmitEdit),
-          // so quantity/transfer_price are safely available here whenever
-          // gst_rate is -- no separate fetch of the pre-existing row needed.
-          gst_amount: line.gst_rate !== undefined
-            ? (() => {
-                const rate = parseNullableNumber(line.gst_rate);
-                const qty = quantity ?? parseNullableNumber(line.quantity);
-                const price = parseNullableNumber(line.transfer_price);
-                return rate && qty && price ? Number((qty * price * rate / 100).toFixed(4)) : null;
-              })()
-            : undefined,
+          freight_term: line.freight_term !== undefined ? toUpperTrimmedString(line.freight_term) : undefined,
           remarks: line.remarks !== undefined ? (toTrimmedString(line.remarks) || null) : undefined,
           has_rebate: line.has_rebate !== undefined ? line.has_rebate === true : undefined,
           rebate_rate: line.rebate_rate !== undefined ? parseNullableNumber(line.rebate_rate) : undefined,
@@ -1708,7 +1721,6 @@ export async function amendSTOHandler(
       expected_delivery_date: body.expected_delivery_date,
       payment_term_id: body.payment_term_id,
       freight_term: body.freight_term,
-      gst_terms: body.gst_terms,
       remarks: body.remarks,
       sending_cost_center_id: body.sending_cost_center_id,
       receiving_cost_center_id: body.receiving_cost_center_id,
@@ -1718,7 +1730,7 @@ export async function amendSTOHandler(
       if (rawValue === undefined || !MUTABLE_STO_AMENDMENT_FIELDS.has(fieldName)) {
         continue;
       }
-      const lineScoped = ["quantity", "transfer_price", "expected_delivery_date", "payment_term_id", "freight_term", "gst_terms"].includes(fieldName);
+      const lineScoped = ["quantity", "transfer_price", "expected_delivery_date", "payment_term_id", "freight_term"].includes(fieldName);
       if (lineScoped && !targetLine) {
         return stoErrorResponse(req, ctx, "STO_LINE_REQUIRED", 400, "STO line id is required for line amendment.");
       }
@@ -1756,9 +1768,21 @@ export async function amendSTOHandler(
         }
         lineUpdates.payment_term_id = paymentTermId;
       } else if (fieldName === "freight_term") {
-        lineUpdates.freight_term = toTrimmedString(normalizedValue) || null;
-      } else if (fieldName === "gst_terms") {
-        lineUpdates.gst_terms = toTrimmedString(normalizedValue) || null;
+        const freightTerm = toUpperTrimmedString(normalizedValue);
+        if (!STO_FREIGHT_TERMS.has(freightTerm)) {
+          return stoErrorResponse(req, ctx, "STO_FREIGHT_TERM_INVALID", 400, "A valid freight term is required.");
+        }
+        // An invoice group is one STO, so it must never inherit a different
+        // freight rule from another still-active STO line.  The normal edit
+        // handler validates a complete line patch; amendments need the same
+        // guard before changing just this one line.
+        if (existingLines.some((line) => (
+          toTrimmedString(line.id) !== toTrimmedString(targetLine?.id)
+          && toUpperTrimmedString(line.freight_term) !== freightTerm
+        ))) {
+          return stoErrorResponse(req, ctx, "STO_FREIGHT_TERM_CONFLICT", 400, "Every line in one STO must have the same freight term.");
+        }
+        lineUpdates.freight_term = freightTerm;
       } else if (fieldName === "expected_delivery_date") {
         lineUpdates.expected_delivery_date = toTrimmedString(normalizedValue) || null;
       } else if (fieldName === "sending_cost_center_id" || fieldName === "receiving_cost_center_id") {
