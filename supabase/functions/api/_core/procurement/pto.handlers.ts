@@ -17,6 +17,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -469,8 +470,7 @@ export async function listPTOsHandler(
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const transferType = toUpperTrimmedString(url.searchParams.get("transfer_type"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
-    const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
@@ -488,6 +488,7 @@ export async function listPTOsHandler(
     if (transferType && PTO_TRANSFER_TYPES.has(transferType)) {
       query = query.eq("transfer_type", transferType);
     }
+    if (search) query = query.or(`pto_number.ilike.%${search}%`);
 
     const { data, error, count } = await query;
     if (error) {
@@ -496,7 +497,7 @@ export async function listPTOsHandler(
 
     const enriched = await enrichPtoRows((data as PtoRow[] | null) ?? []);
     return okResponse(
-      { data: enriched, total: count ?? 0, items: enriched },
+      { data: enriched, total: count ?? 0, items: enriched, pagination: listPagination(page, limit, count ?? 0) },
       ctx.request_id,
       req,
     );

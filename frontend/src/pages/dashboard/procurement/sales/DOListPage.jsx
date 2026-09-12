@@ -41,13 +41,6 @@ const DO_EXPORT_COLUMNS = [
   { key: "total_value", label: "Total Value" },
 ];
 
-// Business owner ask (2026-09-04) -- this handler never had a search param
-// (unlike SO01/§113.10), so this page mirrors SalesInvoiceListPage.jsx's
-// already-established fetch-a-bounded-batch-then-filter-client-side pattern
-// against this exact same listDeliveryOrders() call, rather than restricting
-// the new autosuggest search to whatever 50 rows happen to be on the current
-// server page.
-const DO_FETCH_CAP = 2000;
 const DO_SEARCH_COLUMN_KEYS = ["dc_number", "source_display", "source_document_number", "customer_display", "ship_to_display", "vehicle_number", "transporter_display", "lr_number", "status", "dispatch_category"];
 
 function doStatusTone(status) {
@@ -69,13 +62,9 @@ export default function DOListPage() {
   const [page, setPage] = useState(1);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
-  // Business owner ask (2026-09-04) -- fetch a bounded larger batch once
-  // (this handler has no server-side search param) and filter/paginate it
-  // client-side, so the new autosuggest search covers more than one 50-row
-  // server page. Company/status still narrow the fetch itself.
   const params = useMemo(
-    () => ({ company_id: effectiveCompanyId || undefined, status: status || undefined, limit: DO_FETCH_CAP, offset: 0 }),
-    [effectiveCompanyId, status]
+    () => ({ company_id: effectiveCompanyId || undefined, status: status || undefined, search: search || undefined, limit: LIMIT, offset: (page - 1) * LIMIT }),
+    [effectiveCompanyId, page, search, status]
   );
 
   const doQuery = useQuery({
@@ -98,17 +87,11 @@ export default function DOListPage() {
     return [...values].sort();
   }, [allRows]);
 
-  const filteredRows = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return allRows;
-    return allRows.filter((row) => DO_SEARCH_COLUMN_KEYS.some((key) => String(row[key] ?? "").toLowerCase().includes(needle)));
-  }, [allRows, search]);
-
-  const total = filteredRows.length;
+  const total = Number(doQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
-  const rows = useMemo(() => filteredRows.slice((page - 1) * LIMIT, page * LIMIT), [filteredRows, page]);
+  const rows = allRows;
 
   useErpScreenHotkeys({
     refresh: { disabled: loading, perform: () => void doQuery.refetch() },

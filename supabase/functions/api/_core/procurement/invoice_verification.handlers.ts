@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -685,26 +686,27 @@ export async function listBlockedIVsHandler(
     assertAccountsRole(ctx);
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("invoice_verification")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("status", "BLOCKED")
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) {
       query = query.eq("company_id", companyId);
     }
+    if (search) query = query.or(`iv_number.ilike.%${search}%,vendor_invoice_number.ilike.%${search}%`);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return ivErrorResponse(req, ctx, "IV_BLOCKED_LIST_FAILED", 500, "Unable to list blocked IVs.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    return okResponse({ items: data ?? [], total: count ?? 0, pagination: listPagination(page, limit, count ?? 0) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "IV_BLOCKED_LIST_FAILED";
     return ivErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);

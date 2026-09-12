@@ -539,7 +539,7 @@ export default function CSNTrackerPage() {
   }, []);
 
   const trackerQuery = useQuery({
-    queryKey: ["csn-tracker", effectiveCompanyId, status, csnType, dateFields[0], dateFrom, dateTo, page],
+    queryKey: ["csn-tracker", effectiveCompanyId, status, csnType, dateFields[0], dateFrom, dateTo, debouncedSearch, page],
     queryFn: () =>
       getCSNTracker({
         company_id: effectiveCompanyId || undefined,
@@ -548,6 +548,7 @@ export default function CSNTrackerPage() {
         date_field: dateFields[0] || "created_at",
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        search: debouncedSearch || undefined,
         limit: LIMIT,
         offset: (page - 1) * LIMIT,
       }),
@@ -604,25 +605,6 @@ export default function CSNTrackerPage() {
     queryFn: () => listCHAs({ is_active: true, limit: 500, company_id: expandedRowCompanyId || undefined }),
     enabled: Boolean(expandedRowCompanyId),
   });
-
-  const filteredRows = useMemo(() => {
-    if (!debouncedSearch) {
-      return rows;
-    }
-    return rows.filter((row) =>
-      [
-        row.csn_display_number,
-        row.display_reference_number,
-        row.vendor_name,
-        row.material_name,
-        row.material_group_name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(debouncedSearch)
-    );
-  }, [debouncedSearch, rows]);
 
   const total = Number(trackerQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
@@ -1187,7 +1169,7 @@ export default function CSNTrackerPage() {
               />
               <ErpDenseGrid
                 columns={gridColumns}
-                rows={filteredRows}
+                rows={rows}
                 rowKey={(row) => row.id}
                 onRowActivate={(row) => resetDraft(row)}
                 getRowProps={(row) => ({ onDoubleClick: () => resetDraft(row) })}

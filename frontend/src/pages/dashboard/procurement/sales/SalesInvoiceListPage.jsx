@@ -11,7 +11,7 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -51,12 +51,6 @@ const DO_QUEUE_EXPORT_COLUMNS = [
   { key: "inbound_number", label: "Inbound Number" },
 ];
 
-// Business owner ask (2026-09-04) -- autosuggest search across every visible
-// column, same pattern as SO01MapPage.jsx. This page already loads a bounded
-// batch client-side (DO_QUEUE fetch below), so suggestions genuinely cover
-// the full loaded set, not just one page.
-const DO_QUEUE_SEARCH_COLUMN_KEYS = ["dc_number", "source_display", "source_document_number", "customer_display", "invoice_number", "tally_invoice_number", "status", "dc_type", "fg_type_display", "dispatch_category"];
-
 function getStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
     case "DISPATCHED": return "bg-emerald-100 text-emerald-800";
@@ -70,6 +64,7 @@ export default function SalesInvoiceListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -96,29 +91,21 @@ export default function SalesInvoiceListPage() {
       setLoading(true);
       setError("");
       try {
-        // CREATED-first-then-by-date can't be expressed as a single
-        // PostgREST .order() (it's not a plain column) -- fetched as one
-        // batch (LIMIT capped well above realistic per-page volume, same
-        // trade-off already made for listPOOrderGroupsHandler's own merge)
-        // and sorted client-side, then paginated in memory.
         const data = await listDeliveryOrders({
           company_id: effectiveCompanyId || undefined,
-          limit: 2000,
-          offset: 0,
+          search: debouncedSearch || undefined,
+          limit: LIMIT,
+          offset: (page - 1) * LIMIT,
+          priority: "CREATED_FIRST",
         });
         if (!active) return;
         const items = Array.isArray(data?.items) ? data.items : [];
-        const sorted = [...items].sort((a, b) => {
-          const aPending = a.status === "CREATED" ? 0 : 1;
-          const bPending = b.status === "CREATED" ? 0 : 1;
-          if (aPending !== bPending) return aPending - bPending;
-          if (aPending === 0) return String(a.dc_date || "").localeCompare(String(b.dc_date || ""));
-          return String(b.dc_date || "").localeCompare(String(a.dc_date || ""));
-        });
-        setRows(sorted);
+        setRows(items);
+        setTotal(Number(data?.total ?? 0));
       } catch (loadError) {
         if (!active) return;
         setRows([]);
+        setTotal(0);
         setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_DO_QUEUE_LIST_FAILED");
       } finally {
         if (active) setLoading(false);
@@ -126,32 +113,10 @@ export default function SalesInvoiceListPage() {
     }
     void load();
     return () => { active = false; };
-  }, [effectiveCompanyId, reloadTick]);
+  }, [debouncedSearch, effectiveCompanyId, page, reloadTick]);
 
-  const searchOptions = useMemo(() => {
-    const values = new Set();
-    for (const row of rows) {
-      for (const key of DO_QUEUE_SEARCH_COLUMN_KEYS) {
-        const text = row[key];
-        if (text) values.add(String(text));
-      }
-    }
-    return [...values].sort();
-  }, [rows]);
-
-  const filteredRows = useMemo(() => {
-    if (!debouncedSearch) return rows;
-    return rows.filter((row) => {
-      const haystack = DO_QUEUE_SEARCH_COLUMN_KEYS.map((key) => row[key]).filter(Boolean).join(" ").toLowerCase();
-      return haystack.includes(debouncedSearch);
-    });
-  }, [debouncedSearch, rows]);
-
-  const pagedRows = useMemo(
-    () => filteredRows.slice((page - 1) * LIMIT, page * LIMIT),
-    [filteredRows, page]
-  );
-  const pageTotal = filteredRows.length;
+  const pagedRows = rows;
+  const pageTotal = total;
   const totalPages = Math.max(1, Math.ceil(pageTotal / LIMIT));
   const startIndex = pageTotal === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = pageTotal === 0 ? 0 : Math.min(page * LIMIT, pageTotal);
@@ -199,10 +164,7 @@ export default function SalesInvoiceListPage() {
               onChange={(nextValue) => { setCompanyId(nextValue); setPage(1); }}
               label="Company"
             />
-            <QuickFilterInput label="Search" value={search} onChange={setSearch} primaryFocus placeholder="DO number, SO/STO number, invoice number, or customer" inputProps={{ list: "do-queue-search-options" }} />
-            <datalist id="do-queue-search-options">
-              {searchOptions.map((option) => <option key={option} value={option} />)}
-            </datalist>
+            <QuickFilterInput label="Search" value={search} onChange={(value) => { setSearch(value); setPage(1); }} primaryFocus placeholder="Search DO number" />
           </div>
         ),
       }}

@@ -40,10 +40,6 @@ function statusTone(status) {
   }
 }
 
-function normalizeSearch(text) {
-  return String(text || "").trim().toLowerCase();
-}
-
 function computePassFail(resultValue, lsl, usl) {
   const numericResult = Number(resultValue);
   const hasLimits = lsl !== null && lsl !== undefined || usl !== null && usl !== undefined;
@@ -69,6 +65,7 @@ export default function SfgResultRecordingPage() {
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -76,20 +73,27 @@ export default function SfgResultRecordingPage() {
   const [expandedRowId, setExpandedRowId] = useState("");
 
   const queueQuery = useQuery({
-    queryKey: ["production", "sfg-qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo],
+    queryKey: ["production", "sfg-qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo, debouncedSearch, page],
     queryFn: () =>
       listSfgQaDocuments({
         company_id: effectiveCompanyId || undefined,
         status: statusFilter === "ALL" ? undefined : statusFilter,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        limit: 200,
+        search: debouncedSearch || undefined,
+        limit: LIMIT,
+        offset: (page - 1) * LIMIT,
       }),
     enabled: Boolean(effectiveCompanyId),
   });
 
-  const rows = useMemo(() => (Array.isArray(queueQuery.data) ? queueQuery.data : []), [queueQuery.data]);
+  const rows = useMemo(() => (Array.isArray(queueQuery.data?.items) ? queueQuery.data.items : []), [queueQuery.data]);
   const loading = queueQuery.isLoading;
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [search]);
 
   useErpScreenHotkeys({
     refresh: {
@@ -98,33 +102,11 @@ export default function SfgResultRecordingPage() {
     },
   });
 
-  const filteredRows = useMemo(() => {
-    const needle = normalizeSearch(search);
-    if (!needle) return rows;
-    return rows.filter((row) => {
-      const material = row.material || {};
-      const haystack = [
-        row.po_number,
-        row.batch_number,
-        material.material_name,
-        material.pace_code,
-        row.stroke_number,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [rows, search]);
-
-  const total = filteredRows.length;
+  const total = Number(queueQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
   const currentError = queueQuery.error?.message || "";
-  const pageRows = useMemo(
-    () => filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT),
-    [filteredRows, safePage],
-  );
+  const pageRows = rows;
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 

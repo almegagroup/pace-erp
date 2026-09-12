@@ -42,10 +42,6 @@ function statusTone(status) {
   }
 }
 
-function normalizeSearch(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
 export default function RTVListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
@@ -64,9 +60,11 @@ export default function RTVListPage() {
       status: status || undefined,
       settlement_mode: settlementMode || undefined,
       vendor_id: vendorId || undefined,
-      limit: 200,
+      search: search || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
     }),
-    [effectiveCompanyId, settlementMode, status, vendorId]
+    [effectiveCompanyId, page, search, settlementMode, status, vendorId]
   );
   const rtvQuery = useQuery({
     queryKey: ["procurement", "rtvs", rtvParams],
@@ -116,32 +114,10 @@ export default function RTVListPage() {
     () => new Map(vendors.map((entry) => [entry.id, entry])),
     [vendors]
   );
-  const filteredRows = useMemo(() => {
-    const needle = normalizeSearch(search);
-    if (!needle) {
-      return rows;
-    }
-    return rows.filter((row) => {
-      const vendor = vendorMap.get(row.vendor_id);
-      const grn = grnMap.get(row.grn_id);
-      const haystack = [
-        row.rtv_number,
-        vendor?.vendor_name,
-        vendor?.vendor_code,
-        grn?.grn_number,
-        row.reason_category,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [grnMap, rows, search, vendorMap]);
-
-  const total = filteredRows.length;
+  const total = Number(rtvQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
-  const pageRows = filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT);
+  const pageRows = rows;
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 

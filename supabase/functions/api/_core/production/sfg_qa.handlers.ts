@@ -9,6 +9,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -65,11 +66,6 @@ function todayIsoDate(): string {
 
 function roundQty(value: number): number {
   return Number(value.toFixed(6));
-}
-
-function parsePositiveInt(value: unknown, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 function mapQaStatusForResponse(rawStatus: unknown): string {
@@ -404,16 +400,19 @@ export async function listSfgQaDocumentsHandler(req: Request, ctx: ProdHandlerCo
     const companyId = toTrimmedString(url.searchParams.get("company_id")) || getCompanyScope(ctx);
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 200);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select("id, company_id, po_number, po_type, material_id, stroke_master_id, batch_number, actual_qty, planned_qty, status, verified_at")
+      .select(
+        "id, company_id, po_number, po_type, material_id, stroke_master_id, batch_number, actual_qty, planned_qty, status, verified_at, sfg_qa_document!left(id, status)",
+        { count: "exact" },
+      )
       .eq("status", "VERIFIED")
       .in("po_type", ELIGIBLE_PO_TYPES)
       .order("verified_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) {
       query = query.eq("company_id", companyId);
@@ -424,8 +423,40 @@ export async function listSfgQaDocumentsHandler(req: Request, ctx: ProdHandlerCo
     if (dateTo) {
       query = (query as typeof query & { lte: (column: string, value: string) => typeof query }).lte("verified_at", `${dateTo}T23:59:59.999Z`);
     }
+    if (status) {
+      const dbStatus = status === "DECISION_MADE" ? "DECIDED" : status;
+      if (dbStatus === "PENDING") {
+        query = query.or("sfg_qa_document.is.null,sfg_qa_document.status.eq.PENDING");
+      } else {
+        query = query.eq("sfg_qa_document.status", dbStatus);
+      }
+    }
+    if (search) {
+      const [materialResult, strokeResult] = await Promise.all([
+        serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .select("id")
+          .or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%`),
+        serviceRoleClient
+          .schema("erp_production")
+          .from("stroke_master")
+          .select("id")
+          .or(`stroke_number.ilike.%${search}%`),
+      ]);
+      if (materialResult.error || strokeResult.error) {
+        logDbError("listSfgQaDocumentsHandler search lookup", materialResult.error ?? strokeResult.error);
+        throw new ApiError(500, "Unable to resolve SFG QA search results");
+      }
+      const materialIds = ((materialResult.data ?? []) as JsonRecord[]).map((row) => String(row.id)).filter(Boolean);
+      const strokeIds = ((strokeResult.data ?? []) as JsonRecord[]).map((row) => String(row.id)).filter(Boolean);
+      const searchFilters = ["po_number.ilike.%" + search + "%", "batch_number.ilike.%" + search + "%"];
+      if (materialIds.length) searchFilters.push(`material_id.in.(${materialIds.join(",")})`);
+      if (strokeIds.length) searchFilters.push(`stroke_master_id.in.(${strokeIds.join(",")})`);
+      query = query.or(searchFilters.join(","));
+    }
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       logDbError("listSfgQaDocumentsHandler process-order query", error);
       throw new ApiError(500, error.message || "Unable to list SFG QA source documents");
@@ -491,14 +522,11 @@ export async function listSfgQaDocumentsHandler(req: Request, ctx: ProdHandlerCo
       })
       .filter(Boolean) as JsonRecord[];
 
-    const filteredItems = status
-      ? items.filter((row) => {
-        if (status === "DECISION_MADE") return row.public_status === "DECISION_MADE";
-        return String(row.public_status) === status;
-      })
-      : items;
-
-    return okResponse(filteredItems, ctx.request_id, req);
+    return okResponse({
+      items,
+      total: count ?? 0,
+      pagination: listPagination(page, limit, count ?? 0),
+    }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to list SFG QA documents";
     const status = error instanceof ApiError ? error.status : 500;

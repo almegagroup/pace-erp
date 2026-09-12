@@ -17,7 +17,6 @@ import {
   deleteQaCategoryTestConfig,
   getGRN,
   getQADocument,
-  listGRNs,
   listQaCategoryTestConfig,
   listQaTestMethods,
   listQADocuments,
@@ -40,10 +39,6 @@ function statusTone(status) {
     default:
       return "bg-amber-100 text-amber-800";
   }
-}
-
-function normalizeSearch(text) {
-  return String(text || "").trim().toLowerCase();
 }
 
 // Mirrors the backend's comparison exactly (see inward_qa.handlers.ts addTestLineHandler) —
@@ -80,6 +75,7 @@ export default function QAQueuePage() {
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -87,41 +83,37 @@ export default function QAQueuePage() {
   const [expandedRowId, setExpandedRowId] = useState("");
 
   const queueQuery = useQuery({
-    queryKey: ["procurement", "qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo],
+    queryKey: ["procurement", "qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo, debouncedSearch, page],
     queryFn: () =>
       listQADocuments({
         company_id: effectiveCompanyId || undefined,
         status: statusFilter === "ALL" ? undefined : statusFilter,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        limit: 200,
+        search: debouncedSearch || undefined,
+        limit: LIMIT,
+        offset: (page - 1) * LIMIT,
       }),
     enabled: Boolean(effectiveCompanyId),
   });
-  const grnsQuery = useQuery({
-    queryKey: ["procurement", "qa-queue-grns", effectiveCompanyId || null],
-    queryFn: () => listGRNs({ company_id: effectiveCompanyId || undefined, limit: 200, offset: 0 }),
-    enabled: Boolean(effectiveCompanyId),
-  });
 
-  const rows = useMemo(() => (Array.isArray(queueQuery.data) ? queueQuery.data : []), [queueQuery.data]);
-  const grns = useMemo(
-    () => (Array.isArray(grnsQuery.data?.items) ? grnsQuery.data.items : []),
-    [grnsQuery.data],
-  );
-  const loading = queueQuery.isLoading || grnsQuery.isLoading;
+  const rows = useMemo(() => (Array.isArray(queueQuery.data?.items) ? queueQuery.data.items : []), [queueQuery.data]);
+  const loading = queueQuery.isLoading;
 
   useErpScreenHotkeys({
     refresh: {
       disabled: loading,
-      perform: () => void Promise.all([queueQuery.refetch(), grnsQuery.refetch()]),
+      perform: () => void queueQuery.refetch(),
     },
   });
 
   const error =
-    queueQuery.error?.message ||
-    grnsQuery.error?.message ||
-    "";
+    queueQuery.error?.message || "";
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [search]);
 
   // Deep-link support: other detail pages' Document Flow chain link here with ?qa_id=
   // since QA no longer has its own standalone detail route — expand the matching row.
@@ -140,31 +132,10 @@ export default function QAQueuePage() {
     }
   }, [deepLinkQaId, rows, setSearchParams]);
 
-  const grnMap = useMemo(() => new Map(grns.map((row) => [row.id, row])), [grns]);
-
-  const filteredRows = useMemo(() => {
-    const needle = normalizeSearch(search);
-    if (!needle) {
-      return rows;
-    }
-
-    return rows.filter((row) => {
-      const grn = grnMap.get(row.grn_id);
-      const haystack = [row.qa_doc_number, grn?.grn_number, row.material_name, row.pace_code]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [grnMap, rows, search]);
-
-  const total = filteredRows.length;
+  const total = Number(queueQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
-  const pageRows = useMemo(
-    () => filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT),
-    [filteredRows, safePage],
-  );
+  const pageRows = rows;
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 
@@ -190,7 +161,7 @@ export default function QAQueuePage() {
           key: "refresh",
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
-          onClick: () => void Promise.all([queueQuery.refetch(), grnsQuery.refetch()]),
+          onClick: () => void queueQuery.refetch(),
         },
       ]}
       notices={[
@@ -300,7 +271,6 @@ export default function QAQueuePage() {
                     </tr>
                   ) : (
                     pageRows.map((row) => {
-                      const grn = grnMap.get(row.grn_id);
                       const isExpanded = expandedRowId === row.id;
                       const remaining = Number(row.remaining_qty ?? row.total_qty ?? 0);
                       return (
@@ -310,7 +280,7 @@ export default function QAQueuePage() {
                             className="cursor-pointer border-b border-slate-100 bg-white hover:bg-sky-50"
                           >
                             <td className="px-2 py-1.5 font-mono font-semibold text-sky-700">
-                              {grn?.grn_number || row.grn_id || "—"}
+                              {row.grn_number || row.grn_id || "—"}
                             </td>
                             <td className="px-2 py-1.5">
                               {row.material_name || row.pace_code || "—"}

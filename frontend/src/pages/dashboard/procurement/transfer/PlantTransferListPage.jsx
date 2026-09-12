@@ -28,10 +28,6 @@ import { createPTO, listPTOs } from "../procurementApi.js";
 
 const LIMIT = 50;
 
-function normalizeSearch(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
     case "APPROVED":
@@ -153,8 +149,9 @@ export default function PlantTransferListPage() {
           company_id: effectiveCompanyId || undefined,
           status: status || undefined,
           transfer_type: transferType || undefined,
-          limit: 200,
-          offset: 0,
+          search: search || undefined,
+          limit: LIMIT,
+          offset: (page - 1) * LIMIT,
         });
         if (!active) return;
         const nextRows = Array.isArray(response?.data)
@@ -180,24 +177,14 @@ export default function PlantTransferListPage() {
     return () => {
       active = false;
     };
-  }, [refreshToken, effectiveCompanyId, status, transferType]);
+  }, [refreshToken, effectiveCompanyId, status, transferType, search, page]);
 
-  const filteredRows = useMemo(() => {
-    const needle = normalizeSearch(search);
-    if (!needle) {
-      return rows;
-    }
-    return rows.filter((row) =>
-      String(row.pto_number || "").toLowerCase().includes(needle)
-    );
-  }, [rows, search]);
-
-  const displayTotal = search ? filteredRows.length : total;
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / LIMIT));
+  const displayTotal = total;
+  const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
-  const startIndex = filteredRows.length === 0 ? 0 : (safePage - 1) * LIMIT + 1;
-  const endIndex = filteredRows.length === 0 ? 0 : Math.min(safePage * LIMIT, filteredRows.length);
-  const pageRows = filteredRows.slice((safePage - 1) * LIMIT, safePage * LIMIT);
+  const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
+  const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
+  const pageRows = rows;
 
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_PLANT_TRANSFER_DETAIL.screen_code, { context: { id: row.id } });
@@ -501,7 +488,7 @@ export default function PlantTransferListPage() {
               totalPages={totalPages}
               startIndex={startIndex}
               endIndex={endIndex}
-              totalItems={filteredRows.length}
+              totalItems={total}
             />
             <ErpDenseGrid
               columns={[

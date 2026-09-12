@@ -57,12 +57,13 @@ export default function POListPage() {
     () => ({
       company_id: effectiveCompanyId || undefined,
       status: status || undefined,
+      search: debouncedSearch || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       limit: LIMIT,
       offset: (page - 1) * LIMIT,
     }),
-    [dateFrom, dateTo, effectiveCompanyId, page, status]
+    [dateFrom, dateTo, debouncedSearch, effectiveCompanyId, page, status]
   );
   const purchaseOrderQuery = useQuery({
     queryKey: ["procurement", "purchase-orders", purchaseOrderParams],
@@ -96,26 +97,6 @@ export default function POListPage() {
     () => new Map((runtimeContext?.availableCompanies ?? []).map((entry) => [entry.id, entry])),
     [runtimeContext?.availableCompanies]
   );
-  const filteredRows = useMemo(() => {
-    if (!debouncedSearch) {
-      return rows;
-    }
-    return rows.filter((row) => {
-      const vendor = vendorMap.get(row.vendor_id);
-      const company = companyMap.get(row.company_id);
-      const haystack = [
-        row.po_number,
-        vendor?.vendor_name,
-        vendor?.vendor_code,
-        company?.company_name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(debouncedSearch);
-    });
-  }, [companyMap, debouncedSearch, rows, vendorMap]);
-
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / LIMIT)), [total]);
   const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
@@ -270,7 +251,7 @@ export default function POListPage() {
                   render: (row) => row.created_by_display || row.created_by || "-",
                 },
               ]}
-              rows={filteredRows}
+              rows={rows}
               rowKey={(row) => row.id}
               onRowActivate={openDetail}
               getRowProps={(row) => ({
