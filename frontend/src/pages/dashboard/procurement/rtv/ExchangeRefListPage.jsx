@@ -36,10 +36,6 @@ function statusTone(status) {
   }
 }
 
-function normalizeSearch(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
 export default function ExchangeRefListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
@@ -58,9 +54,11 @@ export default function ExchangeRefListPage() {
     () => ({
       company_id: effectiveCompanyId || undefined,
       status: status || undefined,
-      limit: 200,
+      search: search || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
     }),
-    [effectiveCompanyId, status]
+    [effectiveCompanyId, page, search, status]
   );
   const exchangeRefQuery = useQuery({
     queryKey: ["procurement", "exchange-refs", exchangeRefParams],
@@ -97,34 +95,10 @@ export default function ExchangeRefListPage() {
     [vendors]
   );
 
-  const filteredRows = useMemo(() => {
-    const needle = normalizeSearch(search);
-    if (!needle) {
-      return rows;
-    }
-    return rows.filter((row) => {
-      const vendor = vendorMap.get(row.vendor_id);
-      const haystack = [
-        row.exchange_ref_number,
-        row.rtv_id,
-        row.replacement_grn_id,
-        vendor?.vendor_name,
-        vendor?.vendor_code,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [rows, search, vendorMap]);
-
-  const total = filteredRows.length;
+  const total = Number(exchangeRefQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
-  const pageRows = filteredRows.slice(
-    (safePage - 1) * LIMIT,
-    safePage * LIMIT
-  );
+  const pageRows = rows;
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 

@@ -16,6 +16,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 import { recalculateAndBuildUpdates } from "./csn.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1633,8 +1634,7 @@ export async function listPOsHandler(
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
-    const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
@@ -1658,6 +1658,9 @@ export async function listPOsHandler(
     if (dateTo) {
       query = query.lte("po_date", dateTo);
     }
+    if (search) {
+      query = query.or(`po_number.ilike.%${search}%`);
+    }
 
     const { data, error, count } = await query;
     if (error) {
@@ -1670,6 +1673,7 @@ export async function listPOsHandler(
     return okResponse({
       data: await enrichProcurementUserDisplays(posWithItems),
       total: count ?? 0,
+      pagination: listPagination(page, limit, count ?? 0),
     }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "PROCUREMENT_PO_LIST_FAILED";

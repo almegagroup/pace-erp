@@ -23,6 +23,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 import {
   computeLineValues,
   deriveSalesInvoiceGstType,
@@ -195,7 +196,7 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       .order("created_at", { ascending: false })
       .limit(100);
     if (companyId) query = query.eq("sending_company_id", companyId);
-    if (search) query = query.ilike("sto_number", `%${search}%`);
+    if (search) query = query.or(`sto_number.ilike.%${search}%`);
     const { data, error } = await query;
     if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source STOs.");
 
@@ -323,7 +324,7 @@ export async function listDOStorageLocationOptionsHandler(req: Request, ctx: Pro
       .eq("material_id", materialId)
       .eq("stock_type_code", "UNRESTRICTED")
       .is("batch_id", null)
-      .gt("quantity", 0);
+      .or("quantity.gt.0");
     if (error) return doErrorResponse(req, ctx, "DO_LOCATION_LOOKUP_FAILED", 500, "Unable to look up storage locations.");
 
     const rows = (data ?? []) as JsonRecord[];
@@ -924,8 +925,8 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const url = new URL(req.url);
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const status = toTrimmedString(url.searchParams.get("status")).toUpperCase();
-    const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
-    const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
+    const createdFirst = toUpperTrimmedString(url.searchParams.get("priority")) === "CREATED_FIRST";
 
     if (companyId) {
       try {
@@ -935,20 +936,46 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       }
     }
 
+    let orderedIds: string[] | null = null;
+    let orderedTotal: number | null = null;
+    if (createdFirst) {
+      const { data: pageRows, error: pageError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .rpc("list_delivery_order_page", {
+          p_company_id: companyId || null,
+          p_status: status || null,
+          p_search: search || null,
+          p_limit: limit,
+          p_offset: offset,
+          p_created_first: true,
+        });
+      if (pageError) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
+      orderedIds = ((pageRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.delivery_order_id)).filter(Boolean);
+      orderedTotal = orderedIds.length > 0 ? Number((pageRows as JsonRecord[])[0].total_count ?? 0) : 0;
+    }
+
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("delivery_challan")
       .select("*", { count: "exact" })
-      .in("dc_type", ["SALES", "STO"])
-      .order("created_at", { ascending: false })
-      .range(offset, offset + limit - 1);
+      .in("dc_type", ["SALES", "STO"]);
+    if (orderedIds) {
+      query = query.in("id", orderedIds);
+    } else {
+      query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+    }
     if (companyId) query = query.eq("selling_company_id", companyId);
     if (status) query = query.eq("status", status);
+    if (search) query = query.or(`dc_number.ilike.%${search}%`);
 
     const { data, error, count } = await query;
     if (error) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
 
-    const rows = (data ?? []) as JsonRecord[];
+    let rows = (data ?? []) as JsonRecord[];
+    if (orderedIds) {
+      const rowsById = new Map(rows.map((row) => [toTrimmedString(row.id), row]));
+      rows = orderedIds.map((id) => rowsById.get(id)).filter(Boolean) as JsonRecord[];
+    }
     const dcIds = rows.map((row) => String(row.id));
     const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
       dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
@@ -1110,7 +1137,8 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       };
     });
 
-    return okResponse({ items, total: count ?? items.length }, ctx.request_id, req);
+    const total = orderedTotal ?? count ?? items.length;
+    return okResponse({ items, total, pagination: listPagination(page, limit, total) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_LIST_FAILED";
     return doErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);

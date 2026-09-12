@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1955,8 +1956,7 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
     const requestedDateField = toTrimmedString(url.searchParams.get("date_field"));
     const dateField = TRACKER_DATE_FILTER_FIELDS.has(requestedDateField) ? requestedDateField : "created_at";
     const isTimestampField = dateField === "created_at";
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
-    const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
     const sortBy = toTrimmedString(url.searchParams.get("sort_by")) || "created_at";
     const sortDirection = toUpperTrimmedString(url.searchParams.get("sort_direction")) === "ASC";
 
@@ -1978,6 +1978,7 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
     if (materialCategoryId) query = query.eq("material_category_id", materialCategoryId);
     if (dateFrom) query = query.gte(dateField, isTimestampField ? `${dateFrom}T00:00:00.000Z` : dateFrom);
     if (dateTo) query = query.lte(dateField, isTimestampField ? `${dateTo}T23:59:59.999Z` : dateTo);
+    if (search) query = query.or(`csn_number.ilike.%${search}%,bl_number.ilike.%${search}%,boe_number.ilike.%${search}%`);
 
     const { data, error, count } = await query;
     if (error) {
@@ -1986,7 +1987,7 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
     }
 
     const enriched = await enrichTrackerRows((data as CsnRow[] | null) ?? []);
-    return okResponse({ data: enriched, total: count ?? 0 }, ctx.request_id, req);
+    return okResponse({ data: enriched, total: count ?? 0, pagination: listPagination(page, limit, count ?? 0) }, ctx.request_id, req);
   } catch (err) {
     console.error("CSN_TRACKER_LIST_HANDLER_ERROR", err);
     const code = (err as Error).message || "PROCUREMENT_TRACKER_LIST_FAILED";

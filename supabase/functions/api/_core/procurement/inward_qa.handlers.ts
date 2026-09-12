@@ -14,6 +14,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -381,16 +382,17 @@ export async function listQADocumentsHandler(
     const companyId = requestedCompanyId || getCompanyScope(ctx);
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 200);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("inward_qa_document")
       .select(
         "id, qa_number, grn_id, grn_line_id, material_id, vendor_id, qa_stock_qty, uom_code, status, qa_created_at, company_id",
+        { count: "exact" },
       )
       .order("qa_created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) {
       query = query.eq("company_id", companyId);
@@ -412,14 +414,55 @@ export async function listQADocumentsHandler(
       query = query.lte("qa_created_at", `${dateTo}T23:59:59.999Z`);
     }
 
-    const { data, error } = await query;
+    if (search) {
+      const [materialResult, grnResult] = await Promise.all([
+        serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .select("id")
+          .or(`pace_code.ilike.%${search}%,material_name.ilike.%${search}%`),
+        serviceRoleClient
+          .schema("erp_procurement")
+          .from("goods_receipt")
+          .select("id")
+          .or(`grn_number.ilike.%${search}%`),
+      ]);
+      if (materialResult.error || grnResult.error) {
+        logDbError("listQADocumentsHandler search lookup", materialResult.error ?? grnResult.error);
+        throw new ApiError(500, "Unable to resolve QA search results");
+      }
+      const materialIds = ((materialResult.data ?? []) as JsonRecord[]).map((row) => String(row.id)).filter(Boolean);
+      const grnIds = ((grnResult.data ?? []) as JsonRecord[]).map((row) => String(row.id)).filter(Boolean);
+      const searchFilters = [`qa_number.ilike.%${search}%`];
+      if (materialIds.length) searchFilters.push(`material_id.in.(${materialIds.join(",")})`);
+      if (grnIds.length) searchFilters.push(`grn_id.in.(${grnIds.join(",")})`);
+      query = query.or(searchFilters.join(","));
+    }
+
+    const { data, error, count } = await query;
     if (error) {
       logDbError("listQADocumentsHandler query", error);
       throw new ApiError(500, error.message || "Unable to list QA documents");
     }
 
-    const rows = data ?? [];
+    const rows = (data ?? []) as JsonRecord[];
     const docIds = rows.map((row) => row.id);
+    const grnIdsForRows = [...new Set(rows.map((row: JsonRecord) => String(row.grn_id)).filter(Boolean))];
+
+    const { data: grnRows, error: grnError } = grnIdsForRows.length > 0
+      ? await serviceRoleClient
+          .schema("erp_procurement")
+          .from("goods_receipt")
+          .select("id, grn_number")
+          .in("id", grnIdsForRows)
+      : { data: [] as JsonRecord[], error: null };
+    if (grnError) {
+      logDbError("listQADocumentsHandler GRN resolve", grnError);
+      throw new ApiError(500, grnError.message || "Unable to resolve GRN numbers");
+    }
+    const grnNumberById = new Map(
+      (grnRows ?? []).map((row: JsonRecord) => [String(row.id), row.grn_number ?? null]),
+    );
 
     // Bulk-fetch decision lines for all listed docs in one query (no per-row N+1)
     // so the queue can show an accurate "remaining qty" without a detail fetch per row.
@@ -436,7 +479,7 @@ export async function listQADocumentsHandler(
         throw new ApiError(500, decisionError.message || "Unable to resolve QA decision totals");
       }
 
-      decidedByDoc = (decisionRows ?? []).reduce((map, row) => {
+      decidedByDoc = ((decisionRows ?? []) as JsonRecord[]).reduce((map: Map<string, number>, row: JsonRecord) => {
         const key = String(row.qa_document_id);
         map.set(key, roundQty((map.get(key) ?? 0) + (Number(row.decision_qty) || 0)));
         return map;
@@ -476,6 +519,7 @@ export async function listQADocumentsHandler(
       return {
         ...row,
         qa_doc_number: row.qa_number,
+        grn_number: grnNumberById.get(String(row.grn_id)) ?? null,
         created_at: row.qa_created_at,
         total_qty: totalQty,
         decided_qty: decidedQty,
@@ -487,7 +531,11 @@ export async function listQADocumentsHandler(
       };
     });
 
-    return okResponse(items, ctx.request_id, req);
+    return okResponse({
+      items,
+      total: count ?? 0,
+      pagination: listPagination(page, limit, count ?? 0),
+    }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to list QA documents";
     const status = error instanceof ApiError ? error.status : 500;

@@ -138,6 +138,10 @@ export async function searchBatchVarianceHandler(req: Request, ctx: ProdHandlerC
     const batchNumber = toTrimmedString(url.searchParams.get("batch_number"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    // `%` and `_` are SQL ILIKE wildcards. The report's free-text search is
+    // literal substring search, so strip them instead of letting a user turn a
+    // narrow query into an unintended broad scan.
+    const search = toTrimmedString(url.searchParams.get("search")).replace(/[%_]/g, "");
     const page = parsePositiveInteger(url.searchParams.get("page"), 1);
     const perPage = Math.min(
       MAX_PAGE_SIZE,
@@ -189,44 +193,25 @@ export async function searchBatchVarianceHandler(req: Request, ctx: ProdHandlerC
       }
     }
 
-    let processOrderQuery = serviceRoleClient.schema("erp_production").from("process_order")
-      .select(
-        "id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, stroke_master_id, verified_at",
-        { count: "exact" },
-      )
-      // The ID tie-breaker makes offset pages deterministic when several batches
-      // were verified in the same timestamp.
-      .order("verified_at", { ascending: false })
-      .order("id", { ascending: false });
-
-    if (companyIds) processOrderQuery = processOrderQuery.in("company_id", companyIds);
-    if (packingProcessOrderIds) {
-      processOrderQuery = processOrderQuery.in("id", packingProcessOrderIds);
-    } else if (poNumber) {
-      processOrderQuery = processOrderQuery.eq("po_number", poNumber);
-    } else {
-      if (poTypes.length > 0) processOrderQuery = processOrderQuery.in("po_type", poTypes);
-      if (batchNumber) processOrderQuery = processOrderQuery.eq("batch_number", batchNumber);
-      // Comparisons against NULL verified_at naturally exclude never-verified orders —
-      // this report is inherently about VERIFIED batches (reco only exists post-Verify).
-      processOrderQuery = (processOrderQuery as unknown as {
-        gte: (column: string, value: string) => typeof processOrderQuery;
-      }).gte("verified_at", dateFrom);
-      processOrderQuery = (processOrderQuery as unknown as {
-        lte: (column: string, value: string) => typeof processOrderQuery;
-      }).lte("verified_at", `${dateTo}T23:59:59.999999+00:00`);
-    }
-
-    const { data, error, count } = await ((processOrderQuery as typeof processOrderQuery & {
-      range: (from: number, to: number) => typeof processOrderQuery;
-    }).range((page - 1) * perPage, page * perPage - 1)) as {
-      data: unknown;
-      error: unknown;
-      count?: number | null;
-    };
+    // This RPC applies the global search to Process PO, prodshade, Packing PO,
+    // SKU, status and Verified date before it counts and paginates. Filtering
+    // only the already-loaded browser page would hide valid matches on later pages.
+    const { data, error } = await serviceRoleClient.rpc("search_batch_variance_process_orders", {
+      p_company_ids: companyIds,
+      p_po_types: poNumber ? null : (poTypes.length > 0 ? poTypes : null),
+      p_batch_number: poNumber ? null : (batchNumber || null),
+      p_date_from: poNumber ? null : dateFrom,
+      p_date_to: poNumber ? null : dateTo,
+      p_process_order_ids: packingProcessOrderIds,
+      p_po_number: packingProcessOrderIds ? null : (poNumber || null),
+      p_search: search || null,
+      p_page: page,
+      p_per_page: perPage,
+    });
     if (error) throw new Error("PROD_BATVAR_LOOKUP_FAILED");
     const processOrders = (data ?? []) as JsonRecord[];
-    const pagination = paginationPayload(page, perPage, count ?? 0);
+    const total = processOrders.length > 0 ? Number(processOrders[0].total_count ?? 0) : 0;
+    const pagination = paginationPayload(page, perPage, total);
 
     if (processOrders.length === 0) {
       return okResponse({ data: [], pagination }, ctx.request_id, req);

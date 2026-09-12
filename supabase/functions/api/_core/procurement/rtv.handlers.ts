@@ -14,6 +14,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -393,26 +394,27 @@ export async function listRTVsHandler(
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const settlementMode = toUpperTrimmedString(url.searchParams.get("settlement_mode"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("return_to_vendor")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
     if (status && RTV_STATUSES.has(status)) query = query.eq("status", status);
     if (vendorId) query = query.eq("vendor_id", vendorId);
     if (settlementMode && RTV_SETTLEMENT_MODES.has(settlementMode)) query = query.eq("settlement_mode", settlementMode);
+    if (search) query = query.or(`rtv_number.ilike.%${search}%`);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return rtvErrorResponse(req, ctx, "RTV_LIST_FAILED", 500, "Unable to list RTVs.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    return okResponse({ items: data ?? [], total: count ?? 0, pagination: listPagination(page, limit, count ?? 0) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "RTV_LIST_FAILED";
     return rtvErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
@@ -878,25 +880,26 @@ export async function listDebitNotesHandler(
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("debit_note")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
     if (vendorId) query = query.eq("vendor_id", vendorId);
     if (status && DEBIT_NOTE_STATUSES.has(status)) query = query.eq("status", status);
+    if (search) query = query.or(`dn_number.ilike.%${search}%`);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return rtvErrorResponse(req, ctx, "DN_LIST_FAILED", 500, "Unable to list debit notes.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    return okResponse({ items: data ?? [], total: count ?? 0, pagination: listPagination(page, limit, count ?? 0) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DN_LIST_FAILED";
     return rtvErrorResponse(req, ctx, code, 500, code);
@@ -1162,25 +1165,26 @@ export async function listExchangeRefsHandler(
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
     const rtvId = toTrimmedString(url.searchParams.get("rtv_id"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("exchange_reference")
-      .select("*")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
     if (rtvId) query = query.eq("rtv_id", rtvId);
     if (status && EXCHANGE_REF_STATUSES.has(status)) query = query.eq("status", status);
+    if (search) query = query.or(`exchange_ref_number.ilike.%${search}%`);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return rtvErrorResponse(req, ctx, "EXR_LIST_FAILED", 500, "Unable to list exchange references.");
     }
 
-    return okResponse({ items: data ?? [] }, ctx.request_id, req);
+    return okResponse({ items: data ?? [], total: count ?? 0, pagination: listPagination(page, limit, count ?? 0) }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "EXR_LIST_FAILED";
     return rtvErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);

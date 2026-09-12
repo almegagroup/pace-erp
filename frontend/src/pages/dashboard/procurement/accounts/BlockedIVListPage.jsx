@@ -26,10 +26,6 @@ import { listBlockedIVs } from "../procurementApi.js";
 
 const LIMIT = 50;
 
-function normalizeSearch(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
 function formatNumber(value) {
   const amount = Number(value ?? 0);
   if (!Number.isFinite(amount)) {
@@ -51,11 +47,13 @@ export default function BlockedIVListPage() {
 
   const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const blockedIvQuery = useQuery({
-    queryKey: ["procurement", "blocked-ivs", { company_id: effectiveCompanyId || undefined, limit: 200 }],
+    queryKey: ["procurement", "blocked-ivs", { company_id: effectiveCompanyId || undefined, search: search || undefined, limit: LIMIT, offset: (page - 1) * LIMIT }],
     queryFn: () =>
       listBlockedIVs({
         company_id: effectiveCompanyId || undefined,
-        limit: 200,
+        search: search || undefined,
+        limit: LIMIT,
+        offset: (page - 1) * LIMIT,
       }),
   });
 
@@ -84,35 +82,10 @@ export default function BlockedIVListPage() {
     [vendors]
   );
 
-  const filteredRows = useMemo(() => {
-    const needle = normalizeSearch(search);
-    if (!needle) {
-      return rows;
-    }
-    return rows.filter((row) => {
-      const vendor = vendorMap.get(row.vendor_id);
-      const haystack = [
-        row.iv_number,
-        row.invoice_number,
-        row.vendor_invoice_number,
-        row.block_reason,
-        vendor?.vendor_name,
-        vendor?.vendor_code,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [rows, search, vendorMap]);
-
-  const total = filteredRows.length;
+  const total = Number(blockedIvQuery.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const safePage = Math.min(page, totalPages);
-  const pageRows = filteredRows.slice(
-    (safePage - 1) * LIMIT,
-    safePage * LIMIT
-  );
+  const pageRows = rows;
   const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
   const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
 

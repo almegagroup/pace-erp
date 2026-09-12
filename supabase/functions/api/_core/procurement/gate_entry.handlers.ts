@@ -15,6 +15,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { isSameOrHigher } from "../../_shared/role_ladder.ts";
 import { enrichTrackerRows } from "./csn.handlers.ts";
+import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -594,8 +595,7 @@ export async function listGateEntriesHandler(
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
-    const offset = parsePositiveInt(url.searchParams.get("offset"), 0);
+    const { page, perPage: limit, offset, search } = parseListSearchPage(url);
 
     let query = serviceRoleClient
       .schema("erp_procurement")
@@ -608,6 +608,7 @@ export async function listGateEntriesHandler(
     if (status && GE_HEADER_STATUSES.has(status)) query = query.eq("status", status);
     if (dateFrom) query = query.gte("ge_date", dateFrom);
     if (dateTo) query = query.lte("ge_date", dateTo);
+    if (search) query = query.or(`ge_number.ilike.%${search}%,vehicle_number.ilike.%${search}%,driver_name.ilike.%${search}%`);
 
     const { data, error, count } = await query;
     if (error) {
@@ -640,7 +641,7 @@ export async function listGateEntriesHandler(
       });
     }
 
-    return okResponse({ items, total: count ?? items.length, limit, offset }, ctx.request_id, req);
+    return okResponse({ items, total: count ?? items.length, limit, offset, pagination: listPagination(page, limit, count ?? items.length) }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GE_LIST_FAILED";
     return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);

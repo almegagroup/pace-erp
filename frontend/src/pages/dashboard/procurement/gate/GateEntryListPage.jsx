@@ -54,13 +54,14 @@ export default function GateEntryListPage() {
   const offset = (page - 1) * LIMIT;
 
   const { data: listResult, isLoading: loading, error: queryError } = useQuery({
-    queryKey: ["procurement", "ge-list", effectiveCompanyId, status, dateFrom, dateTo, page],
+    queryKey: ["procurement", "ge-list", effectiveCompanyId, status, dateFrom, dateTo, debouncedSearch, page],
     enabled: Boolean(effectiveCompanyId),
     queryFn: () => listGateEntries({
       company_id: effectiveCompanyId,
       status: status || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
+      search: debouncedSearch || undefined,
       limit: LIMIT,
       offset,
     }),
@@ -76,19 +77,8 @@ export default function GateEntryListPage() {
   const serverTotal = listResult?.total ?? 0;
   const error = queryError instanceof Error ? queryError.message : (queryError ? "GE_LIST_FAILED" : "");
 
-  const rows = useMemo(() => {
-    const sourceRows = Array.isArray(listResult?.items) ? listResult.items : [];
-    if (!debouncedSearch) return sourceRows;
-    return sourceRows.filter((row) =>
-      [row.ge_number, row.vehicle_number, row.driver_name]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(debouncedSearch)
-    );
-  }, [debouncedSearch, listResult]);
-
-  const total = debouncedSearch ? rows.length : serverTotal;
+  const rows = useMemo(() => (Array.isArray(listResult?.items) ? listResult.items : []), [listResult]);
+  const total = serverTotal;
   const totalPages = Math.max(1, Math.ceil(total / LIMIT));
   const startIndex = total === 0 ? 0 : offset + 1;
   const endIndex = total === 0 ? 0 : Math.min(offset + rows.length, total);

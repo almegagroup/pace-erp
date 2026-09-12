@@ -12,7 +12,7 @@
  * Authority: Frontend
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
@@ -62,15 +62,6 @@ function sumBy(list, key) {
 }
 function sanitizeForFileName(value) {
   return String(value ?? "").trim().replace(/[\\/:*?"<>|]+/g, "-");
-}
-
-// Same global-search-across-every-column pattern as PR24 (OrderInformationSystemPage.jsx),
-// business owner ask 2026-09-03 — reuses each column's own copyValue when present so a
-// badge/JSX-rendered cell still filters against plain text, not "[object Object]".
-function getColumnFilterText(column, row) {
-  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
-  const raw = row?.[column.key];
-  return raw == null ? "" : String(raw);
 }
 
 const emptyFilters = () => ({
@@ -314,10 +305,17 @@ export default function BatchVariancePage() {
   // visible at a time, same pattern as PR24/IN02.
   const [page, setPage] = useState(1);
   const [listPage, setListPage] = useState(1);
+  const [globalSearch, setGlobalSearch] = useState("");
+  const deferredSearch = useDeferredValue(globalSearch.trim());
 
   const listQ = useQuery({
-    queryKey: ["batch-variance-search", submittedParams, listPage],
-    queryFn: () => searchBatchVarianceReport({ ...submittedParams, page: listPage, per_page: BATCH_PAGE_SIZE }),
+    queryKey: ["batch-variance-search", submittedParams, listPage, deferredSearch],
+    queryFn: () => searchBatchVarianceReport({
+      ...submittedParams,
+      page: listPage,
+      per_page: BATCH_PAGE_SIZE,
+      search: deferredSearch || undefined,
+    }),
     enabled: Boolean(submittedParams),
   });
   const rows = useMemo(() => (Array.isArray(listQ.data?.data) ? listQ.data.data : []), [listQ.data]);
@@ -328,27 +326,6 @@ export default function BatchVariancePage() {
   const safeListPage = Math.min(listPage, totalPages);
   const startIndex = total === 0 ? 0 : (safeListPage - 1) * perPage + 1;
   const endIndex = total === 0 ? 0 : Math.min(safeListPage * perPage, total);
-
-  // Pagination is server-side so this remains an explicitly page-local filter.
-  // The selection fields above always search the full date-range result set.
-  const [globalSearch, setGlobalSearch] = useState("");
-  const globalSearchOptions = useMemo(() => {
-    const values = new Set();
-    outer: for (const row of rows) {
-      for (const column of LIST_COLUMNS) {
-        const text = getColumnFilterText(column, row);
-        if (text) values.add(text);
-        if (values.size >= 500) break outer;
-      }
-    }
-    return [...values].sort();
-  }, [rows]);
-  const hasActiveSearch = globalSearch.trim().length > 0;
-  const filteredRows = useMemo(() => {
-    const needle = globalSearch.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) => LIST_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
-  }, [rows, globalSearch]);
 
   const detailQ = useQuery({
     queryKey: ["batch-variance-detail", selectedOrderId],
@@ -559,24 +536,23 @@ export default function BatchVariancePage() {
               <span className="text-xs text-slate-500">
                 {listQ.isLoading
                   ? "Loading..."
-                  : hasActiveSearch
-                    ? `${filteredRows.length} of ${rows.length} rows on this page (filtered) — ${total} matching batch${total === 1 ? "" : "es"} overall`
+                  : deferredSearch
+                    ? `${total} batch${total === 1 ? "" : "es"} match “${deferredSearch}” across the full result set`
                     : `${total} matching batch${total === 1 ? "" : "es"} — press Enter or double-click a row to open its Batch Record`}
               </span>
             </div>
             <div className="mb-2 flex items-center gap-2">
               <input
-                list="batvar-search-options"
                 value={globalSearch}
-                onChange={(e) => setGlobalSearch(e.target.value)}
-                placeholder="Filter rows on this page..."
+                onChange={(e) => {
+                  setGlobalSearch(e.target.value);
+                  setListPage(1);
+                }}
+                placeholder="Search all matching batches..."
                 className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
               />
-              <datalist id="batvar-search-options">
-                {globalSearchOptions.map((option) => <option key={option} value={option} />)}
-              </datalist>
-              {hasActiveSearch ? (
-                <button type="button" onClick={() => setGlobalSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+              {globalSearch.trim() ? (
+                <button type="button" onClick={() => { setGlobalSearch(""); setListPage(1); }} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
                   Clear
                 </button>
               ) : null}
@@ -591,7 +567,7 @@ export default function BatchVariancePage() {
             />
             <ErpDenseGrid
               columns={LIST_COLUMNS}
-              rows={filteredRows}
+              rows={rows}
               rowKey={(row) => row.id}
               onRowActivate={openBatchRecord}
               getRowProps={(row) => ({ onDoubleClick: () => openBatchRecord(row), className: "cursor-pointer hover:bg-sky-50" })}
@@ -599,8 +575,8 @@ export default function BatchVariancePage() {
               emptyMessage={
                 listQ.isLoading
                   ? "Loading..."
-                  : hasActiveSearch
-                    ? "No rows match this search."
+                  : deferredSearch
+                    ? "No batches match this search in the selected result set."
                     : "No VERIFIED batches match this criteria."
               }
             />
