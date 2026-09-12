@@ -2694,8 +2694,9 @@ export async function listSalesOrderFgSkuOptionsHandler(
     if (packsError) throw new Error("SO_FG_PACK_CODE_LOOKUP_FAILED");
     const packByCode = new Map(((packs ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.pack_code), row]));
 
-    // A SKU key is prodshade + pack code + optional variant. Resolve only
-    // possible prefixes of this page, then confirm against the real active config.
+    // A SKU is always Prodshade Code + Pack Code. Variant describes the
+    // packing configuration only and must never be appended to a material's
+    // external SKU (e.g. 1B58TH50 + 599 = 1B58TH50599, not ...599BBL).
     const prodshades = prodshadePages as JsonRecord[];
     const prodshadeIds = [...new Set(prodshades.map((row) => toTrimmedString(row.id)))];
     const packIds = [...packByCode.values()].map((pack) => toTrimmedString(pack.id));
@@ -2733,8 +2734,9 @@ export async function listSalesOrderFgSkuOptionsHandler(
     for (const config of configRows) {
       const pack = (config.pack_code ?? {}) as JsonRecord;
       const prodshade = prodshadeById.get(toTrimmedString(config.material_id));
-      const key = toUpperTrimmedString(`${toTrimmedString(prodshade?.external_code)}${toTrimmedString(pack.pack_code)}${toTrimmedString(config.variant)}`);
-      if (key) prodshadeBySkuKey.set(key, toTrimmedString(config.material_id));
+      const baseKey = toUpperTrimmedString(`${toTrimmedString(prodshade?.external_code)}${toTrimmedString(pack.pack_code)}`);
+      const materialId = toTrimmedString(config.material_id);
+      if (baseKey) prodshadeBySkuKey.set(baseKey, materialId);
     }
     const prodshadeByStrokeId = new Map(strokes.map((row) => [toTrimmedString(row.id), toTrimmedString(row.prodshade_material_id)]));
     const strokeIds = [...prodshadeByStrokeId.keys()];
