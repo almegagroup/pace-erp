@@ -19,7 +19,11 @@ import { assertProdReadRole, getIdFromPath, toTrimmedString, toUpperTrimmedStrin
 type JsonRecord = Record<string, unknown>;
 
 const MAX_DATE_RANGE_DAYS = 365;
-const MAX_ORDERS_MATCHED = 200;
+// This constrains the amount of data returned by one HTTP request, not the number
+// of batches a report may contain. The client can request every matching batch
+// through successive pages.
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 200;
 
 function bvErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
@@ -42,6 +46,20 @@ function parseIsoDate(value: string): Date | null {
   if (!value) return null;
   const d = new Date(`${value}T00:00:00Z`);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parsePositiveInteger(value: string | null, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function paginationPayload(page: number, perPage: number, total: number) {
+  return {
+    page,
+    per_page: perPage,
+    total,
+    total_pages: total === 0 ? 0 : Math.ceil(total / perPage),
+  };
 }
 
 // Same no-leak company-boundary pattern as PR24 (order_information_system.handlers.ts §122.5).
@@ -120,11 +138,16 @@ export async function searchBatchVarianceHandler(req: Request, ctx: ProdHandlerC
     const batchNumber = toTrimmedString(url.searchParams.get("batch_number"));
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    const page = parsePositiveInteger(url.searchParams.get("page"), 1);
+    const perPage = Math.min(
+      MAX_PAGE_SIZE,
+      parsePositiveInteger(url.searchParams.get("per_page"), DEFAULT_PAGE_SIZE),
+    );
 
     const allowedCompanyIds = await resolveAllowedCompanyIds(ctx);
     const companyIds = scopeCompanyIds(allowedCompanyIds, requestedCompanyIds);
     if (companyIds !== null && companyIds.length === 0 && requestedCompanyIds.length > 0) {
-      return okResponse({ data: [] }, ctx.request_id, req);
+      return okResponse({ data: [], pagination: paginationPayload(page, perPage, 0) }, ctx.request_id, req);
     }
 
     const bypassDateRange = Boolean(poNumber);
@@ -143,8 +166,10 @@ export async function searchBatchVarianceHandler(req: Request, ctx: ProdHandlerC
       }
     }
 
-    let processOrders: JsonRecord[] = [];
-
+    // A Packing PO lookup first resolves its Process PO parent. The actual Process
+    // PO read stays below so every search path shares company scope, deterministic
+    // ordering and server-side pagination.
+    let packingProcessOrderIds: string[] | null = null;
     if (poNumber) {
       // §123 — accepts either a Process PO or a Packing PO number; a Packing PO number
       // resolves to its owning Process PO (the batch record is always Process-PO-rooted).
@@ -155,43 +180,56 @@ export async function searchBatchVarianceHandler(req: Request, ctx: ProdHandlerC
         if (companyIds) pq = pq.in("company_id", companyIds);
         const { data, error } = await pq;
         if (error) throw new Error("PROD_BATVAR_LOOKUP_FAILED");
-        const processOrderIds = [...new Set(((data ?? []) as JsonRecord[]).map((r) => String(r.process_order_id ?? "")).filter(Boolean))];
-        if (processOrderIds.length > 0) {
-          const { data: parents, error: parentErr } = await serviceRoleClient
-            .schema("erp_production").from("process_order")
-            .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, stroke_master_id, verified_at")
-            .in("id", processOrderIds);
-          if (parentErr) throw new Error("PROD_BATVAR_LOOKUP_FAILED");
-          processOrders = (parents ?? []) as JsonRecord[];
+        packingProcessOrderIds = [...new Set(
+          ((data ?? []) as JsonRecord[]).map((r) => String(r.process_order_id ?? "")).filter(Boolean),
+        )];
+        if (packingProcessOrderIds.length === 0) {
+          return okResponse({ data: [], pagination: paginationPayload(page, perPage, 0) }, ctx.request_id, req);
         }
-      } else {
-        let pq = serviceRoleClient.schema("erp_production").from("process_order")
-          .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, stroke_master_id, verified_at")
-          .eq("po_number", poNumber);
-        if (companyIds) pq = pq.in("company_id", companyIds);
-        const { data, error } = await pq;
-        if (error) throw new Error("PROD_BATVAR_LOOKUP_FAILED");
-        processOrders = (data ?? []) as JsonRecord[];
       }
-    } else {
-      let pq = serviceRoleClient.schema("erp_production").from("process_order")
-        .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, stroke_master_id, verified_at")
-        .order("verified_at", { ascending: false })
-        .limit(MAX_ORDERS_MATCHED);
-      if (companyIds) pq = pq.in("company_id", companyIds);
-      if (poTypes.length > 0) pq = pq.in("po_type", poTypes);
-      if (batchNumber) pq = pq.eq("batch_number", batchNumber);
-      // Comparisons against NULL verified_at naturally exclude never-verified orders —
-      // this report is inherently about VERIFIED batches (reco only exists post-Verify).
-      pq = (pq as unknown as { gte: (c: string, v: string) => typeof pq }).gte("verified_at", dateFrom);
-      pq = (pq as unknown as { lte: (c: string, v: string) => typeof pq }).lte("verified_at", `${dateTo}T23:59:59.999999+00:00`);
-      const { data, error } = await pq;
-      if (error) throw new Error("PROD_BATVAR_LOOKUP_FAILED");
-      processOrders = (data ?? []) as JsonRecord[];
     }
 
+    let processOrderQuery = serviceRoleClient.schema("erp_production").from("process_order")
+      .select(
+        "id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, stroke_master_id, verified_at",
+        { count: "exact" },
+      )
+      // The ID tie-breaker makes offset pages deterministic when several batches
+      // were verified in the same timestamp.
+      .order("verified_at", { ascending: false })
+      .order("id", { ascending: false });
+
+    if (companyIds) processOrderQuery = processOrderQuery.in("company_id", companyIds);
+    if (packingProcessOrderIds) {
+      processOrderQuery = processOrderQuery.in("id", packingProcessOrderIds);
+    } else if (poNumber) {
+      processOrderQuery = processOrderQuery.eq("po_number", poNumber);
+    } else {
+      if (poTypes.length > 0) processOrderQuery = processOrderQuery.in("po_type", poTypes);
+      if (batchNumber) processOrderQuery = processOrderQuery.eq("batch_number", batchNumber);
+      // Comparisons against NULL verified_at naturally exclude never-verified orders —
+      // this report is inherently about VERIFIED batches (reco only exists post-Verify).
+      processOrderQuery = (processOrderQuery as unknown as {
+        gte: (column: string, value: string) => typeof processOrderQuery;
+      }).gte("verified_at", dateFrom);
+      processOrderQuery = (processOrderQuery as unknown as {
+        lte: (column: string, value: string) => typeof processOrderQuery;
+      }).lte("verified_at", `${dateTo}T23:59:59.999999+00:00`);
+    }
+
+    const { data, error, count } = await ((processOrderQuery as typeof processOrderQuery & {
+      range: (from: number, to: number) => typeof processOrderQuery;
+    }).range((page - 1) * perPage, page * perPage - 1)) as {
+      data: unknown;
+      error: unknown;
+      count?: number | null;
+    };
+    if (error) throw new Error("PROD_BATVAR_LOOKUP_FAILED");
+    const processOrders = (data ?? []) as JsonRecord[];
+    const pagination = paginationPayload(page, perPage, count ?? 0);
+
     if (processOrders.length === 0) {
-      return okResponse({ data: [] }, ctx.request_id, req);
+      return okResponse({ data: [], pagination }, ctx.request_id, req);
     }
 
     const processOrderIds = processOrders.map((o) => String(o.id));
@@ -245,9 +283,7 @@ export async function searchBatchVarianceHandler(req: Request, ctx: ProdHandlerC
       };
     });
 
-    rows.sort((a, b) => String(b.verified_at ?? "").localeCompare(String(a.verified_at ?? "")));
-
-    return okResponse({ data: rows }, ctx.request_id, req);
+    return okResponse({ data: rows, pagination }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_BATVAR_SEARCH_FAILED";
     return bvErr(req, ctx, code, 500, "Batch Variance Report search failed");

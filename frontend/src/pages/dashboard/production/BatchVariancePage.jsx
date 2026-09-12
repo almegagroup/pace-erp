@@ -20,12 +20,14 @@ import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useScreenBackInterceptor } from "../../../hooks/useScreenBackInterceptor.js";
 import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
+import ErpPaginationStrip from "../../../components/ErpPaginationStrip.jsx";
 import { searchBatchVarianceReport, getBatchVarianceDetail } from "./prodApi.js";
 
 // process_order_line_reco is only ever written at Verify — INT and MTEST never reach Verify
 // (they run Standard->Final direct / full-cycle-minus-Verify respectively), so they never
 // produce a variance row here. Only offer the types that actually populate this report.
 const PROCESS_ORDER_TYPES = ["MTO", "HPS", "MTS"];
+const BATCH_PAGE_SIZE = 100;
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -311,17 +313,24 @@ export default function BatchVariancePage() {
   // Page 1 (Filters), Page 2 (Matching Batches), Page 3 (Printable Batch Record) — only one
   // visible at a time, same pattern as PR24/IN02.
   const [page, setPage] = useState(1);
+  const [listPage, setListPage] = useState(1);
 
   const listQ = useQuery({
-    queryKey: ["batch-variance-search", submittedParams],
-    queryFn: () => searchBatchVarianceReport(submittedParams),
+    queryKey: ["batch-variance-search", submittedParams, listPage],
+    queryFn: () => searchBatchVarianceReport({ ...submittedParams, page: listPage, per_page: BATCH_PAGE_SIZE }),
     enabled: Boolean(submittedParams),
-    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
-  const rows = useMemo(() => listQ.data ?? [], [listQ.data]);
+  const rows = useMemo(() => (Array.isArray(listQ.data?.data) ? listQ.data.data : []), [listQ.data]);
+  const listPagination = listQ.data?.pagination ?? null;
+  const total = Number(listPagination?.total ?? 0);
+  const perPage = Number(listPagination?.per_page ?? BATCH_PAGE_SIZE);
+  const totalPages = Math.max(1, Number(listPagination?.total_pages ?? Math.ceil(total / perPage)));
+  const safeListPage = Math.min(listPage, totalPages);
+  const startIndex = total === 0 ? 0 : (safeListPage - 1) * perPage + 1;
+  const endIndex = total === 0 ? 0 : Math.min(safeListPage * perPage, total);
 
-  // Single global search across every LIST_COLUMNS entry — same pattern as PR24
-  // (OrderInformationSystemPage.jsx), business owner ask 2026-09-03.
+  // Pagination is server-side so this remains an explicitly page-local filter.
+  // The selection fields above always search the full date-range result set.
   const [globalSearch, setGlobalSearch] = useState("");
   const globalSearchOptions = useMemo(() => {
     const values = new Set();
@@ -378,6 +387,7 @@ export default function BatchVariancePage() {
     setError("");
     setGlobalSearch("");
     setPage(1);
+    setListPage(1);
   }
 
   function handleExecute() {
@@ -402,9 +412,10 @@ export default function BatchVariancePage() {
       date_to: filters.poNumber ? undefined : filters.dateTo,
     };
     setPrintOptions({ showLinkedPacking: filters.showLinkedPacking, showTestResults: filters.showTestResults });
+    setListPage(1);
     if (submittedParams && JSON.stringify(submittedParams) === JSON.stringify(nextParams)) {
-      void listQ.refetch();
       setPage(2);
+      if (listPage === 1) void listQ.refetch();
       return;
     }
     setSubmittedParams(nextParams);
@@ -549,8 +560,8 @@ export default function BatchVariancePage() {
                 {listQ.isLoading
                   ? "Loading..."
                   : hasActiveSearch
-                    ? `${filteredRows.length} of ${rows.length} batch${rows.length === 1 ? "" : "es"} (filtered) — press Enter or double-click a row to open its Batch Record`
-                    : `${rows.length} batch${rows.length === 1 ? "" : "es"} — press Enter or double-click a row to open its Batch Record`}
+                    ? `${filteredRows.length} of ${rows.length} rows on this page (filtered) — ${total} matching batch${total === 1 ? "" : "es"} overall`
+                    : `${total} matching batch${total === 1 ? "" : "es"} — press Enter or double-click a row to open its Batch Record`}
               </span>
             </div>
             <div className="mb-2 flex items-center gap-2">
@@ -558,7 +569,7 @@ export default function BatchVariancePage() {
                 list="batvar-search-options"
                 value={globalSearch}
                 onChange={(e) => setGlobalSearch(e.target.value)}
-                placeholder="Search across every column..."
+                placeholder="Filter rows on this page..."
                 className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
               />
               <datalist id="batvar-search-options">
@@ -570,6 +581,14 @@ export default function BatchVariancePage() {
                 </button>
               ) : null}
             </div>
+            <ErpPaginationStrip
+              page={safeListPage}
+              setPage={setListPage}
+              totalPages={totalPages}
+              startIndex={startIndex}
+              endIndex={endIndex}
+              totalItems={total}
+            />
             <ErpDenseGrid
               columns={LIST_COLUMNS}
               rows={filteredRows}
