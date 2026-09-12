@@ -70,21 +70,25 @@ function fixture(){
   assert(r.ok,JSON.stringify(r)); assert.equal(r.data[0].id,'sku'); assert.equal(r.data[0].per_pack_qty,220); assert.equal(r.data[0].variable_conversion,true);
   assert.equal(r.data[0].prodshade_material_id,'shade'); assert.equal(r.data[0].own_company_mapping,true);
   assert(calls.some(c=>c.table==='stroke_master' && c.from>=1000),'related lookup must exceed row cap');
-  assert.equal((await run({fg_type:'HPS'})).data.length,0);
+  const callsBeforeShortSearch=calls.length;
+  assert.equal((await run()).data.length,0,'opening the picker must not read the full FG master');
+  assert.equal((await run({q:'67'})).data.length,0,'short searches must not read the full FG master');
+  assert.equal(calls.length,callsBeforeShortSearch,'short searches must perform no material or eligibility lookup');
+  assert.equal((await run({fg_type:'HPS',q:'676'})).data.length,0);
   rows.stroke_po_type_applicability.push({stroke_master_id:'stroke1099',target_po_type:'HPS',is_active:true},{stroke_master_id:'stroke1099',target_po_type:'MTS',is_active:true});
-  assert.equal((await run({fg_type:'HPS'})).data.length,1); assert.equal((await run({fg_type:'MTS'})).data.length,1);
-  assert.equal((await run({company_id:'cmp2'})).data.length,0);
+  assert.equal((await run({fg_type:'HPS',q:'676'})).data.length,1); assert.equal((await run({fg_type:'MTS',q:'676'})).data.length,1);
+  assert.equal((await run({company_id:'cmp2',q:'676'})).data.length,0);
   assert.equal((await run({q:'%_*,()"'})).data.length,0);
   assert.equal((await run({cursor:'own:-1'})).status,400); assert.equal((await run({fg_type:'INVALID'})).status,400);
   assert.equal((await run({company_id:'forbidden'})).ok,false);
-  failTable='prodshade_pack_config'; assert.equal((await run()).ok,false); failTable=null;
+  failTable='prodshade_pack_config'; assert.equal((await run({q:'676'})).ok,false); failTable=null;
   rows.pack_code_master[0].pack_type='MTEST';
-  assert.equal((await run({fg_type:'MTEST',company_id:'cmp2',cursor:'other:0'})).data.length,1);
-  assert.equal((await run({fg_type:'MTO'})).data.length,0);
+  assert.equal((await run({fg_type:'MTEST',company_id:'cmp2',cursor:'other:0',q:'676'})).data.length,1);
+  assert.equal((await run({fg_type:'MTO',q:'676'})).data.length,0);
   fixture(); rows.material_company_ext.push({material_id:'sku',company_id:'cmp2',status:'ACTIVE'});
-  assert.equal((await run({cursor:'other:0'})).data.length,0,'own mapping must not recur in other phase');
+  assert.equal((await run({cursor:'other:0',q:'676'})).data.length,0,'own mapping must not recur in other phase');
   rows.material_company_ext=rows.material_company_ext.filter(m=>m.material_id!=='sku'||m.company_id!=='cmp6');
-  assert.equal((await run({cursor:'other:0'})).data.length,1,'cross-company eligibility preserved');
+  assert.equal((await run({cursor:'other:0',q:'676'})).data.length,1,'cross-company eligibility preserved');
   fixture(); rows.material_master[0].external_code+='V2'; rows.prodshade_pack_config[0].variant='V2';
   assert.equal((await run({q:'6765SS06599V2'})).data.length,1,'variant configuration');
   fixture();
@@ -93,9 +97,9 @@ function fixture(){
     rows.material_company_ext.push({material_id:'bulk'+i,company_id:'cmp6',status:'ACTIVE'});
   }
   let cursor='own:0'; const seen=new Set(); let pages=0;
-  do { r=await run({cursor}); assert(r.ok,JSON.stringify(r)); for(const sku of r.data){assert(!seen.has(sku.id));seen.add(sku.id);}cursor=r.next_cursor;pages++;assert(pages<40); } while(cursor);
+  do { r=await run({cursor,q:'Example'}); assert(r.ok,JSON.stringify(r)); for(const sku of r.data){assert(!seen.has(sku.id));seen.add(sku.id);}cursor=r.next_cursor;pages++;assert(pages<40); } while(cursor);
   assert.equal(seen.size,1101); assert(seen.has('sku'));
   assert.equal((await run({q:'does-not-exist'})).data.length,0);
-  console.log('PASS: >1000 mappings/SKUs/strokes; search, variants, conversions, shared types, company isolation, cursor completeness, errors');
+  console.log('PASS: minimum-search guard, >1000 mappings/SKUs/strokes, search, variants, conversions, shared types, company isolation, cursor completeness, errors');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 

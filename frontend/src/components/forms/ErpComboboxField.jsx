@@ -84,6 +84,10 @@ export default function ErpComboboxField({
   hasMore = false,
   loading = false,
   remoteSearch = false,
+  // A remote result page can be intentionally short. Do not repeatedly fetch
+  // pages merely to fill the dropdown; wait until the user actually scrolls
+  // or navigates to the end. Local pickers retain the existing fill behavior.
+  autoLoadMore = !remoteSearch,
   selectedOptionLabel,
   statusLabel,
 
@@ -125,11 +129,13 @@ export default function ErpComboboxField({
 
   const panelReady = Boolean(panelRect);
 
-  // Continue across an eligibility-empty page or fill a short panel. No page button.
+  // Local pickers may fill a short panel automatically. Remote searches wait
+  // for an actual scroll or keyboard navigation so opening a picker cannot
+  // repeatedly request pages from a large server-side result set.
   useEffect(() => {
-    if (!open || !hasMore || loading || !listRef.current) return;
+    if (!autoLoadMore || !open || !hasMore || loading || !listRef.current) return;
     if (listRef.current.scrollHeight - listRef.current.scrollTop <= listRef.current.clientHeight + 40) onLoadMore?.();
-  }, [open, panelReady, hasMore, loading, filtered.length, onLoadMore]);
+  }, [autoLoadMore, open, panelReady, hasMore, loading, filtered.length, onLoadMore]);
 
   // Keep highlightIndex in bounds when filtered list changes
   useEffect(() => {
