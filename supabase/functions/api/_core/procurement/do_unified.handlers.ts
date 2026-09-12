@@ -1643,6 +1643,9 @@ type ProcInvoiceGroup = {
   customer_id: string | null;
   payment_term_id: string | null;
   freight_term: string | null;
+  // Only historical STO lines still carry gst_terms. It is a SO02 UI
+  // convenience default, never the persisted invoice tax authority.
+  legacy_sto_gst_treatment: "INCLUSIVE" | "EXCLUSIVE" | null;
   ibn_required: boolean;
   fo_id: string | null;
   fo_number: string | null;
@@ -1690,7 +1693,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
   const soMapAllocationIds = [...new Set(lines.filter((l) => !toTrimmedString(l.sto_line_id) && toTrimmedString(l.so_map_allocation_id)).map((l) => toTrimmedString(l.so_map_allocation_id)))];
 
   const [stoLineRows, soLineRows, mapAllocRows] = await Promise.all([
-    stoLineIds.length ? fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line").select("id, sto_id, payment_term_id, freight_term").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    stoLineIds.length ? fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line").select("id, sto_id, payment_term_id, freight_term, gst_terms").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     soLineIds.length ? fetchInChunks<JsonRecord>(soLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, hsn_code, round_off_amount").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     soMapAllocationIds.length ? fetchInChunks<JsonRecord>(soMapAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, so_id, fo_id, customer_address_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
@@ -1866,6 +1869,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
     let customerId: string | null = null;
     let paymentTermId: string | null = null;
     let freightTerm: string | null = null;
+    let legacyStoGstTreatment: "INCLUSIVE" | "EXCLUSIVE" | null = null;
     let ibnRequired = false;
     let foNumber: string | null = null;
     let foDate: string | null = null;
@@ -1887,6 +1891,13 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
         throw new Error(freightTerms.length === 0 ? "STO_FREIGHT_TERM_MISSING" : "STO_FREIGHT_TERM_CONFLICT");
       }
       freightTerm = freightTerms[0];
+      // Legacy STOs retain the old Inclusive/Exclusive flag but no final
+      // GST rate. Preserve that user-facing treatment as a prefill only;
+      // SO02 still calculates and saves the new invoice's 18% decision.
+      const legacyGstTreatments = [...new Set(stoCommercialLines
+        .map((line) => toUpperTrimmedString(line.gst_terms))
+        .filter((value): value is "INCLUSIVE" | "EXCLUSIVE" => GST_TREATMENTS.has(value)))];
+      legacyStoGstTreatment = legacyGstTreatments.length === 1 ? legacyGstTreatments[0] : null;
       const paymentTerms = [...new Set(stoCommercialLines.map((line) => toTrimmedString(line.payment_term_id)).filter(Boolean))];
       if (paymentTerms.length > 1) throw new Error("STO_PAYMENT_TERM_CONFLICT");
       paymentTermId = paymentTerms[0] || null;
@@ -1992,6 +2003,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       customer_id: customerId,
       payment_term_id: paymentTermId,
       freight_term: freightTerm,
+      legacy_sto_gst_treatment: legacyStoGstTreatment,
       ibn_required: ibnRequired,
       fo_id: meta.fo_id,
       fo_number: foNumber,
