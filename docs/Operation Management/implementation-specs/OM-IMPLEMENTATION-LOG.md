@@ -127,6 +127,12 @@
 - **R-04 / rollout:** code only. Existing `pg_trgm` indexes already cover `pace_code`, `external_code` and `material_name`, so no schema migration, MCP data mutation, ACL change or snapshot work is required. Deploy frontend and API together.
 - **Verification:** `node scripts/so01-fg-sku-search-test.cjs` passed, including the new assertion that blank and under-three-character terms make no material/eligibility lookup, plus the existing >1,000 mapping/SKU/stroke, cursor, shared-type, variant, conversion and company-isolation coverage. `deno check supabase/functions/api/_core/procurement/sales_order.handlers.ts` and `npm.cmd run build` in `frontend/` passed. The frontend build retains its pre-existing GRN duplicate-prop and chunk-size warnings.
 
+### 2026-09-12 — Plan Feed Edit FO party-name truncation correction
+
+- **Root cause:** Plan Feed loaded only the first 200 active customers into its Party dropdown. Customer ordering is newest-first, so a valid older customer could be present in the FO and its Ship-To address query while absent from the picker. The Edit FO combobox then had an ID with no option label and displayed a blank Party field.
+- **Code fix:** Replaced the fixed list in both Create FO and Edit FO with a server-searched Party picker. Opening it shows a bounded 100-row list: active customers mapped to the selected transaction company are ranked first, then customers mapped to other companies the user can access. It does not require cross-company customers to be mapped again to the selected company. Typing two or more characters searches every eligible accessible customer by code/name on the server, without sending the full customer master to the browser. Opening an existing FO receives its saved `party` from the FO detail response and supplies that exact customer as the selected label independently of search results, so the name remains visible even outside every search page. The existing PO-type rules are retained: MTO/HPS and MTS are filtered, while MTEST can use any real customer.
+- **R-04 / verification:** code only; no schema migration, MCP data mutation, ACL change or snapshot work. `deno check supabase/functions/api/_core/om/customer.handlers.ts`, focused frontend ESLint, and `npm.cmd run build` in `frontend/` passed. Build retains the pre-existing GRN duplicate-prop and chunk-size warnings.
+
 ### 2026-09-09 — AC10 R-04 correction (IN_PROGRESS)
 
 The AC10 rollout initially mixed function DDL with operational version creation,

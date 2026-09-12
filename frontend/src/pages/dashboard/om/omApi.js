@@ -549,10 +549,20 @@ export async function listCustomers({
   status,
   search,
   company_id,
+  priority_company_id,
   limit = 50,
   offset = 0,
 } = {}) {
-  const params = buildParams({ customer_type, fo_customer_type, status, search, company_id, limit, offset });
+  const params = buildParams({
+    customer_type,
+    fo_customer_type,
+    status,
+    search,
+    company_id,
+    priority_company_id,
+    limit,
+    offset,
+  });
   return fetchJson(`/api/om/customers?${params.toString()}`, {}, "OM_CUSTOMER_LIST_FAILED");
 }
 

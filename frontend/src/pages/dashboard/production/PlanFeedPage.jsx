@@ -19,6 +19,7 @@ import { openActionConfirm } from "../../../store/actionConfirm.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import CustomerCreateForm from "../om/customer/CustomerCreateForm.jsx";
 import CustomerEditForm from "../om/customer/CustomerEditForm.jsx";
+import PlanFeedCustomerPicker from "./PlanFeedCustomerPicker.jsx";
 import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed, updateMtestPlanFeed,
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
@@ -26,7 +27,7 @@ import {
   getUnmappedStock, checkOrderedStroke, listStrokeOptions, listPackingOrders,
   listMtestSkus,
 } from "./prodApi.js";
-import { createCustomerAddress, listMaterials, listCustomers, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
+import { createCustomerAddress, listMaterials, updateCustomer, listCustomerAddresses } from "../om/omApi.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 
 const EMPTY_ARRAY = [];
@@ -234,19 +235,6 @@ export default function PlanFeedPage() {
 
   // ── Shared master lookups ─────────────────────────────────────────────────
   const [poTypeFilter, setPoTypeFilter] = useState("");
-  // MTEST is a sample/test batch, not a distinct customer relationship -- the same
-  // real-world customer who normally orders MTO/HPS can just as well receive an
-  // MTEST sample, so the Party list is never narrowed to fo_customer_type=MTEST-
-  // tagged parties only; it shows every party instead (same as no filter at all).
-  const customersQ = useQuery({
-    queryKey: ["plan-feed-customers", poTypeFilter],
-    queryFn: () => listCustomers({
-      fo_customer_type: (poTypeFilter && poTypeFilter !== "MTEST") ? poTypeFilter : undefined,
-      status: "ACTIVE",
-      limit: 200,
-    }),
-    select: (d) => d?.data ?? [],
-  });
   const materialsQ = useQuery({
     queryKey: ["plan-feed-fg-materials"],
     queryFn: () => listMaterials({ material_type: "FG", status: "ACTIVE", limit: 500 }),
@@ -282,21 +270,9 @@ export default function PlanFeedPage() {
     () => (materialsQ.data ?? []).filter((m) => !mtestSkuIdSet.has(m.id)),
     [materialsQ.data, mtestSkuIdSet],
   );
-  const normalizedCustomers = useMemo(
-    () => (customersQ.data ?? []).map((customer) => ({
-      ...customer,
-      fo_customer_type: normalizeFoCustomerType(customer.fo_customer_type),
-    })),
-    [customersQ.data],
-  );
-  const customerOptions = useMemo(
-    () => normalizedCustomers.map((c) => ({ value: c.id, label: customerLabel(c) })),
-    [normalizedCustomers],
-  );
-  const customerMap = useMemo(() => new Map(normalizedCustomers.map((c) => [c.id, c])), [normalizedCustomers]);
-
   // ── Create tab state ──────────────────────────────────────────────────────
   const [form, setForm] = useState(emptyFo);
+  const [selectedFormParty, setSelectedFormParty] = useState(null);
   const [newPartyOpen, setNewPartyOpen] = useState(false);
   const [editPartyOpen, setEditPartyOpen] = useState(false);
   const [addressPickerOpen, setAddressPickerOpen] = useState(false);
@@ -306,7 +282,7 @@ export default function PlanFeedPage() {
   const [newAddressSaving, setNewAddressSaving] = useState(false);
   const [newAddressError, setNewAddressError] = useState("");
 
-  const selectedParty = customerMap.get(form.party_id) ?? null;
+  const selectedParty = selectedFormParty?.id === form.party_id ? selectedFormParty : null;
   const isMtestCreate = poTypeFilter === "MTEST";
 
   // A party can have multiple addresses/sites. The address is a Ship-To
@@ -405,8 +381,10 @@ export default function PlanFeedPage() {
 
   async function handlePartyCreated(customer) {
     const newId = customer?.id;
-    await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
-    if (newId) setForm((f) => ({ ...f, party_id: newId, party_name: customer.customer_name || "" }));
+    if (newId) {
+      setSelectedFormParty(customer);
+      setForm((f) => ({ ...f, party_id: newId, party_name: customer.customer_name || "" }));
+    }
     setNewPartyOpen(false);
     toast("Party created.");
   }
@@ -414,7 +392,7 @@ export default function PlanFeedPage() {
   // Edited here or from Customer Master (MM04) -- both write the same
   // customer_master row, so either page always reflects the other's changes.
   async function handlePartyUpdated() {
-    await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
+    await qc.invalidateQueries({ queryKey: ["plan-feed-customer-search"] });
     await qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
     setEditPartyOpen(false);
     toast("Party updated.");
@@ -428,7 +406,10 @@ export default function PlanFeedPage() {
     setPartyTypeSaving(true);
     try {
       await updateCustomer({ id: partyId, fo_customer_type: newType || "" });
-      await qc.invalidateQueries({ queryKey: ["plan-feed-customers"] });
+      const normalizedType = normalizeFoCustomerType(newType);
+      setSelectedFormParty((customer) => customer?.id === partyId ? { ...customer, fo_customer_type: normalizedType } : customer);
+      setSelectedEditParty((customer) => customer?.id === partyId ? { ...customer, fo_customer_type: normalizedType } : customer);
+      await qc.invalidateQueries({ queryKey: ["plan-feed-customer-search"] });
       setPartyTypeEdit(false);
       toast("Party's FO Type updated.");
     } catch (err) {
@@ -473,6 +454,7 @@ export default function PlanFeedPage() {
       });
       toast("FO created successfully.");
       setForm(emptyFo());
+      setSelectedFormParty(null);
       // Every other mutation on this page invalidates these two -- this was
       // the one place that never did, so a freshly created FO stayed invisible
       // on the Edit FO list / Total Table until an unrelated refetch happened
@@ -493,6 +475,7 @@ export default function PlanFeedPage() {
   }, [editSearch]);
   const [editData, setEditData] = useState(null);
   const [editDraft, setEditDraft] = useState({});
+  const [selectedEditParty, setSelectedEditParty] = useState(null);
   // FO Number is a pure label (every real relationship keys off plan_feed.id) --
   // checkbox-gated so a revision is always a deliberate action, never a stray edit.
   const [reviseFoNumber, setReviseFoNumber] = useState(false);
@@ -520,10 +503,11 @@ export default function PlanFeedPage() {
   const foListFiltered = listQ.data ?? EMPTY_ARRAY;
 
   const skuLockedForEdit = Boolean(editData?.allocations?.length);
+  const editParty = selectedEditParty?.id === editDraft.party_id ? selectedEditParty : null;
   // §131.5 -- the FO's type isn't stored on plan_feed itself, it's always derived from
   // its party's own fo_customer_type (embedded server-side in getPlanFeedHandler's
-  // `party` object) -- more reliable here than the page-local poTypeFilter/customerMap,
-  // which only reflect whichever PO Type the Create tab's filter happens to be set to.
+  // `party` object) -- more reliable here than the page-local Create-tab PO Type
+  // filter, which only reflects the next FO the user intends to create.
   const isMtestEdit = normalizeFoCustomerType(editData?.party?.fo_customer_type) === "MTEST";
   // Uses runtime ACL decisions, never a department/role-name check. QA has MTEST-only
   // edit permission; Production and ACL-MASTER retain their broader Plan Feed authority.
@@ -569,6 +553,7 @@ export default function PlanFeedPage() {
       const d = await getPlanFeed(foId);
       const row = d?.data ?? d;
       setEditData(row);
+      setSelectedEditParty(row.party ?? null);
       setAllocationItemId((row.items ?? []).length === 1 ? row.items[0].id : "");
       setEditDraft({
         party_id: row.party_id ?? "",
@@ -897,16 +882,17 @@ export default function PlanFeedPage() {
 
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">Party <span className="text-rose-500">*</span></label>
-              <ErpComboboxField
+              <PlanFeedCustomerPicker
                 value={form.party_id}
-                onChange={(v) => {
+                companyId={effectiveCompanyId}
+                foCustomerType={poTypeFilter}
+                selectedCustomer={selectedParty}
+                onChange={(v, customer) => {
                   setSelectedAddressId("");
                   setAddressPickerSeenForPartyId("");
+                  setSelectedFormParty(customer);
                   setForm(f => ({ ...f, party_id: v }));
                 }}
-                options={customerOptions}
-                placeholder="-- Select party --"
-                emptyStateLabel={customersQ.isLoading ? "Loading..." : "No party matches this PO Type"}
               />
               <button type="button" onClick={() => setNewPartyOpen((v) => !v)} className="text-[11px] text-sky-600 underline self-start">
                 + New party
@@ -1234,11 +1220,14 @@ export default function PlanFeedPage() {
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Party</label>
-                    <ErpComboboxField
+                    <PlanFeedCustomerPicker
                       value={editDraft.party_id}
-                      onChange={(v) => setEditDraft(d => ({ ...d, party_id: v, customer_address_id: "" }))}
-                      options={customerOptions}
-                      placeholder="-- Select party --"
+                      companyId={editData.company_id}
+                      selectedCustomer={editParty}
+                      onChange={(v, customer) => {
+                        setSelectedEditParty(customer);
+                        setEditDraft(d => ({ ...d, party_id: v, customer_address_id: "" }));
+                      }}
                       disabled={editData.status === "CANCELLED"}
                     />
                     {editDraft.party_id && (
@@ -1246,11 +1235,11 @@ export default function PlanFeedPage() {
                         Edit Customer
                       </button>
                     )}
-                    {editDraft.party_id && customerMap.get(editDraft.party_id) && (
+                    {editDraft.party_id && editParty && (
                       partyTypeEdit ? (
                         <div className="flex items-center gap-2 mt-1">
                           <ErpComboboxField
-                            value={customerMap.get(editDraft.party_id)?.fo_customer_type || ""}
+                            value={editParty.fo_customer_type || ""}
                             onChange={(v) => handleUpdatePartyType(editDraft.party_id, v)}
                             options={FO_CUSTOMER_TYPES}
                             placeholder="-- Not an FO party --"
@@ -1260,7 +1249,7 @@ export default function PlanFeedPage() {
                         </div>
                       ) : (
                         <button type="button" onClick={() => setPartyTypeEdit(true)} className="text-[11px] text-slate-500 underline self-start mt-1">
-                          This party's FO Type: <strong>{customerMap.get(editDraft.party_id)?.fo_customer_type || "not set"}</strong> — change here
+                          This party's FO Type: <strong>{editParty.fo_customer_type || "not set"}</strong> — change here
                         </button>
                       )
                     )}
