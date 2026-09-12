@@ -864,7 +864,7 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
   return {
     ...dc,
     selling_company_display: sellingCompany ? `${sellingCompany.company_code ?? ""} — ${sellingCompany.company_name ?? ""}`.trim() : null,
-    receiving_company_display: receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null,
+    receiving_company_display: receivingCompany ? [toTrimmedString(receivingCompany.company_name), toTrimmedString(receivingCompany.full_address)].filter(Boolean).join(" — ") || null : null,
     customer_display: customer
       ? (customer.customer_name ? `${customer.customer_code ?? ""} — ${customer.customer_name}`.trim() : String(customer.customer_code ?? ""))
       : null,
@@ -885,14 +885,14 @@ async function hydrateDeliveryOrder(dcId: string): Promise<JsonRecord> {
     // frozen snapshot for SO, these overrides only kick in for STO.
     bill_to_name: isSalesOrder
       ? (toTrimmedString(customer?.customer_name) || null)
-      : (receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null),
+      : (toTrimmedString(receivingCompany?.company_name) || null),
     bill_to_address: isSalesOrder
       ? (toTrimmedString(customer?.billing_address) || toTrimmedString(customer?.delivery_address) || null)
       : (toTrimmedString(receivingCompany?.full_address) || null),
     bill_to_state: isSalesOrder ? (toTrimmedString(customer?.billing_state) || null) : (toTrimmedString(receivingCompany?.state_name) || null),
     bill_to_gst_number: isSalesOrder ? (toTrimmedString(customer?.gst_number) || null) : (toTrimmedString(receivingCompany?.gst_number) || null),
     ...(isSalesOrder ? {} : {
-      ship_to_name: receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null,
+      ship_to_name: toTrimmedString(receivingCompany?.company_name) || null,
       ship_to_address: toTrimmedString(receivingCompany?.full_address) || null,
       ship_to_state: toTrimmedString(receivingCompany?.state_name) || null,
       ship_to_gst_number: toTrimmedString(receivingCompany?.gst_number) || null,
@@ -1027,11 +1027,14 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
       receivingCompanyIds.length
-        ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", receivingCompanyIds)
+        ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, full_address").in("id", receivingCompanyIds)
         : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
     const customerMap = new Map(((customers ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
     const receivingCompanyMap = new Map(((receivingCompanies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    const receivingCompanyDisplay = (company: JsonRecord | undefined) => company
+      ? [toTrimmedString(company.company_name), toTrimmedString(company.full_address)].filter(Boolean).join(" — ") || null
+      : null;
 
     // List page was missing source doc number, transporter, vehicle/LR --
     // vehicle_number/lr_number are already raw columns on delivery_challan
@@ -1080,9 +1083,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const receivingCompany = receivingCompanyMap.get(toTrimmedString(row.receiving_company_id));
       const customerDisplay = customer
         ? (customer.customer_name ? `${customer.customer_code ?? ""} — ${customer.customer_name}`.trim() : String(customer.customer_code ?? ""))
-        : receivingCompany
-          ? `To: ${receivingCompany.company_code ?? receivingCompany.company_name ?? ""}`.trim()
-          : null;
+        : receivingCompanyDisplay(receivingCompany);
       const links = sourceByDc.get(String(row.id)) ?? [];
       const sourceSos = links.filter((link) => link.source_type === "SALES_ORDER").map((link) => soMap.get(toTrimmedString(link.source_id))).filter(Boolean) as JsonRecord[];
       const sourceStos = links.filter((link) => link.source_type === "STO").map((link) => stoMap.get(toTrimmedString(link.source_id))).filter(Boolean) as JsonRecord[];
@@ -1144,9 +1145,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         source_document_number: sourceDocuments.join(" | ") || null,
         customer_display: customer
           ? customerDisplay
-          : linkedReceivingCompany
-            ? `To: ${linkedReceivingCompany.company_code ?? linkedReceivingCompany.company_name ?? ""}`.trim()
-            : customerDisplay || billTo,
+          : receivingCompanyDisplay(linkedReceivingCompany) || customerDisplay || billTo,
         bill_to_display: billTo,
         ship_to_display: shipTo,
         ibn_required: effectiveSos.some((entry) => Boolean(entry.ibn_required)),
@@ -1321,7 +1320,7 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
       const { data: receivingCompany, error: receivingCompanyError } = await serviceRoleClient
         .schema("erp_master")
         .from("companies")
-        .select("company_code, company_name, state_name, full_address, gst_number")
+        .select("company_name, state_name, full_address, gst_number")
         .eq("id", receivingCompanyId)
         .maybeSingle();
       if (receivingCompanyError) return doErrorResponse(req, ctx, "PGI_INVOICE_TAX_CONTEXT_FAILED", 500, "Unable to load receiving company tax context.");
@@ -1332,7 +1331,7 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
       // STO has no separate customer -- Bill-To and Ship-To are both the
       // receiving company itself.
       const receivingCompanyDetail: PartyDetail = {
-        name: receivingCompany?.company_name ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name}`.trim() : null,
+        name: toTrimmedString(receivingCompany?.company_name) || null,
         address: toTrimmedString(receivingCompany?.full_address) || null,
         state: counterpartyStateName,
         gstNumber: toTrimmedString(receivingCompany?.gst_number) || null,

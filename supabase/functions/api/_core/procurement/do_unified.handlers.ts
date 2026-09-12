@@ -612,7 +612,7 @@ export async function listDoAddStoOptionsHandler(req: Request, ctx: ProcurementH
 
     const receivingCompanyId = toTrimmedString((sto as JsonRecord).receiving_company_id);
     const { data: receivingCompany, error: receivingCompanyError } = receivingCompanyId
-      ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").eq("id", receivingCompanyId).maybeSingle()
+      ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, full_address").eq("id", receivingCompanyId).maybeSingle()
       : { data: null as JsonRecord | null, error: null };
     if (receivingCompanyError) return doErrorResponse(req, ctx, "DO_RECEIVING_COMPANY_LOOKUP_FAILED", 500, "Unable to load receiving company.");
 
@@ -620,8 +620,8 @@ export async function listDoAddStoOptionsHandler(req: Request, ctx: ProcurementH
       groups: [{
         key: "sto",
         label: `STO ${toTrimmedString((sto as JsonRecord).sto_number)}`,
-        bill_to_display: receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null,
-        ship_to_display: receivingCompany ? `${receivingCompany.company_code ?? ""} — ${receivingCompany.company_name ?? ""}`.trim() : null,
+        bill_to_display: receivingCompany ? [toTrimmedString(receivingCompany.company_name), toTrimmedString(receivingCompany.full_address)].filter(Boolean).join(" — ") || null : null,
+        ship_to_display: receivingCompany ? [toTrimmedString(receivingCompany.company_name), toTrimmedString(receivingCompany.full_address)].filter(Boolean).join(" — ") || null : null,
         lines: await attachMaterialDisplay(withRemaining),
       }],
     }, ctx.request_id, req);
@@ -1461,7 +1461,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
   const receivingCompanyIds = [...new Set(stoRows.map((row) => toTrimmedString(row.receiving_company_id)).filter(Boolean))];
   const [{ data: customers, error: customersError }, { data: receivingCompanies, error: receivingCompaniesError }] = await Promise.all([
     customerIds.length ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-    receivingCompanyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", receivingCompanyIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    receivingCompanyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, full_address").in("id", receivingCompanyIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
   ]);
   if (customersError) throw new Error("DO_CUSTOMER_LOOKUP_FAILED");
   if (receivingCompaniesError) throw new Error("DO_RECEIVING_COMPANY_LOOKUP_FAILED");
@@ -1479,7 +1479,7 @@ export async function hydrateDeliveryOrderUnified(dcId: string): Promise<JsonRec
   }
   function stoPartyDisplay(row: JsonRecord): string | null {
     const company = receivingCompanyMap.get(toTrimmedString(row.receiving_company_id));
-    return company ? `${company.company_code ?? ""} — ${company.company_name ?? ""}`.trim() : null;
+    return company ? [toTrimmedString(company.company_name), toTrimmedString(company.full_address)].filter(Boolean).join(" — ") || null : null;
   }
 
   return {
@@ -1878,6 +1878,10 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       const stoRow = meta.sto_id ? stoMap.get(meta.sto_id) : null;
       documentNumber = (stoRow?.sto_number as string) ?? null;
       documentDate = (stoRow?.sto_date as string) ?? null;
+      // An STO is the receiving company's order document.  There is no
+      // customer PO on an STO, so print the STO number in the invoice's
+      // Buyer’s Order No. field.
+      customerPoNumber = documentNumber;
       sourceDisplayNumber = documentNumber;
       const stoCommercialLines = bucket.lines
         .map((line) => stoLineById.get(toTrimmedString(line.sto_line_id)))
@@ -1893,7 +1897,7 @@ async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; gro
       const company = stoRow ? receivingCompanyMap.get(toTrimmedString(stoRow.receiving_company_id)) : null;
       if (company) {
         const companyDetail: ProcPartyDetail = {
-          name: `${company.company_code ?? ""} — ${company.company_name ?? ""}`.trim(),
+          name: toTrimmedString(company.company_name) || null,
           address: toTrimmedString(company.full_address) || null,
           state: toTrimmedString(company.state_name) || null,
           gst_number: toTrimmedString(company.gst_number) || null,
