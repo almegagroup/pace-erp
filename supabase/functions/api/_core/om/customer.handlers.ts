@@ -541,6 +541,7 @@ export async function listCustomersHandler(
     const statusFilter = toTrimmedString(url.searchParams.get("status")).toUpperCase();
     const search = normalizeSearch(toTrimmedString(url.searchParams.get("search")));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const priorityCompanyId = toTrimmedString(url.searchParams.get("priority_company_id"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 50);
     const offset = parseNonNegativeInt(url.searchParams.get("offset"), 0);
 
@@ -555,6 +556,32 @@ export async function listCustomersHandler(
     // filter — an explicit company_id must additionally be one of their own.
     let scopedCustomerIds: string[] | null = null;
     const adminBypass = isCompanyScopeAdminBypass(ctx);
+    const priorityCustomerIds = new Set<string>();
+    // priority_company_id changes only ordering. It must not become a scope
+    // filter: Plan Feed must still be able to use a valid customer mapped to
+    // another company the caller can access. Check the requested priority
+    // company independently so it cannot disclose an inaccessible mapping.
+    if (priorityCompanyId) {
+      if (!adminBypass) {
+        try {
+          await assertCompanyScope(ctx, priorityCompanyId);
+        } catch {
+          return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+        }
+      }
+      const { data: priorityMapRows, error: priorityMapError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("customer_company_map")
+        .select("customer_id")
+        .eq("company_id", priorityCompanyId)
+        .eq("active", true);
+      if (priorityMapError) {
+        throw new Error("OM_CUSTOMER_LIST_FAILED");
+      }
+      for (const row of priorityMapRows ?? []) {
+        priorityCustomerIds.add(String((row as Record<string, unknown>).customer_id));
+      }
+    }
     let scopeCompanyIds: string[] | null = null;
     if (companyId) {
       if (!adminBypass) {
@@ -608,6 +635,11 @@ export async function listCustomersHandler(
       return query;
     }
 
+    function compareByPriorityThenCreatedAt(a: Record<string, unknown>, b: Record<string, unknown>): number {
+      const priorityDelta = Number(priorityCustomerIds.has(String(b.id))) - Number(priorityCustomerIds.has(String(a.id)));
+      return priorityDelta || String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+    }
+
     let allRows: Record<string, unknown>[];
     let total: number;
 
@@ -624,7 +656,34 @@ export async function listCustomersHandler(
         const q = serviceRoleClient.schema("erp_master").from("customer_master").select("*").in("id", idChunk);
         return applyCustomerFilters(q);
       });
-      rows.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+      rows.sort(compareByPriorityThenCreatedAt);
+      total = rows.length;
+      allRows = rows.slice(offset, offset + limit);
+    } else if (priorityCustomerIds.size > 0) {
+      // Admin callers normally read a single paged customer-master query.
+      // A priority company needs a deterministic merge of its mapped
+      // customers and all other customers, so collect server-side pages,
+      // sort once, then return only the requested bounded page. Nothing is
+      // sent to the browser beyond `limit` rows.
+      const pageSize = 500;
+      const rows: Record<string, unknown>[] = [];
+      for (let pageOffset = 0; ; pageOffset += pageSize) {
+        let query = serviceRoleClient
+          .schema("erp_master")
+          .from("customer_master")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(pageOffset, pageOffset + pageSize - 1);
+        query = applyCustomerFilters(query);
+        const { data, error } = await query;
+        if (error) {
+          throw new Error("OM_CUSTOMER_LIST_FAILED");
+        }
+        const page = (data ?? []) as Record<string, unknown>[];
+        rows.push(...page);
+        if (page.length < pageSize) break;
+      }
+      rows.sort(compareByPriorityThenCreatedAt);
       total = rows.length;
       allRows = rows.slice(offset, offset + limit);
     } else {
