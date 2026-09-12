@@ -6,7 +6,9 @@
 -- Business decision: EXCLUSIVE 18% GST and FREIGHT_SEPARATE / TO_PAY.
 -- GST type is derived from the selling and receiving company states. The
 -- script is idempotent for exactly these invoices and does not touch any
--- other STO, invoice, DO, stock-posting, or CSN row.
+-- other STO, DO, or stock-posting row. Legacy STO GST snapshots are left
+-- unchanged because an active-DO guard correctly prevents source edits;
+-- the invoice and CSN are the authoritative backfill targets.
 --
 -- Prerequisite: apply 20260912172116_sto_invoice_commercial_resolution.sql
 -- to the target database first. This is operational data correction, not a
@@ -127,23 +129,6 @@ SET freight_to_pay = true,
     total_invoice_value = totals.line_total + si.round_off_amount
 FROM invoice_totals totals
 WHERE si.id = totals.invoice_id;
-
-WITH target_sto_lines AS (
-  SELECT sl.id, sl.gst_terms, sl.quantity, sl.transfer_price
-  FROM erp_procurement.stock_transfer_order_line sl
-  JOIN erp_procurement.delivery_challan_line dcl ON dcl.sto_line_id = sl.id
-  JOIN erp_procurement.sales_invoice_line sil ON sil.dc_line_id = dcl.id
-  JOIN erp_procurement.sales_invoice si ON si.id = sil.invoice_id
-  WHERE si.invoice_number IN ('9200000256', '9200000257')
-)
-UPDATE erp_procurement.stock_transfer_order_line sl
-SET gst_rate = 18,
-    gst_amount = CASE
-      WHEN target.gst_terms = 'INCLUSIVE' THEN round(target.quantity * target.transfer_price - (target.quantity * target.transfer_price) / 1.18, 4)
-      ELSE round(target.quantity * target.transfer_price * 0.18, 4)
-    END
-FROM target_sto_lines target
-WHERE sl.id = target.id;
 
 UPDATE erp_procurement.consignment_note csn
 SET transporter_id = dc.transporter_id,
