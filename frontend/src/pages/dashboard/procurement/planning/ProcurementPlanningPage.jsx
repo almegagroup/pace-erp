@@ -97,6 +97,17 @@ function getStatusLabel(tone) {
   return "Normal";
 }
 
+function getPlanningStatusTone(stockQty, safetyStockQty, replenishmentStockQty) {
+  const stock = Number(stockQty || 0);
+  const safety = Number(safetyStockQty || 0);
+  const replenishment = Number(replenishmentStockQty || 0);
+  // A zero threshold is an unconfigured planning trigger, not a stock
+  // shortage. This mirrors the backend status used by IN03.
+  if (safety > 0 && stock <= safety) return "CRITICAL";
+  if (replenishment > 0 && stock <= replenishment) return "WARNING";
+  return "NORMAL";
+}
+
 function summarizeDecisionBlocks(blocks) {
   return blocks
     .filter((entry) => !isGroupedMemberEntry(entry))
@@ -301,12 +312,7 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
       // reservations can satisfy a procurement threshold. TRN, Gate Entry,
       // and QA remain visible below, but are not usable inventory yet.
       const totalStock = totalAvailable;
-      let tone = "NORMAL";
-      if (totalStock <= effectiveSafety) {
-        tone = "CRITICAL";
-      } else if (totalStock <= effectiveReplenishment) {
-        tone = "WARNING";
-      }
+      const tone = getPlanningStatusTone(totalStock, effectiveSafety, effectiveReplenishment);
       groupBlocks.push({
         type: "group-total",
         groupName,
@@ -390,12 +396,11 @@ function normalizeHistoryRows(rows) {
     derived_replenishment_stock_qty: Number(row.derived_replenishment_stock_qty || 0),
     effective_safety_stock_qty: Number(row.effective_safety_stock_qty || 0),
     effective_replenishment_stock_qty: Number(row.effective_replenishment_stock_qty || 0),
-    status_tone:
-      Number(row.total_stock_qty || 0) <= Number(row.effective_safety_stock_qty || 0)
-        ? "CRITICAL"
-        : Number(row.total_stock_qty || 0) <= Number(row.effective_replenishment_stock_qty || 0)
-          ? "WARNING"
-          : "NORMAL",
+    status_tone: getPlanningStatusTone(
+      row.total_stock_qty,
+      row.effective_safety_stock_qty,
+      row.effective_replenishment_stock_qty
+    ),
   }));
 }
 
