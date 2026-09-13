@@ -1211,7 +1211,14 @@ async function loadWorkspaceRows(
     const trnStockQty = normalizeQty(trnMap.get(materialId) ?? 0);
     const geStockQty = normalizeQty(geMap.get(materialId) ?? 0);
     const qaStockQty = normalizeQty(qaMap.get(scopeKey) ?? 0);
-    const totalStockQty = normalizeQty(availableStockQty + trnStockQty + geStockQty + qaStockQty);
+    // Procurement status must be driven only by inventory that can be used
+    // today: Unrestricted less open reservations (the same Net Available
+    // figure shown by IN03). QA stock has not passed inspection; TRN and an
+    // unposted Gate Entry have not become on-hand stock. Keep those values as
+    // separate informational columns, but never let them hide a shortage.
+    // `total_stock_qty` remains the response field for compatibility, and is
+    // now the planning-usable quantity rather than a physical-position total.
+    const totalStockQty = availableStockQty;
     let statusTone: "NORMAL" | "WARNING" | "CRITICAL" = "NORMAL";
     if (totalStockQty <= effectiveSafetyStockQty) {
       statusTone = "CRITICAL";
