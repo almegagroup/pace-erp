@@ -1297,14 +1297,20 @@ async function loadWorkspaceRows(
   return { rows, slocGroups, itemGroups, groupConfigs };
 }
 
-export type ProcurementPlanningStockStatus = "WARNING" | "CRITICAL";
+export type ProcurementPlanningStockStatus = "NORMAL" | "WARNING" | "CRITICAL";
+
+export type ProcurementPlanningStockCoverage = {
+  status: ProcurementPlanningStockStatus;
+  planning_item_group_id: string | null;
+  planning_item_group_name: string | null;
+};
 
 // Returns only non-normal statuses from the existing current-month plan. It
 // deliberately does not call ensurePlanExists: opening IN03 must not create a
 // blank planning month for a company that has not been configured for PO11.
 export async function getCurrentProcurementPlanningStatusByLocation(
   companyId: string,
-): Promise<Map<string, ProcurementPlanningStockStatus>> {
+): Promise<Map<string, ProcurementPlanningStockCoverage>> {
   const plan = await getPlanHeader(companyId, getCurrentPlanMonth());
   if (!plan) return new Map();
 
@@ -1314,12 +1320,16 @@ export async function getCurrentProcurementPlanningStatusByLocation(
   const locationsBySlocGroupId = new Map(
     workspace.slocGroups.map((group) => [group.id, group.storage_locations.map((location) => location.id)]),
   );
-  const statusByMaterialLocation = new Map<string, ProcurementPlanningStockStatus>();
+  const statusByMaterialLocation = new Map<string, ProcurementPlanningStockCoverage>();
   for (const row of workspace.rows) {
-    if (row.excluded_from_dashboard || (row.status_tone !== "WARNING" && row.status_tone !== "CRITICAL")) continue;
+    if (row.excluded_from_dashboard) continue;
     const locationIds = locationsBySlocGroupId.get(row.source_sloc_group_id || "") ?? [];
     for (const locationId of locationIds) {
-      statusByMaterialLocation.set(`${row.material_id}::${locationId}`, row.status_tone);
+      statusByMaterialLocation.set(`${row.material_id}::${locationId}`, {
+        status: row.status_tone,
+        planning_item_group_id: row.planning_item_group_id,
+        planning_item_group_name: row.planning_item_group_name,
+      });
     }
   }
   return statusByMaterialLocation;
@@ -1356,6 +1366,26 @@ export async function getProcurementPlanningHandler(
       plan_id: plan.id,
       plan_status: plan.status,
     });
+    // A closed month is immutable. Its planning quantities live in the PO11
+    // archive, so never recalculate its workspace from today's stock_snapshot.
+    // The frontend switches to GET /history as soon as it sees this status;
+    // returning an empty live workspace here prevents even a brief display of
+    // current stock for an old month.
+    if (plan.status === "CLOSED") {
+      return okResponse(
+        {
+          plan,
+          plan_month: planMonth,
+          rows: [],
+          sloc_groups: [],
+          item_groups: [],
+          group_configs: [],
+          can_maintain: false,
+        },
+        ctx.request_id,
+        req,
+      );
+    }
     const [workspace, canMaintain] = await Promise.all([
       loadWorkspaceRows(ctx, companyId, planMonth, plan.id),
       canMaintainPlanning(ctx, companyId),

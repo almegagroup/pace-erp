@@ -1179,14 +1179,18 @@ export default function ProcurementPlanningPage() {
     select: normalizeCollectionPayload,
   });
 
+  const workspace = workspaceQuery.data ?? EMPTY_WORKSPACE;
+  const planIsClosed = workspace.plan?.status === "CLOSED";
+
   const historyQuery = useQuery({
     queryKey: historyQueryKey,
     queryFn: fetchPlanningHistory,
-    enabled: Boolean(effectiveCompanyId) && activeTab === "history",
+    // A full planning report has no History tab, but a closed month must still
+    // render its frozen archive there rather than a fresh stock calculation.
+    enabled: Boolean(effectiveCompanyId) && (activeTab === "history" || planIsClosed),
     select: normalizeHistoryData,
   });
 
-  const workspace = workspaceQuery.data ?? EMPTY_WORKSPACE;
   const storageLocations = storageLocationsQuery.data ?? [];
   // workspace.sloc_groups/item_groups (embedded in the same getProcurementPlanning()
   // response used for everything else on this page) is the authoritative source -- the
@@ -1214,14 +1218,14 @@ export default function ProcurementPlanningPage() {
     (storageLocationsQuery.error instanceof Error ? storageLocationsQuery.error.message : "") ||
     (slocGroupsQuery.error instanceof Error ? slocGroupsQuery.error.message : "") ||
     (itemGroupsQuery.error instanceof Error ? itemGroupsQuery.error.message : "") ||
-    (activeTab === "history" && historyQuery.error instanceof Error ? historyQuery.error.message : "");
+    ((activeTab === "history" || planIsClosed) && historyQuery.error instanceof Error ? historyQuery.error.message : "");
   const activeError = error || queryError;
   const refreshing =
     workspaceQuery.isFetching ||
     storageLocationsQuery.isFetching ||
     slocGroupsQuery.isFetching ||
     itemGroupsQuery.isFetching ||
-    (activeTab === "history" && historyQuery.isFetching);
+    ((activeTab === "history" || planIsClosed) && historyQuery.isFetching);
   useEffect(() => {
     if (!companyId) {
       const routeCompanyId = String(searchParams.get("company_id") || "").trim();
@@ -1271,6 +1275,12 @@ export default function ProcurementPlanningPage() {
       materialType: String(searchParams.get("material_type") || "ALL"),
     }));
   }, [showFullReport, searchParams]);
+
+  useEffect(() => {
+    if (!showFullReport && planIsClosed && activeTab !== "history") {
+      setActiveTab("history");
+    }
+  }, [activeTab, planIsClosed, showFullReport]);
 
   useEffect(() => {
     setSlocGroupForm({ id: "", group_name: "", storage_location_ids: [] });
@@ -1354,7 +1364,7 @@ export default function ProcurementPlanningPage() {
       storageLocationsQuery.refetch(),
       slocGroupsQuery.refetch(),
       itemGroupsQuery.refetch(),
-      activeTab === "history" ? historyQuery.refetch() : Promise.resolve(),
+      activeTab === "history" || planIsClosed ? historyQuery.refetch() : Promise.resolve(),
     ]);
   }
 
@@ -1677,8 +1687,21 @@ export default function ProcurementPlanningPage() {
     );
   }, [itemGroupsById, lineDrafts, workspace.rows]);
 
+  const archivedRows = useMemo(() => normalizeHistoryRows(historyRows), [historyRows]);
+  const archivedGroupConfigs = useMemo(
+    () => normalizeHistoryGroupConfigs(historyGroupConfigs),
+    [historyGroupConfigs]
+  );
+  // Closed months are always read from their immutable archive. Keeping this
+  // choice here also makes the standalone full-report route safe, because it
+  // has no separate History tab to switch to.
+  const displayedPlanningRows = planIsClosed ? archivedRows : effectiveRows;
+  const displayedPlanningGroupConfigs = planIsClosed
+    ? archivedGroupConfigs
+    : Object.values(groupConfigDrafts);
+
   const planningSummary = useMemo(() => {
-    const rows = effectiveRows || [];
+    const rows = displayedPlanningRows || [];
     return {
       totalRows: rows.length,
       slocGroups: slocGroups.length,
@@ -1689,7 +1712,7 @@ export default function ProcurementPlanningPage() {
       criticalRows: rows.filter((row) => row.status_tone === "CRITICAL").length,
       warningRows: rows.filter((row) => row.status_tone === "WARNING").length,
     };
-  }, [effectiveRows, itemGroups.length, slocGroups.length]);
+  }, [displayedPlanningRows, itemGroups.length, slocGroups.length]);
   const slocGroupInsights = useMemo(() => {
     return slocGroups.map((group) => {
       const linkedRows = effectiveRows.filter((row) => row.source_sloc_group_id === group.id);
@@ -1801,11 +1824,11 @@ export default function ProcurementPlanningPage() {
 
   const historyBlocks = useMemo(() => {
     return computeDashboardBlocks(
-      normalizeHistoryRows(historyRows),
+      archivedRows,
       planMonthValue,
-      normalizeHistoryGroupConfigs(historyGroupConfigs)
+      archivedGroupConfigs
     );
-  }, [historyGroupConfigs, historyRows, planMonthValue]);
+  }, [archivedGroupConfigs, archivedRows, planMonthValue]);
   const historySummary = useMemo(() => summarizeDecisionBlocks(historyBlocks), [historyBlocks]);
   const historyGridRows = useMemo(() => flattenBlocksForGrid(historyBlocks), [historyBlocks]);
   const historyGridColumns = useMemo(() => buildReportGridColumns(), []);
@@ -1977,33 +2000,42 @@ export default function ProcurementPlanningPage() {
         children: (
           <div className="grid gap-4">
             {activeTab === "dashboard" && showFullReport ? (
-              <DashboardTable
-                rows={effectiveRows}
-                monthValue={planMonthValue}
-                filters={dashboardFilters}
-                onFilterChange={handleDashboardFilterChange}
-                groupConfigs={Object.values(groupConfigDrafts)}
-                gridMaxHeight="calc(100vh - 260px)"
-                companyControls={
-                  <>
-                    <TransactionCompanySelector
-                      runtimeContext={runtimeContext}
-                      value={companyId}
-                      onChange={setCompanyId}
-                      label="Company"
-                    />
-                    <label className="grid gap-1 text-sm text-slate-700">
-                      <span className="font-medium text-slate-800">Month</span>
-                      <input
-                        type="month"
-                        value={planMonthValue}
-                        onChange={(event) => setPlanMonth(event.target.value)}
-                        className="h-10 border border-slate-300 bg-white px-3 outline-none focus:border-sky-500"
+              <>
+                {planIsClosed ? (
+                  <div className="border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+                    {historyMeta
+                      ? `Frozen archive for ${planMonthValue}; archived on ${historyMeta.archived_at || "-"}.`
+                      : `No archive exists for closed month ${planMonthValue}.`}
+                  </div>
+                ) : null}
+                <DashboardTable
+                  rows={displayedPlanningRows}
+                  monthValue={planMonthValue}
+                  filters={dashboardFilters}
+                  onFilterChange={handleDashboardFilterChange}
+                  groupConfigs={displayedPlanningGroupConfigs}
+                  gridMaxHeight="calc(100vh - 260px)"
+                  companyControls={
+                    <>
+                      <TransactionCompanySelector
+                        runtimeContext={runtimeContext}
+                        value={companyId}
+                        onChange={setCompanyId}
+                        label="Company"
                       />
-                    </label>
-                  </>
-                }
-              />
+                      <label className="grid gap-1 text-sm text-slate-700">
+                        <span className="font-medium text-slate-800">Month</span>
+                        <input
+                          type="month"
+                          value={planMonthValue}
+                          onChange={(event) => setPlanMonth(event.target.value)}
+                          className="h-10 border border-slate-300 bg-white px-3 outline-none focus:border-sky-500"
+                        />
+                      </label>
+                    </>
+                  }
+                />
+              </>
             ) : null}
 
             {activeTab === "dashboard" && !showFullReport ? (

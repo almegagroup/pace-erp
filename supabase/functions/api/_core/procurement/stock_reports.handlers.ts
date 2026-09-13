@@ -16,7 +16,10 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { errorResponse, okResponse } from "../response.ts";
-import { getCurrentProcurementPlanningStatusByLocation } from "./planning.handlers.ts";
+import {
+  getCurrentProcurementPlanningStatusByLocation,
+  type ProcurementPlanningStockCoverage,
+} from "./planning.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockReportHandlerContext = {
@@ -1377,7 +1380,10 @@ export async function getCurrentStockHandler(
       rows = rows.filter((row) => !isZeroBalanceRow(row));
     }
 
-    const companyIdsForLookup = [...new Set(rows.map((row) => row.company_id).filter(Boolean))];
+    // Keep the selected company's display code available even when the stock
+    // rows are empty: alert-review mode can add a zero-stock group member
+    // solely to show its planning context.
+    const companyIdsForLookup = [companyId];
     const slocIdsForLookup = [...new Set(rows.map((row) => row.storage_location_id).filter(Boolean))];
     const [companyResp, slocResp, packResp] = await Promise.all([
       companyIdsForLookup.length
@@ -1475,7 +1481,7 @@ export async function getCurrentStockHandler(
     // the stock report. If PO11's read-only lookup is temporarily unavailable,
     // return the stock normally without alert dots and record the cause for
     // diagnosis.
-    let planningStatusByMaterialLocation = new Map<string, "WARNING" | "CRITICAL">();
+    let planningStatusByMaterialLocation = new Map<string, ProcurementPlanningStockCoverage>();
     try {
       planningStatusByMaterialLocation = await getCurrentProcurementPlanningStatusByLocation(companyId);
     } catch (planningStatusError) {
@@ -1519,7 +1525,8 @@ export async function getCurrentStockHandler(
       const reservedQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(reservedBaseQty, row.fill_qty_per_pack)
         : normalizeNumber(reservedBaseQty);
-      const planning_status = planningStatusByMaterialLocation.get(`${row.material_id}::${row.storage_location_id}`) ?? "NORMAL";
+      const planningCoverage = planningStatusByMaterialLocation.get(`${row.material_id}::${row.storage_location_id}`);
+      const planning_status = planningCoverage?.status ?? "NORMAL";
 
       return {
         row_key: [
@@ -1530,6 +1537,7 @@ export async function getCurrentStockHandler(
           row.packing_po_number ?? "",
           row.path_kind,
         ].join("__"),
+        material_id: row.material_id,
         company_code: companyCode,
         material_type: material?.material_type ?? row.material_type,
         material_label: materialLabel,
@@ -1546,8 +1554,115 @@ export async function getCurrentStockHandler(
         blocked_qty: blockedQty,
         intransit_qty: intransitQty,
         planning_status,
+        planning_item_group_id: planningCoverage?.planning_item_group_id ?? null,
+        planning_item_group_name: planningCoverage?.planning_item_group_name ?? null,
+        planning_context_only: false,
       };
-    }).sort((left, right) =>
+    });
+
+    // The ordinary IN03 grid stays a stock report. The Critical /
+    // Replenishment review mode, however, must be able to show every member
+    // of an alerted Item Group -- including a member with zero current stock
+    // and therefore no ordinary IN03 row. These context-only rows remain
+    // hidden from the main view and become visible only in that review mode.
+    const alertingGroupIds = new Set<string>();
+    const firstCoverageByGroupMaterial = new Map<string, {
+      material_id: string;
+      storage_location_id: string;
+      coverage: ProcurementPlanningStockCoverage;
+    }>();
+    for (const [coverageKey, coverage] of planningStatusByMaterialLocation) {
+      const groupId = coverage.planning_item_group_id;
+      if (!groupId) continue;
+      if (coverage.status === "WARNING" || coverage.status === "CRITICAL") {
+        alertingGroupIds.add(groupId);
+      }
+      const [materialId, storageLocationId] = coverageKey.split("::");
+      const memberKey = `${groupId}::${materialId}`;
+      if (!firstCoverageByGroupMaterial.has(memberKey)) {
+        firstCoverageByGroupMaterial.set(memberKey, {
+          material_id: materialId,
+          storage_location_id: storageLocationId,
+          coverage,
+        });
+      }
+    }
+    const missingContextMaterialIds = [...new Set(
+      [...firstCoverageByGroupMaterial.values()]
+        .map((member) => member.material_id)
+        .filter((materialId) => !materialMap.has(materialId)),
+    )];
+    const missingContextSlocIds = [...new Set(
+      [...firstCoverageByGroupMaterial.values()]
+        .map((member) => member.storage_location_id)
+        .filter((storageLocationId) => storageLocationId && !slocMap.has(storageLocationId)),
+    )];
+    const [contextMaterialResp, contextSlocResp] = await Promise.all([
+      missingContextMaterialIds.length > 0
+        ? serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, pack_code")
+          .in("id", missingContextMaterialIds)
+        : Promise.resolve({ data: [], error: null }),
+      missingContextSlocIds.length > 0
+        ? serviceRoleClient
+          .schema("erp_inventory")
+          .from("storage_location_master")
+          .select("id, code")
+          .in("id", missingContextSlocIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (contextMaterialResp.error || contextSlocResp.error) {
+      return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+    }
+    for (const rawMaterial of (contextMaterialResp.data ?? []) as JsonRecord[]) {
+      const material = rawMaterial as unknown as CurrentStockMaterialRow;
+      materialMap.set(material.id, material);
+    }
+    for (const rawSloc of (contextSlocResp.data ?? []) as JsonRecord[]) {
+      slocMap.set(toTrimmedString(rawSloc.id), toTrimmedString(rawSloc.code));
+    }
+    const representedGroupMaterials = new Set(
+      responseRows
+        .filter((row) => row.planning_item_group_id)
+        .map((row) => `${row.planning_item_group_id}::${row.material_id}`),
+    );
+    const companyCode = companyMap.get(companyId) ?? "";
+    for (const [memberKey, member] of firstCoverageByGroupMaterial) {
+      if (!alertingGroupIds.has(member.coverage.planning_item_group_id || "") || representedGroupMaterials.has(memberKey)) {
+        continue;
+      }
+      const material = materialMap.get(member.material_id);
+      if (!material) continue;
+      const documentName = toTrimmedString(material.document_name);
+      const materialLabel = documentName || toTrimmedString(material.material_name);
+      responseRows.push({
+        row_key: [companyCode, material.pace_code ?? member.material_id, member.storage_location_id, "PLANNING_GROUP_CONTEXT"].join("__"),
+        material_id: member.material_id,
+        company_code: companyCode,
+        material_type: material.material_type,
+        material_label: materialLabel,
+        external_code: toTrimmedString(material.external_code),
+        document_name: documentName,
+        uom_code: material.base_uom_code,
+        storage_location_code: slocMap.get(member.storage_location_id) ?? "—",
+        batch_number: null,
+        packing_po_number: null,
+        unrestricted_qty: 0,
+        reserved_qty: 0,
+        net_available_qty: 0,
+        qi_qty: 0,
+        blocked_qty: 0,
+        intransit_qty: 0,
+        planning_status: member.coverage.status,
+        planning_item_group_id: member.coverage.planning_item_group_id,
+        planning_item_group_name: member.coverage.planning_item_group_name,
+        planning_context_only: true,
+      });
+    }
+
+    responseRows.sort((left, right) =>
       String(left.company_code).localeCompare(String(right.company_code))
       || String(left.material_type).localeCompare(String(right.material_type))
       || String(left.material_label).localeCompare(String(right.material_label))
