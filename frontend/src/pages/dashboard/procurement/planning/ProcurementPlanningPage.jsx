@@ -297,7 +297,10 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
       const totalTrn = sortedItems.reduce((sum, row) => sum + Number(row.trn_stock_qty || 0), 0);
       const totalGe = sortedItems.reduce((sum, row) => sum + Number(row.ge_stock_qty || 0), 0);
       const totalQa = sortedItems.reduce((sum, row) => sum + Number(row.qa_stock_qty || 0), 0);
-      const totalStock = totalAvailable + totalTrn + totalGe + totalQa;
+      // Match the server and IN03: only unrestricted stock after open
+      // reservations can satisfy a procurement threshold. TRN, Gate Entry,
+      // and QA remain visible below, but are not usable inventory yet.
+      const totalStock = totalAvailable;
       let tone = "NORMAL";
       if (totalStock <= effectiveSafety) {
         tone = "CRITICAL";
@@ -494,7 +497,7 @@ function buildReportGridColumns() {
     numericColumn("trn_stock_qty", "TRN", "90px"),
     numericColumn("ge_stock_qty", "GE", "90px"),
     numericColumn("qa_stock_qty", "In QA", "90px"),
-    numericColumn("total_stock_qty", "Total", "110px"),
+    numericColumn("total_stock_qty", "Planning Stock", "120px"),
     {
       key: "status_tone",
       label: "Status",
@@ -967,7 +970,7 @@ function MonthlyInputGrid({
       },
       {
         key: "total_stock_qty",
-        label: "Live Total Stock",
+        label: "Live Planning Stock",
         width: "120px",
         align: "right",
         render: (row) => formatQty(row.total_stock_qty),
