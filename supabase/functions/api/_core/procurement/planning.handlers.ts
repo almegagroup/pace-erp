@@ -1224,9 +1224,12 @@ async function loadWorkspaceRows(
     // now the planning-usable quantity rather than a physical-position total.
     const totalStockQty = availableStockQty;
     let statusTone: "NORMAL" | "WARNING" | "CRITICAL" = "NORMAL";
-    if (totalStockQty <= effectiveSafetyStockQty) {
+    // A zero threshold means this item has no configured planning trigger.
+    // Without the positive-threshold check, a blank plan line with zero
+    // usable stock incorrectly satisfies `0 <= 0` and becomes Critical.
+    if (effectiveSafetyStockQty > 0 && totalStockQty <= effectiveSafetyStockQty) {
       statusTone = "CRITICAL";
-    } else if (totalStockQty <= effectiveReplenishmentStockQty) {
+    } else if (effectiveReplenishmentStockQty > 0 && totalStockQty <= effectiveReplenishmentStockQty) {
       statusTone = "WARNING";
     }
     return {
