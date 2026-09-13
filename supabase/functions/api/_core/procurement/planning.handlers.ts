@@ -135,10 +135,14 @@ function planningError(
 }
 
 function logPlanningDebug(
-  ctx: ProcurementHandlerContext,
+  ctx: ProcurementHandlerContext | null,
   event: string,
   meta: Record<string, unknown>,
 ): void {
+  // IN03 reuses the stock-calculation part of this workspace without an HTTP
+  // planning context. It is deliberately read-only, so it has no request id
+  // to log and must never fail merely while emitting a PO11 debug event.
+  if (!ctx) return;
   console.info("PO11_DEBUG", {
     request_id: ctx.request_id,
     auth_user_id: ctx.auth_user_id,
