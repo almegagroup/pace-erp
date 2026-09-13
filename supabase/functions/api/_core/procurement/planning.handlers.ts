@@ -1366,6 +1366,26 @@ export async function getProcurementPlanningHandler(
       plan_id: plan.id,
       plan_status: plan.status,
     });
+    // A closed month is immutable. Its planning quantities live in the PO11
+    // archive, so never recalculate its workspace from today's stock_snapshot.
+    // The frontend switches to GET /history as soon as it sees this status;
+    // returning an empty live workspace here prevents even a brief display of
+    // current stock for an old month.
+    if (plan.status === "CLOSED") {
+      return okResponse(
+        {
+          plan,
+          plan_month: planMonth,
+          rows: [],
+          sloc_groups: [],
+          item_groups: [],
+          group_configs: [],
+          can_maintain: false,
+        },
+        ctx.request_id,
+        req,
+      );
+    }
     const [workspace, canMaintain] = await Promise.all([
       loadWorkspaceRows(ctx, companyId, planMonth, plan.id),
       canMaintainPlanning(ctx, companyId),
