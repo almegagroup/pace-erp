@@ -1471,7 +1471,20 @@ export async function getCurrentStockHandler(
     // month's material + SLoc status without turning a historical report into
     // a moving target. The helper is read-only and returns an empty map for a
     // company without an existing PO11 plan.
-    const planningStatusByMaterialLocation = await getCurrentProcurementPlanningStatusByLocation(companyId);
+    // Planning colour is an enhancement to IN03, never a reason to withhold
+    // the stock report. If PO11's read-only lookup is temporarily unavailable,
+    // return the stock normally without alert dots and record the cause for
+    // diagnosis.
+    let planningStatusByMaterialLocation = new Map<string, "WARNING" | "CRITICAL">();
+    try {
+      planningStatusByMaterialLocation = await getCurrentProcurementPlanningStatusByLocation(companyId);
+    } catch (planningStatusError) {
+      console.error("CURRENT_STOCK_PLANNING_STATUS_FAILED", {
+        request_id: ctx.request_id,
+        company_id: companyId,
+        error: planningStatusError instanceof Error ? planningStatusError.message : "UNKNOWN",
+      });
+    }
 
     const responseRows = rows.map((row) => {
       const material = materialMap.get(row.material_id);
