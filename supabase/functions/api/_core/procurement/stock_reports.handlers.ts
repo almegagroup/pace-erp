@@ -16,6 +16,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { getCurrentProcurementPlanningStatusByLocation } from "./planning.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockReportHandlerContext = {
@@ -1466,6 +1467,12 @@ export async function getCurrentStockHandler(
       }
     }
 
+    // IN03 is a live stock snapshot, so it can surface the current planning
+    // month's material + SLoc status without turning a historical report into
+    // a moving target. The helper is read-only and returns an empty map for a
+    // company without an existing PO11 plan.
+    const planningStatusByMaterialLocation = await getCurrentProcurementPlanningStatusByLocation(companyId);
+
     const responseRows = rows.map((row) => {
       const material = materialMap.get(row.material_id);
       const companyCode = companyMap.get(row.company_id) ?? "";
@@ -1499,6 +1506,7 @@ export async function getCurrentStockHandler(
       const reservedQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(reservedBaseQty, row.fill_qty_per_pack)
         : normalizeNumber(reservedBaseQty);
+      const planning_status = planningStatusByMaterialLocation.get(`${row.material_id}::${row.storage_location_id}`) ?? "NORMAL";
 
       return {
         row_key: [
@@ -1524,6 +1532,7 @@ export async function getCurrentStockHandler(
         qi_qty: qiQty,
         blocked_qty: blockedQty,
         intransit_qty: intransitQty,
+        planning_status,
       };
     }).sort((left, right) =>
       String(left.company_code).localeCompare(String(right.company_code))

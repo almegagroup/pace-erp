@@ -55,6 +55,16 @@ const DEFAULT_VISIBLE_COLUMNS = [
   "intransit_qty",
 ];
 
+function planningStatusPresentation(status) {
+  if (status === "CRITICAL") {
+    return { dotClass: "bg-rose-600", rowClass: "!bg-rose-50 !text-rose-950", label: "Procurement Planning: Critical" };
+  }
+  if (status === "WARNING") {
+    return { dotClass: "bg-amber-400", rowClass: "!bg-amber-50 !text-amber-950", label: "Procurement Planning: Replenishment" };
+  }
+  return null;
+}
+
 function formatQuantity(value) {
   const amount = Number(value ?? 0);
   if (!Number.isFinite(amount)) {
@@ -187,7 +197,20 @@ export default function CurrentStockPage() {
     () => [
       { key: "company_code", label: "Company", width: "120px" },
       { key: "material_type", label: "Type", width: "90px" },
-      { key: "material_label", label: "Material", width: "260px" },
+      {
+        key: "material_label",
+        label: "Material",
+        width: "260px",
+        render: (row) => {
+          const planningStatus = planningStatusPresentation(row.planning_status);
+          return (
+            <span className="flex items-center gap-2">
+              {planningStatus ? <span aria-label={planningStatus.label} title={planningStatus.label} className={`h-2.5 w-2.5 shrink-0 rounded-full ${planningStatus.dotClass}`} /> : null}
+              <span>{row.material_label}</span>
+            </span>
+          );
+        },
+      },
       { key: "external_code", label: "External Code", width: "180px", render: (row) => row.external_code || "—" },
       { key: "document_name", label: "Document Name", width: "240px", render: (row) => row.document_name || "—" },
       { key: "uom_code", label: "UOM", width: "90px" },
@@ -460,6 +483,10 @@ export default function CurrentStockPage() {
               columns={gridColumns}
               rows={rows}
               rowKey={(row) => row.row_key}
+              getRowProps={(row) => {
+                const planningStatus = planningStatusPresentation(row.planning_status);
+                return planningStatus ? { className: planningStatus.rowClass } : {};
+              }}
               emptyMessage={loading ? "Searching current stock..." : "No current stock matched the selected filters."}
             />
           )}
