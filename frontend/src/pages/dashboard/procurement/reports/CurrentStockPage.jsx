@@ -75,6 +75,46 @@ function hasPlanningAlert(row) {
   return row?.planning_status === "CRITICAL" || row?.planning_status === "WARNING";
 }
 
+function compareCurrentStockRows(left, right) {
+  return String(left.material_label || "").localeCompare(String(right.material_label || ""))
+    || String(left.storage_location_code || "").localeCompare(String(right.storage_location_code || ""))
+    || String(left.batch_number || "").localeCompare(String(right.batch_number || ""))
+    || String(left.packing_po_number || "").localeCompare(String(right.packing_po_number || ""));
+}
+
+// This is a review view only. A standalone alert remains on its own. When an
+// alert occurs inside an Item Group, every returned member of that group is
+// included so its alternatives can be checked together. The units themselves
+// are alphabetic by their first material; members within one group stay
+// together instead of being split across the list.
+function buildPlanningAlertReviewRows(rows) {
+  const alertingGroupIds = new Set(
+    rows
+      .filter((row) => hasPlanningAlert(row) && row.planning_item_group_id)
+      .map((row) => row.planning_item_group_id),
+  );
+  const units = [];
+  const groupedRows = new Map();
+
+  for (const row of rows) {
+    const groupId = row.planning_item_group_id;
+    if (!groupId) {
+      if (hasPlanningAlert(row)) units.push([row]);
+      continue;
+    }
+    if (!alertingGroupIds.has(groupId)) continue;
+    const groupRows = groupedRows.get(groupId) ?? [];
+    groupRows.push(row);
+    groupedRows.set(groupId, groupRows);
+  }
+
+  units.push(...groupedRows.values());
+  return units
+    .map((unit) => [...unit].sort(compareCurrentStockRows))
+    .sort((left, right) => compareCurrentStockRows(left[0], right[0]))
+    .flat();
+}
+
 function planningStatusExcelFill(status) {
   if (status === "CRITICAL") return "FFFEE2E2";
   if (status === "WARNING") return "FFFEF3C7";
@@ -223,7 +263,12 @@ export default function CurrentStockPage() {
           return (
             <span className="flex items-center gap-2">
               {planningStatus ? <span aria-label={planningStatus.label} title={planningStatus.label} className={`h-2.5 w-2.5 shrink-0 rounded-full ${planningStatus.dotClass}`} /> : null}
-              <span>{row.material_label}</span>
+              <span>
+                <span className="block">{row.material_label}</span>
+                {planningAlertsOnly && row.planning_item_group_name ? (
+                  <span className="block text-xs font-normal text-slate-500">Group: {row.planning_item_group_name}</span>
+                ) : null}
+              </span>
             </span>
           );
         },
@@ -241,7 +286,7 @@ export default function CurrentStockPage() {
       { key: "blocked_qty", label: "Blocked", width: "120px", align: "right", render: (row) => formatQuantity(row.blocked_qty) },
       { key: "intransit_qty", label: "In Transit", width: "120px", align: "right", render: (row) => formatQuantity(row.intransit_qty) },
     ],
-    [],
+    [planningAlertsOnly],
   );
 
   const gridColumns = useMemo(
@@ -253,9 +298,13 @@ export default function CurrentStockPage() {
     () => rows.filter(hasPlanningAlert).length,
     [rows],
   );
+  const mainRows = useMemo(
+    () => rows.filter((row) => !row.planning_context_only),
+    [rows],
+  );
   const displayedRows = useMemo(
-    () => (planningAlertsOnly ? rows.filter(hasPlanningAlert) : rows),
-    [planningAlertsOnly, rows],
+    () => (planningAlertsOnly ? buildPlanningAlertReviewRows(rows) : mainRows),
+    [mainRows, planningAlertsOnly, rows],
   );
 
   async function handleSearch() {
@@ -305,6 +354,11 @@ export default function CurrentStockPage() {
         key: "planning_status",
         label: "Planning Status",
         width: "150px",
+      });
+      exportColumns.push({
+        key: "planning_item_group_name",
+        label: "Planning Group",
+        width: "180px",
       });
       await downloadColoredExcelFile({
         fileName: `current_stock_${new Date().toISOString().slice(0, 10)}.xlsx`,
