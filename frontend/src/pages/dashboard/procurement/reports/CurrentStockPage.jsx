@@ -55,6 +55,32 @@ const DEFAULT_VISIBLE_COLUMNS = [
   "intransit_qty",
 ];
 
+function planningStatusPresentation(status) {
+  if (status === "CRITICAL") {
+    return { dotClass: "bg-rose-600", rowClass: "!bg-rose-50 !text-rose-950", label: "Procurement Planning: Critical" };
+  }
+  if (status === "WARNING") {
+    return { dotClass: "bg-amber-400", rowClass: "!bg-amber-50 !text-amber-950", label: "Procurement Planning: Replenishment" };
+  }
+  return null;
+}
+
+function planningStatusLabel(status) {
+  if (status === "CRITICAL") return "Critical";
+  if (status === "WARNING") return "Replenishment";
+  return "Normal";
+}
+
+function hasPlanningAlert(row) {
+  return row?.planning_status === "CRITICAL" || row?.planning_status === "WARNING";
+}
+
+function planningStatusExcelFill(status) {
+  if (status === "CRITICAL") return "FFFEE2E2";
+  if (status === "WARNING") return "FFFEF3C7";
+  return null;
+}
+
 function formatQuantity(value) {
   const amount = Number(value ?? 0);
   if (!Number.isFinite(amount)) {
@@ -172,6 +198,7 @@ export default function CurrentStockPage() {
   const [stockTypes, setStockTypes] = useState(STOCK_TYPE_OPTIONS.map((entry) => entry.value));
   const [showZero, setShowZero] = useState(false);
   const [rows, setRows] = useState([]);
+  const [planningAlertsOnly, setPlanningAlertsOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
@@ -187,7 +214,20 @@ export default function CurrentStockPage() {
     () => [
       { key: "company_code", label: "Company", width: "120px" },
       { key: "material_type", label: "Type", width: "90px" },
-      { key: "material_label", label: "Material", width: "260px" },
+      {
+        key: "material_label",
+        label: "Material",
+        width: "260px",
+        render: (row) => {
+          const planningStatus = planningStatusPresentation(row.planning_status);
+          return (
+            <span className="flex items-center gap-2">
+              {planningStatus ? <span aria-label={planningStatus.label} title={planningStatus.label} className={`h-2.5 w-2.5 shrink-0 rounded-full ${planningStatus.dotClass}`} /> : null}
+              <span>{row.material_label}</span>
+            </span>
+          );
+        },
+      },
       { key: "external_code", label: "External Code", width: "180px", render: (row) => row.external_code || "—" },
       { key: "document_name", label: "Document Name", width: "240px", render: (row) => row.document_name || "—" },
       { key: "uom_code", label: "UOM", width: "90px" },
@@ -209,6 +249,15 @@ export default function CurrentStockPage() {
     [columnDefinitions, visibleColumns],
   );
 
+  const planningAlertRowCount = useMemo(
+    () => rows.filter(hasPlanningAlert).length,
+    [rows],
+  );
+  const displayedRows = useMemo(
+    () => (planningAlertsOnly ? rows.filter(hasPlanningAlert) : rows),
+    [planningAlertsOnly, rows],
+  );
+
   async function handleSearch() {
     if (!companyId) {
       setError("Select a company first.");
@@ -217,6 +266,7 @@ export default function CurrentStockPage() {
     setLoading(true);
     setError("");
     setSearched(true);
+    setPlanningAlertsOnly(false);
     try {
       const response = await getCurrentStock({
         company_ids: companyId,
@@ -240,8 +290,9 @@ export default function CurrentStockPage() {
 
   // Same pattern as AC01's Export Excel (downloadColoredExcelFile, dynamic
   // import so exceljs never enters this page's own bundle until Export is
-  // actually clicked). Exports whatever columns are currently visible via
-  // the Columns drawer -- what you see is what you get.
+  // actually clicked). It exports the currently displayed rows, preserves
+  // their planning-status row colour, and includes an explicit text status
+  // column so the alert remains understandable outside the ERP as well.
   async function handleExportExcel() {
     setExporting(true);
     try {
@@ -250,13 +301,23 @@ export default function CurrentStockPage() {
         ...column,
         numFmt: NUMERIC_COLUMN_KEYS.has(column.key) ? "0.000" : undefined,
       }));
+      exportColumns.push({
+        key: "planning_status",
+        label: "Planning Status",
+        width: "150px",
+      });
       await downloadColoredExcelFile({
         fileName: `current_stock_${new Date().toISOString().slice(0, 10)}.xlsx`,
         sheetName: "Current Stock",
         columns: exportColumns,
-        rows,
+        rows: displayedRows,
         getCellValue: (row, column) =>
-          NUMERIC_COLUMN_KEYS.has(column.key) ? Number(row?.[column.key] ?? 0) : (row?.[column.key] ?? "—"),
+          column.key === "planning_status"
+            ? planningStatusLabel(row?.planning_status)
+            : NUMERIC_COLUMN_KEYS.has(column.key)
+              ? Number(row?.[column.key] ?? 0)
+              : (row?.[column.key] ?? "—"),
+        getRowFillArgb: (row) => planningStatusExcelFill(row?.planning_status),
       });
     } catch (exportError) {
       setError(exportError instanceof Error ? exportError.message : "CURRENT_STOCK_EXPORT_FAILED");
@@ -323,7 +384,7 @@ export default function CurrentStockPage() {
                 key: "export",
                 label: exporting ? "Exporting..." : "Export Excel",
                 onClick: () => void handleExportExcel(),
-                disabled: exporting || rows.length === 0,
+                disabled: exporting || displayedRows.length === 0,
               },
               {
                 key: "search",
@@ -442,7 +503,7 @@ export default function CurrentStockPage() {
       ) : (
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 2" title="Current Stock Output Grid">
-          <div className="mb-3 flex justify-start">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
               onClick={() => setPage(1)}
@@ -450,6 +511,14 @@ export default function CurrentStockPage() {
             >
               Back to Filters
             </button>
+            <label className="inline-flex items-center gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-950">
+              <input
+                type="checkbox"
+                checked={planningAlertsOnly}
+                onChange={(event) => setPlanningAlertsOnly(event.target.checked)}
+              />
+              <span>Critical / Replenishment only ({planningAlertRowCount})</span>
+            </label>
           </div>
           {!searched ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
@@ -458,9 +527,17 @@ export default function CurrentStockPage() {
           ) : (
             <ErpDenseGrid
               columns={gridColumns}
-              rows={rows}
+              rows={displayedRows}
               rowKey={(row) => row.row_key}
-              emptyMessage={loading ? "Searching current stock..." : "No current stock matched the selected filters."}
+              getRowProps={(row) => {
+                const planningStatus = planningStatusPresentation(row.planning_status);
+                return planningStatus ? { className: planningStatus.rowClass } : {};
+              }}
+              emptyMessage={loading
+                ? "Searching current stock..."
+                : planningAlertsOnly
+                  ? "No critical or replenishment item is present in this result."
+                  : "No current stock matched the selected filters."}
             />
           )}
         </ErpSectionCard>

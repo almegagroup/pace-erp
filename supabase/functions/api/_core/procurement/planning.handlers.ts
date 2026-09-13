@@ -1026,17 +1026,24 @@ async function loadMaterialMap(materialIds: string[]): Promise<Map<string, JsonR
 }
 
 async function loadWorkspaceRows(
-  ctx: ProcurementHandlerContext,
+  ctx: ProcurementHandlerContext | null,
   companyId: string,
   planMonth: string,
   planId: string,
+  options: { ensureAutoIncluded?: boolean } = {},
 ): Promise<{
   rows: PlanningWorkspaceRow[];
   slocGroups: SlocGroupSummary[];
   itemGroups: ItemGroupSummary[];
   groupConfigs: PlanningGroupConfig[];
 }> {
-  await ensureAutoIncludedPlanLines(ctx, companyId, planMonth, planId);
+  // The planning workspace itself may add newly eligible materials to an open
+  // plan. Read-only consumers (such as IN03) must never create plan lines as
+  // a side effect of displaying current stock.
+  if (options.ensureAutoIncluded !== false) {
+    if (!ctx) throw new Error("PROCUREMENT_PLANNING_CONTEXT_REQUIRED");
+    await ensureAutoIncludedPlanLines(ctx, companyId, planMonth, planId);
+  }
 
   const [planLines, slocGroupsRaw, slocRows, itemGroups, groupConfigRows, eligibleRows] = await Promise.all([
     loadPlanLines(planId),
@@ -1277,6 +1284,34 @@ async function loadWorkspaceRows(
   });
 
   return { rows, slocGroups, itemGroups, groupConfigs };
+}
+
+export type ProcurementPlanningStockStatus = "WARNING" | "CRITICAL";
+
+// Returns only non-normal statuses from the existing current-month plan. It
+// deliberately does not call ensurePlanExists: opening IN03 must not create a
+// blank planning month for a company that has not been configured for PO11.
+export async function getCurrentProcurementPlanningStatusByLocation(
+  companyId: string,
+): Promise<Map<string, ProcurementPlanningStockStatus>> {
+  const plan = await getPlanHeader(companyId, getCurrentPlanMonth());
+  if (!plan) return new Map();
+
+  const workspace = await loadWorkspaceRows(null, companyId, plan.plan_month, plan.id, {
+    ensureAutoIncluded: false,
+  });
+  const locationsBySlocGroupId = new Map(
+    workspace.slocGroups.map((group) => [group.id, group.storage_locations.map((location) => location.id)]),
+  );
+  const statusByMaterialLocation = new Map<string, ProcurementPlanningStockStatus>();
+  for (const row of workspace.rows) {
+    if (row.excluded_from_dashboard || (row.status_tone !== "WARNING" && row.status_tone !== "CRITICAL")) continue;
+    const locationIds = locationsBySlocGroupId.get(row.source_sloc_group_id || "") ?? [];
+    for (const locationId of locationIds) {
+      statusByMaterialLocation.set(`${row.material_id}::${locationId}`, row.status_tone);
+    }
+  }
+  return statusByMaterialLocation;
 }
 
 export async function getProcurementPlanningHandler(
