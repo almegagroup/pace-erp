@@ -59,6 +59,7 @@ const MUTABLE_AMENDMENT_FIELDS = new Set([
   "incoterm",
   "payment_term_id",
   "delivery_type",
+  "freight_term",
   "cost_center_id",
   "remarks",
 ]);
@@ -2246,6 +2247,7 @@ export async function amendPOHandler(
       incoterm: body.incoterm,
       payment_term_id: body.payment_term_id,
       delivery_type: body.delivery_type,
+      freight_term: body.freight_term,
       cost_center_id: body.cost_center_id,
       remarks: body.remarks,
     };
@@ -2325,6 +2327,12 @@ export async function amendPOHandler(
           return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_DELIVERY_TYPE", 400, "Invalid delivery type");
         }
         headerUpdates.delivery_type = deliveryType;
+      } else if (fieldName === "freight_term") {
+        const freightTerm = toUpperTrimmedString(normalizedValue);
+        if (!FREIGHT_TERMS.has(freightTerm)) {
+          return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_FREIGHT_TERM", 400, "Invalid freight term");
+        }
+        headerUpdates.freight_term = freightTerm;
       } else {
         headerUpdates[fieldName] = normalizedValue || null;
       }
