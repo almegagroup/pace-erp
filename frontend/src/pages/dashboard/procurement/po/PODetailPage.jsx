@@ -86,6 +86,7 @@ function buildAmendmentState(lines, po) {
     delivery_date: po?.expected_delivery_date ?? "",
     payment_term_id: po?.payment_term_id ?? lines?.[0]?.payment_term_id ?? "",
     delivery_type: po?.delivery_type ?? "STANDARD",
+    freight_term: po?.freight_term ?? lines?.[0]?.freight_term ?? "FOR",
     remarks: "",
     lines: (lines ?? []).map((line) => ({
       id: line.id,
@@ -149,7 +150,7 @@ export default function PODetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(buildEditState(null, ""));
   const [amendmentOpen, setAmendmentOpen] = useState(false);
-  const [amendmentForm, setAmendmentForm] = useState({ delivery_date: "", payment_term_id: "", delivery_type: "STANDARD", remarks: "", lines: [] });
+  const [amendmentForm, setAmendmentForm] = useState({ delivery_date: "", payment_term_id: "", delivery_type: "STANDARD", freight_term: "FOR", remarks: "", lines: [] });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -365,6 +366,7 @@ export default function PODetailPage() {
       amendmentForm.delivery_date !== String(po?.expected_delivery_date ?? "") ||
       amendmentForm.payment_term_id !== String(po?.payment_term_id ?? po?.lines?.[0]?.payment_term_id ?? "") ||
       amendmentForm.delivery_type !== String(po?.delivery_type ?? "STANDARD") ||
+      amendmentForm.freight_term !== String(po?.freight_term ?? po?.lines?.[0]?.freight_term ?? "FOR") ||
       amendmentForm.remarks.trim() !== "";
 
     if (!headerChanged && changedLines.length === 0) {
@@ -382,6 +384,7 @@ export default function PODetailPage() {
           delivery_date: amendmentForm.delivery_date || null,
           payment_term_id: amendmentForm.payment_term_id || null,
           delivery_type: amendmentForm.delivery_type || null,
+          freight_term: amendmentForm.freight_term || null,
           remarks: amendmentForm.remarks.trim() || null,
         });
       }
@@ -1045,6 +1048,19 @@ export default function PODetailPage() {
                     {["STANDARD", "BULK", "TANKER"].map((option) => (
                       <option key={option} value={option}>{option}</option>
                     ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Freight Term
+                  <select
+                    value={amendmentForm.freight_term}
+                    onChange={(event) => setAmendmentForm((current) => ({ ...current, freight_term: event.target.value }))}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                  >
+                    <option value="FOR">FOR</option>
+                    <option value="FREIGHT_SEPARATE">Freight Separate</option>
+                    <option value="FREIGHT_AT_ACTUALS">Freight at Actuals</option>
+                    <option value="EX_TRANSPORTER_GODOWN">Ex Transporter Godown</option>
                   </select>
                 </label>
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">

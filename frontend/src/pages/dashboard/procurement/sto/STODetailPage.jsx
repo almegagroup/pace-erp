@@ -108,6 +108,8 @@ function buildAmendmentState(detail) {
       original_transfer_price: String(line.transfer_price ?? ""),
       expected_delivery_date: line.expected_delivery_date ?? "",
       original_expected_delivery_date: line.expected_delivery_date ?? "",
+      freight_term: line.freight_term ?? "FOR",
+      original_freight_term: line.freight_term ?? "FOR",
     })),
   };
 }
@@ -464,7 +466,8 @@ export default function STODetailPage() {
       (line) =>
         line.quantity !== line.original_quantity ||
         line.transfer_price !== line.original_transfer_price ||
-        line.expected_delivery_date !== line.original_expected_delivery_date
+        line.expected_delivery_date !== line.original_expected_delivery_date ||
+        line.freight_term !== line.original_freight_term
     );
     const headerChanged = amendmentForm.remarks.trim() !== String(detail.remarks ?? "").trim();
 
@@ -488,6 +491,7 @@ export default function STODetailPage() {
           quantity: Number(line.quantity),
           transfer_price: Number(line.transfer_price),
           expected_delivery_date: line.expected_delivery_date || null,
+          freight_term: line.freight_term || null,
           remarks: amendmentForm.remarks.trim() || null,
         });
       }
@@ -1030,7 +1034,7 @@ export default function STODetailPage() {
               </div>
               <div className="grid gap-3">
                 {amendmentForm.lines.map((line, index) => (
-                  <div key={line.id} className="grid gap-3 border border-slate-200 bg-slate-50 p-3 md:grid-cols-4">
+                  <div key={line.id} className="grid gap-3 border border-slate-200 bg-slate-50 p-3 md:grid-cols-5">
                     <div className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
                       Line {index + 1} | {materialMap.get(line.material_id)?.material_name || line.material_id}
                     </div>
@@ -1079,6 +1083,23 @@ export default function STODetailPage() {
                         }
                         className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
                       />
+                    </label>
+                    <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                      Freight Term
+                      <select
+                        value={line.freight_term}
+                        onChange={(event) =>
+                          setAmendmentForm((current) => ({
+                            ...current,
+                            lines: current.lines.map((entry) => entry.id === line.id ? { ...entry, freight_term: event.target.value } : entry),
+                          }))
+                        }
+                        className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                      >
+                        {FREIGHT_TERM_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                 ))}
