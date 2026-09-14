@@ -6,256 +6,240 @@
 **Initial delivery provider:** MSG91  
 **Pilot page:** PO11 — Procurement Planning  
 **Pilot companies:** CMP003 and CMP006  
-**Future channel:** WhatsApp (architecture-ready, implementation deferred)
+**Future channel:** WhatsApp (architecture-ready, live implementation deferred)
 
 ---
 
 ## 1. Business Goal
 
-Build one reusable PACE ERP communication framework so that:
+Build one reusable PACE ERP Communication Automation framework with two clearly separated layers:
 
-1. Super Admin (SA) can centrally decide which ERP pages are allowed to expose communication automation.
-2. When a page is enabled, that page automatically exposes an **Automation / Communication Settings** action.
-3. Authorized users can configure, from the page itself:
-   - recipients (TO / CC / BCC),
-   - subject,
-   - schedule,
-   - report dataset/table,
-   - visible columns and order,
-   - send conditions,
-   - current-matching vs newly-matched behavior,
-   - preview/test behavior.
-4. The framework evaluates the page's **server-authoritative report data**, not frontend-rendered state.
-5. Matching data is queued and sent through MSG91 Email.
-6. Email failure must never fail or roll back the originating ERP business transaction.
-7. The same framework can later support WhatsApp without rebuilding page-level business logic.
+1. **SA Central Enrollment** — Super Admin decides which PACE page is communication-enabled and exactly which sub-page/surface should show the Automation Settings action.
+2. **Page-level Automation Configuration** — authorized users configure recipients, subject, schedule, datasets, columns, conditions, preview, and match behavior from that page/surface.
 
-The framework must be generic, but the first implementation and UAT target is PO11.
+Email is the first live channel. WhatsApp is a future channel and must not complicate the first release.
+
+PO11 is the first pilot.
 
 ---
 
-## 2. Locked Architecture Principles
+## 2. SA UX — must stay simple
 
-### 2.1 Central enablement, page-specific configuration
+The SA page must NOT be a complex technical configuration screen.
 
-Two different responsibilities must remain separate:
+### 2.1 Search-first enrollment
 
-- **SA Central Control:** decides *where* communication automation is allowed.
-- **Page Automation Drawer:** decides *who receives what, when, and under which conditions*.
+SA sees one primary search box:
 
-SA must not edit page-specific report logic.
+`Search by TX Code or Page Name`
 
-### 2.2 Technical allowlist; never arbitrary database access
+Examples:
 
-A page cannot become report-enabled merely because an SA selects a database table.
+- `PO11`
+- `Procurement Planning`
+- partial page name
 
-Each supported page must have a developer-controlled **Report Manifest / Adapter** that explicitly declares:
+Search results should come from the existing PACE page/menu catalog (current menu master / route identity), not from a manually duplicated page list.
 
-- safe datasets,
-- safe fields,
-- displayable fields,
-- conditionable fields,
-- supported operators,
-- field types,
-- labels,
-- optional formatting rules.
+The result shows only human-usable information such as:
 
-Users must never be allowed to type SQL, table names, schema names, or arbitrary column names.
+- TX Code
+- Page Name
+- Module / parent menu if useful
+- Route (optional, secondary)
+- Current communication enrollment state
 
-### 2.3 Server-authoritative decisions
+SA selects a result and clicks **Enlist / Configure**.
 
-Automation conditions must be evaluated on backend-authoritative data.
+### 2.2 Parent page + dependent sub-pages/surfaces
 
-For PO11, `CRITICAL`, `REPLENISH`, and `NORMAL` must come from/reuse the same authoritative planning logic used by PO11. The communication engine must not create an independent copy of PO11 threshold logic that can drift from the page.
+Selecting a page is not enough.
 
-### 2.4 Provider-independent core
+A page may contain several dependent views/tabs/sub-pages/surfaces. SA must be able to choose exactly where the Automation Settings button is visible.
 
-PACE owns:
+Example PO11 surfaces currently include concepts such as:
 
-- rule configuration,
-- scheduling,
-- conditions,
-- datasets,
-- selected columns,
-- recipients,
-- queue,
-- audit/history,
-- retry/idempotency.
+- Main / default page surface
+- Planning Dashboard
+- Monthly Plan Input
+- SLOC Group Setup
+- Item Group Setup
+- History / Archive
+- Report View
 
-MSG91 only delivers the final email payload.
+The exact keys must come from the page's developer-defined surface manifest; labels shown to SA should be friendly.
 
-Provider integration must sit behind an adapter boundary such as:
+SA UI should conceptually look like:
 
-`EmailProvider.send(...)`
+```text
+PO11 — Procurement Planning
 
-The initial adapter is MSG91; a later provider swap must not require rewriting PO11 or the communication rule engine.
+Email: [ ON ]
 
-### 2.5 Business transaction isolation
+Show Automation Settings on:
+[x] Planning Dashboard
+[x] Monthly Plan Input
+[ ] SLOC Group Setup
+[ ] Item Group Setup
+[ ] History / Archive
+[x] Report View
 
-No ERP transaction should wait for or depend on email delivery.
+[ Save ]
+```
 
-The send path must be asynchronous through an outbox/queue. Provider failure affects the delivery job only.
+This is intentionally simpler than asking SA to manage routes, resource codes, datasets, database tables, or technical flags.
 
-### 2.6 Security boundaries
+### 2.3 De-enrollment
 
-- MSG91 secret/auth key: server-side environment secret only.
-- Never expose provider secrets to frontend, normal configuration tables, logs, or Git.
-- Page/report fields are allowlisted by code.
-- Rule access is ACL-controlled.
-- Rule execution is company-scoped.
-- HTML/body values must be escaped/safely rendered.
-- Recipient changes and rule changes must be auditable.
-- Duplicate scheduler execution must not create duplicate deliveries.
+SA must be able to:
+
+- disable Email for the whole enlisted page,
+- remove one or more selected surfaces,
+- de-enlist the page entirely if needed.
+
+Disabling/de-enlisting must stop new configuration use on those surfaces without deleting historical delivery/audit records.
 
 ---
 
-## 3. User Experience
+## 3. Safety Model — SA can choose location, not data internals
 
-### 3.1 SA Central Page
+The SA search/enrollment model must not create a security hole.
 
-A new SA-facing page will provide a central grid similar to:
+### 3.1 Existing PACE menu/page catalog is discovery source
 
-| Tx Code | Page | Email Supported | Email Enabled | WhatsApp Supported | WhatsApp Enabled | Active |
-|---|---|---:|---:|---:|---:|---:|
-| PO11 | Procurement Planning | Yes | ON/OFF | Future | OFF | Yes |
+SA may search normal PACE pages by TX code or page name.
 
-The SA page controls **page/channel availability only**.
+### 3.2 Developer-defined Communication Surface Manifest is the technical allowlist
 
-When PO11 Email is disabled, the page-level automation button must not be available for normal configuration/use.
+Each communication-capable page must declare a code-owned manifest such as:
 
-### 3.2 Page-level Automation Settings
+```text
+Page: PO11
+Stable page identity: tx_code/resource_code
+Surfaces:
+- planning_dashboard
+- monthly_plan_input
+- sloc_group_setup
+- item_group_setup
+- history_archive
+- report_view
+```
 
-An enabled page exposes an action such as:
+Each surface has:
+
+- stable `surface_key`
+- friendly label
+- how frontend determines whether that surface is active
+- supported communication channels
+- later: report dataset adapter(s)
+
+SA cannot invent a surface key.
+
+### 3.3 Enrollment is different from report-data access
+
+SA selecting `PO11 > Planning Dashboard` means:
+
+> “Automation Settings is allowed to appear here.”
+
+It does NOT mean:
+
+> “SA can choose arbitrary database tables/columns.”
+
+Report datasets/fields remain developer-controlled by the later Report Manifest / Adapter.
+
+---
+
+## 4. Page-level Automation Settings
+
+When all are true:
+
+1. parent page is enlisted,
+2. Email is enabled for the parent page,
+3. current surface is selected by SA,
+4. user has the required ACL/company scope,
+5. the page/surface has a valid communication manifest,
+
+then the page/surface shows:
 
 `Automation Settings`
 
-The initial UI will be a center drawer following PACE dense-operator UX conventions.
+The action opens a center drawer following PACE dense-operator UX conventions.
 
-Sections:
+The drawer eventually contains:
 
 1. General
 2. Channel
-3. Recipients
+3. Recipients (TO/CC/BCC)
 4. Subject
 5. Schedule
-6. Dataset/Table Selection
-7. Column Selection + Order
+6. Dataset/Table selection
+7. Column selection/order
 8. Conditions
-9. Match Behavior
-10. Preview / Test
+9. CURRENT_MATCHING / NEWLY_MATCHED behavior
+10. Preview / Send Test
 11. Save / Activate
-
-### 3.3 Recipients
-
-Support at minimum:
-
-- TO
-- CC
-- BCC
-- email address
-- active/inactive
-
-Future options may include resolved PACE users/roles/departments, but Phase 1 email automation does not require dynamic organizational recipients.
-
-### 3.4 Subject templates
-
-Subject may use safe supported tokens, for example:
-
-- `{{company_code}}`
-- `{{company_name}}`
-- `{{page_name}}`
-- `{{report_name}}`
-- `{{date}}`
-- `{{critical_count}}`
-- `{{replenishment_count}}`
-
-Unsupported/untrusted arbitrary template execution is forbidden.
-
-### 3.5 Schedule
-
-Target schedule modes:
-
-- Manual Only
-- Daily
-- Weekly
-- Monthly
-
-Configurable values include:
-
-- time,
-- timezone (default `Asia/Kolkata`),
-- weekly day(s),
-- monthly day,
-- active/inactive,
-- send-empty-report vs skip-empty-report (default: skip).
-
-A single central scheduler should evaluate due rules. Do **not** create one database cron job per rule.
-
-### 3.6 Condition builder
-
-Conditions must use dropdowns and typed values, not SQL.
-
-Initial operators:
-
-- `=`
-- `!=`
-- `IN`
-- `NOT IN`
-- `>`
-- `>=`
-- `<`
-- `<=`
-- `BETWEEN`
-- `IS EMPTY`
-- `IS NOT EMPTY`
-
-Compound conditions must initially support a safe, understandable AND model. OR/grouped expression support should be added only if a real report requires it.
-
-Example PO11 condition:
-
-`Planning Status IN (CRITICAL, REPLENISH)`
-
-### 3.7 Match behavior
-
-Two modes:
-
-#### CURRENT_MATCHING
-At every due run, all rows currently matching the rule are included.
-
-#### NEWLY_MATCHED
-Only rows that newly enter the matching condition are included. A row remaining in the same matching state must not repeatedly alert. If it later leaves the condition and re-enters, it may alert again.
-
-State tracking must use stable row identity supplied by the page adapter.
-
-### 3.8 Preview
-
-Preview must execute the same backend dataset + condition + selected-column pipeline used by a real run, but must not enqueue/send a real message unless the user explicitly chooses **Send Test**.
 
 ---
 
-## 4. PO11 Pilot Contract
+## 5. Report Manifest / Adapter
 
-### 4.1 Scope
+The Communication Engine must never query arbitrary database tables based on user input.
 
-PO11 is the first report adapter.
+Each supported page exposes safe, server-authoritative report datasets and fields through a typed manifest/adapter.
 
-Initial production business scope is CMP003 and CMP006. The generic framework must not hard-code those company codes; company access/configuration stays data/ACL driven.
+Manifest field metadata may include:
 
-### 4.2 PO11 decision grain
+- field key
+- label
+- data type
+- displayable yes/no
+- conditionable yes/no
+- allowed operators
+- formatting
+- stable row identity contribution
 
-Default email output should mirror the procurement decision grain of PO11:
+Users store/select **manifest field keys**, never raw database column names.
 
-- standalone material => one decision row,
-- planning item group => one group decision row.
+---
 
-Group-member detail can be an optional dataset/expansion later; it should not be forced into the default alert mail.
+## 6. PO11 Pilot Contract
 
-### 4.3 Candidate PO11 fields
+### 6.1 Pilot scope
 
-The final manifest must be verified against the actual backend adapter before implementation, but expected fields include:
+PO11 is the first page.
+
+Initial business companies are CMP003 and CMP006, but the framework must not hard-code company codes.
+
+### 6.2 PO11 surface enrollment
+
+The PO11 Communication Surface Manifest must be derived from the actual current PO11 UI and must cover the stable sub-page/tab/view identities that SA may select.
+
+The current implementation is known to contain views including:
+
+- Planning Dashboard
+- Monthly Plan Input
+- SLOC Group Setup
+- Item Group Setup
+- History / Archive
+- report-mode view
+
+Codex must re-read the current dev implementation before locking exact surface keys.
+
+### 6.3 PO11 decision grain
+
+Default procurement-alert output mirrors PO11 decision grain:
+
+- standalone material => one decision row
+- planning item group => one group decision row
+
+Group-member detail may be optional later.
+
+### 6.4 Candidate PO11 report fields
+
+Expected candidates, subject to current-code verification:
 
 - Planning Status
-- Item Type (Standalone / Group)
+- Item Type
 - Material Code
 - Material Name
 - Group Name
@@ -264,7 +248,7 @@ The final manifest must be verified against the actual backend adapter before im
 - Available Stock Qty
 - Safety Stock Qty
 - Replenishment Stock Qty
-- Shortfall Qty (if defined by the adapter)
+- Shortfall Qty when authoritatively defined
 - TRN Stock Qty
 - Gate Entry Stock Qty
 - QA Stock Qty
@@ -273,352 +257,341 @@ The final manifest must be verified against the actual backend adapter before im
 - Lead Time Days
 - UOM
 
-Only fields that the PO11 adapter can authoritatively and safely expose may be registered.
-
-### 4.4 Default pilot rule example
-
-CMP003:
-
-- Channel: Email
-- Condition: `Planning Status IN (CRITICAL, REPLENISH)`
-- Frequency: Daily
-- Time: user-configurable
-- Empty result: Skip
-- Match mode: CURRENT_MATCHING initially; NEWLY_MATCHED must also be supported by the framework before final rollout if included in the release scope.
-
-CMP006 uses an independent rule and independent recipients/schedule.
+`CRITICAL / REPLENISH / NORMAL` must reuse PO11's server-authoritative logic and must not be independently reimplemented in the communication engine.
 
 ---
 
-## 5. Proposed Data Model
+## 7. Central Data Model — revised for parent page + surfaces
 
-Final names may be adjusted to match repository/database conventions after discovery, but the logical model is locked.
+Final physical names may be adjusted to repository conventions after discovery, but the logical model is locked.
 
-### 5.1 `erp_communication.page_registry`
+### 7.1 Existing page catalog remains source of truth
 
-Technical page/channel allowlist plus runtime SA enablement.
+Do not duplicate every PACE page into a new communication table just to support SA search.
 
-Key concepts:
+Search should use the existing page/menu master wherever possible.
 
-- page key / tx code / resource code
-- title / route
-- active
-- `supports_email`
-- `email_enabled`
-- `supports_whatsapp`
-- `whatsapp_enabled`
-- audit columns
+### 7.2 `erp_communication.page_enrollment`
 
-`supports_*` is a technical capability; `*_enabled` is an SA runtime switch. They must not be conflated.
-
-### 5.2 `erp_communication.automation_rule`
-
-One configurable automation rule for one page/company/channel.
+Represents a page that SA has enlisted for communication.
 
 Concepts:
 
-- page registry reference
-- company
-- channel
-- rule name
+- id
+- reference to stable existing page/menu identity
+- tx_code/resource_code snapshots if useful for audit/debugging
+- Email enabled
+- future WhatsApp enabled
+- active/enlisted state
+- audit fields
+
+This is runtime enrollment, not the source of technical page metadata.
+
+### 7.3 `erp_communication.surface_enrollment`
+
+Represents selected dependent page surfaces where the Automation Settings action is allowed.
+
+Concepts:
+
+- id
+- `page_enrollment_id`
+- stable `surface_key`
 - active
-- subject template
-- schedule configuration
-- timezone
-- empty-result behavior
-- match mode
-- last/next run metadata where required
-- audit columns
+- optional channel-specific enabled state if architecture requires it
+- audit fields
 
-### 5.3 `erp_communication.automation_recipient`
+The backend must validate `surface_key` against that page's code-owned Communication Surface Manifest.
 
-- rule
-- recipient type (`TO`, `CC`, `BCC`)
-- email address
-- display name (optional)
-- active
-- audit columns
+Unknown/invented surface keys are rejected.
 
-### 5.4 Dataset / column selection
+### 7.4 Later automation tables
 
-Store selected dataset(s) and selected manifest field keys/order. Persist **manifest keys**, not raw database column names.
+Later phases add:
 
-### 5.5 Conditions
+- `automation_rule`
+- `automation_recipient`
+- dataset selection
+- column selection/order
+- conditions
+- match-state tracking
+- delivery outbox/history
 
-Persist:
-
-- rule
-- manifest field key
-- operator
-- typed value payload
-- order
-
-Backend validation must ensure every stored field/operator pair is allowed by the current manifest.
-
-### 5.6 Match-state tracking
-
-Needed for `NEWLY_MATCHED` mode:
-
-- rule
-- stable row key
-- prior match state / fingerprint
-- transition timestamps
-
-### 5.7 Delivery outbox / history
-
-A delivery job should have an idempotency key and lifecycle such as:
-
-- `PENDING`
-- `PROCESSING`
-- `SENT`
-- `FAILED`
-- `SKIPPED`
-- `DEAD`
-
-Attempts/provider responses should be auditable without storing provider secrets.
+These are deliberately not Phase 1 responsibilities except where a minimal foundation is required.
 
 ---
 
-## 6. End-to-End Runtime Flow
+## 8. Runtime visibility rule
+
+Frontend must not hard-code `if (txCode === 'PO11') show button` as the long-term mechanism.
+
+Conceptually:
 
 ```text
-SA enables Email for PO11
+isCommunicationActionVisible({ pageIdentity, surfaceKey, channel, user })
+```
+
+returns true only when:
+
+- the page is enlisted,
+- channel enabled,
+- surface selected,
+- technical manifest supports the surface/channel,
+- user ACL permits configuration/use.
+
+This same pattern should work for future pages.
+
+---
+
+## 9. Schedule / Conditions / Recipients
+
+These are later page-level configuration concerns.
+
+### Schedule
+
+- Manual Only
+- Daily
+- Weekly
+- Monthly
+- time
+- timezone (default Asia/Kolkata)
+- selected weekdays/month-day
+- skip-empty default
+
+One central scheduler evaluates due rules; never one cron per rule.
+
+### Recipients
+
+- TO
+- CC
+- BCC
+- email
+- active/inactive
+
+### Conditions
+
+No SQL entry.
+
+Safe operators include:
+
+- =
+- !=
+- IN
+- NOT IN
+- >
+- >=
+- <
+- <=
+- BETWEEN
+- IS EMPTY
+- IS NOT EMPTY
+
+Example:
+
+`Planning Status IN (CRITICAL, REPLENISH)`
+
+### Match modes
+
+- `CURRENT_MATCHING`
+- `NEWLY_MATCHED`
+
+---
+
+## 10. Delivery Architecture
+
+```text
+SA searches TX/Page Name
         ↓
-PO11 Automation Settings becomes available
+Enlists parent page
         ↓
-Authorized user saves company-specific rule
+Selects allowed sub-page surfaces
         ↓
-Central scheduler identifies due rule
+Authorized page user configures automation
         ↓
-Page report adapter loads server-authoritative dataset
+Central scheduler finds due rule
         ↓
-Communication engine validates/apply conditions
+Page report adapter loads authoritative rows
         ↓
-No rows? ──→ SKIPPED (when skip-empty enabled)
-        ↓ rows found
-Selected datasets/columns/order applied
+Conditions applied
         ↓
-HTML/text payload rendered
+Selected columns rendered
         ↓
-Idempotent delivery job created
+Idempotent outbox job
         ↓
-Queue worker
-        ↓
-MSG91 Email Provider Adapter
+MSG91 Email adapter
         ↓
 SENT / FAILED / retry / DEAD
         ↓
-History + audit visible in ERP
+History + audit
 ```
+
+Email delivery failure must never roll back or block the ERP transaction that created/changed the underlying business data.
 
 ---
 
-## 7. Implementation Phases and Sequence
+## 11. MSG91 Policy
 
-### Phase 1 — Communication Foundation
+MSG91 is the initial Email delivery provider.
 
-**Goal:** build the safe technical foundation only. No real email sending and no page drawer yet.
+- backend only
+- auth key in server environment secret
+- never expose key to browser/Git/config tables
+- provider receives only final minimum email payload
+- provider does not receive Supabase credentials or ERP database access
+- integrate behind `EmailProvider.send(...)`
+- provider errors/message IDs may be persisted for audit
+- future provider replacement must not require rewriting page logic
+
+---
+
+## 12. Implementation Phases
+
+### Phase 1 — Communication Enrollment Foundation
+
+Build only the parent-page + surface enrollment foundation.
 
 Deliver:
 
-1. Read/align with `CLAUDE.md`, ACL/menu/company-scope conventions, migration rules, and current dev architecture.
-2. Create the `erp_communication` foundation schema and page registry model.
-3. Separate technical capability (`supports_email`) from runtime enablement (`email_enabled`).
-4. Register PO11 as an Email-capable page, initially disabled unless business owner explicitly directs otherwise during implementation.
-5. Add backend read contract/service for registry state that later SA UI and page button logic can consume.
-6. Add validation/constants for supported channel values (`EMAIL`, future `WHATSAPP`) without implementing WhatsApp delivery.
-7. Add required indexes, constraints, grants/RLS/security pattern consistent with the repo.
-8. Add tests/guard verification.
-9. Do not add MSG91, scheduler, automation rules, recipients, or PO11 UI in this phase.
+1. discover current menu/page identity and PO11 surface/tab model,
+2. create `erp_communication` foundation,
+3. create page enrollment model referencing the existing PACE page catalog,
+4. create selected-surface enrollment model,
+5. define code-owned Communication Surface Manifest contract,
+6. define PO11 initial surface manifest from current dev code,
+7. add backend search/read contract needed later by SA UI:
+   - search page by TX/name using existing page catalog,
+   - read page communication enrollment,
+   - read available technical surfaces,
+   - read selected/enabled surfaces,
+8. validate that unknown surfaces cannot be enrolled,
+9. no real SA UI yet,
+10. no email sending/provider/schedule/recipient/rule engine yet.
 
-**Exit condition:** the system has a secure page communication registry and can answer, server-side, whether a known page/channel is supported/enabled.
+**Exit condition:** backend can safely answer:
 
-### Phase 2 — SA Central Communication Control
+- what PACE page matches the TX/name,
+- whether it is enlisted,
+- which communication surfaces are technically available,
+- which surfaces are selected,
+- whether Email is enabled.
 
-Deliver the SA page/API to view supported pages and toggle runtime channel enablement. SA may change `email_enabled`; SA may not turn unsupported channels into supported channels.
+### Phase 2 — Simple SA Enrollment UI
+
+Build search-first SA page:
+
+1. search TX code/page name,
+2. select result,
+3. Enlist,
+4. Email ON/OFF,
+5. checkbox selected surfaces,
+6. Save,
+7. de-enlist/disable.
+
+SA does not see technical manifest internals.
 
 ### Phase 3 — Report Manifest Framework
 
-Create the typed developer-controlled manifest/adapter contract that declares safe datasets, safe fields, operators, row identity, formatting metadata, and page report loader.
+Add safe dataset/field/operator contracts.
 
 ### Phase 4 — PO11 Report Adapter
 
-Implement the first adapter by reusing PO11 server-authoritative planning logic. Normalize standalone/group decision rows and expose only approved fields.
+Normalize authoritative PO11 planning decision data.
 
-### Phase 5 — Page Button + Automation Drawer Shell
+### Phase 5 — Surface-aware Automation Button + Drawer Shell
 
-When central registry enables Email for PO11 and the user has permission, show the automation action. Build the center drawer shell and company-aware rule context.
+Selected surfaces only show the action.
 
 ### Phase 6 — Rule Configuration
 
-Implement rule CRUD, recipients, subject template, dataset selection, column selection/order, schedule settings, and activation.
+Recipients, subject, schedule, datasets, columns, activation.
 
 ### Phase 7 — Condition Builder + Preview
 
-Implement typed condition validation/execution and real-data preview. No arbitrary SQL.
+Typed condition evaluation and preview.
 
-### Phase 8 — Scheduler
+### Phase 8 — Central Scheduler
 
-Implement one central due-rule evaluator. ERP time/frequency changes must not require deployment or one-cron-per-rule changes.
+Single due-rule evaluator.
 
 ### Phase 9 — Outbox / Queue
 
-Create idempotent delivery jobs and retry lifecycle. Business transactions remain isolated.
+Idempotent delivery lifecycle.
 
 ### Phase 10 — MSG91 Email Adapter
 
-Add server-side MSG91 integration, environment-secret configuration, provider response/error mapping, and test send.
+Server-side delivery integration.
 
 ### Phase 11 — CURRENT vs NEWLY_MATCHED
 
-Add stable row-state tracking and transition behavior for event-style alerts.
+Transition-state tracking.
 
-### Phase 12 — Delivery History + Audit + Operations
+### Phase 12 — Delivery History / Audit / Operations
 
-Expose delivery status/history, attempts, last run, last error, configuration audit, and safe manual retry where appropriate.
+Status, attempts, errors, manual retry where safe.
 
-### Phase 13 — Security/UAT/Production Pilot
+### Phase 13 — Security / UAT / PO11 Production Pilot
 
-Test CMP003 and CMP006 end-to-end including no-row skip, provider failure, duplicate scheduler execution, company isolation, ACL, SA disable, and retries. Roll out Email only after UAT.
+CMP003 + CMP006 controlled rollout.
 
-### Phase 14 — Reusable Rollout to More Pages
+### Phase 14 — More Pages
 
-New pages should require primarily:
+New pages plug in through surface manifest + report adapter rather than rebuilding the communication engine.
 
-1. page technical registration,
-2. report manifest,
-3. adapter,
-4. page action integration if not fully generic.
+### Future — WhatsApp
 
-Do not rebuild scheduler/provider/queue per page.
-
-### Future Phase — WhatsApp
-
-Add a WhatsApp provider adapter and channel-specific rendering/rules only after Email is stable. Reuse central enablement, scheduling, conditions, datasets, recipients (where applicable), audit, and queue.
+Reuse enrollment, surface placement, scheduling, conditions, queue, and audit; add WhatsApp-specific recipient/render/provider layer only after Email is stable.
 
 ---
 
-## 8. MSG91 Integration Policy
+## 13. Security / ACL Requirements
 
-MSG91 is selected for the initial Email delivery implementation.
-
-Rules:
-
-- integration is backend-only,
-- provider auth key is an environment secret,
-- provider key is never stored in page/rule configuration,
-- provider does not receive Supabase/ERP credentials,
-- provider receives only the minimum final message payload required to deliver the email,
-- MSG91 outage cannot block procurement/ERP transactions,
-- provider-specific message IDs/errors may be stored for delivery audit,
-- code must use a provider adapter so MSG91 can be replaced later.
-
-Provider/account verification and exact current MSG91 API contract must be checked again at the phase where the adapter is implemented.
+1. SA mutation uses existing Super Admin authorization patterns; no frontend hard-coded role names.
+2. Page/surface enrollment is validated server-side.
+3. Unknown surface keys are rejected.
+4. Page-level automation configuration respects company and page ACL.
+5. Cross-company data cannot mix accidentally.
+6. Secrets never reach browser.
+7. Report fields/operators come only from manifests.
+8. HTML values are safely encoded.
+9. Configuration changes record actor/time.
+10. Delivery has an idempotency boundary.
 
 ---
 
-## 9. Scheduler Policy
+## 14. PO11 UAT Examples
 
-PACE production currently has PostgreSQL scheduling capability available, but the exact execution path must be chosen during scheduler implementation after repo/server review.
+At final pilot, verify among other cases:
 
-Locked behavior:
-
-- one central scheduler/evaluator,
-- no cron-per-user-rule model,
-- configurable time/frequency stored in ERP,
-- timezone-aware,
-- idempotent execution,
-- scheduler overlap must not duplicate deliveries,
-- execution engine must be safe if a prior run is delayed.
-
----
-
-## 10. Security and ACL Requirements
-
-1. SA central-control mutation requires Super Admin-authorized capability, following existing PACE ACL conventions; never hard-code a role name in frontend business logic.
-2. Page automation configuration must respect page resource/action permissions and company scope.
-3. A user must not configure a rule for a company outside their allowed transactional scope.
-4. Cross-company delivery must never mix rows from two companies unless a future report explicitly declares a safe multi-company contract.
-5. Secrets never enter the browser.
-6. Only manifest-declared fields/operators can be persisted/executed.
-7. Email addresses must be normalized/validated.
-8. HTML values must be safely encoded.
-9. Subject/template tokens are from an allowlist.
-10. Every configuration mutation records actor/time.
-11. Every delivery has an idempotency boundary.
-12. Provider error bodies/logs must not leak secrets.
+- PO11 not enlisted => no automation action.
+- PO11 enlisted but Email OFF => no usable Email action.
+- PO11 Email ON + only Planning Dashboard selected => button appears there, not on Monthly Plan Input/Setup/History surfaces.
+- Add Monthly Plan Input => button appears there without deployment.
+- Remove Planning Dashboard => button disappears there without deleting historical rules/delivery audit.
+- CMP003 rule never sends CMP006 rows and vice versa.
+- configured Critical/Replenish conditions behave as PO11 does.
+- no matching rows => skipped when configured.
+- provider failure does not affect PO11 transactions.
+- duplicate scheduler run does not duplicate a logical delivery.
 
 ---
 
-## 11. PO11 UAT Matrix
+## 15. Non-goals for initial Email rollout
 
-At minimum verify:
-
-1. SA Email OFF => automation action unavailable/non-usable.
-2. SA Email ON => authorized PO11 user can open settings.
-3. CMP003 rule cannot accidentally send CMP006 data.
-4. CMP006 rule cannot accidentally send CMP003 data.
-5. `CRITICAL` row matches configured condition.
-6. `REPLENISH` row matches configured condition.
-7. `NORMAL` row excluded when not requested.
-8. No matching rows => no email when skip-empty is enabled.
-9. Selected columns only appear in preview/email.
-10. Column order matches configuration.
-11. Group decision grain matches PO11 decision grain.
-12. Recipient TO/CC/BCC mapping is correct.
-13. Daily schedule fires once for a due window.
-14. Weekly schedule fires only on selected days.
-15. Duplicate scheduler invocation does not duplicate the same logical delivery.
-16. MSG91 failure => delivery job fails/retries; PO11 data remains unaffected.
-17. Manual test does not corrupt scheduled-run state.
-18. CURRENT_MATCHING repeats while still matching.
-19. NEWLY_MATCHED sends only on transition/re-entry.
-20. Audit identifies who changed rule/recipient/schedule.
+- live WhatsApp sending
+- push notification
+- in-app notification center
+- arbitrary SQL builder
+- arbitrary DB table/column selection
+- marketing campaign tooling
+- provider logic embedded in PO11
 
 ---
 
-## 12. Non-Goals for Initial Email Rollout
+## 16. Implementation Gate
 
-Do not include unless separately approved:
+Each phase requires a dedicated task brief and explicit business-owner approval.
 
-- WhatsApp live sending,
-- push notifications,
-- in-app notification center,
-- arbitrary SQL report builder,
-- arbitrary database table/column selection,
-- attachment generation/PDF export,
-- dynamic role/department recipients,
-- user-written executable template code,
-- marketing campaign tooling,
-- provider-specific logic embedded into PO11.
-
----
-
-## 13. Delivery Milestones
-
-### Milestone A — Foundation
-Phase 1 complete and verified.
-
-### Milestone B — Control + PO11 Configuration
-SA control, manifest, PO11 adapter, drawer, conditions, preview.
-
-### Milestone C — Automation + Delivery
-Scheduler, queue, MSG91, retries, match-state behavior, history.
-
-### Milestone D — PO11 Production Pilot
-CMP003 + CMP006 UAT and controlled go-live.
-
-### Milestone E — Generic Expansion
-Add more ERP pages through manifest/adapter registration without rebuilding the engine.
-
----
-
-## 14. Implementation Gate
-
-**Do not implement phases automatically from this document.**
-
-Each phase must have a dedicated Codex task brief and explicit business-owner approval before implementation. The first implementation brief is:
+Current task brief:
 
 `docs/CODEX-COMMUNICATION-AUTOMATION-PHASE-1-FOUNDATION-TASK-BRIEF.md`
 
-Phase 1 must not begin until the business owner explicitly says **Yes**.
+**Do not implement Phase 1 until the business owner explicitly says `YES`.**
