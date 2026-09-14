@@ -99,10 +99,21 @@ function parseMutationInput(value: unknown): EnrollmentMutationInput {
     throw new Error("DUPLICATE_COMMUNICATION_SURFACE");
   }
 
+  const active = body.active === undefined ? true : body.active === true;
+  // An active page must choose one or more developer-declared surfaces. The
+  // only empty selection is the explicit de-enlist state, which also turns
+  // Email off and lets the server atomically deactivate prior surfaces.
+  if (active === true && normalizedSurfaceKeys.length === 0) {
+    throw new Error("COMMUNICATION_SURFACE_SELECTION_REQUIRED");
+  }
+  if (active === false && (body.email_enabled !== false || normalizedSurfaceKeys.length !== 0)) {
+    throw new Error("INVALID_COMMUNICATION_DEENLISTMENT_INPUT");
+  }
+
   return {
     page_menu_id: pageMenuId,
     email_enabled: body.email_enabled,
-    active: body.active ?? true,
+    active,
     surface_keys: normalizedSurfaceKeys,
     channel: body.channel as string | undefined,
   };
@@ -477,6 +488,8 @@ export async function upsertCommunicationEnrollmentHandler(
     const status = [
       "ADMIN_ONLY",
       "INVALID_COMMUNICATION_ENROLLMENT_INPUT",
+      "INVALID_COMMUNICATION_DEENLISTMENT_INPUT",
+      "COMMUNICATION_SURFACE_SELECTION_REQUIRED",
       "DUPLICATE_COMMUNICATION_SURFACE",
       "UNSUPPORTED_COMMUNICATION_CHANNEL",
       "INVALID_COMMUNICATION_SURFACE",
