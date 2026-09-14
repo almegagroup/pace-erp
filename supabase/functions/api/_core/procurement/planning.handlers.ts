@@ -10,6 +10,11 @@ import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import {
+  buildProcurementPlanningDecisionRows,
+  getProcurementPlanningStatusTone,
+  type ProcurementPlanningDecisionRow,
+} from "./planning.decision_rows.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -19,7 +24,7 @@ type ProcurementHandlerContext = {
   roleCode: string;
 };
 
-type PlanningWorkspaceRow = {
+export type PlanningWorkspaceRow = {
   id: string;
   material_id: string;
   material_code: string;
@@ -66,7 +71,7 @@ type ItemGroupSummary = {
   sloc_group_name: string | null;
 };
 
-type PlanningGroupConfig = {
+export type PlanningGroupConfig = {
   planning_item_group_id: string;
   planning_item_group_name: string;
   sloc_group_id: string | null;
@@ -90,7 +95,7 @@ type ArchiveGroupConfig = {
   fixed_replenishment_stock_qty: number | null;
 };
 
-type PlanHeader = {
+export type PlanHeader = {
   id: string;
   company_id: string;
   plan_month: string;
@@ -151,7 +156,7 @@ function logPlanningDebug(
   });
 }
 
-async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
+async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: unknown): Promise<string> {
   const scopedCompanyId = toTrimmedString(ctx.context.companyId);
   const companyId = toTrimmedString(requestedCompanyId) || scopedCompanyId;
   if (companyId) await assertCompanyScope(ctx, companyId);
@@ -1029,18 +1034,20 @@ async function loadMaterialMap(materialIds: string[]): Promise<Map<string, JsonR
   return map;
 }
 
+export type ProcurementPlanningWorkspace = {
+  rows: PlanningWorkspaceRow[];
+  slocGroups: SlocGroupSummary[];
+  itemGroups: ItemGroupSummary[];
+  groupConfigs: PlanningGroupConfig[];
+};
+
 async function loadWorkspaceRows(
   ctx: ProcurementHandlerContext | null,
   companyId: string,
   planMonth: string,
   planId: string,
   options: { ensureAutoIncluded?: boolean } = {},
-): Promise<{
-  rows: PlanningWorkspaceRow[];
-  slocGroups: SlocGroupSummary[];
-  itemGroups: ItemGroupSummary[];
-  groupConfigs: PlanningGroupConfig[];
-}> {
+): Promise<ProcurementPlanningWorkspace> {
   // The planning workspace itself may add newly eligible materials to an open
   // plan. Read-only consumers (such as IN03) must never create plan lines as
   // a side effect of displaying current stock.
@@ -1223,15 +1230,11 @@ async function loadWorkspaceRows(
     // `total_stock_qty` remains the response field for compatibility, and is
     // now the planning-usable quantity rather than a physical-position total.
     const totalStockQty = availableStockQty;
-    let statusTone: "NORMAL" | "WARNING" | "CRITICAL" = "NORMAL";
-    // A zero threshold means this item has no configured planning trigger.
-    // Without the positive-threshold check, a blank plan line with zero
-    // usable stock incorrectly satisfies `0 <= 0` and becomes Critical.
-    if (effectiveSafetyStockQty > 0 && totalStockQty <= effectiveSafetyStockQty) {
-      statusTone = "CRITICAL";
-    } else if (effectiveReplenishmentStockQty > 0 && totalStockQty <= effectiveReplenishmentStockQty) {
-      statusTone = "WARNING";
-    }
+    const statusTone = getProcurementPlanningStatusTone(
+      totalStockQty,
+      effectiveSafetyStockQty,
+      effectiveReplenishmentStockQty,
+    );
     return {
       id: rowId,
       material_id: materialId,
@@ -1300,6 +1303,53 @@ async function loadWorkspaceRows(
   return { rows, slocGroups, itemGroups, groupConfigs };
 }
 
+export type ProcurementPlanningDecisionReadOnlyContext = {
+  company_id: string;
+  plan_month: string;
+};
+
+export type ProcurementPlanningDecisionReadOnlySource = {
+  getPlanHeader(companyId: string, planMonth: string): Promise<PlanHeader | null>;
+  loadWorkspace(companyId: string, planMonth: string, planId: string): Promise<ProcurementPlanningWorkspace>;
+};
+
+/**
+ * Read-only PO11 decision loader shared by the communication adapter and
+ * future server-side report consumers. It never bootstraps a plan or adds
+ * lines; an absent or non-open plan intentionally has no live decisions.
+ */
+export async function loadProcurementPlanningDecisionRowsFromReadOnlySource(
+  context: ProcurementPlanningDecisionReadOnlyContext,
+  source: ProcurementPlanningDecisionReadOnlySource,
+): Promise<readonly ProcurementPlanningDecisionRow[]> {
+  const companyId = toTrimmedString(context.company_id);
+  const planMonth = normalizePlanMonth(context.plan_month);
+  if (!companyId || !planMonth) {
+    throw new Error("PROCUREMENT_PLANNING_DECISION_CONTEXT_INVALID");
+  }
+  const plan = await source.getPlanHeader(companyId, planMonth);
+  if (!plan || plan.status !== "OPEN") return [];
+
+  const workspace = await source.loadWorkspace(companyId, planMonth, plan.id);
+  return buildProcurementPlanningDecisionRows({
+    rows: workspace.rows,
+    group_configs: workspace.groupConfigs,
+    plan_month: planMonth,
+  });
+}
+
+export async function loadProcurementPlanningDecisionRows(
+  context: ProcurementPlanningDecisionReadOnlyContext,
+): Promise<readonly ProcurementPlanningDecisionRow[]> {
+  return loadProcurementPlanningDecisionRowsFromReadOnlySource(context, {
+    getPlanHeader,
+    loadWorkspace: (companyId, planMonth, planId) =>
+      loadWorkspaceRows(null, companyId, planMonth, planId, {
+        ensureAutoIncluded: false,
+      }),
+  });
+}
+
 export type ProcurementPlanningStockStatus = "NORMAL" | "WARNING" | "CRITICAL";
 
 export type ProcurementPlanningStockCoverage = {
@@ -1315,7 +1365,7 @@ export async function getCurrentProcurementPlanningStatusByLocation(
   companyId: string,
 ): Promise<Map<string, ProcurementPlanningStockCoverage>> {
   const plan = await getPlanHeader(companyId, getCurrentPlanMonth());
-  if (!plan) return new Map();
+  if (!plan || plan.status !== "OPEN") return new Map();
 
   const workspace = await loadWorkspaceRows(null, companyId, plan.plan_month, plan.id, {
     ensureAutoIncluded: false,
@@ -1350,7 +1400,15 @@ export async function getProcurementPlanningHandler(
         requested_company_id: url.searchParams.get("company_id") ?? "",
       });
       return okResponse(
-        { plan: null, rows: [], sloc_groups: [], item_groups: [], group_configs: [], can_maintain: false },
+        {
+          plan: null,
+          rows: [],
+          decision_rows: [],
+          sloc_groups: [],
+          item_groups: [],
+          group_configs: [],
+          can_maintain: false,
+        },
         ctx.request_id,
         req,
       );
@@ -1380,6 +1438,7 @@ export async function getProcurementPlanningHandler(
           plan,
           plan_month: planMonth,
           rows: [],
+          decision_rows: [],
           sloc_groups: [],
           item_groups: [],
           group_configs: [],
@@ -1393,6 +1452,11 @@ export async function getProcurementPlanningHandler(
       loadWorkspaceRows(ctx, companyId, planMonth, plan.id),
       canMaintainPlanning(ctx, companyId),
     ]);
+    const decisionRows = buildProcurementPlanningDecisionRows({
+      rows: workspace.rows,
+      group_configs: workspace.groupConfigs,
+      plan_month: planMonth,
+    });
     logPlanningDebug(ctx, "WORKSPACE_RESPONSE", {
       company_id: companyId,
       plan_month: planMonth,
@@ -1408,6 +1472,7 @@ export async function getProcurementPlanningHandler(
         plan,
         plan_month: planMonth,
         rows: workspace.rows,
+        decision_rows: decisionRows,
         sloc_groups: workspace.slocGroups,
         item_groups: workspace.itemGroups,
         group_configs: workspace.groupConfigs,
@@ -1522,7 +1587,6 @@ export async function upsertProcurementPlanningLinesHandler(
           plan_id: plan.id,
           company_id: companyId,
           material_id: materialId,
-          source_sloc_group_id: sourceSlocGroupId,
           auto_included: false,
           created_by: ctx.auth_user_id,
           ...payload,

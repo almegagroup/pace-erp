@@ -49,6 +49,7 @@ function extractCollectionItems(payload) {
 const EMPTY_WORKSPACE = {
   plan: null,
   rows: [],
+  decision_rows: [],
   sloc_groups: [],
   item_groups: [],
   group_configs: [],
@@ -65,6 +66,7 @@ function normalizeWorkspaceData(payload) {
   return {
     plan: payload?.plan ?? null,
     rows: Array.isArray(payload?.rows) ? payload.rows : [],
+    decision_rows: Array.isArray(payload?.decision_rows) ? payload.decision_rows : [],
     sloc_groups: Array.isArray(payload?.sloc_groups) ? payload.sloc_groups : [],
     item_groups: Array.isArray(payload?.item_groups) ? payload.item_groups : [],
     group_configs: Array.isArray(payload?.group_configs) ? payload.group_configs : [],
@@ -212,10 +214,15 @@ function matchesItemTabSearch(row, query) {
     .some((value) => value.includes(needle));
 }
 
-function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
+function computeDashboardBlocks(rows, monthValue, groupConfigs = [], canonicalDecisionRows = []) {
   const visibleRows = rows.filter((row) => !row.excluded_from_dashboard);
   const grouped = new Map();
   const standalone = [];
+  const canonicalGroupTotalsById = new Map(
+    canonicalDecisionRows
+      .filter((row) => row?.decision_type === "ITEM_GROUP" && row?.planning_item_group_id)
+      .map((row) => [String(row.planning_item_group_id), row])
+  );
   const groupConfigById = new Map(
     groupConfigs.map((config) => [String(config.planning_item_group_id || ""), config])
   );
@@ -265,6 +272,26 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
         (sum, row) => sum + Number(row.monthly_requirement_qty || 0),
         0
       );
+      const canonicalGroupTotal = canonicalGroupTotalsById.get(
+        String(sortedItems[0]?.planning_item_group_id || "")
+      );
+      if (canonicalGroupTotal && Number(canonicalGroupTotal.member_count || 0) === sortedItems.length) {
+        groupBlocks.push({
+          type: "group-total",
+          groupName,
+          requirementIsDerivedFromMembers: memberRequirementTotal > 0,
+          row: {
+            ...canonicalGroupTotal,
+            planning_item_group_id: canonicalGroupTotal.planning_item_group_id,
+            planning_item_group_name: canonicalGroupTotal.group_name || groupName,
+            replenishment_days:
+              Number(canonicalGroupTotal.processing_time_days || 0) +
+              Number(canonicalGroupTotal.lead_time_days || 0),
+          },
+        });
+        units.push({ sortKey: sortedItems[0]?.material_name || "", blocks: groupBlocks });
+        return;
+      }
       const totalRequirement =
         memberRequirementTotal > 0
           ? memberRequirementTotal
@@ -590,6 +617,7 @@ function buildMaterialListColumns({ statusLabel, actionLabel, actionClassName, o
 
 function DashboardTable({
   rows,
+  decisionRows,
   monthValue,
   filters,
   onFilterChange,
@@ -606,8 +634,8 @@ function DashboardTable({
     });
   }, [filters.materialType, filters.query, filters.slocGroupId, rows]);
   const blocks = useMemo(
-    () => computeDashboardBlocks(filteredRows, monthValue, groupConfigs),
-    [filteredRows, monthValue, groupConfigs]
+    () => computeDashboardBlocks(filteredRows, monthValue, groupConfigs, decisionRows),
+    [decisionRows, filteredRows, monthValue, groupConfigs]
   );
   const summary = useMemo(() => summarizeDecisionBlocks(blocks), [blocks]);
   const gridRows = useMemo(() => flattenBlocksForGrid(blocks), [blocks]);
@@ -1704,6 +1732,7 @@ export default function ProcurementPlanningPage() {
   const displayedPlanningGroupConfigs = planIsClosed
     ? archivedGroupConfigs
     : Object.values(groupConfigDrafts);
+  const displayedPlanningDecisionRows = planIsClosed ? [] : workspace.decision_rows || [];
 
   const planningSummary = useMemo(() => {
     const rows = displayedPlanningRows || [];
@@ -2015,6 +2044,7 @@ export default function ProcurementPlanningPage() {
                 ) : null}
                 <DashboardTable
                   rows={displayedPlanningRows}
+                  decisionRows={displayedPlanningDecisionRows}
                   monthValue={planMonthValue}
                   filters={dashboardFilters}
                   onFilterChange={handleDashboardFilterChange}
