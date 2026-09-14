@@ -429,141 +429,29 @@ export async function upsertCommunicationEnrollmentHandler(
       assertCommunicationSurfaceSupported(manifest, surfaceKey, requestedChannel);
     }
 
-    const current = await readEnrollmentRows(db, pageResult.page.id);
-    if (current.error) {
+    // One server-owned RPC persists parent and surface state as a single
+    // PostgreSQL transaction. A failed surface write cannot leave a partial
+    // enrollment behind.
+    const { error: saveError } = await db
+      .schema("erp_communication")
+      .rpc("save_page_enrollment", {
+        p_page_menu_id: pageResult.page.id,
+        p_menu_code_snapshot: pageResult.page.menu_code,
+        p_resource_code_snapshot: pageResult.page.resource_code,
+        p_email_enabled: input.email_enabled,
+        p_active: input.active,
+        p_surface_keys: input.surface_keys,
+        p_actor: ctx.auth_user_id,
+      });
+
+    if (saveError) {
       return errorResponse(
-        "COMMUNICATION_ENROLLMENT_READ_FAILED",
-        "Unable to read page enrollment",
+        "COMMUNICATION_ENROLLMENT_SAVE_FAILED",
+        "Unable to save communication enrollment",
         ctx.request_id,
         "NONE",
         500,
       );
-    }
-
-    const timestamp = new Date().toISOString();
-    let enrollmentId = current.enrollment?.id ?? null;
-    if (enrollmentId) {
-      const { error } = await db
-        .schema("erp_communication")
-        .from("page_enrollment")
-        .update({
-          menu_code_snapshot: pageResult.page.menu_code,
-          resource_code_snapshot: pageResult.page.resource_code,
-          email_enabled: input.email_enabled,
-          active: input.active,
-          last_updated_at: timestamp,
-          last_updated_by: ctx.auth_user_id,
-        })
-        .eq("id", enrollmentId);
-      if (error) {
-        return errorResponse(
-          "COMMUNICATION_ENROLLMENT_UPDATE_FAILED",
-          "Unable to update page enrollment",
-          ctx.request_id,
-          "NONE",
-          500,
-        );
-      }
-    } else {
-      const { data, error } = await db
-        .schema("erp_communication")
-        .from("page_enrollment")
-        .insert({
-          page_menu_id: pageResult.page.id,
-          menu_code_snapshot: pageResult.page.menu_code,
-          resource_code_snapshot: pageResult.page.resource_code,
-          email_enabled: input.email_enabled,
-          active: input.active,
-          created_at: timestamp,
-          created_by: ctx.auth_user_id,
-          last_updated_at: timestamp,
-          last_updated_by: ctx.auth_user_id,
-        })
-        .select("id")
-        .single();
-      if (error || !data) {
-        return errorResponse(
-          "COMMUNICATION_ENROLLMENT_CREATE_FAILED",
-          "Unable to create page enrollment",
-          ctx.request_id,
-          "NONE",
-          500,
-        );
-      }
-      enrollmentId = (data as { id: string }).id;
-    }
-
-    const selectedSurfaceKeys = new Set(input.surface_keys);
-    const currentSurfaceByKey = new Map(
-      current.surfaces.map((surface) => [surface.surface_key, surface]),
-    );
-
-    for (const surfaceKey of input.surface_keys) {
-      const currentSurface = currentSurfaceByKey.get(surfaceKey);
-      if (currentSurface) {
-        const { error } = await db
-          .schema("erp_communication")
-          .from("surface_enrollment")
-          .update({
-            active: input.active,
-            last_updated_at: timestamp,
-            last_updated_by: ctx.auth_user_id,
-          })
-          .eq("id", currentSurface.id);
-        if (error) {
-          return errorResponse(
-            "COMMUNICATION_SURFACE_UPDATE_FAILED",
-            "Unable to update communication surface",
-            ctx.request_id,
-            "NONE",
-            500,
-          );
-        }
-      } else {
-        const { error } = await db
-          .schema("erp_communication")
-          .from("surface_enrollment")
-          .insert({
-            page_enrollment_id: enrollmentId,
-            surface_key: surfaceKey,
-            active: input.active,
-            created_at: timestamp,
-            created_by: ctx.auth_user_id,
-            last_updated_at: timestamp,
-            last_updated_by: ctx.auth_user_id,
-          });
-        if (error) {
-          return errorResponse(
-            "COMMUNICATION_SURFACE_CREATE_FAILED",
-            "Unable to create communication surface",
-            ctx.request_id,
-            "NONE",
-            500,
-          );
-        }
-      }
-    }
-
-    for (const currentSurface of current.surfaces) {
-      if (selectedSurfaceKeys.has(currentSurface.surface_key)) continue;
-      const { error } = await db
-        .schema("erp_communication")
-        .from("surface_enrollment")
-        .update({
-          active: false,
-          last_updated_at: timestamp,
-          last_updated_by: ctx.auth_user_id,
-        })
-        .eq("id", currentSurface.id);
-      if (error) {
-        return errorResponse(
-          "COMMUNICATION_SURFACE_UPDATE_FAILED",
-          "Unable to update communication surface",
-          ctx.request_id,
-          "NONE",
-          500,
-        );
-      }
     }
 
     const refreshed = await readEnrollmentRows(db, pageResult.page.id);
