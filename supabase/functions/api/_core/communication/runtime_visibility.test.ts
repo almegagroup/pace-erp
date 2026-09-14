@@ -124,6 +124,10 @@ Deno.test("runtime visibility requires the exact active surface enrollment", asy
 });
 
 Deno.test("runtime visibility respects page-local company scope and ACL", async () => {
+  assertEquals(
+    await resolve({}, { ...VALID_INPUT, company_id: undefined }),
+    { visible: false },
+  );
   assertEquals(await resolve({ canAccessPage: async () => false }), {
     visible: false,
   });
@@ -135,6 +139,32 @@ Deno.test("runtime visibility respects page-local company scope and ACL", async 
     }),
     { visible: false },
   );
+});
+
+Deno.test("a future non-company manifest fails closed until global page ACL exists", async () => {
+  let catalogReads = 0;
+  const result = await resolve({
+    findManifest: () => ({
+      page: {
+        tx_code: "PO11",
+        resource_code: "PROC_PLANNING_VIEW",
+        company_scoped: false,
+      },
+      surfaces: [{
+        key: "planning_dashboard",
+        label: "Planning Dashboard",
+        supported_channels: ["EMAIL"],
+        activation: { kind: "TAB", tab_id: "dashboard" },
+      }],
+    }),
+    resolveCatalogPage: async () => {
+      catalogReads += 1;
+      return null;
+    },
+  }, { ...VALID_INPUT, company_id: undefined });
+
+  assertEquals(result, { visible: false });
+  assertEquals(catalogReads, 0);
 });
 
 Deno.test("runtime visibility does not require SA or GA enrollment authority", async () => {

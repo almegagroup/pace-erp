@@ -25,8 +25,12 @@ export type CommunicationSurfaceManifest = {
   page: {
     tx_code: string;
     resource_code: string;
-    /** Whether runtime visibility requires an explicit page-local company. */
-    company_scoped?: boolean;
+    /**
+     * Phase 5 currently authorizes runtime visibility through a page-local
+     * company and canonical resource VIEW ACL. Non-company pages stay
+     * fail-closed until a canonical global page-ACL resolver exists.
+     */
+    company_scoped: boolean;
   };
   surfaces: readonly CommunicationSurface[];
 };
