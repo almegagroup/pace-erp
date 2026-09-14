@@ -8,6 +8,10 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { createAutomationSettingsAction } from "../../../../components/communication/AutomationSettingsAction.js";
 import AutomationSettingsDrawer from "../../../../components/communication/AutomationSettingsDrawer.jsx";
+import {
+  buildAutomationSettingsContextKey,
+  isAutomationSettingsDrawerOpenForContext,
+} from "../../../../communication/automationDrawerContext.js";
 import { useCommunicationActionVisibility } from "../../../../communication/useCommunicationActionVisibility.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
@@ -1149,11 +1153,20 @@ export default function ProcurementPlanningPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [automationDrawerOpen, setAutomationDrawerOpen] = useState(false);
+  const [automationDrawerOpenContextKey, setAutomationDrawerOpenContextKey] = useState(null);
 
   const effectiveCompanyId = companyId || defaultCompanyId;
   const planMonthValue = getMonthValue(planMonth);
   const communicationSurfaceKey = resolvePO11CommunicationSurface({ showFullReport, activeTab });
+  const automationSettingsContextKey = buildAutomationSettingsContextKey({
+    companyId: effectiveCompanyId,
+    surfaceKey: communicationSurfaceKey,
+    companyScoped: PO11_COMMUNICATION_PAGE.companyScoped,
+  });
+  const automationDrawerOpen = isAutomationSettingsDrawerOpenForContext({
+    openedContextKey: automationDrawerOpenContextKey,
+    currentContextKey: automationSettingsContextKey,
+  });
   const automationVisibility = useCommunicationActionVisibility({
     ...PO11_COMMUNICATION_PAGE,
     surfaceKey: communicationSurfaceKey,
@@ -1354,10 +1367,11 @@ export default function ProcurementPlanningPage() {
     });
   }, [companyId]);
 
-  // This shell owns no drafts, so a company or surface switch always closes it.
+  // This explicit reset clears the previous context. The context-key comparison
+  // above also makes the drawer invisible before this effect can run.
   useEffect(() => {
-    setAutomationDrawerOpen(false);
-  }, [effectiveCompanyId, communicationSurfaceKey]);
+    setAutomationDrawerOpenContextKey(null);
+  }, [automationSettingsContextKey]);
 
   useEffect(() => {
     const nextDrafts = {};
@@ -1895,7 +1909,7 @@ export default function ProcurementPlanningPage() {
 
   const automationSettingsAction = createAutomationSettingsAction({
     visible: automationVisibility.visible,
-    onClick: () => setAutomationDrawerOpen(true),
+    onClick: () => setAutomationDrawerOpenContextKey(automationSettingsContextKey),
   });
 
   return (
@@ -2699,7 +2713,7 @@ export default function ProcurementPlanningPage() {
     <AutomationSettingsDrawer
       visible={automationDrawerOpen}
       metadata={automationVisibility.data}
-      onClose={() => setAutomationDrawerOpen(false)}
+      onClose={() => setAutomationDrawerOpenContextKey(null)}
     />
     </>
   );

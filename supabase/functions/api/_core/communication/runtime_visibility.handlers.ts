@@ -145,7 +145,13 @@ export async function resolveCommunicationActionVisibility(
       return { visible: false };
     }
 
-    if (manifest.page.company_scoped && !input.company_id) {
+    // The canonical runtime resource check today is company-specific. Do not
+    // let a future non-company manifest become visible before a dedicated
+    // global page-ACL resolver is introduced.
+    if (manifest.page.company_scoped !== true) {
+      return { visible: false };
+    }
+    if (!input.company_id) {
       return { visible: false };
     }
     const catalogPage = await dependencies.resolveCatalogPage(page);
@@ -162,14 +168,12 @@ export async function resolveCommunicationActionVisibility(
       return { visible: false };
     }
 
-    if (manifest.page.company_scoped) {
-      const companyId = input.company_id as string;
-      await dependencies.assertCompanyScope(companyId);
-      if (
-        !await dependencies.canAccessPage(companyId, catalogPage.resource_code)
-      ) {
-        return { visible: false };
-      }
+    const companyId = input.company_id;
+    await dependencies.assertCompanyScope(companyId);
+    if (
+      !await dependencies.canAccessPage(companyId, catalogPage.resource_code)
+    ) {
+      return { visible: false };
     }
 
     return {

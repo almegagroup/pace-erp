@@ -1,6 +1,7 @@
 export const PO11_COMMUNICATION_PAGE = Object.freeze({
   txCode: "PO11",
   resourceCode: "PROC_PLANNING_VIEW",
+  companyScoped: true,
 });
 
 const PO11_SURFACE_BY_TAB = Object.freeze({
