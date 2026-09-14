@@ -167,13 +167,15 @@ export default function StrokeMasterPage() {
   );
 
   const createCheckStrokes = createCompanyStrokesQ.data ?? [];
-  const normalizedStrokeNumber = String(form.stroke_number ?? "").trim();
+  // Uppercased so MTS's alphanumeric codes (DOE1, DOE2...) dedupe the same way
+  // regardless of case, matching the backend's own uppercase-normalize on save.
+  const normalizedStrokeNumber = String(form.stroke_number ?? "").trim().toUpperCase();
   const normalizedProdCode = String(form.prod_code ?? "").trim().toUpperCase();
   const normalizedShadeCode = String(form.shade_code ?? "").trim().toUpperCase();
   const duplicateStroke = !form.company_id || !normalizedStrokeNumber
     ? null
     : createCheckStrokes.find((stroke) => {
-        if (String(stroke.stroke_number ?? "").trim() !== normalizedStrokeNumber) return false;
+        if (String(stroke.stroke_number ?? "").trim().toUpperCase() !== normalizedStrokeNumber) return false;
         if (form.prodshade_mode === "existing") {
           return String(stroke.prodshade_material_id ?? "") === String(form.prodshade_material_id ?? "");
         }
@@ -386,6 +388,9 @@ export default function StrokeMasterPage() {
       const isNewProdshade = form.prodshade_mode === "new";
       await createStrokeMaster({
         ...form,
+        // Uppercased so MTS's alphanumeric codes (DOE1, DOE2...) are stored
+        // consistently — matches the backend's own uppercase-normalize.
+        stroke_number: form.stroke_number.trim().toUpperCase(),
         prodshade_material_id: isNewProdshade ? "" : form.prodshade_material_id,
         prod_code: isNewProdshade ? form.prod_code.trim().toUpperCase() : "",
         shade_code: isNewProdshade ? form.shade_code.trim().toUpperCase() : "",
@@ -671,7 +676,7 @@ export default function StrokeMasterPage() {
                 }`}
                 value={form.stroke_number}
                 onChange={(e) => setForm((f) => ({ ...f, stroke_number: e.target.value }))}
-                placeholder="Numeric only"
+                placeholder={form.po_type === "MTS" ? "e.g. DOE1, or 1, 2, 3..." : "Numeric only"}
                 required
               />
             </Field>

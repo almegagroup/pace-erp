@@ -34,6 +34,7 @@ export const EMPTY_LINE = { line_material_type: "RM", material_id: "", dosage_pc
 export const STROKE_ERRORS = {
   PROD_STROKE_DOSAGE_SUM: "Dosage total must equal 100%.",
   PROD_STROKE_NUMBER_NUMERIC: "Stroke number must be numeric.",
+  PROD_STROKE_NUMBER_INVALID: "Stroke number must be alphanumeric (letters and digits only).",
   PROD_STROKE_EXISTS: "Stroke number already exists for this prodshade.",
   PROD_STROKE_APPROVED_LOCKED: "Only DRAFT strokes can be edited.",
   PROD_STROKE_IN_USE: "Cannot revert — active Process Orders reference this stroke.",

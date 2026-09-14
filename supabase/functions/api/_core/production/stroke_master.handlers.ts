@@ -681,7 +681,11 @@ export async function createStrokeMasterHandler(
     const materialId = toTrimmedString(body.prodshade_material_id) || null;
     const prodCode = toUpperTrimmedString(body.prod_code);
     const shadeCode = toUpperTrimmedString(body.shade_code);
-    const strokeNumber = toTrimmedString(body.stroke_number);
+    // MTS strokes may be a letters+digits code (DOE1) or a plain number (1) —
+    // uppercased either way so "doe1"/"DOE1" collide as the same duplicate,
+    // same as prod_code/shade_code. Digits-only values are unaffected by
+    // uppercasing.
+    const strokeNumber = toUpperTrimmedString(body.stroke_number);
     const description = toTrimmedString(body.description);
     const materialType = toUpperTrimmedString(body.material_type || "SFG");
     const poType = toUpperTrimmedString(body.po_type);
@@ -712,14 +716,24 @@ export async function createStrokeMasterHandler(
     if (!materialId && (!prodCode || !shadeCode)) {
       return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "prodshade_material_id required, or prod_code + shade_code for a new Prodshade");
     }
-    if (!/^\d+$/.test(strokeNumber)) {
-      return strokeError(req, ctx, "PROD_STROKE_NUMBER_NUMERIC", 400, "Stroke number must be numeric");
-    }
     if (!MATERIAL_TYPES.has(materialType)) {
       return strokeError(req, ctx, "PROD_STROKE_MATERIAL_TYPE_INVALID", 400, "material_type must be SFG or INT");
     }
     if (!poType || !PO_TYPES_BY_MATERIAL_TYPE[materialType].has(poType)) {
       return strokeError(req, ctx, "PROD_STROKE_PO_TYPE_INVALID", 400, `po_type must be one of ${[...PO_TYPES_BY_MATERIAL_TYPE[materialType]].join(", ")} for material_type ${materialType}`);
+    }
+    // MTS strokes are business-assigned per Prodshade and can be either a
+    // letters+digits code (DOE1, DOE2) or a plain number (1, 2, 3...) — both
+    // forms are in real use, so MTS accepts either. Every other PO type keeps
+    // the original numeric-only rule.
+    const strokeNumberPattern = poType === "MTS" ? /^[A-Z0-9]+$/ : /^\d+$/;
+    if (!strokeNumberPattern.test(strokeNumber)) {
+      return strokeError(
+        req, ctx,
+        poType === "MTS" ? "PROD_STROKE_NUMBER_INVALID" : "PROD_STROKE_NUMBER_NUMERIC",
+        400,
+        poType === "MTS" ? "Stroke number must be alphanumeric (letters and digits only)" : "Stroke number must be numeric",
+      );
     }
     if (!baseUomCode) {
       return strokeError(req, ctx, "PROD_STROKE_BASE_UOM_REQUIRED", 400, "base_uom_code required");
