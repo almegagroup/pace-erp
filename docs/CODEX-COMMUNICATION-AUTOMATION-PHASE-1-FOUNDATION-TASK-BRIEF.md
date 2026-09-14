@@ -9,25 +9,29 @@
 
 ## Read first
 
-1. `CLAUDE.md` — mandatory development rules, migration rules, ACL/company-scope conventions, bug-pattern checklist, guard scripts, and Dev→Prod workflow.
-2. `docs/PACE-ERP-COMMUNICATION-AUTOMATION-MASTER-PLAN.md` — full design lock and phase sequence.
-3. Existing menu/ACL/session patterns used by current SA/admin pages before adding any route/handler/data model.
-4. Existing migration naming/integrity conventions and current `erp_menu` / ACL patterns.
+1. `CLAUDE.md` — mandatory dev, ACL, company-scope, migration-integrity and guard rules.
+2. `docs/PACE-ERP-COMMUNICATION-AUTOMATION-MASTER-PLAN.md` — full design lock.
+3. Existing SA/admin pages and menu search/picker patterns.
+4. Current `erp_menu.menu_master`, route identity and page/sub-page/tab patterns.
+5. Current PO11 page implementation on `dev`, especially how tabs/report-mode/sub-views are identified.
 
-Do not infer missing conventions. Read the current implementation first and follow the repository's existing architecture.
+Do not infer stale route/tab identity. Re-read current code first.
 
 ---
 
 ## Phase 1 Goal
 
-Build only the **safe communication capability registry foundation**.
+Build only the safe technical foundation needed for a future **simple SA enrollment experience** where SA can:
 
-At the end of Phase 1 the backend must be able to answer, for a known page and channel:
+1. search a PACE page by TX code or page name,
+2. enlist that page,
+3. see that page's valid dependent sub-pages/surfaces,
+4. select exactly which surface(s) may show the Automation Settings action,
+5. enable/disable Email for the enlisted page.
 
-- Is this page technically supported by the Communication Automation framework?
-- Is this channel currently enabled by central runtime configuration?
+Phase 1 itself does **not** build the final SA UI and does **not** send email.
 
-Phase 1 is **not** an email-sending phase.
+At Phase 1 exit, backend contracts and data model must already support this UX without later redesign.
 
 ---
 
@@ -35,294 +39,395 @@ Phase 1 is **not** an email-sending phase.
 
 ### IN scope
 
-- database foundation for page communication capability registry,
-- technical channel constants/contracts,
-- initial PO11 registration as Email-capable,
-- runtime Email enablement flag,
-- backend read contract/service/handler for registry state,
-- backend validation so unsupported page/channel combinations cannot be activated,
-- ACL/security/grants/indexes/audit columns consistent with PACE conventions,
-- tests/guards/documentation required to verify the above.
+- discover/reuse existing PACE menu/page catalog as page search source,
+- communication page-enrollment data model,
+- communication sub-page/surface-enrollment data model,
+- developer-owned Communication Surface Manifest contract,
+- initial PO11 surface manifest based on current dev implementation,
+- backend page search/read contracts needed by Phase 2,
+- backend enrollment-state read contract,
+- server-side validation of known page + valid surface keys,
+- Email enabled state at parent-page enrollment level,
+- future WhatsApp capability represented only as a reserved channel where needed,
+- ACL/security/grants/indexes/audit patterns consistent with PACE,
+- verification/guard work.
 
 ### OUT of scope — do not touch
 
+- final SA UI page,
 - MSG91 API or credentials,
-- SMTP or any real email provider,
-- automation rules,
-- recipients,
-- TO/CC/BCC,
+- SMTP/email sending,
+- automation rule CRUD,
+- recipients / TO / CC / BCC,
 - subject templates,
-- schedule/frequency/time configuration,
-- `pg_cron` scheduler,
-- delivery queue/outbox,
-- retry engine,
-- delivery history,
+- schedule/time/frequency,
+- scheduler / pg_cron,
+- queue/outbox,
+- retries/history,
+- report dataset/column configuration,
 - condition builder,
-- preview,
-- PO11 report adapter,
-- PO11 `CRITICAL` / `REPLENISH` data extraction,
-- PO11 automation drawer/button,
+- preview/test send,
+- PO11 Critical/Replenishment report adapter,
+- page-level Automation Settings drawer/button rendering,
 - WhatsApp sending,
-- production database changes.
+- production changes.
 
-If implementation requires any of the above, stop and report the dependency instead of expanding scope.
+If implementation requires any OUT-of-scope feature, stop and report instead of expanding scope.
 
 ---
 
-## Locked model
+## Core UX contract this foundation must support
 
-The framework must distinguish two different facts:
+The future SA screen is intentionally simple.
 
-### Technical capability
+### Search
 
-Example:
+One search box:
 
-`PO11 supports EMAIL = true`
+`Search by TX Code or Page Name`
 
-This is developer-controlled. An SA must not be able to convert an unsupported page/channel into a supported integration merely by changing data.
+Search results should come from existing PACE menu/page records whenever possible; do not duplicate every page into a new communication registry solely for discovery.
 
-### Runtime enablement
+### Enlist
 
-Example:
+SA selects a page and enlists it for communication.
 
-`PO11 EMAIL enabled = false/true`
+### Surface selection
 
-This is runtime configuration that the later SA page will toggle.
+After page selection, SA sees only valid developer-declared dependent surfaces with friendly labels and checkboxes.
 
-Do not collapse these two concepts into one boolean.
+Example concept for PO11:
+
+```text
+PO11 — Procurement Planning
+
+Email [ON]
+
+Show Automation Settings on:
+[x] Planning Dashboard
+[x] Monthly Plan Input
+[ ] SLOC Group Setup
+[ ] Item Group Setup
+[ ] History / Archive
+[x] Report View
+```
+
+SA must not type routes, resource codes, surface keys, database table names, or SQL.
+
+---
+
+## Locked conceptual model
+
+### Existing Page Catalog
+
+Current PACE page/menu master remains the discovery source for searchable page identity wherever feasible.
+
+### `erp_communication.page_enrollment`
+
+Represents a page that SA has enlisted.
+
+Logical fields include:
+
+- `id` UUID PK
+- stable existing page/menu reference if available
+- `tx_code` / `resource_code` snapshot/reference as useful for integrity/debugging
+- `email_enabled`
+- future `whatsapp_enabled` only if needed for forward-compatible shape
+- `active` / enlisted state
+- audit fields following repo conventions
+
+Do not create rows for every PACE page pre-emptively. Enrollment rows should represent enlisted pages.
+
+### `erp_communication.surface_enrollment`
+
+Represents an allowed dependent sub-page/surface for an enlisted page.
+
+Logical fields:
+
+- `id` UUID PK
+- `page_enrollment_id`
+- stable `surface_key`
+- `active`
+- audit fields
+
+Uniqueness must prevent duplicate active enrollment for the same page/surface.
+
+### Communication Surface Manifest
+
+The valid surface list is developer-owned code, not editable free text.
+
+Each page manifest should conceptually declare:
+
+- stable page identity
+- supported channel(s)
+- list of surfaces
+- each surface's stable `surface_key`
+- friendly label
+- enough metadata for later frontend active-surface detection
+
+Do not put report datasets/fields into this Phase-1 surface manifest unless structurally necessary; Report Manifest is a later phase.
 
 ---
 
 ## Work Stream A — Repository discovery before code
 
-Before editing anything, inspect and document in the implementation summary:
+Before editing, inspect and record in the final implementation summary:
 
-1. Current menu/page identity conventions (`tx_code`, `resource_code`, route/page key).
-2. Current SA/admin backend route and ACL pattern.
-3. Existing audit-column conventions (`created_by`, `created_at`, `last_updated_by`, etc.).
-4. Existing schemas used for similar central configuration.
-5. Existing RLS/grant/service-role patterns for backend-managed configuration tables.
-6. Current migration timestamp/integrity workflow.
-7. Current route ACL registry pattern and guard scripts that will be affected.
+1. current menu/page identity conventions (`id`, `tx_code`, `resource_code`, `route_path`),
+2. best existing backend search/picker pattern for page lookup by TX/name,
+3. SA/admin route + ACL conventions,
+4. audit column conventions,
+5. RLS/grant/backend-owned config patterns,
+6. route ACL registry and guard scripts,
+7. PO11 current tabs/views/report-mode implementation,
+8. whether any generic tab/surface identity helper already exists.
 
-Prefer reuse over inventing a parallel architecture.
+Prefer reuse over parallel architecture.
 
 ---
 
 ## Work Stream B — Database foundation
 
-Create a migration using the repository's current migration conventions.
+Create a dev migration consistent with current repo rules.
 
-Target logical schema:
+Target schema:
 
 `erp_communication`
 
-If repository/security conventions make another schema demonstrably better, stop and flag the discrepancy before changing the locked master-plan model.
+If a demonstrably existing communication/config schema is more appropriate, stop and report before changing the locked model.
 
-### B.1 `page_registry`
+### B.1 `page_enrollment`
 
-Create the foundation table for developer-supported page/channel capabilities and runtime switches.
+Requirements:
 
-Required logical fields:
+- references an existing stable PACE page/menu identity where feasible,
+- stores Email runtime enabled state,
+- stores active/enlisted state,
+- audit columns,
+- one logical enrollment per parent page.
 
-- `id` UUID primary key
-- stable page identity, using existing PACE conventions; preferably include enough of:
-  - `tx_code`
-  - `resource_code`
-  - stable page key if existing code requires it
-- human-readable title if the central control UI will need it later
-- optional route reference if consistent with current page registry/menu conventions
-- `active`
-- `supports_email`
-- `email_enabled`
-- `supports_whatsapp`
-- `whatsapp_enabled`
-- audit fields following current PACE conventions
+Do not duplicate page title/route as independent mutable truth unless needed as immutable audit snapshot.
 
-### B.2 Constraints
+### B.2 `surface_enrollment`
 
-At minimum enforce:
+Requirements:
 
-- unique stable page identity,
-- `email_enabled = true` cannot exist when `supports_email = false`,
-- `whatsapp_enabled = true` cannot exist when `supports_whatsapp = false`,
-- allowed values/types are constrained at database/application level where appropriate.
+- FK to parent enrollment,
+- `surface_key` text/code,
+- active state,
+- audit columns,
+- uniqueness suitable for parent+surface.
 
-If separate child rows per channel fit existing architecture better than booleans, that may be proposed **before implementation**, but do not silently diverge from the master plan.
+Database alone cannot know code manifest contents, therefore application/backend validation is mandatory for surface keys.
 
-### B.3 Indexes
+### B.3 Constraints/indexes/security
 
-Add only useful indexes for expected lookups, e.g. by stable page identity / active state. Avoid speculative indexing.
-
-### B.4 Security
+Add only needed constraints/indexes.
 
 Follow existing PACE patterns for:
 
 - grants,
-- RLS if used for similar backend-owned configuration,
-- service access,
+- RLS if applicable,
+- backend/service access,
 - mutation restrictions.
 
-Do not make this table directly writable from untrusted frontend clients.
+No untrusted direct frontend writes.
 
 ---
 
-## Work Stream C — Seed/register PO11
+## Work Stream C — Communication Surface Manifest contract
 
-Register PO11 using the verified identity from the current repository/menu model:
+Create the smallest reusable code-owned contract for technical page/surface support.
 
-- Tx Code: `PO11`
-- Page: Procurement Planning
-- Resource code: `PROC_PLANNING_VIEW`
-- Route: `/dashboard/procurement/planning` if the current branch still matches this verified route
+Logical example only:
 
-Before writing the seed/migration, re-check the dev branch/menu model so the migration does not rely on stale assumptions.
+```js
+{
+  txCode: 'PO11',
+  resourceCode: 'PROC_PLANNING_VIEW',
+  channels: ['EMAIL'],
+  surfaces: [
+    { key: 'planning_dashboard', label: 'Planning Dashboard' },
+    { key: 'monthly_plan_input', label: 'Monthly Plan Input' }
+  ]
+}
+```
 
-Initial capability:
+Match current repository language/style rather than copying this shape blindly.
 
-- `supports_email = true`
-- `supports_whatsapp = false` for the live implementation phase
+Required validation helper must safely answer:
 
-Initial runtime state:
+- is this page technically communication-capable?
+- is this channel supported?
+- is this `surface_key` valid for this page?
 
-- `email_enabled = false` unless the business owner explicitly instructs otherwise during implementation
-- `whatsapp_enabled = false`
-
-Do not hard-code CMP003/CMP006 into this registry. Company-specific rules belong to a later phase.
+Unknown page/channel/surface must fail closed.
 
 ---
 
-## Work Stream D — Backend communication registry contract
+## Work Stream D — PO11 surface manifest
 
-Add a small backend domain/service layer following existing Fastify/Supabase architecture.
+Re-read current `ProcurementPlanningPage.jsx` on dev and derive stable, friendly surfaces from actual implementation.
 
-It must support a read operation conceptually like:
+Known concepts that must be checked include:
 
-`getPageCommunicationCapabilities(pageIdentity)`
+- Planning Dashboard
+- Monthly Plan Input
+- SLOC Group Setup
+- Item Group Setup
+- History / Archive
+- report-mode / Planning Dashboard Report
 
-Expected response shape may be adjusted to existing API conventions, but should communicate at minimum:
+Do not assume every visual tab deserves a separate communication surface; document the final mapping and why.
+
+Important: surface keys must remain stable even if friendly labels later change.
+
+No PO11 mail data adapter in this phase.
+
+---
+
+## Work Stream E — Backend search/read contracts for Phase 2 SA UX
+
+Build only the backend capabilities needed for the later simple SA page.
+
+### E.1 Search existing pages
+
+Authenticated/authorized search conceptually supports:
+
+- TX code exact/partial match,
+- page title/name partial match.
+
+Return a compact result such as:
+
+- stable page/menu id
+- tx_code
+- resource_code
+- title
+- route/module parent if useful
+- whether currently enlisted
+- whether a technical Communication Surface Manifest exists
+
+Do not expose arbitrary menu/internal data unnecessarily.
+
+### E.2 Read technical surfaces + enrollment state
+
+For a selected page return conceptually:
 
 ```json
 {
   "page": {
     "tx_code": "PO11",
-    "resource_code": "PROC_PLANNING_VIEW"
+    "resource_code": "PROC_PLANNING_VIEW",
+    "title": "Procurement Planning",
+    "enlisted": true,
+    "email_enabled": true
   },
-  "channels": {
-    "email": {
+  "surfaces": [
+    {
+      "key": "planning_dashboard",
+      "label": "Planning Dashboard",
       "supported": true,
-      "enabled": false
-    },
-    "whatsapp": {
-      "supported": false,
-      "enabled": false
+      "selected": true
     }
-  }
+  ]
 }
 ```
 
-Do not expose internal database details unnecessarily.
+Actual response style must follow current API conventions.
 
-### D.1 Validation contract
-
-Add a reusable validation/helper that later mutation endpoints can use to reject:
-
-- unknown page,
-- unsupported channel,
-- inactive page registry entry,
-- enabling a channel that is not technically supported.
-
-Phase 1 does not need the final SA mutation endpoint unless the current architecture requires it for proving the model. The actual SA central-control UI/API is Phase 2.
-
-### D.2 Route/ACL
-
-If exposing an HTTP read route:
-
-- follow existing authenticated route style,
-- add route-ACL registry entry if required by PACE conventions,
-- use the appropriate existing resource/action pattern,
-- do not hard-code role names.
-
-If a new dedicated communication resource code is required, document why and keep creation consistent with the project's menu/ACL constitution. Do not invent a broad privilege bypass.
+Phase 1 may include internal service functions and a minimal authenticated read route if that is the normal architecture. Final SA mutation UI/API belongs to Phase 2.
 
 ---
 
-## Work Stream E — Shared channel constants/types
+## Work Stream F — Mutation validation foundation
 
-Create the smallest reusable contract needed for later phases.
+Even if final SA mutation endpoint is deferred, provide reusable server-side validators that Phase 2 must use:
 
-Supported logical channel values:
+- page exists in PACE catalog,
+- manifest exists for page before surface enrollment,
+- EMAIL is technically supported before enabling Email,
+- `surface_key` exists in the page's manifest,
+- deactivated/unknown page fails safely.
 
-- `EMAIL`
-- `WHATSAPP`
-
-WhatsApp is a reserved future channel only. Do not add delivery logic.
-
-Avoid over-engineering a large notification framework in Phase 1.
+SA must never be able to create a made-up surface by posting arbitrary text.
 
 ---
 
-## Work Stream F — Verification
+## Work Stream G — ACL / security
 
-Required verification before declaring Phase 1 complete:
+Follow PACE's real SA capability model; never hard-code `role === 'SA'` in frontend/backend business logic if ACL resources/actions are the project standard.
 
-1. Migration applies cleanly on dev.
-2. Migration integrity check passes according to `CLAUDE.md`.
-3. PO11 registry row exists with correct technical capability and initial runtime state.
-4. Database rejects invalid state such as `email_enabled=true` when `supports_email=false`.
-5. Backend read contract returns PO11 capability state correctly.
-6. Unknown page returns the expected safe not-found/unsupported response.
-7. No MSG91/provider secret/code exists in the diff.
-8. No scheduler/rule/recipient/queue tables were added outside scope.
-9. Route ACL guard passes if a route was added.
-10. Company-scope, frontend payload, hardcoded-role, JSX/ESLint/Deno/type checks relevant to touched files show zero new failures.
-11. Existing PO11 behavior is unchanged.
-12. No production changes are made.
+Search/read/mutation foundation must not create a privilege bypass around menu/ACL rules.
 
-Document any pre-existing baseline failures separately; do not misreport them as Phase 1 regressions.
+No company-specific report data is touched in Phase 1.
+
+---
+
+## Work Stream H — Verification
+
+Before declaring complete verify:
+
+1. migration applies cleanly on dev,
+2. migration integrity passes,
+3. existing page catalog remains source of search truth,
+4. no pre-population of every ERP page into communication enrollment,
+5. PO11 manifest contains only real current surfaces,
+6. valid PO11 surface is recognized,
+7. invented PO11 surface key is rejected,
+8. unsupported/unmanifested page cannot silently gain surface enrollment,
+9. backend search finds PO11 by `PO11`,
+10. backend search finds PO11 by `Procurement Planning` text,
+11. enrollment-state read contract can represent multiple selected surfaces,
+12. Email enabled state is independent of which surfaces are selected,
+13. no MSG91/email/scheduler/rule/recipient/queue code is introduced,
+14. no PO11 business behavior changes,
+15. relevant route ACL/company/role/lint/type/guard checks show zero new regressions,
+16. no production changes.
+
+Document pre-existing failures separately.
 
 ---
 
 ## Acceptance criteria
 
-Phase 1 is complete only when all of the following are true:
+Phase 1 is complete only when the foundation can safely represent and read this scenario:
 
-- `erp_communication` foundation exists in dev,
-- PO11 is technically registered for Email,
-- runtime Email enablement is independently represented,
-- unsupported channel enablement is prevented,
-- backend code can safely read the registry state,
-- ACL/security conventions are respected,
-- no email is actually sent,
-- no page UI is added yet,
-- verification passes with no new regressions,
-- implementation summary lists every file/migration changed and exact verification commands/results.
+> PO11 is found by TX/name, enlisted for Email, and exactly `Planning Dashboard`, `Monthly Plan Input`, and `Report View` are selected surfaces while setup/history surfaces remain unselected.
+
+And it can safely reject:
+
+> `PO11 + made_up_surface`
+
+No email is sent and no final SA UI/button/drawer is built yet.
 
 ---
 
-## Implementation sequence
+## Implementation sequence after explicit approval
 
-When explicitly approved with `YES`, execute in this order:
+When the business owner explicitly says `YES`:
 
 1. Read-first discovery.
-2. Confirm final table/route/ACL naming from current repo conventions.
-3. Add dev migration.
-4. Apply migration to dev only and run migration integrity checks.
-5. Add backend registry model/service/read contract.
-6. Add minimal route/ACL wiring only if required.
-7. Register/verify PO11.
-8. Run targeted + repository guard checks.
-9. Review diff for scope leakage/security issues.
-10. Report results; stop. Do not begin Phase 2.
+2. Confirm current page/menu and PO11 surface conventions.
+3. Finalize migration/table naming to match repo conventions.
+4. Create/apply dev migration only.
+5. Implement generic Communication Surface Manifest contract.
+6. Implement PO11 surface manifest.
+7. Implement page search + enrollment-state read contract.
+8. Implement reusable validation helpers.
+9. Add minimal route/ACL wiring only as required by current architecture.
+10. Run migrations/guards/tests.
+11. Review diff for scope creep/security.
+12. Report exact files, migration, checks and results.
+13. STOP — do not begin Phase 2.
 
 ---
 
 ## Explicit implementation gate
 
-**Do not execute this task merely because this file exists.**
+**Do not implement merely because this file exists.**
 
 Implementation starts only after the business owner explicitly says:
 
 `YES`
 
-After Phase 1 is implemented and verified, stop and request/await approval for Phase 2. Do not automatically continue.
+After Phase 1 is completed and verified, stop and wait for separate Phase 2 approval.
