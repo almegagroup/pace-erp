@@ -25,6 +25,8 @@ export type CommunicationSurfaceManifest = {
   page: {
     tx_code: string;
     resource_code: string;
+    /** Whether runtime visibility requires an explicit page-local company. */
+    company_scoped?: boolean;
   };
   surfaces: readonly CommunicationSurface[];
 };
@@ -52,6 +54,7 @@ const PO11_COMMUNICATION_SURFACE_MANIFEST: CommunicationSurfaceManifest = {
   page: {
     tx_code: "PO11",
     resource_code: "PROC_PLANNING_VIEW",
+    company_scoped: true,
   },
   surfaces: [
     {
