@@ -51,17 +51,34 @@ export type ReportManifestEnumValue = {
   label: string;
 };
 
-export type ReportFieldManifest = {
+type ReportFieldManifestBase = {
   /** Stable application contract, never a client-supplied database column. */
   field_key: string;
   label: string;
-  data_type: ReportFieldDataType;
   displayable: boolean;
   conditionable: boolean;
   allowed_operators: readonly ReportConditionOperatorKey[];
   format_kind: ReportFormatKind;
-  enum_values?: readonly ReportManifestEnumValue[];
 };
+
+/**
+ * Fixed enum values are part of the persisted rule contract.  Keeping this a
+ * discriminated union catches a missing allowlist while developers author a
+ * manifest; validation still protects malformed values at runtime.
+ */
+export type ReportEnumFieldManifest = ReportFieldManifestBase & {
+  data_type: "ENUM";
+  enum_values: readonly ReportManifestEnumValue[];
+};
+
+export type ReportNonEnumFieldManifest = ReportFieldManifestBase & {
+  data_type: Exclude<ReportFieldDataType, "ENUM">;
+  enum_values?: never;
+};
+
+export type ReportFieldManifest =
+  | ReportEnumFieldManifest
+  | ReportNonEnumFieldManifest;
 
 export type ReportDatasetManifest = {
   /** Stable application contract, never a table, query, or SQL expression. */

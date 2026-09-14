@@ -131,6 +131,115 @@ Deno.test("report manifest definition rejects empty stable keys", () => {
   );
 });
 
+Deno.test("report manifest definition rejects an empty field key", () => {
+  const dataset = validDataset();
+  dataset.fields = dataset.fields.map((field) =>
+    field.field_key === "material_name" ? { ...field, field_key: "" } : field
+  );
+  assertErrorCode(
+    () => assertReportManifestDefinitions([dataset]),
+    "REPORT_MANIFEST_EMPTY_STABLE_KEY",
+  );
+});
+
+Deno.test("report manifest definition rejects an ENUM without an allowlist", () => {
+  const dataset = validDataset();
+  const statusField = resolveReportManifestField(dataset, "planning_status");
+  const { enum_values: _ignored, ...withoutAllowlist } = statusField;
+  dataset.fields = dataset.fields.map((field) =>
+    field.field_key === "planning_status"
+      ? (withoutAllowlist as unknown as ReportDatasetManifest["fields"][number])
+      : field
+  );
+  assertErrorCode(
+    () => assertReportManifestDefinitions([dataset]),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+  );
+});
+
+Deno.test("report manifest definition rejects an ENUM with an empty allowlist", () => {
+  const dataset = validDataset();
+  dataset.fields = dataset.fields.map((field) =>
+    field.field_key === "planning_status"
+      ? ({
+        ...field,
+        enum_values: [],
+      } as ReportDatasetManifest["fields"][number])
+      : field
+  );
+  assertErrorCode(
+    () => assertReportManifestDefinitions([dataset]),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+  );
+});
+
+Deno.test("report manifest definition rejects duplicate enum values", () => {
+  const dataset = validDataset();
+  dataset.fields = dataset.fields.map((field) =>
+    field.field_key === "planning_status"
+      ? ({
+        ...field,
+        enum_values: [
+          { value: "CRITICAL", label: "Critical" },
+          { value: "CRITICAL", label: "Critical again" },
+        ],
+      } as ReportDatasetManifest["fields"][number])
+      : field
+  );
+  assertErrorCode(
+    () => assertReportManifestDefinitions([dataset]),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+  );
+});
+
+Deno.test("report manifest definition rejects a blank enum value", () => {
+  const dataset = validDataset();
+  dataset.fields = dataset.fields.map((field) =>
+    field.field_key === "planning_status"
+      ? ({
+        ...field,
+        enum_values: [{ value: " ", label: "Critical" }],
+      } as ReportDatasetManifest["fields"][number])
+      : field
+  );
+  assertErrorCode(
+    () => assertReportManifestDefinitions([dataset]),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+  );
+});
+
+Deno.test("report manifest definition rejects a blank enum label", () => {
+  const dataset = validDataset();
+  dataset.fields = dataset.fields.map((field) =>
+    field.field_key === "planning_status"
+      ? ({
+        ...field,
+        enum_values: [{ value: "CRITICAL", label: " " }],
+      } as ReportDatasetManifest["fields"][number])
+      : field
+  );
+  assertErrorCode(
+    () => assertReportManifestDefinitions([dataset]),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+  );
+});
+
+Deno.test("report manifest definition rejects enum metadata on a non-ENUM field", () => {
+  const dataset = validDataset();
+  dataset.fields = dataset.fields.map((field) =>
+    field.field_key === "material_name"
+      ? ({
+        ...field,
+        enum_values: [{ value: "MATERIAL", label: "Material" }],
+      } as unknown as ReportDatasetManifest["fields"][number])
+      : field
+  );
+  assertErrorCode(
+    () => assertReportManifestDefinitions([dataset]),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+  );
+});
+
 Deno.test("report manifest definition rejects an unknown communication surface", () => {
   const dataset = validDataset();
   dataset.surface_keys = ["not_a_surface"];
@@ -186,6 +295,28 @@ Deno.test("report registry resolves a valid page, surface, and dataset", () => {
     registry.resolveDataset(PO11_PAGE, "planning_dashboard", "test_alert")
       .dataset_key === "test_alert",
     "Expected the requested dataset",
+  );
+});
+
+Deno.test("report registry rejects a valid-but-unbound surface", () => {
+  const registry = createReportManifestRegistry([validDataset()]);
+  assertErrorCode(
+    () =>
+      registry.resolveDataset(PO11_PAGE, "monthly_plan_input", "test_alert"),
+    "REPORT_MANIFEST_SURFACE_NOT_BOUND",
+  );
+});
+
+Deno.test("report registry rejects an unknown page", () => {
+  const registry = createReportManifestRegistry([validDataset()]);
+  assertErrorCode(
+    () =>
+      registry.resolveDataset(
+        { tx_code: "PO99", resource_code: "UNKNOWN_REPORT" },
+        "planning_dashboard",
+        "test_alert",
+      ),
+    "REPORT_MANIFEST_PAGE_NOT_FOUND",
   );
 });
 
@@ -250,6 +381,26 @@ Deno.test("runtime enum values and duplicate output columns are validated", () =
     () =>
       resolveReportOutputFields(dataset, ["material_name", "material_name"]),
     "REPORT_MANIFEST_DUPLICATE_OUTPUT_FIELD",
+  );
+});
+
+Deno.test("runtime malformed ENUM definitions cannot bypass validation", () => {
+  const dataset = validDataset();
+  const statusField = resolveReportManifestField(dataset, "planning_status");
+  const { enum_values: _ignored, ...withoutAllowlist } = statusField;
+  const missingAllowlistField =
+    withoutAllowlist as ReportDatasetManifest["fields"][number];
+  const emptyAllowlistField = {
+    ...statusField,
+    enum_values: [],
+  } as ReportDatasetManifest["fields"][number];
+  assertErrorCode(
+    () => assertReportEnumValue(missingAllowlistField, "ANY_VALUE"),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+  );
+  assertErrorCode(
+    () => assertReportEnumValue(emptyAllowlistField, "ANY_VALUE"),
+    "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
   );
 });
 

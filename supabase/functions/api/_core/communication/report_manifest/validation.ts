@@ -87,29 +87,45 @@ function assertDeclaredFieldKey(
 }
 
 function validateEnumDefinition(field: ReportFieldManifest): void {
-  if (field.enum_values === undefined) return;
-  if (field.data_type !== "ENUM" || field.enum_values.length === 0) {
-    throw new ReportManifestValidationError(
-      "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
-      field.field_key,
-    );
-  }
-  const values: string[] = [];
-  for (const enumValue of field.enum_values) {
-    assertNonEmptyStableKey(enumValue.value, `${field.field_key}.enum_value`);
-    if (!enumValue.label.trim()) {
+  const runtimeEnumValues = (
+    field as unknown as { enum_values?: unknown }
+  ).enum_values;
+  if (field.data_type !== "ENUM") {
+    if (runtimeEnumValues !== undefined) {
       throw new ReportManifestValidationError(
         "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
         field.field_key,
       );
     }
-    values.push(enumValue.value);
+    return;
   }
-  assertNoDuplicates(
-    values,
-    "REPORT_MANIFEST_INVALID_FIELD_DEFINITION",
-    `${field.field_key}.enum_values`,
-  );
+
+  const enumValues = runtimeEnumValues;
+  if (!Array.isArray(enumValues) || enumValues.length === 0) {
+    throw new ReportManifestValidationError(
+      "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+      field.field_key,
+    );
+  }
+  const values = new Set<string>();
+  for (const enumValue of enumValues) {
+    const record = enumValue && typeof enumValue === "object"
+      ? enumValue as Record<string, unknown>
+      : null;
+    const enumValueKey = record?.value;
+    const enumValueLabel = record?.label;
+    if (
+      typeof enumValueKey !== "string" || !enumValueKey.trim() ||
+      typeof enumValueLabel !== "string" || !enumValueLabel.trim() ||
+      values.has(enumValueKey)
+    ) {
+      throw new ReportManifestValidationError(
+        "REPORT_MANIFEST_INVALID_ENUM_DEFINITION",
+        field.field_key,
+      );
+    }
+    values.add(enumValueKey);
+  }
 }
 
 function validateFieldDefinition(field: ReportFieldManifest): void {
@@ -366,8 +382,12 @@ export function assertReportEnumValue(
   field: ReportFieldManifest,
   value: string,
 ): void {
-  if (field.data_type !== "ENUM" || !field.enum_values) return;
-  if (!field.enum_values.some((option) => option.value === value)) {
+  if (field.data_type !== "ENUM") return;
+  validateEnumDefinition(field);
+  const enumValues = (
+    field as unknown as { enum_values?: readonly { value: string }[] }
+  ).enum_values;
+  if (!enumValues || !enumValues.some((option) => option.value === value)) {
     throw new ReportManifestValidationError(
       "REPORT_MANIFEST_ENUM_VALUE_INVALID",
       value,
