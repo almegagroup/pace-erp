@@ -662,6 +662,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/admin/users/state":                           { skipAcl: true },
   "POST:/api/admin/users/role":                            { skipAcl: true },
   "PATCH:/api/admin/users/scope/primary-company":          { skipAcl: true },
+  // Communication enrollment is SA/admin governed in its handlers. It has no
+  // company report-data access and no browser-direct table access.
+  "GET:/api/admin/communication/pages":                    { skipAcl: true },
+  "GET:/api/admin/communication/enrollment":               { skipAcl: true },
+  "POST:/api/admin/communication/enrollment":              { skipAcl: true },
   "GET:/api/admin/audit":                                  { skipAcl: true },
   "GET:/api/admin/sessions":                               { skipAcl: true },
   "POST:/api/admin/sessions/revoke":                       { skipAcl: true },

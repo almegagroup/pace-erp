@@ -87,6 +87,11 @@ import { listAclVersionCenterStatusHandler } from "../_core/admin/acl/list_acl_v
 import { createAclVersionHandler } from "../_core/admin/acl/create_acl_version.handler.ts";
 import { activateAclVersionHandler } from "../_core/admin/acl/activate_acl_version.handler.ts";
 import { deleteAclVersionHandler } from "../_core/admin/acl/delete_acl_version.handler.ts";
+import {
+  getCommunicationEnrollmentHandler,
+  searchCommunicationPagesHandler,
+  upsertCommunicationEnrollmentHandler,
+} from "../_core/admin/communication/communication_enrollment.handlers.ts";
 
 import type { SessionResolution } from "../_pipeline/session.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
@@ -617,6 +622,30 @@ export async function dispatchAdminRoutes(
 
     case "PATCH:/api/admin/users/scope/primary-company":
       response = await setPrimaryCompanyHandler(req, {
+        context,
+        request_id: requestId,
+        auth_user_id: session.authUserId,
+      });
+      break;
+
+    case "GET:/api/admin/communication/pages":
+      response = await searchCommunicationPagesHandler(req, {
+        context,
+        request_id: requestId,
+        auth_user_id: session.authUserId,
+      });
+      break;
+
+    case "GET:/api/admin/communication/enrollment":
+      response = await getCommunicationEnrollmentHandler(req, {
+        context,
+        request_id: requestId,
+        auth_user_id: session.authUserId,
+      });
+      break;
+
+    case "POST:/api/admin/communication/enrollment":
+      response = await upsertCommunicationEnrollmentHandler(req, {
         context,
         request_id: requestId,
         auth_user_id: session.authUserId,
