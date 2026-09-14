@@ -6,7 +6,14 @@ import ErpSummaryChips from "../../../../components/data/ErpSummaryChips.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { createAutomationSettingsAction } from "../../../../components/communication/AutomationSettingsAction.js";
+import AutomationSettingsDrawer from "../../../../components/communication/AutomationSettingsDrawer.jsx";
+import { useCommunicationActionVisibility } from "../../../../communication/useCommunicationActionVisibility.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import {
+  PO11_COMMUNICATION_PAGE,
+  resolvePO11CommunicationSurface,
+} from "./po11CommunicationSurface.js";
 import { listStorageLocations } from "../../om/omApi.js";
 import {
   closeProcurementPlanningMonth,
@@ -1142,9 +1149,17 @@ export default function ProcurementPlanningPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [automationDrawerOpen, setAutomationDrawerOpen] = useState(false);
 
   const effectiveCompanyId = companyId || defaultCompanyId;
   const planMonthValue = getMonthValue(planMonth);
+  const communicationSurfaceKey = resolvePO11CommunicationSurface({ showFullReport, activeTab });
+  const automationVisibility = useCommunicationActionVisibility({
+    ...PO11_COMMUNICATION_PAGE,
+    surfaceKey: communicationSurfaceKey,
+    channel: "EMAIL",
+    companyId: effectiveCompanyId,
+  });
   const workspaceQueryKey = ["po11", "workspace", effectiveCompanyId || "", planMonthValue];
   const historyQueryKey = ["po11", "history", effectiveCompanyId || "", planMonthValue];
   const storageLocationsQueryKey = ["po11", "storage-locations", effectiveCompanyId || ""];
@@ -1338,6 +1353,11 @@ export default function ProcurementPlanningPage() {
       showExcludedOnly: false,
     });
   }, [companyId]);
+
+  // This shell owns no drafts, so a company or surface switch always closes it.
+  useEffect(() => {
+    setAutomationDrawerOpen(false);
+  }, [effectiveCompanyId, communicationSurfaceKey]);
 
   useEffect(() => {
     const nextDrafts = {};
@@ -1873,11 +1893,18 @@ export default function ProcurementPlanningPage() {
     }
   }, [activeTab, tabs]);
 
+  const automationSettingsAction = createAutomationSettingsAction({
+    visible: automationVisibility.visible,
+    onClick: () => setAutomationDrawerOpen(true),
+  });
+
   return (
+    <>
     <ErpMasterListTemplate
       eyebrow="Procurement"
       title="Procurement Planning Workspace"
       actions={[
+        ...(automationSettingsAction ? [automationSettingsAction] : []),
         ...(showFullReport
           ? [
               {
@@ -2669,5 +2696,11 @@ export default function ProcurementPlanningPage() {
         ),
       }}
     />
+    <AutomationSettingsDrawer
+      visible={automationDrawerOpen}
+      metadata={automationVisibility.data}
+      onClose={() => setAutomationDrawerOpen(false)}
+    />
+    </>
   );
 }

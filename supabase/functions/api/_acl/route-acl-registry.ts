@@ -28,6 +28,11 @@ export type RouteAclMeta =
 
 const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
+  // Runtime Communication visibility dynamically verifies the requested
+  // page's VIEW ACL in its page-local company. A static resource here would
+  // incorrectly evaluate only the session-selected company.
+  "GET:/api/communication/action-visibility":       { skipAcl: true },
+
   // ── Procurement: CSN ─────────────────────────────────────────────────────
   "GET:/api/procurement/csns":                        { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/csns/available-for-sto":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
