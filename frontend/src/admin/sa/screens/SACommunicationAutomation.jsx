@@ -168,24 +168,30 @@ export default function SACommunicationAutomation() {
     }
   }, [applyCanonicalState]);
 
-  const requestCloseDrawer = useCallback(async () => {
+  const confirmDiscardChanges = useCallback(async () => {
     if (saving) return false;
-    if (dirty) {
-      const approved = await openActionConfirm({
-        eyebrow: "Communication Automation",
-        title: "Discard Unsaved Changes",
-        message: "You have unsaved changes. Discard them?",
-        confirmLabel: "Discard",
-        cancelLabel: "Keep Editing",
-      });
-      if (!approved) return false;
-    }
+    if (!dirty) return true;
+
+    const approved = await openActionConfirm({
+      eyebrow: "Communication Automation",
+      title: "Discard Unsaved Changes",
+      message: "You have unsaved changes. Discard them?",
+      confirmLabel: "Discard",
+      cancelLabel: "Keep Editing",
+    });
+    if (!approved) return false;
+
+    setDraft(canonicalDraft);
+    return true;
+  }, [canonicalDraft, dirty, saving]);
+
+  const requestCloseDrawer = useCallback(async () => {
+    if (!await confirmDiscardChanges()) return false;
     setDrawerOpen(false);
     return true;
-  }, [dirty, saving]);
+  }, [confirmDiscardChanges]);
 
   const selectPage = useCallback(async (row) => {
-    setSelectedPageId(row.page_menu_id);
     if (row.communication_capable !== true) {
       pushToast({
         message: `${formatPageIdentity(row)} is not communication-ready and cannot be enlisted.`,
@@ -194,16 +200,17 @@ export default function SACommunicationAutomation() {
       return;
     }
 
-    if (drawerOpen && !await requestCloseDrawer()) {
+    if (drawerOpen && !await confirmDiscardChanges()) {
       return;
     }
 
+    const hadCanonicalPage = Boolean(canonicalState?.page?.page_menu_id);
     setDrawerOpen(true);
     const loaded = await loadEnrollment(row.page_menu_id);
-    if (!loaded) {
+    if (!loaded && !hadCanonicalPage) {
       setDrawerOpen(false);
     }
-  }, [drawerOpen, loadEnrollment, requestCloseDrawer]);
+  }, [canonicalState?.page?.page_menu_id, confirmDiscardChanges, drawerOpen, loadEnrollment]);
 
   const { getRowProps } = useErpListNavigation(searchRows, {
     onActivate: (row) => void selectPage(row),
