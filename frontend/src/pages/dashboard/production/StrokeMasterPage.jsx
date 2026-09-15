@@ -123,8 +123,18 @@ export default function StrokeMasterPage() {
   const mtsCurrentStrokeQ = useQuery({
     queryKey: ["prod-mts-current-stroke", currentStrokeCompanyId],
     queryFn: () => listMtsCurrentStroke(currentStrokeCompanyId),
-    select: (d) => d?.data ?? { stroke_numbers: [], rows: [] },
+    // fetchProd already unwraps to { stroke_numbers, rows } directly (no
+    // `pagination` key on this response) -- do NOT read `.data` again here,
+    // that's the exact double-unwrap bug class (11-bug #15): it would leave
+    // this query permanently resolving to the empty fallback.
+    select: (d) => d ?? { stroke_numbers: [], rows: [] },
     enabled: Boolean(currentStrokeOpen && currentStrokeCompanyId),
+    // The global queryClient default staleTime (60s) is wrong for this
+    // drawer specifically -- it's a live multi-user edit surface (another
+    // QA user, or an approve/deactivate/revert elsewhere, can change the
+    // Current Stroke between visits), so every open must hit the server,
+    // never serve a same-session cached copy.
+    staleTime: 0,
   });
 
   const companies = buildTransactionCompanyList(runtimeContext);
@@ -542,6 +552,27 @@ export default function StrokeMasterPage() {
   async function handleSetCurrentStroke(prodshadeMaterialId, strokeNumber) {
     try {
       await setMtsCurrentStroke({ company_id: currentStrokeCompanyId, prodshade_material_id: prodshadeMaterialId, stroke_number: strokeNumber });
+      // Patch the cache immediately with the known-correct new state -- the
+      // checkbox must flip right away, not wait on a refetch race. This is
+      // the exact query this drawer reads (same key/shape queryFn resolves
+      // to, pre-`select`): { stroke_numbers, rows }.
+      qc.setQueryData(["prod-mts-current-stroke", currentStrokeCompanyId], (old) => {
+        if (!old?.rows) return old;
+        return {
+          ...old,
+          rows: old.rows.map((row) => {
+            if (row.prodshade_material_id !== prodshadeMaterialId) return row;
+            return {
+              ...row,
+              strokes: Object.fromEntries(
+                Object.entries(row.strokes ?? {}).map(([number, cell]) => [number, { ...cell, current: number === strokeNumber }]),
+              ),
+            };
+          }),
+        };
+      });
+      // Backstop: also invalidate, so a stale/never-fetched cache entry (or
+      // any drift from another user's concurrent change) still self-heals.
       await qc.invalidateQueries({ queryKey: ["prod-mts-current-stroke"] });
       toast("Current Stroke updated.");
     } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
