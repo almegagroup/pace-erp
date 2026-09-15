@@ -13,6 +13,7 @@ import {
   isAutomationSettingsDrawerOpenForContext,
 } from "../../../../communication/automationDrawerContext.js";
 import { useCommunicationActionVisibility } from "../../../../communication/useCommunicationActionVisibility.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
   PO11_COMMUNICATION_PAGE,
@@ -1154,6 +1155,7 @@ export default function ProcurementPlanningPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [automationDrawerOpenContextKey, setAutomationDrawerOpenContextKey] = useState(null);
+  const [automationDrawerDirty, setAutomationDrawerDirty] = useState(false);
 
   const effectiveCompanyId = companyId || defaultCompanyId;
   const planMonthValue = getMonthValue(planMonth);
@@ -1367,11 +1369,26 @@ export default function ProcurementPlanningPage() {
     });
   }, [companyId]);
 
-  // This explicit reset clears the previous context. The context-key comparison
-  // above also makes the drawer invisible before this effect can run.
+  // Context matching hides the drawer synchronously. When a company or surface
+  // change would leave a dirty editor behind, confirm the discard and never
+  // attach that draft to the new context.
   useEffect(() => {
-    setAutomationDrawerOpenContextKey(null);
-  }, [automationSettingsContextKey]);
+    if (!automationDrawerOpenContextKey || automationDrawerOpenContextKey === automationSettingsContextKey) return;
+    if (!automationDrawerDirty) {
+      setAutomationDrawerOpenContextKey(null);
+      return;
+    }
+    void openActionConfirm({
+      eyebrow: "Automation Settings",
+      title: "Automation context changed",
+      message: "The selected company or page surface changed. Its unsaved automation rule is closed and is never moved to the new context.",
+      confirmLabel: "Discard Draft",
+      cancelLabel: "Close",
+    }).finally(() => {
+      setAutomationDrawerDirty(false);
+      setAutomationDrawerOpenContextKey(null);
+    });
+  }, [automationDrawerDirty, automationDrawerOpenContextKey, automationSettingsContextKey]);
 
   useEffect(() => {
     const nextDrafts = {};
@@ -2713,7 +2730,13 @@ export default function ProcurementPlanningPage() {
     <AutomationSettingsDrawer
       visible={automationDrawerOpen}
       metadata={automationVisibility.data}
-      onClose={() => setAutomationDrawerOpenContextKey(null)}
+      companyId={effectiveCompanyId}
+      contextKey={automationSettingsContextKey}
+      onDirtyChange={setAutomationDrawerDirty}
+      onClose={() => {
+        setAutomationDrawerDirty(false);
+        setAutomationDrawerOpenContextKey(null);
+      }}
     />
     </>
   );

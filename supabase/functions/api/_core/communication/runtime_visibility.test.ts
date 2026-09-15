@@ -123,7 +123,7 @@ Deno.test("runtime visibility requires the exact active surface enrollment", asy
   );
 });
 
-Deno.test("runtime visibility respects page-local company scope and ACL", async () => {
+Deno.test("runtime visibility requires EDIT access in the page-local company", async () => {
   assertEquals(
     await resolve({}, { ...VALID_INPUT, company_id: undefined }),
     { visible: false },
@@ -139,6 +139,18 @@ Deno.test("runtime visibility respects page-local company scope and ACL", async 
     }),
     { visible: false },
   );
+});
+
+Deno.test("runtime visibility asks the dynamic ACL resolver for EDIT", async () => {
+  let action = "";
+  const result = await resolve({
+    canAccessPage: async (_companyId, _resourceCode, requestedAction) => {
+      action = requestedAction;
+      return requestedAction === "EDIT";
+    },
+  });
+  assertEquals(result.visible, true);
+  assertEquals(action, "EDIT");
 });
 
 Deno.test("a future non-company manifest fails closed until global page ACL exists", async () => {

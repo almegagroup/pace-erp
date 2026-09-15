@@ -75,6 +75,7 @@ export type CommunicationActionVisibilityDependencies = {
   canAccessPage(
     companyId: string,
     resourceCode: string,
+    action: "EDIT",
   ): Promise<boolean>;
 };
 
@@ -171,7 +172,7 @@ export async function resolveCommunicationActionVisibility(
     const companyId = input.company_id;
     await dependencies.assertCompanyScope(companyId);
     if (
-      !await dependencies.canAccessPage(companyId, catalogPage.resource_code)
+      !await dependencies.canAccessPage(companyId, catalogPage.resource_code, "EDIT")
     ) {
       return { visible: false };
     }
@@ -264,7 +265,7 @@ export async function getCommunicationActionVisibilityHandler(
         isActiveSurfaceEnrollment(ctx, enrollmentId, surfaceKey),
       assertCompanyScope: (companyId) => assertCompanyScope(ctx, companyId),
       canAccessPage: (companyId, resourceCode) =>
-        canMaintainCompanyResource(ctx, companyId, resourceCode, "VIEW"),
+        canMaintainCompanyResource(ctx, companyId, resourceCode, "EDIT"),
     },
   );
 
