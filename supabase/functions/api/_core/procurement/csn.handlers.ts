@@ -1978,7 +1978,44 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
     if (materialCategoryId) query = query.eq("material_category_id", materialCategoryId);
     if (dateFrom) query = query.gte(dateField, isTimestampField ? `${dateFrom}T00:00:00.000Z` : dateFrom);
     if (dateTo) query = query.lte(dateField, isTimestampField ? `${dateTo}T23:59:59.999Z` : dateTo);
-    if (search) query = query.or(`csn_number.ilike.%${search}%,bl_number.ilike.%${search}%,boe_number.ilike.%${search}%`);
+    if (search) {
+      // consignment_note has no denormalized vendor/material/PO name (only
+      // vendor_id/material_id/po_id FKs) -- the search box's own placeholder
+      // ("CSN, vendor, material, PO") promised those fields but the filter
+      // below never actually matched them (same gap fixed for AC01/GRN
+      // 2026-08-25 -- see that handler's comment). Resolve matching vendor/
+      // material/PO ids by name first, then OR them into the same filter as
+      // the existing csn/bl/boe text match.
+      const [vendorMatchResp, materialMatchResp, poMatchResp] = await Promise.all([
+        serviceRoleClient.schema("erp_master").from("vendor_master")
+          .select("id").or(`vendor_name.ilike.%${search}%,vendor_code.ilike.%${search}%`).limit(50),
+        serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id").or(`material_name.ilike.%${search}%,pace_code.ilike.%${search}%`).limit(50),
+        serviceRoleClient.schema("erp_procurement").from("purchase_order")
+          .select("id").or(`po_number.ilike.%${search}%`).limit(50),
+      ]);
+      if (vendorMatchResp.error || materialMatchResp.error || poMatchResp.error) {
+        console.error("CSN_TRACKER_SEARCH_RESOLVE_FAILED", JSON.stringify({
+          vendor: vendorMatchResp.error,
+          material: materialMatchResp.error,
+          po: poMatchResp.error,
+        }));
+        throw new Error("PROCUREMENT_TRACKER_LIST_FAILED");
+      }
+      const vendorIdMatches = ((vendorMatchResp.data ?? []) as JsonRecord[]).map((row) => String(row.id));
+      const materialIdMatches = ((materialMatchResp.data ?? []) as JsonRecord[]).map((row) => String(row.id));
+      const poIdMatches = ((poMatchResp.data ?? []) as JsonRecord[]).map((row) => String(row.id));
+
+      const orClauses = [
+        `csn_number.ilike.%${search}%`,
+        `bl_number.ilike.%${search}%`,
+        `boe_number.ilike.%${search}%`,
+      ];
+      if (vendorIdMatches.length > 0) orClauses.push(`vendor_id.in.(${vendorIdMatches.join(",")})`);
+      if (materialIdMatches.length > 0) orClauses.push(`material_id.in.(${materialIdMatches.join(",")})`);
+      if (poIdMatches.length > 0) orClauses.push(`po_id.in.(${poIdMatches.join(",")})`);
+      query = query.or(orClauses.join(","));
+    }
 
     const { data, error, count } = await query;
     if (error) {
