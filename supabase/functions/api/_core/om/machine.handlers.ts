@@ -17,6 +17,54 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 type JsonRecord = Record<string, unknown>;
 
 const MACHINE_TYPES = new Set(["MIXER", "FILLING", "PACKAGING", "REACTOR", "OTHER"]);
+// Only the Process PO types that actually require a machine assignment
+// (process_order.handlers.ts's own REQUIRED_MACHINE_TYPES) -- MTEST never
+// shows a Machine field on Process PO Create at all, so it has no map entry.
+const MACHINE_PO_TYPES = new Set(["MTO", "HPS", "MTS", "INT"]);
+
+function parsePoTypes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out = new Set<string>();
+  for (const v of value) {
+    const t = toTrimmedString(v).toUpperCase();
+    if (MACHINE_PO_TYPES.has(t)) out.add(t);
+  }
+  return [...out];
+}
+
+async function getPoTypesMapByMachineIds(machineIds: string[]): Promise<Map<string, string[]>> {
+  const ids = [...new Set(machineIds.filter(Boolean))];
+  const map = new Map<string, string[]>();
+  if (ids.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_po_type_map")
+    .select("machine_id, po_type")
+    .in("machine_id", ids);
+  if (error) throw new Error("OM_MACHINE_LIST_FAILED");
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const machineId = String(row.machine_id ?? "");
+    const list = map.get(machineId) ?? [];
+    list.push(String(row.po_type ?? ""));
+    map.set(machineId, list);
+  }
+  return map;
+}
+
+async function replaceMachinePoTypes(machineId: string, poTypes: string[]): Promise<void> {
+  const { error: delErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_po_type_map")
+    .delete()
+    .eq("machine_id", machineId);
+  if (delErr) throw new Error("OM_MACHINE_PO_TYPE_SAVE_FAILED");
+  if (poTypes.length === 0) return;
+  const { error: insErr } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_po_type_map")
+    .insert(poTypes.map((po_type) => ({ machine_id: machineId, po_type })));
+  if (insErr) throw new Error("OM_MACHINE_PO_TYPE_SAVE_FAILED");
+}
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -89,6 +137,12 @@ export async function createMachineHandler(
       throw new Error("OM_MACHINE_CREATE_FAILED");
     }
 
+    const poTypes = parsePoTypes(body.po_types);
+    if (poTypes.length > 0) {
+      await replaceMachinePoTypes(String((data as JsonRecord).id), poTypes);
+    }
+    (data as JsonRecord).po_types = poTypes;
+
     return okResponse({ data }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MACHINE_CREATE_FAILED";
@@ -108,6 +162,7 @@ export async function listMachinesHandler(
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const machineType = toTrimmedString(url.searchParams.get("machine_type")).toUpperCase();
     const active = url.searchParams.get("active");
+    const poType = toTrimmedString(url.searchParams.get("po_type")).toUpperCase();
 
     let query = serviceRoleClient
       .schema("erp_master")
@@ -132,7 +187,19 @@ export async function listMachinesHandler(
       throw new Error("OM_MACHINE_LIST_FAILED");
     }
 
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    const rows = (data ?? []) as JsonRecord[];
+    const poTypesMap = await getPoTypesMapByMachineIds(rows.map((row) => String(row.id ?? "")));
+    // A machine with NO po_types configured yet is fail-open (shows for every
+    // po_type filter) -- existing machines predate this feature and would
+    // otherwise vanish from every Process PO Create dropdown the moment this
+    // shipped, blocking production until SA visits all of them. Once SA
+    // assigns at least one po_type, the filter becomes real for that machine.
+    const withPoTypes = rows.map((row) => ({ ...row, po_types: poTypesMap.get(String(row.id ?? "")) ?? [] }));
+    const filtered = poType
+      ? withPoTypes.filter((row) => row.po_types.length === 0 || row.po_types.includes(poType))
+      : withPoTypes;
+
+    return okResponse({ data: filtered }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MACHINE_LIST_FAILED";
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
@@ -176,6 +243,10 @@ export async function updateMachineHandler(
       .eq("id", id);
 
     if (error) throw new Error("OM_MACHINE_UPDATE_FAILED");
+
+    if (Object.prototype.hasOwnProperty.call(body, "po_types")) {
+      await replaceMachinePoTypes(id, parsePoTypes(body.po_types));
+    }
 
     return okResponse({ ok: true }, ctx.request_id, req);
   } catch (err) {
