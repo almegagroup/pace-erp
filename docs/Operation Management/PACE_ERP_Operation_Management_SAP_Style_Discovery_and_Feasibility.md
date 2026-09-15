@@ -23711,7 +23711,17 @@ future availability check ভুল উত্তর দেবে (ভুলভ�
   reference-document derivation join করে দেখাবে — শুধু MTS machine-tracked location-এর row-এই
   প্রযোজ্য।
 
-### 138.9 — Unassigned balance পরে machine-এ Allot করার mechanism: "Assign to Machine" button (LOCKED, সংশোধিত)
+### 138.9 — Unassigned balance পরে machine-এ Allot করার mechanism (SUPERSEDED, ২০২৬-০৯-১৫ — পুনরায় design হচ্ছে)
+
+**⚠️ নিচের "IN03-তে Assign to Machine button" design এখন আর locked না — business owner
+(২০২৬-০৯-১৫) সরাসরি বলেছেন এই mechanism-টা তিনি নিজে design করবেন, আর তাতে "pull list" ধারণা
+আনতে হবে — machine-এ distribution আসলে **সেই pull-list flow-এর মধ্যেই** থাকবে, IN03-তে আলাদা
+বাটন হিসেবে না। পুরনো content নিচে শুধু historical reference হিসেবে রাখা হলো — implement করার
+আগে business owner-এর নতুন pull-list design অপেক্ষা করতে হবে (§138.11-এ open item হিসেবে
+tracked)।**
+
+<details>
+<summary>পুরনো draft (superseded) — IN03 "Assign to Machine" button</summary>
 
 - আলাদা নতুন page বানানো হবে না, আর Location Transfer page-এও না (Allot একটা pure attribution
   action, কোনো `stock_ledger` posting নেই — তাই transfer-এর সাথে না মিলিয়ে reporting/management
@@ -23733,6 +23743,8 @@ future availability check ভুল উত্তর দেবে (ভুলভ�
   (Unassigned bucket থেকে OUT + target machine bucket-এ IN, একই qty, একটা common reference দিয়ে
   linked), attribution বদলাবে মাত্র। কোনো `stock_ledger` posting লাগবে না, `movement_type`ও লাগবে
   না।
+
+</details>
 
 ### 138.10 — CMP003 লাইভ data দিয়ে verify করা আসল ছবি (২০২৬-০৯-১৫)
 
@@ -23773,11 +23785,17 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   করবে।
 - ~~`machine_stock_log` টেবিলের সঠিক schema এখনো draft করা হয়নি~~ — **RESOLVED (২০২৬-০৯-১৫):**
   পুরো draft schema (columns + `source_type` behavior table) §138.6-এ lock করা হয়েছে।
-- **Verify-তে hard-block severity** — §83.5-এর existing rule (Standard = hard block on
-  Available) machine-respect check-এও একইভাবে প্রযোজ্য হবে ধরে নেওয়া হচ্ছে, কিন্তু এটা এই
-  session-এ explicit re-confirm হয়নি।
-- **Warehouse → শপ ফ্লোর + machine transfer** কোন page দিয়ে হবে — existing Location Transfer/STO
-  page-এ optional Machine field যোগ হবে, নাকি নতুন flow — এখনো নির্দিষ্ট হয়নি (transfer নিজে সবসময়
-  Unassigned bucket-এই পড়ে, §138.3 — তাই এই প্রশ্নটা শুধু "কোন page দিয়ে transfer entry হবে" নিয়ে,
-  bucket-logic নিয়ে না)।
+- **Standard-এ hard-block severity — এখনো পুরোপুরি খোলা, full design বাকি (২০২৬-০৯-১৫
+  আপডেট):** business owner confirm করেছেন check **Standard stage-এই hard block দিয়ে শুরু হবে**
+  (§83.5-এর existing rule-এর সাথে সামঞ্জস্যপূর্ণ), কিন্তু এটা পুরো গল্প না — **"aro onek conditions
+  chapbe"** (আরও অনেক শর্ত এর উপর বসবে), যেগুলো এখনো design হয়নি। অর্থাৎ শুধু "hard block হবে
+  কিনা" resolve হয়েছে, "ঠিক কোন কোন শর্তে/কীভাবে" এখনো সম্পূর্ণ আলাদা, dedicated design session
+  দরকার — implementation শুরুর আগে এটা lock করা মাস্ট।
+- **Warehouse → শপ ফ্লোর + machine transfer — এখনো খোলা, business owner নিজে design করবেন
+  (২০২৬-০৯-১৫ আপডেট):** পুরনো §138.9-এর "IN03-তে Assign to Machine button" draft **superseded** —
+  business owner জানিয়েছেন machine-এ distribution আসলে একটা নতুন **"pull list" concept**-এর
+  ভেতরেই থাকবে (Stores-এর R001→S001 warehouse transfer flow-এর সাথে ইন্টিগ্রেটেড), IN03-তে আলাদা
+  বাটন হিসেবে না। এই pull-list mechanism-এর বিস্তারিত design এখনো আসেনি — business owner নিজেই
+  পরে বলবেন ("design korar somoy bolbo")। যতক্ষণ না এই design আসে, §138.9-এর পুরনো draft-টা শুধু
+  reference হিসেবে থাকবে, build করা যাবে না।
 - **Implementation শুরু হয়নি** — এই পুরো section শুধু design lock, কোনো migration/code লেখা হয়নি।
