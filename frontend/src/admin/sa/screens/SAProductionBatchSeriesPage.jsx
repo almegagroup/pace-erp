@@ -11,8 +11,8 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates
 import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { listBatchSeries, createBatchSeries, updateBatchSeries } from "../../../pages/dashboard/production/prodApi.js";
-import { listCompaniesForOm, listMaterials } from "../../../pages/dashboard/om/omApi.js";
+import { listBatchSeries, createBatchSeries, updateBatchSeries, listApprovedProdshades } from "../../../pages/dashboard/production/prodApi.js";
+import { listCompaniesForOm } from "../../../pages/dashboard/om/omApi.js";
 import { materialLabel } from "../../../pages/dashboard/production/strokeShared.jsx";
 
 const BATCH_TYPES = [
@@ -71,27 +71,29 @@ export default function SAProductionBatchSeriesPage() {
     queryFn: () => listCompaniesForOm(),
   });
   // MTS is the only batch_type that goes per-Prodshade (see requiresProdshade
-  // below), and MTS is SFG-scoped -- IWC/Powder Prodshades are always SFG
-  // material_type, never INT (that's a separate PO type of its own). Scoped
-  // to the create form's own Company (via material_company_ext, same fix as
-  // Stroke Master's picker) -- previously unscoped, so this dropdown mixed
-  // every company's SFG Prodshades into one list.
-  const sfgMaterialsQ = useQuery({
-    queryKey: ["om-materials", "SFG", form.company_id],
-    queryFn: () => listMaterials({ material_type: "SFG", limit: 500, company_id: form.company_id || undefined }),
-    select: (data) => data?.data ?? [],
+  // below). Scoped to the create form's own Company AND its own batch_type
+  // (via listApprovedProdshades's company_id/po_type filters) -- previously
+  // this pulled every SFG material mapped to the company regardless of
+  // whether it had ever been used for MTS at all (137 SFG materials for one
+  // real company, only 5 of which are actual MTS Prodshades). Now only
+  // Prodshades with an approved MTS stroke in this company show up.
+  const prodshadesQ = useQuery({
+    queryKey: ["prod-approved-prodshades", form.company_id, form.batch_type],
+    queryFn: () => listApprovedProdshades({ company_id: form.company_id || undefined, po_type: form.batch_type }),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+    enabled: requiresProdshade(form.batch_type) && Boolean(form.company_id),
   });
 
   const companies = companiesQ.data ?? [];
-  const prodshadeMaterials = sfgMaterialsQ.data ?? [];
+  const prodshadeMaterials = prodshadesQ.data ?? [];
   const companyOptions = companies.map((company) => ({
     value: company.id,
     label: `${company.company_code} - ${company.company_name}`,
   }));
   const companyLabelById = new Map(companies.map((company) => [company.id, `${company.company_code} - ${company.company_name}`]));
   const prodshadeOptions = prodshadeMaterials.map((material) => ({
-    value: material.id,
-    label: materialLabel(material),
+    value: material.material_id,
+    label: [material.external_code ?? "-", material.material_name, material.document_name].filter(Boolean).join(" — "),
   }));
 
   const listQ = useQuery({
@@ -271,7 +273,13 @@ export default function SAProductionBatchSeriesPage() {
                 onChange={(value) => setForm((current) => ({ ...current, prodshade_material_id: value }))}
                 options={prodshadeOptions}
                 disabled={!form.company_id}
-                emptyStateLabel={form.company_id ? "No SFG Prodshades found for this company" : "Select a Company first"}
+                emptyStateLabel={
+                  !form.company_id
+                    ? "Select a Company first"
+                    : prodshadesQ.isLoading
+                    ? "Loading..."
+                    : `No approved ${form.batch_type} Prodshade found for this company`
+                }
               />
             </div>
           )}

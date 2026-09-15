@@ -9,6 +9,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -411,13 +412,34 @@ export async function togglePackCodeHandler(req: Request, ctx: ProdHandlerContex
 export async function listApprovedProdshadesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    // Both optional and backward-compatible -- existing callers (Pack Config,
+    // SA Pack Code Master) pass neither and keep getting every company's
+    // every-po_type approved Prodshade, exactly as before. A caller that DOES
+    // pass these (e.g. SA Batch Series's MTS Prodshade picker) gets scoped
+    // down to just the Prodshades that actually have an approved stroke of
+    // that po_type in that company -- otherwise every SFG material in the
+    // company shows regardless of whether it's ever been used for that
+    // po_type at all.
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const poType = toTrimmedString(url.searchParams.get("po_type") ?? "").toUpperCase();
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return packError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     // PostgREST cannot embed across schemas — stroke_master is in erp_production,
     // material_master is in erp_master — so resolve in two queries + in-memory join.
-    const { data: strokes, error } = await serviceRoleClient
+    let strokeQuery = serviceRoleClient
       .schema("erp_production")
       .from("stroke_master")
       .select("prodshade_material_id")
       .in("status", ["ACTIVE", "APPROVED"]);
+    if (companyId) strokeQuery = strokeQuery.eq("company_id", companyId);
+    if (poType) strokeQuery = strokeQuery.eq("po_type", poType);
+    const { data: strokes, error } = await strokeQuery;
     if (error) {
       console.error("[pack_config.listApprovedProdshades] stroke query failed:", JSON.stringify(error));
       throw new Error("PROD_PRODSHADE_LIST_FAILED");
