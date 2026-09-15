@@ -56,6 +56,14 @@ export function dosageSumOf(lines) {
   return lines.reduce((s, l) => s + (parseFloat(l.dosage_pct) || 0), 0);
 }
 
+// Includes document_name (the human-recognizable product description) alongside
+// pace_code/material_name -- ErpComboboxField's search only matches label text,
+// and material_name alone is often just an internal numeric code, not something
+// a user would actually type to find a material.
+export function materialLabel(m) {
+  return [m?.pace_code ?? "—", m?.material_name, m?.document_name].filter(Boolean).join(" — ");
+}
+
 // DrawerBase renders `actions` as a raw node, not a descriptor array — turn
 // our {label, tone, onClick, disabled} list into real <button> elements.
 export function renderDrawerActions(items) {
@@ -106,7 +114,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
   const sum = dosageSumOf(lines);
   const materialLabelById = new Map(
     [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
-      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
+      .map((m) => [m.id, materialLabel(m)]),
   );
 
   const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
@@ -137,7 +145,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
         <tbody>
           {lines.map((line, i) => {
             const itemOptions = (materialsByType[line.line_material_type] ?? []).map((m) => ({
-              value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
+              value: m.id, label: materialLabel(m),
             }));
             const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
             const selectedGroup = groups.find((g) => g.id === line.material_group_id);
@@ -260,7 +268,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
 
   const materialLabelById = new Map(
     [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
-      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
+      .map((m) => [m.id, materialLabel(m)]),
   );
   const groupLabelById = new Map(groups.map((g) => [g.id, `${g.group_code} — ${g.group_name}`]));
 
@@ -285,7 +293,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
       <tbody>
         {lines.map((line, i) => {
           const itemOptions = (materialsByType[line.line_material_type] ?? []).map((m) => ({
-            value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
+            value: m.id, label: materialLabel(m),
           }));
           const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
           const selectedGroup = groups.find((g) => g.id === line.new_group_id);
@@ -386,8 +394,8 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
     updateLine(key, { material_id: materialId, uom_code: mat?.base_uom_code ?? "" });
   }
 
-  const materialOptions = materials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }));
-  const materialLabelById = new Map(materials.map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]));
+  const materialOptions = materials.map((m) => ({ value: m.id, label: materialLabel(m) }));
+  const materialLabelById = new Map(materials.map((m) => [m.id, materialLabel(m)]));
   const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
 
   const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
@@ -532,8 +540,8 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
     updateLine(key, { material_id: materialId, uom_code: mat?.base_uom_code ?? "" });
   }
 
-  const materialOptions = materials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }));
-  const materialLabelById = new Map(materials.map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]));
+  const materialOptions = materials.map((m) => ({ value: m.id, label: materialLabel(m) }));
+  const materialLabelById = new Map(materials.map((m) => [m.id, materialLabel(m)]));
   const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
 
   const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
