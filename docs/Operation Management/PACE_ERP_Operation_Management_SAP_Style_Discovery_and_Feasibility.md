@@ -23551,3 +23551,179 @@ here).
 - **Frontend:** new `RecoDataPage.jsx` (Page 1 + Page 2, `ErpDenseGrid`) and
   `RecoSummaryDataPage.jsx` (Page 3), new `getRecoData()` in `procurementApi.js`, route + screen
   registry entries following the AC09 (`ACC_BATCH_COSTING_REPORT`) pattern exactly.
+
+## Section 138 — MTS Machine-Respect Shop Floor Stock: Machine+Sloc mapping, normal vs exception consumption, packet-surplus Keep/Allot, PID integration (✅ DESIGN LOCKED — 2026-09-15, IMPLEMENTATION NOT STARTED)
+
+**পটভূমি:** MTS batch series checkbox (§সংশ্লিষ্ট commit, migration `20260915150000`) implement
+করার পরে business owner একটা নতুন, deeper সমস্যা তুললেন — MTS-এর অনেক item শপ ফ্লোর location
+থেকে consume হয়, আর শপ ফ্লোরে একাধিক machine থাকে। এখন পর্যন্ত সিস্টেমে stock শুধু
+(material + storage_location)-ভিত্তিক ব্লেন্ডেড — machine কোনো dimension না। কিন্তু বাস্তবে একটা
+item-এর মোট requirement (উদাহরণ: ১৪০ কেজি) দুটো machine-এ ভাগ হয়ে issue হয় (১০০+৪০, সমান ভাগ
+না) — যে machine-এ যতটা প্রয়োজন সেই machine-এর নিজের staged stock থেকেই সেটা consume হওয়া
+উচিত, blended শপ ফ্লোর total থেকে না। পুরো এই section-টা সেই আলোচনার লকড ফলাফল — কোনো কোড এখনো
+লেখা হয়নি, পরের session-এ task brief লিখে implementation শুরু হবে।
+
+### 138.1 — Machine + Storage Location mapping (LOCKED)
+
+- নতুন mapping: **Company + Machine + Storage Location** — Prodshade বা PO Type মিশিয়ে key
+  বানানো হবে না (প্রথমে `Company+Machine+MTS Type+Prodshade+Sloc` প্রস্তাব করা হয়েছিল, পরে
+  business owner নিজেই সরিয়ে দেন)। কারণ: Prodshade-এর নিজেরই একটা Default SFG Storage Location
+  আছে (Stroke Master-এর already-locked mandatory field, §83.3) — তাই Machine-কে সরাসরি Sloc-এর
+  সাথে bind করলে, যে যে Prodshade-এর default location সেই Sloc, তারা automatically সেই
+  machine-গুলোর সাথে জুড়ে যায়। আলাদা করে Prodshade ধরে রাখাটা redundant।
+- Machine Master-এ এই mapping যোগ হবে (checkbox/multi-select দিয়ে, ঠিক যেভাবে PO Types
+  checkbox — commit-এ ইতিমধ্যে করা হয়েছে — যোগ করা হয়েছিল)।
+
+### 138.2 — Normal case: machine-respect availability + consumption (LOCKED)
+
+- Process PO Create-এ Machine dropdown **normally** সেই Stroke-এর declared SFG default
+  location অনুযায়ী filter হয়ে আসবে (§138.1-এর mapping ব্যবহার করে)।
+- এই normal case-এ **machine+location-wise real balance/sub-pool** track হবে — একটা item-এর
+  স্টক machine-ভিত্তিক ভাগ হয়ে থাকবে (100kg @Machine-1, 40kg @Machine-2 উদাহরণ)।
+  Availability check আর consumption দুটোই এই machine-নির্দিষ্ট sub-pool-এর বিরুদ্ধেই হবে,
+  ব্লেন্ডেড location total-এর বিরুদ্ধে না।
+- **Requirement derivation:** dosage% × planned/actual Batch Size = কত লাগবে, সাথে কোন
+  Process PO কোন machine-এ assign হয়েছে — এই দুটো মিলিয়েই machine-wise requirement আগে থেকে
+  derive করা যায় (guess করার দরকার নেই), যা warehouse→শপ ফ্লোর+machine transfer planning-এর
+  ভিত্তি হবে।
+
+### 138.3 — Exception case: cross-location/foreign machine override (LOCKED)
+
+- Process PO Create-এ একটা checkbox — **"Select all MTS machines"** — টিক দিলে location-filter
+  বাইপাস হয়ে সব machine (অন্য location-এরও) দেখাবে।
+- এভাবে একটা "foreign" machine (Stroke-এর declared location-এর নিজের না) বেছে নিলে:
+  - Machine-wise sub-pool availability check হবে **না** — শুধু Stroke-এর declared location-এ
+    **overall stock যথেষ্ট আছে কিনা** সেটাই check হবে (location-level, machine-respect না)।
+  - Consumption machine-tag করেই post হবে (spend/consumption log হিসেবে, reporting-এর জন্য) —
+    কিন্তু কোনো machine-নির্দিষ্ট **balance তৈরি হবে না যা negative যেতে পারে**। ব্যতিক্রম:
+    packet-surplus (§138.4) সবসময় non-negative, তাই সেটা machine-এর নামে সত্যিকারের positive
+    balance তৈরি করতে পারে — এটা নিরাপদ, কারণ কখনো দরকারের চেয়ে কম প্যাকেট খোলা হয় না।
+
+### 138.4 — Packet-size surplus: Keep / Allot / Cancel modal (LOCKED)
+
+- RM material fixed packet size-এ আসে (উদাহরণ: 20 KG bag)। প্রয়োজন যদি packet size-এর clean
+  multiple না হয় (উদাহরণ: 26 KG দরকার, 20 KG-এর ২টা প্যাকেট = 40 KG খুলতে হলো, 14 KG surplus
+  থেকে যায়), তাহলে entry **save করার সময়** একটা modal আসবে তিনটা option নিয়ে:
+
+  | Option | ফলাফল |
+  |---|---|
+  | **Keep** | Surplus টা machine-tag ছাড়াই unassigned location-level balance হিসেবে থেকে যাবে — পরের যেকোনো consumption এটা ব্যবহার করতে পারবে। Entry save হয়ে যায়। |
+  | **Allot** | সেই Sloc-এর machine list দেখাবে, user machine বেছে নেবে — surplus সেই machine-এর নামে tag হয়ে যায়। Entry save হয়ে যায়। |
+  | **Cancel** | কিছুই save হয় না, modal বন্ধ হয়ে আগের entry page-এ ফিরিয়ে দেয়। |
+
+- এটা Final/entry-save-এর সময়েই resolve হয় — Verify পর্যন্ত টানতে হয় না। Batch-এর নিজের দরকারি
+  qty ওখানেই consume হয়, বাকিটা তখনই হয় unassigned (Keep) নয়তো নির্দিষ্ট machine-এ (Allot)।
+- **Packet size নিজেই এখনো কোথাও নেই** (material_master-এ কোনো "issue packet size" field নেই,
+  RM issue আজ pure KG-based, কোনো rounding logic নেই) — এটা একটা নতুন mechanism হিসেবে
+  design/build করতে হবে (কোন material-এর packet size কত সেটা কোথায় configure হবে, কীভাবে
+  system বুঝবে surplus আছে কিনা — এই detail এখনো lock হয়নি, শুধু modal-এর UX flow-টা lock হয়েছে)।
+
+### 138.5 — stock_ledger / reservation_document: কোনো schema change লাগবে না (LOCKED)
+
+**মূল সিদ্ধান্ত: machine attribution `stock_ledger`/`stock_snapshot`/`reservation_document`-এ
+কোনো নতুন column হিসেবে যাবে না — core engine সম্পূর্ণ machine-agnostic থেকে যাবে।**
+
+- **Normal case-এর consumption + reservation দুটোই already-existing reference link দিয়ে derive
+  করা যায়, নতুন tracking লাগে না:**
+  - `stock_ledger.reference_document_id` → সেই Process PO → তার নিজের `machine_id` (Process PO
+    creation-এ already assign হওয়া) — join করলেই machine বের হয়ে যায়।
+  - `reservation_document` → source Process PO (§83.5-এর already-locked link) → `machine_id` —
+    একই pattern।
+- **নতুন lightweight side-table লাগবে শুধু দুটো জায়গায়** (নাম এখনো ঠিক হয়নি, ধরা যাক
+  `machine_stock_log` — company_id, storage_location_id, material_id, batch_number (প্রযোজ্য
+  হলে), machine_id, qty, direction, source_type, created_at ধরনের shape, schema detail পরে
+  finalize হবে):
+  1. Warehouse → শপ ফ্লোর **transfer** event (এটা কোনো Process PO-র সাথে সরাসরি linked না, এটা
+     deliberate "এই machine-কে এত পাঠালাম" ঘটনা)।
+  2. Exception-case-এর **Keep/Allot** সিদ্ধান্ত (§138.4) — foreign machine ব্যবহার হওয়ায় কোনো
+     Process PO-র নিজের machine_id দিয়ে derive করা যায় না।
+- **কেন এই সিদ্ধান্ত:** এটা ঠিক §83.15.1-এর batch-level stock precedent-এর মতোই ("stock_snapshot
+  কখনো batch-wise split হয় না, দরকার হলে ledger থেকে on-demand sum করে বের করা হয়") — machine
+  একটা **reporting/attribution layer**, engine-এর hard-enforced dimension না। এতে core §8C
+  posting engine একদম অক্ষত থাকে, কোনো নতুন migration risk নেই `post_stock_movement()`-এ।
+
+### 138.6 — PID (Physical Inventory): machine-wise row, কিন্তু system-derived, user-selectable না (LOCKED, সংশোধিত)
+
+**প্রথম প্রস্তাব ছিল PID পুরোপুরি location-level-ই থাকবে (machine touch করবে না) — এটা ভুল
+প্রমাণিত হয় business owner-এর push back-এ:** যেহেতু normal case-এর availability check
+machine-নির্দিষ্ট sub-pool-এর বিরুদ্ধে **hard-enforced**, PID যদি সেই sub-pool ঠিক না করে,
+future availability check ভুল উত্তর দেবে (ভুলভাবে block বা ভুলভাবে পাশ)।
+
+**সংশোধিত, locked design:**
+- PID-এর line grid-এ, **শুধু MTS machine-tracked শপ ফ্লোর location-গুলোর** (যেমন S001, S003 —
+  §138.1 mapping আছে এমন location) জন্য একটা **Machine column** যোগ হবে।
+- এই column **dropdown/user-selectable না** — এটা **system-derived, read-only**, ঠিক PID-এর
+  existing Status column যেভাবে auto আসে সেভাবেই। System নিজেই (ledger + §138.5-এর side-table
+  থেকে derive করে) জানে কোন material, কোন machine-এ কত tagged আছে — তাই **প্রতিটা machine-এর
+  জন্য আলাদা row pre-generate হয়ে আসবে** (material+location একটা row না, material+location+
+  machine = একটা করে row)।
+- Counter শুধু গিয়ে সেই নির্দিষ্ট machine-এর কাছে যা physically আছে সেটা গুনে Actual Qty
+  column-এ বসাবে — machine নিজে বেছে নেওয়ার কোনো প্রশ্নই নেই (ভুল machine-এ ভুল করে count বসানোর
+  সুযোগ নেই)।
+- **RM store-এর মতো non-machine-tracked location-এ (R001, R003, T003 ইত্যাদি) PID অপরিবর্তিতই
+  থাকবে** — এই machine column আসবেই না। এটা শুধু MTS-এর machine-tracked শপ ফ্লোরের জন্য।
+
+### 138.7 — IN02 (Stock Ledger) / IN03 (Current Stock): machine column report-level join-এ, core snapshot-এ না (LOCKED)
+
+- `stock_ledger`/`stock_snapshot` অপরিবর্তিত (§138.5), কিন্তু user-কে machine-wise stock ঠিকই
+  দেখাতে হবে — এটা **report layer-এর join দিয়ে** হবে, ঠিক যেভাবে IN03 আজ FG-এর
+  batch/Packing-PO-level breakdown দেখায় (§116, `stock_ledger`+`stock_document`+`packing_order`
+  join করে, কোনো আলাদা snapshot dimension ছাড়াই)।
+- IN02/IN03 machine column/filter §138.5-এর side-table + existing reference-document derivation
+  (§138.5) join করে দেখাবে — শুধু MTS machine-tracked location-এর row-এই প্রযোজ্য।
+
+### 138.8 — Unassigned ("Keep") balance পরে machine-এ Allot করার mechanism (LOCKED)
+
+- আলাদা নতুন page বানানো হবে না — **IN03 (Current Stock) page-এ (বা Location Transfer page-এ)
+  একটা "Assign to Machine" button** যোগ হবে।
+- Button শুধু তখনই **active** যখন row-টা একটা MTS machine-tracked শপ ফ্লোর location-এর, আর তার
+  **unassigned balance > 0**। Unassigned না থাকলে button **inactive/greyed out**।
+- Click করলে সেই location+material-এর unassigned qty দেখাবে, user সেখান থেকে qty বেছে **একটা
+  machine**-এ পুরোটা, বা **একাধিক machine-এ ভাগ করে** distribute করতে পারবে।
+- এটা কোনো actual stock movement/posting না (material physically সরছে না, ওটা ওই location-এই
+  ছিল) — শুধু §138.5-এর side-table-এ নতুন machine-tag entry পড়বে, attribution বদলাবে মাত্র। কোনো
+  `stock_ledger` posting লাগবে না।
+
+### 138.9 — CMP003 লাইভ data দিয়ে verify করা আসল ছবি (২০২৬-০৯-১৫)
+
+Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade-এর Stroke formulation সরাসরি Prod DB-তে
+দেখা হয়েছে (§ agreement অনুযায়ী কখনো ধরে না নিয়ে verify করা) — একটা গুরুত্বপূর্ণ বাস্তবতা ধরা
+পড়েছে:
+
+- **প্রতিটা Stroke-এর RM line-এর নিজের storage location আছে (`stroke_line.default_storage_
+  location_id`), যেটা সেই Stroke-এর নিজের overall declared SFG location থেকে আলাদা হতে পারে।**
+  উদাহরণ, SFG-00188 (TRUCARE WALL PUTTY WHITE, stroke 0064, নিজের declared location S001):
+  - DOLOMITE 240# (43.35%), WHITE CEMENT JK (15%) — issue location **R001** (RM store), S001
+    না।
+  - VAE POWDER DA 1100 (1.2%), GABROSA M700 (0.39%), Sodium Gluconate (0.03%), PULMIX 4033
+    (0.03%) — issue location **S001** (শপ ফ্লোর নিজে)।
+  - (7 lines, total dosage 100.00 — verify করা, একটাই active stroke_master row, কোনো duplicate
+    revision মেশেনি।)
+- **তার মানে: ভারী/বেশি dosage-এর RM (Dolomite, Cement) সরাসরি RM store থেকে আসে, শপ ফ্লোরে
+  staged থাকেই না। শুধু কম-dosage additive-গুলোই শপ ফ্লোরে staged থাকে** — machine-respect
+  tracking (§138.1-138.8) বাস্তবে **শুধু এই ছোট-dosage, শপ-ফ্লোর-staged additive line-গুলোর
+  জন্যই প্রাসঙ্গিক**, পুরো RM list-এর জন্য না।
+- SFG-00063 (AP SC VITALIA NEO, নিজের declared location S003) — এর **একটাও material S003-এ
+  নেই** (WATER+HIMFLOWCRETE → T003 tank, বাকি → R003 RM store)। এই একটা প্রোডাক্টে
+  machine-respect stock সমস্যাটাই প্রযোজ্য না।
+- একই additive (যেমন VAE POWDER DA 1100) **একাধিক আলাদা Prodshade-এই** ব্যবহার হয় (SFG-188,
+  189, 190, 191 — চারটাতেই), সবগুলোই একই S001 শপ ফ্লোর location-এর material — এটাই আসল কারণ কেন
+  machine-respect tracking দরকার (একই additive, একই শপ ফ্লোর, কিন্তু আলাদা machine-এ আলাদা
+  Prodshade-এর batch একসাথে চলতে পারে)।
+
+### 138.10 — এখনো খোলা প্রশ্ন (implementation শুরুর আগে lock করতে হবে)
+
+- **Scope: শুধু MTS, নাকি MTO/HPS/INT-ও একইভাবে machine-respect stock চাইবে?** — machine_id
+  ওই সব PO type-এও লাগে (REQUIRED_MACHINE_TYPES-এ MTO/HPS/INT সবাই আছে), কিন্তু আজকের পুরো
+  আলোচনা MTS-কেন্দ্রিক ছিল, MTO/HPS/INT নিয়ে explicit সিদ্ধান্ত হয়নি — **আপাতত MTS-only ধরে
+  নেওয়া হচ্ছে**, পরে confirm করতে হবে।
+- **Verify-তে hard-block severity** — §83.5-এর existing rule (Standard = hard block on
+  Available) machine-respect check-এও একইভাবে প্রযোজ্য হবে ধরে নেওয়া হচ্ছে, কিন্তু এটা এই
+  session-এ explicit re-confirm হয়নি।
+- **Packet size mechanism-এর বিস্তারিত** (§138.4) — কোথায় configure হবে (material_master-এ
+  নতুন field, নাকি আলাদা ASL-জাতীয় table), কীভাবে system surplus detect করবে — এখনো lock হয়নি।
+- **`machine_stock_log` (বা যা নাম হয়) টেবিলের সঠিক schema** — এখনো draft করা হয়নি, শুধু concept
+  lock হয়েছে।
+- **Warehouse → শপ ফ্লোর + machine transfer** কোন page দিয়ে হবে — existing Location Transfer/STO
+  page-এ optional Machine field যোগ হবে, নাকি নতুন flow — এখনো নির্দিষ্ট হয়নি।
+- **Implementation শুরু হয়নি** — এই পুরো section শুধু design lock, কোনো migration/code লেখা হয়নি।
