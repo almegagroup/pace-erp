@@ -1660,7 +1660,24 @@ export async function listPOsHandler(
       query = query.lte("po_date", dateTo);
     }
     if (search) {
-      query = query.or(`po_number.ilike.%${search}%`);
+      // The page's own placeholder promises "Search PO number or vendor" --
+      // po_number lives on this table directly, but vendor_name/vendor_code
+      // don't, so a plain .ilike() can't reach them. Resolve matching vendor
+      // ids first (small, bounded lookup) and fold them into the same .or().
+      const { data: matchedVendors, error: vendorSearchError } = await serviceRoleClient
+        .schema("erp_master")
+        .from("vendor_master")
+        .select("id")
+        .or(`vendor_name.ilike.%${search}%,vendor_code.ilike.%${search}%`);
+      if (vendorSearchError) {
+        throw new Error("PROCUREMENT_PO_LIST_FAILED");
+      }
+      const matchedVendorIds = ((matchedVendors ?? []) as { id: string }[]).map((row) => row.id);
+      const orParts = [`po_number.ilike.%${search}%`];
+      if (matchedVendorIds.length > 0) {
+        orParts.push(`vendor_id.in.(${matchedVendorIds.join(",")})`);
+      }
+      query = query.or(orParts.join(","));
     }
 
     const { data, error, count } = await query;
