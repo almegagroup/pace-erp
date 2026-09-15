@@ -33,6 +33,7 @@ import {
   activateReleasedBatchNumberInstance,
   findReleasedBatchNumberInstances,
   generateBatchNumber,
+  isBatchSeriesAutoGenerate,
   upsertBatchNumberInstanceForProcessOrder,
 } from "./batch_series.handlers.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
@@ -2550,6 +2551,15 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       // Caller hasn't explicitly chosen to skip yet — surface the choice instead of silently picking one.
       return poErr(req, ctx, "PROD_BATCH_RELEASED_AVAILABLE", 409, "Released batch numbers are available for this company and PO type");
     } else {
+      // MTS-only: SA can mark a Prodshade's batch series manual-entry-only
+      // (unchecked "auto-generate" on SA Batch Series) for a production line
+      // where the batch number is decided by hand (e.g. a pre-printed
+      // pack-size run) rather than sequentially assigned. This screen has no
+      // manual-entry input yet -- fail loud instead of silently ignoring the
+      // setting and auto-generating anyway.
+      if (batchType === "MTS" && !(await isBatchSeriesAutoGenerate(companyId, batchType, prodshadeId))) {
+        return poErr(req, ctx, "PROD_PO_MANUAL_BATCH_NUMBER_REQUIRED", 422, "This Prodshade's batch series is manual-entry-only -- Start Batch cannot auto-generate a number for it yet");
+      }
       batchNumber = await generateBatchNumber(companyId, batchType, prodshadeId);
     }
     const now = new Date().toISOString();

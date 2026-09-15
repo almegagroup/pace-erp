@@ -335,7 +335,8 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("batch_number_series")
       .select(`
         id, company_id, prodshade_material_id, batch_type, prefix,
-        current_count, numbering_method, serial_pad_width, reset_period, active, created_at
+        current_count, numbering_method, serial_pad_width, reset_period,
+        auto_generate, active, created_at
       `)
       .order("batch_type").order("prefix");
 
@@ -357,7 +358,9 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       data: rows.map((row) => ({
         ...row,
         material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
-        next_batch_preview: buildPreviewBatchNumber(
+        // Manual-entry series (SA unchecked auto_generate, MTS-only today) has
+        // no meaningful "next" number -- the user types it by hand each time.
+        next_batch_preview: row.auto_generate === false ? null : buildPreviewBatchNumber(
           row,
           Number(row.current_count ?? 0) >= ((10 ** Number(row.serial_pad_width ?? 5)) - 1)
             ? 1
@@ -385,6 +388,11 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     // MTS (IWC+Powder) is per-Prodshade; MTO/HPS/MTEST are company-level (83.7, corrected 2026-07-11).
     const isCompanyLevel = batchType === "MTO" || batchType === "HPS" || batchType === "MTEST";
     const materialId = isCompanyLevel ? null : (toTrimmedString(body.prodshade_material_id) || null);
+    // Manual-entry-only is an MTS choice (the SA Batch Series "Starting Count"
+    // checkbox) -- company-level types always auto-generate, whatever the
+    // caller sends is ignored for them so a stray/forged field can't disable
+    // batch numbering for MTO/HPS/MTEST.
+    const autoGenerate = isCompanyLevel ? true : body.auto_generate !== false;
     let currentCount = 0;
 
     const VALID_TYPES = new Set(["MTO","HPS","MTS","MTEST"]);
@@ -414,6 +422,7 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
         numbering_method: numberingMethod,
         serial_pad_width: serialPadWidth,
         reset_period: numberingMethod === "MONTHLY_RESET_MONYY" ? null : null,
+        auto_generate: autoGenerate,
         active: true,
         created_by: ctx.auth_user_id,
       })
@@ -442,7 +451,7 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     const { data: existing, error: existingErr } = await serviceRoleClient
       .schema("erp_production")
       .from("batch_number_series")
-      .select("id, serial_pad_width")
+      .select("id, batch_type, serial_pad_width")
       .eq("id", id)
       .maybeSingle();
     if (existingErr) {
@@ -471,6 +480,11 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
       const serialPadWidth = parseSerialPadWidth(body.serial_pad_width ?? (existing as JsonRecord).serial_pad_width ?? 5, 5);
       const maxCount = (10 ** serialPadWidth) - 1;
       if (Number.isInteger(n) && n >= 0 && n <= maxCount) updates.current_count = n;
+    }
+    // Manual-entry-only is an MTS choice -- company-level types (MTO/HPS/MTEST)
+    // always auto-generate, whatever the caller sends is ignored for them.
+    if (body.auto_generate !== undefined) {
+      updates.auto_generate = String((existing as JsonRecord).batch_type) === "MTS" ? body.auto_generate !== false : true;
     }
 
     const { error } = await serviceRoleClient
@@ -680,4 +694,30 @@ export async function generateBatchNumber(
     throw new Error(`PROD_BATCH_SERIES_NOT_FOUND: type=${batchType}`);
   }
   return String(row.batch_number);
+}
+
+// Whether Start Batch should auto-generate this (company, batch_type,
+// Prodshade)'s next batch number, or the SA has marked it manual-entry-only
+// (checkbox on SA Batch Series — real MTS/Powder production types where the
+// batch number is decided by hand, e.g. a pre-printed pack-size run). No
+// matching row (company-level MTO/HPS/MTEST, or a series that predates this
+// column) defaults to true -- unchanged, pre-existing behavior.
+export async function isBatchSeriesAutoGenerate(
+  companyId: string,
+  batchType: string,
+  prodshadeId: string | null,
+): Promise<boolean> {
+  let query = serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_series")
+    .select("auto_generate")
+    .eq("company_id", companyId)
+    .eq("batch_type", batchType);
+  query = prodshadeId ? query.eq("prodshade_material_id", prodshadeId) : query.is("prodshade_material_id", null);
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    console.error("[batch_series.isBatchSeriesAutoGenerate] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_SERIES_GENERATE_FAILED");
+  }
+  return (data as JsonRecord | null)?.auto_generate !== false;
 }
