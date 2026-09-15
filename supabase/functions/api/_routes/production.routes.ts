@@ -21,6 +21,8 @@ import {
   reactivateStrokeMasterHandler,
   revertStrokeMasterHandler,
   shareStrokeMasterHandler,
+  listMtsCurrentStrokeHandler,
+  setMtsCurrentStrokeHandler,
 } from "../_core/production/stroke_master.handlers.ts";
 import {
   listPackCodesHandler,
@@ -311,6 +313,10 @@ export async function dispatchProductionRoutes(
       return await createStrokeMasterHandler(req, ctx);
     case "POST:/api/production/stroke-shares":
       return await shareStrokeMasterHandler(req, ctx);
+    case "GET:/api/production/mts-current-stroke":
+      return await listMtsCurrentStrokeHandler(req, ctx);
+    case "POST:/api/production/mts-current-stroke":
+      return await setMtsCurrentStrokeHandler(req, ctx);
 
     // Plan Feed (FO management)
     case "GET:/api/production/plan-feed":

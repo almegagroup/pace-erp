@@ -26,8 +26,9 @@ import {
   listStrokeMasters, getStrokeMaster, createStrokeMaster,
   updateStrokeMaster, approveStrokeMaster, revertStrokeMaster,
   rejectStrokeMaster, deactivateStrokeMaster, reactivateStrokeMaster,
-  shareStrokeMaster,
+  shareStrokeMaster, listMtsCurrentStroke, setMtsCurrentStroke,
 } from "./prodApi.js";
+import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
@@ -80,6 +81,11 @@ export default function StrokeMasterPage() {
     company_id: "", from_po_type: "", to_po_type: "", prodshade_material_id: "", stroke_master_id: "", consider_formulation_changes: false,
   });
 
+  // MTS "Current Stroke" drawer — separate from Stroke Share, MTS-only.
+  const [currentStrokeOpen, setCurrentStrokeOpen] = useState(false);
+  const [currentStrokeCompanyId, setCurrentStrokeCompanyId] = useState("");
+  const [currentStrokeSearch, setCurrentStrokeSearch] = useState("");
+
   const [form, setForm] = useState({
     company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
     prodshade_material_id: "", prod_code: "", shade_code: "",
@@ -113,6 +119,22 @@ export default function StrokeMasterPage() {
     queryFn: () => listStrokeMasters({ company_id: shareForm.company_id, status: "APPROVED" }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
     enabled: Boolean(shareOpen && shareForm.company_id && shareForm.from_po_type),
+  });
+  const mtsCurrentStrokeQ = useQuery({
+    queryKey: ["prod-mts-current-stroke", currentStrokeCompanyId],
+    queryFn: () => listMtsCurrentStroke(currentStrokeCompanyId),
+    // fetchProd already unwraps to { stroke_numbers, rows } directly (no
+    // `pagination` key on this response) -- do NOT read `.data` again here,
+    // that's the exact double-unwrap bug class (11-bug #15): it would leave
+    // this query permanently resolving to the empty fallback.
+    select: (d) => d ?? { stroke_numbers: [], rows: [] },
+    enabled: Boolean(currentStrokeOpen && currentStrokeCompanyId),
+    // The global queryClient default staleTime (60s) is wrong for this
+    // drawer specifically -- it's a live multi-user edit surface (another
+    // QA user, or an approve/deactivate/revert elsewhere, can change the
+    // Current Stroke between visits), so every open must hit the server,
+    // never serve a same-session cached copy.
+    staleTime: 0,
   });
 
   const companies = buildTransactionCompanyList(runtimeContext);
@@ -167,13 +189,15 @@ export default function StrokeMasterPage() {
   );
 
   const createCheckStrokes = createCompanyStrokesQ.data ?? [];
-  const normalizedStrokeNumber = String(form.stroke_number ?? "").trim();
+  // Uppercased so MTS's alphanumeric codes (DOE1, DOE2...) dedupe the same way
+  // regardless of case, matching the backend's own uppercase-normalize on save.
+  const normalizedStrokeNumber = String(form.stroke_number ?? "").trim().toUpperCase();
   const normalizedProdCode = String(form.prod_code ?? "").trim().toUpperCase();
   const normalizedShadeCode = String(form.shade_code ?? "").trim().toUpperCase();
   const duplicateStroke = !form.company_id || !normalizedStrokeNumber
     ? null
     : createCheckStrokes.find((stroke) => {
-        if (String(stroke.stroke_number ?? "").trim() !== normalizedStrokeNumber) return false;
+        if (String(stroke.stroke_number ?? "").trim().toUpperCase() !== normalizedStrokeNumber) return false;
         if (form.prodshade_mode === "existing") {
           return String(stroke.prodshade_material_id ?? "") === String(form.prodshade_material_id ?? "");
         }
@@ -386,6 +410,9 @@ export default function StrokeMasterPage() {
       const isNewProdshade = form.prodshade_mode === "new";
       await createStrokeMaster({
         ...form,
+        // Uppercased so MTS's alphanumeric codes (DOE1, DOE2...) are stored
+        // consistently — matches the backend's own uppercase-normalize.
+        stroke_number: form.stroke_number.trim().toUpperCase(),
         prodshade_material_id: isNewProdshade ? "" : form.prodshade_material_id,
         prod_code: isNewProdshade ? form.prod_code.trim().toUpperCase() : "",
         shade_code: isNewProdshade ? form.shade_code.trim().toUpperCase() : "",
@@ -505,6 +532,97 @@ export default function StrokeMasterPage() {
   }
 
   const strokes = strokesQ.data ?? EMPTY_ARRAY;
+  // Current Stroke is MTS-only — the button (and drawer's own company
+  // choices) only exist for companies that actually have an MTS stroke at
+  // all, derived from the page's own already-loaded list (no extra query).
+  const mtsCompanyIds = useMemo(
+    () => [...new Set(strokes.filter((s) => s.po_type === "MTS").map((s) => String(s.company_id ?? "")))].filter(Boolean),
+    [strokes],
+  );
+  const hasMtsProdshade = mtsCompanyIds.length > 0;
+  const currentStrokeCompanyOptions = companyOptions.filter((c) => mtsCompanyIds.includes(c.value));
+
+  function openCurrentStroke() {
+    const defaultCompanyId = mtsCompanyIds.includes(companyFilter) ? companyFilter : (mtsCompanyIds[0] ?? "");
+    setCurrentStrokeCompanyId(defaultCompanyId);
+    setCurrentStrokeSearch("");
+    setCurrentStrokeOpen(true);
+  }
+
+  async function handleSetCurrentStroke(prodshadeMaterialId, strokeNumber) {
+    try {
+      await setMtsCurrentStroke({ company_id: currentStrokeCompanyId, prodshade_material_id: prodshadeMaterialId, stroke_number: strokeNumber });
+      // Patch the cache immediately with the known-correct new state -- the
+      // checkbox must flip right away, not wait on a refetch race. This is
+      // the exact query this drawer reads (same key/shape queryFn resolves
+      // to, pre-`select`): { stroke_numbers, rows }.
+      qc.setQueryData(["prod-mts-current-stroke", currentStrokeCompanyId], (old) => {
+        if (!old?.rows) return old;
+        return {
+          ...old,
+          rows: old.rows.map((row) => {
+            if (row.prodshade_material_id !== prodshadeMaterialId) return row;
+            return {
+              ...row,
+              strokes: Object.fromEntries(
+                Object.entries(row.strokes ?? {}).map(([number, cell]) => [number, { ...cell, current: number === strokeNumber }]),
+              ),
+            };
+          }),
+        };
+      });
+      // Backstop: also invalidate, so a stale/never-fetched cache entry (or
+      // any drift from another user's concurrent change) still self-heals.
+      await qc.invalidateQueries({ queryKey: ["prod-mts-current-stroke"] });
+      toast("Current Stroke updated.");
+    } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
+  }
+
+  const mtsCurrentStrokeData = mtsCurrentStrokeQ.data ?? { stroke_numbers: [], rows: [] };
+  const filteredMtsCurrentStrokeRows = useMemo(() => {
+    const needle = currentStrokeSearch.trim().toLowerCase();
+    if (!needle) return mtsCurrentStrokeData.rows;
+    return mtsCurrentStrokeData.rows.filter((row) => [
+      row.pace_code, row.material_name, row.document_name, ...Object.keys(row.strokes ?? {}),
+    ].filter(Boolean).join(" ").toLowerCase().includes(needle));
+  }, [mtsCurrentStrokeData.rows, currentStrokeSearch]);
+  const mtsCurrentStrokeSearchOptions = useMemo(() => {
+    const values = new Set();
+    for (const row of mtsCurrentStrokeData.rows) {
+      if (row.pace_code) values.add(row.pace_code);
+      if (row.material_name) values.add(row.material_name);
+      if (row.document_name) values.add(row.document_name);
+      for (const number of Object.keys(row.strokes ?? {})) values.add(number);
+    }
+    return [...values];
+  }, [mtsCurrentStrokeData.rows]);
+  const mtsCurrentStrokeColumns = useMemo(() => [
+    { key: "pace_code", label: "Prodshade", width: "160px", render: (row) => row.pace_code ?? "—" },
+    { key: "material_name", label: "Name", width: "180px", render: (row) => row.material_name ?? "—" },
+    { key: "document_name", label: "Description", width: "220px", render: (row) => row.document_name ?? "—" },
+    ...mtsCurrentStrokeData.stroke_numbers.map((strokeNumber) => ({
+      key: `stroke_${strokeNumber}`,
+      label: strokeNumber,
+      width: "90px",
+      align: "center",
+      render: (row) => {
+        const cell = row.strokes?.[strokeNumber];
+        if (!cell?.available) return null;
+        return (
+          <input
+            type="checkbox"
+            checked={Boolean(cell.current)}
+            onChange={() => handleSetCurrentStroke(row.prodshade_material_id, strokeNumber)}
+          />
+        );
+      },
+    })),
+    // handleSetCurrentStroke closes over currentStrokeCompanyId (already a dep)
+    // and is stable in every way that matters here; omitted to avoid rebuilding
+    // every column definition on each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [mtsCurrentStrokeData.stroke_numbers, currentStrokeCompanyId]);
+
   const filteredStrokes = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return strokes;
@@ -515,6 +633,7 @@ export default function StrokeMasterPage() {
     ].filter(Boolean).join(" ").toLowerCase().includes(needle));
   }, [strokes, search]);
   const actions = [
+    ...(hasMtsProdshade ? [{ label: "Current Stroke", tone: "neutral", mnemonic: "U", onClick: openCurrentStroke }] : []),
     { label: "Stroke Share", tone: "neutral", mnemonic: "H", onClick: openShare },
     { label: "New Stroke", tone: "primary", mnemonic: "N", onClick: openCreate },
   ];
@@ -671,7 +790,7 @@ export default function StrokeMasterPage() {
                 }`}
                 value={form.stroke_number}
                 onChange={(e) => setForm((f) => ({ ...f, stroke_number: e.target.value }))}
-                placeholder="Numeric only"
+                placeholder={form.po_type === "MTS" ? "e.g. DOE1, or 1, 2, 3..." : "Numeric only"}
                 required
               />
             </Field>
@@ -941,6 +1060,52 @@ export default function StrokeMasterPage() {
             <input type="checkbox" className="mt-0.5" checked={shareForm.consider_formulation_changes} onChange={(event) => updateShare("consider_formulation_changes", event.target.checked)} />
             <span><strong>Consider formulation changes</strong><br /><span className="text-xs text-slate-500">Unchecked: the same approved formulation becomes active in the target type. Checked: a target-type DRAFT revision is created for changes and must be approved before use.</span></span>
           </label>
+        </div>
+      </DrawerBase>
+
+      {/* MTS Current Stroke Drawer */}
+      <DrawerBase
+        visible={currentStrokeOpen}
+        title="Current Stroke — MTS"
+        side="center"
+        width="min(1200px, calc(100vw - 24px))"
+        onClose={() => setCurrentStrokeOpen(false)}
+        actions={(
+          <div className="flex w-full justify-end">
+            <button type="button" className="border border-slate-300 px-3 py-1.5 text-sm" onClick={() => setCurrentStrokeOpen(false)}>Close</button>
+          </div>
+        )}
+      >
+        <div className="p-4 flex flex-col gap-3">
+          <p className="text-xs text-slate-500">
+            Per Prodshade, one Stroke Number is the current production default for MTS. Check a box to switch it — the rest stay usable but need this to be changed here first.
+          </p>
+          <div className="flex gap-3 flex-wrap items-end">
+            <div className="flex flex-col gap-1 w-64">
+              <label className="text-xs text-slate-500">Company</label>
+              <ErpComboboxField value={currentStrokeCompanyId} onChange={setCurrentStrokeCompanyId} options={currentStrokeCompanyOptions} hideBlank />
+            </div>
+            <div className="min-w-[280px] flex-1">
+              <label className="text-xs text-slate-500 block mb-1">Search (all columns)</label>
+              <input
+                list="mts-current-stroke-search-options"
+                value={currentStrokeSearch}
+                onChange={(e) => setCurrentStrokeSearch(e.target.value)}
+                placeholder="Search Prodshade, description, stroke number..."
+                className="h-8 w-full border border-slate-300 rounded px-2 text-sm outline-none focus:border-sky-500"
+              />
+              <datalist id="mts-current-stroke-search-options">
+                {mtsCurrentStrokeSearchOptions.map((option) => <option key={option} value={option} />)}
+              </datalist>
+            </div>
+          </div>
+          <ErpDenseGrid
+            columns={mtsCurrentStrokeColumns}
+            rows={filteredMtsCurrentStrokeRows}
+            rowKey={(row) => row.prodshade_material_id}
+            maxHeight="520px"
+            emptyMessage={mtsCurrentStrokeQ.isLoading ? "Loading..." : "No MTS Prodshade with an approved Stroke for this company."}
+          />
         </div>
       </DrawerBase>
 
