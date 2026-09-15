@@ -13,6 +13,7 @@ import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { listBatchSeries, createBatchSeries, updateBatchSeries } from "../../../pages/dashboard/production/prodApi.js";
 import { listCompaniesForOm, listMaterials } from "../../../pages/dashboard/om/omApi.js";
+import { materialLabel } from "../../../pages/dashboard/production/strokeShared.jsx";
 
 const BATCH_TYPES = [
   { value: "MTO", label: "MTO - Admix (company-level)" },
@@ -69,19 +70,20 @@ export default function SAProductionBatchSeriesPage() {
     queryKey: ["om-companies"],
     queryFn: () => listCompaniesForOm(),
   });
+  // MTS is the only batch_type that goes per-Prodshade (see requiresProdshade
+  // below), and MTS is SFG-scoped -- IWC/Powder Prodshades are always SFG
+  // material_type, never INT (that's a separate PO type of its own). Scoped
+  // to the create form's own Company (via material_company_ext, same fix as
+  // Stroke Master's picker) -- previously unscoped, so this dropdown mixed
+  // every company's SFG Prodshades into one list.
   const sfgMaterialsQ = useQuery({
-    queryKey: ["om-materials", "SFG"],
-    queryFn: () => listMaterials({ material_type: "SFG", limit: 500 }),
-    select: (data) => data?.data ?? [],
-  });
-  const intMaterialsQ = useQuery({
-    queryKey: ["om-materials", "INT"],
-    queryFn: () => listMaterials({ material_type: "INT", limit: 500 }),
+    queryKey: ["om-materials", "SFG", form.company_id],
+    queryFn: () => listMaterials({ material_type: "SFG", limit: 500, company_id: form.company_id || undefined }),
     select: (data) => data?.data ?? [],
   });
 
   const companies = companiesQ.data ?? [];
-  const prodshadeMaterials = [...(sfgMaterialsQ.data ?? []), ...(intMaterialsQ.data ?? [])];
+  const prodshadeMaterials = sfgMaterialsQ.data ?? [];
   const companyOptions = companies.map((company) => ({
     value: company.id,
     label: `${company.company_code} - ${company.company_name}`,
@@ -89,7 +91,7 @@ export default function SAProductionBatchSeriesPage() {
   const companyLabelById = new Map(companies.map((company) => [company.id, `${company.company_code} - ${company.company_name}`]));
   const prodshadeOptions = prodshadeMaterials.map((material) => ({
     value: material.id,
-    label: `${material.pace_code ?? "-"} - ${material.material_name ?? ""}`,
+    label: materialLabel(material),
   }));
 
   const listQ = useQuery({
@@ -221,7 +223,7 @@ export default function SAProductionBatchSeriesPage() {
                     <span className="rounded bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">{row.batch_type}</span>
                   </td>
                   <td className="px-3 py-2 text-slate-500">
-                    {row.material ? `${row.material.pace_code ?? "-"} - ${row.material.material_name ?? ""}` : "Company-level"}
+                    {row.material ? materialLabel(row.material) : "Company-level"}
                   </td>
                   <td className="px-3 py-2 font-mono font-semibold">{row.prefix}</td>
                   <td className="px-3 py-2 text-slate-600">
@@ -249,7 +251,7 @@ export default function SAProductionBatchSeriesPage() {
         <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-            <ErpComboboxField value={form.company_id} onChange={(value) => setForm((current) => ({ ...current, company_id: value }))} options={companyOptions} />
+            <ErpComboboxField value={form.company_id} onChange={(value) => setForm((current) => ({ ...current, company_id: value, prodshade_material_id: "" }))} options={companyOptions} />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Batch Type <span className="text-rose-500">*</span></label>
@@ -268,7 +270,8 @@ export default function SAProductionBatchSeriesPage() {
                 value={form.prodshade_material_id}
                 onChange={(value) => setForm((current) => ({ ...current, prodshade_material_id: value }))}
                 options={prodshadeOptions}
-                emptyStateLabel="No SFG/INT prodshades found"
+                disabled={!form.company_id}
+                emptyStateLabel={form.company_id ? "No SFG Prodshades found for this company" : "Select a Company first"}
               />
             </div>
           )}
@@ -329,7 +332,7 @@ export default function SAProductionBatchSeriesPage() {
             <div className="space-y-1 rounded bg-slate-50 px-3 py-2 text-xs text-slate-500">
               <p><span className="font-medium">Company:</span> {companyLabelById.get(editSeries.company_id) ?? "-"}</p>
               <p><span className="font-medium">Type:</span> {editSeries.batch_type}</p>
-              {editSeries.material && <p><span className="font-medium">Prodshade:</span> {editSeries.material.pace_code ?? "-"} - {editSeries.material.material_name ?? ""}</p>}
+              {editSeries.material && <p><span className="font-medium">Prodshade:</span> {materialLabel(editSeries.material)}</p>}
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">Prefix</label>

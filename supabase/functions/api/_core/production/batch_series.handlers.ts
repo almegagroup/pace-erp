@@ -100,7 +100,7 @@ async function getMaterialMapByIds(
   const { data: mats, error: matErr } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, pace_code, material_name, shade_code")
+    .select("id, pace_code, material_name, document_name, shade_code")
     .in("id", matIds);
   if (matErr) {
     console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
