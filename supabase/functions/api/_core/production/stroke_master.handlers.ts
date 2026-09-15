@@ -1087,6 +1087,18 @@ export async function rejectStrokeMasterHandler(
       console.error("[stroke_master.rejectStrokeMaster] line delete failed:", JSON.stringify(lineDelErr));
       throw new Error("PROD_STROKE_LINE_DELETE_FAILED");
     }
+    // A "Consider Formulation Changes" Share Stroke logs a stroke_share_event
+    // row with target_stroke_master_id = this draft's own id (NO ACTION FK,
+    // no cascade) -- any such draft could never be rejected without this,
+    // found live 2026-09-15 (SFG-00135/CMP006: reject hard-failed with
+    // PROD_STROKE_REJECT_FAILED after already deleting the lines, leaving an
+    // orphaned zero-line DRAFT).
+    const { error: shareEventDelErr } = await serviceRoleClient.schema("erp_production").from("stroke_share_event")
+      .delete().eq("target_stroke_master_id", id);
+    if (shareEventDelErr) {
+      console.error("[stroke_master.rejectStrokeMaster] share event delete failed:", JSON.stringify(shareEventDelErr));
+      throw new Error("PROD_STROKE_SHARE_EVENT_DELETE_FAILED");
+    }
     const { error } = await serviceRoleClient.schema("erp_production").from("stroke_master").delete().eq("id", id);
     if (error) {
       console.error("[stroke_master.rejectStrokeMaster] delete failed:", JSON.stringify(error));
