@@ -86,8 +86,8 @@ function saveRule(path, payload, fallbackCode) {
   }, fallbackCode);
 }
 
-export function saveCommunicationRuleDraft(payload) {
-  return saveRule("/api/communication/rules/save-draft", payload, "COMMUNICATION_RULE_SAVE_FAILED");
+export function saveCommunicationRule(payload) {
+  return saveRule("/api/communication/rules/save", payload, "COMMUNICATION_RULE_SAVE_FAILED");
 }
 
 export function activateCommunicationRule(payload) {

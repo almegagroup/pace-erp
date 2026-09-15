@@ -6,7 +6,7 @@ import {
   deactivateCommunicationRuleHandler,
   getCommunicationConfigurationBootstrapHandler,
   getCommunicationRuleHandler,
-  saveCommunicationRuleDraftHandler,
+  saveCommunicationRuleHandler,
 } from "../_core/communication/rule_configuration.handlers.ts";
 
 export async function dispatchCommunicationRoutes(
@@ -32,8 +32,8 @@ export async function dispatchCommunicationRoutes(
       return getCommunicationRuleHandler(req, {
         context, request_id: requestId, auth_user_id: session.authUserId, roleCode: session.roleCode,
       });
-    case "POST:/api/communication/rules/save-draft":
-      return saveCommunicationRuleDraftHandler(req, {
+    case "POST:/api/communication/rules/save":
+      return saveCommunicationRuleHandler(req, {
         context, request_id: requestId, auth_user_id: session.authUserId, roleCode: session.roleCode,
       });
     case "POST:/api/communication/rules/activate":

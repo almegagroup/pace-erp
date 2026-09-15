@@ -1,8 +1,12 @@
 import {
+  assertSurfaceHasDataset,
   CommunicationRuleValidationError,
+  datasetsForSurface,
   parseAutomationRuleInput,
   parseRuleConfigurationIdentity,
+  ruleRpcArgs,
   validateActivation,
+  validateDatasetAndColumns,
 } from "./rule_configuration.handlers.ts";
 
 function assertEquals<T>(actual: T, expected: T): void {
@@ -206,4 +210,69 @@ Deno.test("activation requires time for daily schedule", () => {
     recipients: [{ recipient_type: "TO", email: "to@example.com", active: true, display_order: 1 }],
   }));
   assertThrows("COMMUNICATION_RULE_ACTIVE_SCHEDULE_INVALID", () => validateActivation(rule, {} as never));
+});
+
+const PO11_PAGE = { id: "po11-menu-id", tx_code: "PO11", resource_code: "PROC_PLANNING_VIEW", title: "Procurement Planning" };
+
+// --- No-dataset surface must fail closed server-side (Issue 3) ---
+
+Deno.test("a surface with a bound dataset is not rejected", () => {
+  assertSurfaceHasDataset(PO11_PAGE, "planning_dashboard");
+});
+
+Deno.test("bootstrap on a no-dataset surface safely reports zero datasets", () => {
+  assertEquals(datasetsForSurface(PO11_PAGE, "monthly_plan_input"), []);
+});
+
+Deno.test("a no-dataset surface cannot create a new rule", () => {
+  assertThrows("COMMUNICATION_RULE_DATASET_UNAVAILABLE", () => assertSurfaceHasDataset(PO11_PAGE, "monthly_plan_input"));
+  assertThrows("COMMUNICATION_RULE_DATASET_UNAVAILABLE", () => assertSurfaceHasDataset(PO11_PAGE, "sloc_group_setup"));
+  assertThrows("COMMUNICATION_RULE_DATASET_UNAVAILABLE", () => assertSurfaceHasDataset(PO11_PAGE, "item_group_setup"));
+  assertThrows("COMMUNICATION_RULE_DATASET_UNAVAILABLE", () => assertSurfaceHasDataset(PO11_PAGE, "history_archive"));
+});
+
+Deno.test("a dataset bound to another surface is rejected", () => {
+  const rule = parseAutomationRuleInput(draft({ dataset_key: "planning_alert" }));
+  assertThrows("COMMUNICATION_RULE_DATASET_INVALID", () => validateDatasetAndColumns(PO11_PAGE, "monthly_plan_input", rule));
+});
+
+Deno.test("a valid dataset bound to the current surface is accepted", () => {
+  const rule = parseAutomationRuleInput(draft({ dataset_key: "planning_alert" }));
+  const dataset = validateDatasetAndColumns(PO11_PAGE, "planning_dashboard", rule);
+  assertEquals(dataset?.dataset_key, "planning_alert");
+});
+
+Deno.test("an unknown dataset key is rejected", () => {
+  const rule = parseAutomationRuleInput(draft({ dataset_key: "invented_dataset" }));
+  assertThrows("COMMUNICATION_RULE_DATASET_INVALID", () => validateDatasetAndColumns(PO11_PAGE, "planning_dashboard", rule));
+});
+
+Deno.test("an unknown display field is rejected even for a bound dataset", () => {
+  const rule = parseAutomationRuleInput(draft({
+    dataset_key: "planning_alert",
+    columns: [{ field_key: "invented_field", display_order: 1 }],
+  }));
+  assertThrows("COMMUNICATION_RULE_COLUMN_INVALID", () => validateDatasetAndColumns(PO11_PAGE, "planning_dashboard", rule));
+});
+
+Deno.test("a non-displayable field (row identity) is rejected", () => {
+  const rule = parseAutomationRuleInput(draft({
+    dataset_key: "planning_alert",
+    columns: [{ field_key: "decision_key", display_order: 1 }],
+  }));
+  assertThrows("COMMUNICATION_RULE_COLUMN_INVALID", () => validateDatasetAndColumns(PO11_PAGE, "planning_dashboard", rule));
+});
+
+// --- Lifecycle: a generic save can never smuggle a lifecycle status (Issue 2) ---
+
+Deno.test("the generic save RPC payload never carries a lifecycle status field", () => {
+  const rule = parseAutomationRuleInput(draft({ id: "rule-1", version_no: 4 }));
+  const resolved = { identity: { company_id: "company-1", surface_enrollment_id: "ignored", channel: "EMAIL" as const, tx_code: "PO11", resource_code: "PROC_PLANNING_VIEW", surface_key: "planning_dashboard" }, surfaceEnrollmentId: "surface-enrollment-1" };
+  const args = ruleRpcArgs(resolved, rule, { auth_user_id: "user-1" });
+  assertEquals("p_status" in args, false);
+  assertEquals(args.p_rule_id, "rule-1");
+  assertEquals(args.p_company_id, "company-1");
+  assertEquals(args.p_surface_enrollment_id, "surface-enrollment-1");
+  assertEquals(args.p_expected_version_no, 4);
+  assertEquals(args.p_actor, "user-1");
 });

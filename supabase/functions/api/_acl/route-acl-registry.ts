@@ -34,7 +34,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/communication/action-visibility":       { skipAcl: true },
   "GET:/api/communication/configuration":           { skipAcl: true },
   "GET:/api/communication/rules":                   { skipAcl: true },
-  "POST:/api/communication/rules/save-draft":       { skipAcl: true },
+  "POST:/api/communication/rules/save":             { skipAcl: true },
   "POST:/api/communication/rules/activate":         { skipAcl: true },
   "POST:/api/communication/rules/deactivate":       { skipAcl: true },
 

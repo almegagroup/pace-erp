@@ -337,7 +337,7 @@ export function parseAutomationRuleInput(value: unknown): AutomationRuleInput {
   return rule;
 }
 
-function validateDatasetAndColumns(
+export function validateDatasetAndColumns(
   page: CommunicationManifestPageIdentity,
   surfaceKey: string,
   rule: AutomationRuleInput,
@@ -525,7 +525,7 @@ async function readRuleForContext(
   );
 }
 
-function datasetsForSurface(page: RuntimeCatalogPage, surfaceKey: string) {
+export function datasetsForSurface(page: RuntimeCatalogPage, surfaceKey: string) {
   return REPORT_MANIFEST_REGISTRY.listDatasetsForPage(page)
     .filter((dataset) => dataset.surface_keys.includes(surfaceKey))
     .map((dataset) => ({
@@ -626,44 +626,104 @@ async function parseMutationRequest(req: Request): Promise<{ identity: RuleConfi
   return { identity: parseRuleConfigurationIdentity(body), rule: parseAutomationRuleInput(body.rule) };
 }
 
-async function persistRule(req: Request, ctx: HandlerContext, desiredStatus: RuleStatus): Promise<Response> {
+async function fetchRuleStatus(resolved: ResolvedConfigurationContext, ruleId: string): Promise<RuleStatus> {
+  const { data, error } = await resolved.db
+    .schema("erp_communication")
+    .from("automation_rule")
+    .select("status")
+    .eq("id", ruleId)
+    .eq("company_id", resolved.identity.company_id)
+    .eq("surface_enrollment_id", resolved.surfaceEnrollmentId)
+    .eq("channel", resolved.identity.channel)
+    .maybeSingle();
+  if (error) throw new Error("COMMUNICATION_RULE_READ_FAILED");
+  const row = data as { status: RuleStatus } | null;
+  if (!row) fail("COMMUNICATION_RULE_NOT_FOUND", "Automation rule was not found in this context.");
+  return row.status;
+}
+
+/**
+ * A brand-new rule can never be created on a surface with zero bound Report
+ * Manifest datasets -- the frontend already hides "New Rule" there, but a
+ * direct API call must be rejected server-side too (fail closed, never an
+ * invented/fallback dataset).
+ */
+export function assertSurfaceHasDataset(page: RuntimeCatalogPage, surfaceKey: string): void {
+  if (datasetsForSurface(page, surfaceKey).length === 0) {
+    fail("COMMUNICATION_RULE_DATASET_UNAVAILABLE", "No automation dataset is available for this surface.");
+  }
+}
+
+async function prepareRuleMutation(
+  req: Request,
+  ctx: HandlerContext,
+): Promise<{ resolved: ResolvedConfigurationContext; rule: AutomationRuleInput; dataset: ReportDatasetManifest | null }> {
+  const { identity, rule } = await parseMutationRequest(req);
+  const resolved = await resolveConfigurationContext(identity, ctx);
+  if (!rule.id) assertSurfaceHasDataset(resolved.page, resolved.surface.key);
+  const dataset = validateDatasetAndColumns(resolved.page, resolved.surface.key, rule);
+  return { resolved, rule, dataset };
+}
+
+export function ruleRpcArgs(
+  resolved: Pick<ResolvedConfigurationContext, "identity" | "surfaceEnrollmentId">,
+  rule: AutomationRuleInput,
+  ctx: Pick<HandlerContext, "auth_user_id">,
+) {
+  return {
+    p_rule_id: rule.id,
+    p_company_id: resolved.identity.company_id,
+    p_surface_enrollment_id: resolved.surfaceEnrollmentId,
+    p_channel: resolved.identity.channel,
+    p_rule_name: rule.rule_name,
+    p_dataset_key: rule.dataset_key,
+    p_subject_template: rule.subject_template,
+    p_schedule_kind: rule.schedule_kind,
+    p_schedule_time: rule.schedule_time ? `${rule.schedule_time}:00` : null,
+    p_schedule_timezone: rule.schedule_timezone,
+    p_weekly_days: rule.weekly_days,
+    p_monthly_day: rule.monthly_day,
+    p_skip_empty: rule.skip_empty,
+    p_expected_version_no: rule.version_no,
+    p_recipients: rule.recipients,
+    p_columns: rule.columns,
+    p_actor: ctx.auth_user_id,
+  };
+}
+
+function failOnRuleRpcError(error: { message: string; code?: string }, saveFailedCode: string): never {
+  if (error.message.includes("COMMUNICATION_RULE_VERSION_CONFLICT")) {
+    fail("COMMUNICATION_RULE_VERSION_CONFLICT", "This rule changed in another session. Reload it before saving.");
+  }
+  if (error.message.includes("COMMUNICATION_RULE_NOT_FOUND")) {
+    fail("COMMUNICATION_RULE_NOT_FOUND", "Automation rule was not found in this context.");
+  }
+  if (error.code === "23505") {
+    fail("COMMUNICATION_RULE_NAME_DUPLICATE", "A rule with this name already exists for this surface.");
+  }
+  throw new Error(saveFailedCode);
+}
+
+/**
+ * Generic save/update. Status is never taken from the caller: a new rule is
+ * always created DRAFT, and an existing rule always keeps whatever status it
+ * already has (DRAFT -> DRAFT, ACTIVE -> ACTIVE, INACTIVE -> INACTIVE). Only
+ * activateCommunicationRuleHandler/deactivateCommunicationRuleHandler may
+ * change lifecycle status, and only through their own explicit RPCs.
+ */
+export async function saveCommunicationRuleHandler(req: Request, ctx: HandlerContext): Promise<Response> {
   try {
-    const { identity, rule } = await parseMutationRequest(req);
-    const resolved = await resolveConfigurationContext(identity, ctx);
-    const dataset = validateDatasetAndColumns(resolved.page, resolved.surface.key, rule);
-    if (desiredStatus === "ACTIVE") validateActivation(rule, dataset);
-    const { data, error } = await resolved.db.schema("erp_communication").rpc("save_automation_rule", {
-      p_rule_id: rule.id,
-      p_company_id: resolved.identity.company_id,
-      p_surface_enrollment_id: resolved.surfaceEnrollmentId,
-      p_channel: resolved.identity.channel,
-      p_rule_name: rule.rule_name,
-      p_status: desiredStatus,
-      p_dataset_key: rule.dataset_key,
-      p_subject_template: rule.subject_template,
-      p_schedule_kind: rule.schedule_kind,
-      p_schedule_time: rule.schedule_time ? `${rule.schedule_time}:00` : null,
-      p_schedule_timezone: rule.schedule_timezone,
-      p_weekly_days: rule.weekly_days,
-      p_monthly_day: rule.monthly_day,
-      p_skip_empty: rule.skip_empty,
-      p_expected_version_no: rule.version_no,
-      p_recipients: rule.recipients,
-      p_columns: rule.columns,
-      p_actor: ctx.auth_user_id,
-    });
-    if (error) {
-      if (error.message.includes("COMMUNICATION_RULE_VERSION_CONFLICT")) {
-        fail("COMMUNICATION_RULE_VERSION_CONFLICT", "This rule changed in another session. Reload it before saving.");
-      }
-      if (error.message.includes("COMMUNICATION_RULE_NOT_FOUND")) {
-        fail("COMMUNICATION_RULE_NOT_FOUND", "Automation rule was not found in this context.");
-      }
-      if (error.code === "23505") {
-        fail("COMMUNICATION_RULE_NAME_DUPLICATE", "A rule with this name already exists for this surface.");
-      }
-      throw new Error("COMMUNICATION_RULE_SAVE_FAILED");
+    const { resolved, rule, dataset } = await prepareRuleMutation(req, ctx);
+    if (rule.id) {
+      // An ACTIVE rule must stay valid across every ordinary edit -- a save
+      // that would quietly leave it ACTIVE but no longer meeting activation
+      // requirements (e.g. its last TO recipient removed) is rejected rather
+      // than silently degrading what the scheduler will later treat as live.
+      const currentStatus = await fetchRuleStatus(resolved, rule.id);
+      if (currentStatus === "ACTIVE") validateActivation(rule, dataset);
     }
+    const { data, error } = await resolved.db.schema("erp_communication").rpc("save_automation_rule", ruleRpcArgs(resolved, rule, ctx));
+    if (error) failOnRuleRpcError(error, "COMMUNICATION_RULE_SAVE_FAILED");
     const savedId = (data as Array<{ rule_id: string }> | null)?.[0]?.rule_id;
     if (!savedId) throw new Error("COMMUNICATION_RULE_SAVE_FAILED");
     return okResponse({ rule: await readRuleForContext(resolved, savedId) }, ctx.request_id, req);
@@ -672,12 +732,18 @@ async function persistRule(req: Request, ctx: HandlerContext, desiredStatus: Rul
   }
 }
 
-export async function saveCommunicationRuleDraftHandler(req: Request, ctx: HandlerContext): Promise<Response> {
-  return await persistRule(req, ctx, "DRAFT");
-}
-
 export async function activateCommunicationRuleHandler(req: Request, ctx: HandlerContext): Promise<Response> {
-  return await persistRule(req, ctx, "ACTIVE");
+  try {
+    const { resolved, rule, dataset } = await prepareRuleMutation(req, ctx);
+    validateActivation(rule, dataset);
+    const { data, error } = await resolved.db.schema("erp_communication").rpc("activate_automation_rule", ruleRpcArgs(resolved, rule, ctx));
+    if (error) failOnRuleRpcError(error, "COMMUNICATION_RULE_ACTIVATE_FAILED");
+    const savedId = (data as Array<{ rule_id: string }> | null)?.[0]?.rule_id;
+    if (!savedId) throw new Error("COMMUNICATION_RULE_ACTIVATE_FAILED");
+    return okResponse({ rule: await readRuleForContext(resolved, savedId) }, ctx.request_id, req);
+  } catch (error) {
+    return responseForError(error, ctx, req);
+  }
 }
 
 export async function deactivateCommunicationRuleHandler(req: Request, ctx: HandlerContext): Promise<Response> {
@@ -708,6 +774,9 @@ export async function deactivateCommunicationRuleHandler(req: Request, ctx: Hand
       }
       if (error.message.includes("COMMUNICATION_RULE_NOT_FOUND")) {
         fail("COMMUNICATION_RULE_NOT_FOUND", "Automation rule was not found in this context.");
+      }
+      if (error.message.includes("COMMUNICATION_RULE_INVALID_TRANSITION")) {
+        fail("COMMUNICATION_RULE_INVALID_TRANSITION", "Only an active rule can be deactivated.");
       }
       throw new Error("COMMUNICATION_RULE_DEACTIVATE_FAILED");
     }
