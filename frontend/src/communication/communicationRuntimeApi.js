@@ -8,6 +8,38 @@ async function readJsonSafe(response) {
   }
 }
 
+function buildApiError(json, fallbackCode) {
+  const code = json?.code || fallbackCode;
+  const error = new Error(json?.message || code);
+  error.code = code;
+  error.requestId = json?.request_id || null;
+  return error;
+}
+
+async function communicationRequest(path, options, fallbackCode) {
+  const response = await fetch(`${import.meta.env.VITE_API_BASE}${path}`, {
+    credentials: "include",
+    ...options,
+  });
+  const json = await readJsonSafe(response);
+  if (!response.ok || json?.ok !== true) {
+    throw buildApiError(json, fallbackCode);
+  }
+  return json.data;
+}
+
+function configurationQuery({ txCode, resourceCode, surfaceKey, companyId, channel = "EMAIL", ruleId }) {
+  const query = new URLSearchParams({
+    tx_code: txCode,
+    resource_code: resourceCode,
+    surface_key: surfaceKey,
+    company_id: companyId,
+    channel,
+  });
+  if (ruleId) query.set("rule_id", ruleId);
+  return query.toString();
+}
+
 export async function getCommunicationActionVisibility({
   txCode,
   resourceCode,
@@ -23,15 +55,45 @@ export async function getCommunicationActionVisibility({
   });
   if (companyId) query.set("company_id", companyId);
 
-  const response = await fetch(
-    `${import.meta.env.VITE_API_BASE}/api/communication/action-visibility?${query.toString()}`,
-    { credentials: "include" },
+  return communicationRequest(
+    `/api/communication/action-visibility?${query.toString()}`,
+    { method: "GET" },
+    "COMMUNICATION_RUNTIME_VISIBILITY_FAILED",
   );
-  const json = await readJsonSafe(response);
-  if (!response.ok || json?.ok !== true) {
-    const error = new Error(json?.message || "COMMUNICATION_RUNTIME_VISIBILITY_FAILED");
-    error.code = json?.code || "COMMUNICATION_RUNTIME_VISIBILITY_FAILED";
-    throw error;
-  }
-  return json.data;
+}
+
+export function getCommunicationConfiguration(input) {
+  return communicationRequest(
+    `/api/communication/configuration?${configurationQuery(input)}`,
+    { method: "GET" },
+    "COMMUNICATION_RULE_CONFIGURATION_FAILED",
+  );
+}
+
+export function getCommunicationRule(input) {
+  return communicationRequest(
+    `/api/communication/rules?${configurationQuery(input)}`,
+    { method: "GET" },
+    "COMMUNICATION_RULE_READ_FAILED",
+  );
+}
+
+function saveRule(path, payload, fallbackCode) {
+  return communicationRequest(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }, fallbackCode);
+}
+
+export function saveCommunicationRuleDraft(payload) {
+  return saveRule("/api/communication/rules/save-draft", payload, "COMMUNICATION_RULE_SAVE_FAILED");
+}
+
+export function activateCommunicationRule(payload) {
+  return saveRule("/api/communication/rules/activate", payload, "COMMUNICATION_RULE_ACTIVATE_FAILED");
+}
+
+export function deactivateCommunicationRule(payload) {
+  return saveRule("/api/communication/rules/deactivate", payload, "COMMUNICATION_RULE_DEACTIVATE_FAILED");
 }
