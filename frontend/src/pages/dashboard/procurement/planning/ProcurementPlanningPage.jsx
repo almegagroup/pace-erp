@@ -13,6 +13,7 @@ import {
   isAutomationSettingsDrawerOpenForContext,
 } from "../../../../communication/automationDrawerContext.js";
 import { useCommunicationActionVisibility } from "../../../../communication/useCommunicationActionVisibility.js";
+import { withDirtyGuard } from "../../../../communication/dirtyGuard.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
@@ -1369,26 +1370,41 @@ export default function ProcurementPlanningPage() {
     });
   }, [companyId]);
 
-  // Context matching hides the drawer synchronously. When a company or surface
-  // change would leave a dirty editor behind, confirm the discard and never
-  // attach that draft to the new context.
+  // Safety net only -- guardAutomationContextChange (below) intercepts every
+  // direct user action that can change company/surface and asks BEFORE the
+  // change is applied, so Cancel there truly prevents the navigation. This
+  // effect only catches a context change that reaches companyId/activeTab
+  // through some other path (e.g. a route-driven or automatic tab switch).
+  // By the time it fires the context has already changed, so there is no
+  // real "Cancel" to offer here -- asking one would be a false promise. It
+  // simply closes the stale editor without transplanting it, silently.
   useEffect(() => {
     if (!automationDrawerOpenContextKey || automationDrawerOpenContextKey === automationSettingsContextKey) return;
-    if (!automationDrawerDirty) {
-      setAutomationDrawerOpenContextKey(null);
-      return;
-    }
-    void openActionConfirm({
-      eyebrow: "Automation Settings",
-      title: "Automation context changed",
-      message: "The selected company or page surface changed. Its unsaved automation rule is closed and is never moved to the new context.",
-      confirmLabel: "Discard Draft",
-      cancelLabel: "Close",
-    }).finally(() => {
-      setAutomationDrawerDirty(false);
-      setAutomationDrawerOpenContextKey(null);
+    setAutomationDrawerDirty(false);
+    setAutomationDrawerOpenContextKey(null);
+  }, [automationDrawerOpenContextKey, automationSettingsContextKey]);
+
+  // Gate for every direct, user-initiated company/surface change (company
+  // selector, tab click). Asks BEFORE applying the change, so "Keep Editing"
+  // genuinely prevents the navigation and the draft is never left attached
+  // to a context it no longer belongs to.
+  function guardAutomationContextChange(applyChange) {
+    void withDirtyGuard({
+      isDirty: automationDrawerOpen && automationDrawerDirty,
+      confirm: () => openActionConfirm({
+        eyebrow: "Automation Settings",
+        title: "Discard unsaved automation rule changes?",
+        message: "Changing the company or page view will close Automation Settings. This rule's unsaved changes are never moved to the new context.",
+        confirmLabel: "Discard Changes",
+        cancelLabel: "Keep Editing",
+      }),
+      onDiscard: () => {
+        setAutomationDrawerDirty(false);
+        setAutomationDrawerOpenContextKey(null);
+      },
+      apply: applyChange,
     });
-  }, [automationDrawerDirty, automationDrawerOpenContextKey, automationSettingsContextKey]);
+  }
 
   useEffect(() => {
     const nextDrafts = {};
@@ -2024,7 +2040,7 @@ export default function ProcurementPlanningPage() {
                     <TransactionCompanySelector
                       runtimeContext={runtimeContext}
                       value={companyId}
-                      onChange={setCompanyId}
+                      onChange={(value) => guardAutomationContextChange(() => setCompanyId(value))}
                       label="Company"
                     />
                     <label className="grid gap-1 text-sm text-slate-700">
@@ -2041,7 +2057,7 @@ export default function ProcurementPlanningPage() {
                         <button
                           key={tab.id}
                           type="button"
-                          onClick={() => setActiveTab(tab.id)}
+                          onClick={() => guardAutomationContextChange(() => setActiveTab(tab.id))}
                           className={`border px-3 py-2 text-sm font-semibold ${
                             activeTab === tab.id
                               ? "border-sky-700 bg-sky-100 text-sky-950"
@@ -2113,7 +2129,7 @@ export default function ProcurementPlanningPage() {
                       <TransactionCompanySelector
                         runtimeContext={runtimeContext}
                         value={companyId}
-                        onChange={setCompanyId}
+                        onChange={(value) => guardAutomationContextChange(() => setCompanyId(value))}
                         label="Company"
                       />
                       <label className="grid gap-1 text-sm text-slate-700">

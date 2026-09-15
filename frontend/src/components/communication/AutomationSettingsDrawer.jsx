@@ -7,7 +7,7 @@ import {
   deactivateCommunicationRule,
   getCommunicationConfiguration,
   getCommunicationRule,
-  saveCommunicationRuleDraft,
+  saveCommunicationRule,
 } from "../../communication/communicationRuntimeApi.js";
 
 const RECIPIENT_TYPES = ["TO", "CC", "BCC"];
@@ -170,19 +170,22 @@ export default function AutomationSettingsDrawer({
     onClose?.();
   }
 
-  async function persist(mode) {
+  async function persist(action) {
     if (!editor) return;
     setSaving(true);
     setError("");
     setMessage("");
     try {
-      const result = mode === "ACTIVE"
+      // "SAVE" never carries a target status: a new rule is created DRAFT and
+      // an existing rule keeps whatever status it already has. Only
+      // "ACTIVATE" (below) and Deactivate may change lifecycle status.
+      const result = action === "ACTIVATE"
         ? await activateCommunicationRule({ ...input, rule: makePayload(editor) })
-        : await saveCommunicationRuleDraft({ ...input, rule: makePayload(editor) });
+        : await saveCommunicationRule({ ...input, rule: makePayload(editor) });
       setEditor(copy(result.rule));
       setSelectedRuleId(result.rule.id);
       setDirty(false);
-      setMessage(mode === "ACTIVE" ? "Rule activated." : "Draft saved.");
+      setMessage(action === "ACTIVATE" ? "Rule activated." : "Saved.");
       await configuration.refetch();
     } catch (saveError) {
       setError(saveError.code === "COMMUNICATION_RULE_VERSION_CONFLICT"
@@ -301,10 +304,12 @@ export default function AutomationSettingsDrawer({
       actions={(
         <>
           {editor && !noDataset ? <>
-            <button type="button" onClick={() => void persist("DRAFT")} disabled={saving} className="border border-slate-400 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700 disabled:opacity-50">Save Draft</button>
-            <button type="button" onClick={() => void persist(editor.status === "ACTIVE" ? "ACTIVE" : "DRAFT")} disabled={saving} className="border border-sky-700 bg-sky-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-950 disabled:opacity-50">Save</button>
-            <button type="button" onClick={() => void persist("ACTIVE")} disabled={saving} className="border border-emerald-700 bg-emerald-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-950 disabled:opacity-50">Activate</button>
-            {editor.id && editor.status !== "INACTIVE" ? <button type="button" onClick={() => void deactivate()} disabled={saving} className="border border-amber-700 bg-amber-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-950 disabled:opacity-50">Deactivate</button> : null}
+            {/* Actions match status exactly -- a normal Save never offers a
+                path back to DRAFT for an ACTIVE/INACTIVE rule, and Activate
+                only appears where activation is actually the next step. */}
+            <button type="button" onClick={() => void persist("SAVE")} disabled={saving} className="border border-slate-400 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700 disabled:opacity-50">{editor.status === "ACTIVE" || editor.status === "INACTIVE" ? "Save" : "Save Draft"}</button>
+            {editor.status !== "ACTIVE" ? <button type="button" onClick={() => void persist("ACTIVATE")} disabled={saving} className="border border-emerald-700 bg-emerald-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-950 disabled:opacity-50">Activate</button> : null}
+            {editor.id && editor.status === "ACTIVE" ? <button type="button" onClick={() => void deactivate()} disabled={saving} className="border border-amber-700 bg-amber-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-950 disabled:opacity-50">Deactivate</button> : null}
           </> : null}
           <button type="button" onClick={() => void requestClose()} className="border border-slate-400 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-700">Close</button>
         </>
