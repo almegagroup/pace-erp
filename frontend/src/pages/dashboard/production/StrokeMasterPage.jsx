@@ -85,6 +85,13 @@ export default function StrokeMasterPage() {
   const [currentStrokeOpen, setCurrentStrokeOpen] = useState(false);
   const [currentStrokeCompanyId, setCurrentStrokeCompanyId] = useState("");
   const [currentStrokeSearch, setCurrentStrokeSearch] = useState("");
+  // Staged (unsaved) picks: { [prodshade_material_id]: newStrokeNumber }. Kept
+  // independent of the filtered/visible row list on purpose -- changing the
+  // search box must never drop an edit made while a different filter was
+  // active. Cleared on open and on Company switch (a different company's
+  // rows have nothing to do with a pending edit made against another one).
+  const [currentStrokePending, setCurrentStrokePending] = useState({});
+  const [currentStrokeSaving, setCurrentStrokeSaving] = useState(false);
 
   const [form, setForm] = useState({
     company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
@@ -149,9 +156,26 @@ export default function StrokeMasterPage() {
     select: (d) => d?.data ?? [],
     enabled: Boolean(activeCompanyId),
   });
-  const sfgMaterialsQ = useQuery({ queryKey: ["om-materials", "SFG"], queryFn: () => listMaterials({ material_type: "SFG", limit: 500 }), select: (d) => d?.data ?? [] });
-  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
-  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
+  // Company-scoped (via material_company_ext, same as every other picker in
+  // this app) -- previously these three passed no company_id at all, so the
+  // Prodshade/RM/INT pickers dumped every company's materials into one list
+  // (191+ SFG rows company-wide in Prod). Falls back to the unscoped global
+  // list only before a company is actually chosen (activeCompanyId empty).
+  const sfgMaterialsQ = useQuery({
+    queryKey: ["om-materials", "SFG", activeCompanyId],
+    queryFn: () => listMaterials({ material_type: "SFG", limit: 500, company_id: activeCompanyId || undefined }),
+    select: (d) => d?.data ?? [],
+  });
+  const intMaterialsQ = useQuery({
+    queryKey: ["om-materials", "INT", activeCompanyId],
+    queryFn: () => listMaterials({ material_type: "INT", limit: 500, company_id: activeCompanyId || undefined }),
+    select: (d) => d?.data ?? [],
+  });
+  const rmMaterialsQ = useQuery({
+    queryKey: ["om-materials", "RM", activeCompanyId],
+    queryFn: () => listMaterials({ material_type: "RM", limit: 500, company_id: activeCompanyId || undefined }),
+    select: (d) => d?.data ?? [],
+  });
 
   const storageLocationsQ = useQuery({
     queryKey: ["om-storage-locations", activeCompanyId],
@@ -178,8 +202,14 @@ export default function StrokeMasterPage() {
   const strokeStorageLocationOptions = isMtestStroke && l003Location
     ? [{ value: l003Location.id, label: `${l003Location.code} — ${l003Location.name}` }]
     : storageLocationOptions;
+  // Label includes document_name (the human-recognizable product description,
+  // e.g. "TRUCARE WALL PUTTY WHITE") alongside pace_code/material_name -- the
+  // combobox's own search only matches against the label text, and
+  // material_name alone is often just an internal numeric code, not
+  // something a user would actually type to find a material.
   const prodshadeOptions = (prodshadeMaterialsByType[form.material_type] ?? []).map((m) => ({
-    value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
+    value: m.id,
+    label: [m.pace_code ?? "—", m.material_name, m.document_name].filter(Boolean).join(" — "),
   }));
   // Existing Prodshade's Description is its own Material Master document_name --
   // pulled from the list, never re-typed, so a user picking an existing SFG/INT
@@ -546,14 +576,47 @@ export default function StrokeMasterPage() {
     const defaultCompanyId = mtsCompanyIds.includes(companyFilter) ? companyFilter : (mtsCompanyIds[0] ?? "");
     setCurrentStrokeCompanyId(defaultCompanyId);
     setCurrentStrokeSearch("");
+    setCurrentStrokePending({});
     setCurrentStrokeOpen(true);
   }
 
-  async function handleSetCurrentStroke(prodshadeMaterialId, strokeNumber) {
-    try {
-      await setMtsCurrentStroke({ company_id: currentStrokeCompanyId, prodshade_material_id: prodshadeMaterialId, stroke_number: strokeNumber });
+  function changeCurrentStrokeCompany(nextCompanyId) {
+    setCurrentStrokeCompanyId(nextCompanyId);
+    setCurrentStrokePending({});
+  }
+
+  // Stage a row's picked stroke number -- no network call here. Nothing
+  // persists until Save Changes is clicked, so a user can edit many rows
+  // (across any number of searches) and commit them all in one action.
+  function stageCurrentStrokePick(prodshadeMaterialId, strokeNumber) {
+    setCurrentStrokePending((prev) => ({ ...prev, [prodshadeMaterialId]: strokeNumber }));
+  }
+
+  const currentStrokePendingCount = Object.keys(currentStrokePending).length;
+
+  async function handleSaveCurrentStrokes() {
+    const entries = Object.entries(currentStrokePending);
+    if (entries.length === 0) return;
+    setCurrentStrokeSaving(true);
+    // INDEPENDENT: each entry is a different Prodshade's own pick, unrelated
+    // to any other row -- batch in parallel rather than one at a time.
+    const results = await Promise.allSettled(
+      entries.map(([prodshadeMaterialId, strokeNumber]) =>
+        setMtsCurrentStroke({ company_id: currentStrokeCompanyId, prodshade_material_id: prodshadeMaterialId, stroke_number: strokeNumber })
+          .then(() => ({ prodshadeMaterialId, strokeNumber })),
+      ),
+    );
+    const succeeded = [];
+    const failed = [];
+    results.forEach((result, idx) => {
+      if (result.status === "fulfilled") succeeded.push(result.value);
+      else failed.push(entries[idx][0]);
+    });
+
+    if (succeeded.length > 0) {
+      const succeededMap = new Map(succeeded.map((s) => [s.prodshadeMaterialId, s.strokeNumber]));
       // Patch the cache immediately with the known-correct new state -- the
-      // checkbox must flip right away, not wait on a refetch race. This is
+      // grid must reflect it right away, not wait on a refetch race. This is
       // the exact query this drawer reads (same key/shape queryFn resolves
       // to, pre-`select`): { stroke_numbers, rows }.
       qc.setQueryData(["prod-mts-current-stroke", currentStrokeCompanyId], (old) => {
@@ -561,11 +624,12 @@ export default function StrokeMasterPage() {
         return {
           ...old,
           rows: old.rows.map((row) => {
-            if (row.prodshade_material_id !== prodshadeMaterialId) return row;
+            const newNumber = succeededMap.get(row.prodshade_material_id);
+            if (newNumber === undefined) return row;
             return {
               ...row,
               strokes: Object.fromEntries(
-                Object.entries(row.strokes ?? {}).map(([number, cell]) => [number, { ...cell, current: number === strokeNumber }]),
+                Object.entries(row.strokes ?? {}).map(([number, cell]) => [number, { ...cell, current: number === newNumber }]),
               ),
             };
           }),
@@ -574,8 +638,18 @@ export default function StrokeMasterPage() {
       // Backstop: also invalidate, so a stale/never-fetched cache entry (or
       // any drift from another user's concurrent change) still self-heals.
       await qc.invalidateQueries({ queryKey: ["prod-mts-current-stroke"] });
-      toast("Current Stroke updated.");
-    } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
+    }
+
+    setCurrentStrokePending((prev) => {
+      const next = { ...prev };
+      for (const s of succeeded) delete next[s.prodshadeMaterialId];
+      return next;
+    });
+    setCurrentStrokeSaving(false);
+
+    if (failed.length === 0) toast(`Current Stroke updated for ${succeeded.length} Prodshade${succeeded.length === 1 ? "" : "s"}.`);
+    else if (succeeded.length === 0) toast("Save failed for all changed rows.", "error");
+    else toast(`${succeeded.length} saved, ${failed.length} failed -- retry the remaining row(s).`, "error");
   }
 
   const mtsCurrentStrokeData = mtsCurrentStrokeQ.data ?? { stroke_numbers: [], rows: [] };
@@ -596,32 +670,46 @@ export default function StrokeMasterPage() {
     }
     return [...values];
   }, [mtsCurrentStrokeData.rows]);
+  function currentStrokeNumberOf(row) {
+    for (const [number, cell] of Object.entries(row.strokes ?? {})) if (cell?.current) return number;
+    return null;
+  }
+
   const mtsCurrentStrokeColumns = useMemo(() => [
-    { key: "pace_code", label: "Prodshade", width: "160px", render: (row) => row.pace_code ?? "—" },
-    { key: "material_name", label: "Name", width: "180px", render: (row) => row.material_name ?? "—" },
+    { key: "pace_code", label: "Prodshade", width: "150px", render: (row) => row.pace_code ?? "—" },
+    { key: "material_name", label: "Name", width: "160px", render: (row) => row.material_name ?? "—" },
     { key: "document_name", label: "Description", width: "220px", render: (row) => row.document_name ?? "—" },
-    ...mtsCurrentStrokeData.stroke_numbers.map((strokeNumber) => ({
-      key: `stroke_${strokeNumber}`,
-      label: strokeNumber,
-      width: "90px",
-      align: "center",
+    {
+      key: "current_stroke",
+      label: "Current Stroke",
+      width: "130px",
+      render: (row) => currentStrokeNumberOf(row) ?? "—",
+    },
+    {
+      key: "available_strokes",
+      label: "Available Strokes",
+      width: "220px",
       render: (row) => {
-        const cell = row.strokes?.[strokeNumber];
-        if (!cell?.available) return null;
+        const currentNumber = currentStrokeNumberOf(row);
+        const availableNumbers = Object.keys(row.strokes ?? {});
+        const options = availableNumbers.map((number) => ({
+          value: number,
+          label: number,
+          disabled: number === currentNumber,
+        }));
+        const value = currentStrokePending[row.prodshade_material_id] ?? currentNumber ?? "";
         return (
-          <input
-            type="checkbox"
-            checked={Boolean(cell.current)}
-            onChange={() => handleSetCurrentStroke(row.prodshade_material_id, strokeNumber)}
+          <ErpComboboxField
+            value={value}
+            onChange={(nextNumber) => stageCurrentStrokePick(row.prodshade_material_id, nextNumber)}
+            options={options}
+            hideBlank
+            placeholder="-- Select --"
           />
         );
       },
-    })),
-    // handleSetCurrentStroke closes over currentStrokeCompanyId (already a dep)
-    // and is stable in every way that matters here; omitted to avoid rebuilding
-    // every column definition on each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [mtsCurrentStrokeData.stroke_numbers, currentStrokeCompanyId]);
+    },
+  ], [currentStrokePending]);
 
   const filteredStrokes = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -1071,19 +1159,33 @@ export default function StrokeMasterPage() {
         width="min(1200px, calc(100vw - 24px))"
         onClose={() => setCurrentStrokeOpen(false)}
         actions={(
-          <div className="flex w-full justify-end">
-            <button type="button" className="border border-slate-300 px-3 py-1.5 text-sm" onClick={() => setCurrentStrokeOpen(false)}>Close</button>
+          <div className="flex w-full justify-between items-center">
+            <span className="text-xs text-slate-500">
+              {currentStrokePendingCount > 0 ? `${currentStrokePendingCount} unsaved change${currentStrokePendingCount === 1 ? "" : "s"}` : ""}
+            </span>
+            <div className="flex gap-2">
+              <button type="button" className="border border-slate-300 px-3 py-1.5 text-sm" onClick={() => setCurrentStrokeOpen(false)}>Close</button>
+              <button
+                type="button"
+                className="bg-slate-800 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                onClick={handleSaveCurrentStrokes}
+                disabled={currentStrokeSaving || currentStrokePendingCount === 0}
+              >
+                {currentStrokeSaving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
           </div>
         )}
       >
         <div className="p-4 flex flex-col gap-3">
           <p className="text-xs text-slate-500">
-            Per Prodshade, one Stroke Number is the current production default for MTS. Check a box to switch it — the rest stay usable but need this to be changed here first.
+            Per Prodshade, pick a Stroke Number from Available Strokes to switch the production default — the current one stays disabled in that dropdown.
+            Changes are staged here; nothing is saved until you click Save Changes, so you can edit several rows (across any search) and commit them together.
           </p>
           <div className="flex gap-3 flex-wrap items-end">
             <div className="flex flex-col gap-1 w-64">
               <label className="text-xs text-slate-500">Company</label>
-              <ErpComboboxField value={currentStrokeCompanyId} onChange={setCurrentStrokeCompanyId} options={currentStrokeCompanyOptions} hideBlank />
+              <ErpComboboxField value={currentStrokeCompanyId} onChange={changeCurrentStrokeCompany} options={currentStrokeCompanyOptions} hideBlank />
             </div>
             <div className="min-w-[280px] flex-1">
               <label className="text-xs text-slate-500 block mb-1">Search (all columns)</label>
@@ -1121,7 +1223,7 @@ export default function StrokeMasterPage() {
         open={Boolean(memberModal)}
         memberMaterialId={memberMaterialId}
         setMemberMaterialId={setMemberMaterialId}
-        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: [m.pace_code ?? "—", m.material_name, m.document_name].filter(Boolean).join(" — ") }))}
         onCancel={() => setMemberModal(null)}
         onAdd={handleAddMember}
       />
