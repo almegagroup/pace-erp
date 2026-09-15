@@ -544,8 +544,8 @@ function ProcessPoEditTab() {
   const blockMessage = useMemo(() => validateEditablePo(po), [po]);
 
   const machinesQ = useQuery({
-    queryKey: ["production-edit-machines", po?.company_id],
-    queryFn: () => listMachines({ company_id: po.company_id, active: true }),
+    queryKey: ["production-edit-machines", po?.company_id, po?.po_type],
+    queryFn: () => listMachines({ company_id: po.company_id, active: true, po_type: po.po_type || undefined }),
     enabled: Boolean(po?.company_id && !blockMessage),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });

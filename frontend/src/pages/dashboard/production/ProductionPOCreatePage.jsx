@@ -284,8 +284,8 @@ export default function ProductionPOCreatePage() {
   });
 
   const machinesQ = useQuery({
-    queryKey: ["production-create-machines", effectiveCompanyId],
-    queryFn: () => listMachines({ company_id: effectiveCompanyId, active: true }),
+    queryKey: ["production-create-machines", effectiveCompanyId, processForm.po_type],
+    queryFn: () => listMachines({ company_id: effectiveCompanyId, active: true, po_type: processForm.po_type || undefined }),
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });

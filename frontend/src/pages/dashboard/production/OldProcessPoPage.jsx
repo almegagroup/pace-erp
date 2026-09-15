@@ -88,8 +88,8 @@ export default function OldProcessPoPage() {
   const selectedStroke = strokes.find((s) => s.id === strokeId) ?? null;
 
   const machinesQ = useQuery({
-    queryKey: ["old-po-machines", effectiveCompanyId],
-    queryFn: () => listMachines({ company_id: effectiveCompanyId, active: true }),
+    queryKey: ["old-po-machines", effectiveCompanyId, poType],
+    queryFn: () => listMachines({ company_id: effectiveCompanyId, active: true, po_type: poType || undefined }),
     enabled: !!effectiveCompanyId,
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
