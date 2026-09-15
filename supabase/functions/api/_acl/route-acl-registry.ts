@@ -28,6 +28,16 @@ export type RouteAclMeta =
 
 const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
+  // Runtime Communication configuration dynamically verifies the requested
+  // page's EDIT ACL in its page-local company. A static resource here would
+  // incorrectly evaluate only the session-selected company.
+  "GET:/api/communication/action-visibility":       { skipAcl: true },
+  "GET:/api/communication/configuration":           { skipAcl: true },
+  "GET:/api/communication/rules":                   { skipAcl: true },
+  "POST:/api/communication/rules/save":             { skipAcl: true },
+  "POST:/api/communication/rules/activate":         { skipAcl: true },
+  "POST:/api/communication/rules/deactivate":       { skipAcl: true },
+
   // ── Procurement: CSN ─────────────────────────────────────────────────────
   "GET:/api/procurement/csns":                        { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/csns/available-for-sto":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
@@ -647,6 +657,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/admin/users/state":                           { skipAcl: true },
   "POST:/api/admin/users/role":                            { skipAcl: true },
   "PATCH:/api/admin/users/scope/primary-company":          { skipAcl: true },
+  // Communication enrollment is SA/admin governed in its handlers. It has no
+  // company report-data access and no browser-direct table access.
+  "GET:/api/admin/communication/pages":                    { skipAcl: true },
+  "GET:/api/admin/communication/enrollment":               { skipAcl: true },
+  "POST:/api/admin/communication/enrollment":              { skipAcl: true },
   "GET:/api/admin/audit":                                  { skipAcl: true },
   "GET:/api/admin/sessions":                               { skipAcl: true },
   "POST:/api/admin/sessions/revoke":                       { skipAcl: true },
