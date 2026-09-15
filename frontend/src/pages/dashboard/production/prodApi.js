@@ -118,6 +118,8 @@ export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke
 export const getStrokeMaster = (id) => fetchProd("GET", `/api/production/stroke-masters/${id}`);
 export const createStrokeMaster = (body) => fetchProd("POST", "/api/production/stroke-masters", body);
 export const shareStrokeMaster = (body) => fetchProd("POST", "/api/production/stroke-shares", body);
+export const listMtsCurrentStroke = (companyId) => fetchProd("GET", "/api/production/mts-current-stroke", undefined, { company_id: companyId });
+export const setMtsCurrentStroke = (body) => fetchProd("POST", "/api/production/mts-current-stroke", body);
 export const updateStrokeMaster = (id, body) => fetchProd("PATCH", `/api/production/stroke-masters/${id}`, body);
 export const approveStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/approve`);
 export const revertStrokeMaster = (id) => fetchProd("POST", `/api/production/stroke-masters/${id}/revert`);

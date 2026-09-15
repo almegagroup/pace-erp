@@ -470,6 +470,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/stroke-masters":              { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "VIEW" },
   "POST:/api/production/stroke-masters":             { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "WRITE" },
   "POST:/api/production/stroke-shares":              { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "WRITE" },
+  // MTS "Current Stroke" — reuses the same PROD_STROKE_MASTER resource as the
+  // rest of Stroke Master (no new capability/menu entry); whoever already has
+  // VIEW/WRITE on Stroke Master gets this too, per business owner directive.
+  "GET:/api/production/mts-current-stroke":          { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "VIEW" },
+  "POST:/api/production/mts-current-stroke":         { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "WRITE" },
   "GET:/api/production/plan-feed":                   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   "POST:/api/production/plan-feed":                  { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "WRITE" },
   "GET:/api/production/plan-feed/summary":           { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },

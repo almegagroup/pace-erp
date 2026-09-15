@@ -13,6 +13,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
@@ -51,6 +52,85 @@ function validateCommunicationDetails(values: JsonRecord): string | null {
   if (!COMMUNICATION_TYPES.has(communicationType)) return "PROD_STROKE_COMMUNICATION_TYPE_INVALID";
   if (!isManualDocumentDateWithinWindow(communicationDate)) return "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW";
   return null;
+}
+
+// MTS Current Stroke recompute is a no-op for every other po_type/material_type
+// (INT has no sibling-stroke concept; MTO/HPS/MTEST keep their existing design
+// untouched). Fire-and-log, never blocks the caller's own transaction.
+async function maybeRecomputeMtsCurrentStroke(
+  companyId: string,
+  poType: string,
+  materialType: string,
+  prodshadeMaterialId: string | null,
+  actorId: string,
+): Promise<void> {
+  if (poType !== "MTS" || materialType !== "SFG" || !prodshadeMaterialId) return;
+  const { error } = await serviceRoleClient.schema("erp_production").rpc("recompute_mts_current_stroke", {
+    p_company_id: companyId,
+    p_prodshade_material_id: prodshadeMaterialId,
+    p_actor: actorId,
+  });
+  if (error) {
+    console.error("[stroke_master.maybeRecomputeMtsCurrentStroke] rpc failed:", JSON.stringify(error));
+  }
+}
+
+// route-registry's stepAcl() only checks ctx.context.companyId (the session's
+// active company) -- a handler that resolves a DIFFERENT company_id from the
+// request body and then mutates using it must separately confirm the caller
+// actually has WRITE on PROD_STROKE_MASTER at THAT specific company (not just
+// membership, which assertCompanyScope alone proves). Same shape as
+// planning.handlers.ts's canMaintainPlanning/requirePlanningEditAccess (found
+// live 2026-08-11) -- mirrored here for setMtsCurrentStrokeHandler.
+async function canMaintainStrokeMasterAt(ctx: ProdHandlerContext, companyId: string): Promise<boolean> {
+  if (ctx.context.isAdmin) return true;
+  if (!companyId) return false;
+
+  let workContextIds: string[];
+  if (companyId === ctx.context.companyId) {
+    workContextIds = ctx.context.workContextIds && ctx.context.workContextIds.length > 0
+      ? ctx.context.workContextIds
+      : ctx.context.workContextId
+        ? [ctx.context.workContextId]
+        : [];
+  } else {
+    const { data: workContextRows, error: workContextError } = await serviceRoleClient
+      .schema("erp_acl")
+      .from("user_work_contexts")
+      .select("work_context:work_context_id!inner(work_context_id, is_active)")
+      .eq("auth_user_id", ctx.auth_user_id)
+      .eq("company_id", companyId);
+    if (workContextError) return false;
+    workContextIds = ((workContextRows ?? []) as Array<{ work_context: unknown }>)
+      .map((row) => {
+        const wc = Array.isArray(row.work_context) ? row.work_context[0] : row.work_context;
+        return wc && typeof wc === "object" ? (wc as { work_context_id: string; is_active: boolean }) : null;
+      })
+      .filter((wc): wc is { work_context_id: string; is_active: boolean } => Boolean(wc && wc.is_active === true))
+      .map((wc) => wc.work_context_id);
+  }
+  if (workContextIds.length === 0) return false;
+
+  const { data: versionRow, error: versionError } = await serviceRoleClient
+    .schema("acl")
+    .from("acl_versions")
+    .select("acl_version_id")
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .single();
+  if (versionError || !versionRow?.acl_version_id) return false;
+
+  const { data, error } = await readAclSnapshotDecisionAny({
+    db: serviceRoleClient,
+    aclVersionId: versionRow.acl_version_id as string,
+    authUserId: ctx.auth_user_id,
+    companyId,
+    workContextIds,
+    resourceCode: "PROD_STROKE_MASTER",
+    actionCode: "WRITE",
+  });
+  if (error || !data) return false;
+  return data.decision === "ALLOW";
 }
 
 function strokeError(
@@ -1060,6 +1140,14 @@ export async function approveStrokeMasterHandler(
       throw new Error("PROD_STROKE_APPLICABILITY_ACTIVATE_FAILED");
     }
 
+    await maybeRecomputeMtsCurrentStroke(
+      existing.company_id as string,
+      existing.po_type as string,
+      existing.material_type as string,
+      materialId,
+      ctx.auth_user_id,
+    );
+
     return okResponse({ id, status: "APPROVED", prodshade_material_id: materialId }, ctx.request_id, req);
   } catch (err) {
     console.error("[stroke_master.approveStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
@@ -1146,6 +1234,14 @@ export async function deactivateStrokeMasterHandler(
       console.error("[stroke_master.deactivateStrokeMaster] update failed:", JSON.stringify(error));
       throw new Error("PROD_STROKE_DEACTIVATE_FAILED");
     }
+
+    await maybeRecomputeMtsCurrentStroke(
+      existing.company_id as string,
+      existing.po_type as string,
+      existing.material_type as string,
+      existing.prodshade_material_id as string | null,
+      ctx.auth_user_id,
+    );
 
     return okResponse({ id, status: "DEACTIVATED" }, ctx.request_id, req);
   } catch (err) {
@@ -1242,11 +1338,182 @@ export async function revertStrokeMasterHandler(
       throw new Error("PROD_STROKE_REVERT_FAILED");
     }
 
+    await maybeRecomputeMtsCurrentStroke(
+      existing.company_id as string,
+      existing.po_type as string,
+      existing.material_type as string,
+      existing.prodshade_material_id as string | null,
+      ctx.auth_user_id,
+    );
+
     return okResponse({ id, status: "DRAFT" }, ctx.request_id, req);
   } catch (err) {
     console.error("[stroke_master.revertStrokeMasterHandler] request_id:", ctx.request_id, "error:", err);
     const code = err instanceof Error ? err.message : "PROD_STROKE_REVERT_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return strokeError(req, ctx, code, status, "Stroke revert failed");
+  }
+}
+
+// GET /api/production/mts-current-stroke?company_id=...
+// Pivot data for the "Current Stroke" drawer: every Prodshade in this company
+// with at least one APPROVED MTS stroke, the set of stroke_numbers it has
+// available, and which one (if any) is currently the production default.
+// MTS-only — MTO/HPS/MTEST have no equivalent concept.
+export async function listMtsCurrentStrokeHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    if (!companyId) return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "company_id required");
+    await assertCompanyScope(ctx, companyId);
+
+    const { data: strokeRows, error: strokeErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_master")
+      .select("prodshade_material_id, stroke_number")
+      .eq("company_id", companyId)
+      .eq("po_type", "MTS")
+      .eq("material_type", "SFG")
+      .eq("status", "APPROVED");
+    if (strokeErr) {
+      console.error("[stroke_master.listMtsCurrentStroke] stroke query failed:", JSON.stringify(strokeErr));
+      throw new Error("PROD_STROKE_MTS_CURRENT_LOOKUP_FAILED");
+    }
+
+    const availableByProdshade = new Map<string, Set<string>>();
+    for (const row of (strokeRows ?? []) as JsonRecord[]) {
+      const prodshadeId = String(row.prodshade_material_id ?? "");
+      const strokeNumber = String(row.stroke_number ?? "");
+      if (!prodshadeId || !strokeNumber) continue;
+      const set = availableByProdshade.get(prodshadeId) ?? new Set<string>();
+      set.add(strokeNumber);
+      availableByProdshade.set(prodshadeId, set);
+    }
+
+    const prodshadeIds = [...availableByProdshade.keys()];
+    if (prodshadeIds.length === 0) {
+      return okResponse({ data: { stroke_numbers: [], rows: [] } }, ctx.request_id, req);
+    }
+
+    const [materialMap, currentRowsResult] = await Promise.all([
+      getMaterialMapByIds(prodshadeIds),
+      serviceRoleClient
+        .schema("erp_production")
+        .from("mts_current_stroke")
+        .select("prodshade_material_id, stroke_number")
+        .eq("company_id", companyId)
+        .in("prodshade_material_id", prodshadeIds),
+    ]);
+    if (currentRowsResult.error) {
+      console.error("[stroke_master.listMtsCurrentStroke] current-stroke query failed:", JSON.stringify(currentRowsResult.error));
+      throw new Error("PROD_STROKE_MTS_CURRENT_LOOKUP_FAILED");
+    }
+    const currentByProdshade = new Map<string, string>();
+    for (const row of (currentRowsResult.data ?? []) as JsonRecord[]) {
+      currentByProdshade.set(String(row.prodshade_material_id ?? ""), String(row.stroke_number ?? ""));
+    }
+
+    const strokeNumberSet = new Set<string>();
+    for (const set of availableByProdshade.values()) for (const n of set) strokeNumberSet.add(n);
+    const strokeNumbers = [...strokeNumberSet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    const rows = prodshadeIds.map((prodshadeId) => {
+      const material = materialMap.get(prodshadeId) ?? null;
+      const available = availableByProdshade.get(prodshadeId) ?? new Set<string>();
+      const currentNumber = currentByProdshade.get(prodshadeId) ?? null;
+      return {
+        prodshade_material_id: prodshadeId,
+        pace_code: material?.pace_code ?? null,
+        material_name: material?.material_name ?? null,
+        document_name: material?.document_name ?? null,
+        strokes: Object.fromEntries(
+          strokeNumbers
+            .filter((n) => available.has(n))
+            .map((n) => [n, { available: true, current: n === currentNumber }]),
+        ),
+      };
+    });
+    rows.sort((a, b) => (a.material_name ?? "").localeCompare(b.material_name ?? ""));
+
+    return okResponse({ data: { stroke_numbers: strokeNumbers, rows } }, ctx.request_id, req);
+  } catch (err) {
+    console.error("[stroke_master.listMtsCurrentStrokeHandler] request_id:", ctx.request_id, "error:", err);
+    const code = err instanceof Error ? err.message : "PROD_STROKE_MTS_CURRENT_LOOKUP_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "MTS current stroke lookup failed");
+  }
+}
+
+// POST /api/production/mts-current-stroke
+// Sets (or switches) the Current Stroke for one (company, Prodshade) — the
+// explicit human override on top of the auto-select/auto-clear behavior in
+// recompute_mts_current_stroke(). Only ever moves to a stroke_number that is
+// actually APPROVED+available for this Prodshade right now.
+export async function setMtsCurrentStrokeHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    const prodshadeMaterialId = toTrimmedString(body.prodshade_material_id);
+    const strokeNumber = toUpperTrimmedString(body.stroke_number);
+    if (!companyId || !prodshadeMaterialId || !strokeNumber) {
+      return strokeError(req, ctx, "PROD_STROKE_INVALID", 400, "company_id, prodshade_material_id, stroke_number required");
+    }
+    await assertCompanyScope(ctx, companyId);
+    if (!(await canMaintainStrokeMasterAt(ctx, companyId))) {
+      return strokeError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have edit access to Stroke Master for this company.");
+    }
+
+    const { data: match, error: matchErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_master")
+      .select("id")
+      .eq("company_id", companyId)
+      .eq("prodshade_material_id", prodshadeMaterialId)
+      .eq("po_type", "MTS")
+      .eq("material_type", "SFG")
+      .eq("status", "APPROVED")
+      .eq("stroke_number", strokeNumber)
+      .maybeSingle();
+    if (matchErr) {
+      console.error("[stroke_master.setMtsCurrentStroke] validation query failed:", JSON.stringify(matchErr));
+      throw new Error("PROD_STROKE_MTS_CURRENT_SET_FAILED");
+    }
+    if (!match) {
+      return strokeError(req, ctx, "PROD_STROKE_MTS_CURRENT_NOT_AVAILABLE", 422, "That stroke number is not an approved MTS stroke for this Prodshade");
+    }
+
+    const { error: upsertErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_current_stroke")
+      .upsert(
+        {
+          company_id: companyId,
+          prodshade_material_id: prodshadeMaterialId,
+          stroke_number: strokeNumber,
+          set_by: ctx.auth_user_id,
+          last_updated_at: new Date().toISOString(),
+          last_updated_by: ctx.auth_user_id,
+        },
+        { onConflict: "company_id,prodshade_material_id" },
+      );
+    if (upsertErr) {
+      console.error("[stroke_master.setMtsCurrentStroke] upsert failed:", JSON.stringify(upsertErr));
+      throw new Error("PROD_STROKE_MTS_CURRENT_SET_FAILED");
+    }
+
+    return okResponse({ prodshade_material_id: prodshadeMaterialId, stroke_number: strokeNumber }, ctx.request_id, req);
+  } catch (err) {
+    console.error("[stroke_master.setMtsCurrentStrokeHandler] request_id:", ctx.request_id, "error:", err);
+    const code = err instanceof Error ? err.message : "PROD_STROKE_MTS_CURRENT_SET_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return strokeError(req, ctx, code, status, "MTS current stroke set failed");
   }
 }
