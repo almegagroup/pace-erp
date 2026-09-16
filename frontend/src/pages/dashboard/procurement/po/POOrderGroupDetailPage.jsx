@@ -6,7 +6,7 @@ import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, openScreen, openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { openActionPrompt } from "../../../../store/actionPrompt.js";
+import { openActionPrompt, openConfirmPrompt } from "../../../../store/actionPrompt.js";
 import {
   approvePOOrderGroup,
   confirmPOOrderGroup,
@@ -77,9 +77,31 @@ export default function POOrderGroupDetailPage() {
   }
 
   async function handleApprove() {
+    // A pending amendment that raised a PO's ordered_qty needs an explicit
+    // Yes/No from the approver before we touch CSNs at all — see
+    // createCsnsForQtyIncreaseAmendments's comment on the backend for why
+    // this can no longer happen silently. Rate-only amendments (or a PO's
+    // own first-ever approval) never reach here — the backend only ever
+    // returns rows for a genuine ordered_qty increase.
+    const pendingQtyIncreases = group?.pending_qty_increase_amendments ?? [];
+    let createCsnForQtyIncrease;
+    if (pendingQtyIncreases.length > 0) {
+      const summary = pendingQtyIncreases
+        .map((row) => `${row.po_number || "PO"} — ${row.material_display || "Material"}: ${row.old_value} → ${row.new_value} (+${row.delta_qty})`)
+        .join("\n");
+      createCsnForQtyIncrease = await openConfirmPrompt({
+        eyebrow: "Purchase Order Amendment",
+        title: "Create a CSN for the increased quantity?",
+        message: `This approval includes a quantity-increasing amendment:\n${summary}\n\nYes — a new CSN is created for the extra quantity.\nNo — the PO quantity increases, no new CSN is created.`,
+        confirmLabel: "Yes, Create CSN",
+      });
+    }
     const remarks = (await openActionPrompt({ eyebrow: "Purchase Order Order", title: "Approve all POs in this order?", label: "Remarks (optional)", placeholder: "Optional approval remarks" })) ?? "";
     await runAction(
-      () => approvePOOrderGroup(id, { remarks }),
+      () => approvePOOrderGroup(id, {
+        remarks,
+        ...(pendingQtyIncreases.length > 0 ? { create_csn_for_qty_increase: createCsnForQtyIncrease === true } : {}),
+      }),
       "All purchase orders in this group approved."
     );
   }

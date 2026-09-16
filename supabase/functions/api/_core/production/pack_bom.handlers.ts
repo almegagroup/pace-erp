@@ -10,6 +10,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { isGlobalAdmin, isSuperAdmin } from "../../_shared/role_ladder.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
@@ -58,17 +59,20 @@ async function getMaterialMapByIds(
   const matMap = new Map<string, JsonRecord>();
   if (matIds.length === 0) return matMap;
 
-  const { data: mats, error: matErr } = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_master")
-    .select(selectColumns)
-    .in("id", matIds);
-  if (matErr) {
+  let mats: JsonRecord[];
+  try {
+    mats = await fetchInChunks<JsonRecord>(matIds, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select(selectColumns)
+        .in("id", idChunk));
+  } catch (matErr) {
     console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
     throw new Error(errorCode);
   }
 
-  for (const mat of (mats ?? []) as JsonRecord[]) {
+  for (const mat of mats) {
     matMap.set(String(mat.id), mat);
   }
   return matMap;
@@ -419,16 +423,29 @@ export async function listPackBomEligibleSkusHandler(
     const availableSkuIds = skuIds.filter((id) => !existingSkuIds.has(id));
     if (availableSkuIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
-    const { data: skuRows, error: skuErr } = await serviceRoleClient
-      .schema("erp_master")
-      .from("material_master")
-      .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, shade_code, pack_code, status")
-      .in("id", availableSkuIds)
-      .eq("material_type", "FG")
-      .eq("status", "ACTIVE");
-    if (skuErr) throw new Error("PROD_BOM_ELIGIBLE_SKU_FAILED");
+    // Found live 2026-09-16 (CMP003, MTS): a plain .in("id", availableSkuIds) here
+    // silently 500'd once a company's material_company_ext mapping grew past ~400
+    // active rows (CMP003 had 626) -- the same unbounded-.in() URL-length failure
+    // documented in _shared/chunkedIn.ts's own header (§8E). This ran unconditionally
+    // for every po_type on every call, so MTO/HPS/MTEST were never actually exempt --
+    // they just kept working off cached/pre-existing Pack BOMs and weren't retried
+    // fresh after the company's material count crossed the threshold. See §8E in
+    // CLAUDE.md: any id list built from a company/date-range filter must be chunked.
+    let skuRows: JsonRecord[];
+    try {
+      skuRows = await fetchInChunks<JsonRecord>(availableSkuIds, (idChunk) =>
+        serviceRoleClient
+          .schema("erp_master")
+          .from("material_master")
+          .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, shade_code, pack_code, status")
+          .in("id", idChunk)
+          .eq("material_type", "FG")
+          .eq("status", "ACTIVE"));
+    } catch {
+      throw new Error("PROD_BOM_ELIGIBLE_SKU_FAILED");
+    }
 
-    const skuList = (skuRows ?? []) as JsonRecord[];
+    const skuList = skuRows;
     if (skuList.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     const packCodeMap = await getPackCodeMapByCodes(
