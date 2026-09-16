@@ -23836,13 +23836,29 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   কিন্তু MTS edit window বানানোর সময় এই field-টা রেডিই থাকবে।
 - **Phase 1 (Foundation) — ✅ IMPLEMENTED (২০২৬-০৯-১৬)।** Machine+Sloc mapping
   (`machine_master.storage_location_id` + FK, company-scope validated), `machine_stock_log`
-  side-table (schema অনুযায়ী, এখনো কোনো writer ছাড়া), `SAMachineMaster.jsx`-এ নতুন Storage
+  side-table (schema অনুযায়ী), `SAMachineMaster.jsx`-এ নতুন Storage
   Location Mapping Tab, আর Process PO **Create**-এ (Edit-এ না, উপরের point দেখো) MTS-only
   machine dropdown location-filter + "Select all MTS machines" checkbox — সব dev-এ migrate+verify
-  করা হয়েছে, guard/lint clean। Phase 2 (Transfer/Distribution, §138.13 — DESIGN LOCKED, IN10/IN11
-  reuse + IN11-এর নতুন "Distribute to Machine" বাটন), Phase 3 (Consumption/hard-block conditions,
-  §138.12-এ DESIGN LOCKED), Phase 4 (IN02/IN03 reporting), Phase 5 (PID) এখনো implementation শুরু
-  হয়নি — শুধু Phase 4/5-এর design এখনো বাকি।
+  করা হয়েছে, guard/lint clean।
+- **Phase 2 (Transfer/Distribution, §138.13/§138.13.1) — ✅ IMPLEMENTED (২০২৬-০৯-১৬), `machine_stock_log`-এর
+  প্রথম real writer।** IN10/IN11 নিজেরা অপরিবর্তিত (ইতিমধ্যেই fully operational, §121)। নতুন যা
+  যোগ হয়েছে: দুটো backend handler (`location_transfer.handlers.ts`-এই, নতুন file না) —
+  `listUnassignedMachineStockHandler` (`GET /api/procurement/machine-distribution/unassigned` —
+  company-র সব MTS machine-tracked location মিলিয়ে Unassigned bucket balance, item+location-ভিত্তিক
+  aggregate করে) আর `postMachineDistributionHandler` (`POST /api/procurement/machine-distribution/assign`
+  — §138.6-এর `MANUAL_ALLOT` paired double-entry লেখে, একটা bulk `INSERT`-এ সব split atomic ভাবে,
+  cross-location machine assign আর duplicate machine block করে, live Unassigned balance-এর বিরুদ্ধে
+  re-validate করে)। দুটোই existing `PROC_LOC_TRANSFER_POST` ACL resource-ই reuse করে (VIEW/WRITE) —
+  IN11-এর existing user-রাই automatic access পায়, কোনো নতুন ACL grant লাগেনি। Frontend:
+  `LocationTransferWorkbenchPage.jsx`-এ নতুন `DistributeToMachineDrawer` (center drawer, ErpDenseGrid +
+  all-column search + per-item `MachineSplitPanel` sub-view) আর header-এ "Distribute to Machine" বাটন —
+  `listMachines({po_type:"MTS"})`-এর result খালি থাকলে বাটন page-এই দেখাবে না (company-level
+  visibility), grid খালি থাকলে ("কোনো MTS location-এ Unassigned নেই") save করা যাবে না (item-level
+  inactive condition, business owner-এর exact rule)। সব guard (route-acl-registry, stock-posting,
+  hardcoded-role-check, wrong-company-source, jsx-no-undef, frontend-payload) + `eslint` clean।
+- Phase 3 (Consumption/hard-block conditions, §138.12-এ DESIGN LOCKED), Phase 4 (IN02/IN03 reporting),
+  Phase 5 (PID, §138.7-এ DESIGN LOCKED — কোনো নতুন UI লাগবে না, শুধু PID_ADJUSTMENT-এর backend writer)
+  এখনো implementation শুরু হয়নি — শুধু Phase 4-এর বিস্তারিত design এখনো বাকি।
 
 ### 138.12 — MTS Alternate-Group Auto-Derive Mechanism (LOCKED, ২০২৬-০৯-১৬)
 
@@ -23924,7 +23940,7 @@ StrokeMasterPage.jsx-এর সাথে সম্পর্কিত):**
 ব্যবহার হয়, alternate-group থাকলেও optional/manual override হিসেবেই থাকে — §138 এর আগের অংশে
 verify করা আছে, HPS/INT sample stroke-এ কোনো shop-floor location-ই নেই)।
 
-### 138.13 — Phase 2: Warehouse→Machine Distribution — IN10/IN11 reuse, নতুন "Distribute to Machine" বাটন (LOCKED, ২০২৬-০৯-১৬)
+### 138.13 — Phase 2: Warehouse→Machine Distribution — IN10/IN11 reuse, নতুন "Distribute to Machine" বাটন (LOCKED + ✅ IMPLEMENTED, ২০২৬-০৯-১৬)
 
 **প্রেক্ষাপট:** §138.12-এর auto-derive-এও যদি machine-এর নিজের bucket-এ formulation+group মিলিয়ে
 requirement-এর তুলনায় কম stock থাকে (§138.12 point 5, hard block), root-cause fix হলো warehouse
@@ -23964,11 +23980,9 @@ warehouse থেকে যেকোনো valid item-ই তোলা যায�
   machine-এ item distribute করে আনবে, তারপর আবার Standard-এ ফিরে auto-derive re-run করবে — এভাবেই
   root-cause resolve হয়, hard block শুধু safety net হিসেবে থেকে যায়।
 
-**⏳ এখনো খোলা (পরের ধাপ):** বাটন click করলে যে center drawer খুলবে, তার ভেতরের exact ফিল্ড/flow
-(Company/Prodshade select, machine-wise qty entry, ইত্যাদি) — এখনো design হয়নি, business owner-এর
-input বাকি।
+**✅ Drawer flow lock + implement হয়েছে — §138.13.1 দেখো।**
 
-#### 138.13.1 — Drawer flow: item grid → per-item machine-split, `MANUAL_ALLOT` reuse (LOCKED, ২০২৬-০৯-১৬)
+#### 138.13.1 — Drawer flow: item grid → per-item machine-split, `MANUAL_ALLOT` reuse (LOCKED + ✅ IMPLEMENTED, ২০২৬-০৯-১৬)
 
 **Drawer-এর প্রথম view — ErpDenseGrid, company-র সব MTS location একসাথে:**
 

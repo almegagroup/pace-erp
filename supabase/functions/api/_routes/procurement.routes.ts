@@ -204,7 +204,9 @@ import {
   getLocationTransferRequestHandler,
   getLocationTransferWorkbenchHandler,
   listLocationTransferRequestsHandler,
+  listUnassignedMachineStockHandler,
   postLocationTransferHandler,
+  postMachineDistributionHandler,
   previewLocationTransferAvailabilityHandler,
   reverseLocationTransferPostingHandler,
   updateLocationTransferRequestHandler,
@@ -537,6 +539,10 @@ export async function dispatchProcurementRoutes(
       return await getLocationTransferWorkbenchHandler(req, ctx);
     case "POST:/api/procurement/location-transfer-postings":
       return await postLocationTransferHandler(req, ctx);
+    case "GET:/api/procurement/machine-distribution/unassigned":
+      return await listUnassignedMachineStockHandler(req, ctx);
+    case "POST:/api/procurement/machine-distribution/assign":
+      return await postMachineDistributionHandler(req, ctx);
     case "GET:/api/procurement/stock-status-change/balance":
       return await getStockStatusChangeBalanceHandler(req, ctx);
     case "POST:/api/procurement/stock-status-change/postings":

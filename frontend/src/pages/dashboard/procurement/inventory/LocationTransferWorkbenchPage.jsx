@@ -3,16 +3,20 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { listMachines } from "../../om/omApi.js";
 import {
   getLocationTransferWorkbench,
   getLocationTransferWorkbenchByNumber,
+  listUnassignedMachineStock,
   postLocationTransfer,
+  postMachineDistribution,
   reverseLocationTransferPosting,
 } from "../procurementApi.js";
 
@@ -36,6 +40,218 @@ function formatDateTime(value) {
 function formatNumber(value) {
   const numeric = Number(value ?? 0);
   return Number.isFinite(numeric) ? numeric.toFixed(3) : "0.000";
+}
+
+// §138.13.1 -- one Unassigned-bucket row's identity: (location, material, batch).
+function distributionRowKey(row) {
+  return `${row.storage_location_id}::${row.material_id}::${row.batch_number ?? ""}`;
+}
+
+// §138.13.1 -- machine-split sub-view for one Unassigned item: manual qty per
+// machine mapped to that item's own storage location, live running balance.
+function MachineSplitPanel({ row, companyId, qtyByMachine, onChangeQty, onClose }) {
+  const machinesQuery = useQuery({
+    queryKey: ["ltr-distribute-machines", companyId, row.storage_location_id],
+    queryFn: () => listMachines({
+      company_id: companyId,
+      active: true,
+      po_type: "MTS",
+      storage_location_id: row.storage_location_id,
+    }),
+    enabled: Boolean(companyId && row.storage_location_id),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const machines = (machinesQuery.data ?? []).filter(
+    (machine) => machine.storage_location_id === row.storage_location_id,
+  );
+  const assignedTotal = Object.values(qtyByMachine).reduce((sum, value) => sum + (Number(value) || 0), 0);
+  const remaining = Number((Number(row.unassigned_qty ?? 0) - assignedTotal).toFixed(6));
+
+  return (
+    <ErpSectionCard eyebrow="Assign" title={row.material_label}>
+      <div className="mb-3 text-xs text-slate-600">
+        {row.storage_location_label} &middot; Unassigned: {formatNumber(row.unassigned_qty)}
+        {row.batch_number ? <> &middot; Batch: {row.batch_number}</> : null}
+      </div>
+      <div className="grid gap-2">
+        {machines.map((machine) => (
+          <div key={machine.id} className="flex items-center justify-between gap-3">
+            <span className="text-sm text-slate-800">{machine.machine_code} &mdash; {machine.machine_name}</span>
+            <input
+              value={qtyByMachine[machine.id] ?? ""}
+              onChange={(event) => onChangeQty(machine.id, event.target.value)}
+              placeholder="0"
+              className="h-8 w-32 border border-slate-300 bg-white px-2 text-right text-sm text-slate-900"
+            />
+          </div>
+        ))}
+        {!machinesQuery.isLoading && machines.length === 0 ? (
+          <div className="text-xs text-slate-500">No MTS machine mapped to this storage location.</div>
+        ) : null}
+      </div>
+      <div className={`mt-3 text-xs font-semibold ${remaining < -0.000001 ? "text-rose-700" : "text-slate-600"}`}>
+        Remaining balance: {formatNumber(remaining)}
+      </div>
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-8 border border-slate-300 bg-white px-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+        >
+          Done
+        </button>
+      </div>
+    </ErpSectionCard>
+  );
+}
+
+// §138.13/§138.13.1 -- general, always-present IN11 button (not tied to a
+// specific transfer): all Unassigned items across this company's MTS
+// machine-tracked locations, per-item machine split, per-item or bulk Save,
+// partial supported (whatever isn't assigned stays Unassigned for later).
+function DistributeToMachineDrawer({ visible, onClose, companyId }) {
+  const [search, setSearch] = useState("");
+  const [expandedKey, setExpandedKey] = useState(null);
+  const [pendingByKey, setPendingByKey] = useState({});
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const unassignedQuery = useQuery({
+    queryKey: ["ltr-distribute-unassigned", companyId],
+    queryFn: () => listUnassignedMachineStock(companyId),
+    enabled: visible && Boolean(companyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+
+  const rows = unassignedQuery.data ?? [];
+  const searchTerm = search.trim().toLowerCase();
+  const filteredRows = searchTerm
+    ? rows.filter((row) => `${row.material_label} ${row.storage_location_label}`.toLowerCase().includes(searchTerm))
+    : rows;
+  const expandedRow = expandedKey ? rows.find((row) => distributionRowKey(row) === expandedKey) ?? null : null;
+
+  function handleChangeQty(rowKey, machineId, value) {
+    setPendingByKey((current) => ({
+      ...current,
+      [rowKey]: { ...(current[rowKey] ?? {}), [machineId]: value },
+    }));
+  }
+
+  async function handleSave() {
+    setError("");
+    setNotice("");
+    const distributions = rows
+      .map((row) => {
+        const key = distributionRowKey(row);
+        const qtyByMachine = pendingByKey[key] ?? {};
+        const splits = Object.entries(qtyByMachine)
+          .map(([machine_id, qty]) => ({ machine_id, qty: Number(qty) }))
+          .filter((split) => split.machine_id && split.qty > 0);
+        if (splits.length === 0) return null;
+        return {
+          storage_location_id: row.storage_location_id,
+          material_id: row.material_id,
+          batch_number: row.batch_number ?? null,
+          splits,
+        };
+      })
+      .filter(Boolean);
+    if (distributions.length === 0) {
+      setError("Enter at least one machine quantity before saving.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await postMachineDistribution({ company_id: companyId, distributions });
+      setPendingByKey({});
+      setExpandedKey(null);
+      setNotice("Distribution saved. Whatever wasn't assigned stays Unassigned.");
+      await unassignedQuery.refetch();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Distribution failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <DrawerBase
+      visible={visible}
+      onClose={onClose}
+      onEscape={onClose}
+      side="center"
+      width="min(980px, calc(100vw - 24px))"
+      title="Distribute to Machine"
+      actions={(
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 border border-slate-300 bg-white px-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={saving}
+            className="h-8 border border-sky-700 bg-sky-100 px-4 text-xs font-semibold uppercase tracking-[0.12em] text-sky-950 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </>
+      )}
+    >
+      {error ? <div className="mb-3 text-xs font-semibold text-rose-700">{error}</div> : null}
+      {notice ? <div className="mb-3 text-xs font-semibold text-emerald-700">{notice}</div> : null}
+      <input
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="Search item or storage location..."
+        className="mb-3 h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
+      />
+      <ErpDenseGrid
+        columns={[
+          { key: "material_label", label: "Item", width: "260px" },
+          { key: "storage_location_label", label: "Storage Location", width: "200px" },
+          { key: "unassigned_qty", label: "Unassigned Qty", width: "130px", render: (row) => formatNumber(row.unassigned_qty) },
+          {
+            key: "assign",
+            label: "Action",
+            width: "110px",
+            render: (row) => {
+              const key = distributionRowKey(row);
+              return (
+                <button
+                  type="button"
+                  onClick={() => setExpandedKey((current) => (current === key ? null : key))}
+                  className="border border-sky-300 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-700"
+                >
+                  {expandedKey === key ? "Hide" : "Assign"}
+                </button>
+              );
+            },
+          },
+        ]}
+        rows={filteredRows}
+        rowKey={(row) => distributionRowKey(row)}
+        emptyMessage={unassignedQuery.isLoading ? "Loading..." : "No Unassigned stock at any MTS location."}
+        maxHeight="min(320px, 40vh)"
+      />
+      {expandedRow ? (
+        <div className="mt-3">
+          <MachineSplitPanel
+            row={expandedRow}
+            companyId={companyId}
+            qtyByMachine={pendingByKey[expandedKey] ?? {}}
+            onChangeQty={(machineId, value) => handleChangeQty(expandedKey, machineId, value)}
+            onClose={() => setExpandedKey(null)}
+          />
+        </div>
+      ) : null}
+    </DrawerBase>
+  );
 }
 
 function PostWorkspace({ requestId, openLines, onPosted }) {
@@ -218,6 +434,18 @@ export default function LocationTransferWorkbenchPage() {
   const [refetchNonce, setRefetchNonce] = useState(0);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [distributeOpen, setDistributeOpen] = useState(false);
+
+  // §138.13 -- "Distribute to Machine" is visible only for companies that
+  // have at least one active MTS machine mapped; companies without MTS never
+  // see the button at all (not just disabled).
+  const companyMtsMachinesQuery = useQuery({
+    queryKey: ["ltr-distribute-company-has-mts", companyId],
+    queryFn: () => listMachines({ company_id: companyId, active: true, po_type: "MTS" }),
+    enabled: Boolean(companyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const companyHasMts = (companyMtsMachinesQuery.data ?? []).length > 0;
 
   const workbenchQuery = useQuery({
     queryKey: ["procurement", "location-transfer-workbench", submittedLookup],
@@ -275,6 +503,7 @@ export default function LocationTransferWorkbenchPage() {
   }
 
   return (
+    <>
     <ErpScreenScaffold
       eyebrow="Inventory"
       title="Goods Movement Workbench / IN11"
@@ -284,6 +513,12 @@ export default function LocationTransferWorkbenchPage() {
         ...(workbenchQuery.error instanceof Error ? [{ key: "ltr-post-query-error", tone: "error", message: workbenchQuery.error.message }] : []),
       ]}
       actions={[
+        ...(companyHasMts ? [{
+          key: "distribute-to-machine",
+          label: "Distribute to Machine",
+          tone: "primary",
+          onClick: () => setDistributeOpen(true),
+        }] : []),
         {
           key: "back",
           label: "Back To IN10",
@@ -403,5 +638,11 @@ export default function LocationTransferWorkbenchPage() {
         )}
       </div>
     </ErpScreenScaffold>
+    <DistributeToMachineDrawer
+      visible={distributeOpen}
+      onClose={() => setDistributeOpen(false)}
+      companyId={companyId}
+    />
+    </>
   );
 }
