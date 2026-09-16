@@ -131,29 +131,28 @@ async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, Js
   return map;
 }
 
-async function getPackCodeByCode(packCode: string): Promise<JsonRecord | null> {
-  if (!packCode) return null;
-  const { data, error } = await serviceRoleClient
-    .schema("erp_production")
-    .from("pack_code_master")
-    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, active")
-    .eq("pack_code", packCode)
-    .maybeSingle();
-  if (error) {
-    console.error("[pack_bom.getPackCodeByCode] query failed:", JSON.stringify(error));
-    throw new Error("PROD_BOM_PACK_CODE_LOOKUP_FAILED");
-  }
-  return (data as JsonRecord | null) ?? null;
+// pack_code alone is no longer a safe lookup key — (pack_code, pack_type) can legitimately repeat
+// (Asian Paints' own SKU numbering reuses digits across pack types, §pack-code-scoped-identity).
+// Resolve the FG SKU's own pack_code_master row via its full SKU identity (prodshade external
+// code + pack code) instead, same match resolveProdshadeForSku already performs — never look up
+// pack_code_master by bare pack_code for a specific SKU.
+async function resolvePackCodeForSku(sku: JsonRecord): Promise<JsonRecord | null> {
+  const resolved = await resolveProdshadeForSku(sku);
+  return (resolved?.pack_code as JsonRecord | undefined) ?? null;
 }
 
-async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, JsonRecord>> {
+async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, JsonRecord[]>> {
+  // pack_code alone can now match MULTIPLE rows (pack_code+pack_type is the real identity,
+  // §pack-code-scoped-identity) — collect every row per code instead of overwriting, so
+  // callers can pick the right one by pack_type rather than silently getting whichever
+  // row the query happened to return last.
   const uniqueCodes = [...new Set(packCodes.map((code) => toTrimmedString(code)).filter(Boolean))];
-  const map = new Map<string, JsonRecord>();
+  const map = new Map<string, JsonRecord[]>();
   if (uniqueCodes.length === 0) return map;
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("pack_code_master")
-    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, active")
+    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, inner_uom_code, active")
     .in("pack_code", uniqueCodes);
   if (error) {
     console.error("[pack_bom.getPackCodeMapByCodes] query failed:", JSON.stringify(error));
@@ -161,7 +160,9 @@ async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, J
   }
   for (const row of (data ?? []) as JsonRecord[]) {
     const code = toTrimmedString(row.pack_code);
-    if (code) map.set(code, row);
+    if (!code) continue;
+    const existing = map.get(code);
+    if (existing) existing.push(row); else map.set(code, [row]);
   }
   return map;
 }
@@ -175,7 +176,7 @@ async function resolveProdshadeForSku(sku: JsonRecord): Promise<JsonRecord | nul
     .from("prodshade_pack_config")
     .select(`
       id, material_id, pack_code_id, fill_qty, variant, active,
-      pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
+      pack_code:pack_code_master!pack_code_id(id, pack_code, pack_type, pack_name, bom_required, outer_uom_code, inner_uom_code)
     `)
     .eq("active", true);
   if (error) {
@@ -322,11 +323,13 @@ async function syncPackBomConversions(packBomId: string, createdBy: string): Pro
     [String(bom.sku_material_id ?? "")],
     "[pack_bom.syncPackBomConversions]",
     "PROD_BOM_CONVERSION_SYNC_FAILED",
-    "id, pack_code",
+    "id, pack_code, base_uom_code, external_code, material_name",
   );
   const sku = skuMap.get(String(bom.sku_material_id ?? "")) ?? {};
-  const packCode = await getPackCodeByCode(toTrimmedString(sku.pack_code));
+  const packCode = await resolvePackCodeForSku(sku);
   if (!packCode) throw new Error("PROD_BOM_PACK_CODE_NOT_FOUND");
+  const skuBaseUom = toTrimmedString(sku.base_uom_code);
+  if (!skuBaseUom) throw new Error("PROD_BOM_SKU_BASE_UOM_MISSING");
 
   const sfgLine = lines.find((line) => toTrimmedString(line.line_type) === SFG_LINE_TYPE);
   const sfgQty = parsePositiveNumber(sfgLine?.qty);
@@ -334,12 +337,24 @@ async function syncPackBomConversions(packBomId: string, createdBy: string): Pro
     throw new Error("PROD_BOM_SFG_QTY_REQUIRED");
   }
 
+  // Pack code declares its own layer structure (inner_uom_code, e.g. Bottle/Pouch) — if it has
+  // one, exactly one PM line flagged is_primary_container must carry that unit, so the retail
+  // multi-layer conversions (§retail-pack-layers) always get built correctly rather than
+  // depending purely on the checkbox being ticked on the right row by memory.
+  const declaredInnerUom = toTrimmedString(packCode.inner_uom_code);
+  if (Boolean(packCode.bom_required) && declaredInnerUom) {
+    const hasMatchingInnerLine = lines.some(
+      (line) => Boolean(line.is_primary_container) && toTrimmedString(line.uom_code) === declaredInnerUom,
+    );
+    if (!hasMatchingInnerLine) throw new Error("PROD_BOM_INNER_LAYER_MISSING");
+  }
+
   const rows: JsonRecord[] = [];
   if (Boolean(packCode.bom_required) && sfgQty) {
     rows.push({
       material_id: bom.sku_material_id,
-      from_uom_code: toTrimmedString(packCode.outer_uom_code) || "KG",
-      to_uom_code: "KG",
+      from_uom_code: toTrimmedString(packCode.outer_uom_code) || skuBaseUom,
+      to_uom_code: skuBaseUom,
       conversion_factor: sfgQty,
       variable_conversion: false,
       active: true,
@@ -352,7 +367,7 @@ async function syncPackBomConversions(packBomId: string, createdBy: string): Pro
       rows.push({
         material_id: bom.sku_material_id,
         from_uom_code: pmUom,
-        to_uom_code: "KG",
+        to_uom_code: skuBaseUom,
         conversion_factor: sfgQty / pmQty,
         variable_conversion: false,
         active: true,
@@ -362,8 +377,8 @@ async function syncPackBomConversions(packBomId: string, createdBy: string): Pro
   } else if (!Boolean(packCode.bom_required)) {
     rows.push({
       material_id: bom.sku_material_id,
-      from_uom_code: toTrimmedString(packCode.outer_uom_code) || "KG",
-      to_uom_code: "KG",
+      from_uom_code: toTrimmedString(packCode.outer_uom_code) || skuBaseUom,
+      to_uom_code: skuBaseUom,
       conversion_factor: null,
       variable_conversion: true,
       active: true,
@@ -462,26 +477,27 @@ export async function listPackBomEligibleSkusHandler(
     // would surface these 5 SKUs regardless of which PO Type the caller asked for —
     // selecting MTO/HPS/MTS would still show "Admix sample 1kg" etc., which is wrong.
     // These SKUs only make sense as MTEST results.
+    function findMtestRow(packCode: string): JsonRecord | null {
+      return packCodeMap.get(toTrimmedString(packCode))?.find(
+        (row) => toUpperTrimmedString(row.pack_type) === "MTEST",
+      ) ?? null;
+    }
     const mtestSkus = poType === "MTEST"
-      ? skuList.filter(
-          (sku) => toUpperTrimmedString(packCodeMap.get(toTrimmedString(sku.pack_code))?.pack_type) === "MTEST",
-        )
+      ? skuList.filter((sku) => Boolean(findMtestRow(toTrimmedString(sku.pack_code))))
       : [];
-    const nonMtestSkus = skuList.filter(
-      (sku) => toUpperTrimmedString(packCodeMap.get(toTrimmedString(sku.pack_code))?.pack_type) !== "MTEST",
-    );
+    const nonMtestSkus = skuList.filter((sku) => !findMtestRow(toTrimmedString(sku.pack_code)));
     const mtestOutput: JsonRecord[] = mtestSkus.map((sku) => ({
       ...sku,
       company_id: companyId,
       po_type: poType,
       prodshade_material_id: null,
       prodshade: null,
-      pack_code_row: packCodeMap.get(toTrimmedString(sku.pack_code)) ?? null,
+      pack_code_row: findMtestRow(toTrimmedString(sku.pack_code)),
       stroke_master: null,
     }));
 
     const packCodeIds = [...new Set(
-      [...packCodeMap.values()].map((packCode) => toTrimmedString(packCode.id)).filter(Boolean),
+      [...packCodeMap.values()].flat().map((packCode) => toTrimmedString(packCode.id)).filter(Boolean),
     )];
     if (packCodeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
@@ -490,7 +506,7 @@ export async function listPackBomEligibleSkusHandler(
       .from("prodshade_pack_config")
       .select(`
         id, material_id, pack_code_id, fill_qty, variant, active,
-        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
+        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code, inner_uom_code)
       `)
       .eq("active", true)
       .in("pack_code_id", packCodeIds);
@@ -568,12 +584,15 @@ export async function listPackBomEligibleSkusHandler(
 
     const output: JsonRecord[] = [];
     for (const sku of nonMtestSkus) {
-      const packCode = packCodeMap.get(toTrimmedString(sku.pack_code));
-      if (!packCode) continue;
       const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
       const prodshadeConfig = prodshadeBySkuKey.get(key);
       const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
       if (!prodshade) continue;
+      // pack_code_row comes from this exact SKU's own resolved config (prodshadeConfig),
+      // never from packCodeMap's bare pack_code lookup — that lookup can now return
+      // multiple rows once a pack_code has more than one pack_type variant.
+      const packCode = (prodshadeConfig?.pack_code as JsonRecord | undefined) ?? null;
+      if (!packCode) continue;
       const stroke = strokeByProdshadeId.get(String(prodshade.id));
       if (!stroke) continue;
       const effectiveStorageLocationId = applicableStrokeLocations.get(String(stroke.id))
@@ -789,8 +808,7 @@ export async function createPackBomHandler(
       return bomError(req, ctx, "PROD_BOM_OUTPUT_SLOC_INVALID", 422, "Output storage location must be an active F-location for the selected company");
     }
 
-    const packCode = toTrimmedString((sku as JsonRecord).pack_code);
-    const packCodeRow = await getPackCodeByCode(packCode);
+    const packCodeRow = await resolvePackCodeForSku(sku as JsonRecord);
     if (!packCodeRow) return bomError(req, ctx, "PROD_BOM_PACK_CODE_NOT_FOUND", 422, "Pack code not found for selected SKU");
     const bomRequired = Boolean(packCodeRow.bom_required);
     // §131.4 item #10 (2026-08-26): pack_type=MTEST (pack_code 001 today) is the generic
@@ -1287,10 +1305,10 @@ export async function createPackBomChangeRequestHandler(
       [String((bom as JsonRecord).sku_material_id ?? "")],
       "[pack_bom.createPackBomChangeRequest]",
       "PROD_BCR_CREATE_FAILED",
-      "id, pack_code",
+      "id, pack_code, external_code, material_name",
     );
     const sku = skuMap.get(String((bom as JsonRecord).sku_material_id ?? "")) ?? {};
-    const packCode = await getPackCodeByCode(toTrimmedString(sku.pack_code));
+    const packCode = await resolvePackCodeForSku(sku);
     const bomRequired = Boolean(packCode?.bom_required);
     const now = new Date().toISOString();
 

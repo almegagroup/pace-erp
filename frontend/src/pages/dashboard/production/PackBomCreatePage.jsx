@@ -35,6 +35,8 @@ const ERRORS = {
   PROD_BOM_ALREADY_EXISTS: "A DRAFT or ACTIVE Pack BOM already exists for this company and SKU.",
   PROD_BOM_SCOPE_VIOLATION: "You do not have access to create a Pack BOM for this company.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
+  PROD_BOM_SKU_BASE_UOM_MISSING: "This SKU has no Base UOM set — fix it in Material Master first.",
+  PROD_BOM_INNER_LAYER_MISSING: "This pack code requires an inner-layer PM line (e.g. Bottle/Pouch) — add one and mark it \"Is Primary Container\" in the exact unit the pack code declares.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
@@ -280,7 +282,7 @@ export default function PackBomCreatePage() {
               <div><p className="text-xs text-slate-400">Company</p><p className="font-semibold">{companyLabel(selectedCompany)}</p></div>
               <div><p className="text-xs text-slate-400">Type</p><p className="font-semibold">{poType} / {packingPoTypeForProcessType(poType)}</p></div>
               <div><p className="text-xs text-slate-400">FG SKU</p><p className="font-semibold">{skuLabel(selectedSku)}</p></div>
-              <div><p className="text-xs text-slate-400">Base UOM / BOM</p><p className="font-semibold">KG / {bomRequired ? "Required" : "Not Required"}</p></div>
+              <div><p className="text-xs text-slate-400">Base UOM / BOM</p><p className="font-semibold">{selectedSku?.base_uom_code || "KG"} / {bomRequired ? "Required" : "Not Required"}</p></div>
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
@@ -328,7 +330,7 @@ export default function PackBomCreatePage() {
                           <input className="h-8 w-28 border border-slate-300 rounded px-2 text-right font-mono" type="number" min="0" step="0.001" value={sfgQty} onChange={(event) => setSfgQty(event.target.value)} />
                         ) : "Calculated"}
                       </td>
-                      <td className="py-2 px-3">KG</td>
+                      <td className="py-2 px-3">{selectedSku?.base_uom_code || "KG"}</td>
                       <td className="py-2 px-3">{slocLabel(sfgLineLocation)}</td>
                       <td className="py-2 px-3 font-mono">P261</td>
                     </tr>
@@ -348,6 +350,15 @@ export default function PackBomCreatePage() {
                 {!bomRequired && (
                   <p className="mb-3 text-xs text-slate-500">
                     This pack code is non-fixed. Material/group mapping stays editable here, while quantity can remain blank until Packing PO time.
+                  </p>
+                )}
+                {bomRequired && packCode.inner_uom_code && (
+                  <p className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+                    This pack code has 2 alternate layers. Add the inner-layer material below in{" "}
+                    <span className="font-mono font-semibold">{packCode.inner_uom_code}</span> and tick its{" "}
+                    <span className="font-semibold">Primary Container?</span> checkbox — the outer layer (
+                    <span className="font-mono font-semibold">{packCode.outer_uom_code}</span>) needs no flag,
+                    it is derived automatically from this SKU's own dispatch unit.
                   </p>
                 )}
                 <PackBomLinesTable
