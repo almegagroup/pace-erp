@@ -104,6 +104,7 @@ const messageStyle = {
   fontSize: "14px",
   lineHeight: 1.55,
   color: "#475569",
+  whiteSpace: "pre-line",
 };
 
 const contentStyle = {

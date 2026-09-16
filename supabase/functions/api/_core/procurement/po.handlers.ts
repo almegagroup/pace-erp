@@ -936,17 +936,23 @@ async function createCsnsForPo(
   }
 
   const lineIds = uniqueTrimmedStrings(poLines.map((line) => line.id));
-  // Found live 2026-09-01 (PO ACPL/AD94/2026-27): this used to be "does this line have ANY
-  // existing CSN at all" -- a PO amendment that raises ordered_qty after the line's original
-  // (already fully-received) CSN was created could then never get a new CSN for the incremental
-  // qty the vendor actually sent, because the line already had a row in existingLineIds and was
-  // skipped outright. Now tops up the gap between the line's CURRENT ordered_qty and what its
-  // still-active (not CAN/KOF) sibling CSNs already account for -- covers both the first-ever
-  // confirm (nothing accounted for yet, full ordered_qty gets one CSN, same as before) and a
-  // later amendment (only the fresh delta is new). Sums dispatch_qty, not po_qty -- po_qty on a
-  // CSN row is a snapshot of the line's ordered_qty *at that CSN's own creation time*, not that
-  // CSN's own share of it (every sibling CSN for one line carries the same po_qty value, so
-  // summing po_qty across siblings wildly overcounts). This is the exact same
+  // NOTE (updated 2026-09-16): this function now only ever runs at a PO's own
+  // first-ever confirm/approve (no prior amendment pending) -- see
+  // approvePOHandler/approvePOOrderGroupHandler/approveAmendmentHandler,
+  // which route any amendment-approval to createCsnsForQtyIncreaseAmendments
+  // instead. It used to also be re-run on every amendment re-approval as a
+  // generic "gap fill", but that was found live 2026-09-01 (PO ACPL/AD94/
+  // 2026-27) to duplicate CSNs: this gap calc sums dispatch_qty across active
+  // sibling CSNs, and a freshly-created-but-not-yet-dispatched sibling reads
+  // as "nothing accounted for", so any later re-approval (even a unit_rate-
+  // only amendment that never touched qty) created another full-balance CSN
+  // on top of the still-undispatched one. Left as-is for the first-approval
+  // case it still serves, where there are no siblings yet and the formula
+  // degenerates to "full ordered_qty gets one CSN". Sums dispatch_qty, not
+  // po_qty -- po_qty on a CSN row is a snapshot of the line's ordered_qty *at
+  // that CSN's own creation time*, not that CSN's own share of it (every
+  // sibling CSN for one line carries the same po_qty value, so summing po_qty
+  // across siblings wildly overcounts). This is the exact same
   // orderedQty - knockedOffQty - sum(dispatch_qty) formula computeDispatchQtyPreview already
   // uses for the "Create CSN for Balance" manual flow -- reused here instead of invented fresh,
   // for consistency and because it's the one already proven against real CSN data.
@@ -983,60 +989,181 @@ async function createCsnsForPo(
         return { line, deltaQty: Number((orderedQty - knockedOffQty - accountedQty).toFixed(6)) };
       })
       .filter(({ deltaQty }) => deltaQty > 0.000001)
-      .map(async ({ line, deltaQty }) => {
-        const csnNumber = await generateProcurementDocNumber("CSN");
-        const orderedQty = deltaQty;
-        const materialId = toTrimmedString(line.material_id);
-        const materialCategoryId = materialCategoryByMaterialId.get(materialId) ?? null;
-        const csnType = deriveCsnType(po);
-        const portOfDischargeId = toTrimmedString(po.destination_port_id) || null;
-
-        // Seed the same ETD/ETA-to-plant cascade the CSN would otherwise only
-        // get on its first later edit -- see recalculateAndBuildUpdates's own
-        // comment in csn.handlers.ts for why this was blank until TRN before.
-        const etaUpdates = await recalculateAndBuildUpdates(
-          {
-            csn_type: csnType,
-            po_id: po.id,
-            vendor_id: po.vendor_id,
-            material_category_id: materialCategoryId,
-            company_id: po.company_id,
-            consignee_company_id: po.company_id,
-          },
-          portOfDischargeId ? { port_of_discharge_id: portOfDischargeId } : {},
-        );
-
-        const { error } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("consignment_note")
-          .insert({
-            csn_number: csnNumber,
-            csn_type: csnType,
-            status: "ORD",
-            company_id: po.company_id,
-            vendor_id: po.vendor_id,
-            material_id: line.material_id,
-            material_category_id: materialCategoryId,
-            po_id: po.id,
-            po_line_id: line.id,
-            po_qty: orderedQty,
-            po_uom_code: line.po_uom_code,
-            payment_term_id: po.payment_term_id,
-            lc_required: po.lc_required === true,
-            delivery_type: po.delivery_type ?? "STANDARD",
-            has_rebate: po.has_rebate === true,
-            rebate_remarks: po.rebate_remarks ?? null,
-            indent_required: po.indent_required === true,
-            port_of_discharge_id: portOfDischargeId,
-            ...etaUpdates,
-            created_by: createdBy,
-          });
-
-        if (error) {
-          throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
-        }
-      }),
+      .map(({ line, deltaQty }) =>
+        insertCsnRowForLine(po, line, deltaQty, materialCategoryByMaterialId.get(toTrimmedString(line.material_id)) ?? null, createdBy)
+      ),
   );
+}
+
+// Shared by createCsnsForPo's own confirm/approve-time gap-fill above and by
+// createCsnsForQtyIncreaseAmendments below (amendment-approval flow) -- one
+// insert shape, two different callers deciding the qty to book.
+async function insertCsnRowForLine(
+  po: PurchaseOrderRow,
+  line: PurchaseOrderLineRow,
+  qty: number,
+  materialCategoryId: string | null,
+  createdBy: string,
+): Promise<void> {
+  const csnNumber = await generateProcurementDocNumber("CSN");
+  const csnType = deriveCsnType(po);
+  const portOfDischargeId = toTrimmedString(po.destination_port_id) || null;
+
+  // Seed the same ETD/ETA-to-plant cascade the CSN would otherwise only
+  // get on its first later edit -- see recalculateAndBuildUpdates's own
+  // comment in csn.handlers.ts for why this was blank until TRN before.
+  const etaUpdates = await recalculateAndBuildUpdates(
+    {
+      csn_type: csnType,
+      po_id: po.id,
+      vendor_id: po.vendor_id,
+      material_category_id: materialCategoryId,
+      company_id: po.company_id,
+      consignee_company_id: po.company_id,
+    },
+    portOfDischargeId ? { port_of_discharge_id: portOfDischargeId } : {},
+  );
+
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .insert({
+      csn_number: csnNumber,
+      csn_type: csnType,
+      status: "ORD",
+      company_id: po.company_id,
+      vendor_id: po.vendor_id,
+      material_id: line.material_id,
+      material_category_id: materialCategoryId,
+      po_id: po.id,
+      po_line_id: line.id,
+      po_qty: qty,
+      po_uom_code: line.po_uom_code,
+      payment_term_id: po.payment_term_id,
+      lc_required: po.lc_required === true,
+      delivery_type: po.delivery_type ?? "STANDARD",
+      has_rebate: po.has_rebate === true,
+      rebate_remarks: po.rebate_remarks ?? null,
+      indent_required: po.indent_required === true,
+      port_of_discharge_id: portOfDischargeId,
+      ...etaUpdates,
+      created_by: createdBy,
+    });
+
+  if (error) {
+    throw new Error("PROCUREMENT_CSN_CREATE_FAILED");
+  }
+}
+
+// Amendment-approval CSN creation (LOCKED 2026-09-16, business owner decision):
+// unlike createCsnsForPo's gap-fill (used only at a PO's own first-ever
+// confirm/approve), an amendment approval must NEVER auto-create a CSN --
+// found live that createCsnsForPo's gap formula (sum of sibling dispatch_qty)
+// treats a freshly-created-but-not-yet-dispatched sibling CSN as "nothing
+// accounted for", so *any* amendment re-approval (even a unit_rate-only one
+// that never touched ordered_qty) re-triggered a brand new duplicate CSN for
+// the whole outstanding balance. Now: only an ordered_qty INCREASE amendment
+// can ever create a CSN, and only when the approver explicitly opts in
+// (create_csn_for_qty_increase: true in the approve request body) -- "No"
+// just leaves the PO's ordered_qty higher with no new CSN. The qty booked is
+// taken directly from that amendment's own recorded old_value/new_value
+// delta -- not recomputed via the ambiguous sibling-sum gap heuristic -- so
+// it is exactly the "extra quantity", nothing more.
+async function createCsnsForQtyIncreaseAmendments(
+  po: PurchaseOrderRow,
+  poLines: PurchaseOrderLineRow[],
+  qtyIncreaseRows: PoAmendmentLogRow[],
+  createdBy: string,
+): Promise<void> {
+  if (toUpperTrimmedString(po.delivery_type) === "BULK" || qtyIncreaseRows.length === 0) {
+    return;
+  }
+
+  const lineById = new Map(poLines.map((line) => [toTrimmedString(line.id), line]));
+  const materialCategoryByMaterialId = await getPrimaryMaterialCategoryIds(
+    poLines.map((line) => toTrimmedString(line.material_id)),
+  );
+
+  await Promise.all(
+    qtyIncreaseRows.map((row) => {
+      const line = lineById.get(toTrimmedString(row.po_line_id));
+      if (!line) {
+        return Promise.resolve();
+      }
+      const deltaQty = Number((Number(row.new_value ?? 0) - Number(row.old_value ?? 0)).toFixed(6));
+      if (deltaQty <= 0.000001) {
+        return Promise.resolve();
+      }
+      const materialCategoryId = materialCategoryByMaterialId.get(toTrimmedString(line.material_id)) ?? null;
+      return insertCsnRowForLine(po, line, deltaQty, materialCategoryId, createdBy);
+    }),
+  );
+}
+
+type PoAmendmentLogRow = {
+  id: string;
+  po_id: string;
+  po_line_id: string | null;
+  field_changed: string;
+  old_value: string | null;
+  new_value: string | null;
+};
+
+// Every requires_approval=true amendment row still sitting at PENDING for
+// these POs -- both ordered_qty/unit_rate amendments land here the moment
+// amendPOHandler logs them, and nothing else ever moved them out of PENDING
+// (approveAmendmentHandler's own log update was dead code, never called by
+// the frontend -- the real approval path is approvePOHandler/
+// approvePOOrderGroupHandler, which never touched this table at all before
+// this fix). Callers must mark whatever they act on APPROVED via
+// markAmendmentRowsApproved so a later, unrelated approval never re-reads
+// these same rows again.
+async function getPendingAmendmentRows(poIds: string[]): Promise<PoAmendmentLogRow[]> {
+  const ids = uniqueTrimmedStrings(poIds);
+  if (ids.length === 0) {
+    return [];
+  }
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("po_amendment_log")
+    .select("id, po_id, po_line_id, field_changed, old_value, new_value")
+    .in("po_id", ids)
+    .eq("requires_approval", true)
+    .eq("approval_status", "PENDING");
+
+  if (error) {
+    throw new Error("PROCUREMENT_PO_AMEND_LOOKUP_FAILED");
+  }
+  return (data as PoAmendmentLogRow[] | null) ?? [];
+}
+
+function isQtyIncreaseAmendment(row: PoAmendmentLogRow): boolean {
+  if (row.field_changed !== "ordered_qty") {
+    return false;
+  }
+  const oldQty = Number(row.old_value ?? 0);
+  const newQty = Number(row.new_value ?? 0);
+  return Number.isFinite(oldQty) && Number.isFinite(newQty) && newQty > oldQty;
+}
+
+async function markAmendmentRowsApproved(rowIds: string[], actorId: string): Promise<void> {
+  const ids = uniqueTrimmedStrings(rowIds);
+  if (ids.length === 0) {
+    return;
+  }
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("po_amendment_log")
+    .update({
+      approval_status: "APPROVED",
+      approved_by: actorId,
+      approved_at: new Date().toISOString(),
+    })
+    .in("id", ids);
+
+  if (error) {
+    throw new Error("PROCUREMENT_PO_AMEND_APPROVE_FAILED");
+  }
 }
 
 async function inactivateCsnsForPo(input: {
@@ -2042,6 +2169,25 @@ export async function approvePOHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_APPROVAL_STATE_INVALID", 422, "PO is not pending approval");
     }
 
+    // A PO lands back at PENDING_APPROVAL two different ways: its very first
+    // confirm (no amendment involved -- always needs the initial full-qty
+    // CSN, no decision to ask), or an amendPOHandler-driven re-approval of an
+    // already-CONFIRMED PO. Only the latter must ever prompt for a CSN, and
+    // only when it actually raised ordered_qty -- see
+    // createCsnsForQtyIncreaseAmendments's own comment for why this replaced
+    // the old unconditional createCsnsForPo call on every approval.
+    const pendingAmendmentRows = await getPendingAmendmentRows([poId]);
+    const qtyIncreaseRows = pendingAmendmentRows.filter(isQtyIncreaseAmendment);
+    if (qtyIncreaseRows.length > 0 && typeof body.create_csn_for_qty_increase !== "boolean") {
+      return procurementErrorResponse(
+        req,
+        ctx,
+        "PROCUREMENT_CSN_DECISION_REQUIRED",
+        400,
+        "Specify whether to create a CSN for the increased quantity",
+      );
+    }
+
     const { data: updatedPo, error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("purchase_order")
@@ -2068,7 +2214,15 @@ export async function approvePOHandler(
       remarks: toTrimmedString(body.remarks) || null,
       actionedBy: ctx.auth_user_id,
     });
-    await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
+
+    if (pendingAmendmentRows.length > 0) {
+      await markAmendmentRowsApproved(pendingAmendmentRows.map((row) => row.id), ctx.auth_user_id);
+      if (qtyIncreaseRows.length > 0 && body.create_csn_for_qty_increase === true) {
+        await createCsnsForQtyIncreaseAmendments(updatedPo as PurchaseOrderRow, await getPOLines(poId), qtyIncreaseRows, ctx.auth_user_id);
+      }
+    } else {
+      await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
+    }
 
     const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
     if (orderGroupId) {
@@ -2496,39 +2650,26 @@ export async function approveAmendmentHandler(
     }
     await assertProcurementHeadRole(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by));
 
-    const { data: pendingLogs, error: logError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("po_amendment_log")
-      .select("*")
-      .eq("po_id", poId)
-      .eq("requires_approval", true)
-      .eq("approval_status", "PENDING");
-
-    if (logError) {
-      throw new Error("PROCUREMENT_PO_AMEND_LOOKUP_FAILED");
-    }
-    if (!pendingLogs || pendingLogs.length === 0) {
+    const pendingLogs = await getPendingAmendmentRows([poId]);
+    if (pendingLogs.length === 0) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_NO_PENDING_AMENDMENT", 422, "No pending amendment found");
     }
 
-    const nowIso = new Date().toISOString();
-    const logUpdate = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("po_amendment_log")
-      .update({
-        approval_status: "APPROVED",
-        approved_by: ctx.auth_user_id,
-        approved_at: nowIso,
-        rejection_reason: null,
-      })
-      .eq("po_id", poId)
-      .eq("requires_approval", true)
-      .eq("approval_status", "PENDING");
-
-    if (logUpdate.error) {
-      throw new Error("PROCUREMENT_PO_AMEND_APPROVE_FAILED");
+    // See createCsnsForQtyIncreaseAmendments's own comment: only an
+    // ordered_qty INCREASE ever creates a CSN here, and only when the
+    // approver explicitly opts in via create_csn_for_qty_increase.
+    const qtyIncreaseRows = pendingLogs.filter(isQtyIncreaseAmendment);
+    if (qtyIncreaseRows.length > 0 && typeof body.create_csn_for_qty_increase !== "boolean") {
+      return procurementErrorResponse(
+        req,
+        ctx,
+        "PROCUREMENT_CSN_DECISION_REQUIRED",
+        400,
+        "Specify whether to create a CSN for the increased quantity",
+      );
     }
 
+    const nowIso = new Date().toISOString();
     const { data: updatedPo, error: poUpdateError } = await serviceRoleClient
       .schema("erp_procurement")
       .from("purchase_order")
@@ -2553,6 +2694,11 @@ export async function approveAmendmentHandler(
       remarks: toTrimmedString(body.remarks) || null,
       actionedBy: ctx.auth_user_id,
     });
+
+    await markAmendmentRowsApproved(pendingLogs.map((row) => row.id), ctx.auth_user_id);
+    if (qtyIncreaseRows.length > 0 && body.create_csn_for_qty_increase === true) {
+      await createCsnsForQtyIncreaseAmendments(updatedPo as PurchaseOrderRow, await getPOLines(poId), qtyIncreaseRows, ctx.auth_user_id);
+    }
 
     const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
     if (orderGroupId) {
@@ -3153,11 +3299,36 @@ export async function getPOOrderGroupHandler(
       : { data: null };
     const vendorDisplay = vendorRow ? formatCodeNameDisplay(vendorRow.vendor_code, vendorRow.vendor_name) : null;
 
+    // Lets the "Approve Order" screen ask for a CSN decision (Yes/No) before
+    // calling approve, instead of the approve call failing first with
+    // PROCUREMENT_CSN_DECISION_REQUIRED -- see approvePOOrderGroupHandler's
+    // own comment for why only an ordered_qty increase is ever relevant here.
+    const pendingPoIds = posWithEnrichedLines
+      .filter((po) => toUpperTrimmedString(po.status) === "PENDING_APPROVAL")
+      .map((po) => toTrimmedString(po.id));
+    const pendingAmendmentRows = await getPendingAmendmentRows(pendingPoIds);
+    const poNumberById = new Map(posWithEnrichedLines.map((po) => [toTrimmedString(po.id), toTrimmedString(po.po_number)]));
+    const lineDisplayById = new Map(
+      posWithEnrichedLines.flatMap((po) => po.lines).map((line) => [toTrimmedString(line.id), toTrimmedString(line.material_display)]),
+    );
+    const pendingQtyIncreaseAmendments = pendingAmendmentRows
+      .filter(isQtyIncreaseAmendment)
+      .map((row) => ({
+        po_id: row.po_id,
+        po_number: poNumberById.get(row.po_id) ?? null,
+        po_line_id: row.po_line_id,
+        material_display: lineDisplayById.get(toTrimmedString(row.po_line_id)) ?? null,
+        old_value: row.old_value,
+        new_value: row.new_value,
+        delta_qty: Number((Number(row.new_value ?? 0) - Number(row.old_value ?? 0)).toFixed(6)),
+      }));
+
     return okResponse({
       data: await enrichProcurementUserDisplays({
         ...group,
         vendor_display: vendorDisplay,
         purchase_orders: posWithEnrichedLines,
+        pending_qty_increase_amendments: pendingQtyIncreaseAmendments,
       }),
     }, ctx.request_id, req);
   } catch (err) {
@@ -3289,6 +3460,33 @@ export async function approvePOOrderGroupHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_ORDER_GROUP_APPROVAL_STATE_INVALID", 422, "No purchase orders pending approval in this group");
     }
 
+    // Same amendment-vs-first-approval split as approvePOHandler -- see
+    // createCsnsForQtyIncreaseAmendments's comment. A single group approve
+    // can bundle a PO's first-ever confirm together with another PO's
+    // amendment re-approval, so this is worked out per PO below, but the
+    // create_csn_for_qty_increase decision itself is one Yes/No for the
+    // whole batch (matches the single confirm-order action the approver
+    // is taking).
+    const pendingPoIds = pendingPos.map((po) => toTrimmedString(po.id));
+    const pendingAmendmentRows = await getPendingAmendmentRows(pendingPoIds);
+    const qtyIncreaseRows = pendingAmendmentRows.filter(isQtyIncreaseAmendment);
+    if (qtyIncreaseRows.length > 0 && typeof body.create_csn_for_qty_increase !== "boolean") {
+      return procurementErrorResponse(
+        req,
+        ctx,
+        "PROCUREMENT_CSN_DECISION_REQUIRED",
+        400,
+        "Specify whether to create a CSN for the increased quantity",
+      );
+    }
+    const amendmentRowsByPoId = new Map<string, PoAmendmentLogRow[]>();
+    for (const row of pendingAmendmentRows) {
+      const key = toTrimmedString(row.po_id);
+      const list = amendmentRowsByPoId.get(key) ?? [];
+      list.push(row);
+      amendmentRowsByPoId.set(key, list);
+    }
+
     const nowIso = new Date().toISOString();
     for (const po of pendingPos) {
       const poId = toTrimmedString(po.id);
@@ -3318,7 +3516,17 @@ export async function approvePOOrderGroupHandler(
         remarks: toTrimmedString(body.remarks) || null,
         actionedBy: ctx.auth_user_id,
       });
-      await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
+
+      const poAmendmentRows = amendmentRowsByPoId.get(poId) ?? [];
+      if (poAmendmentRows.length > 0) {
+        await markAmendmentRowsApproved(poAmendmentRows.map((row) => row.id), ctx.auth_user_id);
+        const poQtyIncreaseRows = poAmendmentRows.filter(isQtyIncreaseAmendment);
+        if (poQtyIncreaseRows.length > 0 && body.create_csn_for_qty_increase === true) {
+          await createCsnsForQtyIncreaseAmendments(updatedPo as PurchaseOrderRow, await getPOLines(poId), poQtyIncreaseRows, ctx.auth_user_id);
+        }
+      } else {
+        await createCsnsForPo(updatedPo as PurchaseOrderRow, await getPOLines(poId), ctx.auth_user_id);
+      }
     }
 
     const { data: updatedGroup, error: groupError } = await serviceRoleClient
