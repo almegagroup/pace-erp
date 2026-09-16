@@ -62,6 +62,9 @@ const EMPTY_PROCESS = {
   prodshade_material_id: "",
   stroke_master_id: "",
   machine_id: "",
+  // §138.2 — MTS-only: bypass the Stroke's default-location machine filter
+  // and show every MTS machine in the company (exception-case override).
+  select_all_mts_machines: false,
   planned_qty_kg: "",
   planned_start_date: "",
   mts_segment_code: "",
@@ -283,9 +286,23 @@ export default function ProductionPOCreatePage() {
     enabled: Boolean(processForm.stroke_master_id),
   });
 
+  // §138.2 — normal case: for MTS only, filter the Machine dropdown down to
+  // the Stroke's own declared default SFG location (§138.1 mapping). The
+  // "Select all MTS machines" checkbox bypasses this (§138.4 exception case)
+  // and shows every MTS machine in the company regardless of location.
+  const isMts = processForm.po_type === "MTS";
+  const strokeDefaultLocationId = strokeDetailQ.data?.default_storage_location_id || null;
+  const machineLocationFilterId = isMts && !processForm.select_all_mts_machines
+    ? strokeDefaultLocationId
+    : null;
   const machinesQ = useQuery({
-    queryKey: ["production-create-machines", effectiveCompanyId, processForm.po_type],
-    queryFn: () => listMachines({ company_id: effectiveCompanyId, active: true, po_type: processForm.po_type || undefined }),
+    queryKey: ["production-create-machines", effectiveCompanyId, processForm.po_type, machineLocationFilterId],
+    queryFn: () => listMachines({
+      company_id: effectiveCompanyId,
+      active: true,
+      po_type: processForm.po_type || undefined,
+      storage_location_id: machineLocationFilterId || undefined,
+    }),
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
@@ -1272,6 +1289,24 @@ export default function ProductionPOCreatePage() {
                         emptyStateLabel={machinesQ.isLoading ? "Loading machines..." : "No active machines for this company"}
                         disabled={!effectiveCompanyId}
                       />
+                      {isMts && (
+                        <label className="mt-1 flex items-center gap-2 text-xs text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={processForm.select_all_mts_machines}
+                            onChange={(event) => {
+                              updateProcess("select_all_mts_machines", event.target.checked);
+                              updateProcess("machine_id", "");
+                            }}
+                          />
+                          Select all MTS machines (bypass this Stroke's default location filter — §138.4 exception case)
+                        </label>
+                      )}
+                      {isMts && !processForm.select_all_mts_machines && !strokeDefaultLocationId && processForm.stroke_master_id && (
+                        <p className="text-xs text-amber-600">
+                          এই Stroke-এর কোনো default storage location নেই — machine list filter করা যাচ্ছে না, সব active MTS machine দেখানো হচ্ছে।
+                        </p>
+                      )}
                     </div>
                   )}
 
