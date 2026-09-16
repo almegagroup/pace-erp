@@ -23563,7 +23563,7 @@ item-এর মোট requirement (উদাহরণ: ১৪০ কেজি) �
 উচিত, blended শপ ফ্লোর total থেকে না। পুরো এই section-টা সেই আলোচনার লকড ফলাফল — কোনো কোড এখনো
 লেখা হয়নি, পরের session-এ task brief লিখে implementation শুরু হবে।
 
-### 138.1 — Machine + Storage Location mapping (LOCKED)
+### 138.1 — Machine + Storage Location mapping (LOCKED, বিস্তারিত ২০২৬-০৯-১৬)
 
 - নতুন mapping: **Company + Machine + Storage Location** — Prodshade বা PO Type মিশিয়ে key
   বানানো হবে না (প্রথমে `Company+Machine+MTS Type+Prodshade+Sloc` প্রস্তাব করা হয়েছিল, পরে
@@ -23571,8 +23571,16 @@ item-এর মোট requirement (উদাহরণ: ১৪০ কেজি) �
   আছে (Stroke Master-এর already-locked mandatory field, §83.3) — তাই Machine-কে সরাসরি Sloc-এর
   সাথে bind করলে, যে যে Prodshade-এর default location সেই Sloc, তারা automatically সেই
   machine-গুলোর সাথে জুড়ে যায়। আলাদা করে Prodshade ধরে রাখাটা redundant।
-- Machine Master-এ এই mapping যোগ হবে (checkbox/multi-select দিয়ে, ঠিক যেভাবে PO Types
-  checkbox — commit-এ ইতিমধ্যে করা হয়েছে — যোগ করা হয়েছিল)।
+- **UI (২০২৬-০৯-১৬ finalize):** existing SA Machine Master page (`SAMachineMaster.jsx`)-এ একটা
+  **নতুন Tab** যোগ হবে — সেখানে Company + Storage Location-এর সাথে Machine map করা হবে (§138.1-এ
+  আগে ভাবা হয়েছিল inline checkbox/multi-select PO-Type-এর মতো একই field হিসেবে বসবে — সেটা
+  সংশোধিত, এটা এখন নিজের আলাদা Tab)।
+- **Cardinality (২০২৬-০৯-১৬ lock):** এক Machine **ঠিক একটাই** Storage Location-এ mapped থাকবে
+  (single FK-জাতীয় সম্পর্ক, many-to-many না) — একবারে একটার বেশি location-এ mapped থাকবে না।
+  ভবিষ্যতে machine সরানো হলে mapping **change করা যাবে** (নতুন location-এ re-map), কিন্তু যেকোনো
+  মুহূর্তে একটাই active location থাকবে।
+- **Existing machine setup (২০২৬-০৯-১৬ lock):** কোনো auto-backfill/default হবে না — সব existing
+  machine-এর mapping **SA manually UI দিয়েই** বসাবে। নতুন mapping ফাঁকা অবস্থায় শুরু হবে।
 
 ### 138.2 — Normal case: machine-respect availability + consumption (LOCKED)
 
