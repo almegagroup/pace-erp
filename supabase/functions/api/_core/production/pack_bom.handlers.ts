@@ -141,9 +141,13 @@ async function resolvePackCodeForSku(sku: JsonRecord): Promise<JsonRecord | null
   return (resolved?.pack_code as JsonRecord | undefined) ?? null;
 }
 
-async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, JsonRecord>> {
+async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, JsonRecord[]>> {
+  // pack_code alone can now match MULTIPLE rows (pack_code+pack_type is the real identity,
+  // §pack-code-scoped-identity) — collect every row per code instead of overwriting, so
+  // callers can pick the right one by pack_type rather than silently getting whichever
+  // row the query happened to return last.
   const uniqueCodes = [...new Set(packCodes.map((code) => toTrimmedString(code)).filter(Boolean))];
-  const map = new Map<string, JsonRecord>();
+  const map = new Map<string, JsonRecord[]>();
   if (uniqueCodes.length === 0) return map;
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
@@ -156,7 +160,9 @@ async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, J
   }
   for (const row of (data ?? []) as JsonRecord[]) {
     const code = toTrimmedString(row.pack_code);
-    if (code) map.set(code, row);
+    if (!code) continue;
+    const existing = map.get(code);
+    if (existing) existing.push(row); else map.set(code, [row]);
   }
   return map;
 }
@@ -471,26 +477,27 @@ export async function listPackBomEligibleSkusHandler(
     // would surface these 5 SKUs regardless of which PO Type the caller asked for —
     // selecting MTO/HPS/MTS would still show "Admix sample 1kg" etc., which is wrong.
     // These SKUs only make sense as MTEST results.
+    function findMtestRow(packCode: string): JsonRecord | null {
+      return packCodeMap.get(toTrimmedString(packCode))?.find(
+        (row) => toUpperTrimmedString(row.pack_type) === "MTEST",
+      ) ?? null;
+    }
     const mtestSkus = poType === "MTEST"
-      ? skuList.filter(
-          (sku) => toUpperTrimmedString(packCodeMap.get(toTrimmedString(sku.pack_code))?.pack_type) === "MTEST",
-        )
+      ? skuList.filter((sku) => Boolean(findMtestRow(toTrimmedString(sku.pack_code))))
       : [];
-    const nonMtestSkus = skuList.filter(
-      (sku) => toUpperTrimmedString(packCodeMap.get(toTrimmedString(sku.pack_code))?.pack_type) !== "MTEST",
-    );
+    const nonMtestSkus = skuList.filter((sku) => !findMtestRow(toTrimmedString(sku.pack_code)));
     const mtestOutput: JsonRecord[] = mtestSkus.map((sku) => ({
       ...sku,
       company_id: companyId,
       po_type: poType,
       prodshade_material_id: null,
       prodshade: null,
-      pack_code_row: packCodeMap.get(toTrimmedString(sku.pack_code)) ?? null,
+      pack_code_row: findMtestRow(toTrimmedString(sku.pack_code)),
       stroke_master: null,
     }));
 
     const packCodeIds = [...new Set(
-      [...packCodeMap.values()].map((packCode) => toTrimmedString(packCode.id)).filter(Boolean),
+      [...packCodeMap.values()].flat().map((packCode) => toTrimmedString(packCode.id)).filter(Boolean),
     )];
     if (packCodeIds.length === 0) return okResponse({ data: mtestOutput }, ctx.request_id, req);
 
@@ -577,12 +584,15 @@ export async function listPackBomEligibleSkusHandler(
 
     const output: JsonRecord[] = [];
     for (const sku of nonMtestSkus) {
-      const packCode = packCodeMap.get(toTrimmedString(sku.pack_code));
-      if (!packCode) continue;
       const key = toUpperTrimmedString(sku.external_code ?? sku.material_name);
       const prodshadeConfig = prodshadeBySkuKey.get(key);
       const prodshade = (prodshadeConfig?.prodshade ?? null) as JsonRecord | null;
       if (!prodshade) continue;
+      // pack_code_row comes from this exact SKU's own resolved config (prodshadeConfig),
+      // never from packCodeMap's bare pack_code lookup — that lookup can now return
+      // multiple rows once a pack_code has more than one pack_type variant.
+      const packCode = (prodshadeConfig?.pack_code as JsonRecord | undefined) ?? null;
+      if (!packCode) continue;
       const stroke = strokeByProdshadeId.get(String(prodshade.id));
       if (!stroke) continue;
       const effectiveStorageLocationId = applicableStrokeLocations.get(String(stroke.id))
