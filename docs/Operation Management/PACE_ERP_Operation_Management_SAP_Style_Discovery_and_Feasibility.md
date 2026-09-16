@@ -23793,12 +23793,13 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   করবে।
 - ~~`machine_stock_log` টেবিলের সঠিক schema এখনো draft করা হয়নি~~ — **RESOLVED (২০২৬-০৯-১৫):**
   পুরো draft schema (columns + `source_type` behavior table) §138.6-এ lock করা হয়েছে।
-- **Standard-এ hard-block severity — এখনো পুরোপুরি খোলা, full design বাকি (২০২৬-০৯-১৫
-  আপডেট):** business owner confirm করেছেন check **Standard stage-এই hard block দিয়ে শুরু হবে**
-  (§83.5-এর existing rule-এর সাথে সামঞ্জস্যপূর্ণ), কিন্তু এটা পুরো গল্প না — **"aro onek conditions
-  chapbe"** (আরও অনেক শর্ত এর উপর বসবে), যেগুলো এখনো design হয়নি। অর্থাৎ শুধু "hard block হবে
-  কিনা" resolve হয়েছে, "ঠিক কোন কোন শর্তে/কীভাবে" এখনো সম্পূর্ণ আলাদা, dedicated design session
-  দরকার — implementation শুরুর আগে এটা lock করা মাস্ট।
+- ~~Standard-এ hard-block severity — "aro onek conditions" এখনো design হয়নি~~ — **RESOLVED
+  (২০২৬-০৯-১৬): §138.12-ই সেই conditions।** business owner স্পষ্ট করেছেন যে এই item আলাদা কোনো
+  future কাজ ছিল না — machine+Sloc mapping অনুযায়ী normal/exception case নির্ধারণ, group-এর মধ্যে
+  formulation-priority + smallest-first auto-derive algorithm, machine-bucket boundary, আর
+  group-সহ-সব-মিলিয়েও stock কম হলে hard block (§138.12-এর ৫ নম্বর point) — এই পুরো mechanism-টাই
+  ছিল সেই "আরও অনেক শর্ত"। Standard-এর hard-block severity এখন পুরোপুরি lock, আলাদা dedicated
+  session লাগবে না।
 - **Warehouse → শপ ফ্লোর + machine transfer — এখনো খোলা, business owner নিজে design করবেন
   (২০২৬-০৯-১৫ আপডেট):** পুরনো §138.9-এর "IN03-তে Assign to Machine button" draft **superseded** —
   business owner জানিয়েছেন machine-এ distribution আসলে একটা নতুন **"pull list" concept**-এর
