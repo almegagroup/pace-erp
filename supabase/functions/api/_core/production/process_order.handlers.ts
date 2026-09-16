@@ -1670,7 +1670,9 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
         ? serviceRoleClient
             .schema("erp_production")
             .from("stroke_master")
-            .select("id, stroke_number, description, status")
+            // default_storage_location_id needed so PR10 Edit (ProductionPOEditPage.jsx)
+            // can filter its Machine dropdown by §138.1's mapping, same as Create.
+            .select("id, stroke_number, description, status, default_storage_location_id")
             .eq("id", strokeMasterId)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
