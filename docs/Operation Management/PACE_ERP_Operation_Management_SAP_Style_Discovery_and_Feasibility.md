@@ -23869,9 +23869,36 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   `.ilike()` noise), `procurement.routes.ts` (baseline ১০১, pre-existing অন্য file-এর noise),
   `route-acl-registry.ts` (baseline ০)। সব guard (route-acl-registry, stock-posting,
   hardcoded-role-check, wrong-company-source, jsx-no-undef, frontend-payload) + `eslint` clean।
-  **এখনো বাকি:** live end-to-end click-through (dev server/browser-এ আসল test), আর `PROC_LOC_TRANSFER_POST`
-  ACL গ্রান্ট সত্যিই সব OM-mapped company-র সব user-কে দেওয়া আছে কিনা সরাসরি dev DB-তে গিয়ে confirm করা
-  — এখনো শুধু static check (guard/lint/`deno check`) হয়েছে, কোড চোখে দেখে চালানো হয়নি।
+
+  **🔴→✅ Real ACL bug found + fixed live, prod ও dev দুটোতেই (২০২৬-০৯-১৬)।** ধরে নেওয়া হয়েছিল
+  IN11-এর existing user-রাই automatic access পাবে (যেহেতু "IN10/IN11 already fully implemented ও
+  operational") — business owner push back করলেন ("IN10 ar IN11 er access to sobar ache nei"),
+  সরাসরি prod DB query করে confirm হলো: `CAP_LOC_TRANSFER_POST`/`CAP_LOC_TRANSFER_REQ`/
+  `CAP_LOC_TRANSFER_REVERSE` — তিনটাই CMP003/005/006/011-এ **শুধু "ACL-MASTER" work context**-এ
+  granted ছিল, বাকি ১৫টা real department work context (STORES, PRODUCTION, QUALITY, LOGISTICS,
+  ACCOUNTS, ...) কোনোটাই না — অর্থাৎ আজ পর্যন্ত prod-এ শুধু ACL-MASTER-tier user IN10/IN11 আসলে
+  ব্যবহার করতে পারত, বাকি সবাই 403 পেত। ঠিক CLAUDE.md pattern #5 (ACL-MASTER maintenance drift)।
+  **Fix (business owner confirm: সব department-এ broad, শুধু Stores+Production না):**
+  `erp_master.company_module_map`-এ `MOD_PRODUCTION` enabled company গুলো বের করে
+  (CMP003/005/006/011/014, prod-এ) — প্রতিটার সব active, non-ACL-MASTER work context-এ তিনটা
+  capability-ই grant করা হলো (`acl.work_context_capabilities` INSERT, `ON CONFLICT DO NOTHING`),
+  তারপর প্রতিটা company-র জন্য নতুন `acl_versions` row (version bump, কারণ পুরনো version আগেই
+  source_captured ছিল — re-capture no-op) → `capture_acl_version_source` → `generate_acl_snapshot`
+  — CLAUDE.md §8-এর established 4-step MCP sequence। **Prod-এ live verify করা হয়েছে:**
+  `acl.precomputed_acl_view`-এ real user (ACCOUNTS/STORES work context) এখন `PROC_LOC_TRANSFER_POST`
+  VIEW+WRITE `decision=ALLOW` দেখাচ্ছে। CMP003→v106, CMP005→v3, CMP006→v106, CMP011→v3,
+  CMP014→v24। **Dev-এও same fix করা হয়েছে** (dev-এ CMP003/005/006 পাওয়া গেছে, CMP011/CMP014 dev-এ
+  exist করে না — dev/prod company_code একই code হলেও আলাদা company, seeded data আলাদা, এটা আগে
+  থেকেই জানা ছিল) — dev-এ আগে থেকে **কোনো** work context-েই এই capability ছিল না (এমনকি
+  ACL-MASTER-ও না), সব active work context-এ grant করে version bump (CMP003→v40, CMP005→v33,
+  CMP006→v39)। **Sidebar visibility** (`erp_menu.menu_snapshot`) আলাদা করে rebuild করা হয়নি —
+  existing ৩০০s TTL cache-এর মাধ্যমেই next login/request-এ নিজে থেকে ঠিক হয়ে যাবে (§8-PERF-এর
+  established read-first-then-rebuild mechanism), তবে backend route-level access (আসল
+  authorization, `precomputed_acl_view`-নির্ভর) এখনই কার্যকর।
+
+  **এখনো বাকি:** live end-to-end click-through (dev/prod server-এ আসল browser test) — এই environment-এ
+  কোনো browser login নেই, তাই শুধু SQL দিয়ে ACL+data structure verify করা হয়েছে, UI click করে দেখা
+  হয়নি।
 - Phase 3 (Consumption/hard-block conditions, §138.12-এ DESIGN LOCKED), Phase 4 (IN02/IN03 reporting),
   Phase 5 (PID, §138.7-এ DESIGN LOCKED — কোনো নতুন UI লাগবে না, শুধু PID_ADJUSTMENT-এর backend writer)
   এখনো implementation শুরু হয়নি — শুধু Phase 4-এর বিস্তারিত design এখনো বাকি।
