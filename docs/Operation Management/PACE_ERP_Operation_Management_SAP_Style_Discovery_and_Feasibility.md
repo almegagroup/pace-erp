@@ -23824,3 +23824,83 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   করা হয়েছে, guard/lint clean। Phase 2 (Transfer/pull-list), Phase 3 (Consumption/hard-block
   conditions), Phase 4 (IN02/IN03 reporting), Phase 5 (PID) এখনো implementation শুরু হয়নি —
   উপরের open items resolve হওয়ার অপেক্ষায়।
+
+### 138.12 — MTS Alternate-Group Auto-Derive Mechanism (LOCKED, ২০২৬-০৯-১৬)
+
+**প্রেক্ষাপট:** Stroke Line-এর `material_group_id` (Material Category Group, §এ আগে থেকেই আছে —
+"Has Alternate" mechanism) দিয়ে একই formulation item-এর কয়েকটা interchangeable alternate থাকতে
+পারে। Prod DB-তে verify করা (২০২৬-০৯-১৬): এই group membership **material-এর fixed property না,
+প্রতিটা stroke-line-এই আলাদাভাবে সেট হয়** — যেমন VAE POWDER DA 1100 (RM-00095) বেশিরভাগ MTS
+stroke-এ "RDP" group-এর সদস্য, কিন্তু stroke 0001-এ "RDP_PLC" নামের **আলাদা** group-এর সদস্য।
+তাই auto-derive সবসময় **সেই নির্দিষ্ট stroke-line-এর নিজের `material_group_id`** থেকেই member
+list নেবে, material-এর কোনো global/other-formulation group থেকে না।
+
+**MTS-এর জন্য মূল সিদ্ধান্ত (business owner, ২০২৬-০৯-১৬):** MTS-এ user manually Actual Qty তুলবে
+না — **system নিজে থেকে actual item + qty derive করবে**, দরকারে একাধিক row-ও add করবে। এই পুরো
+mechanism **শুধু MTS-এর জন্য** (§138.1-138.11-এর MTS-only scope lock-এরই সম্প্রসারণ)।
+
+**Precondition — কখন auto-derive প্রযোজ্য:** শুধু তখনই, যখন stroke-line-এর নিজের
+`default_storage_location_id` **সেই stroke-master-এরই declared shop-floor location**-এর সাথে
+মেলে (§138.1-এর machine-mapped location)। Prod DB-তে verify করা (CMP003, MTS stroke "00790908"
+/ SFG-00188): GABROSA M700 (MHEC group)-এর location = S003 = stroke-এর নিজের declared location
+→ auto-derive প্রযোজ্য। কিন্তু WHITE CEMENT JK (WHITE_CEMENT_NORMAL group)-এর location সবসময়
+R001 ("PUTTY RM", plain bulk godown, কোনো machine নেই ওখানে) — stroke-এর নিজের S00x location
+থেকে আলাদা → **auto-derive প্রযোজ্য না, group থাকলেও actual item manually বেছে নিতে হবে।**
+
+**Auto-derive algorithm (normal case — machine নিজের bucket):**
+
+1. **Bucket boundary — কখনো ভাঙা যাবে না:** শুধু সেই machine-এর নিজের bucket-এর ভিতরেই candidate
+   খোঁজা হবে। Formulation item (যেমন DA 1100) machine-এর bucket-এ না থাকলেও, সেই location-এর
+   Unassigned bucket-এ থাকলেও **কখনো সেখান থেকে টেনে নেওয়া যাবে না** — এটা §138.3/§138.4-এর
+   machine/Unassigned বিভাজনের ধারাবাহিকতা।
+2. **Priority order:** প্রথমে formulation item নিজে (যা machine-এর bucket-এ available), তারপর
+   group-এর বাকি সদস্যরা — **ছোট available quantity আগে সম্পূর্ণ শেষ করে**, তারপর পরের সদস্যে।
+   (কারণ: ছোট leftover অন্য কোথাও "আটকে" না রেখে আগে ক্লিয়ার করা)।
+3. প্রতিটা exhausted item = একটা আলাদা row। **শুধু original/formulation row-এর Standard (dosage_pct
+   + planned_qty) অপরিবর্তিত থাকে** — নতুন auto-added row-গুলোর Standard/dosage = **0**, ঠিক
+   §83.4-এর existing "Final: can add items, Standard=0" rule-এর মতোই (কোডে already আছে,
+   `is_formulation_line: false`, `applyFinalOrVerifyLineUpdates`-এ) — শুধু নতুন করে এটা Standard
+   stage-এও ব্যবহার হবে MTS-এর জন্য।
+4. **Worked example (business owner-এর দেওয়া, ২০২৬-০৯-১৬):** Requirement = DA 1100-এর 78 KG,
+   machine 5KL1-এর bucket-এ VINNAPASS 5010-N=49 KG, ELOTEX 60W=100 KG (DA 1100 নিজে 0 KG) —
+
+   | Row | Material | Standard | Actual Qty |
+   |---|---|---|---|
+   | Original | VINNAPASS 5010-N | 78 KG | 49 KG (পুরো) |
+   | নতুন (auto) | ELOTEX 60W | 0 | 29 KG (78−49) |
+
+   একই logic ৩+ item-এও বাড়ে (ছোট-থেকে-বড় ক্রমে exhaust)। **DA 1100 নিজে bucket-এ কিছু থাকলে
+   (যেমন 6 KG) সেটাই সবার আগে ব্যবহার হবে**, তারপর group-এর বাকি সদস্য ছোট-প্রথম ক্রমে — কারণ
+   formulation item-ই "সঠিক" material, group শুধু fallback।
+5. **Insufficient stock:** পুরো group (formulation + সব alternate) machine-এর bucket-এ মিলিয়েও
+   requirement-এর কম হলে (যেমন 78 লাগবে, সব মিলিয়ে 76) → **§83.5-এর existing severity rule
+   অনুযায়ী hard block**, Save হবে না। System কখনো নিজে থেকে Unassigned bucket-এ fallback করবে
+   না (bucket boundary অক্ষত থাকে) — user-কে হয় exception-case checkbox ব্যবহার করতে হবে, নাহলে
+   আগে ওই machine-এ transfer/assign করে আনতে হবে। এই scenario বাস্তবে Phase 2 (pull-list,
+   §138.11-এর ৫ নম্বর point)-এর সঠিক design/implementation হলে প্রায় ঘটবেই না — root-cause fix
+   ওখানেই, এই hard-block শুধু safety net হিসেবে থেকে যাবে।
+
+**Exception case (foreign machine, §138.4):** ঠিক একই algorithm, শুধু candidate-এর source
+machine-এর bucket-এর বদলে **সেই location-এর Unassigned bucket**।
+
+**User override rules:**
+- Auto-picked item বদলানো যাবে, কিন্তু **শুধু সেই stroke-line-এর নিজের group-এর সদস্যদের মধ্যেই**
+- Qty বদলালে বাকি row-গুলো recalculate হবে (মোট আবার Standard-এর সমান রাখতে)
+- Auto-generated row delete করা যাবে
+- নতুন item row manually add করা যাবে (existing Final/Verify add-line mechanism reuse)
+- **Duplicate prevention:** একই formulation-line-এর জন্য তৈরি row-গুলোর মধ্যে একই material
+  দুইবার select করা যাবে না — অন্য কোনো sibling-row-এ ইতিমধ্যে ব্যবহৃত item সেই row-এর dropdown-এ
+  **disabled/greyed out** থাকবে। কোনো auto-recalculate/merge চেষ্টা করা হবে না duplicate হলে —
+  user চাইলে একটা row delete করে qty manually মিলিয়ে নেবে।
+
+**Stage/editability — "Current Stroke" status-এর উপর নির্ভরশীল (§ আগের "Current Stroke" redesign,
+StrokeMasterPage.jsx-এর সাথে সম্পর্কিত):**
+
+| Case | Standard page-এ | Edit কোথায় |
+|---|---|---|
+| **Current Stroke** দিয়ে batch | Auto-derive হয়, **পুরোপুরি editable** (উপরের সব override rule Standard-এই প্রযোজ্য) | Standard-এই |
+| **Non-current (অন্য) Stroke** দিয়ে batch | Auto-derive হয়ে দেখাবে, কিন্তু **read-only** — user শুধু Save করতে পারবে | **Final ও Verify-তে** — Verify-তে QA-র existing normal authority দিয়েই edit + post |
+
+এই mechanism পুরোটাই **MTS-only**, MTO/HPS/INT-এর জন্য প্রযোজ্য না (formulation material সরাসরি
+ব্যবহার হয়, alternate-group থাকলেও optional/manual override হিসেবেই থাকে — §138 এর আগের অংশে
+verify করা আছে, HPS/INT sample stroke-এ কোনো shop-floor location-ই নেই)।
