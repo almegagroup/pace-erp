@@ -54,6 +54,33 @@ async function getPoTypesMapByMachineIds(machineIds: string[]): Promise<Map<stri
   return map;
 }
 
+async function getStorageLocationMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+  // Bulk-fetched separately, never via a PostgREST resource-embed shorthand in
+  // the machine_master select -- storage_location_master lives in a different
+  // schema (erp_inventory vs erp_master), and PostgREST resource embedding
+  // does not resolve relationships that cross the request's schema profile
+  // even when the FK genuinely exists (confirmed live: PGRST200 "Could not
+  // find a relationship... in the schema cache"). Same pattern already used
+  // by stroke_master.handlers.ts's getStorageLocationMapByIds for this exact
+  // reason.
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name")
+    .in("id", uniqueIds);
+  if (error) {
+    console.error("[machine.getStorageLocationMap] query failed:", JSON.stringify(error));
+    throw new Error("OM_MACHINE_LIST_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    map.set(String(row.id ?? ""), row);
+  }
+  return map;
+}
+
 async function assertLocationInCompany(companyId: string, storageLocationId: string): Promise<void> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory")
@@ -193,9 +220,7 @@ export async function listMachinesHandler(
     let query = serviceRoleClient
       .schema("erp_master")
       .from("machine_master")
-      .select(
-        "*, cost_center:cost_center_id(id, cost_center_code, cost_center_name), storage_location:storage_location_id(id, code, name)",
-      )
+      .select("*, cost_center:cost_center_id(id, cost_center_code, cost_center_name)")
       .order("machine_code", { ascending: true });
 
     if (companyId) {
@@ -226,13 +251,20 @@ export async function listMachinesHandler(
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const poTypesMap = await getPoTypesMapByMachineIds(rows.map((row) => String(row.id ?? "")));
+    const [poTypesMap, storageLocationMap] = await Promise.all([
+      getPoTypesMapByMachineIds(rows.map((row) => String(row.id ?? ""))),
+      getStorageLocationMapByIds(rows.map((row) => String(row.storage_location_id ?? ""))),
+    ]);
     // A machine with NO po_types configured yet is fail-open (shows for every
     // po_type filter) -- existing machines predate this feature and would
     // otherwise vanish from every Process PO Create dropdown the moment this
     // shipped, blocking production until SA visits all of them. Once SA
     // assigns at least one po_type, the filter becomes real for that machine.
-    const withPoTypes = rows.map((row) => ({ ...row, po_types: poTypesMap.get(String(row.id ?? "")) ?? [] }));
+    const withPoTypes = rows.map((row) => ({
+      ...row,
+      po_types: poTypesMap.get(String(row.id ?? "")) ?? [],
+      storage_location: storageLocationMap.get(String(row.storage_location_id ?? "")) ?? null,
+    }));
     const filtered = poType
       ? withPoTypes.filter((row) => row.po_types.length === 0 || row.po_types.includes(poType))
       : withPoTypes;
