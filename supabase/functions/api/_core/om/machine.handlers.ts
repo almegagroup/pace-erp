@@ -41,7 +41,10 @@ async function getPoTypesMapByMachineIds(machineIds: string[]): Promise<Map<stri
     .from("machine_po_type_map")
     .select("machine_id, po_type")
     .in("machine_id", ids);
-  if (error) throw new Error("OM_MACHINE_LIST_FAILED");
+  if (error) {
+    console.error("[machine.getPoTypesMap] query failed:", JSON.stringify(error));
+    throw new Error("OM_MACHINE_LIST_FAILED");
+  }
   for (const row of (data ?? []) as JsonRecord[]) {
     const machineId = String(row.machine_id ?? "");
     const list = map.get(machineId) ?? [];
@@ -218,6 +221,7 @@ export async function listMachinesHandler(
 
     const { data, error } = await query;
     if (error) {
+      console.error("[machine.listMachines] query failed:", JSON.stringify(error));
       throw new Error("OM_MACHINE_LIST_FAILED");
     }
 
@@ -236,6 +240,15 @@ export async function listMachinesHandler(
     return okResponse({ data: filtered }, ctx.request_id, req);
   } catch (err) {
     const code = (err as Error).message || "OM_MACHINE_LIST_FAILED";
+    // OM_MACHINE_LIST_FAILED is already logged with detail at its two throw sites
+    // above; anything else reaching here is unexpected (e.g. a bug in this
+    // handler itself), so log it too instead of only surfacing the public code.
+    if (code !== "OM_ADMIN_REQUIRED" && code !== "OM_MACHINE_LIST_FAILED") {
+      console.error(
+        "[machine.listMachines] unhandled:",
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      );
+    }
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : 500;
     return machineErrorResponse(req, ctx, code, status, "Machine list failed");
   }
