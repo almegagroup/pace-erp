@@ -23685,7 +23685,7 @@ Unassigned bucket থেকে issue হবে — কোনো surplus বা�
   | **TRANSFER** | হ্যাঁ (R001→S001 movement, existing movement_type) | Unassigned bucket-এ IN |
   | **CONSUMPTION** (normal case) | হ্যাঁ (P261, existing movement_type) | সেই machine-এর bucket থেকে OUT |
   | ~~EXCEPTION_SPEND~~ | হ্যাঁ (P261) | **এটা আলাদা source_type না** — এটাও আসলে সাধারণ CONSUMPTION-ই, শুধু Unassigned bucket থেকে OUT হয় (machine bucket থেকে না), আর `machine_id` column-এ informational tag থাকে (§138.4) |
-  | **PID_ADJUSTMENT** | হ্যাঁ (PI movement type) | যে bucket-এ variance ধরা পড়েছে (machine বা Unassigned) সেখানে correction |
+  | **PID_ADJUSTMENT** | হ্যাঁ (PI movement type) | **সবসময় Unassigned bucket-এ** correction — কখনো সরাসরি কোনো নির্দিষ্ট machine bucket-এ না (সংশোধিত ২০২৬-০৯-১৬, §138.7 দেখো) |
   | **MANUAL_ALLOT** | **না** — কোনো physical movement নেই | **Paired double-entry**: Unassigned bucket থেকে OUT + নির্বাচিত machine bucket-এ IN, একই qty, একটা common reference দিয়ে জোড়া লাগানো |
 
   **কেন MANUAL_ALLOT-এর জন্য কোনো movement_type লাগে না:** material physically সরছেই না (ওটা
@@ -23696,26 +23696,35 @@ Unassigned bucket থেকে issue হবে — কোনো surplus বা�
   **reporting/attribution layer**, engine-এর hard-enforced dimension না। এতে core §8C posting
   engine একদম অক্ষত থাকে, কোনো নতুন migration risk নেই `post_stock_movement()`-এ।
 
-### 138.7 — PID (Physical Inventory): machine-wise row, কিন্তু system-derived, user-selectable না (LOCKED, সংশোধিত)
+### 138.7 — PID (Physical Inventory): কোনো machine column না, variance সবসময় Unassigned bucket-এ (LOCKED, দ্বিতীয়বার সংশোধিত ২০২৬-০৯-১৬)
 
-**প্রথম প্রস্তাব ছিল PID পুরোপুরি location-level-ই থাকবে (machine touch করবে না) — এটা ভুল
-প্রমাণিত হয় business owner-এর push back-এ:** যেহেতু normal case-এর availability check
-machine-নির্দিষ্ট sub-pool-এর বিরুদ্ধে **hard-enforced**, PID যদি সেই sub-pool ঠিক না করে,
-future availability check ভুল উত্তর দেবে (ভুলভাবে block বা ভুলভাবে পাশ)।
+**প্রথম প্রস্তাব ছিল PID পুরোপুরি location-level-ই থাকবে (machine touch করবে না) — এই session-এর
+শুরুতে এটা ভুল প্রমাণিত হয়েছিল business owner-এর push back-এ**, আর তখন সিদ্ধান্ত হয়েছিল PID-এ
+system-derived, read-only একটা mandatory machine column যোগ হবে (প্রতিটা machine-এর জন্য আলাদা
+row)। **§138.13/§138.13.1 (IN11-এর "Distribute to Machine" বাটন) lock হওয়ার পরে business owner
+এটা আবার revisit করে উল্টে দিয়েছেন (২০২৬-০৯-১৬):**
 
-**সংশোধিত, locked design:**
-- PID-এর line grid-এ, **শুধু MTS machine-tracked শপ ফ্লোর location-গুলোর** (যেমন S001, S003 —
-  §138.1 mapping আছে এমন location) জন্য একটা **Machine column** যোগ হবে।
-- এই column **dropdown/user-selectable না** — এটা **system-derived, read-only**, ঠিক PID-এর
-  existing Status column যেভাবে auto আসে সেভাবেই। System নিজেই (ledger + §138.6-এর side-table
-  থেকে derive করে) জানে কোন material, কোন machine-এ কত tagged আছে — তাই **প্রতিটা machine-এর
-  জন্য আলাদা row pre-generate হয়ে আসবে** (material+location একটা row না, material+location+
-  machine = একটা করে row)।
-- Counter শুধু গিয়ে সেই নির্দিষ্ট machine-এর কাছে যা physically আছে সেটা গুনে Actual Qty
-  column-এ বসাবে — machine নিজে বেছে নেওয়ার কোনো প্রশ্নই নেই (ভুল machine-এ ভুল করে count বসানোর
-  সুযোগ নেই)।
-- **RM store-এর মতো non-machine-tracked location-এ (R001, R003, T003 ইত্যাদি) PID অপরিবর্তিতই
-  থাকবে** — এই machine column আসবেই না। এটা শুধু MTS-এর machine-tracked শপ ফ্লোরের জন্য।
+> "sono ami ki bolchi, opening stock r PID te user sloc e bosak, unassigned hoye thakbe, user
+> IN11 e giye distribute korbe, tahole extra dorkar e nai।"
+
+**চূড়ান্ত, locked design — PID-এর mandatory machine-column ধারণাটাই বাতিল:**
+- PID **MTS machine-tracked location-সহ সব location-এ অপরিবর্তিত থাকবে** — কোনো নতুন Machine
+  column, কোনো per-machine row-split লাগবে না। Counter আজকের মতোই শুধু location-level Actual Qty
+  গুনে বসাবে (§130-এর existing PID mechanism অক্ষত)।
+- যেকোনো variance (§138.6-এর `PID_ADJUSTMENT`) **সবসময় সেই location-এর Unassigned bucket-এই
+  correction হবে** — কখনো সরাসরি কোনো নির্দিষ্ট machine bucket-এ না। Opening Stock ইতিমধ্যেই
+  এই একই pattern-এ আছে (§138.3 — "আলাদা কোনো machine-breakup mechanism লাগে না, এটাও
+  Unassigned-এই পড়বে")। PID এখন **সেই একই নিয়মে unified**।
+- যদি variance আসলে কোনো নির্দিষ্ট machine-এর কাছেই (over/under) হয়, PID নিজে সেটা attribute
+  করার চেষ্টা করবে না — Unassigned bucket-এ correction হওয়ার পরে user (Production) IN11-এ গিয়ে
+  **"Distribute to Machine"** (§138.13.1, `MANUAL_ALLOT`) দিয়ে সেই correction machine-ভিত্তিক
+  ভাগ করে নেবে, ঠিক যেভাবে normal transfer/opening stock-এর Unassigned balance distribute হয়।
+- **আগের এই section-এর প্রথম সংশোধন (machine column, mandatory per-machine row, system-derived
+  read-only) এখন পুরোপুরি superseded** — সেই approach-এর মূল যুক্তি ছিল "PID যদি machine sub-pool
+  ঠিক না করে, future availability check ভুল হবে" — কিন্তু এখন সেই sub-pool correction PID-এর
+  ভেতরেই করতে হবে না, IN11-এর already-locked Distribute-to-Machine mechanism-ই সেটা আলাদা ধাপে
+  করে দেয়। তাই দুটো mechanism-কে জোর করে এক জায়গায় মেলানোর দরকার নেই — PID সরল থাকে,
+  distribution আলাদা, দুই ধাপেই কাজ ঠিকভাবে হয়।
 
 ### 138.8 — IN02 (Stock Ledger) / IN03 (Current Stock): machine column report-level join-এ, core snapshot-এ না (LOCKED)
 
