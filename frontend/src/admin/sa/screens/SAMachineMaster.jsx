@@ -312,8 +312,8 @@ export default function SAMachineMaster() {
       {activeTab === "sloc" && (
         <ErpSectionCard eyebrow="§138.1 — MTS machine-respect stock foundation" title="Machine ↔ Storage Location mapping">
           <p className="mb-3 text-xs text-slate-500">
-            প্রতিটা Machine ঠিক একটাই Storage Location-এ mapped থাকতে পারে (পরে re-map করা যায়)।
-            এই mapping MTS Process PO Create-এর Machine dropdown filter করতে ব্যবহৃত হবে।
+            Each machine maps to exactly one storage location (re-mappable later). This mapping
+            is used to filter the Machine dropdown on MTS Process PO Create.
           </p>
           <div className="mb-3 flex items-center gap-2">
             <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Company</label>
@@ -330,7 +330,7 @@ export default function SAMachineMaster() {
           </div>
 
           {!slocCompany && (
-            <p className="px-3 py-6 text-center text-sm text-slate-400">Company বেছে নিন machine list দেখতে।</p>
+            <p className="px-3 py-6 text-center text-sm text-slate-400">Select a company to see its machine list.</p>
           )}
 
           {slocCompany && (
@@ -349,7 +349,7 @@ export default function SAMachineMaster() {
                     <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
                   )}
                   {!machinesLoading && !slocLocationsLoading && slocMachines.length === 0 && (
-                    <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">এই company-তে কোনো machine নেই।</td></tr>
+                    <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">No machines in this company.</td></tr>
                   )}
                   {slocMachines.map((machine) => {
                     const draftValue = slocDraftFor(machine);

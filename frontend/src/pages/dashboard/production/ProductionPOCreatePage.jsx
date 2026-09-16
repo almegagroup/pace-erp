@@ -1304,7 +1304,7 @@ export default function ProductionPOCreatePage() {
                       )}
                       {isMts && !processForm.select_all_mts_machines && !strokeDefaultLocationId && processForm.stroke_master_id && (
                         <p className="text-xs text-amber-600">
-                          এই Stroke-এর কোনো default storage location নেই — machine list filter করা যাচ্ছে না, সব active MTS machine দেখানো হচ্ছে।
+                          This Stroke has no default storage location -- machine list can't be filtered, showing every active MTS machine.
                         </p>
                       )}
                     </div>
