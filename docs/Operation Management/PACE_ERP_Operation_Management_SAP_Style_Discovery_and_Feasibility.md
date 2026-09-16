@@ -23841,21 +23841,37 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   machine dropdown location-filter + "Select all MTS machines" checkbox — সব dev-এ migrate+verify
   করা হয়েছে, guard/lint clean।
 - **Phase 2 (Transfer/Distribution, §138.13/§138.13.1) — ✅ IMPLEMENTED (২০২৬-০৯-১৬), `machine_stock_log`-এর
-  প্রথম real writer।** IN10/IN11 নিজেরা অপরিবর্তিত (ইতিমধ্যেই fully operational, §121)। নতুন যা
-  যোগ হয়েছে: দুটো backend handler (`location_transfer.handlers.ts`-এই, নতুন file না) —
+  প্রথম real writer-দুটোই।** IN10/IN11-এর নিজস্ব UI/lifecycle অপরিবর্তিত (ইতিমধ্যেই fully
+  operational, §121), কিন্তু **`postLocationTransferHandler`/`reverseLocationTransferPostingHandler`-এ
+  একটা ছোট follow-up step যোগ হয়েছে** — এই দুটোই `location_transfer.handlers.ts`-এর existing
+  handler, নতুন file/endpoint না। **TRANSFER writer (২০২৬-০৯-১৬, দ্বিতীয় পাস — প্রথম পাসে বাদ পড়ে
+  গিয়েছিল, নিজেই ধরা পড়ে ঠিক করা হয়েছে):** P311 post হওয়ার পরে, target location MTS-tracked হলে
+  একটা `machine_stock_log` IN entry (Unassigned bucket, `source_type=TRANSFER`) লেখা হয় — এটা না
+  থাকলে Distribute-to-Machine grid কখনো কিছু দেখাত না, যদিও `stock_ledger`-এ আসল transfer ঠিকই
+  posted হতো। P312 reversal-এও সমান্তরাল OUT entry লেখা হয়, **কিন্তু আগে check করে সেই qty এখনো
+  পুরোপুরি Unassigned-এ আছে কিনা** — মাঝখানে কিছু অংশ Distribute-to-Machine দিয়ে কোনো machine-এ
+  চলে গিয়ে থাকলে reversal block হয় (`LTR_REVERSE_MACHINE_LOG_INSUFFICIENT`, "pull it back to
+  Unassigned first")। এই দুই writer পাশাপাশি নতুন দুটো backend handler —
   `listUnassignedMachineStockHandler` (`GET /api/procurement/machine-distribution/unassigned` —
   company-র সব MTS machine-tracked location মিলিয়ে Unassigned bucket balance, item+location-ভিত্তিক
   aggregate করে) আর `postMachineDistributionHandler` (`POST /api/procurement/machine-distribution/assign`
   — §138.6-এর `MANUAL_ALLOT` paired double-entry লেখে, একটা bulk `INSERT`-এ সব split atomic ভাবে,
   cross-location machine assign আর duplicate machine block করে, live Unassigned balance-এর বিরুদ্ধে
-  re-validate করে)। দুটোই existing `PROC_LOC_TRANSFER_POST` ACL resource-ই reuse করে (VIEW/WRITE) —
+  re-validate করে)। সবগুলোই existing `PROC_LOC_TRANSFER_POST` ACL resource-ই reuse করে (VIEW/WRITE) —
   IN11-এর existing user-রাই automatic access পায়, কোনো নতুন ACL grant লাগেনি। Frontend:
   `LocationTransferWorkbenchPage.jsx`-এ নতুন `DistributeToMachineDrawer` (center drawer, ErpDenseGrid +
   all-column search + per-item `MachineSplitPanel` sub-view) আর header-এ "Distribute to Machine" বাটন —
   `listMachines({po_type:"MTS"})`-এর result খালি থাকলে বাটন page-এই দেখাবে না (company-level
   visibility), grid খালি থাকলে ("কোনো MTS location-এ Unassigned নেই") save করা যাবে না (item-level
-  inactive condition, business owner-এর exact rule)। সব guard (route-acl-registry, stock-posting,
+  inactive condition, business owner-এর exact rule)। **`deno check` (এই session-এ প্রথমবার npm
+  distribution দিয়ে locally install করা হয়েছে, যেহেতু `deno.land`-এর নিজস্ব installer proxy-blocked)
+  before/after তুলনায় ০টা নতুন error** — `location_transfer.handlers.ts` (baseline ১, pre-existing
+  `.ilike()` noise), `procurement.routes.ts` (baseline ১০১, pre-existing অন্য file-এর noise),
+  `route-acl-registry.ts` (baseline ০)। সব guard (route-acl-registry, stock-posting,
   hardcoded-role-check, wrong-company-source, jsx-no-undef, frontend-payload) + `eslint` clean।
+  **এখনো বাকি:** live end-to-end click-through (dev server/browser-এ আসল test), আর `PROC_LOC_TRANSFER_POST`
+  ACL গ্রান্ট সত্যিই সব OM-mapped company-র সব user-কে দেওয়া আছে কিনা সরাসরি dev DB-তে গিয়ে confirm করা
+  — এখনো শুধু static check (guard/lint/`deno check`) হয়েছে, কোড চোখে দেখে চালানো হয়নি।
 - Phase 3 (Consumption/hard-block conditions, §138.12-এ DESIGN LOCKED), Phase 4 (IN02/IN03 reporting),
   Phase 5 (PID, §138.7-এ DESIGN LOCKED — কোনো নতুন UI লাগবে না, শুধু PID_ADJUSTMENT-এর backend writer)
   এখনো implementation শুরু হয়নি — শুধু Phase 4-এর বিস্তারিত design এখনো বাকি।

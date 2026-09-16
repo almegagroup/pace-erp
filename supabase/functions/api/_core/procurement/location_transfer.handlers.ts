@@ -1130,6 +1130,11 @@ export async function postLocationTransferHandler(
     const movementTypeCode = "P311";
     const movements: JsonRecord[] = [];
     const completionLines: JsonRecord[] = [];
+    // §138.6 TRANSFER writer -- a P311 landing at an MTS machine-tracked
+    // location always lands the Unassigned bucket (§138.3), never a specific
+    // machine. Non-MTS targets skip this entirely, same table stays untouched.
+    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const machineStockLogRows: JsonRecord[] = [];
 
     for (const entry of postingLines) {
       const line = lineMap.get(entry.request_line_id);
@@ -1202,6 +1207,23 @@ export async function postLocationTransferHandler(
         out_line_ref: outLineRef,
         in_line_ref: inLineRef,
       });
+
+      const targetStorageLocationId = toTrimmedString(line.target_storage_location_id);
+      if (mtsLocationIds.has(targetStorageLocationId)) {
+        machineStockLogRows.push({
+          company_id: companyId,
+          storage_location_id: targetStorageLocationId,
+          material_id: toTrimmedString(line.material_id),
+          machine_id: null,
+          batch_number: toTrimmedString(line.batch_number) || null,
+          qty: entry.quantity,
+          direction: "IN",
+          source_type: "TRANSFER",
+          reference_document_type: "LTR",
+          reference_document_id: requestId,
+          created_by: ctx.auth_user_id,
+        });
+      }
     }
 
     await postTransferDocument({
@@ -1216,6 +1238,22 @@ export async function postLocationTransferHandler(
       },
     });
 
+    // Only logged once the real stock_ledger posting above has actually
+    // succeeded -- an Unassigned-bucket arrival should never be recorded for
+    // a transfer that didn't happen. machine_stock_log is a side-table
+    // (§138.6), not part of post_document's own transaction, so this is a
+    // best-effort follow-up write, not atomic with the posting itself.
+    if (machineStockLogRows.length > 0) {
+      const { error: machineLogError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .insert(machineStockLogRows);
+      if (machineLogError) {
+        console.error("[location_transfer.postLocationTransfer] machine_stock_log insert failed:", JSON.stringify(machineLogError));
+        throw new Error("LTR_POST_MACHINE_LOG_FAILED");
+      }
+    }
+
     return okResponse(await hydrateRequestPayload(requestId), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "LTR_POST_FAILED";
@@ -1224,10 +1262,17 @@ export async function postLocationTransferHandler(
         ? "LTR_SCOPE_VIOLATION"
         : message === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || message === "LTR_POST_QTY_EXCEEDS_OPEN"
           ? message
-          : message === "LTR_POST_DOCUMENT_FAILED"
-            ? "LTR_POST_DOCUMENT_FAILED"
+          : message === "LTR_POST_DOCUMENT_FAILED" || message === "LTR_POST_MACHINE_LOG_FAILED"
+            ? message
           : "LTR_POST_FAILED";
-    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN" ? 409 : code === "LTR_POST_DOCUMENT_FAILED" ? 500 : 400;
+    const status =
+      code === "LTR_SCOPE_VIOLATION"
+        ? 403
+        : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN"
+          ? 409
+          : code === "LTR_POST_DOCUMENT_FAILED" || code === "LTR_POST_MACHINE_LOG_FAILED"
+            ? 500
+            : 400;
     return ltrErrorResponse(req, ctx, code, status, message);
   }
 }
@@ -1592,6 +1637,31 @@ export async function reverseLocationTransferPostingHandler(
       return ltrErrorResponse(req, ctx, "LTR_REVERSE_INVALID", 409, "Target location no longer has enough quantity to reverse.");
     }
 
+    // §138.6 TRANSFER writer, reversal side -- if the target was MTS-tracked,
+    // the original posting logged an Unassigned-bucket IN (below). Reversing
+    // it must log a matching OUT, but only if that much is STILL sitting
+    // Unassigned -- some of it may already have been distributed to a
+    // machine (§138.13.1's MANUAL_ALLOT) since the original transfer, in
+    // which case reversal is blocked here rather than silently leaving the
+    // Unassigned bucket negative.
+    const mtsLocationIdsForReversal = await getMtsStorageLocationIds(companyId);
+    const targetIsMtsTracked = mtsLocationIdsForReversal.has(targetStorageLocationId);
+    if (targetIsMtsTracked) {
+      const unassignedBuckets = await fetchUnassignedBuckets(companyId, [targetStorageLocationId]);
+      const unassignedQty = unassignedBuckets.find(
+        (bucket) => bucket.material_id === materialId && (bucket.batch_number ?? null) === batchNumber,
+      )?.qty ?? 0;
+      if (quantity > unassignedQty + EPSILON) {
+        return ltrErrorResponse(
+          req,
+          ctx,
+          "LTR_REVERSE_MACHINE_LOG_INSUFFICIENT",
+          409,
+          "Part of this transfer has already been distributed to a machine (IN11's Distribute to Machine) -- pull it back to Unassigned first.",
+        );
+      }
+    }
+
     const reverseBody = await parseBody(req);
     const requestNumber = toTrimmedString(requestRow.ltr_number);
     const postingDate = todayIsoDate();
@@ -1667,11 +1737,48 @@ export async function reverseLocationTransferPostingHandler(
       },
     });
 
+    if (targetIsMtsTracked) {
+      const { error: machineLogError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .insert({
+          company_id: companyId,
+          storage_location_id: targetStorageLocationId,
+          material_id: materialId,
+          machine_id: null,
+          batch_number: batchNumber,
+          qty: quantity,
+          direction: "OUT",
+          source_type: "TRANSFER",
+          reference_document_type: "LTR",
+          reference_document_id: toTrimmedString((posting as JsonRecord).request_id),
+          created_by: ctx.auth_user_id,
+        });
+      if (machineLogError) {
+        console.error("[location_transfer.reverseLocationTransferPosting] machine_stock_log insert failed:", JSON.stringify(machineLogError));
+        throw new Error("LTR_REVERSE_MACHINE_LOG_FAILED");
+      }
+    }
+
     return okResponse(await hydrateRequestPayload(toTrimmedString((posting as JsonRecord).request_id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "LTR_REVERSE_FAILED";
-    const code = message === "LTR_SCOPE_VIOLATION" ? "LTR_SCOPE_VIOLATION" : message === "LTR_REVERSE_INVALID" ? "LTR_REVERSE_INVALID" : message === "LTR_POST_DOCUMENT_FAILED" ? "LTR_POST_DOCUMENT_FAILED" : "LTR_REVERSE_FAILED";
-    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REVERSE_INVALID" ? 409 : code === "LTR_POST_DOCUMENT_FAILED" ? 500 : 400;
+    const code =
+      message === "LTR_SCOPE_VIOLATION"
+        ? "LTR_SCOPE_VIOLATION"
+        : message === "LTR_REVERSE_INVALID"
+          ? "LTR_REVERSE_INVALID"
+          : message === "LTR_POST_DOCUMENT_FAILED" || message === "LTR_REVERSE_MACHINE_LOG_FAILED"
+            ? message
+            : "LTR_REVERSE_FAILED";
+    const status =
+      code === "LTR_SCOPE_VIOLATION"
+        ? 403
+        : code === "LTR_REVERSE_INVALID"
+          ? 409
+          : code === "LTR_POST_DOCUMENT_FAILED" || code === "LTR_REVERSE_MACHINE_LOG_FAILED"
+            ? 500
+            : 400;
     return ltrErrorResponse(req, ctx, code, status, message);
   }
 }
