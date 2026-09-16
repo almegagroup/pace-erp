@@ -148,7 +148,7 @@ async function getPackCodeMapByCodes(packCodes: string[]): Promise<Map<string, J
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("pack_code_master")
-    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, active")
+    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, inner_uom_code, active")
     .in("pack_code", uniqueCodes);
   if (error) {
     console.error("[pack_bom.getPackCodeMapByCodes] query failed:", JSON.stringify(error));
@@ -499,7 +499,7 @@ export async function listPackBomEligibleSkusHandler(
       .from("prodshade_pack_config")
       .select(`
         id, material_id, pack_code_id, fill_qty, variant, active,
-        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code)
+        pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, bom_required, outer_uom_code, inner_uom_code)
       `)
       .eq("active", true)
       .in("pack_code_id", packCodeIds);
