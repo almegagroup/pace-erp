@@ -69,6 +69,8 @@ const ERROR_MESSAGES = {
   OM_MATERIAL_TYPE_CATEGORY_LIST_FAILED: "Failed to load material categories.",
   OM_INVALID_MATERIAL_TYPE_CATEGORY: "Category name is required.",
   OM_INVALID_MATERIAL_TYPE: "Invalid material type.",
+  OM_MATERIAL_BASE_UOM_LOCKED: "Base UOM can't be changed once stock movements exist for this material.",
+  OM_MATERIAL_INVALID_UOM: "Invalid base UOM code.",
 };
 
 function friendly(code) {
