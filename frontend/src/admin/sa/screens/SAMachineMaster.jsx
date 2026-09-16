@@ -16,6 +16,7 @@ import {
   listMachines,
   updateMachine,
   toggleMachine,
+  listPlantAssignments,
 } from "../../../pages/dashboard/om/omApi.js";
 import { useAdminCompaniesQuery } from "../../../hooks/queries/useAdminMasterQueries.js";
 import { useCostCentersQuery, useUomsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
@@ -32,6 +33,8 @@ const ERROR_LABELS = {
   OM_MACHINE_TOGGLE_FAILED: "Could not change active status.",
   OM_MACHINE_EXISTS:        "A machine with this code already exists in this company.",
   OM_MACHINE_PO_TYPE_SAVE_FAILED: "Could not save PO Types for this machine.",
+  OM_MACHINE_STORAGE_LOCATION_INVALID: "Storage location does not belong to this company.",
+  OM_LOCATION_LIST_FAILED:  "Failed to load storage locations.",
   COMPANY_LIST_FAILED:      "Failed to load company list.",
   CC_LIST_FAILED:           "Failed to load cost centers.",
 };
@@ -41,6 +44,7 @@ function label(code) {
 }
 
 export default function SAMachineMaster() {
+  const [activeTab, setActiveTab] = useState("register");
   const [filterCompany, setFilterCompany] = useState("");
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState("");
@@ -75,6 +79,58 @@ export default function SAMachineMaster() {
     select: (result) => (Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : []),
   });
   const loading = machinesLoading || companiesLoading || costCentersLoading || uomsLoading;
+
+  // ── Sloc Mapping tab ───────────────────────────────────────────
+  const [slocCompany, setSlocCompany] = useState("");
+  const [slocDrafts, setSlocDrafts]   = useState({}); // machine_id -> pending storage_location_id
+  const [slocSavingId, setSlocSavingId] = useState(null);
+  const {
+    data: slocLocations = [],
+    isLoading: slocLocationsLoading,
+  } = useQuery({
+    queryKey: ["om", "plant-assignments", slocCompany],
+    queryFn: () => listPlantAssignments({ company_id: slocCompany }),
+    enabled: Boolean(slocCompany),
+    select: (result) => (Array.isArray(result?.data) ? result.data : Array.isArray(result) ? result : []),
+  });
+  const slocMachines = slocCompany ? rows.filter((r) => r.company_id === slocCompany) : [];
+
+  function slocDraftFor(machine) {
+    return Object.prototype.hasOwnProperty.call(slocDrafts, machine.id)
+      ? slocDrafts[machine.id]
+      : (machine.storage_location_id ?? "");
+  }
+
+  async function saveSlocMapping(machine) {
+    const nextLocationId = slocDraftFor(machine) || null;
+    setSlocSavingId(machine.id);
+    setError("");
+    setNotice("");
+    try {
+      await updateMachine({
+        id: machine.id,
+        machine_name: machine.machine_name,
+        machine_type: machine.machine_type,
+        capacity_per_batch: machine.capacity_per_batch ?? null,
+        capacity_uom_code: machine.capacity_uom_code ?? null,
+        cost_center_id: machine.cost_center_id ?? null,
+        description: machine.description ?? null,
+        storage_location_id: nextLocationId,
+      });
+      setNotice(`${machine.machine_code} storage location updated.`);
+      setSlocDrafts((d) => {
+        const next = { ...d };
+        delete next[machine.id];
+        return next;
+      });
+      await queryClient.invalidateQueries({ queryKey: ["admin", "machines"] });
+      await refetchMachines();
+    } catch (e) {
+      setError(label(e instanceof Error ? e.message : "OM_MACHINE_UPDATE_FAILED"));
+    } finally {
+      setSlocSavingId(null);
+    }
+  }
 
   // inline edit
   const [editId, setEditId]       = useState(null);
@@ -233,6 +289,108 @@ export default function SAMachineMaster() {
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
     >
+      <div className="mb-4 flex gap-2 border-b border-slate-200">
+        {[
+          { key: "register", label: "Machine Register" },
+          { key: "sloc", label: "Storage Location Mapping" },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${
+              activeTab === tab.key
+                ? "border-sky-600 text-sky-900"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "sloc" && (
+        <ErpSectionCard eyebrow="§138.1 — MTS machine-respect stock foundation" title="Machine ↔ Storage Location mapping">
+          <p className="mb-3 text-xs text-slate-500">
+            প্রতিটা Machine ঠিক একটাই Storage Location-এ mapped থাকতে পারে (পরে re-map করা যায়)।
+            এই mapping MTS Process PO Create-এর Machine dropdown filter করতে ব্যবহৃত হবে।
+          </p>
+          <div className="mb-3 flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Company</label>
+            <select
+              value={slocCompany}
+              onChange={(e) => setSlocCompany(e.target.value)}
+              className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+            >
+              <option value="">— select company —</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>{c.company_code} | {c.company_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {!slocCompany && (
+            <p className="px-3 py-6 text-center text-sm text-slate-400">Company বেছে নিন machine list দেখতে।</p>
+          )}
+
+          {slocCompany && (
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Name</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Storage Location</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(machinesLoading || slocLocationsLoading) && (
+                    <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
+                  )}
+                  {!machinesLoading && !slocLocationsLoading && slocMachines.length === 0 && (
+                    <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">এই company-তে কোনো machine নেই।</td></tr>
+                  )}
+                  {slocMachines.map((machine) => {
+                    const draftValue = slocDraftFor(machine);
+                    const isDirty = draftValue !== (machine.storage_location_id ?? "");
+                    return (
+                      <tr key={machine.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2 font-mono text-slate-900 whitespace-nowrap">{machine.machine_code}</td>
+                        <td className="px-3 py-2 text-slate-900">{machine.machine_name}</td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={draftValue}
+                            onChange={(e) => setSlocDrafts((d) => ({ ...d, [machine.id]: e.target.value }))}
+                            className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                          >
+                            <option value="">— not mapped —</option>
+                            {slocLocations.map((loc) => (
+                              <option key={loc.id} value={loc.id}>{loc.code} — {loc.name}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            disabled={!isDirty || slocSavingId === machine.id}
+                            onClick={() => void saveSlocMapping(machine)}
+                            className="border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {slocSavingId === machine.id ? "Saving..." : "Save"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </ErpSectionCard>
+      )}
+
+      {activeTab === "register" && (
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_380px]">
         {/* ── Left: list ── */}
         <ErpSectionCard eyebrow="Machine Register" title="All machines">
@@ -259,6 +417,7 @@ export default function SAMachineMaster() {
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Name</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Type</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">PO Types</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Storage Location</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Capacity</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Cost Center</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
@@ -267,10 +426,10 @@ export default function SAMachineMaster() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
+                  <tr><td colSpan={10} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
                 )}
                 {!loading && displayRows.length === 0 && (
-                  <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">No machines found.</td></tr>
+                  <tr><td colSpan={10} className="px-3 py-6 text-center text-sm text-slate-400">No machines found.</td></tr>
                 )}
                 {displayRows.map((row) => {
                   const isEditing = editId === row.id;
@@ -336,6 +495,11 @@ export default function SAMachineMaster() {
                           ) : (
                             <span className="text-xs text-slate-400" title="Not configured yet -- shows for every PO type until set">All (unconfigured)</span>
                           )}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
+                          {row.storage_location
+                            ? `${row.storage_location.code} — ${row.storage_location.name}`
+                            : <span className="text-xs text-slate-400" title="Map from the Storage Location Mapping tab">— not mapped —</span>}
                         </td>
                         <td className="px-3 py-2 text-slate-600">
                           {isEditing ? (
@@ -425,7 +589,7 @@ export default function SAMachineMaster() {
                       </tr>
                       {isEditing && (
                         <tr className="bg-sky-50">
-                          <td colSpan={9} className="px-3 pb-2">
+                          <td colSpan={10} className="px-3 pb-2">
                             <label className="text-[11px] font-semibold text-slate-600">Description</label>
                             <input
                               value={editDraft.description}
@@ -570,6 +734,7 @@ export default function SAMachineMaster() {
           </div>
         </ErpSectionCard>
       </div>
+      )}
     </ErpScreenScaffold>
   );
 }

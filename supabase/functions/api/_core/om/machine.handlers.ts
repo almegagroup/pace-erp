@@ -51,6 +51,18 @@ async function getPoTypesMapByMachineIds(machineIds: string[]): Promise<Map<stri
   return map;
 }
 
+async function assertLocationInCompany(companyId: string, storageLocationId: string): Promise<void> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_plant_map")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("storage_location_id", storageLocationId)
+    .limit(1);
+  if (error) throw new Error("OM_MACHINE_STORAGE_LOCATION_INVALID");
+  if (!data || data.length === 0) throw new Error("OM_MACHINE_STORAGE_LOCATION_INVALID");
+}
+
 async function replaceMachinePoTypes(machineId: string, poTypes: string[]): Promise<void> {
   const { error: delErr } = await serviceRoleClient
     .schema("erp_master")
@@ -112,6 +124,15 @@ export async function createMachineHandler(
       return machineErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
+    const storageLocationId = toTrimmedString(body.storage_location_id) || null;
+    if (storageLocationId) {
+      try {
+        await assertLocationInCompany(companyId, storageLocationId);
+      } catch {
+        return machineErrorResponse(req, ctx, "OM_MACHINE_STORAGE_LOCATION_INVALID", 400, "Storage location does not belong to this company");
+      }
+    }
+
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("machine_master")
@@ -123,6 +144,7 @@ export async function createMachineHandler(
         capacity_per_batch: capacityPerBatch,
         capacity_uom_code: toTrimmedString(body.capacity_uom_code).toUpperCase() || null,
         cost_center_id: toTrimmedString(body.cost_center_id) || null,
+        storage_location_id: storageLocationId,
         description: toTrimmedString(body.description) || null,
         active: true,
         created_by: ctx.auth_user_id,
@@ -163,11 +185,14 @@ export async function listMachinesHandler(
     const machineType = toTrimmedString(url.searchParams.get("machine_type")).toUpperCase();
     const active = url.searchParams.get("active");
     const poType = toTrimmedString(url.searchParams.get("po_type")).toUpperCase();
+    const storageLocationId = toTrimmedString(url.searchParams.get("storage_location_id"));
 
     let query = serviceRoleClient
       .schema("erp_master")
       .from("machine_master")
-      .select("*, cost_center:cost_center_id(id, cost_center_code, cost_center_name)")
+      .select(
+        "*, cost_center:cost_center_id(id, cost_center_code, cost_center_name), storage_location:storage_location_id(id, code, name)",
+      )
       .order("machine_code", { ascending: true });
 
     if (companyId) {
@@ -180,6 +205,15 @@ export async function listMachinesHandler(
       query = query.eq("active", true);
     } else if (active === "false") {
       query = query.eq("active", false);
+    }
+    // Location filter is fail-open (§138.1/§138.2): a machine with NO
+    // storage_location_id mapped yet still shows up for every location
+    // filter -- same discipline as the po_type fail-open rule below, so
+    // existing machines don't vanish from Process PO Create the moment a
+    // Stroke-location filter is wired in, before SA has mapped them.
+    // UUID-shape validated before interpolating into the .or() filter string.
+    if (storageLocationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storageLocationId)) {
+      query = query.or(`storage_location_id.eq.${storageLocationId},storage_location_id.is.null`);
     }
 
     const { data, error } = await query;
@@ -229,17 +263,38 @@ export async function updateMachineHandler(
       return machineErrorResponse(req, ctx, "OM_MACHINE_UPDATE_FAILED", 400, "Invalid machine capacity");
     }
 
+    const patch: JsonRecord = {
+      machine_name: machineName,
+      machine_type: machineType,
+      capacity_per_batch: capacityPerBatch,
+      capacity_uom_code: toTrimmedString(body.capacity_uom_code).toUpperCase() || null,
+      cost_center_id: toTrimmedString(body.cost_center_id) || null,
+      description: toTrimmedString(body.description) || null,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(body, "storage_location_id")) {
+      const storageLocationId = toTrimmedString(body.storage_location_id) || null;
+      if (storageLocationId) {
+        const { data: existing, error: fetchErr } = await serviceRoleClient
+          .schema("erp_master")
+          .from("machine_master")
+          .select("company_id")
+          .eq("id", id)
+          .single();
+        if (fetchErr || !existing) throw new Error("OM_MACHINE_UPDATE_FAILED");
+        try {
+          await assertLocationInCompany(String((existing as JsonRecord).company_id), storageLocationId);
+        } catch {
+          return machineErrorResponse(req, ctx, "OM_MACHINE_STORAGE_LOCATION_INVALID", 400, "Storage location does not belong to this company");
+        }
+      }
+      patch.storage_location_id = storageLocationId;
+    }
+
     const { error } = await serviceRoleClient
       .schema("erp_master")
       .from("machine_master")
-      .update({
-        machine_name: machineName,
-        machine_type: machineType,
-        capacity_per_batch: capacityPerBatch,
-        capacity_uom_code: toTrimmedString(body.capacity_uom_code).toUpperCase() || null,
-        cost_center_id: toTrimmedString(body.cost_center_id) || null,
-        description: toTrimmedString(body.description) || null,
-      })
+      .update(patch)
       .eq("id", id);
 
     if (error) throw new Error("OM_MACHINE_UPDATE_FAILED");
