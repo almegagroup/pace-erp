@@ -32,3 +32,13 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase db push --linked --include-all
+
+      # Render's own auto-deploy-on-push is disabled for this reason: it used to
+      # race this job -- the app server could go live with code expecting a new
+      # column/table before the migration above finished applying (see PR #489's
+      # OM_MACHINE_LIST_FAILED incident, 2026-09-16). Triggering Render only from
+      # here, after migrations succeed, makes DB-before-app ordering guaranteed
+      # instead of accidental.
+      - name: Trigger Render deploy (after migrations succeed)
+        run: |
+          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
