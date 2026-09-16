@@ -74,6 +74,17 @@ async function ensureCompanyExists(companyId: string): Promise<boolean> {
   return !error && Boolean(data?.id);
 }
 
+async function materialHasStockLedgerHistory(materialId: string): Promise<boolean> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_ledger")
+    .select("id")
+    .eq("material_id", materialId)
+    .limit(1);
+  if (error) throw new Error("OM_MATERIAL_STOCK_HISTORY_CHECK_FAILED");
+  return (data ?? []).length > 0;
+}
+
 async function getMaterialById(id: string): Promise<Record<string, unknown> | null> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
@@ -723,6 +734,32 @@ export async function updateMaterialHandler(
     }
     if (body.is_batch_managed !== undefined) {
       updates.batch_tracking_required = body.is_batch_managed === true;
+    }
+
+    // base_uom_code denominates every historical stock_ledger quantity for
+    // this material -- changing it once real postings exist would silently
+    // reinterpret past quantities under a new unit with no conversion
+    // applied. Only allow the change while the material has zero ledger
+    // history; error clearly otherwise instead of the old silent no-op
+    // (base_uom_code wasn't in mutableFields, so past edits looked like they
+    // saved but never actually touched the column).
+    if (body.base_uom_code !== undefined) {
+      const nextBaseUom = toTrimmedString(body.base_uom_code).toUpperCase();
+      if (nextBaseUom && nextBaseUom !== toTrimmedString(existing.base_uom_code).toUpperCase()) {
+        if (!(await ensureUomExists(nextBaseUom))) {
+          return materialErrorResponse(req, ctx, "OM_MATERIAL_INVALID_UOM", 400, "Invalid base UOM code");
+        }
+        if (await materialHasStockLedgerHistory(id)) {
+          return materialErrorResponse(
+            req,
+            ctx,
+            "OM_MATERIAL_BASE_UOM_LOCKED",
+            422,
+            "Base UOM can't be changed once stock movements exist for this material",
+          );
+        }
+        updates.base_uom_code = nextBaseUom;
+      }
     }
 
     if (Object.keys(updates).length === 2) {
