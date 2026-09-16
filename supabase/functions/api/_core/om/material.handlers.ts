@@ -85,6 +85,20 @@ async function materialHasStockLedgerHistory(materialId: string): Promise<boolea
   return (data ?? []).length > 0;
 }
 
+// Batched sibling of materialHasStockLedgerHistory() for bulkSaveMaterialsHandler
+// -- one query for the whole update batch instead of one per row.
+async function getMaterialIdsWithStockLedgerHistory(materialIds: string[]): Promise<Set<string>> {
+  const uniqueIds = [...new Set(materialIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return new Set();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_ledger")
+    .select("material_id")
+    .in("material_id", uniqueIds);
+  if (error) throw new Error("OM_MATERIAL_STOCK_HISTORY_CHECK_FAILED");
+  return new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)));
+}
+
 async function getMaterialById(id: string): Promise<Record<string, unknown> | null> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
@@ -371,6 +385,26 @@ export async function bulkSaveMaterialsHandler(
     // Process updates
     const updateIds = updates.map((row) => toTrimmedString(row.id)).filter(Boolean);
     const existingById = await getMaterialsByIds(updateIds);
+    // base_uom_code isn't in mutableFields below (same reasoning as
+    // updateMaterialHandler -- it denominates every historical stock_ledger
+    // quantity, so it's handled separately per-row further down, gated on
+    // that material having zero ledger history).
+    const materialIdsWithHistory = await getMaterialIdsWithStockLedgerHistory(updateIds);
+    const candidateBaseUoms = [...new Set(
+      updates
+        .filter((row) => row.base_uom_code !== undefined)
+        .map((row) => toTrimmedString(row.base_uom_code).toUpperCase())
+        .filter(Boolean),
+    )];
+    let validBaseUoms = new Set<string>();
+    if (candidateBaseUoms.length) {
+      const { data: uomRows } = await serviceRoleClient
+        .schema("erp_master")
+        .from("uom_master")
+        .select("code")
+        .in("code", candidateBaseUoms);
+      validBaseUoms = new Set(((uomRows ?? []) as JsonRecord[]).map((row) => String(row.code)));
+    }
 
     const mutableFields = [
       "material_name", "document_name", "short_name", "material_category",
@@ -408,6 +442,21 @@ export async function bulkSaveMaterialsHandler(
 
       for (const field of mutableFields) {
         if (row[field] !== undefined) patch[field] = row[field];
+      }
+
+      if (row.base_uom_code !== undefined) {
+        const nextBaseUom = toTrimmedString(row.base_uom_code).toUpperCase();
+        if (nextBaseUom && nextBaseUom !== toTrimmedString(existing.base_uom_code).toUpperCase()) {
+          if (!validBaseUoms.has(nextBaseUom)) {
+            errors.push({ index: i, context: "update", error: "OM_MATERIAL_INVALID_UOM" });
+            continue;
+          }
+          if (materialIdsWithHistory.has(id)) {
+            errors.push({ index: i, context: "update", error: "OM_MATERIAL_BASE_UOM_LOCKED" });
+            continue;
+          }
+          patch.base_uom_code = nextBaseUom;
+        }
       }
 
       // Check duplicate name if name is changing (same order-sensitive reservation as creates)
