@@ -191,6 +191,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/location-transfer-availability-preview": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "WRITE" },
   "GET:/api/procurement/location-transfer-workbench": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
   "POST:/api/procurement/location-transfer-postings": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
+  // §138.13/§138.13.1 -- IN11's "Distribute to Machine" drawer rides on the
+  // same PROC_LOC_TRANSFER_POST grant IN11 posting already uses, deliberately
+  // -- it's the same page, same workbench, just a different attribution action.
+  "GET:/api/procurement/machine-distribution/unassigned": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
+  "POST:/api/procurement/machine-distribution/assign":    { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/balance":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
   "POST:/api/procurement/stock-status-change/postings": { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/postings":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },

@@ -1130,6 +1130,11 @@ export async function postLocationTransferHandler(
     const movementTypeCode = "P311";
     const movements: JsonRecord[] = [];
     const completionLines: JsonRecord[] = [];
+    // §138.6 TRANSFER writer -- a P311 landing at an MTS machine-tracked
+    // location always lands the Unassigned bucket (§138.3), never a specific
+    // machine. Non-MTS targets skip this entirely, same table stays untouched.
+    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const machineStockLogRows: JsonRecord[] = [];
 
     for (const entry of postingLines) {
       const line = lineMap.get(entry.request_line_id);
@@ -1202,6 +1207,23 @@ export async function postLocationTransferHandler(
         out_line_ref: outLineRef,
         in_line_ref: inLineRef,
       });
+
+      const targetStorageLocationId = toTrimmedString(line.target_storage_location_id);
+      if (mtsLocationIds.has(targetStorageLocationId)) {
+        machineStockLogRows.push({
+          company_id: companyId,
+          storage_location_id: targetStorageLocationId,
+          material_id: toTrimmedString(line.material_id),
+          machine_id: null,
+          batch_number: toTrimmedString(line.batch_number) || null,
+          qty: entry.quantity,
+          direction: "IN",
+          source_type: "TRANSFER",
+          reference_document_type: "LTR",
+          reference_document_id: requestId,
+          created_by: ctx.auth_user_id,
+        });
+      }
     }
 
     await postTransferDocument({
@@ -1216,6 +1238,22 @@ export async function postLocationTransferHandler(
       },
     });
 
+    // Only logged once the real stock_ledger posting above has actually
+    // succeeded -- an Unassigned-bucket arrival should never be recorded for
+    // a transfer that didn't happen. machine_stock_log is a side-table
+    // (§138.6), not part of post_document's own transaction, so this is a
+    // best-effort follow-up write, not atomic with the posting itself.
+    if (machineStockLogRows.length > 0) {
+      const { error: machineLogError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .insert(machineStockLogRows);
+      if (machineLogError) {
+        console.error("[location_transfer.postLocationTransfer] machine_stock_log insert failed:", JSON.stringify(machineLogError));
+        throw new Error("LTR_POST_MACHINE_LOG_FAILED");
+      }
+    }
+
     return okResponse(await hydrateRequestPayload(requestId), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "LTR_POST_FAILED";
@@ -1224,10 +1262,324 @@ export async function postLocationTransferHandler(
         ? "LTR_SCOPE_VIOLATION"
         : message === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || message === "LTR_POST_QTY_EXCEEDS_OPEN"
           ? message
-          : message === "LTR_POST_DOCUMENT_FAILED"
-            ? "LTR_POST_DOCUMENT_FAILED"
+          : message === "LTR_POST_DOCUMENT_FAILED" || message === "LTR_POST_MACHINE_LOG_FAILED"
+            ? message
           : "LTR_POST_FAILED";
-    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN" ? 409 : code === "LTR_POST_DOCUMENT_FAILED" ? 500 : 400;
+    const status =
+      code === "LTR_SCOPE_VIOLATION"
+        ? 403
+        : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN"
+          ? 409
+          : code === "LTR_POST_DOCUMENT_FAILED" || code === "LTR_POST_MACHINE_LOG_FAILED"
+            ? 500
+            : 400;
+    return ltrErrorResponse(req, ctx, code, status, message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// §138.13/§138.13.1 -- IN11 "Distribute to Machine" (MANUAL_ALLOT attribution
+// move, no stock_ledger posting -- material never physically leaves the
+// storage location, only its machine_stock_log bucket tag changes).
+// ---------------------------------------------------------------------------
+
+type DistributionSplitInput = { machine_id: string; qty: number };
+type DistributionInput = {
+  storage_location_id: string;
+  material_id: string;
+  batch_number: string | null;
+  splits: DistributionSplitInput[];
+};
+type UnassignedBucketRow = {
+  storage_location_id: string;
+  material_id: string;
+  batch_number: string | null;
+  qty: number;
+};
+
+const DISTRIBUTE_ERROR_CODES = new Set([
+  "LTR_DISTRIBUTE_INVALID",
+  "LTR_DISTRIBUTE_DUPLICATE_MACHINE",
+  "LTR_DISTRIBUTE_MACHINE_LOCATION_MISMATCH",
+  "LTR_DISTRIBUTE_QTY_EXCEEDS_UNASSIGNED",
+  "LTR_DISTRIBUTE_LOCATION_NOT_MTS",
+]);
+
+// Same fail-open convention as machine.handlers.ts's listMachinesHandler po_type
+// filter -- a machine with no po_types configured yet still counts as
+// MTS-eligible, so pre-existing machines don't vanish from this feature the
+// moment SA hasn't visited machine_po_type_map for them yet.
+async function getMtsStorageLocationIds(companyId: string): Promise<Set<string>> {
+  const { data: machines, error: machineError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_master")
+    .select("id, storage_location_id")
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .not("storage_location_id", "is", null);
+  if (machineError) throw new Error("LTR_DISTRIBUTE_MACHINE_LOOKUP_FAILED");
+  const machineRows = (machines ?? []) as JsonRecord[];
+  const machineIds = machineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+  if (machineIds.length === 0) return new Set();
+
+  const { data: poTypeRows, error: poTypeError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_po_type_map")
+    .select("machine_id, po_type")
+    .in("machine_id", machineIds);
+  if (poTypeError) throw new Error("LTR_DISTRIBUTE_MACHINE_LOOKUP_FAILED");
+  const poTypesByMachine = new Map<string, string[]>();
+  for (const row of (poTypeRows ?? []) as JsonRecord[]) {
+    const machineId = toTrimmedString(row.machine_id);
+    const list = poTypesByMachine.get(machineId) ?? [];
+    list.push(toUpperTrimmedString(row.po_type));
+    poTypesByMachine.set(machineId, list);
+  }
+
+  const locationIds = new Set<string>();
+  for (const row of machineRows) {
+    const machineId = toTrimmedString(row.id);
+    const poTypes = poTypesByMachine.get(machineId) ?? [];
+    if (poTypes.length === 0 || poTypes.includes("MTS")) {
+      const locationId = toTrimmedString(row.storage_location_id);
+      if (locationId) locationIds.add(locationId);
+    }
+  }
+  return locationIds;
+}
+
+async function getStorageLocationInfo(ids: string[]): Promise<Map<string, JsonRecord>> {
+  const uniqueIds = [...new Set(ids.map((entry) => toTrimmedString(entry)).filter(Boolean))];
+  const map = new Map<string, JsonRecord>();
+  if (uniqueIds.length === 0) return map;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id, code, name")
+    .in("id", uniqueIds);
+  if (error) throw new Error("LTR_DISTRIBUTE_LOCATION_LOOKUP_FAILED");
+  for (const row of (data ?? []) as JsonRecord[]) {
+    map.set(toTrimmedString(row.id), {
+      code: toTrimmedString(row.code),
+      name: toTrimmedString(row.name),
+      label: `${toTrimmedString(row.code)} - ${toTrimmedString(row.name)}`.trim(),
+    });
+  }
+  return map;
+}
+
+// Aggregates every Unassigned-bucket (machine_id IS NULL) machine_stock_log row
+// into one running balance per (storage_location, material, batch) -- this is
+// the same derivation for both the list view and the write-time re-validation,
+// so the two can never silently disagree.
+async function fetchUnassignedBuckets(companyId: string, storageLocationIds: string[]): Promise<UnassignedBucketRow[]> {
+  if (storageLocationIds.length === 0) return [];
+  let data: JsonRecord[];
+  try {
+    data = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
+      .schema("erp_production")
+      .from("machine_stock_log")
+      .select("storage_location_id, material_id, batch_number, qty, direction")
+      .eq("company_id", companyId)
+      .is("machine_id", null)
+      .in("storage_location_id", storageLocationIds)
+      .range(from, to));
+  } catch {
+    throw new Error("LTR_DISTRIBUTE_UNASSIGNED_LOOKUP_FAILED");
+  }
+  const totals = new Map<string, UnassignedBucketRow>();
+  for (const row of data) {
+    const storageLocationId = toTrimmedString(row.storage_location_id);
+    const materialId = toTrimmedString(row.material_id);
+    const batchNumber = toTrimmedString(row.batch_number) || null;
+    const key = `${storageLocationId}::${materialId}::${batchNumber ?? ""}`;
+    const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
+    const qty = Number(parseNullableNumber(row.qty) ?? 0) * sign;
+    const existing = totals.get(key);
+    if (existing) {
+      existing.qty = Number((existing.qty + qty).toFixed(6));
+    } else {
+      totals.set(key, { storage_location_id: storageLocationId, material_id: materialId, batch_number: batchNumber, qty: Number(qty.toFixed(6)) });
+    }
+  }
+  return [...totals.values()].filter((row) => row.qty > EPSILON);
+}
+
+function normalizeDistributions(rawDistributions: unknown): DistributionInput[] {
+  const list = Array.isArray(rawDistributions) ? rawDistributions : [];
+  return list.map((entry) => {
+    const distribution = (entry ?? {}) as JsonRecord;
+    const rawSplits = Array.isArray(distribution.splits) ? distribution.splits : [];
+    return {
+      storage_location_id: toTrimmedString(distribution.storage_location_id),
+      material_id: toTrimmedString(distribution.material_id),
+      batch_number: toTrimmedString(distribution.batch_number) || null,
+      splits: rawSplits.map((splitEntry) => ({
+        machine_id: toTrimmedString((splitEntry as JsonRecord)?.machine_id),
+        qty: Number(parsePositiveNumber((splitEntry as JsonRecord)?.qty) ?? 0),
+      })),
+    };
+  });
+}
+
+// §138.13.1 -- item grid feeding the "Distribute to Machine" drawer: every
+// Unassigned-bucket balance across this company's MTS machine-tracked
+// locations. An empty result is exactly the condition that keeps the IN11
+// button disabled -- whether because the company has no MTS location at all,
+// or because every location's Unassigned bucket is already fully distributed.
+export async function listUnassignedMachineStockHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    if (!companyId) {
+      return ltrErrorResponse(req, ctx, "LTR_COMPANY_REQUIRED", 400, "company_id is required.");
+    }
+    await assertScopedCompanyAccess(ctx, companyId, POST_RESOURCE, "VIEW");
+
+    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const buckets = await fetchUnassignedBuckets(companyId, [...mtsLocationIds]);
+
+    const [materialInfo, locationInfo] = await Promise.all([
+      getMaterialInfo(buckets.map((row) => row.material_id)),
+      getStorageLocationInfo(buckets.map((row) => row.storage_location_id)),
+    ]);
+
+    const rows = buckets
+      .map((row) => {
+        const material = materialInfo.get(row.material_id);
+        const location = locationInfo.get(row.storage_location_id);
+        return {
+          storage_location_id: row.storage_location_id,
+          storage_location_label: (location?.label as string) ?? "—",
+          material_id: row.material_id,
+          material_label: material
+            ? `${toTrimmedString(material.pace_code)} - ${toTrimmedString(material.material_name)}`.trim()
+            : "—",
+          batch_number: row.batch_number,
+          unassigned_qty: row.qty,
+        };
+      })
+      .sort((a, b) => a.material_label.localeCompare(b.material_label));
+
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "LTR_DISTRIBUTE_LIST_FAILED";
+    const code = message === "LTR_SCOPE_VIOLATION" ? "LTR_SCOPE_VIOLATION" : "LTR_DISTRIBUTE_LIST_FAILED";
+    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : 400;
+    return ltrErrorResponse(req, ctx, code, status, message);
+  }
+}
+
+// §138.13.1 -- the "Assign" action itself. Pure attribution: no stock_ledger
+// posting, no movement_type (§138.6's MANUAL_ALLOT) -- a paired OUT (Unassigned)
+// + IN (target machine) row per split, sharing one reference_document_id,
+// written in a single bulk INSERT so the whole request's splits land atomically
+// (all distributions in one request either all land or none do).
+export async function postMachineDistributionHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    if (!companyId) {
+      return ltrErrorResponse(req, ctx, "LTR_COMPANY_REQUIRED", 400, "company_id is required.");
+    }
+    await assertScopedCompanyAccess(ctx, companyId, POST_RESOURCE, "WRITE");
+
+    const distributions = normalizeDistributions(body.distributions).filter(
+      (entry) => entry.storage_location_id && entry.material_id && entry.splits.length > 0,
+    );
+    if (distributions.length === 0) {
+      return ltrErrorResponse(req, ctx, "LTR_DISTRIBUTE_INVALID", 400, "At least one item with at least one machine split is required.");
+    }
+
+    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const storageLocationIds = [...new Set(distributions.map((entry) => entry.storage_location_id))];
+    for (const locationId of storageLocationIds) {
+      if (!mtsLocationIds.has(locationId)) {
+        throw new Error("LTR_DISTRIBUTE_LOCATION_NOT_MTS");
+      }
+    }
+
+    const currentBuckets = await fetchUnassignedBuckets(companyId, storageLocationIds);
+    const bucketByKey = new Map(
+      currentBuckets.map((row) => [`${row.storage_location_id}::${row.material_id}::${row.batch_number ?? ""}`, row.qty]),
+    );
+
+    const machineIds = [...new Set(distributions.flatMap((entry) => entry.splits.map((split) => split.machine_id)).filter(Boolean))];
+    const { data: machineRows } = machineIds.length
+      ? await serviceRoleClient.schema("erp_master").from("machine_master").select("id, storage_location_id").in("id", machineIds)
+      : { data: [] as JsonRecord[] };
+    const machineLocationById = new Map(
+      ((machineRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.storage_location_id)]),
+    );
+
+    // Validate every distribution + split before writing anything -- all-or-nothing.
+    const insertRows: JsonRecord[] = [];
+    for (const distribution of distributions) {
+      if (!distribution.splits.every((split) => split.machine_id && split.qty > 0)) {
+        throw new Error("LTR_DISTRIBUTE_INVALID");
+      }
+      const seenMachineIds = new Set<string>();
+      for (const split of distribution.splits) {
+        if (seenMachineIds.has(split.machine_id)) throw new Error("LTR_DISTRIBUTE_DUPLICATE_MACHINE");
+        seenMachineIds.add(split.machine_id);
+        if (machineLocationById.get(split.machine_id) !== distribution.storage_location_id) {
+          throw new Error("LTR_DISTRIBUTE_MACHINE_LOCATION_MISMATCH");
+        }
+      }
+      const key = `${distribution.storage_location_id}::${distribution.material_id}::${distribution.batch_number ?? ""}`;
+      const available = bucketByKey.get(key) ?? 0;
+      const requestedTotal = distribution.splits.reduce((sum, split) => sum + split.qty, 0);
+      if (requestedTotal > available + EPSILON) throw new Error("LTR_DISTRIBUTE_QTY_EXCEEDS_UNASSIGNED");
+
+      for (const split of distribution.splits) {
+        const commonFields = {
+          company_id: companyId,
+          storage_location_id: distribution.storage_location_id,
+          material_id: distribution.material_id,
+          batch_number: distribution.batch_number,
+          qty: Number(split.qty.toFixed(6)),
+          source_type: "MANUAL_ALLOT",
+          reference_document_type: "MANUAL_ALLOT",
+          reference_document_id: crypto.randomUUID(),
+          created_by: ctx.auth_user_id,
+        };
+        insertRows.push({ ...commonFields, machine_id: null, direction: "OUT" });
+        insertRows.push({ ...commonFields, machine_id: split.machine_id, direction: "IN" });
+      }
+    }
+
+    const { error: insertError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("machine_stock_log")
+      .insert(insertRows);
+    if (insertError) {
+      console.error("[location_transfer.postMachineDistribution] insert failed:", JSON.stringify(insertError));
+      throw new Error("LTR_DISTRIBUTE_FAILED");
+    }
+
+    return okResponse({ ok: true, rows_inserted: insertRows.length }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "LTR_DISTRIBUTE_FAILED";
+    const code =
+      message === "LTR_SCOPE_VIOLATION"
+        ? "LTR_SCOPE_VIOLATION"
+        : DISTRIBUTE_ERROR_CODES.has(message)
+          ? message
+          : "LTR_DISTRIBUTE_FAILED";
+    const status =
+      code === "LTR_SCOPE_VIOLATION"
+        ? 403
+        : code === "LTR_DISTRIBUTE_QTY_EXCEEDS_UNASSIGNED"
+          ? 409
+          : code === "LTR_DISTRIBUTE_FAILED"
+            ? 500
+            : 400;
     return ltrErrorResponse(req, ctx, code, status, message);
   }
 }
@@ -1283,6 +1635,31 @@ export async function reverseLocationTransferPostingHandler(
     });
     if (quantity > targetBalance.quantity + EPSILON) {
       return ltrErrorResponse(req, ctx, "LTR_REVERSE_INVALID", 409, "Target location no longer has enough quantity to reverse.");
+    }
+
+    // §138.6 TRANSFER writer, reversal side -- if the target was MTS-tracked,
+    // the original posting logged an Unassigned-bucket IN (below). Reversing
+    // it must log a matching OUT, but only if that much is STILL sitting
+    // Unassigned -- some of it may already have been distributed to a
+    // machine (§138.13.1's MANUAL_ALLOT) since the original transfer, in
+    // which case reversal is blocked here rather than silently leaving the
+    // Unassigned bucket negative.
+    const mtsLocationIdsForReversal = await getMtsStorageLocationIds(companyId);
+    const targetIsMtsTracked = mtsLocationIdsForReversal.has(targetStorageLocationId);
+    if (targetIsMtsTracked) {
+      const unassignedBuckets = await fetchUnassignedBuckets(companyId, [targetStorageLocationId]);
+      const unassignedQty = unassignedBuckets.find(
+        (bucket) => bucket.material_id === materialId && (bucket.batch_number ?? null) === batchNumber,
+      )?.qty ?? 0;
+      if (quantity > unassignedQty + EPSILON) {
+        return ltrErrorResponse(
+          req,
+          ctx,
+          "LTR_REVERSE_MACHINE_LOG_INSUFFICIENT",
+          409,
+          "Part of this transfer has already been distributed to a machine (IN11's Distribute to Machine) -- pull it back to Unassigned first.",
+        );
+      }
     }
 
     const reverseBody = await parseBody(req);
@@ -1360,11 +1737,48 @@ export async function reverseLocationTransferPostingHandler(
       },
     });
 
+    if (targetIsMtsTracked) {
+      const { error: machineLogError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .insert({
+          company_id: companyId,
+          storage_location_id: targetStorageLocationId,
+          material_id: materialId,
+          machine_id: null,
+          batch_number: batchNumber,
+          qty: quantity,
+          direction: "OUT",
+          source_type: "TRANSFER",
+          reference_document_type: "LTR",
+          reference_document_id: toTrimmedString((posting as JsonRecord).request_id),
+          created_by: ctx.auth_user_id,
+        });
+      if (machineLogError) {
+        console.error("[location_transfer.reverseLocationTransferPosting] machine_stock_log insert failed:", JSON.stringify(machineLogError));
+        throw new Error("LTR_REVERSE_MACHINE_LOG_FAILED");
+      }
+    }
+
     return okResponse(await hydrateRequestPayload(toTrimmedString((posting as JsonRecord).request_id)), ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "LTR_REVERSE_FAILED";
-    const code = message === "LTR_SCOPE_VIOLATION" ? "LTR_SCOPE_VIOLATION" : message === "LTR_REVERSE_INVALID" ? "LTR_REVERSE_INVALID" : message === "LTR_POST_DOCUMENT_FAILED" ? "LTR_POST_DOCUMENT_FAILED" : "LTR_REVERSE_FAILED";
-    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_REVERSE_INVALID" ? 409 : code === "LTR_POST_DOCUMENT_FAILED" ? 500 : 400;
+    const code =
+      message === "LTR_SCOPE_VIOLATION"
+        ? "LTR_SCOPE_VIOLATION"
+        : message === "LTR_REVERSE_INVALID"
+          ? "LTR_REVERSE_INVALID"
+          : message === "LTR_POST_DOCUMENT_FAILED" || message === "LTR_REVERSE_MACHINE_LOG_FAILED"
+            ? message
+            : "LTR_REVERSE_FAILED";
+    const status =
+      code === "LTR_SCOPE_VIOLATION"
+        ? 403
+        : code === "LTR_REVERSE_INVALID"
+          ? 409
+          : code === "LTR_POST_DOCUMENT_FAILED" || code === "LTR_REVERSE_MACHINE_LOG_FAILED"
+            ? 500
+            : 400;
     return ltrErrorResponse(req, ctx, code, status, message);
   }
 }
