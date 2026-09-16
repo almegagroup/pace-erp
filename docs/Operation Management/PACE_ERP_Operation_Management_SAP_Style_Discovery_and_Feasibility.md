@@ -23727,7 +23727,7 @@ future availability check ভুল উত্তর দেবে (ভুলভ�
   reference-document derivation join করে দেখাবে — শুধু MTS machine-tracked location-এর row-এই
   প্রযোজ্য।
 
-### 138.9 — Unassigned balance পরে machine-এ Allot করার mechanism (SUPERSEDED, ২০২৬-০৯-১৫ — পুনরায় design হচ্ছে)
+### 138.9 — Unassigned balance পরে machine-এ Allot করার mechanism (SUPERSEDED — resolved by §138.13/§138.13.1, ২০২৬-০৯-১৬)
 
 **⚠️ নিচের "IN03-তে Assign to Machine button" design এখন আর locked না — business owner
 (২০২৬-০৯-১৫) সরাসরি বলেছেন এই mechanism-টা তিনি নিজে design করবেন, আর তাতে "pull list" ধারণা
@@ -23958,3 +23958,49 @@ warehouse থেকে যেকোনো valid item-ই তোলা যায�
 **⏳ এখনো খোলা (পরের ধাপ):** বাটন click করলে যে center drawer খুলবে, তার ভেতরের exact ফিল্ড/flow
 (Company/Prodshade select, machine-wise qty entry, ইত্যাদি) — এখনো design হয়নি, business owner-এর
 input বাকি।
+
+#### 138.13.1 — Drawer flow: item grid → per-item machine-split, `MANUAL_ALLOT` reuse (LOCKED, ২০২৬-০৯-১৬)
+
+**Drawer-এর প্রথম view — ErpDenseGrid, company-র সব MTS location একসাথে:**
+
+- প্রতিটা row = একটা Unassigned item। কোনো আলাদা Prodshade pre-select ধাপ নেই — সেই company-র
+  **সব MTS machine-tracked shop-floor location মিলিয়ে** যত item-এর Unassigned bucket-এ balance
+  > 0 আছে, সবগুলো এক grid-এ, নিচের columns সহ:
+  - Item Name (`material_code — material_name`, §8A অনুযায়ী)
+  - **Storage Location** (per row, বাধ্যতামূলক — কারণ **একই item একাধিক shop floor-এ থাকতে
+    পারে**, আর "Assign" click করলে ঠিক কোন location-এর machine list আনতে হবে সেটা জানতে এই column-ই
+    একমাত্র উৎস)
+  - Unassigned Qty
+  - "Assign" বাটন (per row)
+- Grid-এর উপরে **all-column search bar** (existing `ErpDenseGrid` pattern-এর মতোই) — item name,
+  location code যেকোনোটা দিয়ে filter করা যায়।
+
+**"Assign" click করলে — সেই row-এর machine-split sub-view:**
+
+- সেই row-এর নিজের **Storage Location** ধরে `machine_master.storage_location_id` মিলিয়ে শুধু সেই
+  location-এর machine list আসবে (§138.1 mapping)।
+- প্রতিটা machine-এর পাশে একটা manual qty input field।
+- নিচে **live running balance** — মোট Unassigned qty থেকে এখন পর্যন্ত type করা সব machine-এর qty
+  বাদ দিয়ে যা বাকি থাকছে, সেটা real-time দেখাবে (negative হলে block, §138.9-এর পুরনো draft-এর
+  "sum exact/কম match" validation-ই বহাল — sum কখনো original Unassigned qty-এর বেশি হতে পারবে না,
+  কম হতে পারে)।
+
+**Save behavior — per-item বা bulk, partial সমর্থিত:**
+
+- User একটা item করেই Save করতে পারে, অথবা grid-এর একাধিক item-এ qty বসিয়ে **একসাথে Save**
+  করতে পারে।
+- যে item-এ কোনো qty বসানো হয়নি, বা যেটুকু বসানো হয়েছে তার বাইরে যা বাকি থাকল — সেটুকু
+  **Unassigned bucket-এই থেকে যাবে**, grid থেকে বাদ যাবে না, পরে আবার এসে distribute করা যায়।
+
+**Underlying posting mechanism — কোনো নতুন design না, §138.6-এর already-locked `MANUAL_ALLOT`-ই
+reuse:** এই Save action **কোনো real `stock_ledger` posting করবে না** (material physically সরছে
+না, ওটা ওই location-এই ছিল, শুধু machine-tag বদলাচ্ছে) — শুধু `machine_stock_log` side-table-এ
+**paired double-entry** লিখবে: Unassigned bucket থেকে OUT + নির্বাচিত machine bucket-এ IN, একই
+qty, একটা common reference দিয়ে জোড়া লাগানো, `source_type = MANUAL_ALLOT`। কোনো `movement_type`
+লাগবে না, `post_stock_movement()`/§8C engine touch হবে না। (§138.9-এর পুরনো superseded draft-এ
+প্রায় এই একই mechanism আগে থেকেই lock ছিল — শুধু হোস্ট page IN03-এর বদলে এখন IN11।)
+
+**§138.9 status:** উপরের পুরনো `<details>` draft এখন থেকে **fully superseded by §138.13/§138.13.1**
+ধরা হবে — mechanism-টা একই থেকে গেছে (`MANUAL_ALLOT` paired entry, partial-distribution সমর্থিত),
+শুধু host page IN03 থেকে IN11-এ সরে গেছে, আর grid-এ Storage Location column + all-column search
+নতুন যোগ হয়েছে।
