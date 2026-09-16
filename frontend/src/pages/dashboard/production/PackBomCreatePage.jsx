@@ -35,6 +35,8 @@ const ERRORS = {
   PROD_BOM_ALREADY_EXISTS: "A DRAFT or ACTIVE Pack BOM already exists for this company and SKU.",
   PROD_BOM_SCOPE_VIOLATION: "You do not have access to create a Pack BOM for this company.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
+  PROD_BOM_SKU_BASE_UOM_MISSING: "This SKU has no Base UOM set — fix it in Material Master first.",
+  PROD_BOM_INNER_LAYER_MISSING: "This pack code requires an inner-layer PM line (e.g. Bottle/Pouch) — add one and mark it \"Is Primary Container\" in the exact unit the pack code declares.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
