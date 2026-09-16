@@ -23806,4 +23806,21 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   বাটন হিসেবে না। এই pull-list mechanism-এর বিস্তারিত design এখনো আসেনি — business owner নিজেই
   পরে বলবেন ("design korar somoy bolbo")। যতক্ষণ না এই design আসে, §138.9-এর পুরনো draft-টা শুধু
   reference হিসেবে থাকবে, build করা যাবে না।
-- **Implementation শুরু হয়নি** — এই পুরো section শুধু design lock, কোনো migration/code লেখা হয়নি।
+- **PR10 Edit-এ MTS support — এখনো খোলা, পরে একসাথে হবে (২০২৬-০৯-১৬ আপডেট):** `ProductionPOEditPage.jsx`-এর
+  `validateEditablePo()` আজও শুধু **MTO/HPS-only** ("PR10 edit is available only for MTO or HPS
+  Process POs") — MTS Process PO Standard-এ QA approval-এর আগে edit করার window পুরো §138-এর বাইরের,
+  আগে থেকেই deferred একটা item (CLAUDE.md §6 "MTS/INT-এর 'before Final' window... deferred")।
+  Business owner confirm করেছেন: এটা **এখন আলাদা করে করা হবে না** — MTS-এর পুরো production design
+  (batch qty entry, Stroke selection mechanism, ইত্যাদি সব একসাথে) সম্পূর্ণ locked হওয়ার পরে, PR10
+  Edit-এর MTS support **আর machine-respect location-filter দুটোই একসাথে** সেই session-এ করা হবে।
+  Prerequisite (harmless, already done): `getProcessOrderHandler`-এর response-এ Stroke-এর
+  `default_storage_location_id` যোগ করা হয়েছে (commit `ccb813d`) — আজ কোনো UI এটা ব্যবহার করছে না,
+  কিন্তু MTS edit window বানানোর সময় এই field-টা রেডিই থাকবে।
+- **Phase 1 (Foundation) — ✅ IMPLEMENTED (২০২৬-০৯-১৬)।** Machine+Sloc mapping
+  (`machine_master.storage_location_id` + FK, company-scope validated), `machine_stock_log`
+  side-table (schema অনুযায়ী, এখনো কোনো writer ছাড়া), `SAMachineMaster.jsx`-এ নতুন Storage
+  Location Mapping Tab, আর Process PO **Create**-এ (Edit-এ না, উপরের point দেখো) MTS-only
+  machine dropdown location-filter + "Select all MTS machines" checkbox — সব dev-এ migrate+verify
+  করা হয়েছে, guard/lint clean। Phase 2 (Transfer/pull-list), Phase 3 (Consumption/hard-block
+  conditions), Phase 4 (IN02/IN03 reporting), Phase 5 (PID) এখনো implementation শুরু হয়নি —
+  উপরের open items resolve হওয়ার অপেক্ষায়।
