@@ -18691,7 +18691,15 @@ split workflow অনুযায়ী।
 
 ---
 
-## Section 121 — Inventory Location Transfer Redesign: IN10 (MB21/MB22-style) + IN11 (MIGO-style) (✅ DESIGN LOCKED — 2026-08-17, IMPLEMENTATION NOT STARTED)
+## Section 121 — Inventory Location Transfer Redesign: IN10 (MB21/MB22-style) + IN11 (MIGO-style) (✅ DESIGN LOCKED — 2026-08-17, ✅ IMPLEMENTATION COMPLETE — corrected ২০২৬-০৯-১৬, stale)
+
+**Status correction (২০২৬-০৯-১৬):** এই heading আগে "IMPLEMENTATION NOT STARTED" বলছিল — সেটা stale,
+business owner ধরিয়ে দেন। Code verify করা হয়েছে: `location_transfer.handlers.ts` (নিজের comment-এই
+"IN10 / IN11 location transfer request + posting workbench handlers"), আর frontend-এ
+`LocationTransferRequestWorkspacePage.jsx`, `LocationTransferRequestListPage.jsx`,
+`LocationTransferWorkbenchPage.jsx` — সবই বাস্তবে আছে, **fully operational**। §138-এর MTS
+machine-respect chain (Phase 2 — warehouse→machine transfer) এখন এই already-built IN10/IN11-এর
+উপরেই বসবে, নতুন কোনো "Pull List" page লাগবে না (§138.13 দেখো)।
 
 **Scope boundary:** this section is only for **same-company, storage-location-to-storage-location transfer** inside the Inventory menu. It deliberately does **not** reuse the existing PTO approval model, because that model is for cross-company / plant-transfer business (`erp_procurement.plant_transfer_order`, approval-driven, transport/GST-heavy, procurement-owned). This new design is the PACE equivalent of **SAP MB21 + MB22 + MIGO** for internal location transfer work.
 
@@ -23800,13 +23808,13 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   group-সহ-সব-মিলিয়েও stock কম হলে hard block (§138.12-এর ৫ নম্বর point) — এই পুরো mechanism-টাই
   ছিল সেই "আরও অনেক শর্ত"। Standard-এর hard-block severity এখন পুরোপুরি lock, আলাদা dedicated
   session লাগবে না।
-- **Warehouse → শপ ফ্লোর + machine transfer — এখনো খোলা, business owner নিজে design করবেন
-  (২০২৬-০৯-১৫ আপডেট):** পুরনো §138.9-এর "IN03-তে Assign to Machine button" draft **superseded** —
-  business owner জানিয়েছেন machine-এ distribution আসলে একটা নতুন **"pull list" concept**-এর
-  ভেতরেই থাকবে (Stores-এর R001→S001 warehouse transfer flow-এর সাথে ইন্টিগ্রেটেড), IN03-তে আলাদা
-  বাটন হিসেবে না। এই pull-list mechanism-এর বিস্তারিত design এখনো আসেনি — business owner নিজেই
-  পরে বলবেন ("design korar somoy bolbo")। যতক্ষণ না এই design আসে, §138.9-এর পুরনো draft-টা শুধু
-  reference হিসেবে থাকবে, build করা যাবে না।
+- ~~Warehouse → শপ ফ্লোর + machine transfer — এখনো খোলা, business owner নিজে design করবেন~~ —
+  **RESOLVED (২০২৬-০৯-১৬): §138.13-এ পুরোপুরি lock।** পুরনো §138.9-এর "IN03-তে Assign to Machine
+  button" draft, আর এই session-এরই শুরুতে discuss করা standalone "Pull List" page concept —
+  দুটোই **superseded/abandoned**। চূড়ান্ত design: Stores↔Production-এর মধ্যে quantity verbally
+  ঠিক হবে, তারপর already-built **IN10 (request create) + IN11 (post/receive)**-ই পুরো transfer
+  করবে, আর IN11-এর ভেতরেই একটা নতুন **"Distribute to Machine"** বাটন (MTS-company-scoped) বসবে —
+  বিস্তারিত §138.13।
 - **PR10 Edit-এ MTS support — এখনো খোলা, পরে একসাথে হবে (২০২৬-০৯-১৬ আপডেট):** `ProductionPOEditPage.jsx`-এর
   `validateEditablePo()` আজও শুধু **MTO/HPS-only** ("PR10 edit is available only for MTO or HPS
   Process POs") — MTS Process PO Standard-এ QA approval-এর আগে edit করার window পুরো §138-এর বাইরের,
@@ -23822,9 +23830,10 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   side-table (schema অনুযায়ী, এখনো কোনো writer ছাড়া), `SAMachineMaster.jsx`-এ নতুন Storage
   Location Mapping Tab, আর Process PO **Create**-এ (Edit-এ না, উপরের point দেখো) MTS-only
   machine dropdown location-filter + "Select all MTS machines" checkbox — সব dev-এ migrate+verify
-  করা হয়েছে, guard/lint clean। Phase 2 (Transfer/pull-list), Phase 3 (Consumption/hard-block
-  conditions), Phase 4 (IN02/IN03 reporting), Phase 5 (PID) এখনো implementation শুরু হয়নি —
-  উপরের open items resolve হওয়ার অপেক্ষায়।
+  করা হয়েছে, guard/lint clean। Phase 2 (Transfer/Distribution, §138.13 — DESIGN LOCKED, IN10/IN11
+  reuse + IN11-এর নতুন "Distribute to Machine" বাটন), Phase 3 (Consumption/hard-block conditions,
+  §138.12-এ DESIGN LOCKED), Phase 4 (IN02/IN03 reporting), Phase 5 (PID) এখনো implementation শুরু
+  হয়নি — শুধু Phase 4/5-এর design এখনো বাকি।
 
 ### 138.12 — MTS Alternate-Group Auto-Derive Mechanism (LOCKED, ২০২৬-০৯-১৬)
 
@@ -23905,3 +23914,47 @@ StrokeMasterPage.jsx-এর সাথে সম্পর্কিত):**
 এই mechanism পুরোটাই **MTS-only**, MTO/HPS/INT-এর জন্য প্রযোজ্য না (formulation material সরাসরি
 ব্যবহার হয়, alternate-group থাকলেও optional/manual override হিসেবেই থাকে — §138 এর আগের অংশে
 verify করা আছে, HPS/INT sample stroke-এ কোনো shop-floor location-ই নেই)।
+
+### 138.13 — Phase 2: Warehouse→Machine Distribution — IN10/IN11 reuse, নতুন "Distribute to Machine" বাটন (LOCKED, ২০২৬-০৯-১৬)
+
+**প্রেক্ষাপট:** §138.12-এর auto-derive-এও যদি machine-এর নিজের bucket-এ formulation+group মিলিয়ে
+requirement-এর তুলনায় কম stock থাকে (§138.12 point 5, hard block), root-cause fix হলো warehouse
+(R001)-এর ample stock থেকে সেই নির্দিষ্ট machine-এ transfer করে আনা। প্রথমে একটা standalone
+**"Pull List"** page design করার চেষ্টা হয়েছিল (prodshade-row entry → MT-তে required qty → system
+নিজে থেকে R001-এর group-wise item-split derive করবে) — কিন্তু derive করতে গিয়ে ধরা পড়ে R001-এ
+প্রায় সব item-এরই "ample" quantity থাকে (business owner: "R001 to warehouse okhane to sober e
+onek quantity thakbe"), তাই ওখানে group-wise smallest-first split করার কোনো বাস্তব প্রয়োজনই নেই —
+warehouse থেকে যেকোনো valid item-ই তোলা যায়, স্বয়ংক্রিয় derive করার দরকার নেই। এই realization-এর
+পরে business owner পুরো standalone Pull List page-টাই **বাতিল** করেন।
+
+**চূড়ান্ত design — already-built IN10/IN11 reuse, কোনো নতুন page না:**
+
+- **Mechanism:** Production, Stores-কে **verbally** বলবে কত qty লাগবে (কোন item, কোন location
+  থেকে) — কোনো system-generated pull-list/request document লাগবে না। Stores সেই অনুযায়ী **IN10**
+  (Location Transfer Request, MB21/MB22-style) দিয়ে **P311** post করবে (R001 → সেই machine-এর
+  নিজের mapped storage location)। Production সেটা **IN11** (posting/receiving workbench,
+  MIGO-style) দিয়ে receive করবে। IN10/IN11 দুটোই **আগে থেকেই fully implemented ও operational**
+  (§121 দেখো — এই session-এ ধরা পড়েছিল doc-এর একটা stale note "IMPLEMENTATION NOT STARTED" বলছিল,
+  correct করা হয়েছে) — নতুন কোনো transfer mechanism বানাতে হবে না।
+- **ACL:** যে যে company-তে এই Operation Management project map করা আছে, তাদের **সব user**-এর
+  জন্য IN10 আর IN11-এর **full access** (VIEW/WRITE/EDIT/APPROVE যা যা প্রযোজ্য) — আলাদা কোনো
+  role-tier গেটিং না।
+- **"Distribute to Machine" বাটন — IN11-এর ভিতরে, নতুন কোনো page না:** যে যে company-তে MTS-এর
+  কোনো prodshade আছে, শুধু তাদের জন্যই এই বাটন IN11 page-এ visible থাকবে; MTS নেই এমন company-তে
+  বাটনটাই থাকবে না।
+- **বাটনের ধরন — general/independent, কোনো নির্দিষ্ট transfer-এর সাথে বাঁধা না (business owner,
+  ২০২৬-০৯-১৬):** এটা IN11-এর Post Transfer/Reverse Transfer/Display History-র মতোই একটা
+  **আলাদা, সবসময়-উপস্থিত সাধারণ বাটন** — কোনো একটা নির্দিষ্ট transfer সবেমাত্র Post হওয়ার সাথে
+  bind করা না, page-এর যেকোনো সময় click করা যায়।
+- **বাটনের enable/disable condition:** বাটনটা **inactive** থাকবে যদি সেই company-র কোনো MTS-mapped
+  SFG storage location-এই **কোনো Unassigned item** না থাকে (অর্থাৎ distribute করার মতো কিছুই নেই —
+  §138.3-এর Unassigned bucket concept-এর সরাসরি ব্যবহার)। যেকোনো একটা MTS SFG location-এ যদি
+  Unassigned bucket-এ কিছু থাকে, বাটন active থাকবে।
+- **Standard-এ insufficient-stock hard-block-এর সাথে সংযোগ:** §138.12 point 5-এর hard block হলে
+  Production, IN11-এ গিয়ে (verbal কথা বলে Stores-কে IN10 post করাবে, তারপর) এই বাটন দিয়ে সেই
+  machine-এ item distribute করে আনবে, তারপর আবার Standard-এ ফিরে auto-derive re-run করবে — এভাবেই
+  root-cause resolve হয়, hard block শুধু safety net হিসেবে থেকে যায়।
+
+**⏳ এখনো খোলা (পরের ধাপ):** বাটন click করলে যে center drawer খুলবে, তার ভেতরের exact ফিল্ড/flow
+(Company/Prodshade select, machine-wise qty entry, ইত্যাদি) — এখনো design হয়নি, business owner-এর
+input বাকি।
