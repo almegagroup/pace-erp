@@ -249,7 +249,15 @@ export default function ChangePackBomPage() {
               onAddMember={(groupId) => setMemberModal(groupId)}
               editable
               innerUomCode={bom.pack_code_row?.inner_uom_code || ""}
-              sfgQty={(bom.lines ?? []).find((line) => line.line_type === "SFG")?.qty ?? null}
+              sfgQtyPerInner={(() => {
+                // Read-only reference here (SFG recipe isn't part of this change-request
+                // flow) -- derived from the saved Outer total ÷ whichever proposed line is
+                // currently flagged as the Inner layer.
+                const sfgTotal = Number((bom.lines ?? []).find((line) => line.line_type === "SFG")?.qty);
+                const innerLine = changes.find((line) => line.is_primary_container);
+                const innerQty = Number(innerLine?.qty);
+                return sfgTotal > 0 && innerQty > 0 ? sfgTotal / innerQty : "";
+              })()}
               baseUomCode={bom.sku?.base_uom_code || "KG"}
             />
             <div className="flex justify-end mt-3">

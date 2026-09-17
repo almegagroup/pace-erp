@@ -299,7 +299,14 @@ export default function ChangePackBomApprovalPage() {
                                     onAddMember={(groupId) => setMemberModal(groupId)}
                                     editable={r.status === "DRAFT"}
                                     innerUomCode={detail.bom?.pack_code_row?.inner_uom_code || ""}
-                                    sfgQty={detail.bom?.sfg_qty ?? null}
+                                    sfgQtyPerInner={(() => {
+                                      // Read-only reference here too -- derived from the saved
+                                      // Outer total ÷ whichever proposed line is flagged Inner.
+                                      const sfgTotal = Number(detail.bom?.sfg_qty);
+                                      const innerLine = editLines.find((line) => line.is_primary_container);
+                                      const innerQty = Number(innerLine?.qty);
+                                      return sfgTotal > 0 && innerQty > 0 ? sfgTotal / innerQty : "";
+                                    })()}
                                     baseUomCode={detail.bom?.sku?.base_uom_code || "KG"}
                                   />
                                 </>
