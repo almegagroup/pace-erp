@@ -716,7 +716,7 @@ export async function getPackBomHandler(
         [String(bom.sku_material_id ?? "")],
         "[pack_bom.getPackBom]",
         "PROD_BOM_FETCH_FAILED",
-        "id, pace_code, material_name, material_type, pack_code, shade_code",
+        "id, pace_code, material_name, material_type, pack_code, shade_code, external_code, base_uom_code",
       ),
       getMaterialMapByIds(
         lines.map((line) => String(line.material_id ?? "")),
@@ -728,12 +728,15 @@ export async function getPackBomHandler(
       getStorageLocationMapByIds(lines.map((line) => String(line.storage_location_id ?? ""))),
       resolveUserDisplayNames([String(bom.created_by ?? ""), String(bom.approved_by ?? "")]),
     ]);
+    const sku = skuMap.get(String(bom.sku_material_id ?? "")) ?? null;
+    const packCodeRow = sku ? await resolvePackCodeForSku(sku) : null;
 
     return okResponse({
       data: {
         ...bom,
         company: companyMap.get(String(bom.company_id ?? "")) ?? null,
-        sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null,
+        sku,
+        pack_code_row: packCodeRow,
         created_by_display: userDisplayMap.get(String(bom.created_by ?? "")) ?? null,
         approved_by_display: userDisplayMap.get(String(bom.approved_by ?? "")) ?? null,
         lines: lines.map((line) => ({
@@ -1491,7 +1494,7 @@ export async function getPackBomChangeRequestHandler(
         [String(bom?.sku_material_id ?? "")],
         "[pack_bom.getPackBomChangeRequest]",
         "PROD_BCR_FETCH_FAILED",
-        "id, pace_code, material_name, pack_code",
+        "id, pace_code, material_name, pack_code, external_code, base_uom_code",
       ),
       getMaterialMapByIds(
         [
@@ -1509,6 +1512,10 @@ export async function getPackBomChangeRequestHandler(
       resolveUserDisplayNames([String(row.created_by ?? ""), String(row.approved_by ?? "")]),
     ]);
 
+    const bomSku = bom ? skuMap.get(String(bom.sku_material_id ?? "")) ?? null : null;
+    const bomPackCodeRow = bomSku ? await resolvePackCodeForSku(bomSku) : null;
+    const sfgLine = ((lineRes.data ?? []) as JsonRecord[]).find((l) => l.line_type === SFG_LINE_TYPE);
+
     return okResponse({
       data: {
         ...row,
@@ -1517,7 +1524,9 @@ export async function getPackBomChangeRequestHandler(
         bom: bom ? {
           ...bom,
           company: companyMap.get(String(bom.company_id ?? "")) ?? null,
-          sku: skuMap.get(String(bom.sku_material_id ?? "")) ?? null,
+          sku: bomSku,
+          pack_code_row: bomPackCodeRow,
+          sfg_qty: sfgLine?.qty ?? null,
         } : null,
         change_lines: changeLines.map((line) => {
           const currentLine = bomLineMap.get(String(line.bom_line_id ?? ""));
