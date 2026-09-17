@@ -1225,9 +1225,14 @@ function ProcessPoFinalTab() {
       });
       // INT: output qty is the independently-entered manual field (posts
       // immediately, no Verify). MTO/HPS/MTS/MTEST: unchanged, derived from RM approved qty.
+      // A plain JS .reduce() sum carries its own IEEE-754 residue even when every
+      // addend is clean (2070 becomes 2069.9999999999995) -- this is the actual
+      // posted value, not just a display number, so round it here (6dp, same
+      // ceiling PRODUCTION_DECIMAL_STEP/formatSum already use) rather than relying
+      // on formatSum, which only ever touches what's rendered, never what's sent.
       const outputActualQty = isDirectPostType
         ? Number(manualOutputQty || 0)
-        : rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0);
+        : Number(rows.reduce((sum, row) => sum + computeRowValues(row).apApproved, 0).toFixed(6));
       await finalizeProcessOrder(po.id, {
         actual_qty: outputActualQty,
         lines: inputRows,
