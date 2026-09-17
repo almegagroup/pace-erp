@@ -301,7 +301,14 @@ export default function PackBomCreatePage() {
                   <tr className="border-t">
                     <td className="py-2 px-3 font-semibold">OUTPUT</td>
                     <td className="py-2 px-3">{skuLabel(selectedSku)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{bomRequired ? "1" : "Calculated"}</td>
+                    <td className="py-2 px-3 text-right font-mono">
+                      {bomRequired ? "1" : "Calculated"}
+                      {bomRequired && Number(sfgQty) > 0 ? (
+                        <div className="mt-0.5 text-[11px] font-semibold text-sky-700">
+                          = {Number(sfgQty)} {selectedSku?.base_uom_code || "KG"}
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="py-2 px-3">{packCode.outer_uom_code || "KG"}</td>
                     <td className="py-2 px-3 min-w-[240px]">
                       {outputLocationOptions.length === 1 ? (
@@ -356,7 +363,7 @@ export default function PackBomCreatePage() {
                   <p className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
                     This pack code has 2 alternate layers. Add the inner-layer material below in{" "}
                     <span className="font-mono font-semibold">{packCode.inner_uom_code}</span> and tick its{" "}
-                    <span className="font-semibold">Primary Container?</span> checkbox — the outer layer (
+                    <span className="font-semibold">Inner Layer?</span> checkbox — the outer layer (
                     <span className="font-mono font-semibold">{packCode.outer_uom_code}</span>) needs no flag,
                     it is derived automatically from this SKU's own dispatch unit.
                   </p>
@@ -369,6 +376,9 @@ export default function PackBomCreatePage() {
                   onCreateGroup={openCreateGroupModal}
                   onAddMember={(groupId) => setMemberModal(groupId)}
                   qtyDisabled={!bomRequired}
+                  innerUomCode={packCode.inner_uom_code || ""}
+                  sfgQty={sfgQty}
+                  baseUomCode={selectedSku?.base_uom_code || "KG"}
                 />
               </ErpSectionCard>
             )}
