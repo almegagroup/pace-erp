@@ -322,7 +322,12 @@ export default function ProductionPOVerifyPage() {
           is_rm: true,
         };
       });
-      const verifiedQty = rows.reduce((sum, row) => sum + computeRowValues(row).actual, 0);
+      // A plain JS .reduce() sum carries its own IEEE-754 residue even when every
+      // addend is clean (2070 becomes 2069.9999999999995) -- this is the actual
+      // posted value, not just a display number, so round it here (6dp, same
+      // ceiling PRODUCTION_DECIMAL_STEP/formatSum already use) rather than relying
+      // on formatSum, which only ever touches what's rendered, never what's sent.
+      const verifiedQty = Number(rows.reduce((sum, row) => sum + computeRowValues(row).actual, 0).toFixed(6));
       await verifyProcessOrder(po.id, {
         verified_qty: verifiedQty,
         lines: payloadLines,
