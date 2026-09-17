@@ -43,6 +43,17 @@ async function ensureUomExists(code: string): Promise<boolean> {
   return !error && Boolean(data?.code);
 }
 
+const BILLING_UOM_VALUES = new Set(["PER_OUTER_UOM", "PER_INNER_UOM", "PER_BASE_UOM"]);
+
+// PER_INNER_UOM only makes sense once a pack code actually declares an inner layer — without
+// this, saving billing_uom=PER_INNER_UOM on a single-layer pack code would leave costing/billing
+// with a unit that doesn't exist anywhere on the material.
+function validateBillingUom(billingUom: string, innerUomCode: string | null): string | null {
+  if (!BILLING_UOM_VALUES.has(billingUom)) return "PROD_PACK_CODE_INVALID_BILLING_UOM";
+  if (billingUom === "PER_INNER_UOM" && !innerUomCode) return "PROD_PACK_CODE_BILLING_REQUIRES_INNER_UOM";
+  return null;
+}
+
 function buildFgSku(prodshadeCode: string, packCode: string): string {
   return [
     normalizeNullableString(prodshadeCode),
@@ -332,6 +343,8 @@ export async function createPackCodeHandler(req: Request, ctx: ProdHandlerContex
     if (innerUomCode && !(await ensureUomExists(innerUomCode))) {
       return packError(req, ctx, "PROD_PACK_CODE_INVALID_INNER_UOM", 400, "inner_uom_code is not a valid UOM");
     }
+    const billingUomError = validateBillingUom(billingUom, innerUomCode);
+    if (billingUomError) return packError(req, ctx, billingUomError, 400, "Invalid billing_uom");
 
     // Identity is (pack_code, pack_type) — the same trailing pack_code digits legitimately
     // repeat across different pack_type rows (Asian Paints' own external SKU numbering reuses
@@ -403,6 +416,8 @@ export async function updatePackCodeHandler(req: Request, ctx: ProdHandlerContex
     if (innerUomCode && !(await ensureUomExists(innerUomCode))) {
       return packError(req, ctx, "PROD_PACK_CODE_INVALID_INNER_UOM", 400, "inner_uom_code is not a valid UOM");
     }
+    const billingUomError = validateBillingUom(updates.billing_uom, innerUomCode);
+    if (billingUomError) return packError(req, ctx, billingUomError, 400, "Invalid billing_uom");
 
     const { data, error } = await serviceRoleClient
       .schema("erp_production")
