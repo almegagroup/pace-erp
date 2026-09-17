@@ -94,6 +94,14 @@ export default function PackBomApprovalPage() {
   const groups = groupsQ.data ?? [];
   const detailPackCode = detail?.pack_code_row ?? {};
   const detailSfgQty = (detail?.lines ?? []).find((line) => line.line_type === "SFG")?.qty ?? null;
+  // Read-only here (SFG recipe isn't part of what this page lets a Manager change) --
+  // shown per Inner unit for consistency with PR05/PR07/PR08, derived from the already-
+  // saved Outer total and whichever line is currently flagged as the Inner layer.
+  const innerEditedLine = editedLines.find((line) => line.is_primary_container);
+  const innerPmQtyForDisplay = Number(innerEditedLine?.qty);
+  const detailSfgQtyPerInner = Number(detailSfgQty) > 0 && innerPmQtyForDisplay > 0
+    ? Number(detailSfgQty) / innerPmQtyForDisplay
+    : "";
 
   async function toggleExpand(row) {
     if (expandedId === row.id) {
@@ -332,7 +340,7 @@ export default function PackBomApprovalPage() {
                                 onAddMember={(groupId) => setMemberModal(groupId)}
                                 disabled={bom.status !== "DRAFT"}
                                 innerUomCode={detailPackCode.inner_uom_code || ""}
-                                sfgQty={detailSfgQty}
+                                sfgQtyPerInner={detailSfgQtyPerInner}
                                 baseUomCode={detail.sku?.base_uom_code || "KG"}
                               />
                             </div>

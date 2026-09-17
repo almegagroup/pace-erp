@@ -349,27 +349,17 @@ export default function PackBomCreatePage() {
                     <tr className="border-t">
                       <td className="py-2 px-3 font-semibold">
                         INPUT / SFG
-                        {has2Layers ? <div className="mt-0.5 text-[10px] font-normal text-slate-400">per {packCode.inner_uom_code}</div> : null}
+                        {has2Layers ? <div className="mt-0.5 text-[10px] font-normal text-slate-400">derived, per {packCode.outer_uom_code}</div> : null}
                       </td>
                       <td className="py-2 px-3">{materialLabel(selectedSku?.prodshade)}</td>
                       <td className="py-2 px-3 text-right">
                         {bomRequired ? (
                           has2Layers ? (
-                            <div className="flex flex-col items-end gap-1">
-                              <input
-                                className="h-8 w-28 border border-slate-300 rounded px-2 text-right font-mono"
-                                type="number" min="0" step="0.0001"
-                                value={sfgQtyPerInner}
-                                onChange={(event) => setSfgQtyPerInner(event.target.value)}
-                              />
-                              {Number(effectiveSfgQty) > 0 ? (
-                                <span className="whitespace-nowrap text-[11px] font-semibold text-sky-700">
-                                  = {Number(effectiveSfgQty)} per {packCode.outer_uom_code}
-                                </span>
-                              ) : (
-                                <span className="whitespace-nowrap text-[10px] text-amber-600">enter Inner-layer PM qty below too</span>
-                              )}
-                            </div>
+                            Number(effectiveSfgQty) > 0 ? (
+                              <span className="whitespace-nowrap font-mono text-sm">= {Number(effectiveSfgQty)}</span>
+                            ) : (
+                              <span className="whitespace-nowrap text-[11px] text-amber-600">set per-{packCode.inner_uom_code} qty on the Inner-layer PM line below</span>
+                            )
                           ) : (
                             <input className="h-8 w-28 border border-slate-300 rounded px-2 text-right font-mono" type="number" min="0" step="0.001" value={sfgQty} onChange={(event) => setSfgQty(event.target.value)} />
                           )
@@ -399,11 +389,12 @@ export default function PackBomCreatePage() {
                 )}
                 {bomRequired && packCode.inner_uom_code && (
                   <p className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
-                    This pack code has 2 alternate layers. You already entered SFG qty per{" "}
-                    <span className="font-mono font-semibold">{packCode.inner_uom_code}</span> above — add that material
-                    below, tick its <span className="font-semibold">Inner Layer?</span> checkbox, and set its own Qty to{" "}
+                    This pack code has 2 alternate layers. Add the{" "}
+                    <span className="font-mono font-semibold">{packCode.inner_uom_code}</span> material below, tick its{" "}
+                    <span className="font-semibold">Inner Layer?</span> checkbox, then fill in both numbers that appear:
+                    how much product per 1 {packCode.inner_uom_code}, and its own Qty ={" "}
                     <span className="font-semibold">how many {packCode.inner_uom_code} go into 1 {packCode.outer_uom_code}</span>{" "}
-                    (e.g. bottles per carton). The outer layer itself needs no flag — its total is derived automatically.
+                    (e.g. bottles per carton). The outer layer itself needs no flag — its total is derived automatically above.
                   </p>
                 )}
                 <PackBomLinesTable
@@ -415,7 +406,8 @@ export default function PackBomCreatePage() {
                   onAddMember={(groupId) => setMemberModal(groupId)}
                   qtyDisabled={!bomRequired}
                   innerUomCode={packCode.inner_uom_code || ""}
-                  sfgQty={effectiveSfgQty}
+                  sfgQtyPerInner={sfgQtyPerInner}
+                  onSfgQtyPerInnerChange={setSfgQtyPerInner}
                   baseUomCode={selectedSku?.base_uom_code || "KG"}
                 />
               </ErpSectionCard>
