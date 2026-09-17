@@ -23899,37 +23899,9 @@ Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade
   **এখনো বাকি:** live end-to-end click-through (dev/prod server-এ আসল browser test) — এই environment-এ
   কোনো browser login নেই, তাই শুধু SQL দিয়ে ACL+data structure verify করা হয়েছে, UI click করে দেখা
   হয়নি।
-- **Phase 3 (Consumption/hard-block conditions, §138.12) — backend core ✅ IMPLEMENTED (২০২৬-০৯-১৭),
-  UI override অংশ এখনো বাকি।** নতুন shared helper `_shared/mtsMachineStock.ts`
-  (`getMachineBucketBalances` + `computeMtsAutoDerive` — §138.12-এর পুরো priority-order/smallest-
-  first algorithm বিশুদ্ধ function হিসেবে, + best-effort `logMachineStockConsumption` writer)।
-  **Hard-block (rule 5):** Process PO Standard create-এ (MTS-only) নতুন
-  `checkMtsMachineBucketAvailability()` — existing কোম্পানি-wide UNRESTRICTED check-এর ঠিক পরেই
-  চলে, শুধু সেই stroke-line গুলোর জন্য যাদের নিজের `default_storage_location_id`
-  `resolveOutputStorageLocationId()`-এর দেওয়া stroke-এর নিজের shop-floor location-এর সাথে মেলে
-  (§138.1 machine-tracked additive-only precondition, Dolomite/Cement-এর মতো RM-store line
-  অপরিবর্তিত থাকে) — formulation + group সব মিলিয়ে সেই নির্দিষ্ট machine-এর নিজের bucket-এ কম
-  পড়লে `PROD_PO_MTS_MACHINE_STOCK_SHORT` দিয়ে block করে, readable material name+qty detail সহ
-  (§8A)। **Consumption writer:** Verify (`runProcessOrderVerify`)-তে `post_document` succeed
-  হওয়ার পরে, MTS PO-র প্রতিটা RM/INT line যেটার issue location MTS-tracked (machine-mapped)
-  location, তার জন্য একটা `machine_stock_log` OUT (`source_type=CONSUMPTION`) row লেখা হয়
-  (best-effort, §138.13-এর existing TRANSFER/MANUAL_ALLOT writer-এর একই non-transactional
-  pattern) — এখনই যা actually post হয় (আজকের manual/existing alternate-override mechanism দিয়েই,
-  auto-derive ছাড়াই) সেটাই machine bucket-এ log হচ্ছে, তাই hard-block check-এর জন্য বাস্তব
-  consumption history জমা হতে শুরু করবে এখনই। `deno check`/`deno lint`/সব existing guard
-  (stock-posting, route-acl-registry, hardcoded-role-check, wrong-company-source) clean, ০টা
-  নতুন error/warning (`location_transfer.handlers.ts`-এর ২টা pre-existing unused-var lint noise
-  ছাড়া)। `getMtsStorageLocationIds()` `location_transfer.handlers.ts` থেকে এই shared file-এ move
-  করা হয়েছে (duplicate logic এড়াতে), call site অপরিবর্তিত।
-  **⚠️ এখনো বাকি — ইচ্ছাকৃতভাবে এই পাসে বাদ:** rule 1-4-এর প্রকৃত **auto-derive split লাইন তৈরি +
-  editability matrix** (Current Stroke: Standard-এই editable / Non-current: Final-Verify-তে) —
-  এটার জন্য কোনো locked page-by-page UI spec এখনো নেই (PR09-এর মতো), আর এই session-এই বারবার
-  দেখা গেছে business owner live screenshot দেখে UI flow ঠিক করেন (Pack BOM Inner/Outer-এর ৩ রাউন্ড
-  correction যেমন) — তাই Standard page-এর editable preview/override table বানানোর আগে page-flow
-  নিয়ে একটা ছোট confirm করা দরকার, blind বানানো ঠিক হবে না। এখনকার অবস্থায় auto-derive শুধু
-  hard-block validation-এর জন্য ব্যবহার হচ্ছে, কোনো নতুন line/split তৈরি করছে না — Standard এখনো
-  আগের মতোই single formulation line তৈরি করে (existing manual actual_material_id override
-  অপরিবর্তিত)। Phase 4 (IN02/IN03 reporting)-ও এখনো implementation শুরু হয়নি।
+- Phase 3 (Consumption/hard-block conditions, §138.12-এ DESIGN LOCKED), Phase 4 (IN02/IN03 reporting),
+  Phase 5 (PID, §138.7-এ DESIGN LOCKED — কোনো নতুন UI লাগবে না, শুধু PID_ADJUSTMENT-এর backend writer)
+  এখনো implementation শুরু হয়নি — শুধু Phase 4-এর বিস্তারিত design এখনো বাকি।
 
 ### 138.12 — MTS Alternate-Group Auto-Derive Mechanism (LOCKED, ২০২৬-০৯-১৬)
 

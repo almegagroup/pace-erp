@@ -37,7 +37,6 @@ import {
   upsertBatchNumberInstanceForProcessOrder,
 } from "./batch_series.handlers.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
-import { computeMtsAutoDerive, getMachineBucketBalances, getMtsStorageLocationIds, logMachineStockConsumption } from "../../_shared/mtsMachineStock.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockPostingResult = { stock_document_id: string; stock_ledger_id: string };
@@ -1353,98 +1352,6 @@ async function formatMaterialLabels(materialIds: string[]): Promise<string> {
     .join(", ");
 }
 
-type MtsBucketShortage = {
-  formulationMaterialId: string;
-  neededQty: number;
-  totalAvailable: number;
-  shortfall: number;
-};
-
-// §138.12 — Standard-time hard block for MTS only. For stroke lines whose own
-// issue location is the stroke's own declared shop-floor location (§138.1
-// machine-tracked additive lines — Dolomite/Cement-style bulk RM issued
-// straight from an RM godown never qualifies), the formulation item PLUS its
-// whole alternate group (material_category_group) must together cover the
-// requirement INSIDE that specific machine's own `machine_stock_log` bucket —
-// never borrowed from the location's Unassigned bucket or another machine
-// (bucket boundary, §138.3/§138.4). The generic company-wide UNRESTRICTED
-// check just above this in createProcessOrderHandler is not enough on its own
-// for these lines — plenty of UNRESTRICTED stock can exist at the location
-// while still being short inside this one machine's bucket.
-// This only validates (mirrors checkStockAvailability's shape) — it does not
-// create any lines/splits; auto-derived actual item/qty at Standard, and the
-// user-override UI, are a separate follow-up (§138.12 rules 1-4 + the
-// editability matrix) once the Standard-page UI flow is agreed with the
-// business owner.
-async function checkMtsMachineBucketAvailability(params: {
-  companyId: string;
-  machineId: string;
-  shopfloorStorageLocationId: string | null;
-  plannedQty: number;
-  strokeLines: JsonRecord[];
-}): Promise<MtsBucketShortage[]> {
-  const { companyId, machineId, shopfloorStorageLocationId, plannedQty, strokeLines } = params;
-  if (!shopfloorStorageLocationId) return [];
-
-  const qualifying = strokeLines.filter(
-    (line) => toTrimmedString(line.default_storage_location_id) === shopfloorStorageLocationId,
-  );
-  if (qualifying.length === 0) return [];
-
-  const groupIds = qualifying.map((line) => String(line.material_group_id ?? "")).filter(Boolean);
-  const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(
-    groupIds,
-    "[process_order.checkMtsMachineBucketAvailability]",
-    "PROD_PO_STOCK_CHECK_FAILED",
-  );
-
-  const shortages: MtsBucketShortage[] = [];
-  for (const line of qualifying) {
-    const formulationMaterialId = String(line.material_id ?? "");
-    if (!formulationMaterialId) continue;
-    const neededQty = (Number(line.dosage_pct ?? 0) / 100) * plannedQty;
-    if (neededQty <= 0) continue;
-
-    const groupId = String(line.material_group_id ?? "");
-    const groupMemberIds = (groupMemberMap.get(groupId) ?? []).filter((id) => id !== formulationMaterialId);
-
-    const balances = await getMachineBucketBalances({
-      companyId,
-      storageLocationId: shopfloorStorageLocationId,
-      materialIds: [formulationMaterialId, ...groupMemberIds],
-      machineId,
-    });
-    const result = computeMtsAutoDerive({ formulationMaterialId, neededQty, balances, groupMemberIds });
-    if (result.insufficient) {
-      shortages.push({
-        formulationMaterialId,
-        neededQty,
-        totalAvailable: result.totalAvailable,
-        shortfall: result.shortfall,
-      });
-    }
-  }
-  return shortages;
-}
-
-async function formatMtsShortageDetail(shortages: MtsBucketShortage[]): Promise<string> {
-  if (shortages.length === 0) return "";
-  const materialIds = shortages.map((row) => row.formulationMaterialId);
-  const materialMap = await getMaterialMapByIds(
-    materialIds,
-    "[process_order.formatMtsShortageDetail]",
-    "PROD_PO_STOCK_CHECK_FAILED",
-    "id, pace_code, material_name",
-  );
-  return shortages
-    .map((row) => {
-      const mat = materialMap.get(row.formulationMaterialId);
-      const label = mat ? `${toTrimmedString(mat.pace_code) || "—"} — ${toTrimmedString(mat.material_name) || "—"}` : row.formulationMaterialId;
-      return `${label} (need ${row.neededQty.toFixed(3)}, machine bucket + alternates have ${row.totalAvailable.toFixed(3)}, short ${row.shortfall.toFixed(3)})`;
-    })
-    .join("; ");
-}
-
 export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -2002,24 +1909,6 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         if (short.length > 0) {
           const detail = await formatShortageDetail(short);
           return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient UNRESTRICTED stock for ${short.length} material(s): ${detail}`);
-        }
-
-        // §138.12 — MTS-only additional check: the company-wide UNRESTRICTED
-        // check above is not machine-aware, so it can pass while this specific
-        // machine's own bucket is still short.
-        if (poType === "MTS" && machineId) {
-          const shopfloorStorageLocationId = await resolveOutputStorageLocationId(strokeId, poType);
-          const mtsShortages = await checkMtsMachineBucketAvailability({
-            companyId,
-            machineId,
-            shopfloorStorageLocationId,
-            plannedQty,
-            strokeLines: (strokeLines ?? []) as JsonRecord[],
-          });
-          if (mtsShortages.length > 0) {
-            const detail = await formatMtsShortageDetail(mtsShortages);
-            return poErr(req, ctx, "PROD_PO_MTS_MACHINE_STOCK_SHORT", 422, `Insufficient machine-bucket stock (formulation + registered alternates) for ${mtsShortages.length} material(s): ${detail}`);
-          }
         }
       }
     }
@@ -3641,49 +3530,6 @@ async function runProcessOrderVerify(
         reco_rows: recoRows,
       },
     });
-
-    // §138.6/§138.12 — CONSUMPTION writer, MTS only. The real physical posting
-    // (post_document, above) has already committed; this is the machine-
-    // attribution side-table only (best-effort, matches the existing
-    // TRANSFER/MANUAL_ALLOT writers in location_transfer.handlers.ts — a
-    // failure here logs and never rolls back the already-committed Verify).
-    // Every RM/INT line issued from an MTS-tracked (machine-mapped) location
-    // logs an OUT against this Process PO's OWN machine bucket, using
-    // whatever material actually got posted (actual_material_id if a manual
-    // alternate was chosen, else the formulation material) — this is what
-    // lets §138.12's Standard-time hard-block see real consumption history,
-    // independent of whether the Standard-page auto-derive/override UI exists
-    // yet for this line.
-    if (po.po_type === "MTS" && toTrimmedString(po.machine_id)) {
-      try {
-        const mtsLocationIds = await getMtsStorageLocationIds(String(po.company_id));
-        const lineById = new Map(lines.map((line) => [String(line.id), line]));
-        const consumptionRows = postings
-          .filter((p) => !["FG", "QI_OUT", "QI_RELEASE"].includes(p.line_ref))
-          .map((p) => {
-            const line = lineById.get(p.line_ref);
-            if (!line) return null;
-            const slocId = getIssueStorageLocationId(line);
-            if (!slocId || !mtsLocationIds.has(slocId)) return null;
-            const actualQty = Number(line.actual_qty ?? line.planned_qty ?? 0);
-            if (actualQty <= 0) return null;
-            return {
-              companyId: String(po.company_id),
-              storageLocationId: slocId,
-              materialId: toTrimmedString(line.actual_material_id) || String(line.material_id),
-              machineId: String(po.machine_id),
-              qty: actualQty,
-              referenceDocumentType: "PROC_PO",
-              referenceDocumentId: String(po.id),
-              createdBy: postedBy,
-            };
-          })
-          .filter((row): row is NonNullable<typeof row> => row !== null);
-        await logMachineStockConsumption(consumptionRows);
-      } catch (machineLogError) {
-        console.error("[process_order.verifyProcessOrder] machine_stock_log CONSUMPTION write failed:", JSON.stringify(machineLogError instanceof Error ? machineLogError.message : machineLogError));
-      }
-    }
 
     return okResponse({
       id,

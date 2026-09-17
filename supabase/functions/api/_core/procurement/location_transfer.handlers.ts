@@ -12,7 +12,6 @@ import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/com
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
-import { getMtsStorageLocationIds } from "../../_shared/mtsMachineStock.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1305,6 +1304,49 @@ const DISTRIBUTE_ERROR_CODES = new Set([
   "LTR_DISTRIBUTE_QTY_EXCEEDS_UNASSIGNED",
   "LTR_DISTRIBUTE_LOCATION_NOT_MTS",
 ]);
+
+// Same fail-open convention as machine.handlers.ts's listMachinesHandler po_type
+// filter -- a machine with no po_types configured yet still counts as
+// MTS-eligible, so pre-existing machines don't vanish from this feature the
+// moment SA hasn't visited machine_po_type_map for them yet.
+async function getMtsStorageLocationIds(companyId: string): Promise<Set<string>> {
+  const { data: machines, error: machineError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_master")
+    .select("id, storage_location_id")
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .not("storage_location_id", "is", null);
+  if (machineError) throw new Error("LTR_DISTRIBUTE_MACHINE_LOOKUP_FAILED");
+  const machineRows = (machines ?? []) as JsonRecord[];
+  const machineIds = machineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+  if (machineIds.length === 0) return new Set();
+
+  const { data: poTypeRows, error: poTypeError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_po_type_map")
+    .select("machine_id, po_type")
+    .in("machine_id", machineIds);
+  if (poTypeError) throw new Error("LTR_DISTRIBUTE_MACHINE_LOOKUP_FAILED");
+  const poTypesByMachine = new Map<string, string[]>();
+  for (const row of (poTypeRows ?? []) as JsonRecord[]) {
+    const machineId = toTrimmedString(row.machine_id);
+    const list = poTypesByMachine.get(machineId) ?? [];
+    list.push(toUpperTrimmedString(row.po_type));
+    poTypesByMachine.set(machineId, list);
+  }
+
+  const locationIds = new Set<string>();
+  for (const row of machineRows) {
+    const machineId = toTrimmedString(row.id);
+    const poTypes = poTypesByMachine.get(machineId) ?? [];
+    if (poTypes.length === 0 || poTypes.includes("MTS")) {
+      const locationId = toTrimmedString(row.storage_location_id);
+      if (locationId) locationIds.add(locationId);
+    }
+  }
+  return locationIds;
+}
 
 async function getStorageLocationInfo(ids: string[]): Promise<Map<string, JsonRecord>> {
   const uniqueIds = [...new Set(ids.map((entry) => toTrimmedString(entry)).filter(Boolean))];
