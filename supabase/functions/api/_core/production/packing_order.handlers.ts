@@ -2319,22 +2319,6 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     }
 
     const poData = po as JsonRecord;
-    // §136 (2026-09-04) — inherits the parent Process PO's own urgent_posting_date
-    // exactly (never recomputed independently here) -- the two steps can happen
-    // on different real days, so only the value actually stored on the source
-    // Process PO is authoritative. NORMAL-priority (or no linked Process PO,
-    // e.g. an MTS/MTEST-sourced batch) falls back to today, unchanged.
-    let today = todayIso();
-    if (toTrimmedString(poData.process_order_id)) {
-      const { data: sourceProcessOrder } = await serviceRoleClient
-        .schema("erp_production").from("process_order")
-        .select("priority, urgent_posting_date").eq("id", poData.process_order_id).maybeSingle();
-      const sourcePriority = (sourceProcessOrder as JsonRecord | null)?.priority;
-      const sourceUrgentDate = toTrimmedString((sourceProcessOrder as JsonRecord | null)?.urgent_posting_date);
-      if (sourcePriority === "URGENT" && sourceUrgentDate) {
-        today = sourceUrgentDate;
-      }
-    }
     const docNumber = poData.po_number as string;
 
     const { data: segConfig } = await serviceRoleClient
@@ -2436,6 +2420,32 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       poData.process_order_id = selectedSfgBatch.process_order_id;
       poData.machine_id = toTrimmedString(selectedSfgBatch.machine?.id) || null;
     }
+
+    // §136 (2026-09-04) — inherits the parent Process PO's own urgent_posting_date
+    // exactly (never recomputed independently here) -- the two steps can happen
+    // on different real days, so only the value actually stored on the source
+    // Process PO is authoritative. NORMAL-priority (or no linked Process PO,
+    // e.g. an MTS/MTEST-sourced batch) falls back to today, unchanged.
+    //
+    // Found live 2026-09-17: this block used to run BEFORE the SFG-batch-driven
+    // poData.process_order_id reassignment above, so it always read the row's
+    // pre-Final process_order_id (frequently still unset at that point -- the
+    // real source Process PO is only resolved once the SFG batch is picked,
+    // right here at Final) and silently fell back to today's real date every
+    // time, even for a genuinely URGENT source batch. Must run AFTER the
+    // reassignment so it reads the actual, final process_order_id.
+    let today = todayIso();
+    if (toTrimmedString(poData.process_order_id)) {
+      const { data: sourceProcessOrder } = await serviceRoleClient
+        .schema("erp_production").from("process_order")
+        .select("priority, urgent_posting_date").eq("id", poData.process_order_id).maybeSingle();
+      const sourcePriority = (sourceProcessOrder as JsonRecord | null)?.priority;
+      const sourceUrgentDate = toTrimmedString((sourceProcessOrder as JsonRecord | null)?.urgent_posting_date);
+      if (sourcePriority === "URGENT" && sourceUrgentDate) {
+        today = sourceUrgentDate;
+      }
+    }
+
     const materialMap = await getMaterialMapByIds(
       lineRows.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
       "[packing_order.finalizePackingOrder]",
