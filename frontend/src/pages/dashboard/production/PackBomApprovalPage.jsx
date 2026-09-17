@@ -92,6 +92,8 @@ export default function PackBomApprovalPage() {
   const boms = bomsQ.data ?? [];
   const pmMaterials = pmMaterialsQ.data ?? [];
   const groups = groupsQ.data ?? [];
+  const detailPackCode = detail?.pack_code_row ?? {};
+  const detailSfgQty = (detail?.lines ?? []).find((line) => line.line_type === "SFG")?.qty ?? null;
 
   async function toggleExpand(row) {
     if (expandedId === row.id) {
@@ -313,6 +315,14 @@ export default function PackBomApprovalPage() {
 
                             <div>
                               <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">PM Input Lines</p>
+                              {detailPackCode.inner_uom_code && (
+                                <p className="mb-2 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+                                  This pack code has 2 alternate layers. The Inner-layer material must be in{" "}
+                                  <span className="font-mono font-semibold">{detailPackCode.inner_uom_code}</span> with its{" "}
+                                  <span className="font-semibold">Inner Layer?</span> checkbox ticked — the outer layer (
+                                  <span className="font-mono font-semibold">{detailPackCode.outer_uom_code}</span>) needs no flag.
+                                </p>
+                              )}
                               <PackBomLinesTable
                                 lines={editedLines}
                                 setLines={setEditedLines}
@@ -321,6 +331,9 @@ export default function PackBomApprovalPage() {
                                 onCreateGroup={openCreateGroupModal}
                                 onAddMember={(groupId) => setMemberModal(groupId)}
                                 disabled={bom.status !== "DRAFT"}
+                                innerUomCode={detailPackCode.inner_uom_code || ""}
+                                sfgQty={detailSfgQty}
+                                baseUomCode={detail.sku?.base_uom_code || "KG"}
                               />
                             </div>
 
