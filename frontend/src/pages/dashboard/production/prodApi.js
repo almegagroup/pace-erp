@@ -212,6 +212,11 @@ export const reverseProcessOrder = (id, body) => fetchProd("POST", `/api/product
 // §138.12/§138.15 (2026-09-18) -- MTS Page 4 RM auto-derive material plan.
 export const getMtsMaterialPlan = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-material-plan`);
 export const saveMtsMaterialPlan = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-material-plan`, body);
+// §138.16 (2026-09-18) -- MTS Page 5 batch->pack-size packing plan.
+export const getMtsPackingPlan = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-plan`);
+export const saveMtsPackingPlan = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-packing-plan`, body);
+export const getMtsPackingCombine = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-combine`);
+export const saveMtsPackingCombine = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-packing-combine`, body);
 
 // —— SFG QA Result Recording ————————————————————————————————————————————————————————
 export const listSfgQaDocuments = (p) => fetchProd("GET", "/api/production/sfg-qa-documents", undefined, p);

@@ -540,6 +540,7 @@ type MtsAutoDeriveRow = {
   planned_qty: number; // Standard Qty — non-zero only on the first row
   actual_qty: number; // this row's own resolved qty
   available_qty: number; // this row's actual_material_id's own bucket/location balance (for display)
+  variance_qty?: number; // Standard − confirmed-shortfall total, only set on the first row when the user explicitly accepted an under-qty save
 };
 
 type MtsAutoDeriveGroupResult = {
@@ -2054,7 +2055,17 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
-    if (strokeId) {
+    // §138.12/§138.14 (2026-09-18 fix, found live via a real Page 3 click-
+    // through): this up-front fast-fail check was never guarded for MTS,
+    // even though the later prepopulation block was. It checks each
+    // formulation line's OWN default_storage_location_id (R001 or S001)
+    // against generic location-level UNRESTRICTED stock -- no group/alternate
+    // substitution, no machine-bucket awareness -- so it always 422'd MTS
+    // Create with PROD_PO_INSUFFICIENT_STOCK before Page 4 (the real,
+    // machine-bucket-aware, group-alternate-aware check) ever got a chance to
+    // run. MTS has no lines at Create time at all now (see the later,
+    // already-guarded prepopulation block) so there is nothing here to check.
+    if (strokeId && !isMtsCreate) {
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
@@ -2721,6 +2732,7 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
       planned_qty: number;
       actual_qty: number;
       storage_location_id: string;
+      variance_qty?: number;
     }> = [];
 
     for (const group of serverGroups) {
@@ -2760,8 +2772,27 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
               available_qty: 0,
             });
           }
-          if (Math.abs(sumQty - group.standard_qty) > EPSILON) {
-            return poErr(req, ctx, "PROD_PO_MTS_PLAN_QTY_MISMATCH", 422, `Row quantities for ${group.stroke_line_material_id} must total the Standard Qty`);
+          // §138.12 refinement (2026-09-18): over-Standard stays a hard block
+          // (never allowed); under-Standard is allowed ONLY when the client
+          // sends an explicit confirmed_shortfall flag for this group (the
+          // frontend's own "you are taking less than required, do you agree?"
+          // modal) -- an unconfirmed under-total is still rejected, just with
+          // a distinct code so the frontend knows to show that modal rather
+          // than treating it as a plain validation error.
+          if (sumQty > group.standard_qty + EPSILON) {
+            return poErr(req, ctx, "PROD_PO_MTS_PLAN_QTY_MISMATCH", 422, `Row quantities for ${group.stroke_line_material_id} exceed the Standard Qty`);
+          }
+          if (sumQty < group.standard_qty - EPSILON && override?.confirmed_shortfall !== true) {
+            return poErr(req, ctx, "PROD_PO_MTS_PLAN_SHORTFALL_NOT_CONFIRMED", 422, `Row quantities for ${group.stroke_line_material_id} are below the Standard Qty and have not been confirmed`);
+          }
+          // Record the confirmed shortfall (if any) on the group's own first
+          // row so it stays visible/auditable after save -- variance_qty is
+          // an existing, general-purpose column, not repurposed from another
+          // meaning (process_order_line_reco's own variance_qty is a
+          // different, Verify-time concept; this is Standard-time only).
+          if (mapped.length > 0) {
+            mapped[0].planned_qty = group.standard_qty;
+            mapped[0].variance_qty = Number((group.standard_qty - sumQty).toFixed(6));
           }
           rows = mapped;
         }
@@ -2839,6 +2870,10 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
       // auto-derived split rows (business owner, 2026-09-18).
       approved_status: "YES",
       ap_approved_qty: row.actual_qty,
+      // Confirmed-shortfall audit trail (2026-09-18 refinement) -- non-zero
+      // only on a group's first row, only when the user explicitly accepted
+      // an under-Standard save via the confirm modal.
+      variance_qty: row.variance_qty ?? null,
     }));
 
     const { data: insertedLines, error: insertErr } = await serviceRoleClient
@@ -3286,6 +3321,30 @@ export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandler
     const reason = toTrimmedString(body.reason);
     if (!reason) {
       return poErr(req, ctx, "PROD_QA_REJECT_REASON_MISSING", 400, "reason required");
+    }
+
+    // §138.16 (2026-09-18) — MTS Policy 2's Page 4-6 flow can already have
+    // real Packing PO(s) attached at STANDARD by the time QA rejects here
+    // (MTO/HPS never reaches this state — their own Packing PO only gets
+    // created well after Start Batch). This codebase never auto-cascades a
+    // cancel/reversal onto child documents anywhere (reverseProcessOrderHandler
+    // hard-blocks the same way: "Reverse all Packing Orders first") — stay
+    // consistent with that convention rather than inventing a first-of-its-kind
+    // silent cascade. Cancel each Packing PO via its own endpoint first.
+    if (po.po_type === "MTS") {
+      const { count: activePackingCount, error: packingCheckErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("packing_order")
+        .select("id", { count: "exact", head: true })
+        .eq("process_order_id", id)
+        .not("status", "in", "(CANCELLED,REVERSED)") as { count?: number; error?: unknown };
+      if (packingCheckErr) {
+        console.error("[process_order.qaRejectProcessOrder] packing-order count failed:", JSON.stringify(packingCheckErr));
+        throw new Error("PROD_PO_QA_REJECT_FAILED");
+      }
+      if ((activePackingCount ?? 0) > 0) {
+        return poErr(req, ctx, "PROD_PO_HAS_PACKING_ORDERS", 422, "Cancel all Packing Orders created from this Process PO first");
+      }
     }
 
     const now = new Date().toISOString();

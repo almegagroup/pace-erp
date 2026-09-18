@@ -23971,6 +23971,32 @@ machine-এর bucket-এর বদলে **সেই location-এর Unassigned
   **disabled/greyed out** থাকবে। কোনো auto-recalculate/merge চেষ্টা করা হবে না duplicate হলে —
   user চাইলে একটা row delete করে qty manually মিলিয়ে নেবে।
 
+**✅ "Qty বদলালে recalculate" ও "row delete"-এর ঠিক mechanics — LOCKED (2026-09-18), 🔴 real gap
+confirmed in already-merged code (#504), not yet fixed:**
+- **Auto-vanish on full-qty override:** কোনো row-এর Actual Qty user বাড়িয়ে সেই group-এর পুরো
+  Standard Qty-এর সমান বা তার বেশি করে দিলে, সেই একই formulation-line-এর বাকি sibling row-গুলো
+  **automatically vanish** করবে (তাদের আর কোনো qty contribute করার দরকার নেই)। এটা "recalculate"
+  বুলেটের আসল অর্থ — automatic redistribution/rebalancing কোনো ২+ বাকি sibling-এর মধ্যে করার
+  চেষ্টা করা হবে **না** (কোনো unambiguous "fair split" নেই), শুধু full-qty override-এ সম্পূর্ণ
+  vanish।
+- **Row delete = real UI control লাগবে:** এখনো `MtsMaterialPlanStep`-এ কোনো "Remove row" বাটনই
+  নেই (merged #504 এতে শুধু material-swap dropdown + qty input আছে) — এটা তৈরি করতে হবে।
+- **Under-qty confirm modal (নতুন lock, 2026-09-18):** user ইচ্ছাকৃতভাবে একটা group-এর row(গুলো)
+  delete/qty-কমিয়ে সেই group-এর total **Standard Qty-এর কমে** নামিয়ে আনলে — এটা আর হার্ড-ব্লক না
+  (আগে `PROD_PO_MTS_PLAN_QTY_MISMATCH` দিয়ে ব্লক করত)। Save করতে গেলে একটা modal (English) আসবে:
+  "You are taking less than the required quantity for &lt;item&gt;. Do you agree?" — **Cancel**
+  = form-এ ফেরত (কিছু save হবে না), **Confirm** = shortfall accept করে save এগোবে। **Over-qty
+  (Standard-এর বেশি)** এখনো hard-block-ই থাকবে (এটা user explicitly allow করতে বলেননি) — শুধু
+  under-qty confirm-করে-allow হবে।
+- **Backend পরিবর্তন লাগবে:** `saveMtsMaterialPlanHandler`-এর group-per-group qty check
+  (`Math.abs(sumQty - group.standard_qty) > EPSILON` → reject) বদলে `sumQty > group.standard_qty
+  + EPSILON` (over এখনো block) বনাম `sumQty < group.standard_qty - EPSILON` (under — client-এর
+  একটা explicit `confirmed_shortfall: true` flag ছাড়া reject, flag থাকলে allow, আর কোন কোন group
+  shortfall-এ ছিল সেটা response/persisted data-তে track করা দরকার — কোন field-এ রাখা হবে সেটা
+  implementation-এর সময় ঠিক করতে হবে, `process_order`-এর existing `has_unapproved_deviation`
+  field অন্য অর্থে ব্যবহৃত, তাই ওটা reuse না করে আলাদা track করাই নিরাপদ)।
+- **Page 6-এও একই rule প্রযোজ্য** — §138.16-এ note করা আছে, এখানে দ্বিতীয়বার লেখা হলো না।
+
 **Stage/editability — "Current Stroke" status-এর উপর নির্ভরশীল (§ আগের "Current Stroke" redesign,
 StrokeMasterPage.jsx-এর সাথে সম্পর্কিত):**
 
@@ -24193,7 +24219,7 @@ batch range কখনো persist করবে না**, যেটাই আস�
 (single-transaction RPC, §8D pattern) ভবিষ্যতে করা যায় যদি দরকার পড়ে, কিন্তু এই মুহূর্তে over-engineering
 মনে হচ্ছে rare-event-এর জন্য।
 
-### 138.15 — Page 4: RM Auto-Derive Grid — Material Table structure (🔶 MOCKUP ONLY, IMPLEMENTATION NOT STARTED, 2026-09-18)
+### 138.15 — Page 4: RM Auto-Derive Grid — Material Table structure (✅ DESIGN LOCKED + IMPLEMENTATION CODE-COMPLETE — 2026-09-18, see this section's own "Implementation status" block below; live click-through still pending)
 
 **Scope:** §138.12-এর auto-derive algorithm-কে আসলে Page 4-এর "Material Table"-এ কীভাবে দেখানো
 হবে — এটা এখনো শুধু একটা interactive Artifact mockup-এ আছে, কোনো real backend handler বা frontend
@@ -24289,3 +24315,265 @@ session's earlier `shift_master.handlers.ts::createShiftHandler` — missing sec
 ACL check at the caller-supplied `company_id`, fixed via `canMaintainCompanyResource`). **Not yet
 done:** live logged-in click-through in the deployed app; commit/push (holding for explicit
 permission per standing session rule).
+
+**⚠️ Real bug found + fixed same day, via live click-through (2026-09-18) — a stroke-line
+up-front stock check was never guarded for MTS.** `createProcessOrderHandler` has always had
+TWO stroke-line-driven blocks: (a) an early "fast-fail" availability check (before the PO insert
+at all) using each formulation line's own `default_storage_location_id` against generic
+location-level UNRESTRICTED stock — no group/alternate substitution, no machine-bucket awareness;
+(b) the naive 1:1 line-prepopulation block right before the PO insert. This session's original
+§138.15 implementation guarded only (b) with `!isMtsCreate` — (a) was missed. Result: every real
+MTS Create attempt 422'd with `PROD_PO_INSUFFICIENT_STOCK` (e.g. real click-through on Stroke
+0064: "Insufficient UNRESTRICTED stock for 6 material(s): RM-00084 — DOLOMITE 24...") before Page
+4 ever got a chance to run its own correct check — MTS never even reached the `process_order`
+insert. **Verified clean via direct prod DB query:** the failed attempts left zero orphaned rows
+(`batch_number_instance` had zero rows for either failed attempt's declared range, `process_order`
+had no MTS row at all for the company) — the up-front check fires before batch-range resolution
+AND before the PO insert, so a 422 here is a clean no-op, nothing to roll back. **Fixed:** guarded
+block (a) with the same `!isMtsCreate` condition as (b); also gated off a related frontend-only
+waste — `availabilityPreviewProcessOrder`'s background query was firing for MTS even though its
+own Material Table/short-stock UI is hidden for MTS (mirrors the same "not guarded for MTS" class
+of miss). Same session also fixed 3 other live-test findings on Page 3: **Segment** was a manual
+IWC/POWDER dropdown for no reason — real prod data confirmed (7 of 8 real MTS strokes are
+`base_uom_code='KG'`/POWDER, only 1 is `base_uom_code='L'`/IWC with a real conversion factor) —
+now auto-derived from the Stroke's own `base_uom_code`, read-only, no manual pick; **Batch Size**
+previously forced every MTS stroke through Liter-entry + a conversion-factor requirement
+regardless of segment, so a genuine POWDER (KG-native) stroke always hit "conversion factor
+missing" with no way to clear it — now only the IWC segment uses Liter entry, POWDER gets a plain
+KG input like MTO/HPS; the stale "RM lines move to a future Page 4" placeholder copy (Page 4 has
+existed since this same day) and the "Create Process PO" button label (relabeled "Save & Continue
+to Page 4" for MTS, since it only creates the header before Page 4 opens) were also corrected.
+
+### 138.16 — Page 5 & 6: Packing PO Standard (Batch→Pack-Size Planning + PM Auto-Derive) — MTS (✅ DESIGN LOCKED + IMPLEMENTATION CODE-COMPLETE, 2026-09-18)
+
+**Implementation status (2026-09-18, same-day code-complete):** Page 5 backend
+(`mts_packing_plan.handlers.ts`, `erp_production.mts_packing_plan_row` staging table,
+`packing_order.batch_number_from/to` + `process_order.planned_loss_qty/reason` columns —
+migrations `20260918140000`/`20260918150000`) + frontend (`MtsPackingPlanStep`) are done —
+batch-range→pack-size grid, "Up to Last Batch" + availability-first batch dropdown sort, running
+SFG-balance hard block, Consider-Loss shortfall modal. Page 6 backend
+(`mts_packing_combine.handlers.ts`) + frontend (`MtsPackingCombineStep`) are done — combined PM
+auto-derive across every Page-5 row (grouped by formulation material, location-level not
+machine-bucket, both Actual Material and Storage Location editable), proportional per-row split
+on Save, N separate real `packing_order`+`packing_order_line`(+reservations) records created (one
+per Page-5 row), each `mts_packing_plan_row` flipped to `CONVERTED`. Page 4's own gap-fixes
+(auto-vanish on qty-raise, explicit row-delete, under-Standard Consider-Loss-style confirm modal —
+same three rules on Page 6's combined table too) are also implemented. All touched/new backend
+files `deno check` clean (only the same pre-existing, unrelated `.ilike()`/`.localeCompare()`/
+`SESSION_IDLE_EXPIRED` typing-noise errors already tolerated elsewhere in this domain); frontend
+`eslint` clean (only the same 4 pre-existing `exhaustive-deps` warnings). Migration integrity
+reconciled and confirmed `in_sync` against Dev (only the pre-existing, unrelated 9-migration
+`communication_enrollment/rule` REMOTE_ONLY drift remains).
+**Deliberately NOT built this pass (flagged, not forgotten):** (1) "Total Inner Unit" on Page 5 is
+a display placeholder ("N/A"/"See Page 6") rather than a fully computed inner-uom ratio — no real
+dataset with `inner_uom_code` set exists yet to build/verify against; (2) the Approve→FINAL
+lifecycle cascade from a Process PO onto its child MTS Packing PO(s) was NOT built — this
+project's own established convention (`reverseProcessOrderHandler`'s "Reverse all Packing Orders
+first" hard block, `cancelPackingOrderHandler`'s per-PO-only cancel) never auto-cascades a
+status change onto child documents anywhere, and Approve's own FINAL transition mechanics for MTS
+are entangled with the separately-flagged "Verify redesign for MTS" session the business owner
+has not yet held — building a cascade now would guess at undesigned lifecycle mechanics. What WAS
+added: `qaRejectProcessOrderHandler` now hard-blocks a Policy-2 MTS reject with
+`PROD_PO_HAS_PACKING_ORDERS` whenever active (non-CANCELLED/REVERSED) child Packing PO(s) exist —
+consistent with the existing reverse/cancel convention, closes the real orphan-data risk (a
+rejected Process PO leaving live Packing PO(s) referencing a now-dead formulation) without
+inventing new cascade semantics. (3) No live click-through in a running app — this environment has
+no way to authenticate into the deployed app or invoke the edge functions directly; verification
+here is schema-level (Dev DB column/table checks) + static (`deno check`/`eslint`) + hand-traced
+algorithm review, not an actual end-to-end Page 1→6 run against real data. **Not yet done:**
+`OM-IMPLEMENTATION-LOG.md` was not updated with this entry — a follow-up documentation-sync task.
+
+**Scope/continuum:** Page 5 & 6 are the **Packing PO** half of the same numbered flow that starts
+at Process PO entry — Page 1-4 (§138.14/§138.15) build and save the Process PO's own header +
+RM plan; Page 5 & 6 build and save the resulting Packing PO(s) that will eventually pack that
+Process PO's SFG output. All six pages are one continuous sitting for a single production run —
+Page 4's Save (material plan saved) is what enables "Next" into Page 5.
+
+**Verification dataset (real, prod, 2026-09-18):** CMP003, Prodshade 00790908 (SFG-00188,
+Stroke 0064), 3 real ACTIVE Pack BOMs (all `bom_required=true`, SFG issue from S001/P261, FG
+receipt to F003/P101):
+
+| SKU | Pack Size | SFG Input | PM lines |
+|---|---|---|---|
+| FG-00391 (00790908320) | 20 KG BAG | 20 KG | EXT PUTTY 20KG bag (has_alternate), Cable Tie, Label, Ribbon 0.02625 MTR, **Thread 4.42 MTR**, Ink/Additive/Cleaning (BTL) |
+| FG-00392 (00790908330) | 30 KG BAG | 30 KG | EXT PUTTY 30KG bag (no alternate), Cable Tie, Label, Ribbon, **Thread 5.74 MTR**, Ink/Additive/Cleaning |
+| FG-00393 (00790908340) | 40 KG BAG | 40 KG | AP EXT WALLPUTTY 40KG WOVENSACK (has_alternate), Cable Tie, Label, Ribbon, **Thread 5.74 MTR**, Ink/Additive/Cleaning |
+
+`prodshade_pack_config` maps all 3 pack codes (320/330/340) to this Prodshade, `pack_code_master.
+description` = "20 BAG"/"30 BAG"/"40 BAG" (this is the Pack Size dropdown's label source),
+`fill_qty` = 20/30/40, `inner_uom_code` = NULL for all three (no Inner Unit concept for this
+Prodshade's packs — confirmed a real 2-layer example exists elsewhere in the system, e.g. pack
+code "050 Bottle" with `outer_uom_code=CTN`/`inner_uom_code=BTL`, so the Inner Unit column is a
+real, general mechanism, just greyed out for this specific dataset).
+
+**F-location numeric correspondence (real, prod, confirmed same day):** `storage_location_master`
+is global (no `company_id` column); company-scoping is via `storage_location_plant_map`. CMP003
+now has 3 active F-locations (business owner added F001/F002 live during this design session to
+demonstrate the multi-location case): S001 "PUTTY SHOP FLOOR" ↔ F001 "PUTTY FINISH GOODS
+LOCATION", S002 "TLA SHOP FLOOR" ↔ F002 "TA CTG FINISH GOODS LOCATION", S003 "ADMIX SHOP FLOOR
+LOCATION" ↔ F003 "ADMIX FINISH GOODS LOCATION" — the numeric suffix always matches by business
+naming convention, confirmed real, not assumed.
+
+#### Page 5 — Batch → Pack-Size Planning Grid
+
+**Header:** same fields as Page 4's header (Prodshade code+name, Description, Stroke Number,
+Machine, Batch Range From-To, Number of Batches, Batch Size/batch, Total Qty) **plus** the now-real
+**Process PO Number** (the PO already exists at this point — created at the Page 3→4 transition).
+
+**Grid, one row per pack-size allocation (each row → one Packing PO on Save):**
+
+`From Batch` — `To Batch` (dropdown, sourced from this Process PO's own declared batch range;
+batch numbers already consumed by an earlier row are disabled in later rows' dropdowns — no
+double-allocation of the same physical batch to two different pack sizes) → `Number of Batches`
+(derived, To−From+1) → `Pack Size` (dropdown, `prodshade_pack_config` → `pack_code_master.
+description` for this Prodshade) → `Outer Unit / Batch` (user entry) → `Total Outer Unit`
+(= Number of Batches × Outer Unit/Batch) → `Total Inner Unit` (auto-resolved if the pack code has
+`inner_uom_code`, otherwise greyed/N-A) → `Volume` (auto = Total Outer Unit × `fill_qty`, KG,
+shows the pack's own UOM) → `Storage Location` (FG/SKU's own location — see below; SFG's own
+location is fixed/derived from the Stroke, not user-editable here).
+
+**From/To Batch dropdown mechanics — "Up to Last Batch" checkbox + availability-first sort order
+(LOCKED, 2026-09-18):**
+- Each row gets an **"Up to Last Batch"** checkbox. Checking it auto-fills `To Batch` with the
+  Process PO's own actual final batch number in the declared range (resolved dynamically from
+  that PO's `batch_number_to`, never hardcoded) and disables manual entry/selection of `To Batch`
+  for that row while checked.
+- **Both** `From Batch` and `To Batch` dropdowns sort **available-first, taken-last**: the still-
+  unclaimed batch numbers (starting right after whatever the previous row's own last-claimed batch
+  was) list first/at the top; batch numbers already claimed by an earlier row list **after** them,
+  shown disabled — not merely disabled-in-place at their original numeric position mixed among the
+  available ones.
+- **Worked example (locked):** a 40-batch Process PO. Row 1: user does NOT check "Up to Last
+  Batch", manually picks batch 26 as `To Batch` (From defaults to the first unclaimed batch, 1) →
+  Row 1 claims batches 1–26. Adding Row 2: its `From Batch` dropdown now shows 27 onward first
+  (available), with 1–26 pushed below, disabled. If Row 2 then checks "Up to Last Batch" (with
+  `From Batch`=27), `To Batch` auto-resolves to 40 → Row 2 claims 27–40. The same available-first/
+  disabled-after ordering applies to Row 2's own `To Batch` dropdown too, whether or not "Up to
+  Last Batch" is checked.
+
+**Storage Location dropdown (SKU/OUTPUT side only — SFG side is fixed):** options = every active
+F-prefixed location mapped to this company via `storage_location_plant_map` (NOT
+`material_plant_ext`, which only holds one `default_storage_location_id` per material+company,
+not a multi-option list). Sort + default: the F-location whose numeric suffix matches the SFG's
+own S-location suffix (e.g. Stroke 0064's S001 → F001) sorts first and is the default selection;
+the rest follow in code order. User can still override to any other active F-location in the
+list. *(Open edge case, not yet resolved: if a future S-number has no matching F-number at all —
+e.g. S005 exists but no F005 — fall back to [decide when it actually happens; not real today].)*
+
+**Running SFG-balance hard block (per row, live as rows are added):** below the grid, a display
+area shows, per row already built, how much SKU is being received (P101) and how much SFG is
+being issued (P261) for that row. The system tracks a running cumulative SFG total across every
+row built so far and compares it against the Process PO's own Total Qty. If a new/edited row's own
+Volume would push the cumulative total **past** the remaining SFG balance, that row's own `Outer
+Unit / Batch` field gets a red hard-block alert asking to adjust the qty, and the **Next Page**
+button is disabled until fixed. This can never be bypassed — it is a hard block, not a warning.
+
+**End-of-entry reconciliation (soft, only fires when the user tries to leave Page 5 with SFG still
+unallocated):** if, after the user has finished adding rows, some SFG balance still remains
+un-packed and the user clicks Next, a modal appears (English) stating the remaining SFG qty and
+offering two choices:
+- **Back to Entry** — returns to Page 5 to add more rows.
+- **Consider Loss** — accepts the remainder as loss.
+
+**"Consider Loss" — two-phase design, LOCKED (2026-09-18):** Because Page 5 runs *before* the
+SFG is physically produced/verified (Page 3→4→5→6 all happen before Finalize/Verify), no real
+stock movement can be posted for this qty at Page 5 time — there is no `stock_ledger` entry for
+this SFG yet at all. So:
+- **Now (Page 5, this section's scope):** clicking Consider Loss only **captures** the qty (+
+  optional reason) as a new field on the Process PO record (e.g. `planned_loss_qty`) — pure
+  data capture, zero stock/costing effect.
+- **Later (deferred, explicitly NOT part of this section — the business owner has separately
+  flagged Process PO's own Verify step for MTS as "redesign a bit later"):** the actual write-off
+  **posting** mechanism (which movement type, how it reconciles against the real `verified_qty`
+  which may differ from the planned Total Qty this loss was computed against) will be designed as
+  part of that later Verify-redesign session, using this captured `planned_loss_qty` as its input.
+  Do not build any stock-posting logic for this loss qty before that session locks the mechanism.
+
+#### Page 6 — Combined PM Auto-Derive Table + Multi-PO Save
+
+**No difference from Page 4's auto-derive table mechanism** (§138.12's algorithm — formulation/
+declared item first if available, then group alternates smallest-available-first, per-group hard
+block, repeat-row-per-actual-material display rule) with two changes:
+1. **No machine-bucket concept.** PM items are not machine-tracked. The stock check is against
+   whatever storage location that specific PM line's own Pack BOM declares (location-level, same
+   shape as Page 4's R001 lines) — not a machine's own sub-bucket.
+2. **Both Actual Material (within the item's own group) and Storage Location are user-editable**
+   on every auto-derive row here (Page 4 only let the Actual Material move within a group; the
+   Storage Location itself came from the stroke and wasn't user-editable there).
+
+**Confirmed 2026-09-18: the auto-vanish / row-delete / under-qty-confirm rules locked for Page 4
+(§138.12's "Qty বদলালে recalculate ও row delete" refinement, above) apply identically here** —
+raising one row's Actual Qty to meet/exceed a (combined, across pack sizes) group's Standard Qty
+vanishes its siblings; rows can be explicitly deleted; landing a group's total below Standard
+after edits/deletions requires the same English confirm modal before Save, same backend
+over-still-blocked/under-confirmable split. Not a separate mechanism — same code path Page 4 uses,
+just fed this page's own combined-per-item totals instead of Page 4's per-Process-PO ones.
+
+**Header:** same identity fields as Page 5's header, plus a summary strip of the rows about to
+become Packing POs: `Pack Size | Batch sub-range | Total Outer Unit | Volume (KG)` — one line per
+Page 5 row, so the user can cross-check the PM totals below against exactly which POs will be
+created.
+
+**The combined table itself (LOCKED mechanic — this is the one piece that is NOT just "Page 4
+again"):** the PM requirement is derived from **every Page 5 row combined**, not per-row.
+- A PM item whose material/qty genuinely differs per pack size (e.g. the outer bag itself — 20KG
+  bag vs 30KG bag vs 40KG bag are different materials) gets its **own row per pack size** — never
+  merged, since they are not the same requirement.
+- A PM item that is **common across pack sizes** (e.g. Thread, Cable Tie, Label, Ribbon, Ink,
+  Additive, Cleaning — all present in every one of the 3 real Pack BOMs above, just at different
+  per-unit qty) shows **once**, with the header's per-row qty **totalled** across every
+  contributing pack size (e.g. real data: Thread's combined Standard Qty = 20KG-row's `4.42 ×
+  Total Outer Unit(20KG)` + 30KG-row's `5.74 × Total Outer Unit(30KG)` + 40KG-row's `5.74 × Total
+  Outer Unit(40KG)`) — Standard, Actual, and AP-Reco totals all follow this same combine-then-total
+  rule.
+- **Why combined, not per-row:** a shared PM item's real stock is one physical pool. Running
+  Page 4's own per-group stock check independently, three separate times (once per pack size),
+  would let each check pass against the same physical stock the others are also counting on,
+  over-allocating it (a double/triple-count race, structurally the same class of bug §8D exists
+  to prevent for stock postings). Checking the item exactly once, against its true combined
+  requirement, is the only way to get a correct answer.
+- Auto-derive/substitution decisions made here (swap to a group alternate, change storage
+  location) are **not row-scoped** — a swap for a shared item like Thread applies identically to
+  every Packing PO whose own line uses that item, since it is the same underlying requirement
+  split across them.
+
+**Save — creates every Page 5 row's own Packing PO in one action (confirmed 2026-09-18):** Page 6
+itself never persists anything until Save. On Save, the system creates **N separate
+`packing_order` (+ their own `packing_order_line` rows)**, one per Page 5 row — Page 6's combined
+table is a computation/UI layer only, not a shared/merged document. Each individual Packing PO's
+own PM line quantities are **split back out proportionally** from the combined table's resolved
+per-unit result: a shared item's total actual-material/qty is divided across the contributing
+Packing POs using the same Pack-BOM-per-unit-qty × that row's own Total Outer Unit math Page 5
+already computed for it (i.e. the split is fully deterministic from data already on hand, not a
+new allocation decision) — a pack-size-specific item (the outer bag itself) goes only to its own
+one Packing PO, unsplit.
+
+#### Approve/Reject/Final/Verify lifecycle for MTS Packing PO(s) — mirrors Process PO's own two-policy split (LOCKED, 2026-09-18)
+
+**No separate QA action exists for the Packing PO(s) at all.** The Process PO's own existing QA
+decision (§138.14's `qaApproveProcessOrderHandler`/`qaRejectProcessOrderHandler`) governs every
+Packing PO created from it — this is intentional reuse of an already-built mechanism, not a new
+one:
+
+- **Current Stroke (Policy 1):** same as Process PO's own Page 3/4 — Standard and Final happen
+  together (no separate QA click), Verify stays a separate action. This applies identically to the
+  Packing PO(s): once Page 5/6 are saved, the Packing PO(s) move straight through to Final in the
+  same motion, with their own Verify staying separate.
+- **Non-current Stroke (Policy 2):** stops at STANDARD. At this stage, item lines remain
+  add/editable in **both** Page 4 (Process PO RM) and Page 6 (Packing PO PM) — the QA reviewer
+  sees the full plan, RM and PM together, before deciding. **Approve** → both the Process PO and
+  every one of its Packing PO(s) move to FINAL together, where Actual Qty and AP-Approved become
+  editable (same mechanism MTO/HPS's own Final page already has) — Verify then happens as its own
+  separate, later action, same as always. **Reject** → cascades exactly like the already-built
+  Process PO reject path: PO(s) CANCELLED, and — per the already-locked rule this codebase already
+  follows — every associated `reservation_document` also cancelled. No new reject mechanism is
+  needed; the existing `qaRejectProcessOrderHandler` pattern (status CANCELLED + reservation
+  cancel + `voidBatchNumberInstancesForProcessOrder` for the Process PO's own batch numbers) is
+  simply extended to cascade onto the Packing PO(s) created from it.
+
+**Implementation status: design fully locked in this section. Nothing has been coded yet** —
+backend handlers (Page 5's batch-range/pack-size grid + running-balance check + loss capture;
+Page 6's combined PM auto-derive + N-way Packing PO creation; the Approve/Reject cascade onto
+child Packing PO(s)), and the real frontend pages, are all still to be built. Next step: write the
+implementation the same way Page 4 was built — real handlers against real schema, verified with
+real prod data, then all `scripts/*.mjs` guards, before moving on.

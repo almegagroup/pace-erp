@@ -144,6 +144,14 @@ import {
   getMtsMaterialPlanHandler,
   saveMtsMaterialPlanHandler,
 } from "../_core/production/process_order.handlers.ts";
+import {
+  getMtsPackingPlanHandler,
+  saveMtsPackingPlanHandler,
+} from "../_core/production/mts_packing_plan.handlers.ts";
+import {
+  getMtsPackingCombineHandler,
+  saveMtsPackingCombineHandler,
+} from "../_core/production/mts_packing_combine.handlers.ts";
 import { getOrderInformationReportHandler, getBatchCountsReportHandler } from "../_core/production/order_information_system.handlers.ts";
 import { searchBatchVarianceHandler, getBatchVarianceDetailHandler } from "../_core/production/batch_variance_report.handlers.ts";
 import {
@@ -608,6 +616,16 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/process-orders\/[^/]+\/mts-material-plan$/.test(pathname)) {
     if (req.method === "GET") return await getMtsMaterialPlanHandler(req, ctx);
     if (req.method === "POST") return await saveMtsMaterialPlanHandler(req, ctx);
+  }
+  // §138.16 (2026-09-18) — MTS Page 5 batch->pack-size packing plan.
+  if (/^\/api\/production\/process-orders\/[^/]+\/mts-packing-plan$/.test(pathname)) {
+    if (req.method === "GET") return await getMtsPackingPlanHandler(req, ctx);
+    if (req.method === "POST") return await saveMtsPackingPlanHandler(req, ctx);
+  }
+  // §138.16 (2026-09-18) — MTS Page 6 combined PM auto-derive + N-way Packing PO save.
+  if (/^\/api\/production\/process-orders\/[^/]+\/mts-packing-combine$/.test(pathname)) {
+    if (req.method === "GET") return await getMtsPackingCombineHandler(req, ctx);
+    if (req.method === "POST") return await saveMtsPackingCombineHandler(req, ctx);
   }
 
   // SFG QA /:id actions

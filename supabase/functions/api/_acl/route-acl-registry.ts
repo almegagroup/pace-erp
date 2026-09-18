@@ -1665,6 +1665,25 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     },
   },
   {
+    // §138.16 (2026-09-18) — MTS Page 5 batch->pack-size packing plan. Same
+    // continuum as mts-material-plan above, still Process PO Create/Standard
+    // territory, so rides the same PROD_PO_CREATE resource.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/mts-packing-plan$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    },
+  },
+  {
+    // §138.16 (2026-09-18) — MTS Page 6 combined PM auto-derive + N-way
+    // Packing PO save. Same continuum, same PROD_PO_CREATE resource.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/mts-packing-combine$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    },
+  },
+  {
     pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROD_SFG_RESULT_RECORDING", action: "VIEW" } },
   },
