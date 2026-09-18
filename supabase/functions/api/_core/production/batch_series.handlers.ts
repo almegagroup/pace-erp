@@ -12,6 +12,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
@@ -71,7 +72,7 @@ function parseNumberingMethod(value: unknown, fallback = "PLAIN"): string {
   return normalized;
 }
 
-function buildPreviewBatchNumber(row: JsonRecord, nextCount: number, today = new Date()): string {
+export function buildPreviewBatchNumber(row: JsonRecord, nextCount: number, today = new Date()): string {
   const prefix = toTrimmedString(row.prefix);
   const numberingMethod = parseNumberingMethod(row.numbering_method, "PLAIN");
   const serialPadWidth = parseSerialPadWidth(row.serial_pad_width, 5);
@@ -240,6 +241,72 @@ export async function activateReleasedBatchNumberInstance(params: {
     last_updated_at: String((data as JsonRecord).last_updated_at),
     last_updated_by: toTrimmedString((data as JsonRecord).last_updated_by) || null,
   };
+}
+
+// MTS QA Reject (Policy 2, at STANDARD) — void every ACTIVE batch_number_instance
+// row for this PO's range in one statement, no manual Manager/SA release needed
+// (lighter than the CORS-reversal release mechanism, since stock was never
+// posted at STANDARD). Duplicate-check only ever treats ACTIVE as blocking, so
+// this makes the same batch numbers immediately reusable by a fresh entry.
+export async function voidBatchNumberInstancesForProcessOrder(processOrderId: string, actorId: string): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .update({ status: "VOIDED", voided_at: now, last_updated_at: now, last_updated_by: actorId })
+    .eq("source_process_order_id", processOrderId)
+    .eq("status", "ACTIVE");
+  if (error) {
+    console.error("[batch_series.voidBatchNumberInstancesForProcessOrder] update failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_NUMBER_VOID_FAILED");
+  }
+}
+
+// MTS Page 3 batch-range create — single atomic bulk INSERT of every batch
+// number in the range, instead of N separate upserts (2026-09-18 fix). The
+// earlier N-separate-calls shape had a real race: two concurrent Creates
+// could both pass the advisory duplicate-check (neither has inserted yet),
+// then each insert its own rows independently -- if only ONE row in a range
+// collided, that range would end up PARTIALLY inserted (some ACTIVE, one
+// missing) while its process_order row still claims the full range. A
+// single multi-row INSERT is one statement: erp_production.batch_number_
+// instance's own UNIQUE(company_id, batch_number) constraint makes Postgres
+// reject the WHOLE statement if any one row collides, so it is impossible to
+// end up with a half-inserted range. The caller must still compensate by
+// deleting the just-created process_order row when this returns ok:false --
+// see createProcessOrderHandler.
+export async function bulkInsertBatchNumberInstances(params: {
+  companyId: string;
+  poType: string;
+  prodshadeMaterialId: string | null;
+  batchNumbers: string[];
+  processOrderId: string;
+  authUserId: string;
+}): Promise<{ ok: true } | { ok: false }> {
+  const now = new Date().toISOString();
+  const rows = params.batchNumbers.map((batchNumber) => ({
+    company_id: params.companyId,
+    po_type: params.poType,
+    prodshade_material_id: params.prodshadeMaterialId,
+    batch_number: batchNumber,
+    status: "ACTIVE",
+    source_process_order_id: params.processOrderId,
+    created_at: now,
+    last_updated_at: now,
+    last_updated_by: params.authUserId,
+  }));
+  const { error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .insert(rows);
+  if (error) {
+    if ((error as { code?: string }).code === "23505") {
+      return { ok: false };
+    }
+    console.error("[batch_series.bulkInsertBatchNumberInstances] insert failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_NUMBER_BULK_INSERT_FAILED");
+  }
+  return { ok: true };
 }
 
 export async function upsertBatchNumberInstanceForProcessOrder(params: {
@@ -586,6 +653,120 @@ export async function listBatchNumbersHandler(req: Request, ctx: ProdHandlerCont
     const code = err instanceof Error ? err.message : "PROD_BATCH_NUMBER_LIST_FAILED";
     return batchError(req, ctx, code, 500, "Batch number list failed");
   }
+}
+
+// GET /api/production/mts-batch-range-check?company_id=&prodshade_material_id=&start_serial=&count=
+// MTS Page 3 "Batch Range" -- live duplicate-check as the user types Start
+// Batch Number + Number of Batches. Prodshade-scoped only (no pack-size
+// dimension, per the 2026-09-17 lock). Also re-run server-side inside
+// createProcessOrderHandler right before insert -- this endpoint alone is
+// advisory (a second browser tab could race it).
+export async function checkMtsBatchRangeHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const prodshadeMaterialId = toTrimmedString(url.searchParams.get("prodshade_material_id") ?? "");
+    const startSerial = Number(url.searchParams.get("start_serial") ?? "");
+    const count = Number(url.searchParams.get("count") ?? "");
+
+    if (!companyId || !prodshadeMaterialId) {
+      return batchError(req, ctx, "PROD_BATCH_RANGE_INVALID", 400, "company_id and prodshade_material_id required");
+    }
+    if (!Number.isInteger(startSerial) || startSerial < 1 || !Number.isInteger(count) || count < 1 || count > 500) {
+      return batchError(req, ctx, "PROD_BATCH_RANGE_INVALID", 400, "start_serial (>=1) and count (1-500) required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return batchError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
+    const batchNumbers = await resolveMtsBatchRangeNumbers(companyId, prodshadeMaterialId, startSerial, count);
+    if ("errorCode" in batchNumbers) {
+      return batchError(req, ctx, batchNumbers.errorCode, batchNumbers.status, batchNumbers.message);
+    }
+
+    const duplicates = await findDuplicateBatchNumbers(companyId, batchNumbers.numbers);
+
+    return okResponse({
+      prefix: batchNumbers.prefix,
+      from_batch_number: batchNumbers.numbers[0],
+      to_batch_number: batchNumbers.numbers[batchNumbers.numbers.length - 1],
+      duplicates,
+      has_duplicate: duplicates.length > 0,
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_BATCH_RANGE_CHECK_FAILED";
+    return batchError(req, ctx, code, 500, "Batch range check failed");
+  }
+}
+
+type MtsBatchRangeResolution =
+  | { prefix: string; numbers: string[] }
+  | { errorCode: string; status: number; message: string };
+
+// Shared by the standalone check endpoint above AND createProcessOrderHandler's
+// own server-side re-check at Create -- one place resolves the MTS Prodshade's
+// active series + formats the requested range into concrete batch numbers.
+export async function resolveMtsBatchRangeNumbers(
+  companyId: string,
+  prodshadeMaterialId: string,
+  startSerial: number,
+  count: number,
+): Promise<MtsBatchRangeResolution> {
+  const { data: seriesRow, error: seriesErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_series")
+    .select("prefix, numbering_method, serial_pad_width")
+    .eq("company_id", companyId)
+    .eq("batch_type", "MTS")
+    .eq("prodshade_material_id", prodshadeMaterialId)
+    .eq("active", true)
+    .maybeSingle();
+  if (seriesErr) {
+    console.error("[batch_series.resolveMtsBatchRangeNumbers] series lookup failed:", JSON.stringify(seriesErr));
+    return { errorCode: "PROD_BATCH_RANGE_CHECK_FAILED", status: 500, message: "Batch range check failed" };
+  }
+  if (!seriesRow) {
+    return {
+      errorCode: "PROD_BATCH_SERIES_NOT_CONFIGURED",
+      status: 422,
+      message: "No MTS batch number series configured for this Prodshade",
+    };
+  }
+
+  const maxSerial = (10 ** Number((seriesRow as JsonRecord).serial_pad_width ?? 5)) - 1;
+  if (startSerial + count - 1 > maxSerial) {
+    return {
+      errorCode: "PROD_BATCH_RANGE_OVERFLOW",
+      status: 422,
+      message: `Batch range exceeds the series' maximum serial (${maxSerial})`,
+    };
+  }
+
+  const numbers: string[] = [];
+  for (let i = 0; i < count; i++) {
+    numbers.push(buildPreviewBatchNumber(seriesRow as JsonRecord, startSerial + i));
+  }
+  return { prefix: toTrimmedString((seriesRow as JsonRecord).prefix), numbers };
+}
+
+// Company-wide ACTIVE-status collision check (matches batch_number_instance's
+// own UNIQUE(company_id, batch_number) shape) -- chunked per §8E since a large
+// Number-of-Batches entry could in theory push the .in() list past a safe URL
+// length, even though today's 500-count cap keeps it well under that.
+export async function findDuplicateBatchNumbers(companyId: string, batchNumbers: string[]): Promise<string[]> {
+  if (batchNumbers.length === 0) return [];
+  const rows = await fetchInChunks<JsonRecord>(batchNumbers, (chunk) =>
+    serviceRoleClient
+      .schema("erp_production")
+      .from("batch_number_instance")
+      .select("batch_number")
+      .eq("company_id", companyId)
+      .eq("status", "ACTIVE")
+      .in("batch_number", chunk));
+  return rows.map((row) => String(row.batch_number));
 }
 
 export async function releaseBatchNumberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {

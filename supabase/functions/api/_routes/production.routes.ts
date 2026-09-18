@@ -40,7 +40,12 @@ import {
   updateBatchSeriesHandler,
   listBatchNumbersHandler,
   releaseBatchNumberHandler,
+  checkMtsBatchRangeHandler,
 } from "../_core/production/batch_series.handlers.ts";
+import {
+  listShiftsHandler,
+  createShiftHandler,
+} from "../_core/production/shift_master.handlers.ts";
 import {
   listSegmentLocationsHandler,
   upsertSegmentLocationHandler,
@@ -136,6 +141,8 @@ import {
   correctProcessOrderHandler,
   reverseProcessOrderHandler,
   pruneProcessOrderHandler,
+  getMtsMaterialPlanHandler,
+  saveMtsMaterialPlanHandler,
 } from "../_core/production/process_order.handlers.ts";
 import { getOrderInformationReportHandler, getBatchCountsReportHandler } from "../_core/production/order_information_system.handlers.ts";
 import { searchBatchVarianceHandler, getBatchVarianceDetailHandler } from "../_core/production/batch_variance_report.handlers.ts";
@@ -234,6 +241,15 @@ export async function dispatchProductionRoutes(
       return await createBatchSeriesHandler(req, ctx);
     case "GET:/api/production/batch-numbers":
       return await listBatchNumbersHandler(req, ctx);
+    // MTS Page 3 Batch Range live duplicate-check (§ MTS Page 3, 2026-09-17)
+    case "GET:/api/production/mts-batch-range-check":
+      return await checkMtsBatchRangeHandler(req, ctx);
+
+    // Shifts (MTS Page 3 field, company-wise, inline-create-as-you-go)
+    case "GET:/api/production/shifts":
+      return await listShiftsHandler(req, ctx);
+    case "POST:/api/production/shifts":
+      return await createShiftHandler(req, ctx);
 
     // Segment Location Config
     case "GET:/api/production/segment-locations":
@@ -587,6 +603,11 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/process-orders\/[^/]+\/prune$/.test(pathname) && req.method === "POST") {
     return await pruneProcessOrderHandler(req, ctx);
+  }
+  // §138.12/§138.15 (2026-09-18) — MTS Page 4 RM auto-derive material plan.
+  if (/^\/api\/production\/process-orders\/[^/]+\/mts-material-plan$/.test(pathname)) {
+    if (req.method === "GET") return await getMtsMaterialPlanHandler(req, ctx);
+    if (req.method === "POST") return await saveMtsMaterialPlanHandler(req, ctx);
   }
 
   // SFG QA /:id actions

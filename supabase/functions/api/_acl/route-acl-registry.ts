@@ -464,6 +464,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/batch-series":                { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "VIEW" },
   "POST:/api/production/batch-series":               { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "WRITE" },
   "GET:/api/production/batch-numbers":               { skipAcl: false, resourceCode: "PROD_BATCH_RELEASE", action: "VIEW" },
+  // MTS Page 3 "Batch Range" live duplicate-check + "Shift" inline-create — both tightly
+  // coupled to Process PO Create, so they ride PROD_PO_CREATE rather than a new resource.
+  "GET:/api/production/mts-batch-range-check":       { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "GET:/api/production/shifts":                      { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/shifts":                     { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/segment-locations":           { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "VIEW" },
   "POST:/api/production/segment-locations":          { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "WRITE" },
   "GET:/api/production/conversion-rates":            { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "VIEW" },
@@ -1646,6 +1651,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/prune$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    // §138.12/§138.15 (2026-09-18) — MTS Page 4 RM auto-derive material plan.
+    // Rides PROD_PO_CREATE like every other Process PO Create-flow lookup
+    // above (mts-batch-range-check, shifts) — this is still part of the same
+    // Standard-stage create flow for MTS, just a second request instead of
+    // being inline in the create body.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/mts-material-plan$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    },
   },
   {
     pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+$/,
