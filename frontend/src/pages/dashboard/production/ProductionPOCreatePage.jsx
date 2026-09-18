@@ -54,7 +54,6 @@ import { formatPreciseNumber, formatStockQty, multiplyPreciseValues, PRODUCTION_
 import { getManualPastDateBounds, isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
-const MTS_SEGMENTS = ["IWC", "POWDER"];
 const MTEST_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER"];
 const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 const TABS = ["Process PO", "Packing PO"];
@@ -182,11 +181,23 @@ function storageLocationLabel(location) {
   return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
 }
 
-function deriveSegmentCode(poType, mtsSegmentCode, mtestSegmentCode) {
+// MTS spans two segments (IWC=liquid, POWDER=dry) that share one po_type --
+// live prod data confirmed (2026-09-18) the Stroke's own base_uom_code is
+// the real signal, no manual picker needed: 7 of 8 real MTS strokes are
+// base_uom_code='KG' (POWDER, no Liter concept at all), exactly 1 is
+// base_uom_code='L' with a real conversion_factor (IWC). Previously this was
+// a manual dropdown that (a) required a needless extra click and (b) forced
+// EVERY MTS stroke through the Liter-entry+conversion-factor-required path
+// regardless of segment, so a genuine POWDER (KG-native) stroke always hit a
+// "missing conversion factor" error it should never have needed to clear.
+function deriveSegmentCode(poType, mtsStrokeBaseUomCode, mtestSegmentCode) {
   if (poType === "MTO") return "ADMIX";
   if (poType === "HPS") return "HPS";
   if (poType === "INT") return "INT";
-  if (poType === "MTS") return mtsSegmentCode || "";
+  if (poType === "MTS") {
+    if (!mtsStrokeBaseUomCode) return "";
+    return LITRE_UOM_CODES.has(String(mtsStrokeBaseUomCode).trim().toUpperCase()) ? "IWC" : "POWDER";
+  }
   if (poType === "MTEST") return mtestSegmentCode || "";
   return "";
 }
@@ -299,11 +310,6 @@ export default function ProductionPOCreatePage() {
   }, [approvedStrokes]);
 
   const selectedMaterial = materialById.get(processForm.prodshade_material_id) ?? null;
-  const derivedSegmentCode = deriveSegmentCode(
-    processForm.po_type,
-    processForm.mts_segment_code,
-    processForm.mtest_segment_code,
-  );
   const machineRequired = ["MTO", "HPS", "MTS", "INT"].includes(processForm.po_type);
 
   const strokesQ = useQuery({
@@ -369,6 +375,11 @@ export default function ProductionPOCreatePage() {
     queryFn: () => getStrokeMaster(processForm.stroke_master_id),
     enabled: Boolean(processForm.stroke_master_id),
   });
+  const derivedSegmentCode = deriveSegmentCode(
+    processForm.po_type,
+    strokeDetailQ.data?.base_uom_code,
+    processForm.mtest_segment_code,
+  );
 
   // §138.2 — normal case: for MTS only, filter the Machine dropdown down to
   // the Stroke's own declared default SFG location (§138.1 mapping). The
@@ -390,19 +401,25 @@ export default function ProductionPOCreatePage() {
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
 
-  // §108.2 item 3 — MTS/IWC Batch Qty is entered in Liter, RM calc needs KG.
+  // §108.2 item 3 — only the IWC segment of MTS (base_uom_code=Litre) enters
+  // Batch Qty in Liter, RM calc needs KG. POWDER-segment MTS (base_uom_code=KG,
+  // 7 of 8 real MTS strokes) is KG-native and never needs this at all -- gating
+  // on po_type==="MTS" alone (fixed 2026-09-18) wrongly forced every POWDER
+  // stroke through this Liter-entry path and a "conversion factor missing"
+  // error it could never legitimately clear.
   // Source of truth: the selected Stroke's own conversion_uom_code/conversion_factor
   // (§83.3 — "Conversion Factor = KG per Litre (density-based)", captured at Stroke
   // Master create/approve, StrokeMasterPage.jsx). By processStep 3 the Stroke (step 2)
   // is already selected, so strokeDetailQ is already loaded — no separate lookup needed.
+  const isMtsIwc = processForm.po_type === "MTS" && derivedSegmentCode === "IWC";
   const strokeConversionFactor = Number(strokeDetailQ.data?.conversion_factor);
-  const literToKgFactor = processForm.po_type === "MTS"
+  const literToKgFactor = isMtsIwc
     && strokeDetailQ.data?.conversion_uom_code
     && Number.isFinite(strokeConversionFactor)
     && strokeConversionFactor > 0
     ? strokeConversionFactor
     : null;
-  const literConversionMissing = processForm.po_type === "MTS"
+  const literConversionMissing = isMtsIwc
     && Boolean(processForm.stroke_master_id)
     && !strokeDetailQ.isLoading
     && literToKgFactor === null;
@@ -1450,13 +1467,15 @@ export default function ProductionPOCreatePage() {
 
                   {processForm.po_type === "MTS" ? (
                     <div className="flex flex-col gap-1">
-                      <label className="text-xs font-medium text-slate-600">Segment <span className="text-rose-500">*</span></label>
-                      <ErpComboboxField
-                        value={processForm.mts_segment_code}
-                        onChange={(value) => updateProcess("mts_segment_code", value)}
-                        options={MTS_SEGMENTS.map((segment) => ({ value: segment, label: segment }))}
-                        placeholder="-- Select segment --"
-                      />
+                      <label className="text-xs font-medium text-slate-600">Segment</label>
+                      <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900">
+                        {strokeDetailQ.isLoading ? "Loading..." : (derivedSegmentCode || "--")}
+                      </div>
+                      {!strokeDetailQ.isLoading && processForm.stroke_master_id && (
+                        <p className="text-xs text-slate-500">
+                          Auto-derived from this Stroke's own base UOM (Litre = IWC, KG = POWDER) -- not a manual choice.
+                        </p>
+                      )}
                     </div>
                   ) : processForm.po_type === "MTEST" ? (
                     <>
@@ -1525,7 +1544,7 @@ export default function ProductionPOCreatePage() {
                     </div>
                   )}
 
-                  {processForm.po_type === "MTS" ? (
+                  {isMtsIwc ? (
                     <>
                       <div className="flex flex-col gap-1">
                         <label className="text-xs font-medium text-slate-600">Batch Size (Liter) <span className="text-rose-500">*</span></label>
@@ -1739,9 +1758,9 @@ export default function ProductionPOCreatePage() {
 
                 {isMts ? (
                   <div className="rounded-lg border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
-                    RM Line entry (Standard/Actual, AP-Approved, Loss/Gain%) moves to a future Page 4 —
-                    not part of this Create step. Stroke-derived RM/PM lines are still auto-populated and
-                    stock-checked against the total Batch Range quantity on save.
+                    RM Line entry (machine-bucket auto-derive, AP-Approved) is not part of this step —
+                    saving here creates the Process PO header only. The RM Material Table opens next
+                    (Page 4), where lines get computed and saved against this Batch Range's total quantity.
                   </div>
                 ) : (
                   <>
@@ -1846,7 +1865,7 @@ export default function ProductionPOCreatePage() {
                       disabled={saving || (!isMts && shortLineNumbers.length > 0) || machineCapacityCheck.blocked || (isMts && mtsBatchRangeHasDuplicate)}
                       className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
                     >
-                      {saving ? "Creating..." : "Create Process PO"}
+                      {saving ? "Saving..." : (isMts ? "Save & Continue to Page 4" : "Create Process PO")}
                     </button>
                   </div>
                 </div>
