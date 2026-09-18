@@ -27,6 +27,10 @@ import {
   getProcessOrderCreateCapability,
   getMtsMaterialPlan,
   saveMtsMaterialPlan,
+  getMtsPackingPlan,
+  saveMtsPackingPlan,
+  getMtsPackingCombine,
+  saveMtsPackingCombine,
   getPackBom,
   getStrokeMaster,
   listPackBoms,
@@ -54,6 +58,7 @@ import { formatPreciseNumber, formatStockQty, multiplyPreciseValues, PRODUCTION_
 import { getManualPastDateBounds, isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 
 const PROCESS_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
+const EPSILON_FRONTEND = 0.0001;
 const MTEST_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER"];
 const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 const TABS = ["Process PO", "Packing PO"];
@@ -907,8 +912,13 @@ export default function ProductionPOCreatePage() {
       planned_qty: processForm.planned_qty_kg,
       overrides: debouncedCreatePreview,
     }),
+    // MTS has no Material Table / short-stock-block on this page at all
+    // (moves to Page 4's machine-bucket-aware check instead) -- this preview
+    // is MTO/HPS/INT/MTEST-only, same as the up-front create-time check it
+    // mirrors (fixed 2026-09-18 to also skip MTS).
     enabled: Boolean(
-      effectiveCompanyId
+      !isMts
+      && effectiveCompanyId
       && processForm.stroke_master_id
       && Number(processForm.planned_qty_kg || 0) > 0,
     ),
@@ -1308,7 +1318,7 @@ export default function ProductionPOCreatePage() {
           ))}
         </div>
 
-        {activeTab === 0 && processStep !== 4 && (
+        {activeTab === 0 && processStep <= 3 && (
           <form onSubmit={handleCreateProcess} className="flex max-w-6xl flex-col gap-4">
             {processStep === 1 && (
               <div className="flex flex-col gap-4">
@@ -1879,6 +1889,27 @@ export default function ProductionPOCreatePage() {
             processOrder={mtsCreatedPo}
             overrides={mtsPlanOverrides}
             setOverrides={setMtsPlanOverrides}
+            onCancel={() => {
+              setMtsCreatedPo(null);
+              setMtsPlanOverrides({});
+              resetProcess({ company_id: defaultCompanyId || "" });
+            }}
+            onContinue={() => setProcessStep(5)}
+          />
+        )}
+
+        {activeTab === 0 && processStep === 5 && mtsCreatedPo && (
+          <MtsPackingPlanStep
+            processOrder={mtsCreatedPo}
+            onBack={() => setProcessStep(4)}
+            onContinue={() => setProcessStep(6)}
+          />
+        )}
+
+        {activeTab === 0 && processStep === 6 && mtsCreatedPo && (
+          <MtsPackingCombineStep
+            processOrder={mtsCreatedPo}
+            onBack={() => setProcessStep(5)}
             onDone={() => {
               setMtsCreatedPo(null);
               setMtsPlanOverrides({});
@@ -2331,10 +2362,15 @@ export default function ProductionPOCreatePage() {
 // (non-machine-tracked) lines need a manual Actual Material pick here, same
 // as MTO/HPS already does. Policy 1 (Current Stroke) is fully editable here;
 // Policy 2 (non-current) is read-only -- editing moves to Final/Verify.
-function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onDone }) {
+function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, onContinue }) {
   const qc = useQueryClient();
   const [manualPicks, setManualPicks] = useState({});
   const [saving, setSaving] = useState(false);
+  // §138.12 refinement (2026-09-18): groups whose total lands below Standard
+  // Qty after the user's own edits/row-deletions need an explicit confirm
+  // before Save -- this holds the pending confirmation state between the
+  // Save click and the modal's own Confirm/Cancel.
+  const [pendingShortfall, setPendingShortfall] = useState(null); // [{ label, shortQty }]
 
   const planQ = useQuery({
     queryKey: ["mts-material-plan", processOrder.id],
@@ -2376,8 +2412,23 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onDone }) 
   }
 
   function handleQtyChange(group, rowIndex, qtyStr) {
-    const rows = rowsForGroup(group).map((r) => ({ ...r }));
-    rows[rowIndex] = { ...rows[rowIndex], actual_qty: Number(qtyStr) || 0 };
+    let rows = rowsForGroup(group).map((r) => ({ ...r }));
+    const qty = Number(qtyStr) || 0;
+    rows[rowIndex] = { ...rows[rowIndex], actual_qty: qty };
+    // §138.12 refinement: raising one row's Actual Qty to meet/exceed the
+    // group's own Standard Qty means every sibling row's contribution is no
+    // longer needed -- they vanish rather than sitting at qty 0. No attempt
+    // is made to redistribute a *reduction* across remaining siblings (no
+    // unambiguous "fair split"); that case is handled by the under-qty
+    // confirm-on-Save flow instead.
+    if (qty >= group.standard_qty - EPSILON_FRONTEND) {
+      rows = [rows[rowIndex]];
+    }
+    setOverrides((current) => ({ ...current, [group.stroke_line_material_id]: rows }));
+  }
+
+  function handleRemoveRow(group, rowIndex) {
+    const rows = rowsForGroup(group).filter((_, i) => i !== rowIndex);
     setOverrides((current) => ({ ...current, [group.stroke_line_material_id]: rows }));
   }
 
@@ -2386,24 +2437,55 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onDone }) 
     && !manualPicks[g.stroke_line_material_id]
     && !g.rows.some((r) => r.is_formulation_line && r.actual_qty > 0));
 
-  async function handleSave() {
+  function buildSaveBody(confirmedLabels) {
+    return {
+      groups: groups.map((group) => {
+        if (group.auto_derive_applicable) {
+          const override = overrides[group.stroke_line_material_id];
+          if (!override) return null;
+          return {
+            stroke_line_material_id: group.stroke_line_material_id,
+            rows: override.map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
+            confirmed_shortfall: confirmedLabels?.has(group.stroke_line_material_id) || undefined,
+          };
+        }
+        const chosen = manualPicks[group.stroke_line_material_id];
+        return chosen ? { stroke_line_material_id: group.stroke_line_material_id, actual_material_id: chosen } : null;
+      }).filter(Boolean),
+    };
+  }
+
+  // §138.12 refinement: a group's own total landing below Standard Qty after
+  // the user's edits/deletions is no longer a hard block -- it needs an
+  // explicit "do you agree?" confirm before Save, per business owner lock
+  // 2026-09-18. Over-Standard stays hard-blocked (unchanged).
+  function findShortfallGroups() {
+    const found = [];
+    for (const group of groups) {
+      if (!group.auto_derive_applicable || !isEditable) continue;
+      const override = overrides[group.stroke_line_material_id];
+      if (!override) continue;
+      const total = override.reduce((sum, r) => sum + (Number(r.actual_qty) || 0), 0);
+      if (total < group.standard_qty - EPSILON_FRONTEND) {
+        found.push({ label: group.stroke_line_material_id, shortQty: Number((group.standard_qty - total).toFixed(6)) });
+      }
+    }
+    return found;
+  }
+
+  async function handleSave(confirmedLabels) {
+    if (!confirmedLabels) {
+      const shortfalls = findShortfallGroups();
+      if (shortfalls.length > 0) {
+        setPendingShortfall(shortfalls);
+        return;
+      }
+    }
     setSaving(true);
     try {
-      const body = {
-        groups: groups.map((group) => {
-          if (group.auto_derive_applicable) {
-            const override = overrides[group.stroke_line_material_id];
-            if (!override) return null;
-            return {
-              stroke_line_material_id: group.stroke_line_material_id,
-              rows: override.map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
-            };
-          }
-          const chosen = manualPicks[group.stroke_line_material_id];
-          return chosen ? { stroke_line_material_id: group.stroke_line_material_id, actual_material_id: chosen } : null;
-        }).filter(Boolean),
-      };
+      const body = buildSaveBody(confirmedLabels ? new Set(confirmedLabels.map((s) => s.label)) : null);
       await saveMtsMaterialPlan(processOrder.id, body);
+      setPendingShortfall(null);
       pushToast(`Material plan saved for ${processOrder.po_number}.`);
       qc.invalidateQueries({ queryKey: ["mts-material-plan", processOrder.id] });
       qc.invalidateQueries({ queryKey: ["process-orders"] });
@@ -2567,7 +2649,19 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onDone }) 
                       <td className="border-b border-slate-100 px-3 py-2">P261</td>
                       <td className="border-b border-slate-100 px-3 py-2">Yes</td>
                       <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.actual_qty, "0.###")}</td>
-                      <td className="border-b border-slate-100 px-3 py-2">{group.short ? <span className="text-rose-600">Short</span> : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2">
+                        {group.short ? <span className="text-rose-600">Short</span> : ""}
+                        {group.auto_derive_applicable && isEditable && rows.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRow(group, rowIndex)}
+                            className="ml-2 text-xs text-slate-400 underline hover:text-rose-600"
+                            title="Remove this row"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 });
@@ -2580,22 +2674,726 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onDone }) 
       <div className="flex justify-between">
         <button
           type="button"
-          onClick={onDone}
-          className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+          onClick={saved ? onContinue : onCancel}
+          className={saved
+            ? "rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700"
+            : "rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"}
         >
-          {saved ? "Done" : "Cancel / Back to list"}
+          {saved ? "Continue to Page 5" : "Cancel / Back to list"}
         </button>
         {!saved && (
           <button
             type="button"
             disabled={saving || shortGroups.length > 0 || manualPickMissing}
-            onClick={handleSave}
+            onClick={() => handleSave()}
             className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save Material Plan"}
           </button>
         )}
       </div>
+
+      <BlockingLayer
+        visible={Boolean(pendingShortfall)}
+        onEscape={() => setPendingShortfall(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 420, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-800">Quantity Below Requirement</p>
+        <div className="text-sm text-slate-600">
+          You are taking less than the required quantity for:
+          <ul className="mt-1 list-disc pl-5">
+            {(pendingShortfall ?? []).map((s) => (
+              <li key={s.label}>{materialLabel(s.label)} -- short by {formatPreciseNumber(s.shortQty, "0.###")} KG</li>
+            ))}
+          </ul>
+          Do you agree?
+        </div>
+        <div className="flex justify-end gap-2 mt-1">
+          <button
+            type="button"
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+            onClick={() => setPendingShortfall(null)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
+            onClick={() => handleSave(pendingShortfall)}
+          >
+            Confirm
+          </button>
+        </div>
+      </BlockingLayer>
+    </div>
+  );
+}
+
+// §138.16 (2026-09-18) -- Page 5: Packing PO batch->pack-size planning grid.
+// Each row here becomes one Packing PO once Page 6 saves. This page only
+// stages the plan (erp_production.mts_packing_plan_row) -- no Packing PO
+// exists yet.
+function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
+  const qc = useQueryClient();
+  const [rows, setRows] = useState(null); // lazily initialized from server data
+  const [pendingShortfall, setPendingShortfall] = useState(null);
+  const [lossReason, setLossReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const planQ = useQuery({
+    queryKey: ["mts-packing-plan", processOrder.id],
+    queryFn: () => getMtsPackingPlan(processOrder.id),
+  });
+
+  const header = planQ.data?.header ?? null;
+  const packSizeOptions = planQ.data?.pack_size_options ?? [];
+  const storageLocationOptions = planQ.data?.storage_location_options ?? [];
+  const batchNumbers = planQ.data?.batch_numbers ?? [];
+
+  useEffect(() => {
+    if (rows === null && planQ.data) {
+      const existing = (planQ.data.rows ?? []).map((r) => ({
+        batch_number_from: r.batch_number_from,
+        batch_number_to: r.batch_number_to,
+        up_to_last_batch: batchNumbers.length > 0 && r.batch_number_to === batchNumbers[batchNumbers.length - 1],
+        pack_code_id: r.pack_code_id,
+        outer_unit_per_batch: r.outer_unit_per_batch,
+        storage_location_id: r.storage_location_id,
+      }));
+      setRows(existing.length > 0 ? existing : [{ batch_number_from: "", batch_number_to: "", up_to_last_batch: false, pack_code_id: "", outer_unit_per_batch: "", storage_location_id: "" }]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planQ.data]);
+
+  const effectiveRows = rows ?? [];
+
+  function batchIndexOf(bn) {
+    return batchNumbers.indexOf(bn);
+  }
+
+  // Batches claimed by every OTHER row -- used both to disable/reorder the
+  // dropdown options for a given row and to compute each row's own live
+  // Number of Batches/Volume without double-claiming.
+  function claimedIndicesExcluding(rowIndex) {
+    const claimed = new Set();
+    effectiveRows.forEach((r, i) => {
+      if (i === rowIndex) return;
+      const fromIdx = batchIndexOf(r.batch_number_from);
+      const toIdx = r.up_to_last_batch ? batchNumbers.length - 1 : batchIndexOf(r.batch_number_to);
+      if (fromIdx < 0 || toIdx < fromIdx) return;
+      for (let k = fromIdx; k <= toIdx; k++) claimed.add(k);
+    });
+    return claimed;
+  }
+
+  // §138.16 "availability-first, taken-after" sort: unclaimed batch numbers
+  // list first (in their natural order), claimed ones after, disabled.
+  function batchOptionsFor(rowIndex) {
+    const claimed = claimedIndicesExcluding(rowIndex);
+    const available = [];
+    const taken = [];
+    batchNumbers.forEach((bn, idx) => {
+      (claimed.has(idx) ? taken : available).push({ value: bn, label: bn, disabled: claimed.has(idx) });
+    });
+    return [...available, ...taken];
+  }
+
+  function updateRow(index, patch) {
+    setRows((current) => current.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  function computeRowMetrics(row) {
+    const fromIdx = batchIndexOf(row.batch_number_from);
+    const toIdx = row.up_to_last_batch ? batchNumbers.length - 1 : batchIndexOf(row.batch_number_to);
+    const numberOfBatches = fromIdx >= 0 && toIdx >= fromIdx ? toIdx - fromIdx + 1 : 0;
+    const pack = packSizeOptions.find((p) => p.pack_code_id === row.pack_code_id) ?? null;
+    const outerUnitPerBatch = Number(row.outer_unit_per_batch) || 0;
+    const totalOuterUnit = numberOfBatches * outerUnitPerBatch;
+    const hasInner = Boolean(pack?.inner_uom_code);
+    const volume = pack ? totalOuterUnit * Number(pack.fill_qty || 0) : 0;
+    return { numberOfBatches, pack, totalOuterUnit, hasInner, volume };
+  }
+
+  const rowMetrics = effectiveRows.map((r) => computeRowMetrics(r));
+  const runningVolume = rowMetrics.reduce((sum, m) => sum + m.volume, 0);
+  const totalQty = Number(header?.total_qty ?? 0);
+  const overAllocated = runningVolume > totalQty + 0.0001;
+  const shortfall = Math.max(0, Number((totalQty - runningVolume).toFixed(6)));
+
+  function addRow() {
+    setRows((current) => [...current, { batch_number_from: "", batch_number_to: "", up_to_last_batch: false, pack_code_id: "", outer_unit_per_batch: "", storage_location_id: "" }]);
+  }
+  function removeRow(index) {
+    setRows((current) => current.filter((_, i) => i !== index));
+  }
+
+  async function doSave(confirmedLoss) {
+    setSaving(true);
+    try {
+      const body = {
+        rows: effectiveRows
+          .filter((r) => r.batch_number_from && (r.up_to_last_batch || r.batch_number_to) && r.pack_code_id && r.outer_unit_per_batch && r.storage_location_id)
+          .map((r) => ({
+            batch_number_from: r.batch_number_from,
+            batch_number_to: r.up_to_last_batch ? batchNumbers[batchNumbers.length - 1] : r.batch_number_to,
+            pack_code_id: r.pack_code_id,
+            outer_unit_per_batch: Number(r.outer_unit_per_batch),
+            storage_location_id: r.storage_location_id,
+          })),
+        planned_loss_qty: confirmedLoss ? shortfall : undefined,
+        planned_loss_reason: confirmedLoss ? lossReason || undefined : undefined,
+      };
+      await saveMtsPackingPlan(processOrder.id, body);
+      setPendingShortfall(null);
+      pushToast("Packing plan saved.");
+      qc.invalidateQueries({ queryKey: ["mts-packing-plan", processOrder.id] });
+      onContinue();
+    } catch (error) {
+      pushToast(error.message || "Save failed.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleSaveClick() {
+    if (overAllocated) return;
+    if (shortfall > 0.0001) {
+      setPendingShortfall({ shortfall });
+      return;
+    }
+    doSave(false);
+  }
+
+  if (planQ.isLoading) {
+    return <div className="max-w-6xl px-1 py-6 text-sm text-slate-500">Loading packing plan...</div>;
+  }
+  if (planQ.isError) {
+    return <div className="max-w-6xl px-1 py-6 text-sm text-rose-600">{planQ.error?.message || "Failed to load packing plan."}</div>;
+  }
+
+  return (
+    <div className="flex max-w-6xl flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 5</p>
+          <h3 className="text-lg font-semibold text-slate-900">Batch to Pack-Size Planning</h3>
+        </div>
+        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">{header?.status || "STANDARD"}</span>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">PO Number</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{header?.po_number}</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Batch Range</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{header?.batch_number_from} - {header?.batch_number_to} ({header?.number_of_batches})</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Total Qty</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{formatPreciseNumber(totalQty, "0.###")} KG</div>
+        </div>
+        <div className={`rounded border px-3 py-2 ${overAllocated ? "border-rose-500 bg-rose-50" : "border-slate-200 bg-slate-50"}`}>
+          <div className="text-xs font-medium text-slate-500">Planned So Far</div>
+          <div className={`mt-1 text-sm font-medium ${overAllocated ? "text-rose-700" : "text-slate-900"}`}>{formatPreciseNumber(runningVolume, "0.###")} KG</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Remaining</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{formatPreciseNumber(shortfall, "0.###")} KG</div>
+        </div>
+      </div>
+
+      {overAllocated && (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          Planned rows exceed this Process PO's Total Qty. Reduce a row's Outer Unit/Batch or its batch range.
+        </div>
+      )}
+
+      <div className="rounded-lg border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <h4 className="text-sm font-semibold text-slate-800">Packing Rows</h4>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1300px] border-collapse text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <th className="border-b px-3 py-2 text-left">#</th>
+                <th className="border-b px-3 py-2 text-left">From Batch</th>
+                <th className="border-b px-3 py-2 text-left">To Batch</th>
+                <th className="border-b px-3 py-2 text-left">Up to Last Batch</th>
+                <th className="border-b px-3 py-2 text-right">Number of Batches</th>
+                <th className="border-b px-3 py-2 text-left">Pack Size</th>
+                <th className="border-b px-3 py-2 text-right">Outer Unit / Batch</th>
+                <th className="border-b px-3 py-2 text-right">Total Outer Unit</th>
+                <th className="border-b px-3 py-2 text-right">Total Inner Unit</th>
+                <th className="border-b px-3 py-2 text-right">Volume (KG)</th>
+                <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                <th className="border-b px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {effectiveRows.map((row, index) => {
+                const metrics = rowMetrics[index];
+                const batchOptions = batchOptionsFor(index);
+                return (
+                  <tr key={index} className="border-b border-slate-100">
+                    <td className="border-b border-slate-100 px-3 py-2">{index + 1}</td>
+                    <td className="border-b border-slate-100 px-3 py-2">
+                      <ErpComboboxField
+                        value={row.batch_number_from}
+                        onChange={(value) => updateRow(index, { batch_number_from: value })}
+                        options={batchOptions}
+                        placeholder="-- From --"
+                      />
+                    </td>
+                    <td className="border-b border-slate-100 px-3 py-2">
+                      <ErpComboboxField
+                        value={row.up_to_last_batch ? (batchNumbers[batchNumbers.length - 1] || "") : row.batch_number_to}
+                        onChange={(value) => updateRow(index, { batch_number_to: value })}
+                        options={batchOptions}
+                        placeholder="-- To --"
+                        disabled={row.up_to_last_batch}
+                      />
+                    </td>
+                    <td className="border-b border-slate-100 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={row.up_to_last_batch}
+                        onChange={(event) => updateRow(index, { up_to_last_batch: event.target.checked })}
+                      />
+                    </td>
+                    <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{metrics.numberOfBatches || "--"}</td>
+                    <td className="border-b border-slate-100 px-3 py-2">
+                      <ErpComboboxField
+                        value={row.pack_code_id}
+                        onChange={(value) => updateRow(index, { pack_code_id: value })}
+                        options={packSizeOptions.map((p) => ({ value: p.pack_code_id, label: p.description }))}
+                        placeholder="-- Pack Size --"
+                      />
+                    </td>
+                    <td className="border-b border-slate-100 px-3 py-2 text-right">
+                      <input
+                        type="number"
+                        step="1"
+                        min="0"
+                        className="w-24 rounded border border-slate-300 px-2 py-1 text-right text-sm"
+                        value={row.outer_unit_per_batch}
+                        onChange={(event) => updateRow(index, { outer_unit_per_batch: event.target.value })}
+                      />
+                    </td>
+                    <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(metrics.totalOuterUnit, "0.###")}</td>
+                    <td className="border-b border-slate-100 px-3 py-2 text-right font-mono text-slate-400">
+                      {metrics.hasInner ? "See Page 6" : "N/A"}
+                    </td>
+                    <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(metrics.volume, "0.###")}</td>
+                    <td className="border-b border-slate-100 px-3 py-2">
+                      <ErpComboboxField
+                        value={row.storage_location_id}
+                        onChange={(value) => updateRow(index, { storage_location_id: value })}
+                        options={storageLocationOptions.map((s) => ({ value: s.id, label: `${s.code} - ${s.name}` }))}
+                        placeholder="-- Storage Location --"
+                      />
+                    </td>
+                    <td className="border-b border-slate-100 px-3 py-2">
+                      {effectiveRows.length > 1 && (
+                        <button type="button" onClick={() => removeRow(index)} className="text-xs text-slate-400 underline hover:text-rose-600">Remove</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="border-t border-slate-200 px-4 py-3">
+          <button type="button" onClick={addRow} className="text-sm text-sky-600 hover:text-sky-700">+ Add Row</button>
+        </div>
+      </div>
+
+      <div className="flex justify-between">
+        <button type="button" onClick={onBack} className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50">Back</button>
+        <button
+          type="button"
+          disabled={saving || overAllocated}
+          onClick={handleSaveClick}
+          className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Next: Page 6"}
+        </button>
+      </div>
+
+      <BlockingLayer
+        visible={Boolean(pendingShortfall)}
+        onEscape={() => setPendingShortfall(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 420, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-800">SFG Quantity Remaining</p>
+        <p className="text-sm text-slate-600">
+          {formatPreciseNumber(pendingShortfall?.shortfall, "0.###")} KG of SFG output is not covered by any row yet. What do you want to do?
+        </p>
+        <label className="flex flex-col gap-1 text-xs text-slate-600">
+          Reason (optional, for Consider Loss)
+          <input
+            type="text"
+            className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+            value={lossReason}
+            onChange={(event) => setLossReason(event.target.value)}
+          />
+        </label>
+        <div className="flex justify-end gap-2 mt-1">
+          <button
+            type="button"
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+            onClick={() => setPendingShortfall(null)}
+          >
+            Back to Entry
+          </button>
+          <button
+            type="button"
+            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
+            onClick={() => doSave(true)}
+          >
+            Consider Loss
+          </button>
+        </div>
+      </BlockingLayer>
+    </div>
+  );
+}
+
+// §138.16 (2026-09-18) -- Page 6: combined PM auto-derive across every Page-5
+// pack-size row, then Save fans out into N real Packing POs (one per Page-5
+// row). Groups are keyed by PM formulation material -- a PM item shared
+// across pack sizes (Thread, Cable Tie...) shows ONCE with a combined
+// Standard Qty; a pack-specific item (the outer bag) never merges since its
+// own material_id differs per pack size. Same auto_derive_applicable
+// row/override shape as Page 4's MtsMaterialPlanStep, but at PM-storage-
+// location level (no machine bucket) and with Storage Location itself also
+// editable per group (Page 4 only let Actual Material move within a group).
+function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
+  const qc = useQueryClient();
+  const [overrides, setOverrides] = useState({}); // material_id -> { rows: [...], storage_location_id }
+  const [saving, setSaving] = useState(false);
+  const [pendingShortfall, setPendingShortfall] = useState(null);
+
+  const combineQ = useQuery({
+    queryKey: ["mts-packing-combine", processOrder.id],
+    queryFn: () => getMtsPackingCombine(processOrder.id),
+  });
+
+  const header = combineQ.data?.header ?? null;
+  const rowsSummary = combineQ.data?.rows_summary ?? [];
+  const groups = useMemo(() => combineQ.data?.groups ?? [], [combineQ.data]);
+  const materials = combineQ.data?.materials ?? {};
+  const storageLocations = combineQ.data?.storage_locations ?? {};
+  const pmStorageLocationOptions = combineQ.data?.pm_storage_location_options ?? [];
+
+  function materialLabel(id) {
+    const m = materials[id];
+    if (!m) return "--";
+    return [m.pace_code, m.material_name].filter(Boolean).join(" - ") || "--";
+  }
+  function slocLabel(id) {
+    const s = storageLocations[id];
+    if (s) return [s.code, s.name].filter(Boolean).join(" - ") || "--";
+    const opt = pmStorageLocationOptions.find((o) => o.id === id);
+    return opt ? [opt.code, opt.name].filter(Boolean).join(" - ") : "--";
+  }
+
+  function overrideFor(group) {
+    return overrides[group.material_id] ?? { rows: group.rows, storage_location_id: group.storage_location_id };
+  }
+  function rowsForGroup(group) {
+    return overrideFor(group).rows;
+  }
+  function storageLocationForGroup(group) {
+    return overrideFor(group).storage_location_id;
+  }
+
+  function setGroupOverride(group, patch) {
+    setOverrides((current) => ({
+      ...current,
+      [group.material_id]: { ...overrideFor(group), ...patch },
+    }));
+  }
+
+  function handleSwapMaterial(group, rowIndex, newMaterialId) {
+    const rows = rowsForGroup(group).map((r) => ({ ...r }));
+    if (rows.some((r, i) => i !== rowIndex && r.actual_material_id === newMaterialId)) {
+      pushToast("This material is already used in another row for this PM group.", "error");
+      return;
+    }
+    rows[rowIndex] = { ...rows[rowIndex], actual_material_id: newMaterialId };
+    setGroupOverride(group, { rows });
+  }
+
+  function handleQtyChange(group, rowIndex, qtyStr) {
+    let rows = rowsForGroup(group).map((r) => ({ ...r }));
+    const qty = Number(qtyStr) || 0;
+    rows[rowIndex] = { ...rows[rowIndex], actual_qty: qty };
+    // Same auto-vanish rule as Page 4 (§138.12 refinement): raising one row to
+    // meet/exceed the group's own combined Standard Qty removes every sibling.
+    if (qty >= group.standard_qty - EPSILON_FRONTEND) {
+      rows = [rows[rowIndex]];
+    }
+    setGroupOverride(group, { rows });
+  }
+
+  function handleRemoveRow(group, rowIndex) {
+    const rows = rowsForGroup(group).filter((_, i) => i !== rowIndex);
+    setGroupOverride(group, { rows });
+  }
+
+  function handleStorageLocationChange(group, storageLocationId) {
+    setGroupOverride(group, { storage_location_id: storageLocationId });
+  }
+
+  const shortGroups = groups.filter((g) => g.short);
+
+  function findShortfallGroups() {
+    const found = [];
+    for (const group of groups) {
+      const rows = rowsForGroup(group);
+      const total = rows.reduce((sum, r) => sum + (Number(r.actual_qty) || 0), 0);
+      if (total < group.standard_qty - EPSILON_FRONTEND) {
+        found.push({ label: group.material_id, shortQty: Number((group.standard_qty - total).toFixed(6)) });
+      }
+    }
+    return found;
+  }
+
+  function buildSaveBody(confirmedLabels) {
+    return {
+      groups: groups.map((group) => ({
+        material_id: group.material_id,
+        storage_location_id: storageLocationForGroup(group),
+        rows: rowsForGroup(group).map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
+        confirmed_shortfall: confirmedLabels?.has(group.material_id) || undefined,
+      })),
+    };
+  }
+
+  async function handleSave(confirmedLabels) {
+    if (!confirmedLabels) {
+      const shortfalls = findShortfallGroups();
+      if (shortfalls.length > 0) {
+        setPendingShortfall(shortfalls);
+        return;
+      }
+    }
+    if (groups.some((g) => !storageLocationForGroup(g))) {
+      pushToast("Select a Storage Location for every PM group before saving.", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = buildSaveBody(confirmedLabels ? new Set(confirmedLabels.map((s) => s.label)) : null);
+      const result = await saveMtsPackingCombine(processOrder.id, body);
+      setPendingShortfall(null);
+      pushToast(`${result.po_numbers?.length ?? 0} Packing PO(s) created for ${processOrder.po_number}.`);
+      qc.invalidateQueries({ queryKey: ["mts-packing-combine", processOrder.id] });
+      qc.invalidateQueries({ queryKey: ["process-orders"] });
+      qc.invalidateQueries({ queryKey: ["packing-orders"] });
+      onDone();
+    } catch (error) {
+      pushToast(error.message || "Save failed.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (combineQ.isLoading) {
+    return <div className="max-w-6xl px-1 py-6 text-sm text-slate-500">Loading combined PM plan...</div>;
+  }
+  if (combineQ.isError) {
+    return <div className="max-w-6xl px-1 py-6 text-sm text-rose-600">{combineQ.error?.message || "Failed to load combined PM plan."}</div>;
+  }
+
+  return (
+    <div className="flex max-w-6xl flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 6</p>
+          <h3 className="text-lg font-semibold text-slate-900">Combined PM Auto-Derive &amp; Packing PO Save</h3>
+        </div>
+        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">{header?.status || "STANDARD"}</span>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <h4 className="text-sm font-semibold text-slate-800">Page 5 Summary -- one Packing PO per row on Save</h4>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[700px] border-collapse text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <th className="border-b px-3 py-2 text-left">Pack Size</th>
+                <th className="border-b px-3 py-2 text-left">Batch Sub-Range</th>
+                <th className="border-b px-3 py-2 text-right">Total Outer Unit</th>
+                <th className="border-b px-3 py-2 text-right">Volume (KG)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rowsSummary.map((r) => (
+                <tr key={r.row_id} className="border-b border-slate-100">
+                  <td className="border-b border-slate-100 px-3 py-2">{r.pack_size_label}</td>
+                  <td className="border-b border-slate-100 px-3 py-2">{r.batch_number_from} - {r.batch_number_to} ({r.number_of_batches})</td>
+                  <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(r.total_outer_unit, "0.###")}</td>
+                  <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(r.volume, "0.###")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {shortGroups.length > 0 && (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          Insufficient PM stock (formulation + alternates combined) for: {shortGroups.map((g) => materialLabel(g.material_id)).join(", ")}.
+        </div>
+      )}
+
+      <div className="rounded-lg border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <h4 className="text-sm font-semibold text-slate-800">Combined PM Table</h4>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1400px] border-collapse text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <th className="border-b px-3 py-2 text-left">#</th>
+                <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                <th className="border-b px-3 py-2 text-right">Standard Qty</th>
+                <th className="border-b px-3 py-2 text-right">Actual Qty</th>
+                <th className="border-b px-3 py-2 text-right">Available</th>
+                <th className="border-b px-3 py-2 text-left">Contributing Pack Sizes</th>
+                <th className="border-b px-3 py-2 text-left">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">No PM lines found across the planned pack sizes.</td>
+                </tr>
+              ) : groups.flatMap((group, groupIndex) => {
+                const rows = rowsForGroup(group);
+                const usedIds = new Set(rows.map((r) => r.actual_material_id));
+                const groupStorageLocationId = storageLocationForGroup(group);
+                return rows.map((row, rowIndex) => {
+                  const rowKey = `${group.material_id}-${rowIndex}`;
+                  const materialOptions = group.group_member_ids.map((id) => ({
+                    value: id,
+                    label: materialLabel(id),
+                    disabled: usedIds.has(id) && id !== row.actual_material_id,
+                  }));
+                  const isFirstRow = rowIndex === 0;
+                  return (
+                    <tr key={rowKey} className={group.short ? "bg-rose-50" : "border-b border-slate-100"}>
+                      <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? groupIndex + 1 : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? materialLabel(group.material_id) : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2">
+                        <ErpComboboxField
+                          value={row.actual_material_id}
+                          onChange={(value) => handleSwapMaterial(group, rowIndex, value)}
+                          options={materialOptions}
+                        />
+                      </td>
+                      <td className="border-b border-slate-100 px-3 py-2">
+                        {isFirstRow ? (
+                          <ErpComboboxField
+                            value={groupStorageLocationId || ""}
+                            onChange={(value) => handleStorageLocationChange(group, value)}
+                            options={pmStorageLocationOptions.map((s) => ({ value: s.id, label: `${s.code} - ${s.name}` }))}
+                            placeholder="-- Storage Location --"
+                          />
+                        ) : slocLabel(groupStorageLocationId)}
+                      </td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{isFirstRow ? formatPreciseNumber(group.standard_qty, "0.###") : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
+                        <input
+                          type="number"
+                          step="0.001"
+                          className="w-24 rounded border border-slate-300 px-2 py-1 text-right text-sm"
+                          value={row.actual_qty}
+                          onChange={(event) => handleQtyChange(group, rowIndex, event.target.value)}
+                        />
+                      </td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.available_qty, "0.###")}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
+                        {isFirstRow ? group.contributing.map((c) => c.pack_size_label).join(", ") : ""}
+                      </td>
+                      <td className="border-b border-slate-100 px-3 py-2">
+                        {group.short ? <span className="text-rose-600">Short</span> : ""}
+                        {rows.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRow(group, rowIndex)}
+                            className="ml-2 text-xs text-slate-400 underline hover:text-rose-600"
+                            title="Remove this row"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                });
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="flex justify-between">
+        <button type="button" onClick={onBack} className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50">Back</button>
+        <button
+          type="button"
+          disabled={saving || shortGroups.length > 0}
+          onClick={() => handleSave()}
+          className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : `Save & Create ${rowsSummary.length || ""} Packing PO(s)`}
+        </button>
+      </div>
+
+      <BlockingLayer
+        visible={Boolean(pendingShortfall)}
+        onEscape={() => setPendingShortfall(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 420, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-800">Quantity Below Requirement</p>
+        <div className="text-sm text-slate-600">
+          You are taking less than the required quantity for:
+          <ul className="mt-1 list-disc pl-5">
+            {(pendingShortfall ?? []).map((s) => (
+              <li key={s.label}>{materialLabel(s.label)} -- short by {formatPreciseNumber(s.shortQty, "0.###")} KG</li>
+            ))}
+          </ul>
+          Do you agree?
+        </div>
+        <div className="flex justify-end gap-2 mt-1">
+          <button
+            type="button"
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+            onClick={() => setPendingShortfall(null)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
+            onClick={() => handleSave(pendingShortfall)}
+          >
+            Confirm
+          </button>
+        </div>
+      </BlockingLayer>
     </div>
   );
 }
