@@ -20,16 +20,22 @@ import { useMenu } from "../../../context/useMenu.js";
 import {
   availabilityPreviewPackingOrder,
   availabilityPreviewProcessOrder,
+  checkMtsBatchRange,
   createPackingOrder,
   createProcessOrder,
+  createShift,
   getProcessOrderCreateCapability,
+  getMtsMaterialPlan,
+  saveMtsMaterialPlan,
   getPackBom,
   getStrokeMaster,
   listPackBoms,
   listPackCodes,
   listMtestSfgProdshadeOptions,
   listMtestSkusForPacking,
+  listMtsCurrentStroke,
   listSegmentLocations,
+  listShifts,
   listStrokeMasters,
 } from "./prodApi.js";
 import {
@@ -43,6 +49,7 @@ import {
 } from "../om/omApi.js";
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 import { GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
+import BlockingLayer from "../../../components/layer/BlockingLayer.jsx";
 import { formatPreciseNumber, formatStockQty, multiplyPreciseValues, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 import { getManualPastDateBounds, isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 
@@ -52,6 +59,25 @@ const MTEST_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER"];
 const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 const TABS = ["Process PO", "Packing PO"];
 const PROCESS_PO_DATE_BOUNDS = getManualPastDateBounds();
+// MTS Page 3 "Date" field (2026-09-17 lock) — current-3-days..current only,
+// never future. Deliberately narrower than PROCESS_PO_DATE_BOUNDS' 3-CALENDAR-
+// MONTH window above (that one is for backdated Planned Start Date generally;
+// this is "which of the last few days did this actually run"). Mirrors the
+// backend's own isProductionDateWithinWindow() in process_order.handlers.ts.
+function toLocalIsoDateForBounds(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function getProductionDateBounds(today = new Date()) {
+  const lower = new Date(today);
+  lower.setDate(lower.getDate() - 3);
+  return { min: toLocalIsoDateForBounds(lower), max: toLocalIsoDateForBounds(today) };
+}
+const PRODUCTION_DATE_BOUNDS = getProductionDateBounds();
+const PRODUCTION_DATE_WINDOW_MESSAGE = "Date must be within the previous 3 days and cannot be in the future.";
+function isProductionDateWithinWindow(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return false;
+  return value >= PRODUCTION_DATE_BOUNDS.min && value <= PRODUCTION_DATE_BOUNDS.max;
+}
 const KG_UOM_CODES = new Set(["KG", "KGS", "KILOGRAM", "KILOGRAMS"]);
 const LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
 const MACHINE_CAPACITY_TOLERANCE = 1.1;
@@ -69,6 +95,12 @@ const EMPTY_PROCESS = {
   planned_start_date: "",
   mts_segment_code: "",
   mtest_segment_code: "",
+  // MTS Page 3 (2026-09-17 lock) — captured here at Create, not at a later
+  // Start Batch click. See createProcessOrderHandler for the matching backend.
+  production_date: "",
+  shift_id: "",
+  batch_start_serial: "",
+  number_of_batches: "",
   // §136 follow-up (2026-09-08): MTEST has no separate QA_APPROVED step to pick
   // Priority at (QA is the only actor, this Standard-creation IS the approval) —
   // so for MTEST only, Priority is captured right here. Ignored server-side for
@@ -119,7 +151,8 @@ function prodshadeLabel(item) {
   const prodCode = item.material?.pace_code || item.pace_code || null;
   const shadeCode = item.material?.external_code || item.external_code || item.material?.shade_code || item.shade_code || null;
   const materialName = item.material?.material_name || item.material_name || null;
-  return [prodCode, shadeCode, materialName]
+  const documentName = item.material?.document_name || item.document_name || null;
+  return [prodCode, shadeCode, materialName, documentName]
     .filter((value, index, list) => Boolean(value) && list.indexOf(value) === index)
     .join(" - ");
 }
@@ -168,6 +201,11 @@ export default function ProductionPOCreatePage() {
   const [saving, setSaving] = useState(false);
   const [processStep, setProcessStep] = useState(1);
   const [processForm, setProcessForm] = useState({ ...EMPTY_PROCESS });
+  // §138.12/§138.15 (2026-09-18) -- Page 4 (MTS RM auto-derive) runs against
+  // the already-created Process PO, so it needs that id + po_number, plus
+  // per-group user overrides (Policy 1/editable case) and R001 manual picks.
+  const [mtsCreatedPo, setMtsCreatedPo] = useState(null); // { id, po_number }
+  const [mtsPlanOverrides, setMtsPlanOverrides] = useState({}); // { [formulationMaterialId]: rows[] | { actual_material_id } }
   const [packingStep, setPackingStep] = useState(1);
   const [packingForm, setPackingForm] = useState({ ...EMPTY_PACKING });
   // Only used for bomRequired=false (599/000/001) — these pack codes carry no
@@ -181,6 +219,11 @@ export default function ProductionPOCreatePage() {
   const [lineLocationOverrides, setLineLocationOverrides] = useState({});
   const [debouncedCreatePreview, setDebouncedCreatePreview] = useState([]);
   const [batchQtyLiter, setBatchQtyLiter] = useState("");
+  // MTS-only Stroke Gate design (2026-09-17 session) — holds the stroke the
+  // user just picked from the dropdown when it is NOT the Current Stroke, so
+  // the confirm modal can apply it on Confirm or drop it on Cancel without
+  // ever touching processForm.stroke_master_id in between.
+  const [pendingNonCurrentStroke, setPendingNonCurrentStroke] = useState(null);
   const packingManualTemplateKeyRef = useRef("");
 
   const { runtimeContext } = useMenu();
@@ -274,11 +317,52 @@ export default function ProductionPOCreatePage() {
     enabled: Boolean(effectiveCompanyId && processForm.prodshade_material_id),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
+
+  // MTS-only (design session 2026-09-17) — Stroke Gate defaults to this
+  // (company, Prodshade)'s Current Stroke (erp_production.mts_current_stroke,
+  // auto-set when exactly one APPROVED stroke exists for the Prodshade) and
+  // flags it in the dropdown; picking any other stroke needs an explicit
+  // confirm below. MTO/HPS/MTEST are completely untouched by this block.
+  const isMts = processForm.po_type === "MTS";
+  const mtsCurrentStrokeQ = useQuery({
+    queryKey: ["production-create-mts-current-stroke", effectiveCompanyId],
+    queryFn: () => listMtsCurrentStroke(effectiveCompanyId),
+    // fetchProd already unwraps to { stroke_numbers, rows } directly (no
+    // `pagination` key on this response) — do NOT read `.data` again here
+    // (11-bug #15's double-unwrap class), same as StrokeMasterPage.jsx's own
+    // mtsCurrentStrokeQ.
+    select: (d) => d ?? { stroke_numbers: [], rows: [] },
+    enabled: Boolean(effectiveCompanyId && isMts),
+  });
+  const mtsCurrentStrokeNumber = useMemo(() => {
+    if (!isMts || !processForm.prodshade_material_id) return null;
+    const row = (mtsCurrentStrokeQ.data?.rows ?? [])
+      .find((r) => String(r.prodshade_material_id) === String(processForm.prodshade_material_id));
+    if (!row) return null;
+    const currentEntry = Object.entries(row.strokes ?? {}).find(([, info]) => info?.current);
+    return currentEntry ? currentEntry[0] : null;
+  }, [mtsCurrentStrokeQ.data, isMts, processForm.prodshade_material_id]);
+
   const strokeOptions = useMemo(
     () => (strokesQ.data ?? [])
-      .map((stroke) => ({ value: stroke.id, label: strokeLabel(stroke) })),
-    [strokesQ.data],
+      .map((stroke) => {
+        const isCurrent = isMts
+          && mtsCurrentStrokeNumber !== null
+          && String(stroke.stroke_number) === String(mtsCurrentStrokeNumber);
+        return { value: stroke.id, label: isCurrent ? `${strokeLabel(stroke)} — Current` : strokeLabel(stroke) };
+      }),
+    [strokesQ.data, isMts, mtsCurrentStrokeNumber],
   );
+
+  // Auto-default to the Current Stroke once both queries have landed —
+  // stroke_master_id resets to "" whenever prodshade_material_id changes
+  // (updateProcess below), so this only ever fires once per fresh Prodshade
+  // pick, never overriding a choice the user already made.
+  useEffect(() => {
+    if (!isMts || processForm.stroke_master_id || !mtsCurrentStrokeNumber) return;
+    const match = (strokesQ.data ?? []).find((stroke) => String(stroke.stroke_number) === String(mtsCurrentStrokeNumber));
+    if (match) updateProcess("stroke_master_id", match.id);
+  }, [isMts, processForm.stroke_master_id, mtsCurrentStrokeNumber, strokesQ.data]);
 
   const strokeDetailQ = useQuery({
     queryKey: ["production-create-stroke-detail", processForm.stroke_master_id],
@@ -290,7 +374,6 @@ export default function ProductionPOCreatePage() {
   // the Stroke's own declared default SFG location (§138.1 mapping). The
   // "Select all MTS machines" checkbox bypasses this (§138.4 exception case)
   // and shows every MTS machine in the company regardless of location.
-  const isMts = processForm.po_type === "MTS";
   const strokeDefaultLocationId = strokeDetailQ.data?.default_storage_location_id || null;
   const machineLocationFilterId = isMts && !processForm.select_all_mts_machines
     ? strokeDefaultLocationId
@@ -351,6 +434,75 @@ export default function ProductionPOCreatePage() {
     }
     return { blocked: false, message: `Maximum allowed: ${formatPreciseNumber(maximumKg, "0.###")} KG (Machine Capacity ${capacity} ${uom} + 10%).` };
   }, [literToKgFactor, machineRequired, processForm.machine_id, processForm.planned_qty_kg, selectedMachine]);
+
+  // MTS Page 3 "Shift" — company-wise, inline-create-as-you-go (2026-09-17 lock).
+  const [shiftCreateName, setShiftCreateName] = useState("");
+  const [shiftCreating, setShiftCreating] = useState(false);
+  const shiftsQ = useQuery({
+    queryKey: ["production-create-shifts", effectiveCompanyId],
+    queryFn: () => listShifts({ company_id: effectiveCompanyId }),
+    enabled: Boolean(effectiveCompanyId && isMts),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const shiftOptions = useMemo(
+    () => (shiftsQ.data ?? []).map((shift) => ({ value: shift.id, label: shift.shift_name })),
+    [shiftsQ.data],
+  );
+
+  async function handleCreateShiftInline() {
+    const shiftName = shiftCreateName.trim();
+    if (!shiftName || !effectiveCompanyId) return;
+    setShiftCreating(true);
+    try {
+      const created = await createShift({ company_id: effectiveCompanyId, shift_name: shiftName });
+      await qc.invalidateQueries({ queryKey: ["production-create-shifts", effectiveCompanyId] });
+      updateProcess("shift_id", created?.id ?? created?.data?.id ?? "");
+      setShiftCreateName("");
+      toast("Shift added.");
+    } catch (error) {
+      toast(error.message || "Shift create failed.", "error");
+    } finally {
+      setShiftCreating(false);
+    }
+  }
+
+  // MTS Page 3 "Batch Range" — live duplicate-check, debounced as the user
+  // types Start Batch Number / Number of Batches (2026-09-17 lock). Advisory
+  // only — createProcessOrderHandler re-checks server-side right before insert.
+  const [debouncedBatchRange, setDebouncedBatchRange] = useState({ start: "", count: "" });
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedBatchRange({
+        start: processForm.batch_start_serial,
+        count: processForm.number_of_batches,
+      });
+    }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [processForm.batch_start_serial, processForm.number_of_batches]);
+
+  const mtsBatchRangeQ = useQuery({
+    queryKey: [
+      "production-create-mts-batch-range-check",
+      effectiveCompanyId,
+      processForm.prodshade_material_id,
+      debouncedBatchRange.start,
+      debouncedBatchRange.count,
+    ],
+    queryFn: () => checkMtsBatchRange({
+      company_id: effectiveCompanyId,
+      prodshade_material_id: processForm.prodshade_material_id,
+      start_serial: debouncedBatchRange.start,
+      count: debouncedBatchRange.count,
+    }),
+    enabled: Boolean(
+      isMts
+      && effectiveCompanyId
+      && processForm.prodshade_material_id
+      && Number(debouncedBatchRange.start) > 0
+      && Number(debouncedBatchRange.count) > 0,
+    ),
+  });
+  const mtsBatchRangeHasDuplicate = mtsBatchRangeQ.data?.has_duplicate === true;
 
   const storageLocationQ = useStorageLocationOptionsQuery(
     { company_id: effectiveCompanyId || undefined },
@@ -786,6 +938,7 @@ export default function ProductionPOCreatePage() {
     setProcessStep(1);
     setLineActualMaterialOverrides({});
     setLineLocationOverrides({});
+    setShiftCreateName("");
   }
 
   function updateProcess(field, value) {
@@ -799,6 +952,10 @@ export default function ProductionPOCreatePage() {
         next.planned_start_date = "";
         next.mts_segment_code = "";
         next.mtest_segment_code = "";
+        next.production_date = "";
+        next.shift_id = "";
+        next.batch_start_serial = "";
+        next.number_of_batches = "";
       }
       if (field === "po_type") {
         next.prodshade_material_id = "";
@@ -807,9 +964,15 @@ export default function ProductionPOCreatePage() {
         next.mts_segment_code = "";
         next.mtest_segment_code = "";
         next.planned_qty_kg = "";
+        next.production_date = "";
+        next.shift_id = "";
+        next.batch_start_serial = "";
+        next.number_of_batches = "";
       }
       if (field === "prodshade_material_id") {
         next.stroke_master_id = "";
+        next.batch_start_serial = "";
+        next.number_of_batches = "";
       }
       return next;
     });
@@ -941,7 +1104,7 @@ export default function ProductionPOCreatePage() {
       toast(machineCapacityCheck.message, "error");
       return;
     }
-    if (processForm.planned_start_date && !isManualDocumentDateWithinPastWindow(processForm.planned_start_date)) {
+    if (!isMts && processForm.planned_start_date && !isManualDocumentDateWithinPastWindow(processForm.planned_start_date)) {
       toast(MANUAL_PAST_DATE_WINDOW_MESSAGE, "error");
       return;
     }
@@ -963,9 +1126,27 @@ export default function ProductionPOCreatePage() {
       toast("Stroke is required for this Process PO type.", "error");
       return;
     }
-    if (shortLineNumbers.length > 0) {
+    if (!isMts && shortLineNumbers.length > 0) {
       toast(`Create is blocked. Short stock on line(s): ${shortLineNumbers.join(", ")}.`, "error");
       return;
+    }
+    if (isMts) {
+      if (!processForm.production_date || !isProductionDateWithinWindow(processForm.production_date)) {
+        toast(PRODUCTION_DATE_WINDOW_MESSAGE, "error");
+        return;
+      }
+      if (!processForm.shift_id) {
+        toast("Shift is required.", "error");
+        return;
+      }
+      if (!(Number(processForm.batch_start_serial) > 0) || !(Number(processForm.number_of_batches) > 0)) {
+        toast("Start Batch Number and Number of Batches are required.", "error");
+        return;
+      }
+      if (mtsBatchRangeHasDuplicate) {
+        toast("One or more batch numbers in this range already exist. Change Start Batch Number or Number of Batches.", "error");
+        return;
+      }
     }
 
     setSaving(true);
@@ -977,9 +1158,20 @@ export default function ProductionPOCreatePage() {
         prodshade_material_id: processForm.prodshade_material_id,
         machine_id: processForm.machine_id || undefined,
         stroke_master_id: processForm.stroke_master_id,
-        planned_qty_kg: Number(processForm.planned_qty_kg),
-        planned_start_date: processForm.planned_start_date || undefined,
+        planned_start_date: isMts ? undefined : (processForm.planned_start_date || undefined),
         priority: processForm.po_type === "MTEST" ? processForm.priority : undefined,
+        // MTS: planned_qty is always derived server-side from batch_size × number_of_batches
+        // (createProcessOrderHandler ignores planned_qty_kg entirely for MTS) — batch_size is
+        // the per-batch KG already derived above (Liter→KG conversion where applicable).
+        ...(isMts ? {
+          batch_size: Number(processForm.planned_qty_kg),
+          number_of_batches: Number(processForm.number_of_batches),
+          production_date: processForm.production_date,
+          shift_id: processForm.shift_id,
+          batch_start_serial: Number(processForm.batch_start_serial),
+        } : {
+          planned_qty_kg: Number(processForm.planned_qty_kg),
+        }),
         line_location_overrides: previewRowsWithAvailability
           .filter((row) => (row.storage_location_id && row.storage_location_id !== row.default_storage_location_id) || row.actual_material_id)
           .map((row) => ({
@@ -990,8 +1182,16 @@ export default function ProductionPOCreatePage() {
       };
       const result = await createProcessOrder(payload);
       toast(`Process PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
-      resetProcess({ company_id: defaultCompanyId || "" });
       qc.invalidateQueries({ queryKey: ["process-orders"] });
+      if (isMts) {
+        // Page 4 (RM auto-derive) runs against the created order next --
+        // don't reset the form yet, the wizard moves to Step 4 instead.
+        setMtsCreatedPo({ id: result.id, po_number: result.po_number });
+        setMtsPlanOverrides({});
+        setProcessStep(4);
+      } else {
+        resetProcess({ company_id: defaultCompanyId || "" });
+      }
     } catch (error) {
       toast(error.message || "Process PO create failed.", "error");
     } finally {
@@ -1091,7 +1291,7 @@ export default function ProductionPOCreatePage() {
           ))}
         </div>
 
-        {activeTab === 0 && (
+        {activeTab === 0 && processStep !== 4 && (
           <form onSubmit={handleCreateProcess} className="flex max-w-6xl flex-col gap-4">
             {processStep === 1 && (
               <div className="flex flex-col gap-4">
@@ -1158,7 +1358,16 @@ export default function ProductionPOCreatePage() {
                     </label>
                     <ErpComboboxField
                       value={processForm.stroke_master_id}
-                      onChange={(value) => updateProcess("stroke_master_id", value)}
+                      onChange={(value) => {
+                        if (isMts && mtsCurrentStrokeNumber !== null) {
+                          const picked = (strokesQ.data ?? []).find((stroke) => String(stroke.id) === String(value));
+                          if (picked && String(picked.stroke_number) !== String(mtsCurrentStrokeNumber)) {
+                            setPendingNonCurrentStroke({ id: value, label: strokeLabel(picked) });
+                            return;
+                          }
+                        }
+                        updateProcess("stroke_master_id", value);
+                      }}
                       options={strokeOptions}
                       placeholder="-- Select stroke --"
                       emptyStateLabel={strokesQ.isLoading ? "Loading strokes..." : "No approved strokes for this company + material"}
@@ -1190,7 +1399,7 @@ export default function ProductionPOCreatePage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 3</p>
-                    <h3 className="text-lg font-semibold text-slate-900">Header + Material Table</h3>
+                    <h3 className="text-lg font-semibold text-slate-900">{isMts ? "Header + Batch Range" : "Header + Material Table"}</h3>
                   </div>
                   <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">STANDARD</span>
                 </div>
@@ -1209,8 +1418,14 @@ export default function ProductionPOCreatePage() {
                     <div className="mt-1 text-sm font-medium text-slate-900">{processForm.po_type || "--"}</div>
                   </div>
                   <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="text-xs font-medium text-slate-500">Batch Number</div>
-                    <div className="mt-1 text-sm font-medium text-slate-900">--</div>
+                    <div className="text-xs font-medium text-slate-500">Batch Number{isMts ? " Range" : ""}</div>
+                    <div className="mt-1 text-sm font-medium text-slate-900">
+                      {isMts
+                        ? (mtsBatchRangeQ.data?.from_batch_number
+                          ? `${mtsBatchRangeQ.data.from_batch_number} — ${mtsBatchRangeQ.data.to_batch_number}`
+                          : "--")
+                        : "--"}
+                    </div>
                   </div>
                   <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
                     <div className="text-xs font-medium text-slate-500">Stroke</div>
@@ -1367,18 +1582,128 @@ export default function ProductionPOCreatePage() {
                     </div>
                   )}
 
-                  <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-slate-600">Planned Start Date</label>
-                    <input
-                      type="date"
-                      min={PROCESS_PO_DATE_BOUNDS.min}
-                      max={PROCESS_PO_DATE_BOUNDS.max}
-                      className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                      value={processForm.planned_start_date}
-                      onChange={(event) => updateProcess("planned_start_date", event.target.value)}
-                    />
-                  </div>
+                  {isMts ? (
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">Date <span className="text-rose-500">*</span></label>
+                        <input
+                          type="date"
+                          min={PRODUCTION_DATE_BOUNDS.min}
+                          max={PRODUCTION_DATE_BOUNDS.max}
+                          className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                          value={processForm.production_date}
+                          onChange={(event) => updateProcess("production_date", event.target.value)}
+                          required
+                        />
+                        <span className="text-xs text-slate-400">Declared physical production date — previous 3 days only, never future.</span>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">Shift <span className="text-rose-500">*</span></label>
+                        <ErpComboboxField
+                          value={processForm.shift_id}
+                          onChange={(value) => updateProcess("shift_id", value)}
+                          options={shiftOptions}
+                          placeholder="-- Select shift --"
+                          emptyStateLabel={shiftsQ.isLoading ? "Loading shifts..." : "No shifts yet — add one below"}
+                          disabled={!effectiveCompanyId}
+                        />
+                        <div className="mt-1 flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="+ New shift name"
+                            className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                            value={shiftCreateName}
+                            onChange={(event) => setShiftCreateName(event.target.value)}
+                            disabled={!effectiveCompanyId}
+                          />
+                          <button
+                            type="button"
+                            onClick={handleCreateShiftInline}
+                            disabled={!shiftCreateName.trim() || shiftCreating}
+                            className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {shiftCreating ? "Adding..." : "Add"}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-slate-600">Planned Start Date</label>
+                      <input
+                        type="date"
+                        min={PROCESS_PO_DATE_BOUNDS.min}
+                        max={PROCESS_PO_DATE_BOUNDS.max}
+                        className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+                        value={processForm.planned_start_date}
+                        onChange={(event) => updateProcess("planned_start_date", event.target.value)}
+                      />
+                    </div>
+                  )}
                 </div>
+
+                {isMts && (
+                  <div className="rounded-lg border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <h4 className="text-sm font-semibold text-slate-800">Batch Range</h4>
+                    </div>
+                    <div className="grid gap-4 px-4 py-4 md:grid-cols-3">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">Start Batch Number <span className="text-rose-500">*</span></label>
+                        <div className="flex items-center gap-2">
+                          {mtsBatchRangeQ.data?.prefix && (
+                            <span className="rounded bg-slate-100 px-2 py-1.5 text-xs font-mono text-slate-500">{mtsBatchRangeQ.data.prefix}</span>
+                          )}
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            className={`w-full rounded border px-2 py-1.5 text-sm font-mono ${mtsBatchRangeHasDuplicate ? "border-rose-500 bg-rose-50 text-rose-900" : "border-slate-300"}`}
+                            value={processForm.batch_start_serial}
+                            onChange={(event) => updateProcess("batch_start_serial", event.target.value)}
+                            disabled={!processForm.prodshade_material_id}
+                            required
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">Number of Batches <span className="text-rose-500">*</span></label>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          className={`rounded border px-2 py-1.5 text-sm font-mono ${mtsBatchRangeHasDuplicate ? "border-rose-500 bg-rose-50 text-rose-900" : "border-slate-300"}`}
+                          value={processForm.number_of_batches}
+                          onChange={(event) => updateProcess("number_of_batches", event.target.value)}
+                          disabled={!processForm.prodshade_material_id}
+                          required
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-slate-600">To Batch</label>
+                        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-900">
+                          {mtsBatchRangeQ.data?.to_batch_number || "--"}
+                        </div>
+                      </div>
+                    </div>
+                    {mtsBatchRangeQ.error && (
+                      <div className="border-t border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+                        {mtsBatchRangeQ.error.message || "Could not resolve batch range for this Prodshade."}
+                      </div>
+                    )}
+                    {mtsBatchRangeHasDuplicate && (
+                      <div className="border-t border-rose-200 bg-rose-50 px-4 py-2 text-xs font-medium text-rose-700">
+                        Already active: {mtsBatchRangeQ.data.duplicates.join(", ")} — change Start Batch Number or Number of Batches.
+                      </div>
+                    )}
+                    {isMts && Number(processForm.number_of_batches) > 0 && Number(processForm.planned_qty_kg) > 0 && (
+                      <div className="border-t border-slate-100 px-4 py-2 text-xs text-slate-500">
+                        SFG Output Qty (total): {formatStockQty(Number(processForm.planned_qty_kg) * Number(processForm.number_of_batches))} KG
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="rounded-lg border border-slate-200 bg-white">
                   <div className="border-b border-slate-200 px-4 py-3">
@@ -1412,82 +1737,92 @@ export default function ProductionPOCreatePage() {
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-200 bg-white">
-                  <div className="border-b border-slate-200 px-4 py-3">
-                    <h4 className="text-sm font-semibold text-slate-800">Material Table</h4>
+                {isMts ? (
+                  <div className="rounded-lg border border-slate-200 bg-white px-4 py-4 text-sm text-slate-500">
+                    RM Line entry (Standard/Actual, AP-Approved, Loss/Gain%) moves to a future Page 4 —
+                    not part of this Create step. Stroke-derived RM/PM lines are still auto-populated and
+                    stock-checked against the total Batch Range quantity on save.
                   </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[1180px] border-collapse text-sm">
-                      <thead>
-                        <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                          <th className="border-b px-3 py-2 text-left">#</th>
-                          <th className="border-b px-3 py-2 text-left">Material Type</th>
-                          <th className="border-b px-3 py-2 text-left">Formulation Material</th>
-                          <th className="border-b px-3 py-2 text-right">Dosage %</th>
-                          <th className="border-b px-3 py-2 text-left">Actual Material</th>
-                          <th className="border-b px-3 py-2 text-left">Storage Location</th>
-                          <th className="border-b px-3 py-2 text-right">Standard Qty</th>
-                          <th className="border-b px-3 py-2 text-left">Movement Type</th>
-                          <th className="border-b px-3 py-2 text-right">Available</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {previewRowsWithAvailability.length === 0 ? (
-                          <tr>
-                            <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">
-                              No stroke-derived material lines.
-                            </td>
-                          </tr>
-                        ) : previewRowsWithAvailability.map((row) => {
-                          const actualMaterialOptions = [
-                            { value: "", label: "(same)" },
-                            ...row.registered_alternate_material_options,
-                          ];
-                          return (
-                            <tr key={row.key} className={row.is_short ? "bg-rose-50" : "border-b border-slate-100"}>
-                              <td className="border-b border-slate-100 px-3 py-2">{row.line_no}</td>
-                              <td className="border-b border-slate-100 px-3 py-2">{row.material_type}</td>
-                              <td className="border-b border-slate-100 px-3 py-2">{row.material_label || "--"}</td>
-                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.dosage_pct, "0")}</td>
-                              <td className="border-b border-slate-100 px-3 py-2">
-                                <ErpComboboxField
-                                  value={row.actual_material_id}
-                                  onChange={(value) => {
-                                    setLineActualMaterialOverrides((current) => ({ ...current, [row.material_id]: value }));
-                                  }}
-                                  options={actualMaterialOptions}
-                                  placeholder="(same)"
-                                  disabled={row.registered_alternate_material_options.length === 0}
-                                />
-                              </td>
-                              <td className="border-b border-slate-100 px-3 py-2">
-                                <ErpComboboxField
-                                  value={row.storage_location_id}
-                                  onChange={(value) => {
-                                    setLineLocationOverrides((current) => ({ ...current, [row.material_id]: value }));
-                                  }}
-                                  options={storageLocationOptions}
-                                  placeholder="-- Select storage location --"
-                                  emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
-                                />
-                              </td>
-                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.standard_qty, "0")}</td>
-                              <td className="border-b border-slate-100 px-3 py-2">P261</td>
-                              <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
-                                {formatStockQty(row.available_qty)}
-                              </td>
+                ) : (
+                  <>
+                    <div className="rounded-lg border border-slate-200 bg-white">
+                      <div className="border-b border-slate-200 px-4 py-3">
+                        <h4 className="text-sm font-semibold text-slate-800">Material Table</h4>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[1180px] border-collapse text-sm">
+                          <thead>
+                            <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                              <th className="border-b px-3 py-2 text-left">#</th>
+                              <th className="border-b px-3 py-2 text-left">Material Type</th>
+                              <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                              <th className="border-b px-3 py-2 text-right">Dosage %</th>
+                              <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                              <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                              <th className="border-b px-3 py-2 text-right">Standard Qty</th>
+                              <th className="border-b px-3 py-2 text-left">Movement Type</th>
+                              <th className="border-b px-3 py-2 text-right">Available</th>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                          </thead>
+                          <tbody>
+                            {previewRowsWithAvailability.length === 0 ? (
+                              <tr>
+                                <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">
+                                  No stroke-derived material lines.
+                                </td>
+                              </tr>
+                            ) : previewRowsWithAvailability.map((row) => {
+                              const actualMaterialOptions = [
+                                { value: "", label: "(same)" },
+                                ...row.registered_alternate_material_options,
+                              ];
+                              return (
+                                <tr key={row.key} className={row.is_short ? "bg-rose-50" : "border-b border-slate-100"}>
+                                  <td className="border-b border-slate-100 px-3 py-2">{row.line_no}</td>
+                                  <td className="border-b border-slate-100 px-3 py-2">{row.material_type}</td>
+                                  <td className="border-b border-slate-100 px-3 py-2">{row.material_label || "--"}</td>
+                                  <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.dosage_pct, "0")}</td>
+                                  <td className="border-b border-slate-100 px-3 py-2">
+                                    <ErpComboboxField
+                                      value={row.actual_material_id}
+                                      onChange={(value) => {
+                                        setLineActualMaterialOverrides((current) => ({ ...current, [row.material_id]: value }));
+                                      }}
+                                      options={actualMaterialOptions}
+                                      placeholder="(same)"
+                                      disabled={row.registered_alternate_material_options.length === 0}
+                                    />
+                                  </td>
+                                  <td className="border-b border-slate-100 px-3 py-2">
+                                    <ErpComboboxField
+                                      value={row.storage_location_id}
+                                      onChange={(value) => {
+                                        setLineLocationOverrides((current) => ({ ...current, [row.material_id]: value }));
+                                      }}
+                                      options={storageLocationOptions}
+                                      placeholder="-- Select storage location --"
+                                      emptyStateLabel={storageLocationQ.isLoading ? "Loading storage locations..." : "No storage locations"}
+                                    />
+                                  </td>
+                                  <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.standard_qty, "0")}</td>
+                                  <td className="border-b border-slate-100 px-3 py-2">P261</td>
+                                  <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
+                                    {formatStockQty(row.available_qty)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
 
-                {shortLineNumbers.length > 0 && (
-                  <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                    Create is blocked because Available is below Standard Qty on line(s): {shortLineNumbers.join(", ")}.
-                  </div>
+                    {shortLineNumbers.length > 0 && (
+                      <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                        Create is blocked because Available is below Standard Qty on line(s): {shortLineNumbers.join(", ")}.
+                      </div>
+                    )}
+                  </>
                 )}
 
                 <div className="flex justify-between">
@@ -1508,7 +1843,7 @@ export default function ProductionPOCreatePage() {
                     </button>
                     <button
                       type="submit"
-                      disabled={saving || shortLineNumbers.length > 0 || machineCapacityCheck.blocked}
+                      disabled={saving || (!isMts && shortLineNumbers.length > 0) || machineCapacityCheck.blocked || (isMts && mtsBatchRangeHasDuplicate)}
                       className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
                     >
                       {saving ? "Creating..." : "Create Process PO"}
@@ -1518,6 +1853,19 @@ export default function ProductionPOCreatePage() {
               </div>
             )}
           </form>
+        )}
+
+        {activeTab === 0 && processStep === 4 && mtsCreatedPo && (
+          <MtsMaterialPlanStep
+            processOrder={mtsCreatedPo}
+            overrides={mtsPlanOverrides}
+            setOverrides={setMtsPlanOverrides}
+            onDone={() => {
+              setMtsCreatedPo(null);
+              setMtsPlanOverrides({});
+              resetProcess({ company_id: defaultCompanyId || "" });
+            }}
+          />
         )}
 
         {activeTab === 1 && (
@@ -1923,6 +2271,312 @@ export default function ProductionPOCreatePage() {
         onCancel={() => setPackingMemberModal(null)}
         onAdd={handlePackingAddMember}
       />
+      <BlockingLayer
+        visible={Boolean(pendingNonCurrentStroke)}
+        onEscape={() => setPendingNonCurrentStroke(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 380, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-800">Non-Current Stroke Selected</p>
+        <p className="text-sm text-slate-600">
+          You have selected a non-current stroke ({pendingNonCurrentStroke?.label}). Are you sure you want to continue with this stroke?
+        </p>
+        <div className="flex justify-end gap-2 mt-1">
+          <button
+            type="button"
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+            onClick={() => setPendingNonCurrentStroke(null)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
+            onClick={() => {
+              updateProcess("stroke_master_id", pendingNonCurrentStroke.id);
+              setPendingNonCurrentStroke(null);
+            }}
+          >
+            Confirm
+          </button>
+        </div>
+      </BlockingLayer>
     </ErpScreenScaffold>
+  );
+}
+
+// §138.12/§138.14/§138.15 (2026-09-18) -- Page 4: MTS RM Auto-Derive Grid.
+// Runs against the Process PO Create's just-created STANDARD order (see
+// MtsCreatedPo state above). Machine-tracked formulation lines are computed
+// server-side (§138.12's bucket-boundary + smallest-first algorithm); R001
+// (non-machine-tracked) lines need a manual Actual Material pick here, same
+// as MTO/HPS already does. Policy 1 (Current Stroke) is fully editable here;
+// Policy 2 (non-current) is read-only -- editing moves to Final/Verify.
+function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onDone }) {
+  const qc = useQueryClient();
+  const [manualPicks, setManualPicks] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  const planQ = useQuery({
+    queryKey: ["mts-material-plan", processOrder.id],
+    queryFn: () => getMtsMaterialPlan(processOrder.id),
+  });
+
+  const header = planQ.data?.header ?? null;
+  const groups = useMemo(() => planQ.data?.groups ?? [], [planQ.data]);
+  const materials = planQ.data?.materials ?? {};
+  const storageLocations = planQ.data?.storage_locations ?? {};
+  const saved = planQ.data?.saved === true;
+  const isEditable = header?.mts_used_current_stroke === true && !saved;
+
+  function materialLabel(id) {
+    const m = materials[id];
+    if (!m) return "--";
+    return [m.pace_code, m.material_name].filter(Boolean).join(" - ") || "--";
+  }
+  function slocLabel(id) {
+    const s = storageLocations[id];
+    if (!s) return "--";
+    return [s.code, s.name].filter(Boolean).join(" - ") || "--";
+  }
+
+  function rowsForGroup(group) {
+    const override = overrides[group.stroke_line_material_id];
+    if (isEditable && override) return override;
+    return group.rows;
+  }
+
+  function handleSwapMaterial(group, rowIndex, newMaterialId) {
+    const rows = rowsForGroup(group).map((r) => ({ ...r }));
+    if (rows.some((r, i) => i !== rowIndex && r.actual_material_id === newMaterialId)) {
+      pushToast("This material is already used in another row for this line.", "error");
+      return;
+    }
+    rows[rowIndex] = { ...rows[rowIndex], actual_material_id: newMaterialId };
+    setOverrides((current) => ({ ...current, [group.stroke_line_material_id]: rows }));
+  }
+
+  function handleQtyChange(group, rowIndex, qtyStr) {
+    const rows = rowsForGroup(group).map((r) => ({ ...r }));
+    rows[rowIndex] = { ...rows[rowIndex], actual_qty: Number(qtyStr) || 0 };
+    setOverrides((current) => ({ ...current, [group.stroke_line_material_id]: rows }));
+  }
+
+  const shortGroups = groups.filter((g) => g.short);
+  const manualPickMissing = groups.some((g) => !g.auto_derive_applicable
+    && !manualPicks[g.stroke_line_material_id]
+    && !g.rows.some((r) => r.is_formulation_line && r.actual_qty > 0));
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const body = {
+        groups: groups.map((group) => {
+          if (group.auto_derive_applicable) {
+            const override = overrides[group.stroke_line_material_id];
+            if (!override) return null;
+            return {
+              stroke_line_material_id: group.stroke_line_material_id,
+              rows: override.map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
+            };
+          }
+          const chosen = manualPicks[group.stroke_line_material_id];
+          return chosen ? { stroke_line_material_id: group.stroke_line_material_id, actual_material_id: chosen } : null;
+        }).filter(Boolean),
+      };
+      await saveMtsMaterialPlan(processOrder.id, body);
+      pushToast(`Material plan saved for ${processOrder.po_number}.`);
+      qc.invalidateQueries({ queryKey: ["mts-material-plan", processOrder.id] });
+      qc.invalidateQueries({ queryKey: ["process-orders"] });
+    } catch (error) {
+      pushToast(error.message || "Save failed.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (planQ.isLoading) {
+    return <div className="max-w-6xl px-1 py-6 text-sm text-slate-500">Loading material plan...</div>;
+  }
+  if (planQ.isError) {
+    return <div className="max-w-6xl px-1 py-6 text-sm text-rose-600">{planQ.error?.message || "Failed to load material plan."}</div>;
+  }
+
+  return (
+    <div className="flex max-w-6xl flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 4</p>
+          <h3 className="text-lg font-semibold text-slate-900">RM Auto-Derive Material Table</h3>
+        </div>
+        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">{header?.status || "STANDARD"}</span>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">PO Number</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{header?.po_number || processOrder.po_number}</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Prodshade</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{[header?.prodshade_pace_code, header?.prodshade_material_name].filter(Boolean).join(" - ") || "--"}</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Description</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{header?.prodshade_description || "--"}</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Stroke Number</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{header?.stroke_number || "--"}</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Machine</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{header?.machine_label || "--"}</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Batch Range</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">
+            {header?.batch_number_from ? `${header.batch_number_from} - ${header.batch_number_to}` : "--"}
+            {header?.number_of_batches ? ` (${header.number_of_batches})` : ""}
+          </div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Batch Size (per batch)</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{formatPreciseNumber(header?.batch_size, "0.###")} KG</div>
+        </div>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+          <div className="text-xs font-medium text-slate-500">Total Qty</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{formatPreciseNumber(header?.total_qty, "0.###")} KG</div>
+        </div>
+      </div>
+
+      {saved && (
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          Material plan already saved for this Process PO -- read-only.
+        </div>
+      )}
+      {!saved && !isEditable && (
+        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+          This batch used a Non-Current Stroke -- the auto-derived plan below is read-only here. Edits happen at Final/Verify instead.
+        </div>
+      )}
+      {shortGroups.length > 0 && (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          Insufficient stock (formulation + alternates combined) for: {shortGroups.map((g) => materialLabel(g.stroke_line_material_id)).join(", ")}.
+        </div>
+      )}
+
+      <div className="rounded-lg border border-slate-200 bg-white">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <h4 className="text-sm font-semibold text-slate-800">Material Table</h4>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1400px] border-collapse text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <th className="border-b px-3 py-2 text-left">#</th>
+                <th className="border-b px-3 py-2 text-left">Material Type</th>
+                <th className="border-b px-3 py-2 text-left">Formulation Material</th>
+                <th className="border-b px-3 py-2 text-right">Dosage %</th>
+                <th className="border-b px-3 py-2 text-left">Actual Material</th>
+                <th className="border-b px-3 py-2 text-left">Storage Location</th>
+                <th className="border-b px-3 py-2 text-right">Standard Qty</th>
+                <th className="border-b px-3 py-2 text-right">Actual Qty</th>
+                <th className="border-b px-3 py-2 text-right">Available</th>
+                <th className="border-b px-3 py-2 text-left">Movement Type</th>
+                <th className="border-b px-3 py-2 text-left">AP-Approved</th>
+                <th className="border-b px-3 py-2 text-right">AP Qty</th>
+                <th className="border-b px-3 py-2 text-left">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groups.length === 0 ? (
+                <tr>
+                  <td colSpan={13} className="px-3 py-6 text-center text-sm text-slate-400">No stroke-derived material lines.</td>
+                </tr>
+              ) : groups.flatMap((group, groupIndex) => {
+                const rows = rowsForGroup(group);
+                const usedIds = new Set(rows.map((r) => r.actual_material_id));
+                return rows.map((row, rowIndex) => {
+                  const rowKey = `${group.stroke_line_material_id}-${rowIndex}`;
+                  const materialOptions = group.group_member_ids.map((id) => ({
+                    value: id,
+                    label: materialLabel(id),
+                    disabled: usedIds.has(id) && id !== row.actual_material_id,
+                  }));
+                  const isFirstRow = rowIndex === 0;
+                  return (
+                    <tr key={rowKey} className={group.short ? "bg-rose-50" : "border-b border-slate-100"}>
+                      <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? groupIndex + 1 : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2">RM</td>
+                      <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? materialLabel(group.stroke_line_material_id) : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{isFirstRow ? formatPreciseNumber(group.dosage_pct, "0") : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2">
+                        {group.auto_derive_applicable && isEditable ? (
+                          <ErpComboboxField
+                            value={row.actual_material_id}
+                            onChange={(value) => handleSwapMaterial(group, rowIndex, value)}
+                            options={materialOptions}
+                          />
+                        ) : !group.auto_derive_applicable && !saved ? (
+                          <ErpComboboxField
+                            value={manualPicks[group.stroke_line_material_id] || ""}
+                            onChange={(value) => setManualPicks((current) => ({ ...current, [group.stroke_line_material_id]: value }))}
+                            options={group.group_member_ids.map((id) => ({ value: id, label: materialLabel(id) }))}
+                            placeholder="-- Select Actual Material --"
+                          />
+                        ) : (
+                          materialLabel(row.actual_material_id)
+                        )}
+                      </td>
+                      <td className="border-b border-slate-100 px-3 py-2">{slocLabel(group.storage_location_id)}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{isFirstRow ? formatPreciseNumber(group.standard_qty, "0.###") : ""}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
+                        {group.auto_derive_applicable && isEditable ? (
+                          <input
+                            type="number"
+                            step="0.001"
+                            className="w-24 rounded border border-slate-300 px-2 py-1 text-right text-sm"
+                            value={row.actual_qty}
+                            onChange={(event) => handleQtyChange(group, rowIndex, event.target.value)}
+                          />
+                        ) : (
+                          formatPreciseNumber(row.actual_qty, "0.###")
+                        )}
+                      </td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.available_qty, "0.###")}</td>
+                      <td className="border-b border-slate-100 px-3 py-2">P261</td>
+                      <td className="border-b border-slate-100 px-3 py-2">Yes</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.actual_qty, "0.###")}</td>
+                      <td className="border-b border-slate-100 px-3 py-2">{group.short ? <span className="text-rose-600">Short</span> : ""}</td>
+                    </tr>
+                  );
+                });
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="flex justify-between">
+        <button
+          type="button"
+          onClick={onDone}
+          className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+        >
+          {saved ? "Done" : "Cancel / Back to list"}
+        </button>
+        {!saved && (
+          <button
+            type="button"
+            disabled={saving || shortGroups.length > 0 || manualPickMissing}
+            onClick={handleSave}
+            className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : "Save Material Plan"}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

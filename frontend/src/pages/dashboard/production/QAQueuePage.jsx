@@ -55,11 +55,23 @@ function machineLabel(machine) {
   return [machine?.machine_code, machine?.machine_name].filter(Boolean).join(" - ");
 }
 
-// §131.1/§120: MTS and MTEST skip the QA_APPROVED gate entirely — Start Batch accepts
-// them directly from STANDARD, so this page must offer Start Batch there instead of
-// Approve/Reject (which the backend now rejects for these two po_types at STANDARD).
-function skipsQaApproval(poType) {
-  return poType === "MTS" || poType === "MTEST";
+// §131.1/§120 + MTS Current/Non-Current Stroke policy (2026-09-17 lock):
+// MTEST always skips plain Approve/Reject. MTS only skips it when the order used
+// its Prodshade's Current Stroke (Policy 1 — QA's real checkpoint there is Verify,
+// not Approve). A non-current-stroke MTS order (Policy 2) shows Approve/Reject
+// exactly like MTO/HPS. Takes the order row (not just po_type) because the MTS
+// case needs mts_used_current_stroke.
+function skipsQaApproval(order) {
+  if (order.po_type === "MTEST") return true;
+  if (order.po_type === "MTS") return order.mts_used_current_stroke === true;
+  return false;
+}
+
+function mtsBatchNumberDisplay(order) {
+  if (order.po_type !== "MTS" || !order.batch_number) return order.batch_number ?? "—";
+  return order.batch_number_to && order.batch_number_to !== order.batch_number
+    ? `${order.batch_number} – ${order.batch_number_to}`
+    : order.batch_number;
 }
 
 function statusTone(status) {
@@ -332,7 +344,7 @@ export default function QAQueuePage() {
                       >
                         <td className="px-3 py-2 font-mono font-semibold text-sky-700">{order.po_number ?? "--"}</td>
                         <td className="px-3 py-2">{order.po_type ?? "--"}</td>
-                        <td className="px-3 py-2 font-mono text-slate-500">{order.batch_number ?? "—"}</td>
+                        <td className="px-3 py-2 font-mono text-slate-500">{mtsBatchNumberDisplay(order)}</td>
                         <td className="px-3 py-2">{materialLabel(order.material) || "--"}</td>
                         <td className="px-3 py-2 font-mono text-slate-500">{order.stroke_number ?? "--"}</td>
                         <td className="px-3 py-2">{machineLabel(order.machine) || "--"}</td>
@@ -344,7 +356,7 @@ export default function QAQueuePage() {
                           </span>
                         </td>
                         <td className="px-3 py-2">
-                          {order.status === "STANDARD" && !skipsQaApproval(order.po_type) ? (
+                          {order.status === "STANDARD" && !skipsQaApproval(order) ? (
                             <select
                               value={priorityByOrderId[order.id] || "NORMAL"}
                               onChange={(event) => {
@@ -368,7 +380,7 @@ export default function QAQueuePage() {
                           onClick={(event) => event.stopPropagation()}
                         >
                           <div className="flex justify-end gap-2">
-                            {order.status === "STANDARD" && !skipsQaApproval(order.po_type) && (
+                            {order.status === "STANDARD" && !skipsQaApproval(order) && (
                               <>
                                 <button
                                   onClick={() => handleApprove(order.id)}
@@ -419,10 +431,9 @@ export default function QAQueuePage() {
                             )}
                             {/* §136 follow-up (2026-09-08): MTEST has no QA_APPROVED step, so
                                 an Urgent MTEST PO is still STANDARD here — Manager Approve gates
-                                Start Batch, same as Urgent MTO/HPS does from QA_APPROVED. MTS
-                                (also skipsQaApproval) never carries a priority, so it always
-                                falls through to the direct Start Batch branch below. */}
-                            {order.status === "STANDARD" && skipsQaApproval(order.po_type) && order.po_type === "MTEST" && order.priority === "URGENT" ? (
+                                Start Batch, same as Urgent MTO/HPS does from QA_APPROVED. MTEST
+                                never carries a priority other than via this branch. */}
+                            {order.status === "STANDARD" && order.po_type === "MTEST" && order.priority === "URGENT" ? (
                               <>
                                 <button
                                   onClick={() => handleManagerApprove(order.id)}
@@ -443,7 +454,7 @@ export default function QAQueuePage() {
                                   Manager Reject
                                 </button>
                               </>
-                            ) : order.status === "STANDARD" && skipsQaApproval(order.po_type) && (
+                            ) : order.status === "STANDARD" && order.po_type === "MTEST" && (
                               <>
                                 <button
                                   onClick={() => setStartBatchOrder(order)}
@@ -465,9 +476,21 @@ export default function QAQueuePage() {
                                 </button>
                               </>
                             )}
+                            {/* MTS Current-vs-Non-Current Stroke policy (2026-09-17 lock) — MTS
+                                never uses Start Batch (batch number is set at Create). Policy 1
+                                (Current Stroke) sits at STANDARD ready for Finalize immediately;
+                                Policy 2 (non-current) sits at QA_APPROVED ready for Finalize once
+                                approved above. Neither shows an action button here. */}
+                            {order.status === "STANDARD" && order.po_type === "MTS" && order.mts_used_current_stroke === true && (
+                              <span className="text-xs font-medium text-emerald-600">Ready for Finalize</span>
+                            )}
+                            {order.status === "QA_APPROVED" && order.po_type === "MTS" && (
+                              <span className="text-xs font-medium text-emerald-600">Ready for Finalize</span>
+                            )}
                             {/* §136 -- Start Batch for QA_APPROVED only when NOT Urgent;
-                                an Urgent order must clear MANAGER_APPROVED first. */}
-                            {order.status === "QA_APPROVED" && order.priority !== "URGENT" && (
+                                an Urgent order must clear MANAGER_APPROVED first. MTS excluded --
+                                see the Ready-for-Finalize branch above. */}
+                            {order.status === "QA_APPROVED" && order.priority !== "URGENT" && order.po_type !== "MTS" && (
                               <button
                                 onClick={() => setStartBatchOrder(order)}
                                 disabled={saving}

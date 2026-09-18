@@ -24070,3 +24070,222 @@ qty, একটা common reference দিয়ে জোড়া লাগা�
 ধরা হবে — mechanism-টা একই থেকে গেছে (`MANUAL_ALLOT` paired entry, partial-distribution সমর্থিত),
 শুধু host page IN03 থেকে IN11-এ সরে গেছে, আর grid-এ Storage Location column + all-column search
 নতুন যোগ হয়েছে।
+
+### 138.14 — MTS Process PO Create (Page 1-3): Current/Non-Current Stroke Policy + Batch Range (✅ DESIGN LOCKED — 2026-09-17/18, IMPLEMENTATION CODE-COMPLETE, UNCOMMITTED — live browser click-through still pending)
+
+**পটভূমি:** §138-এর machine-respect mechanism ঠিক করার পাশাপাশি একই সেশনে business owner MTS
+Process PO Create-এর পুরো Page 1-3 flow নতুন করে design করেন — batch number আর কবে QA approval
+লাগবে, দুটোই একসাথে redesign হয়েছে। Recovered/consolidated from same-day chat transcript
+(2026-09-17/18), যেহেতু এই design-টা আগে কখনো doc-এ লেখা হয়নি — শুধু chat-এই ছিল।
+
+**Page 1 — Company/PO Type/Material:** অপরিবর্তিত, শুধু `prodshadeLabel()`-এর label array-তে
+`document_name` যোগ করা হয়েছে (আগে code/shade/material_name-ই দেখাত, description বাদ পড়ত)।
+
+**Page 2 — Stroke Gate (নতুন mechanism):**
+- MTS-only: dropdown-এ সেই Prodshade-এর **Current Stroke** (§ উপরে `erp_production.mts_current_stroke`)
+  default-select হয়ে যায়, dropdown-এ তার পাশে "— Current" ট্যাগ দেখায়।
+- User অন্য (non-current) stroke বেছে নিলে একটা Cancel/Confirm warning modal আসে ("তুমি non-current
+  stroke বেছেছ, confirm করবে?") — Cancel করলে আগের selection ফিরে আসে (dropdown কখনো
+  `processForm.stroke_master_id` touch করে না যতক্ষণ না Confirm করা হয়), Confirm করলে সেটাই বসে।
+- Current Stroke বাছলে কোনো warning ছাড়াই সরাসরি বসে যায়।
+
+**Page 3 — Header + Batch Range (RM Table Page 4-এ পিছিয়ে গেছে, ব্যবসা owner-এর নিজের decision):**
+- **Machine** — আগে থেকে থাকা §138.4 exception checkbox ("Select all MTS machines") সহ, অপরিবর্তিত।
+- **Date** — user manually দেয়, allowed range = current−3 দিন থেকে current (future date একদম না)।
+  এটা শুধু "কবে physically produce হয়েছে" record করে — posting_date-এর সাথে সরাসরি কোনো derivation
+  নেই এই মুহূর্তে (§136 Urgent-এর existing `addDaysIso()` fixed-offset pattern-এর generalization,
+  fixed −1-এর বদলে user-এর দেওয়া date; native date math month/year boundary নিজে থেকেই সামলায়)।
+- **Shift** — pre-set list নেই, company-wise, field-এর সাথেই inline "+ New" (type করে save করলেই
+  dropdown-এ যোগ হয়ে যায়) — নতুন `erp_production.shift_master` table।
+- **Batch Range** — Start Batch Number (numeric অংশ শুধু, prefix সেই Prodshade-এর
+  `batch_number_series.prefix` থেকে auto-resolve), Number of Batches, To Batch (auto-derived
+  = Start + Count − 1)। Duplicate-check **Prodshade-scoped**, pack-size-এর সাথে কোনো সম্পর্ক নেই
+  (একটা প্রথম প্রস্তাব pack-size-scoped cycle_number ছিল, business owner explicitly reject করেছেন
+  — "pack size er sathe kono somporko nei")। Already-active batch number দিলে **live red warning +
+  Save button disable** (server round-trip advisory check + Create-time server-side re-check, দুটোই)।
+- **Batch Size** — Prodshade-এর নিজের base UoM-এ সরাসরি এন্ট্রি (এই Prodshade-এর base_uom_code=KG
+  বলে সরাসরি KG) — পুরনো MTS Liter→KG conversion mechanism (§ উপরে, 2026-07-24) touch করা হয়নি,
+  পাশাপাশি রাখা হয়েছে (batch size ইনপুট এখনো Liter নিতে পারে যেখানে stroke-এর conversion factor
+  আছে, ভিতরে KG-তে convert হয়ে যায় — Number of Batches এই derived KG-কে multiply করে)।
+  **Total Qty = Number of Batches × Batch Size (KG)।**
+- RM Table (Standard/Actual পাশাপাশি, AP-Approved) — **Page 4-এ**, এখানে না।
+
+**Workflow branching — দুটো policy, batch range নির্ধারিত হয় Page 2-এর stroke choice দিয়ে:**
+
+| | Policy 1 — Current Stroke | Policy 2 — Non-current Stroke |
+|---|---|---|
+| Create-এ status | STANDARD | STANDARD |
+| QA Approval | **Skip** — কোনো Approve/Reject বাটন নেই | MTO/HPS-এর মতোই Approve/Reject |
+| QA Reject-এ | প্রযোজ্য না (কখনো এই gate-এ পৌঁছায় না) | Status → CANCELLED, batch range-এর সব `batch_number_instance` **ACTIVE→VOIDED** automatic (manual Manager/SA release লাগে না — bag-এর গায়ে batch number আগেই প্রিন্ট করা, তাই একই number দিয়ে সাথে সাথে আবার entry করা যায়) |
+| Start Batch | **নেই কোনো policy-তেই** — batch number Create-এই set হয়ে গেছে | নেই |
+| Finalize শুরু হয় | সরাসরি STANDARD থেকে | QA_APPROVED থেকে (Approve-এর পরে) |
+| Verify | আলাদা, QA করে (অপরিবর্তিত `verifyProcessOrderHandler`, stock post এখানেই) | আলাদা, QA করে |
+
+**Server-side truth, client bishash kora hoyni:** `process_order.mts_used_current_stroke`
+(migration `20260918100000_mts_current_stroke_qa_policy.sql`) Create-এর সময়ই set হয়ে যায় —
+`erp_production.mts_current_stroke` table-এ সেই (company, Prodshade)-এর current stroke_number-এর
+সাথে chosen stroke-এর নিজের stroke_number মিলিয়ে (client-এর পাঠানো কোনো flag কখনো trust করা হয়
+না)। Current Stroke row না থাকলে (mechanism এখনো set হয়নি) ডিফল্ট **Policy 2** ধরা হয় (নিরাপদ
+দিকে ভুল করা — বেশি strict flow-ই default)।
+
+**Reservation — machine + storage location কীভাবে কাজ করবে (LOCKED, ২০২৬-০৯-১৫, কোনো নতুন tracking
+লাগে না):** `reservation_document` ইতিমধ্যেই সেই source Process PO-র সাথে link করা থাকে (§83.5),
+আর Process PO নিজেই তার `machine_id` রাখে। তাই **Machine-wise Reserved qty = `reservation_document`
+→ source Process PO → `machine_id`** — শুধু একটা JOIN। Normal-case Consumption-ও সেই একই ভাবে
+(`stock_ledger.reference_document_id` → Process PO → `machine_id`)। `machine_stock_log` side-table
+(§138.6) শুধু দুটো জায়গায় লাগে যেখানে কোনো Process PO নেই সরাসরি: Warehouse→Shopfloor Transfer, আর
+Exception-case Keep/Allot। CORS (full reversal)-ও একই যুক্তিতে "just works" হওয়ার কথা — reversal
+posting-ও সেই একই Process PO-র `reference_document_id` বহন করে, তাই machine-join reversal-কেও
+সঠিক machine-এ attribute করে দেবে, আলাদা কোনো mechanism ছাড়াই। **এটা propose, business owner-এর
+final confirm বাকি।**
+
+**⚠️ Explicitly deferred (business owner directive, 2026-09-18) — Page 4/5/6 শেষ হওয়ার পরে আলাদা
+session:**
+- **PR10 Edit-এ MTS support** — §138.11-এ আগে থেকেই flagged, এখনো একই অবস্থায়।
+- **CORS (full reversal) for MTS** — উপরের propose-টা confirm করতে হবে, আর actual reversal
+  handler-এ machine_stock_log-এর ভূমিকা (যদি লাগে) design করতে হবে।
+- **Partial Reversal (PR19) for MTS** — machine bucket-এ salvage/return কোথায় যাবে (নিজের machine,
+  নাকি Unassigned) — এখনো resolve হয়নি।
+
+**Implementation status (code-complete, uncommitted — commit করার অনুমতি এখনো নেওয়া হয়নি):**
+- Migrations: `20260917140000_mts_page3_shift_batch_range.sql` (`shift_master` table +
+  `process_order`-এ `production_date`/`shift_id`/`batch_number_from`/`batch_number_to`/
+  `number_of_batches`), `20260918100000_mts_current_stroke_qa_policy.sql`
+  (`mts_used_current_stroke`) — দুটোই dev-এ apply + migration-integrity reconcile করা হয়েছে,
+  আলাদা কোনো drift ধরা পড়েনি (dev-এ একটা pre-existing, unrelated "communication enrollment/rule"
+  ৯টা migration drift ধরা পড়েছিল একই সময়ে — এই session-এর কাজের সাথে সম্পর্কহীন, touch করা হয়নি)।
+- Backend: `shift_master.handlers.ts` (নতুন), `batch_series.handlers.ts` (batch-range
+  duplicate-check + void mechanism), `process_order.handlers.ts` (MTS field parsing/validation,
+  server-side policy flag, QA approve/reject policy gate, Start Batch removal, Finalize gate fix,
+  list handler-এর select-এ নতুন column যোগ)।
+- Routes + ACL: `production.routes.ts` (৩টা নতুন route, সব `PROD_PO_CREATE` resource reuse করে),
+  `route-acl-registry.ts`।
+- Frontend: `prodApi.js` (নতুন API call), `ProductionPOCreatePage.jsx` (Page 2 Stroke Gate + Page 3
+  পুরো নতুন MTS branch), `QAQueuePage.jsx` (`skipsQaApproval()` policy-aware করা, Start Batch বাটন
+  MTS-এ কখনো না দেখানো, "Ready for Finalize" badge)।
+- Verification: `deno check` (নতুন কোনো error না, শুধু already-accepted `.ilike()` typing noise +
+  pre-existing unrelated file errors), `eslint` (0 নতুন warning), সব CI guard (route-acl-registry,
+  stock-posting, jsx-no-undef, hardcoded-role-check, wrong-company-source) clean।
+- **এখনো বাকি:** deployed app-এ real browser click-through (এই environment-এ dev login নেই),
+  আর business owner-এর explicit commit permission (এখনো commit/push হয়নি ইচ্ছাকৃতভাবে)।
+
+**✅ RESOLVED (2026-09-18) — batch-range race condition।** Business owner নিজেই ধরিয়ে দেন: PO
+save না হওয়া পর্যন্ত, দুইজন user একই সাথে overlapping batch range নিলে কী হয়? মূল গঠনগত সমস্যা —
+`createProcessOrderHandler` আগে duplicate-check (SELECT) করে *তারপর* N-টা আলাদা batch number আলাদা
+আলাদা করে insert করত (`Promise.all`) — দুইটা concurrent request-ই check pass করে ফেলতে পারত
+(কেউই তখনো insert করেনি), তারপর প্রতিটা নিজের নিজের row insert করতে গিয়ে একটাই row-এ collision
+হলে **শুধু সেই একটা row fail করত, বাকি ৩৯টা successfully insert হয়ে যেত** — অর্থাৎ একটা আধা-insert
+হওয়া batch range, PO তার পুরো range দাবি করছে অথচ মাঝখানে একটা batch number আসলে নেই। Business
+owner-এর প্রস্তাবিত "TEMP hold + TTL" mechanism (booking-system-এর মতো soft lock) discuss করে
+বাতিল হয়েছে — কারণ TTL expiry নিজেই আরেকটা race/complexity আনে (cron/lazy-expiry, "user চলে গেছে"
+reliably detect করার কোনো উপায় নেই ব্রাউজার বন্ধ/crash হলে), আর collision বাস্তবে rare event
+(দুইজন ঠিক একই মুহূর্তে ঠিক একই Prodshade-এ Save চাপা)। **Simpler fix, already database-এর নিজের
+`UNIQUE(company_id, batch_number)` constraint ব্যবহার করে (dev-এ verify করা আছে):**
+`batch_series.handlers.ts`-এ নতুন `bulkInsertBatchNumberInstances()` — পুরো range-টা **একটাই bulk
+INSERT statement**-এ যায় (N-টা আলাদা call না), তাই Postgres নিজেই কোনো একটা row collide করলে
+**পুরো statement fail করে**, আধা-insert হওয়ার কোনো উপায় নেই। এই insert fail হলে (rare race,
+আসলেই ঘটলে) caller (`createProcessOrderHandler`) সেই মুহূর্তে তৈরি হওয়া `process_order` row-টা
+**compensating delete** করে দেয় (তখনো কোনো line insert হয়নি বলে শুধু PO row-ই delete করলেই যথেষ্ট)
+এবং user-কে স্পষ্ট `PROD_PO_BATCH_RANGE_RACE_LOST` (409) error দেয় — "আবার range check করে try
+করুন"। এটা true DB-transaction-এর মতো ১০০% bulletproof না (PO insert আর batch insert দুটো আলাদা
+statement, মাঝে এক মুহূর্তের জন্য PO row exist করে বৈধ batch range ছাড়াই) — কিন্তু **duplicate/আধা
+batch range কখনো persist করবে না**, যেটাই আসল data-integrity গ্যারান্টি। পুরোপুরি bulletproof
+(single-transaction RPC, §8D pattern) ভবিষ্যতে করা যায় যদি দরকার পড়ে, কিন্তু এই মুহূর্তে over-engineering
+মনে হচ্ছে rare-event-এর জন্য।
+
+### 138.15 — Page 4: RM Auto-Derive Grid — Material Table structure (🔶 MOCKUP ONLY, IMPLEMENTATION NOT STARTED, 2026-09-18)
+
+**Scope:** §138.12-এর auto-derive algorithm-কে আসলে Page 4-এর "Material Table"-এ কীভাবে দেখানো
+হবে — এটা এখনো শুধু একটা interactive Artifact mockup-এ আছে, কোনো real backend handler বা frontend
+page কোডে লেখা হয়নি।
+
+**Structural lock (business owner correction, 2026-09-18) — প্রথম mockup ভুল ছিল:** প্রথম draft
+প্রতিটা auto-added alternate-কে indent+"AUTO" badge দিয়ে আলাদা row হিসেবে দেখিয়েছিল, existing
+Process PO Item Table থেকে সম্পূর্ণ আলাদা style-এ। **সঠিক design existing table-এর column সেট-ই
+হুবহু (কোনো extra formatting/pace-code sub-line ছাড়া):**
+
+```
+# | Material Type | Formulation Material | Dosage % | Actual Material | Storage Location |
+Standard Qty | Actual Qty | Available | Movement Type | AP-Approved | AP Qty | Status
+```
+
+- **Formulation Material** column সবসময় declared/dosage item দেখায় (যেমন GABROSA M700) — এটা
+  কখনো বদলায় না।
+- **Actual Material** column-এ যা genuinely draw হচ্ছে সেটা দেখায় (formulation item নিজে যদি
+  available থাকে তবে সেটাই, নাহলে group-এর alternate)।
+- একটা formulation line-এর requirement মেটাতে যদি **একাধিক alternate লাগে**, তাহলে সেই formulation
+  **row হিসেবে ততবার repeat হবে যতবার আলাদা Actual Material লাগে** — Dosage % আর Standard Qty
+  **শুধু প্রথম row-এ** দেখাবে, বাকি repeat row-এ ফাঁকা/dash।
+- একটা item-এর জন্য row তখনই বসে যখন সেই item থেকে **actually কিছু টানা হয়েছে** (qty > 0) —
+  formulation item নিজের bucket-এ 0 থাকলে তার জন্য আলাদা "Actual=0" row বসে না, সরাসরি alternate-এর
+  row থেকেই শুরু হয়।
+- **R001 (non-machine-tracked) line-ও real availability check পায়** — প্রথম mockup ভুল করে এদের
+  "N/A" দেখিয়েছিল, ধরে নিয়েছিল machine-bucket check না থাকলে কোনো check-ই দরকার নেই। **সংশোধন:**
+  এই line-গুলো existing §83.5 location-level (blended, reservation-aware) check-ই পায়, শুধু
+  §138.12-এর group/alternate auto-derive mechanism প্রযোজ্য না (auto-derive শুধু machine-tracked
+  line-এর জন্য, §138.12-এর precondition অনুযায়ী)।
+- **Warning শুধু তখনই একটা formulation line-কে নাম ধরে mention করবে যখন সেই group-এর সব member
+  মিলিয়েও requirement মেটে না** — কোনো individual alternate সম্পূর্ণ exhaust হয়ে গেলেই (normal,
+  প্রত্যাশিত) সেটা আলাদা করে "short" হিসেবে flag হবে না, শুধু group-level shortfall হলেই সেই লাইনের
+  নাম warning banner-এ আসবে।
+- Header-এ **Batch Size (per batch)** আর **Total Qty (Number of Batches × Batch Size)** — দুটোই
+  আলাদা করে দেখাতে হবে (শুধু per-batch দেখালে মোট qty visually mismatch মনে হয়)।
+
+**✅ RESOLVED (2026-09-18) — AP-Approved default for auto-derived rows = Yes।** Business owner
+confirm করেছেন: Standard=0 এমন repeat row সহ **সব row-এর AP-Approved default Yes** — আলাদা কোনো
+বিশেষ নিয়ম লাগবে না। Mockup-এ যা assumption হিসেবে ধরা হয়েছিল সেটাই এখন locked।
+
+**✅ RESOLVED (2026-09-18) — user override + add-line rules, Page 4-এর জন্য:**
+- **R001 (non-machine-tracked) line-এ group থাকলেও** (যেমন White Cement JK-এর
+  `WHITE_CEMENT_NORMAL`) auto-derive কখনো চলবে না (§138.12-এর precondition অনুযায়ী) — user
+  manually Actual Material বেছে নেবে, ঠিক MTO/HPS-এ আজ যেভাবে হয় সেই একই dropdown mechanism।
+- **Auto-derived Actual Material-ও user বদলাতে পারবে** — কিন্তু শুধু সেই stroke-line-এর নিজের
+  group-এর সদস্যদের মধ্যেই (§138.12-এ আগে থেকেই লক করা "User override rules", এখানে পুনঃনিশ্চিত)।
+- **এই সবকিছুর পরেও নতুন item row manually add করা যাবে** — MTO/HPS/MTEST-এ Final-এ existing
+  "Standard=0, নতুন material add" mechanism (`is_formulation_line: false`)-ই MTS-এর Standard
+  stage-এ reuse হবে (§138.12-এ আগে থেকেই লক)।
+
+**Verification (mockup-এর জন্যই, real prod data দিয়ে):** CMP003, Stroke 0064 / SFG-00188 (TRUCARE
+WALL PUTTY WHITE), Machine 5KL-1 (ASCL/PRD/01, S001-mapped, capacity 5000 KG), ৭টা real RM line
+(৪টা S001/machine-tracked — GABROSA M700/MHEC group, PULMIX 4033, Sodium Gluconate 98%, VAE
+POWDER DA 1100/RDP group; ৩টা R001 — Dolomite 240# ×2, White Cement JK) — সব prod DB থেকে সরাসরি
+query করে আনা, কোনো ধরে নেওয়া নেই। Fabricated demo stock (কল্পিত সংখ্যা, কোনো DB-তে লেখা হয়নি)
+দিয়ে ইচ্ছাকৃতভাবে ৩টা line short দেখানো হয়েছে hard-block behavior verify করার জন্য।
+
+**✅ Implementation status (2026-09-18) — backend + frontend CODE-COMPLETE, UNCOMMITTED, mjs
+guards + real-data algorithm verification done; live click-through NOT done (no dev login in
+this environment).** `getMtsMaterialPlanHandler`/`saveMtsMaterialPlanHandler`
+(`process_order.handlers.ts`) implement the full auto-derive computation
+(`computeMtsAutoDeriveRowsForGroup`, machine-bucket reads via `fetchMachineBucketBalances`) +
+R001 manual-pick + hard-block, exactly per this section's lock — new routes
+`GET`/`POST /api/production/process-orders/:id/mts-material-plan` (`production.routes.ts`,
+`route-acl-registry.ts`, riding `PROD_PO_CREATE`). `createProcessOrderHandler`'s naive 1:1
+stroke-line prepopulation is now skipped for MTS (`!isMtsCreate` guard) — MTS lines only get
+written by this new save handler, never at Create. Reservation for MTS lines is written directly
+(actual_qty as required_qty, not via `reserve_process_order_materials()`, which reserves
+`planned_qty` — deliberately 0 on split rows here per this section's own point 3) — documented
+known gap: this insert has no advisory-lock, unlike that RPC, so two concurrent Page 4 saves for
+the same machine bucket could theoretically over-reserve (accepted for v1, see the code comment
+in `saveMtsMaterialPlanHandler`). Frontend: `ProductionPOCreatePage.jsx` gained `processStep===4`
+(`MtsMaterialPlanStep` component) — Create's success path for MTS moves here instead of
+resetting the form; matches this section's exact table-column lock (`# | Material Type |
+Formulation Material | Dosage % | Actual Material | Storage Location | Standard Qty | Actual Qty
+| Available | Movement Type | AP-Approved | AP Qty | Status`), the repeat-row/first-row-only-
+Standard rule, R001 manual-pick, and Policy 1 (Current Stroke) vs Policy 2 (read-only) editability
+from §138.14's stage table. Excel export from the mockup was NOT carried into the real page (out
+of scope for this pass — mockup-only, design-approval tool).
+**Verification done (2026-09-18):** live prod DB schema check (`machine_stock_log`,
+`stroke_line`, `material_category_group_member`, `machine_master`, `reservation_document`,
+`process_order_line` — every column this code touches confirmed to exist with matching types);
+real dataset re-confirmed (CMP003 Stroke 0064/SFG-00188, Machine 5KL-1/S001, same 4
+machine-tracked + 3 R001 split as this section's own worked example, group memberships for
+MHEC/RDP/WHITE_CEMENT_NORMAL pulled live). The real `computeMtsAutoDeriveRowsForGroup` function
+(imported directly from `process_order.handlers.ts`, not a re-implementation) was unit-tested
+against this section's own locked worked example (DA 1100/78 KG/VINNAPAS-49+ELOTEX-29) plus 3
+more cases (formulation-item-used-first, hard-block shortfall math, empty-bucket placeholder row
+matching prod's real current zero-row `machine_stock_log` state) — all passed exactly. All 18
+`scripts/*.mjs` CI guards pass (`company-scope-write-acl-guard.mjs` caught a real gap in this
+session's earlier `shift_master.handlers.ts::createShiftHandler` — missing secondary EDIT-level
+ACL check at the caller-supplied `company_id`, fixed via `canMaintainCompanyResource`). **Not yet
+done:** live logged-in click-through in the deployed app; commit/push (holding for explicit
+permission per standing session rule).

@@ -59,6 +59,12 @@ export const createBatchSeries = (body) => fetchProd("POST", "/api/production/ba
 export const updateBatchSeries = (id, body) => fetchProd("PATCH", `/api/production/batch-series/${id}`, body);
 export const listBatchNumbers = (p) => fetchProd("GET", "/api/production/batch-numbers", undefined, p);
 export const releaseBatchNumber = (id, body) => fetchProd("POST", `/api/production/batch-numbers/${id}/release`, body);
+// MTS Page 3 "Batch Range" live duplicate-check (2026-09-17)
+export const checkMtsBatchRange = (p) => fetchProd("GET", "/api/production/mts-batch-range-check", undefined, p);
+
+// ── Shifts (MTS Page 3 field, inline-create-as-you-go) ────────────────────────
+export const listShifts = (p) => fetchProd("GET", "/api/production/shifts", undefined, p);
+export const createShift = (body) => fetchProd("POST", "/api/production/shifts", body);
 
 // ── Segment Location Config ───────────────────────────────────────────────────
 export const listSegmentLocations = (p) => fetchProd("GET", "/api/production/segment-locations", undefined, p);
@@ -203,6 +209,9 @@ export const finalizeProcessOrder = (id, body, poType) => fetchProd(
 export const verifyProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/verify`, body);
 export const correctProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/correct`, body);
 export const reverseProcessOrder = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/reverse`, body);
+// §138.12/§138.15 (2026-09-18) -- MTS Page 4 RM auto-derive material plan.
+export const getMtsMaterialPlan = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-material-plan`);
+export const saveMtsMaterialPlan = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-material-plan`, body);
 
 // —— SFG QA Result Recording ————————————————————————————————————————————————————————
 export const listSfgQaDocuments = (p) => fetchProd("GET", "/api/production/sfg-qa-documents", undefined, p);
