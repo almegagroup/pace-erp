@@ -6,7 +6,20 @@ import ErpSummaryChips from "../../../../components/data/ErpSummaryChips.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
+import { createAutomationSettingsAction } from "../../../../components/communication/AutomationSettingsAction.js";
+import AutomationSettingsDrawer from "../../../../components/communication/AutomationSettingsDrawer.jsx";
+import {
+  buildAutomationSettingsContextKey,
+  isAutomationSettingsDrawerOpenForContext,
+} from "../../../../communication/automationDrawerContext.js";
+import { useCommunicationActionVisibility } from "../../../../communication/useCommunicationActionVisibility.js";
+import { withDirtyGuard } from "../../../../communication/dirtyGuard.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import {
+  PO11_COMMUNICATION_PAGE,
+  resolvePO11CommunicationSurface,
+} from "./po11CommunicationSurface.js";
 import { listStorageLocations } from "../../om/omApi.js";
 import {
   closeProcurementPlanningMonth,
@@ -49,6 +62,7 @@ function extractCollectionItems(payload) {
 const EMPTY_WORKSPACE = {
   plan: null,
   rows: [],
+  decision_rows: [],
   sloc_groups: [],
   item_groups: [],
   group_configs: [],
@@ -65,6 +79,7 @@ function normalizeWorkspaceData(payload) {
   return {
     plan: payload?.plan ?? null,
     rows: Array.isArray(payload?.rows) ? payload.rows : [],
+    decision_rows: Array.isArray(payload?.decision_rows) ? payload.decision_rows : [],
     sloc_groups: Array.isArray(payload?.sloc_groups) ? payload.sloc_groups : [],
     item_groups: Array.isArray(payload?.item_groups) ? payload.item_groups : [],
     group_configs: Array.isArray(payload?.group_configs) ? payload.group_configs : [],
@@ -212,10 +227,15 @@ function matchesItemTabSearch(row, query) {
     .some((value) => value.includes(needle));
 }
 
-function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
+function computeDashboardBlocks(rows, monthValue, groupConfigs = [], canonicalDecisionRows = []) {
   const visibleRows = rows.filter((row) => !row.excluded_from_dashboard);
   const grouped = new Map();
   const standalone = [];
+  const canonicalGroupTotalsById = new Map(
+    canonicalDecisionRows
+      .filter((row) => row?.decision_type === "ITEM_GROUP" && row?.planning_item_group_id)
+      .map((row) => [String(row.planning_item_group_id), row])
+  );
   const groupConfigById = new Map(
     groupConfigs.map((config) => [String(config.planning_item_group_id || ""), config])
   );
@@ -265,6 +285,26 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = []) {
         (sum, row) => sum + Number(row.monthly_requirement_qty || 0),
         0
       );
+      const canonicalGroupTotal = canonicalGroupTotalsById.get(
+        String(sortedItems[0]?.planning_item_group_id || "")
+      );
+      if (canonicalGroupTotal && Number(canonicalGroupTotal.member_count || 0) === sortedItems.length) {
+        groupBlocks.push({
+          type: "group-total",
+          groupName,
+          requirementIsDerivedFromMembers: memberRequirementTotal > 0,
+          row: {
+            ...canonicalGroupTotal,
+            planning_item_group_id: canonicalGroupTotal.planning_item_group_id,
+            planning_item_group_name: canonicalGroupTotal.group_name || groupName,
+            replenishment_days:
+              Number(canonicalGroupTotal.processing_time_days || 0) +
+              Number(canonicalGroupTotal.lead_time_days || 0),
+          },
+        });
+        units.push({ sortKey: sortedItems[0]?.material_name || "", blocks: groupBlocks });
+        return;
+      }
       const totalRequirement =
         memberRequirementTotal > 0
           ? memberRequirementTotal
@@ -590,6 +630,7 @@ function buildMaterialListColumns({ statusLabel, actionLabel, actionClassName, o
 
 function DashboardTable({
   rows,
+  decisionRows,
   monthValue,
   filters,
   onFilterChange,
@@ -606,8 +647,8 @@ function DashboardTable({
     });
   }, [filters.materialType, filters.query, filters.slocGroupId, rows]);
   const blocks = useMemo(
-    () => computeDashboardBlocks(filteredRows, monthValue, groupConfigs),
-    [filteredRows, monthValue, groupConfigs]
+    () => computeDashboardBlocks(filteredRows, monthValue, groupConfigs, decisionRows),
+    [decisionRows, filteredRows, monthValue, groupConfigs]
   );
   const summary = useMemo(() => summarizeDecisionBlocks(blocks), [blocks]);
   const gridRows = useMemo(() => flattenBlocksForGrid(blocks), [blocks]);
@@ -1114,9 +1155,27 @@ export default function ProcurementPlanningPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [automationDrawerOpenContextKey, setAutomationDrawerOpenContextKey] = useState(null);
+  const [automationDrawerDirty, setAutomationDrawerDirty] = useState(false);
 
   const effectiveCompanyId = companyId || defaultCompanyId;
   const planMonthValue = getMonthValue(planMonth);
+  const communicationSurfaceKey = resolvePO11CommunicationSurface({ showFullReport, activeTab });
+  const automationSettingsContextKey = buildAutomationSettingsContextKey({
+    companyId: effectiveCompanyId,
+    surfaceKey: communicationSurfaceKey,
+    companyScoped: PO11_COMMUNICATION_PAGE.companyScoped,
+  });
+  const automationDrawerOpen = isAutomationSettingsDrawerOpenForContext({
+    openedContextKey: automationDrawerOpenContextKey,
+    currentContextKey: automationSettingsContextKey,
+  });
+  const automationVisibility = useCommunicationActionVisibility({
+    ...PO11_COMMUNICATION_PAGE,
+    surfaceKey: communicationSurfaceKey,
+    channel: "EMAIL",
+    companyId: effectiveCompanyId,
+  });
   const workspaceQueryKey = ["po11", "workspace", effectiveCompanyId || "", planMonthValue];
   const historyQueryKey = ["po11", "history", effectiveCompanyId || "", planMonthValue];
   const storageLocationsQueryKey = ["po11", "storage-locations", effectiveCompanyId || ""];
@@ -1310,6 +1369,42 @@ export default function ProcurementPlanningPage() {
       showExcludedOnly: false,
     });
   }, [companyId]);
+
+  // Safety net only -- guardAutomationContextChange (below) intercepts every
+  // direct user action that can change company/surface and asks BEFORE the
+  // change is applied, so Cancel there truly prevents the navigation. This
+  // effect only catches a context change that reaches companyId/activeTab
+  // through some other path (e.g. a route-driven or automatic tab switch).
+  // By the time it fires the context has already changed, so there is no
+  // real "Cancel" to offer here -- asking one would be a false promise. It
+  // simply closes the stale editor without transplanting it, silently.
+  useEffect(() => {
+    if (!automationDrawerOpenContextKey || automationDrawerOpenContextKey === automationSettingsContextKey) return;
+    setAutomationDrawerDirty(false);
+    setAutomationDrawerOpenContextKey(null);
+  }, [automationDrawerOpenContextKey, automationSettingsContextKey]);
+
+  // Gate for every direct, user-initiated company/surface change (company
+  // selector, tab click). Asks BEFORE applying the change, so "Keep Editing"
+  // genuinely prevents the navigation and the draft is never left attached
+  // to a context it no longer belongs to.
+  function guardAutomationContextChange(applyChange) {
+    void withDirtyGuard({
+      isDirty: automationDrawerOpen && automationDrawerDirty,
+      confirm: () => openActionConfirm({
+        eyebrow: "Automation Settings",
+        title: "Discard unsaved automation rule changes?",
+        message: "Changing the company or page view will close Automation Settings. This rule's unsaved changes are never moved to the new context.",
+        confirmLabel: "Discard Changes",
+        cancelLabel: "Keep Editing",
+      }),
+      onDiscard: () => {
+        setAutomationDrawerDirty(false);
+        setAutomationDrawerOpenContextKey(null);
+      },
+      apply: applyChange,
+    });
+  }
 
   useEffect(() => {
     const nextDrafts = {};
@@ -1704,6 +1799,7 @@ export default function ProcurementPlanningPage() {
   const displayedPlanningGroupConfigs = planIsClosed
     ? archivedGroupConfigs
     : Object.values(groupConfigDrafts);
+  const displayedPlanningDecisionRows = planIsClosed ? [] : workspace.decision_rows || [];
 
   const planningSummary = useMemo(() => {
     const rows = displayedPlanningRows || [];
@@ -1844,11 +1940,18 @@ export default function ProcurementPlanningPage() {
     }
   }, [activeTab, tabs]);
 
+  const automationSettingsAction = createAutomationSettingsAction({
+    visible: automationVisibility.visible,
+    onClick: () => setAutomationDrawerOpenContextKey(automationSettingsContextKey),
+  });
+
   return (
+    <>
     <ErpMasterListTemplate
       eyebrow="Procurement"
       title="Procurement Planning Workspace"
       actions={[
+        ...(automationSettingsAction ? [automationSettingsAction] : []),
         ...(showFullReport
           ? [
               {
@@ -1937,7 +2040,7 @@ export default function ProcurementPlanningPage() {
                     <TransactionCompanySelector
                       runtimeContext={runtimeContext}
                       value={companyId}
-                      onChange={setCompanyId}
+                      onChange={(value) => guardAutomationContextChange(() => setCompanyId(value))}
                       label="Company"
                     />
                     <label className="grid gap-1 text-sm text-slate-700">
@@ -1954,7 +2057,7 @@ export default function ProcurementPlanningPage() {
                         <button
                           key={tab.id}
                           type="button"
-                          onClick={() => setActiveTab(tab.id)}
+                          onClick={() => guardAutomationContextChange(() => setActiveTab(tab.id))}
                           className={`border px-3 py-2 text-sm font-semibold ${
                             activeTab === tab.id
                               ? "border-sky-700 bg-sky-100 text-sky-950"
@@ -2015,6 +2118,7 @@ export default function ProcurementPlanningPage() {
                 ) : null}
                 <DashboardTable
                   rows={displayedPlanningRows}
+                  decisionRows={displayedPlanningDecisionRows}
                   monthValue={planMonthValue}
                   filters={dashboardFilters}
                   onFilterChange={handleDashboardFilterChange}
@@ -2025,7 +2129,7 @@ export default function ProcurementPlanningPage() {
                       <TransactionCompanySelector
                         runtimeContext={runtimeContext}
                         value={companyId}
-                        onChange={setCompanyId}
+                        onChange={(value) => guardAutomationContextChange(() => setCompanyId(value))}
                         label="Company"
                       />
                       <label className="grid gap-1 text-sm text-slate-700">
@@ -2639,5 +2743,17 @@ export default function ProcurementPlanningPage() {
         ),
       }}
     />
+    <AutomationSettingsDrawer
+      visible={automationDrawerOpen}
+      metadata={automationVisibility.data}
+      companyId={effectiveCompanyId}
+      contextKey={automationSettingsContextKey}
+      onDirtyChange={setAutomationDrawerDirty}
+      onClose={() => {
+        setAutomationDrawerDirty(false);
+        setAutomationDrawerOpenContextKey(null);
+      }}
+    />
+    </>
   );
 }
