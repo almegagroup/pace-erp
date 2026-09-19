@@ -2626,6 +2626,16 @@ async function buildMtsMaterialPlanGroupsForOrder(
       alternateMaterialIds: alternateIds,
       bucketBalances,
     });
+    // A machine bucket is one physical pool.  Subsequent formulation groups
+    // must only see what this group did not already allocate from it.
+    for (const row of rows) {
+      if (row.actual_qty > EPSILON) {
+        bucketBalances.set(
+          row.actual_material_id,
+          Number(((bucketBalances.get(row.actual_material_id) ?? 0) - row.actual_qty).toFixed(6)),
+        );
+      }
+    }
     groups.push({
       stroke_line_material_id: formulationMaterialId,
       auto_derive_applicable: true,
@@ -2646,7 +2656,10 @@ async function buildMtsMaterialPlanGroupsForOrder(
       const locationId = String(line.default_storage_location_id);
       const candidateIds = [formulationMaterialId, ...(allowedAlternateMap.get(formulationMaterialId) ?? [])];
       for (const candidateId of candidateIds) {
-        needed.set(buildAvailabilityKey(candidateId, locationId), { materialId: candidateId, storageLocationId: locationId, qty: 0 });
+        // computeAvailabilityRows deliberately ignores zero-quantity entries.
+        // Page 4 needs the live balance for every manual-pick choice, not a
+        // requested quantity at preview time, so use a harmless positive probe.
+        needed.set(buildAvailabilityKey(candidateId, locationId), { materialId: candidateId, storageLocationId: locationId, qty: 1 });
       }
     }
     const availabilityRows = needed.size > 0 ? await computeAvailabilityRows(companyId, needed) : [];
@@ -2797,29 +2810,6 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
           rows = mapped;
         }
 
-        // Hard re-validate against the fresh machine-bucket balances
-        // computed just above -- never trust the client's own "available"
-        // display, whether the rows came from an override or the server's
-        // own computed default.
-        const perMaterialTotal = new Map<string, number>();
-        for (const row of rows) {
-          perMaterialTotal.set(row.actual_material_id, (perMaterialTotal.get(row.actual_material_id) ?? 0) + row.actual_qty);
-        }
-        // Re-derive each material's own bucket balance the same way
-        // buildMtsMaterialPlanGroupsForOrder did, from the group's own rows
-        // (available_qty was populated for the server-default path; for an
-        // override we recompute directly).
-        const freshBalances = machineStorageLocationId && machineId
-          ? await fetchMachineBucketBalances(companyId, machineStorageLocationId, machineId, [...perMaterialTotal.keys()])
-          : new Map<string, number>();
-        for (const [materialId, qty] of perMaterialTotal.entries()) {
-          const available = Math.max(0, freshBalances.get(materialId) ?? 0);
-          if (qty > available + EPSILON) {
-            shortGroupLabels.push(group.stroke_line_material_id);
-            break;
-          }
-        }
-
         if (group.short) shortGroupLabels.push(group.stroke_line_material_id);
         for (const row of rows) {
           finalRows.push({ ...row, storage_location_id: group.storage_location_id });
@@ -2848,8 +2838,51 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
       }
     }
 
+    // Validate the completed plan as one allocation, rather than validating
+    // each group independently against the same physical stock.  A material
+    // can be an allowed alternate for more than one formulation line.
+    const autoFormulationIds = new Set(
+      serverGroups.filter((group) => group.auto_derive_applicable).map((group) => group.stroke_line_material_id),
+    );
+    const machineNeeds = new Map<string, number>();
+    const manualNeeds = new Map<string, AvailabilityNeed>();
+    const labelsByNeedKey = new Map<string, string[]>();
+    for (const row of finalRows) {
+      if (row.actual_qty <= EPSILON) continue;
+      if (autoFormulationIds.has(row.stroke_line_material_id)) {
+        machineNeeds.set(row.actual_material_id, Number(((machineNeeds.get(row.actual_material_id) ?? 0) + row.actual_qty).toFixed(6)));
+      } else {
+        const key = buildAvailabilityKey(row.actual_material_id, row.storage_location_id);
+        const current = manualNeeds.get(key);
+        manualNeeds.set(key, {
+          materialId: row.actual_material_id,
+          storageLocationId: row.storage_location_id,
+          qty: Number(((current?.qty ?? 0) + row.actual_qty).toFixed(6)),
+        });
+        labelsByNeedKey.set(key, [...(labelsByNeedKey.get(key) ?? []), row.stroke_line_material_id]);
+      }
+    }
+    if (machineNeeds.size > 0) {
+      const freshBalances = machineStorageLocationId && machineId
+        ? await fetchMachineBucketBalances(companyId, machineStorageLocationId, machineId, [...machineNeeds.keys()])
+        : new Map<string, number>();
+      for (const [materialId, qty] of machineNeeds.entries()) {
+        if (qty > Math.max(0, freshBalances.get(materialId) ?? 0) + EPSILON) {
+          for (const row of finalRows.filter((r) => r.actual_material_id === materialId && autoFormulationIds.has(r.stroke_line_material_id))) {
+            shortGroupLabels.push(row.stroke_line_material_id);
+          }
+        }
+      }
+    }
+    if (manualNeeds.size > 0) {
+      const availabilityRows = await computeAvailabilityRows(companyId, manualNeeds);
+      for (const row of availabilityRows) {
+        if (row.short) shortGroupLabels.push(...(labelsByNeedKey.get(buildAvailabilityKey(row.material_id, row.storage_location_id)) ?? []));
+      }
+    }
+
     if (shortGroupLabels.length > 0) {
-      const detail = await formatMaterialLabels(shortGroupLabels);
+      const detail = await formatMaterialLabels([...new Set(shortGroupLabels)]);
       return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient stock (formulation + alternates combined) for: ${detail}`);
     }
 

@@ -2570,6 +2570,7 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
       <div className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-4 py-3">
           <h4 className="text-sm font-semibold text-slate-800">Material Table</h4>
+          <p className="mt-1 text-xs text-slate-500">Formulation Material, Dosage and Standard Qty describe the recipe requirement. Actual Material shows what will be issued; replacing it does not change the recipe.</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1400px] border-collapse text-sm">
@@ -3151,7 +3152,10 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
     setGroupOverride(group, { storage_location_id: storageLocationId });
   }
 
-  const shortGroups = groups.filter((g) => g.short);
+  // `short` is calculated for the initial Pack-BOM location. Once the user
+  // chooses a different location, the old result must not block Save; the
+  // backend re-checks the selected location using fresh balances.
+  const shortGroups = groups.filter((g) => g.short && storageLocationForGroup(g) === g.storage_location_id);
 
   function findShortfallGroups() {
     const found = [];

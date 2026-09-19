@@ -297,6 +297,7 @@ type CombinedPmGroup = {
   has_alternate: boolean;
   material_group_id: string | null;
   storage_location_id: string;
+  source_storage_location_ids: string[];
   standard_qty: number;
   group_member_ids: string[];
   contributing: Array<{ row_id: string; pack_size_label: string; qty: number }>;
@@ -315,13 +316,21 @@ function buildCombinedPmGroups(rows: ResolvedPage5Row[]): CombinedPmGroup[] {
       if (existing) {
         existing.standard_qty = Number((existing.standard_qty + requiredQty).toFixed(6));
         existing.contributing.push({ row_id: row.id, pack_size_label: row.packSizeLabel, qty: requiredQty });
+        const sourceLocationId = toTrimmedString(line.storage_location_id);
+        if (sourceLocationId && !existing.source_storage_location_ids.includes(sourceLocationId)) {
+          existing.source_storage_location_ids.push(sourceLocationId);
+          // One combined row cannot silently choose between disagreeing Pack
+          // BOM locations. Require an explicit operator choice instead.
+          existing.storage_location_id = "";
+        }
       } else {
         byMaterial.set(materialId, {
           material_id: materialId,
           uom_code: toTrimmedString(line.uom_code) || "KG",
           has_alternate: Boolean(line.has_alternate),
           material_group_id: toTrimmedString(line.material_group_id) || null,
-          storage_location_id: "", // resolved by caller (segment default, user-editable)
+          storage_location_id: toTrimmedString(line.storage_location_id),
+          source_storage_location_ids: [toTrimmedString(line.storage_location_id)].filter(Boolean),
           standard_qty: requiredQty,
           group_member_ids: [materialId],
           contributing: [{ row_id: row.id, pack_size_label: row.packSizeLabel, qty: requiredQty }],
@@ -350,19 +359,27 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
 
     const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(groups.map((g) => g.material_group_id ?? "").filter(Boolean) as string[]);
     for (const group of groups) {
-      group.storage_location_id = defaultPmSlocId ?? "";
+      // Pack BOM location is the design-default. The segment setting is only
+      // a legacy fallback for old BOM lines with no declared location.
+      if (!group.storage_location_id && group.source_storage_location_ids.length === 0) {
+        group.storage_location_id = defaultPmSlocId ?? "";
+      }
       if (group.has_alternate && group.material_group_id) {
         const members = (groupMemberMap.get(group.material_group_id) ?? []).filter((m) => m !== group.material_id);
         group.group_member_ids = [group.material_id, ...members];
       }
     }
 
-    const candidateMaterialIds = [...new Set(groups.flatMap((g) => g.group_member_ids))];
-    const balances = defaultPmSlocId
-      ? await fetchLocationBalances(String(po.company_id), defaultPmSlocId, candidateMaterialIds)
-      : new Map<string, number>();
-
-    const derivedGroups = groups.map((group) => {
+    const remainingByLocation = new Map<string, Map<string, number>>();
+    const derivedGroups = [];
+    for (const group of groups) {
+      let balances = remainingByLocation.get(group.storage_location_id);
+      if (!balances) {
+        balances = group.storage_location_id
+          ? await fetchLocationBalances(String(po.company_id), group.storage_location_id, [...new Set(groups.filter((g) => g.storage_location_id === group.storage_location_id).flatMap((g) => g.group_member_ids))])
+          : new Map<string, number>();
+        remainingByLocation.set(group.storage_location_id, balances);
+      }
       const { rows: derivedRows, short, shortfallQty } = computeMtsAutoDeriveRowsForGroup({
         formulationMaterialId: group.material_id,
         dosagePct: null,
@@ -370,7 +387,10 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
         alternateMaterialIds: group.group_member_ids.filter((m) => m !== group.material_id),
         bucketBalances: balances,
       });
-      return {
+      for (const row of derivedRows) {
+        if (row.actual_qty > EPSILON) balances.set(row.actual_material_id, Number(((balances.get(row.actual_material_id) ?? 0) - row.actual_qty).toFixed(6)));
+      }
+      derivedGroups.push({
         material_id: group.material_id,
         uom_code: group.uom_code,
         auto_derive_applicable: true,
@@ -381,8 +401,8 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
         short,
         shortfall_qty: shortfallQty,
         contributing: group.contributing,
-      };
-    });
+      });
+    }
 
     const materialIds = new Set<string>();
     for (const group of derivedGroups) {
@@ -476,16 +496,21 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
     const bodyGroups = Array.isArray(body.groups) ? (body.groups as JsonRecord[]) : [];
     const bodyGroupByMaterial = new Map(bodyGroups.map((g) => [toTrimmedString(g.material_id), g]));
 
-    // per-row PM qty accumulator: rowId -> Map<actualMaterialId, qty>
+    // per-row PM qty accumulator: rowId -> Map<formulation+actual, qty>.
+    // The same alternate may legally serve more than one formulation group.
     const perRowPmQty = new Map<string, Map<string, number>>();
     for (const row of rows) perRowPmQty.set(row.id, new Map());
     // group storage location chosen (rowId doesn't matter -- PM issue location is
     // per combined-group, shared across every row that draws from that group).
     const groupStorageLocationById = new Map<string, string>();
+    const totalNeedsByLocationMaterial = new Map<string, number>();
 
     for (const group of serverGroups) {
       const bodyGroup = bodyGroupByMaterial.get(group.material_id);
-      const storageLocationId = toTrimmedString(bodyGroup?.storage_location_id) || defaultPmSlocId || "";
+      const storageLocationId = toTrimmedString(bodyGroup?.storage_location_id)
+        || group.storage_location_id
+        || (group.source_storage_location_ids.length === 0 ? defaultPmSlocId : "")
+        || "";
       if (!storageLocationId) {
         return combineErr(req, ctx, "PROD_PACK_COMBINE_PM_SLOC_REQUIRED", 400, `A Storage Location is required for PM group ${group.material_id}`);
       }
@@ -541,6 +566,10 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           return combineErr(req, ctx, "PROD_PACK_COMBINE_PM_SHORTAGE", 422, `Insufficient stock for material ${materialId} at the selected PM storage location`);
         }
       }
+      for (const [materialId, qty] of perMaterialTotal.entries()) {
+        const needKey = `${storageLocationId}::${materialId}`;
+        totalNeedsByLocationMaterial.set(needKey, Number(((totalNeedsByLocationMaterial.get(needKey) ?? 0) + qty).toFixed(6)));
+      }
 
       // Split each (actual_material_id, qty) proportionally back to every
       // contributing Page-5 row, by that row's own share of the group's
@@ -558,8 +587,20 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           allocated = Number((allocated + qty).toFixed(6));
           if (qty <= 0) return;
           const rowMap = perRowPmQty.get(contrib.row_id)!;
-          rowMap.set(finalRow.actual_material_id, Number(((rowMap.get(finalRow.actual_material_id) ?? 0) + qty).toFixed(6)));
+          const allocationKey = `${group.material_id}::${finalRow.actual_material_id}`;
+          rowMap.set(allocationKey, Number(((rowMap.get(allocationKey) ?? 0) + qty).toFixed(6)));
         });
+      }
+    }
+
+    // Group-level checks above are not enough when one alternate is used by
+    // multiple formulation groups. Re-check the summed draw from each real
+    // location before creating any document.
+    for (const [needKey, qty] of totalNeedsByLocationMaterial.entries()) {
+      const [storageLocationId, materialId] = needKey.split("::");
+      const balances = await fetchLocationBalances(companyId, storageLocationId, [materialId]);
+      if (qty > Math.max(0, balances.get(materialId) ?? 0) + EPSILON) {
+        return combineErr(req, ctx, "PROD_PACK_COMBINE_PM_SHORTAGE", 422, `Combined demand exceeds available stock for material ${materialId} at the selected PM storage location`);
       }
     }
 
@@ -620,14 +661,15 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
         // item + an alternate.
         const candidateIds = group ? group.group_member_ids : [formulationMaterialId];
         for (const actualMaterialId of candidateIds) {
-          const qty = pmQtyForRow.get(actualMaterialId);
+          const allocationKey = `${formulationMaterialId}::${actualMaterialId}`;
+          const qty = pmQtyForRow.get(allocationKey);
           if (!qty || qty <= 0) continue;
           // A given (formulation, actual) pair is only ever attributed to
           // ONE bomLine per row (Pack BOM never repeats the same formulation
           // material twice within one BOM) -- consume it so a formulation
           // material appearing in more than one bomLine row (shouldn't
           // happen) can't double count.
-          pmQtyForRow.set(actualMaterialId, 0);
+          pmQtyForRow.set(allocationKey, 0);
           pmLineInserts.push({
             packing_order_id: packPoId,
             line_type: "PM",
