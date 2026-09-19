@@ -604,49 +604,13 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
       }
     }
 
-    // §8E: no unbounded id list here -- one packing_order per Page-5 row,
-    // and MTS Packing PO row counts are always small (a handful of pack
-    // sizes per batch range), so a plain sequential loop is fine; each
-    // row's own DB writes are otherwise independent of the others (§8B).
+    // Build every header and line before writing. A single database RPC then
+    // owns all inserts, reservations, and staging conversion in one
+    // transaction; a failure cannot leave a partial set of Packing POs.
     const now = new Date().toISOString();
-    const createdIds: string[] = [];
-    const createdPoNumbers: string[] = [];
+    const atomicOrders: JsonRecord[] = [];
     for (const row of rows) {
       const poNumber = await generateGlobalDocNumber("PACK_PO");
-      const { data: packPo, error: insertErr } = await serviceRoleClient
-        .schema("erp_production").from("packing_order")
-        .insert({
-          company_id: companyId,
-          po_number: poNumber,
-          po_type: "PMTS",
-          source_po_type: "MTS",
-          process_order_id: po.id,
-          machine_id: null,
-          material_id: row.skuMaterialId,
-          pack_code_id: row.packCodeId,
-          batch_number_from: row.batchNumberFrom || null,
-          batch_number_to: row.batchNumberTo || null,
-          fill_qty_per_pack: row.fillQty,
-          num_packs: row.totalOuterUnit,
-          sku_qty: row.totalOuterUnit,
-          fg_conversion_qty: 1,
-          sfg_conversion_qty: row.fillQty,
-          planned_qty_kg: row.volume,
-          total_qty_kg: row.volume,
-          status: "STANDARD",
-          segment_code: po.segment_code,
-          created_by: ctx.auth_user_id,
-          created_at: now,
-          last_updated_at: now,
-          last_updated_by: ctx.auth_user_id,
-        })
-        .select("id").single();
-      if (insertErr) {
-        console.error("[mts_packing_combine.save] packing_order insert failed:", JSON.stringify(insertErr));
-        throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-      }
-      const packPoId = (packPo as JsonRecord).id as string;
-
       const pmQtyForRow = perRowPmQty.get(row.id) ?? new Map<string, number>();
       const pmLineInserts: JsonRecord[] = [];
       let displayOrder = 10;
@@ -671,7 +635,6 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           // happen) can't double count.
           pmQtyForRow.set(allocationKey, 0);
           pmLineInserts.push({
-            packing_order_id: packPoId,
             line_type: "PM",
             material_id: formulationMaterialId,
             actual_material_id: actualMaterialId === formulationMaterialId ? null : actualMaterialId,
@@ -691,7 +654,6 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
 
       const lineRows: JsonRecord[] = [
         {
-          packing_order_id: packPoId,
           line_type: "FG",
           material_id: row.skuMaterialId,
           batch_number: null,
@@ -706,7 +668,6 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           display_order: 1,
         },
         {
-          packing_order_id: packPoId,
           line_type: "SFG",
           material_id: toTrimmedString(row.sfgLine.material_id),
           batch_number: null, // chosen at Final, same convention as MTO/HPS
@@ -722,57 +683,32 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
         },
         ...pmLineInserts,
       ];
-      const { data: insertedLines, error: lineErr } = await serviceRoleClient
-        .schema("erp_production").from("packing_order_line")
-        .insert(lineRows)
-        .select("id, line_type, material_id, actual_material_id, total_qty, issue_sloc_id, uom_code");
-      if (lineErr) {
-        console.error("[mts_packing_combine.save] line insert failed:", JSON.stringify(lineErr));
-        throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-      }
-
-      const reservationRows = ((insertedLines ?? []) as JsonRecord[])
-        .filter((line) => String(line.line_type) !== "FG")
-        .map((line) => ({
-          source_type: "PACKING_PO",
-          source_id: packPoId,
-          source_line_id: line.id,
-          company_id: companyId,
-          material_id: toTrimmedString(line.actual_material_id) || line.material_id,
-          storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
-          required_qty: Number(line.total_qty ?? 0),
-          uom_code: toTrimmedString(line.uom_code) || "KG",
-          issued_qty: 0,
-          status: "OPEN",
-          batch_number: null,
-          created_by: ctx.auth_user_id,
-          created_at: now,
-          last_updated_by: ctx.auth_user_id,
-          last_updated_at: now,
-        }));
-      if (reservationRows.length > 0) {
-        const { error: reservationErr } = await serviceRoleClient
-          .schema("erp_production").from("reservation_document").insert(reservationRows);
-        if (reservationErr) {
-          console.error("[mts_packing_combine.save] reservation insert failed:", JSON.stringify(reservationErr));
-          throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-        }
-      }
-
-      const { error: convertErr } = await serviceRoleClient
-        .schema("erp_production").from("mts_packing_plan_row")
-        .update({ status: "CONVERTED", packing_order_id: packPoId, last_updated_by: ctx.auth_user_id, last_updated_at: now })
-        .eq("id", row.id);
-      if (convertErr) {
-        console.error("[mts_packing_combine.save] plan-row convert failed:", JSON.stringify(convertErr));
-        throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-      }
-
-      createdIds.push(packPoId);
-      createdPoNumbers.push(poNumber);
+      atomicOrders.push({
+        plan_row_id: row.id,
+        order: {
+          company_id: companyId, po_number: poNumber, po_type: "PMTS", source_po_type: "MTS",
+          process_order_id: po.id, material_id: row.skuMaterialId, pack_code_id: row.packCodeId,
+          batch_number_from: row.batchNumberFrom || "", batch_number_to: row.batchNumberTo || "",
+          fill_qty_per_pack: row.fillQty, num_packs: row.totalOuterUnit, sku_qty: row.totalOuterUnit,
+          fg_conversion_qty: 1, sfg_conversion_qty: row.fillQty, planned_qty_kg: row.volume,
+          total_qty_kg: row.volume, status: "STANDARD", segment_code: po.segment_code ?? "",
+          actor_id: ctx.auth_user_id, now,
+        },
+        lines: lineRows,
+      });
     }
-
-    return createdOkResponse({ ids: createdIds, po_numbers: createdPoNumbers }, ctx.request_id, req);
+    const { data: created, error: atomicErr } = await serviceRoleClient
+      .schema("erp_production")
+      .rpc("create_mts_packing_orders_atomic", { p_orders: atomicOrders });
+    if (atomicErr) {
+      console.error("[mts_packing_combine.save] atomic save failed:", JSON.stringify(atomicErr));
+      throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
+    }
+    const createdRows = (created ?? []) as JsonRecord[];
+    return createdOkResponse({
+      ids: createdRows.map((entry) => String(entry.packing_order_id)),
+      po_numbers: createdRows.map((entry) => String(entry.po_number)),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_COMBINE_SAVE_FAILED";
     return combineErr(req, ctx, code, code === "PROD_PO_NOT_FOUND" ? 404 : 500, "Failed to save combined packing plan");
