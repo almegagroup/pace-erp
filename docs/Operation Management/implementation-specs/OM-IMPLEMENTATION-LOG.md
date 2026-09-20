@@ -5866,3 +5866,65 @@ it against this section's own locked worked example (DA 1100/78 KG split) and 3 
 exact matches. No live logged-in click-through (no dev login in this environment).
 
 **Not yet done:** live click-through; commit/push (withheld pending permission, per standing rule).
+
+## 2026-09-20 — MTS Page 4-6 Continuity, Atomicity and Rule Re-verification — DEPLOYED
+
+**Scope:** continuation of feasibility §138.12/§138.15/§138.16. This entry supersedes the
+previous Page-4 note's "uncommitted", direct-insert and v1-concurrency-gap wording: the work is
+committed, pushed to `dev`, deployed, and the relevant material-plan and packing-order writes are
+now atomic.
+
+**Implemented:**
+- Page 4 uses the immutable `stroke_line_id` as its per-line identity. Two formulation lines that
+  declare the same material (the real `0064`/Dolomite shape) therefore remain two independent
+  recipe requirements, alternate groups and saved rows; `process_order_line.stroke_line_id`
+  preserves that identity after save.
+- A normal MTS machine reads only its own bucket. When the user deliberately selects a foreign
+  machine, Page 4 reads that selected location's `machine_id IS NULL` (Unassigned) bucket; the
+  original recipe/default dosage is still displayed even when an alternate supplies all quantity.
+- Page 4 supports adding/removing an alternate row. The shortfall confirmation names the
+  formulation material rather than exposing an internal id.
+- `save_mts_material_plan_atomic()` inserts every Page-4 line and its reservations in one
+  transaction under an order lock. The existing Packing-PO atomic save remains in the same flow.
+- Page 6 sends a storage-location override back to the server; the server recomputes availability,
+  allocations and shortage for that selected location rather than retaining stale default-location
+  figures.
+- Process-PO Verify now appends the matching MTS bucket `OUT` rows inside
+  `complete_process_po_verify()` / `post_document`'s transaction. A verified issue therefore
+  cannot remain falsely available for a later auto-derive. The bucket lookup now has a composite
+  index on company, location, machine and material.
+
+**Migrations applied to Dev and reconciled:**
+`20260919184410_mts_packing_atomic_save`,
+`20260920110000_mts_material_plan_identity_atomic_save`,
+`20260920111000_mts_machine_consumption_atomic`, and
+`20260920112000_mts_machine_bucket_lookup_index`.
+
+**Mandatory-rule review:**
+- **R-01:** Page 4/6 labels resolve material and storage-location code/name from server maps; an
+  unresolved reference renders `--`, never a UUID.
+- **R-02:** both derived grids use React Query with stable keys; Page-6's selected location is in
+  the query key, so changing it gets fresh server data without a `useEffect` reload hack.
+- **R-03:** these are single-order planning endpoints; all display labels are bulk-resolved in the
+  endpoint response, with no frontend per-row detail calls.
+- **R-04:** all DDL/function/index changes are versioned migration files. Only Dev migration-history
+  metadata was repaired administratively after MCP had recorded timestamp versions instead of the
+  committed filename versions; no schema or business data was changed by that repair.
+- **R-05:** Page 4-6 are a bounded creation wizard, not report/heavy-query screens; a selection
+  screen is not applicable.
+
+**Verification:** all 18 repository `scripts/*.mjs` checks pass locally. This includes route/ACL
+registry (0 missing), company-scope (0), company-scope write ACL (0), frontend payload (0), JSX
+undefined component (0), stock posting (12/12 baseline), migration column/order scans, and the
+strict SU24 dependency-manifest check. The Dev migration canonical diff is zero rows after repair
+(`578` local/remote migrations). The generated SU24 live dependency-gap query returns zero rows
+for CMP003/CMP006; approver-map integrity returns zero rows. Touched frontend/backend modules also
+passed esbuild syntax parsing and `git diff --check`. Render Dev deployed commit `c320a95f` with
+status `live`.
+
+**Known external findings, not changed by this MTS scope:** repository-wide ACL-MASTER drift is
+still reported for CMP003/CMP005/CMP007, and CMP007 has 90 uncaptured
+`work_context_capabilities` rows. These are pre-existing ACL business-configuration/snapshot
+issues outside the MTS resource and require an ACL-owner decision; the MTS SU24 target-company
+dependency check itself is clean. A signed-in browser click-through was not available in this
+terminal session; no user session was impersonated.
