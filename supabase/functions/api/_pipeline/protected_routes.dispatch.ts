@@ -13,6 +13,7 @@ import { dispatchProcurementRoutes } from "../_routes/procurement.routes.ts";
 import { dispatchProductionRoutes } from "../_routes/production.routes.ts";
 import { dispatchMenuRoutes } from "../_routes/menu.routes.ts";
 import { dispatchSessionRoutes } from "../_routes/session.routes.ts";
+import { dispatchCommunicationRoutes } from "../_routes/communication.routes.ts";
 import { logoutHandler } from "../_core/auth/logout.handler.ts";
 import { errorResponse } from "../_core/response.ts";
 
@@ -108,6 +109,15 @@ const sessionRoute = await dispatchSessionRoutes(
   sessionResult
 );
 if (sessionRoute) return sessionRoute;
+
+const communication = await dispatchCommunicationRoutes(
+  routeKey,
+  req,
+  requestId,
+  sessionResult,
+  contextResult
+);
+if (communication) return communication;
 
     switch (routeKey) {
       case "POST:/api/logout":
