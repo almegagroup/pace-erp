@@ -5928,3 +5928,25 @@ still reported for CMP003/CMP005/CMP007, and CMP007 has 90 uncaptured
 issues outside the MTS resource and require an ACL-owner decision; the MTS SU24 target-company
 dependency check itself is clean. A signed-in browser click-through was not available in this
 terminal session; no user session was impersonated.
+
+## 2026-09-20 — MTS Non-Current Final and Common Verify — DEPLOYED
+
+**Scope:** feasibility §138.15.1. This completes the workflow after the Page-4 material plan:
+MTS has no Batch Start checkpoint. Current-stroke MTS becomes eligible for Final from `STANDARD`;
+non-current-stroke MTS becomes eligible from `QA_APPROVED`.
+
+**Implemented:**
+- PR11 Final now lists both eligible MTS paths. A non-current-stroke order shows an explicit
+  notice that Production may correct actual issue there and QA will review/post it at Verify.
+- Verify remains the common QA posting checkpoint for current and non-current MTS. Its existing
+  atomic Verify transaction posts the final material movements and corresponding MTS bucket
+  consumption together.
+- MTS Final/Verify accepts a split alternate issue row whose planned quantity is zero and actual
+  quantity is positive. Since MTS does not expose the generic AP controls, the server records the
+  internally required approval values from that actual quantity rather than rejecting the update
+  for hidden `approved_status` input.
+
+**Verification:** frontend Final page and process-order handler parse cleanly with esbuild;
+`git diff --check`, route/ACL registry (0 missing), company-scope (0), JSX undefined component
+(0), and stock-posting baseline (12/12) pass. Render Dev deployed commit `1ca52b81` with status
+`live`. A signed-in browser E2E was not available, so no user session was impersonated.
