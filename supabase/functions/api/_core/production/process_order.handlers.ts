@@ -293,6 +293,7 @@ async function buildAllowedAlternateIdsByStrokeLines(
   strokeLines: JsonRecord[],
   logPrefix: string,
   errorCode: string,
+  keyForLine: (strokeLine: JsonRecord) => string = (strokeLine) => String(strokeLine.material_id ?? ""),
 ): Promise<Map<string, string[]>> {
   const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(
     strokeLines.map((line) => String(line.material_group_id ?? "")),
@@ -314,7 +315,8 @@ async function buildAllowedAlternateIdsByStrokeLines(
       if (memberId && memberId !== formulationMaterialId) allowedIds.add(memberId);
     }
 
-    allowedMap.set(formulationMaterialId, Array.from(allowedIds));
+    const lineKey = keyForLine(strokeLine);
+    if (lineKey) allowedMap.set(lineKey, Array.from(allowedIds));
   }
   return allowedMap;
 }
@@ -326,7 +328,7 @@ async function fetchOrderLines(orderId: string, strokeMasterId: string | null = 
     .select(`
       id, process_order_id, material_id, planned_qty, actual_qty, uom_code,
       issue_sloc_id, is_rm, display_order, stock_ledger_id,
-      actual_material_id, dosage_pct, is_formulation_line,
+      actual_material_id, dosage_pct, is_formulation_line, stroke_line_id,
       approved_status, ap_approved_qty, variance_qty
     `)
     .eq("process_order_id", orderId)
@@ -503,22 +505,25 @@ async function resolveOutputStorageLocationId(strokeMasterId: string | null, poT
 export async function fetchMachineBucketBalances(
   companyId: string,
   storageLocationId: string,
-  machineId: string,
+  machineId: string | null,
   materialIds: string[],
 ): Promise<Map<string, number>> {
   const balances = new Map<string, number>();
   if (materialIds.length === 0) return balances;
   let rows: JsonRecord[];
   try {
-    rows = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
-      .schema("erp_production")
-      .from("machine_stock_log")
-      .select("material_id, qty, direction")
-      .eq("company_id", companyId)
-      .eq("storage_location_id", storageLocationId)
-      .eq("machine_id", machineId)
-      .in("material_id", materialIds)
-      .range(from, to));
+    rows = await fetchAllRows<JsonRecord>((from, to) => {
+      const query = serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .select("material_id, qty, direction")
+        .eq("company_id", companyId)
+        .eq("storage_location_id", storageLocationId)
+        .in("material_id", materialIds);
+      return machineId
+        ? query.eq("machine_id", machineId).range(from, to)
+        : query.is("machine_id", null).range(from, to);
+    });
   } catch {
     throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
   }
@@ -533,6 +538,7 @@ export async function fetchMachineBucketBalances(
 }
 
 type MtsAutoDeriveRow = {
+  stroke_line_id: string;
   stroke_line_material_id: string; // formulation/declared item — constant across a group's split rows
   actual_material_id: string; // real material this specific row draws from
   is_formulation_line: boolean; // true only on the first (Standard-carrying) row of the group
@@ -544,6 +550,7 @@ type MtsAutoDeriveRow = {
 };
 
 type MtsAutoDeriveGroupResult = {
+  stroke_line_id: string;
   stroke_line_material_id: string;
   auto_derive_applicable: boolean; // false = R001-style, non-machine-tracked, manual pick required
   storage_location_id: string;
@@ -561,13 +568,15 @@ type MtsAutoDeriveGroupResult = {
 // exhausted (hard block). Never reads Unassigned or another machine's bucket
 // -- bucketBalances is expected to already be scoped that way by the caller.
 export function computeMtsAutoDeriveRowsForGroup(params: {
+  strokeLineId?: string;
   formulationMaterialId: string;
   dosagePct: number | null;
   standardQty: number;
   alternateMaterialIds: string[]; // group members excluding the formulation item itself
   bucketBalances: Map<string, number>;
 }): { rows: MtsAutoDeriveRow[]; short: boolean; shortfallQty: number } {
-  const { formulationMaterialId, dosagePct, standardQty, alternateMaterialIds, bucketBalances } = params;
+  const { strokeLineId: requestedStrokeLineId, formulationMaterialId, dosagePct, standardQty, alternateMaterialIds, bucketBalances } = params;
+  const strokeLineId = requestedStrokeLineId || formulationMaterialId;
 
   // Order: formulation item's own bucket first (regardless of size -- it's
   // the "correct" material, group is only a fallback), then alternates
@@ -587,6 +596,7 @@ export function computeMtsAutoDeriveRowsForGroup(params: {
     if (available <= EPSILON) continue;
     const draw = Math.min(available, remaining);
     rows.push({
+      stroke_line_id: strokeLineId,
       stroke_line_material_id: formulationMaterialId,
       actual_material_id: materialId,
       is_formulation_line: rows.length === 0,
@@ -604,6 +614,7 @@ export function computeMtsAutoDeriveRowsForGroup(params: {
   // the formulation item itself as a placeholder row (actual_qty 0).
   if (rows.length === 0) {
     rows.push({
+      stroke_line_id: strokeLineId,
       stroke_line_material_id: formulationMaterialId,
       actual_material_id: formulationMaterialId,
       is_formulation_line: true,
@@ -2363,6 +2374,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
 // ---------------------------------------------------------------------------
 
 type MtsPlanGroup = {
+  stroke_line_id: string;
   stroke_line_material_id: string;
   auto_derive_applicable: boolean;
   storage_location_id: string;
@@ -2378,6 +2390,7 @@ async function fetchMtsPoAndStrokeLines(id: string): Promise<{
   po: JsonRecord;
   strokeLines: JsonRecord[];
   machineStorageLocationId: string | null;
+  strokeShopFloorLocationId: string | null;
 }> {
   const po = await fetchProcessOrder(id);
   if (!po) throw new Error("PROD_PO_NOT_FOUND");
@@ -2389,7 +2402,7 @@ async function fetchMtsPoAndStrokeLines(id: string): Promise<{
   const { data: strokeLines, error: strokeLineErr } = await serviceRoleClient
     .schema("erp_production")
     .from("stroke_line")
-    .select("material_id, alternate_material_id, material_group_id, dosage_pct, display_order, default_storage_location_id")
+    .select("id, material_id, alternate_material_id, material_group_id, dosage_pct, display_order, default_storage_location_id")
     .eq("stroke_master_id", strokeMasterId)
     .order("display_order");
   if (strokeLineErr) {
@@ -2413,7 +2426,19 @@ async function fetchMtsPoAndStrokeLines(id: string): Promise<{
     machineStorageLocationId = toTrimmedString((machineRow as JsonRecord | null)?.storage_location_id) || null;
   }
 
-  return { po, strokeLines: (strokeLines ?? []) as JsonRecord[], machineStorageLocationId };
+  const { data: strokeRow, error: strokeErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_master")
+    .select("default_storage_location_id")
+    .eq("id", strokeMasterId)
+    .maybeSingle();
+  if (strokeErr) {
+    console.error("[process_order.mtsMaterialPlan] stroke location query failed:", JSON.stringify(strokeErr));
+    throw new Error("PROD_PO_MTS_PLAN_FAILED");
+  }
+  const strokeShopFloorLocationId = toTrimmedString((strokeRow as JsonRecord | null)?.default_storage_location_id) || null;
+
+  return { po, strokeLines: (strokeLines ?? []) as JsonRecord[], machineStorageLocationId, strokeShopFloorLocationId };
 }
 
 async function resolveMtsPlanCompanyAndAuth(
@@ -2505,23 +2530,30 @@ export async function getMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerCo
       // Already saved once -- rebuild the same group shape from what is
       // actually persisted, so revisiting Page 4 shows real state, not a
       // fresh recompute that could disagree with it.
-      const byFormulation = new Map<string, JsonRecord[]>();
+      const byStrokeLine = new Map<string, JsonRecord[]>();
       for (const line of existingLines) {
-        const key = String(line.material_id);
-        const list = byFormulation.get(key) ?? [];
+        // Do not merge two declared Stroke Lines merely because they share a
+        // material. Stroke 0064, for example, legitimately uses Dolomite at
+        // two different dosages. Old records predate stroke_line_id, so keep
+        // their legacy fallback rather than making a destructive guess.
+        const key = toTrimmedString(line.stroke_line_id) || `legacy:${String(line.material_id)}:${String(line.display_order)}`;
+        const list = byStrokeLine.get(key) ?? [];
         list.push(line);
-        byFormulation.set(key, list);
+        byStrokeLine.set(key, list);
       }
       const groups: MtsPlanGroup[] = [];
-      for (const [formulationMaterialId, lines] of byFormulation.entries()) {
+      for (const [strokeLineId, lines] of byStrokeLine.entries()) {
         const firstLine = lines.find((l) => l.is_formulation_line !== false) ?? lines[0];
+        const formulationMaterialId = String(firstLine.material_id);
         groups.push({
+          stroke_line_id: strokeLineId,
           stroke_line_material_id: formulationMaterialId,
           auto_derive_applicable: true,
           storage_location_id: toTrimmedString(firstLine.issue_sloc_id) || "",
           dosage_pct: firstLine.dosage_pct === null || firstLine.dosage_pct === undefined ? null : Number(firstLine.dosage_pct),
           standard_qty: Number(firstLine.planned_qty ?? 0),
           rows: lines.map((l) => ({
+            stroke_line_id: strokeLineId,
             stroke_line_material_id: formulationMaterialId,
             actual_material_id: toTrimmedString(l.actual_material_id) || formulationMaterialId,
             is_formulation_line: l.is_formulation_line !== false,
@@ -2554,10 +2586,10 @@ export async function getMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerCo
       }, ctx.request_id, req);
     }
 
-    const { strokeLines, machineStorageLocationId } = await fetchMtsPoAndStrokeLines(id);
+    const { strokeLines, machineStorageLocationId, strokeShopFloorLocationId } = await fetchMtsPoAndStrokeLines(id);
     const machineId = toTrimmedString(po.machine_id);
     const groups = await buildMtsMaterialPlanGroupsForOrder(
-      String(po.company_id), strokeLines, machineStorageLocationId, machineId, Number(po.planned_qty ?? 0),
+      String(po.company_id), strokeLines, machineStorageLocationId, strokeShopFloorLocationId, machineId, Number(po.planned_qty ?? 0),
     );
 
     const materialIds = new Set<string>();
@@ -2591,35 +2623,48 @@ async function buildMtsMaterialPlanGroupsForOrder(
   companyId: string,
   strokeLines: JsonRecord[],
   machineStorageLocationId: string | null,
+  strokeShopFloorLocationId: string | null,
   machineId: string,
   totalPlannedQty: number,
 ): Promise<MtsPlanGroup[]> {
   if (strokeLines.length === 0) return [];
   const allowedAlternateMap = await buildAllowedAlternateIdsByStrokeLines(
     strokeLines, "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED",
+    (line) => toTrimmedString(line.id) || String(line.material_id ?? ""),
   );
-  const machineTrackedLines = machineStorageLocationId
+  const normalMachineTrackedLines = machineStorageLocationId
     ? strokeLines.filter((line) => toTrimmedString(line.default_storage_location_id) === machineStorageLocationId)
     : [];
+  // §138.4: selecting an MTS machine at another shop-floor location is an
+  // explicit exception. The selected location's Unassigned bucket supplies
+  // the shop-floor stroke lines; bulk/R001 lines remain ordinary manual picks.
+  const isForeignMachine = Boolean(
+    machineStorageLocationId && strokeShopFloorLocationId && machineStorageLocationId !== strokeShopFloorLocationId,
+  );
+  const machineTrackedLines = isForeignMachine
+    ? strokeLines.filter((line) => toTrimmedString(line.default_storage_location_id) === strokeShopFloorLocationId)
+    : normalMachineTrackedLines;
   const manualPickLines = strokeLines.filter((line) => !machineTrackedLines.includes(line));
 
   const machineCandidateIds = new Set<string>();
   for (const line of machineTrackedLines) {
     machineCandidateIds.add(String(line.material_id));
-    for (const altId of allowedAlternateMap.get(String(line.material_id)) ?? []) machineCandidateIds.add(altId);
+    for (const altId of allowedAlternateMap.get(String(line.id)) ?? []) machineCandidateIds.add(altId);
   }
   const bucketBalances = (machineStorageLocationId && machineId)
-    ? await fetchMachineBucketBalances(companyId, machineStorageLocationId, machineId, [...machineCandidateIds])
+    ? await fetchMachineBucketBalances(companyId, machineStorageLocationId, isForeignMachine ? null : machineId, [...machineCandidateIds])
     : new Map<string, number>();
 
   const groups: MtsPlanGroup[] = [];
   for (const line of machineTrackedLines) {
+    const strokeLineId = String(line.id);
     const formulationMaterialId = String(line.material_id);
     const hasDosage = line.dosage_pct !== null && line.dosage_pct !== undefined;
     const dosagePct = Number(line.dosage_pct ?? 0);
     const standardQty = Number(((dosagePct / 100) * totalPlannedQty).toFixed(6));
-    const alternateIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
+    const alternateIds = allowedAlternateMap.get(strokeLineId) ?? [];
     const { rows, short, shortfallQty } = computeMtsAutoDeriveRowsForGroup({
+      strokeLineId,
       formulationMaterialId,
       dosagePct: hasDosage ? dosagePct : null,
       standardQty,
@@ -2637,9 +2682,10 @@ async function buildMtsMaterialPlanGroupsForOrder(
       }
     }
     groups.push({
+      stroke_line_id: strokeLineId,
       stroke_line_material_id: formulationMaterialId,
       auto_derive_applicable: true,
-      storage_location_id: String(line.default_storage_location_id),
+      storage_location_id: isForeignMachine ? String(machineStorageLocationId) : String(line.default_storage_location_id),
       dosage_pct: hasDosage ? dosagePct : null,
       standard_qty: standardQty,
       rows,
@@ -2652,9 +2698,10 @@ async function buildMtsMaterialPlanGroupsForOrder(
   if (manualPickLines.length > 0) {
     const needed = new Map<string, AvailabilityNeed>();
     for (const line of manualPickLines) {
+      const strokeLineId = String(line.id);
       const formulationMaterialId = String(line.material_id);
       const locationId = String(line.default_storage_location_id);
-      const candidateIds = [formulationMaterialId, ...(allowedAlternateMap.get(formulationMaterialId) ?? [])];
+      const candidateIds = [formulationMaterialId, ...(allowedAlternateMap.get(strokeLineId) ?? [])];
       for (const candidateId of candidateIds) {
         // computeAvailabilityRows deliberately ignores zero-quantity entries.
         // Page 4 needs the live balance for every manual-pick choice, not a
@@ -2666,20 +2713,23 @@ async function buildMtsMaterialPlanGroupsForOrder(
     const availabilityByKey = new Map(availabilityRows.map((row) => [buildAvailabilityKey(row.material_id, row.storage_location_id), row.available_qty]));
 
     for (const line of manualPickLines) {
+      const strokeLineId = String(line.id);
       const formulationMaterialId = String(line.material_id);
       const hasDosage = line.dosage_pct !== null && line.dosage_pct !== undefined;
       const dosagePct = Number(line.dosage_pct ?? 0);
       const standardQty = Number(((dosagePct / 100) * totalPlannedQty).toFixed(6));
       const locationId = String(line.default_storage_location_id);
-      const alternateIds = allowedAlternateMap.get(formulationMaterialId) ?? [];
+      const alternateIds = allowedAlternateMap.get(strokeLineId) ?? [];
       const candidateIds = [formulationMaterialId, ...alternateIds];
       groups.push({
+        stroke_line_id: strokeLineId,
         stroke_line_material_id: formulationMaterialId,
         auto_derive_applicable: false,
         storage_location_id: locationId,
         dosage_pct: hasDosage ? dosagePct : null,
         standard_qty: standardQty,
         rows: candidateIds.map((candidateId) => ({
+          stroke_line_id: strokeLineId,
           stroke_line_material_id: formulationMaterialId,
           actual_material_id: candidateId,
           is_formulation_line: candidateId === formulationMaterialId,
@@ -2717,7 +2767,7 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
       return poErr(req, ctx, "PROD_PO_MTS_PLAN_ALREADY_SAVED", 409, "Material plan already saved for this Process Order");
     }
 
-    const { strokeLines, machineStorageLocationId } = await fetchMtsPoAndStrokeLines(id);
+    const { strokeLines, machineStorageLocationId, strokeShopFloorLocationId } = await fetchMtsPoAndStrokeLines(id);
     if (strokeLines.length === 0) {
       return poErr(req, ctx, "PROD_PO_MTS_PLAN_NO_STROKE_LINES", 422, "This stroke has no RM lines configured");
     }
@@ -2726,18 +2776,19 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
     const isEditable = po.mts_used_current_stroke === true; // §138.12 stage/editability table
 
     const serverGroups = await buildMtsMaterialPlanGroupsForOrder(
-      companyId, strokeLines, machineStorageLocationId, machineId, totalPlannedQty,
+      companyId, strokeLines, machineStorageLocationId, strokeShopFloorLocationId, machineId, totalPlannedQty,
     );
 
     const body = await parseBody(req);
-    const bodyGroupsByFormulation = new Map<string, JsonRecord>();
+    const bodyGroupsByStrokeLine = new Map<string, JsonRecord>();
     for (const entry of (Array.isArray(body.groups) ? body.groups : []) as JsonRecord[]) {
-      const key = toTrimmedString(entry.stroke_line_material_id);
-      if (key) bodyGroupsByFormulation.set(key, entry);
+      const key = toTrimmedString(entry.stroke_line_id);
+      if (key) bodyGroupsByStrokeLine.set(key, entry);
     }
 
     const shortGroupLabels: string[] = [];
     const finalRows: Array<{
+      stroke_line_id: string;
       stroke_line_material_id: string;
       actual_material_id: string;
       is_formulation_line: boolean;
@@ -2755,7 +2806,7 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
         // table) -- either way, an override is only ever a same-group
         // material swap layered on the server's own freshly-computed rows,
         // never an arbitrary client-invented row set.
-        const override = isEditable ? bodyGroupsByFormulation.get(group.stroke_line_material_id) : null;
+        const override = isEditable ? bodyGroupsByStrokeLine.get(group.stroke_line_id) : null;
         const overrideRows = override && Array.isArray(override.rows) ? (override.rows as JsonRecord[]) : null;
 
         let rows = group.rows;
@@ -2776,6 +2827,7 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
             const qty = Number(parseNonNegativeNumber(r.actual_qty) ?? 0);
             sumQty = Number((sumQty + qty).toFixed(6));
             mapped.push({
+              stroke_line_id: group.stroke_line_id,
               stroke_line_material_id: group.stroke_line_material_id,
               actual_material_id: actualMaterialId,
               is_formulation_line: index === 0,
@@ -2812,11 +2864,11 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
 
         if (group.short) shortGroupLabels.push(group.stroke_line_material_id);
         for (const row of rows) {
-          finalRows.push({ ...row, storage_location_id: group.storage_location_id });
+          finalRows.push({ ...row, stroke_line_id: group.stroke_line_id, storage_location_id: group.storage_location_id });
         }
       } else {
         // R001-style: client MUST supply exactly one manual pick.
-        const override = bodyGroupsByFormulation.get(group.stroke_line_material_id);
+        const override = bodyGroupsByStrokeLine.get(group.stroke_line_id);
         const chosenMaterialId = toTrimmedString(override?.actual_material_id);
         if (!chosenMaterialId || !group.group_member_ids.includes(chosenMaterialId)) {
           return poErr(req, ctx, "PROD_PO_MTS_PLAN_MATERIAL_REQUIRED", 422, `An Actual Material must be selected for ${group.stroke_line_material_id}`);
@@ -2827,6 +2879,7 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
           shortGroupLabels.push(group.stroke_line_material_id);
         }
         finalRows.push({
+          stroke_line_id: group.stroke_line_id,
           stroke_line_material_id: group.stroke_line_material_id,
           actual_material_id: chosenMaterialId,
           is_formulation_line: true,
@@ -2841,15 +2894,15 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
     // Validate the completed plan as one allocation, rather than validating
     // each group independently against the same physical stock.  A material
     // can be an allowed alternate for more than one formulation line.
-    const autoFormulationIds = new Set(
-      serverGroups.filter((group) => group.auto_derive_applicable).map((group) => group.stroke_line_material_id),
+    const autoStrokeLineIds = new Set(
+      serverGroups.filter((group) => group.auto_derive_applicable).map((group) => group.stroke_line_id),
     );
     const machineNeeds = new Map<string, number>();
     const manualNeeds = new Map<string, AvailabilityNeed>();
     const labelsByNeedKey = new Map<string, string[]>();
     for (const row of finalRows) {
       if (row.actual_qty <= EPSILON) continue;
-      if (autoFormulationIds.has(row.stroke_line_material_id)) {
+      if (autoStrokeLineIds.has(row.stroke_line_id)) {
         machineNeeds.set(row.actual_material_id, Number(((machineNeeds.get(row.actual_material_id) ?? 0) + row.actual_qty).toFixed(6)));
       } else {
         const key = buildAvailabilityKey(row.actual_material_id, row.storage_location_id);
@@ -2863,12 +2916,15 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
       }
     }
     if (machineNeeds.size > 0) {
+      const useUnassignedBucket = Boolean(
+        machineStorageLocationId && strokeShopFloorLocationId && machineStorageLocationId !== strokeShopFloorLocationId,
+      );
       const freshBalances = machineStorageLocationId && machineId
-        ? await fetchMachineBucketBalances(companyId, machineStorageLocationId, machineId, [...machineNeeds.keys()])
+        ? await fetchMachineBucketBalances(companyId, machineStorageLocationId, useUnassignedBucket ? null : machineId, [...machineNeeds.keys()])
         : new Map<string, number>();
       for (const [materialId, qty] of machineNeeds.entries()) {
         if (qty > Math.max(0, freshBalances.get(materialId) ?? 0) + EPSILON) {
-          for (const row of finalRows.filter((r) => r.actual_material_id === materialId && autoFormulationIds.has(r.stroke_line_material_id))) {
+          for (const row of finalRows.filter((r) => r.actual_material_id === materialId && autoStrokeLineIds.has(r.stroke_line_id))) {
             shortGroupLabels.push(row.stroke_line_material_id);
           }
         }
@@ -2886,9 +2942,9 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
       return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient stock (formulation + alternates combined) for: ${detail}`);
     }
 
-    const now = new Date().toISOString();
     const lineRows = finalRows.map((row, index) => ({
       process_order_id: id,
+      stroke_line_id: row.stroke_line_id,
       material_id: row.stroke_line_material_id,
       actual_material_id: row.actual_material_id === row.stroke_line_material_id ? null : row.actual_material_id,
       planned_qty: row.planned_qty,
@@ -2909,58 +2965,21 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
       variance_qty: row.variance_qty ?? null,
     }));
 
-    const { data: insertedLines, error: insertErr } = await serviceRoleClient
+    const atomicLines = lineRows.map((line) => ({ ...line, company_id: companyId }));
+    const { data: linesCreated, error: saveErr } = await serviceRoleClient
       .schema("erp_production")
-      .from("process_order_line")
-      .insert(lineRows)
-      .select("id, material_id, actual_material_id, issue_sloc_id, actual_qty");
-    if (insertErr) {
-      console.error("[process_order.saveMtsMaterialPlan] line insert failed:", JSON.stringify(insertErr));
+      .rpc("save_mts_material_plan_atomic", {
+        p_process_order_id: id,
+        p_actor_id: ctx.auth_user_id,
+        p_required_by_date: toTrimmedString(po.production_date) || null,
+        p_lines: atomicLines,
+      });
+    if (saveErr) {
+      console.error("[process_order.saveMtsMaterialPlan] atomic save failed:", JSON.stringify(saveErr));
       throw new Error("PROD_PO_MTS_PLAN_SAVE_FAILED");
     }
 
-    // Reservation basis for MTS is ACTUAL qty (already fixed at Standard via
-    // auto-derive), not planned_qty -- unlike MTO/HPS, so this writes
-    // reservation_document directly instead of going through
-    // reserve_process_order_materials() (which reserves pol.planned_qty,
-    // deliberately 0 on split rows here per §138.12 point 3's display rule).
-    // KNOWN GAP (documented, not yet closed): unlike that RPC, this insert is
-    // not wrapped in the same advisory-lock pattern, so two Page 4 saves
-    // racing for the same machine bucket at the same instant could both pass
-    // their own fresh balance check above and over-reserve. Accepted for v1
-    // -- one person drives one Process PO through Page 3→4 sequentially, and
-    // no other document reserves against machine_stock_log today, so the
-    // collision surface is small. Revisit if this ever becomes a real issue.
-    const reservationRows = ((insertedLines ?? []) as JsonRecord[])
-      .filter((line) => Number(line.actual_qty ?? 0) > 0)
-      .map((line) => ({
-        source_type: "PROCESS_PO",
-        source_id: id,
-        source_line_id: line.id,
-        company_id: companyId,
-        material_id: toTrimmedString(line.actual_material_id) || String(line.material_id),
-        storage_location_id: line.issue_sloc_id,
-        required_qty: Number(line.actual_qty ?? 0),
-        uom_code: "KG",
-        required_by_date: toTrimmedString(po.production_date) || null,
-        status: "OPEN",
-        created_by: ctx.auth_user_id,
-        created_at: now,
-        last_updated_by: ctx.auth_user_id,
-        last_updated_at: now,
-      }));
-    if (reservationRows.length > 0) {
-      const { error: reservationErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("reservation_document")
-        .insert(reservationRows);
-      if (reservationErr) {
-        console.error("[process_order.saveMtsMaterialPlan] reservation insert failed:", JSON.stringify(reservationErr));
-        throw new Error("PROD_PO_MTS_PLAN_SAVE_FAILED");
-      }
-    }
-
-    return createdOkResponse({ id, lines_created: lineRows.length }, ctx.request_id, req);
+    return createdOkResponse({ id, lines_created: Number(linesCreated ?? lineRows.length) }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PO_MTS_PLAN_SAVE_FAILED";
     return poErr(req, ctx, code, code === "PROD_PO_NOT_FOUND" ? 404 : 500, "Failed to save material plan");
@@ -4208,7 +4227,23 @@ async function runProcessOrderVerify(
     // touches the database until that single transactional call.
     const movements: MovementSpec[] = [];
     const reservationUpdates: Array<{ reservation_id: string; issued_qty: number; status: string }> = [];
+    const machineStockLogRows: JsonRecord[] = [];
     const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
+
+    // MTS bucket attribution must move with the real P261 issue. A normal
+    // machine consumes its own bucket; §138.4 foreign-machine override
+    // consumes the selected location's Unassigned bucket. R001/manual lines
+    // are deliberately absent from this side-table.
+    let mtsMachineStorageLocationId: string | null = null;
+    let mtsConsumptionMachineId: string | null = null;
+    if (po.po_type === "MTS" && toTrimmedString(po.machine_id)) {
+      const { data: machineRow, error: machineErr } = await serviceRoleClient
+        .schema("erp_master").from("machine_master")
+        .select("storage_location_id").eq("id", String(po.machine_id)).maybeSingle();
+      if (machineErr) throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
+      mtsMachineStorageLocationId = toTrimmedString((machineRow as JsonRecord | null)?.storage_location_id) || null;
+      mtsConsumptionMachineId = mtsMachineStorageLocationId === shopfloorSlocId ? String(po.machine_id) : null;
+    }
 
     // §106: one Material Document for the whole Verify event — every RM/INT issue (P261),
     // the SFG receipt (P101) and the QI auto-release (P321) are items under it; the
@@ -4298,6 +4333,22 @@ async function runProcessOrderVerify(
         matDoc: verifyMatDoc,
         referenceDocumentId: String(po.id),
       }, String(line.id)));
+
+      if (mtsMachineStorageLocationId && slocId === mtsMachineStorageLocationId) {
+        machineStockLogRows.push({
+          company_id: po.company_id,
+          storage_location_id: slocId,
+          material_id: movementMaterialId,
+          machine_id: mtsConsumptionMachineId,
+          batch_number: batchNumber,
+          qty: actualQty,
+          direction: "OUT",
+          source_type: "CONSUMPTION",
+          reference_document_type: "PROCESS_PO",
+          reference_document_id: po.id,
+          created_by: ctx.auth_user_id,
+        });
+      }
 
       // Reservation arithmetic is unchanged — still computed here, just applied inside
       // the transaction instead of in its own round trip.
@@ -4478,6 +4529,7 @@ async function runProcessOrderVerify(
         },
         reservations: reservationUpdates,
         reco_rows: recoRows,
+        machine_stock_log_rows: machineStockLogRows,
       },
     });
 

@@ -355,10 +355,33 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
     const rows = resolvedOrError;
 
     const defaultPmSlocId = await resolveDefaultPmStorageLocationId(String(po.company_id), String(po.segment_code ?? ""));
+    // UI location changes re-run this same server computation so Available,
+    // auto-derived rows, and Short always describe the currently selected
+    // location rather than a stale Pack-BOM default.
+    let storageOverrides: Record<string, string> = {};
+    const rawOverrides = new URL(req.url).searchParams.get("storage_overrides");
+    if (rawOverrides) {
+      try {
+        const parsed = JSON.parse(rawOverrides);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          storageOverrides = Object.fromEntries(
+            Object.entries(parsed as Record<string, unknown>)
+              .map(([materialId, locationId]) => [materialId, toTrimmedString(locationId)])
+              .filter(([materialId, locationId]) => materialId && locationId),
+          );
+        }
+      } catch {
+        return combineErr(req, ctx, "PROD_PACK_COMBINE_LOCATION_OVERRIDE_INVALID", 400, "Storage-location preview is invalid");
+      }
+    }
     const groups = buildCombinedPmGroups(rows);
 
     const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(groups.map((g) => g.material_group_id ?? "").filter(Boolean) as string[]);
     for (const group of groups) {
+      const requestedLocationId = storageOverrides[group.material_id];
+      if (requestedLocationId) {
+        group.storage_location_id = requestedLocationId;
+      }
       // Pack BOM location is the design-default. The segment setting is only
       // a legacy fallback for old BOM lines with no declared location.
       if (!group.storage_location_id && group.source_storage_location_ids.length === 0) {

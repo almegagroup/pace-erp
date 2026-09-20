@@ -215,7 +215,12 @@ export const saveMtsMaterialPlan = (id, body) => fetchProd("POST", `/api/product
 // §138.16 (2026-09-18) -- MTS Page 5 batch->pack-size packing plan.
 export const getMtsPackingPlan = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-plan`);
 export const saveMtsPackingPlan = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-packing-plan`, body);
-export const getMtsPackingCombine = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-combine`);
+export const getMtsPackingCombine = (id, storageOverrides = null) => {
+  const query = storageOverrides && Object.keys(storageOverrides).length > 0
+    ? `?storage_overrides=${encodeURIComponent(JSON.stringify(storageOverrides))}`
+    : "";
+  return fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-combine${query}`);
+};
 export const saveMtsPackingCombine = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-packing-combine`, body);
 
 // —— SFG QA Result Recording ————————————————————————————————————————————————————————

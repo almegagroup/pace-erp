@@ -2396,7 +2396,7 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
   }
 
   function rowsForGroup(group) {
-    const override = overrides[group.stroke_line_material_id];
+    const override = overrides[group.stroke_line_id];
     if (isEditable && override) return override;
     return group.rows;
   }
@@ -2408,7 +2408,7 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
       return;
     }
     rows[rowIndex] = { ...rows[rowIndex], actual_material_id: newMaterialId };
-    setOverrides((current) => ({ ...current, [group.stroke_line_material_id]: rows }));
+    setOverrides((current) => ({ ...current, [group.stroke_line_id]: rows }));
   }
 
   function handleQtyChange(group, rowIndex, qtyStr) {
@@ -2424,33 +2424,53 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
     if (qty >= group.standard_qty - EPSILON_FRONTEND) {
       rows = [rows[rowIndex]];
     }
-    setOverrides((current) => ({ ...current, [group.stroke_line_material_id]: rows }));
+    setOverrides((current) => ({ ...current, [group.stroke_line_id]: rows }));
   }
 
   function handleRemoveRow(group, rowIndex) {
     const rows = rowsForGroup(group).filter((_, i) => i !== rowIndex);
-    setOverrides((current) => ({ ...current, [group.stroke_line_material_id]: rows }));
+    setOverrides((current) => ({ ...current, [group.stroke_line_id]: rows }));
+  }
+
+  function handleAddRow(group) {
+    const rows = rowsForGroup(group).map((r) => ({ ...r }));
+    const nextMaterialId = group.group_member_ids.find((id) => !rows.some((r) => r.actual_material_id === id));
+    if (!nextMaterialId) {
+      pushToast("Every material in this alternate group is already present.", "error");
+      return;
+    }
+    rows.push({
+      stroke_line_id: group.stroke_line_id,
+      stroke_line_material_id: group.stroke_line_material_id,
+      actual_material_id: nextMaterialId,
+      is_formulation_line: false,
+      dosage_pct: null,
+      planned_qty: 0,
+      actual_qty: 0,
+      available_qty: 0,
+    });
+    setOverrides((current) => ({ ...current, [group.stroke_line_id]: rows }));
   }
 
   const shortGroups = groups.filter((g) => g.short);
   const manualPickMissing = groups.some((g) => !g.auto_derive_applicable
-    && !manualPicks[g.stroke_line_material_id]
+    && !manualPicks[g.stroke_line_id]
     && !g.rows.some((r) => r.is_formulation_line && r.actual_qty > 0));
 
   function buildSaveBody(confirmedLabels) {
     return {
       groups: groups.map((group) => {
         if (group.auto_derive_applicable) {
-          const override = overrides[group.stroke_line_material_id];
+          const override = overrides[group.stroke_line_id];
           if (!override) return null;
           return {
-            stroke_line_material_id: group.stroke_line_material_id,
+            stroke_line_id: group.stroke_line_id,
             rows: override.map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
-            confirmed_shortfall: confirmedLabels?.has(group.stroke_line_material_id) || undefined,
+            confirmed_shortfall: confirmedLabels?.has(group.stroke_line_id) || undefined,
           };
         }
-        const chosen = manualPicks[group.stroke_line_material_id];
-        return chosen ? { stroke_line_material_id: group.stroke_line_material_id, actual_material_id: chosen } : null;
+        const chosen = manualPicks[group.stroke_line_id];
+        return chosen ? { stroke_line_id: group.stroke_line_id, actual_material_id: chosen } : null;
       }).filter(Boolean),
     };
   }
@@ -2463,11 +2483,15 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
     const found = [];
     for (const group of groups) {
       if (!group.auto_derive_applicable || !isEditable) continue;
-      const override = overrides[group.stroke_line_material_id];
+      const override = overrides[group.stroke_line_id];
       if (!override) continue;
       const total = override.reduce((sum, r) => sum + (Number(r.actual_qty) || 0), 0);
       if (total < group.standard_qty - EPSILON_FRONTEND) {
-        found.push({ label: group.stroke_line_material_id, shortQty: Number((group.standard_qty - total).toFixed(6)) });
+        found.push({
+          label: group.stroke_line_id,
+          materialId: group.stroke_line_material_id,
+          shortQty: Number((group.standard_qty - total).toFixed(6)),
+        });
       }
     }
     return found;
@@ -2600,7 +2624,7 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
                 const rows = rowsForGroup(group);
                 const usedIds = new Set(rows.map((r) => r.actual_material_id));
                 return rows.map((row, rowIndex) => {
-                  const rowKey = `${group.stroke_line_material_id}-${rowIndex}`;
+                  const rowKey = `${group.stroke_line_id}-${rowIndex}`;
                   const materialOptions = group.group_member_ids.map((id) => ({
                     value: id,
                     label: materialLabel(id),
@@ -2622,8 +2646,8 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
                           />
                         ) : !group.auto_derive_applicable && !saved ? (
                           <ErpComboboxField
-                            value={manualPicks[group.stroke_line_material_id] || ""}
-                            onChange={(value) => setManualPicks((current) => ({ ...current, [group.stroke_line_material_id]: value }))}
+                            value={manualPicks[group.stroke_line_id] || ""}
+                            onChange={(value) => setManualPicks((current) => ({ ...current, [group.stroke_line_id]: value }))}
                             options={group.group_member_ids.map((id) => ({ value: id, label: materialLabel(id) }))}
                             placeholder="-- Select Actual Material --"
                           />
@@ -2660,6 +2684,16 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
                             title="Remove this row"
                           >
                             Remove
+                          </button>
+                        )}
+                        {group.auto_derive_applicable && isEditable && rowIndex === rows.length - 1 && rows.length < group.group_member_ids.length && (
+                          <button
+                            type="button"
+                            onClick={() => handleAddRow(group)}
+                            className="ml-2 text-xs text-sky-600 underline hover:text-sky-800"
+                            title="Add an alternate-material row"
+                          >
+                            Add row
                           </button>
                         )}
                       </td>
@@ -2705,7 +2739,7 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
           You are taking less than the required quantity for:
           <ul className="mt-1 list-disc pl-5">
             {(pendingShortfall ?? []).map((s) => (
-              <li key={s.label}>{materialLabel(s.label)} -- short by {formatPreciseNumber(s.shortQty, "0.###")} KG</li>
+              <li key={s.label}>{materialLabel(s.materialId ?? s.label)} -- short by {formatPreciseNumber(s.shortQty, "0.###")} KG</li>
             ))}
           </ul>
           Do you agree?
@@ -3080,9 +3114,15 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
   const [saving, setSaving] = useState(false);
   const [pendingShortfall, setPendingShortfall] = useState(null);
 
+  const storageOverrides = useMemo(
+    () => Object.fromEntries(Object.entries(overrides)
+      .map(([materialId, override]) => [materialId, override?.storage_location_id])
+      .filter(([, storageLocationId]) => Boolean(storageLocationId))),
+    [overrides],
+  );
   const combineQ = useQuery({
-    queryKey: ["mts-packing-combine", processOrder.id],
-    queryFn: () => getMtsPackingCombine(processOrder.id),
+    queryKey: ["mts-packing-combine", processOrder.id, storageOverrides],
+    queryFn: () => getMtsPackingCombine(processOrder.id, storageOverrides),
   });
 
   const header = combineQ.data?.header ?? null;
@@ -3105,7 +3145,11 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
   }
 
   function overrideFor(group) {
-    return overrides[group.material_id] ?? { rows: group.rows, storage_location_id: group.storage_location_id };
+    const override = overrides[group.material_id] ?? {};
+    return {
+      rows: Array.isArray(override.rows) ? override.rows : group.rows,
+      storage_location_id: override.storage_location_id ?? group.storage_location_id,
+    };
   }
   function rowsForGroup(group) {
     return overrideFor(group).rows;
@@ -3117,7 +3161,7 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
   function setGroupOverride(group, patch) {
     setOverrides((current) => ({
       ...current,
-      [group.material_id]: { ...overrideFor(group), ...patch },
+      [group.material_id]: { ...(current[group.material_id] ?? {}), ...patch },
     }));
   }
 
@@ -3149,7 +3193,10 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
   }
 
   function handleStorageLocationChange(group, storageLocationId) {
-    setGroupOverride(group, { storage_location_id: storageLocationId });
+    // Reset rows to the server-derived result for the newly selected location.
+    // The query key above fetches it immediately, so Available/Short never
+    // continue to show the previous location's numbers.
+    setGroupOverride(group, { storage_location_id: storageLocationId, rows: null });
   }
 
   // `short` is calculated for the initial Pack-BOM location. Once the user
@@ -3297,7 +3344,7 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
                   }));
                   const isFirstRow = rowIndex === 0;
                   return (
-                    <tr key={rowKey} className={group.short ? "bg-rose-50" : "border-b border-slate-100"}>
+                    <tr key={rowKey} className={group.short && groupStorageLocationId === group.storage_location_id ? "bg-rose-50" : "border-b border-slate-100"}>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? groupIndex + 1 : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? materialLabel(group.material_id) : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">
