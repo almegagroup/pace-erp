@@ -24344,6 +24344,21 @@ KG input like MTO/HPS; the stale "RM lines move to a future Page 4" placeholder 
 existed since this same day) and the "Create Process PO" button label (relabeled "Save & Continue
 to Page 4" for MTS, since it only creates the header before Page 4 opens) were also corrected.
 
+### 138.15.1 — MTS Final and Verify after the Page-4 plan (✅ DESIGN LOCKED — 2026-09-20)
+
+The Page-4 saved plan remains the recipe record: formulation material, dosage and Standard Qty never
+become the selected alternate. MTS has no Start Batch step.
+
+| Stroke policy | Final entry status | Final actor/edit | Verify actor/edit/post |
+|---|---|---|---|
+| Current Stroke | `STANDARD` | Production records Final from the already editable Page-4 plan | QA may inspect/correct actual issue and posts the atomic P261/P101 transaction |
+| Non-Current Stroke | `QA_APPROVED` | Production may correct the actual issue at Final; Page 4 was intentionally read-only | QA has the same Verify authority, performs the final stock check and posts |
+
+For both policies Verify is the common stock-posting checkpoint. MTS split alternate rows are valid
+even where a repeat row has Standard Qty `0` and Actual Qty above `0`; MTS therefore uses automatic
+`YES`/Actual AP values internally and never requires hidden AP-Reco controls. Non-current Final is
+not a stock posting: it only saves `FINAL`; Verify remains the one atomic posting transaction.
+
 ### 138.16 — Page 5 & 6: Packing PO Standard (Batch→Pack-Size Planning + PM Auto-Derive) — MTS (✅ DESIGN LOCKED + IMPLEMENTATION CODE-COMPLETE, 2026-09-18)
 
 **Implementation status (2026-09-18, same-day code-complete):** Page 5 backend

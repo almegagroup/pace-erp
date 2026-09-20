@@ -958,12 +958,18 @@ function storageLocationLabel(location) {
 // BATCH_STARTED (reached via Start Batch), MTEST included — §131.1 (2026-08-26)
 // changed what happens AT Final for MTEST (it now also posts/verifies in that same
 // click), not the status required to reach Final in the first place.
-function requiredFinalStatus(poType) {
-  return String(poType || "").toUpperCase() === "INT" ? "STANDARD" : "BATCH_STARTED";
+function requiredFinalStatus(poType, mtsUsedCurrentStroke = false) {
+  const type = String(poType || "").toUpperCase();
+  if (type === "INT") return "STANDARD";
+  // §138.17: MTS has no Start Batch. Current Stroke reaches Final from
+  // STANDARD; Non-Current Stroke first goes through QA and reaches Final from
+  // QA_APPROVED.
+  if (type === "MTS") return mtsUsedCurrentStroke === true ? "STANDARD" : "QA_APPROVED";
+  return "BATCH_STARTED";
 }
 
-function validateFinalPoStatus(status, poType) {
-  const required = requiredFinalStatus(poType);
+function validateFinalPoStatus(status, poType, mtsUsedCurrentStroke) {
+  const required = requiredFinalStatus(poType, mtsUsedCurrentStroke);
   return String(status || "").toUpperCase() === required
     ? ""
     : `This Process PO is not applicable for Final. Only \`${required}\` is allowed for this type.`;
@@ -1042,9 +1048,21 @@ function ProcessPoFinalTab() {
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
+  const mtsCurrentOrdersQ = useQuery({
+    queryKey: ["production-final-mts-current-orders", effectiveCompanyId],
+    queryFn: () => listProcessOrders({ company_id: effectiveCompanyId || undefined, status: "STANDARD", po_type: "MTS", per_page: 100 }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []).filter((order) => order.mts_used_current_stroke === true),
+  });
+  const mtsNonCurrentOrdersQ = useQuery({
+    queryKey: ["production-final-mts-non-current-orders", effectiveCompanyId],
+    queryFn: () => listProcessOrders({ company_id: effectiveCompanyId || undefined, status: "QA_APPROVED", po_type: "MTS", per_page: 100 }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []).filter((order) => order.mts_used_current_stroke !== true),
+  });
   const orderOptions = useMemo(
-    () => [...(ordersQ.data ?? []), ...(intOrdersQ.data ?? [])].map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
-    [ordersQ.data, intOrdersQ.data],
+    () => [...(ordersQ.data ?? []), ...(intOrdersQ.data ?? []), ...(mtsCurrentOrdersQ.data ?? []), ...(mtsNonCurrentOrdersQ.data ?? [])].map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
+    [ordersQ.data, intOrdersQ.data, mtsCurrentOrdersQ.data, mtsNonCurrentOrdersQ.data],
   );
 
   const lookupQ = useQuery({
@@ -1055,7 +1073,7 @@ function ProcessPoFinalTab() {
       const options = Array.isArray(result) ? result : result?.data ?? [];
       const match = options.find((order) => String(order.po_number || "").toUpperCase() === submittedPoNumber.toUpperCase()) ?? null;
       if (!match?.id) return { match: null, blockedMessage: "Process PO not found." };
-      const blockedMessage = validateFinalPoStatus(match.status, match.po_type);
+      const blockedMessage = validateFinalPoStatus(match.status, match.po_type, match.mts_used_current_stroke);
       return { match, blockedMessage };
     },
   });
@@ -1206,7 +1224,7 @@ function ProcessPoFinalTab() {
   }
 
   async function handleSave() {
-    if (!po || po.status !== requiredFinalStatus(po.po_type)) return;
+    if (!po || po.status !== requiredFinalStatus(po.po_type, po.mts_used_current_stroke)) return;
     setSaving(true);
     try {
       const inputRows = rows.map((row) => {
@@ -1323,12 +1341,17 @@ function ProcessPoFinalTab() {
 
       {po && (
         <ErpSectionCard title="PR11 Final">
-          {po.status !== requiredFinalStatus(po.po_type) ? (
+          {po.status !== requiredFinalStatus(po.po_type, po.mts_used_current_stroke) ? (
             <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              This Process PO is blocked for Final. Only `{requiredFinalStatus(po.po_type)}` is allowed for this type.
+              This Process PO is blocked for Final. Only `{requiredFinalStatus(po.po_type, po.mts_used_current_stroke)}` is allowed for this type.
             </div>
           ) : (
             <div className="flex flex-col gap-4">
+              {po.po_type === "MTS" && po.mts_used_current_stroke !== true ? (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Non-Current Stroke: Production may adjust the actual issue here; QA will review and post it at Verify.
+                </div>
+              ) : null}
               <div className="flex items-start justify-between gap-4">
                 <div className="grid flex-1 gap-3 md:grid-cols-3 text-sm">
                   <div><span className="block text-xs text-slate-400">PO #</span><p className="font-mono font-semibold text-sky-700">{po.po_number || "--"}</p></div>

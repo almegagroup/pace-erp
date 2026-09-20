@@ -1007,7 +1007,13 @@ async function applyFinalOrVerifyLineUpdates(params: {
 
     if (existingLine) {
       const plannedQty = Number(existingLine.planned_qty ?? 0);
-      const approval = computeApprovalValues(req, ctx, plannedQty, actualQty, bodyLine);
+      // §138.17: MTS has no AP/Reco approval workflow. Split alternate rows
+      // legitimately have Standard=0 with Actual>0, so the generic deviation
+      // rule would otherwise reject a valid MTS Final/Verify payload merely
+      // because its hidden Approved fields were not supplied.
+      const approval = po.po_type === "MTS"
+        ? { approved_status: "YES", ap_approved_qty: actualQty, variance_qty: 0 }
+        : computeApprovalValues(req, ctx, plannedQty, actualQty, bodyLine);
       if (approval instanceof Response) return { response: approval };
       const nextRequiredQty = actualQty;
 
