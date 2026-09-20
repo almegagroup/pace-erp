@@ -222,6 +222,12 @@ export const getMtsPackingCombine = (id, storageOverrides = null) => {
   return fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-combine${query}`);
 };
 export const saveMtsPackingCombine = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-packing-combine`, body);
+// MTS Pages 1-6 creation session: preview calls are deliberately stateless;
+// only commit creates Process/Packing POs, reservations and batch claims.
+export const previewMtsCreationMaterialPlan = (body) => fetchProd("POST", "/api/production/mts-creation/material-plan", body);
+export const previewMtsCreationPackingPlan = (body) => fetchProd("POST", "/api/production/mts-creation/packing-plan", body);
+export const previewMtsCreationPackingCombine = (body) => fetchProd("POST", "/api/production/mts-creation/packing-combine", body);
+export const commitMtsCreation = (body) => fetchProd("POST", "/api/production/mts-creation/commit", body);
 
 // —— SFG QA Result Recording ————————————————————————————————————————————————————————
 export const listSfgQaDocuments = (p) => fetchProd("GET", "/api/production/sfg-qa-documents", undefined, p);

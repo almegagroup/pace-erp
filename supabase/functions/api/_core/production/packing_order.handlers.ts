@@ -102,6 +102,16 @@ function mapSourceTypeToPackingType(sourceType: string): string {
   return "";
 }
 
+// PMTS children are created only by the parent MTS Process PO's Page-6
+// transaction. Their edit/final/correction lifecycle belongs exclusively to
+// the parent MTS Verify workspace.
+function isMtsControlledPackingOrder(po: JsonRecord): boolean {
+  return toUpperTrimmedString(po.po_type) === "PMTS"
+    || toUpperTrimmedString(po.source_po_type) === "MTS";
+}
+
+const MTS_PACKING_PARENT_VERIFY_MESSAGE = "This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be edited, finalized, or corrected separately. Complete the MTS cycle from the parent Process PO in Verify.";
+
 function todayIso(): string { return todayIsoInKolkata(); }
 
 function buildAvailabilityKey(materialId: string, storageLocationId: string): string {
@@ -1861,7 +1871,7 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
 
     const { data: poRow, error: poErr2 } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
-      .select("id, company_id, status, num_packs, fill_qty_per_pack, pack_code_id, po_type")
+      .select("id, company_id, status, num_packs, fill_qty_per_pack, pack_code_id, po_type, source_po_type")
       .eq("id", id).maybeSingle();
     if (poErr2) throw new Error("PROD_PACK_EDIT_FAILED");
     if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
@@ -1873,6 +1883,9 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
     }
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
+    if (isMtsControlledPackingOrder(po)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if (String(po.status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Packing PO is editable only at STANDARD status.");
@@ -2069,7 +2082,7 @@ export async function cancelPackingOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const { data: poRow, error: poErr2 } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
-      .select("id, status, company_id").eq("id", id).maybeSingle();
+      .select("id, status, company_id, po_type, source_po_type").eq("id", id).maybeSingle();
     if (poErr2) throw new Error("PROD_PACK_CANCEL_FAILED");
     if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
     try {
@@ -2079,6 +2092,9 @@ export async function cancelPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     }
     if (!(await canMaintainCompanyResource(ctx, String((poRow as JsonRecord).company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
+    if (isMtsControlledPackingOrder(poRow as JsonRecord)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if (String((poRow as JsonRecord).status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Only a STANDARD Packing PO can be cancelled here. A finalised PO must be reversed.");
@@ -2115,7 +2131,7 @@ export async function updatePackingOrderLinesHandler(req: Request, ctx: ProdHand
     if (!id) return packErr(req, ctx, "PROD_PACK_ID_MISSING", 400, "ID required");
 
     const { data: po } = await serviceRoleClient.schema("erp_production").from("packing_order")
-      .select("id, status, company_id").eq("id", id).maybeSingle();
+      .select("id, status, company_id, po_type, source_po_type").eq("id", id).maybeSingle();
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
     try {
       await assertPackingCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
@@ -2124,6 +2140,9 @@ export async function updatePackingOrderLinesHandler(req: Request, ctx: ProdHand
     }
     if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
+    if (isMtsControlledPackingOrder(po as JsonRecord)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Lines editable only at STANDARD status");
@@ -2219,6 +2238,9 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const packFinalResourceCode = (po as JsonRecord).po_type === "PTEST" ? "PROD_MTEST_PACK_PO_FINAL" : "PROD_PO_FINAL";
     if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), packFinalResourceCode, "WRITE"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
+    }
+    if (isMtsControlledPackingOrder(po as JsonRecord)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_INVALID", 422, "Must be STANDARD to finalize");
@@ -2799,6 +2821,9 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     }
     if (!(await canMaintainCompanyResource(ctx, String(poData.company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have correction access for this company.");
+    }
+    if (isMtsControlledPackingOrder(poData)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if (poData.status !== "FINAL") {
       return packErr(req, ctx, "PROD_PACK_CORRECTION_STATUS_INVALID", 422, "Packing PO must be FINAL to correct");
