@@ -22,6 +22,13 @@ export function enableKeyboardIntentEngine() {
 }
 
 function onKeyDown(event) {
+  // The ERP combobox deliberately owns Escape while its list is open. This
+  // listener runs in capture phase, before the input's own onKeyDown handler;
+  // treating that Escape as a shell Back here used to close the list and pop
+  // the screen from the same keystroke. That could leave the route and the
+  // rendered workspace briefly out of sync.
+  if (shouldDeferEscapeToOpenCombobox(event)) return;
+
   const intent = normalizeKeyEvent(event);
   if (!intent) return;
 
@@ -36,6 +43,21 @@ function onKeyDown(event) {
   if (event.repeat) return;
 
   handleKeyboardIntent(intent);
+}
+
+function shouldDeferEscapeToOpenCombobox(event) {
+  if (event.key !== "Escape") return false;
+
+  const path = typeof event.composedPath === "function"
+    ? event.composedPath()
+    : [event.target];
+
+  return path.some(
+    (node) =>
+      node instanceof HTMLElement &&
+      node.getAttribute("role") === "combobox" &&
+      node.getAttribute("aria-expanded") === "true",
+  );
 }
 
 function normalizeKeyEvent(event) {
