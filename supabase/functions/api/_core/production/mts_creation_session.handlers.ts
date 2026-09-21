@@ -482,15 +482,40 @@ async function prepareRmLines(session: SessionHeader, clientGroups: unknown): Pr
       choices = [{ actual_material_id: selected, actual_qty: Number(group.standard_qty ?? 0) }];
     }
     const total = Number(choices.reduce((sum, row) => sum + row.actual_qty, 0).toFixed(6));
-    if (Math.abs(total - Number(group.standard_qty ?? 0)) > EPSILON) throw new Error("PROD_MTS_RM_QTY_MISMATCH");
+    const standardQty = Number(group.standard_qty ?? 0);
+    const deviation = Number((total - standardQty).toFixed(6));
+    // A deviation from the formula's own Standard Qty (either direction --
+    // more or less) is a real production event, not an error: alternates
+    // substitute at a different ratio, mixing loses/gains material, etc.
+    // Never silently accepted -- the operator must explicitly confirm it on
+    // Page 4 first (confirmed_deviation), same as Page 6's PM table below.
+    if (Math.abs(deviation) > EPSILON && suppliedGroup?.confirmed_deviation !== true) {
+      throw new Error("PROD_MTS_RM_DEVIATION_NOT_CONFIRMED");
+    }
     const machineSource = group.auto_derive_applicable === true;
-    for (const [index, row] of choices.entries()) if (row.actual_qty > 0) {
+    // The group's Standard Qty/dosage/formulation-flag/variance must attach to
+    // whichever row actually survives into finalLines -- never to raw array
+    // index 0. A full substitution (the original formulation material typed
+    // down to exactly 0, an alternate carrying the rest) would otherwise drop
+    // that row entirely and leave every remaining row wrongly flagged as a
+    // non-formulation line with a lost Standard Qty and a silently-zeroed
+    // variance_qty, even though the group-level deviation was confirmed.
+    // Mirrors buildAtomicPackingOrders' "first choice with qty > 0" rule below.
+    let formulationAssigned = false;
+    for (const row of choices) {
+      if (row.actual_qty <= 0) continue;
+      const isFormulationLine = !formulationAssigned;
+      formulationAssigned = true;
       finalLines.push({
         stroke_line_id: group.stroke_line_id, material_id: group.stroke_line_material_id,
-        actual_material_id: row.actual_material_id, planned_qty: index === 0 ? group.standard_qty : 0,
+        actual_material_id: row.actual_material_id, planned_qty: isFormulationLine ? group.standard_qty : 0,
         actual_qty: row.actual_qty, issue_sloc_id: group.storage_location_id, uom_code: "KG",
-        dosage_pct: index === 0 ? group.dosage_pct : null, is_formulation_line: index === 0,
-        variance_qty: 0, display_order: displayOrder++,
+        dosage_pct: isFormulationLine ? group.dosage_pct : null, is_formulation_line: isFormulationLine,
+        // Recorded for audit/traceability only -- never gates or classifies
+        // the deviation (no approved_status/AP-approved concept for MTS;
+        // AP Reco/billing for MTS is derived from formulation + dispatch,
+        // never from this actual RM/PM consumption -- see §138 lock).
+        variance_qty: isFormulationLine ? deviation : 0, display_order: displayOrder++,
         bucket_source: machineSource ? (foreignMachine ? "UNASSIGNED" : "MACHINE") : "LOCATION",
         bucket_machine_id: machineSource && !foreignMachine ? session.machineId : null,
       });
@@ -500,9 +525,9 @@ async function prepareRmLines(session: SessionHeader, clientGroups: unknown): Pr
   return finalLines;
 }
 
-function preparePmSelections(preview: PackingPreview, clientGroups: unknown): Map<string, { storageLocationId: string; rows: Array<{ actualMaterialId: string; actualQty: number }> }> {
+function preparePmSelections(preview: PackingPreview, clientGroups: unknown): Map<string, { storageLocationId: string; rows: Array<{ actualMaterialId: string; actualQty: number }>; varianceQty: number }> {
   const supplied = bodyGroupsByKey(clientGroups, "material_id");
-  const result = new Map<string, { storageLocationId: string; rows: Array<{ actualMaterialId: string; actualQty: number }> }>();
+  const result = new Map<string, { storageLocationId: string; rows: Array<{ actualMaterialId: string; actualQty: number }>; varianceQty: number }>();
   for (const group of preview.groups) {
     const selection = supplied.get(String(group.material_id));
     const storageLocationId = toTrimmedString(selection?.storage_location_id) || toTrimmedString(group.storage_location_id);
@@ -511,13 +536,20 @@ function preparePmSelections(preview: PackingPreview, clientGroups: unknown): Ma
     const finalRows = rows.map((row) => ({ actualMaterialId: toTrimmedString(row.actual_material_id), actualQty: Number(parseNonNegativeNumber(row.actual_qty) ?? 0) }));
     if (!storageLocationId || finalRows.some((row) => !row.actualMaterialId || !allowed.has(row.actualMaterialId) || seen.has(row.actualMaterialId) || !seen.add(row.actualMaterialId))) throw new Error("PROD_MTS_PM_SELECTION_INVALID");
     const total = Number(finalRows.reduce((sum, row) => sum + row.actualQty, 0).toFixed(6));
-    if (Math.abs(total - Number(group.standard_qty ?? 0)) > EPSILON) throw new Error("PROD_MTS_PM_QTY_MISMATCH");
-    result.set(String(group.material_id), { storageLocationId, rows: finalRows });
+    const standardQty = Number(group.standard_qty ?? 0);
+    const varianceQty = Number((total - standardQty).toFixed(6));
+    // Same rule as Page 4's RM table (§138 lock): a PM deviation from the
+    // combined Standard Qty, either direction, needs an explicit operator
+    // confirmation -- never silently blocked, never silently accepted.
+    if (Math.abs(varianceQty) > EPSILON && selection?.confirmed_deviation !== true) {
+      throw new Error("PROD_MTS_PM_DEVIATION_NOT_CONFIRMED");
+    }
+    result.set(String(group.material_id), { storageLocationId, rows: finalRows, varianceQty });
   }
   return result;
 }
 
-function buildAtomicPackingOrders(preview: PackingPreview, selections: Map<string, { storageLocationId: string; rows: Array<{ actualMaterialId: string; actualQty: number }> }>): JsonRecord[] {
+function buildAtomicPackingOrders(preview: PackingPreview, selections: Map<string, { storageLocationId: string; rows: Array<{ actualMaterialId: string; actualQty: number }>; varianceQty: number }>): JsonRecord[] {
   const perRow = new Map(preview.rows.map((row) => [row.id, new Map<string, number>()]));
   for (const group of preview.groups) {
     const selection = selections.get(String(group.material_id))!;
@@ -532,6 +564,10 @@ function buildAtomicPackingOrders(preview: PackingPreview, selections: Map<strin
       });
     }
   }
+  // A group's own variance_qty is recorded on exactly ONE of its (possibly
+  // many, cross-Packing-PO) split PM lines -- audit visibility without
+  // double counting, mirroring prepareRmLines' "only the first row" rule.
+  const varianceAssigned = new Set<string>();
   return preview.rows.map((row) => {
     const pmLines: JsonRecord[] = []; let displayOrder = 10;
     const quantities = perRow.get(row.id)!;
@@ -542,7 +578,9 @@ function buildAtomicPackingOrders(preview: PackingPreview, selections: Map<strin
       for (const choice of selection.rows) {
         const qty = quantities.get(`${formulation}::${choice.actualMaterialId}`) ?? 0;
         if (qty <= 0) continue;
-        pmLines.push({ line_type: "PM", material_id: formulation, actual_material_id: choice.actualMaterialId === formulation ? null : choice.actualMaterialId, qty_per_pack: Number((qty / row.totalOuterUnit).toFixed(6)), total_qty: qty, issue_sloc_id: selection.storageLocationId, uom_code: toTrimmedString(bomLine.uom_code) || "KG", movement_type_code: "P261", has_alternate: Boolean(bomLine.has_alternate), material_group_id: bomLine.has_alternate ? toTrimmedString(bomLine.material_group_id) || null : null, display_order: displayOrder++ });
+        const carriesVariance = !varianceAssigned.has(formulation);
+        if (carriesVariance) varianceAssigned.add(formulation);
+        pmLines.push({ line_type: "PM", material_id: formulation, actual_material_id: choice.actualMaterialId === formulation ? null : choice.actualMaterialId, qty_per_pack: Number((qty / row.totalOuterUnit).toFixed(6)), total_qty: qty, issue_sloc_id: selection.storageLocationId, uom_code: toTrimmedString(bomLine.uom_code) || "KG", movement_type_code: "P261", has_alternate: Boolean(bomLine.has_alternate), material_group_id: bomLine.has_alternate ? toTrimmedString(bomLine.material_group_id) || null : null, display_order: displayOrder++, variance_qty: carriesVariance ? selection.varianceQty : 0 });
       }
     }
     return {

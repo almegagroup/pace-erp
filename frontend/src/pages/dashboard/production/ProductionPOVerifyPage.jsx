@@ -18,6 +18,7 @@ import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import ModalBase from "../../../components/layer/ModalBase.jsx";
 import { availabilityPreviewProcessOrder, correctProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
 import { formatPreciseNumber, formatSum, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
 
@@ -146,8 +147,31 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
   const [holdRows, setHoldRows] = useState([]);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [deviationModal, setDeviationModal] = useState(false);
 
   const packingOrders = useMemo(() => po.packing_orders ?? [], [po.packing_orders]);
+  // §138 deviation-confirm (2026-09-21): RM (Page 4) / PM (Page 6) lines whose
+  // group deviated from the formula's Standard Qty carry that signed amount in
+  // variance_qty (recorded on exactly one line per group, per prepareRmLines/
+  // buildAtomicPackingOrders). QA must see this one final time before posting.
+  const rmPmDeviations = useMemo(() => {
+    const found = [];
+    for (const line of po.lines ?? []) {
+      const v = Number(line.variance_qty || 0);
+      if (Math.abs(v) > 0.0001) {
+        found.push({ key: `rm-${line.id}`, type: "RM", label: materialLabel(line.actual_material) || materialLabel(line.material) || "--", deviation: v });
+      }
+    }
+    for (const order of packingOrders) {
+      for (const line of (order.lines ?? []).filter((entry) => entry.line_type === "PM")) {
+        const v = Number(line.variance_qty || 0);
+        if (Math.abs(v) > 0.0001) {
+          found.push({ key: `pm-${line.id}`, type: "PM", label: materialLabel(line.actual_material) || materialLabel(line.material) || "--", deviation: v });
+        }
+      }
+    }
+    return found;
+  }, [po.lines, packingOrders]);
   const yields = useMemo(
     () => [...(po.mts_review?.batch_yield_variances ?? [])].sort((left, right) => mtsBatchSort(left.batch_number, right.batch_number)),
     [po.mts_review?.batch_yield_variances],
@@ -234,6 +258,17 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
     if (!rejectReason.trim()) return;
     onReject(rejectReason.trim());
   };
+  const attemptApprove = () => {
+    if (rmPmDeviations.length > 0) {
+      setDeviationModal(true);
+      return;
+    }
+    onApprove(MTS_CHECKLIST.map(([code]) => code), holdPayload(), false);
+  };
+  const confirmDeviationAndApprove = () => {
+    setDeviationModal(false);
+    onApprove(MTS_CHECKLIST.map(([code]) => code), holdPayload(), true);
+  };
 
   if (po.status !== "FINAL") {
     return <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">This MTS Process PO is not pending Verify. MTS documents cannot be edited or corrected from this page.</div>;
@@ -302,11 +337,39 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
           <div><h3 className="mb-2 text-sm font-semibold text-slate-800">RM Material Table — Page 4</h3><div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-sm"><thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="border-b px-3 py-2 text-left">Material</th><th className="border-b px-3 py-2 text-right">Dosage %</th><th className="border-b px-3 py-2 text-left">Actual material</th><th className="border-b px-3 py-2 text-left">Issue location</th><th className="border-b px-3 py-2 text-right">Standard KG</th><th className="border-b px-3 py-2 text-right">Actual KG</th><th className="border-b px-3 py-2 text-left">Movement</th></tr></thead><tbody>{(po.lines ?? []).map((line) => <tr key={line.id} className="border-b border-slate-100"><td className="px-3 py-2">{materialLabel(line.material) || "--"}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.dosage_pct, "0")}</td><td className="px-3 py-2">{materialLabel(line.actual_material) || materialLabel(line.material) || "--"}</td><td className="px-3 py-2">{storageLocationLabel(line.issue_storage_location) || "--"}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.planned_qty, "0")}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.actual_qty, "0")}</td><td className="px-3 py-2 font-mono">P261</td></tr>)}</tbody></table></div></div>
           <div><h3 className="mb-2 text-sm font-semibold text-slate-800">PM Material Table — Page 6</h3><div className="overflow-x-auto"><table className="w-full min-w-[980px] border-collapse text-sm"><thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="border-b px-3 py-2 text-left">Packing PO</th><th className="border-b px-3 py-2 text-left">SKU</th><th className="border-b px-3 py-2 text-left">PM Material</th><th className="border-b px-3 py-2 text-left">Issue location</th><th className="border-b px-3 py-2 text-right">Qty / Bag</th><th className="border-b px-3 py-2 text-right">Planned KG</th><th className="border-b px-3 py-2 text-left">Movement</th></tr></thead><tbody>{packingOrders.flatMap((order) => (order.lines ?? []).filter((line) => line.line_type === "PM").map((line) => <tr key={line.id} className="border-b border-slate-100"><td className="px-3 py-2 font-mono">{order.po_number}</td><td className="px-3 py-2">{materialLabel((order.lines ?? []).find((entry) => entry.line_type === "FG")?.material) || "--"}</td><td className="px-3 py-2">{materialLabel(line.actual_material) || materialLabel(line.material) || "--"}</td><td className="px-3 py-2">{storageLocationLabel(line.issue_storage_location) || "--"}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.qty_per_pack, "0")}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.total_qty, "0")}</td><td className="px-3 py-2 font-mono">P261</td></tr>))}</tbody></table></div></div>
           <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">Declared SKU output: <span className="font-mono font-semibold">{formatSum(totalDeclaredOutput, "0")} KG</span>. Gain / Loss: <span className="font-mono font-semibold">{formatSum(totalGainLoss, "0")} KG</span>. {holdPayload().length > 0 ? `${holdPayload().length} QA stock allocation line(s) will be posted.` : "No QA stock hold: all SKU output remains unrestricted."}</div>
-          <div className="flex flex-wrap justify-between gap-3 border-t border-slate-200 pt-3"><div className="flex gap-2"><button type="button" onClick={() => setStep(3)} className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back</button><button type="button" onClick={beginReject} disabled={saving} className="rounded border border-rose-300 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50">Reject & Release</button></div><button type="button" onClick={() => onApprove(MTS_CHECKLIST.map(([code]) => code), holdPayload())} disabled={saving} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">{saving ? "Posting..." : "Approve & Post"}</button></div>
+          <div className="flex flex-wrap justify-between gap-3 border-t border-slate-200 pt-3"><div className="flex gap-2"><button type="button" onClick={() => setStep(3)} className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back</button><button type="button" onClick={beginReject} disabled={saving} className="rounded border border-rose-300 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50">Reject & Release</button></div><button type="button" onClick={attemptApprove} disabled={saving} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">{saving ? "Posting..." : "Approve & Post"}</button></div>
         </div>
       ) : null}
 
       {rejectOpen ? <div className="rounded border border-rose-300 bg-rose-50 p-3"><label className="block text-sm font-semibold text-rose-800">Rejection reason</label><textarea value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} rows="3" className="mt-2 w-full rounded border border-rose-200 bg-white px-2 py-1.5 text-sm" placeholder="Explain why this MTS Process PO is being rejected." /><div className="mt-3 flex gap-2"><button type="button" onClick={() => setRejectOpen(false)} className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700">Cancel</button><button type="button" onClick={submitReject} disabled={!rejectReason.trim() || saving} className="rounded bg-rose-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">{saving ? "Releasing..." : "Confirm Reject & Release"}</button></div></div> : null}
+
+      <ModalBase
+        visible={deviationModal}
+        onEscape={() => setDeviationModal(false)}
+        eyebrow="MTS QA Verify"
+        title="RM / PM quantity deviates from Standard Qty"
+        message="The following lines were confirmed on Page 4/6 as deviating from the formula's Standard Qty (over or under). Review before posting -- Cancel returns here without posting (Reject remains available), Confirm proceeds to Approve & Post."
+        width="min(560px, calc(100vw - 32px))"
+        actions={
+          <>
+            <button type="button" onClick={() => setDeviationModal(false)} className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+            <button type="button" onClick={confirmDeviationAndApprove} disabled={saving} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">{saving ? "Posting..." : "Confirm & Post"}</button>
+          </>
+        }
+      >
+        <table className="w-full border-collapse text-sm">
+          <thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="border-b px-3 py-2 text-left">Type</th><th className="border-b px-3 py-2 text-left">Material</th><th className="border-b px-3 py-2 text-right">Deviation (KG)</th></tr></thead>
+          <tbody>
+            {rmPmDeviations.map((row) => (
+              <tr key={row.key} className="border-b border-slate-100">
+                <td className="px-3 py-2 font-mono">{row.type}</td>
+                <td className="px-3 py-2">{row.label}</td>
+                <td className={`px-3 py-2 text-right font-mono font-semibold ${row.deviation > 0 ? "text-amber-600" : "text-rose-600"}`}>{row.deviation > 0 ? "+" : ""}{formatSum(row.deviation, "0")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ModalBase>
     </div>
   );
 }
@@ -534,7 +597,7 @@ export default function ProductionPOVerifyPage() {
     }
   }
 
-  async function handleMtsApprove(checklist, holds) {
+  async function handleMtsApprove(checklist, holds, confirmedDeviation) {
     if (!po || po.po_type !== "MTS" || po.status !== "FINAL") return;
     const confirmed = await openActionConfirm({
       eyebrow: "MTS QA Verify",
@@ -545,7 +608,7 @@ export default function ProductionPOVerifyPage() {
     if (!confirmed) return;
     setSaving(true);
     try {
-      await verifyProcessOrder(po.id, { mts_action: "APPROVE", checklist, holds });
+      await verifyProcessOrder(po.id, { mts_action: "APPROVE", checklist, holds, confirmed_deviation: confirmedDeviation === true });
       toast("MTS Process PO verified and stock posted.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-orders"] });

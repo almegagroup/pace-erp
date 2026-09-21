@@ -1943,7 +1943,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
           ? serviceRoleClient
               .schema("erp_production")
               .from("packing_order_line")
-              .select("id, packing_order_id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code, movement_type_code, has_alternate, display_order")
+              .select("id, packing_order_id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code, movement_type_code, has_alternate, display_order, variance_qty")
               .in("packing_order_id", packingOrderIds)
               .order("display_order", { ascending: true })
           : Promise.resolve({ data: [], error: null }),
@@ -4535,10 +4535,33 @@ async function runMtsProcessOrderVerify(
   const packingOrderIds = packingOrders.map((order) => String(order.id));
   const { data: packingLineData, error: packingLineError } = await serviceRoleClient
     .schema("erp_production").from("packing_order_line")
-    .select("id, packing_order_id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code, stock_ledger_id")
+    .select("id, packing_order_id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code, stock_ledger_id, variance_qty")
     .in("packing_order_id", packingOrderIds).order("display_order", { ascending: true });
   if (packingLineError) throw new Error("PROD_MTS_VERIFY_FETCH_FAILED");
   const packingLines = (packingLineData ?? []) as JsonRecord[];
+
+  // §138 (2026-09-21): Page 4/6's RM/PM total may have been saved with a
+  // confirmed deviation from the formula's own Standard Qty (either
+  // direction). That confirmation happened well before Verify, possibly by
+  // a different person -- QA must see and re-confirm it one last time here,
+  // right before the irreversible stock posting. Never gates or classifies
+  // the deviation (no approved_status/AP-approved concept for MTS), purely
+  // a final "are you sure" before Approve commits.
+  const rmDeviations = processLines
+    .filter((line) => Math.abs(mtsQty(line.variance_qty)) > EPSILON)
+    .map((line) => ({ material_id: toTrimmedString(line.actual_material_id) || String(line.material_id), variance_qty: mtsQty(line.variance_qty) }));
+  const pmDeviations = packingLines
+    .filter((line) => String(line.line_type) === "PM" && Math.abs(mtsQty(line.variance_qty)) > EPSILON)
+    .map((line) => ({ material_id: toTrimmedString(line.actual_material_id) || String(line.material_id), variance_qty: mtsQty(line.variance_qty) }));
+  const allDeviations = [...rmDeviations, ...pmDeviations];
+  if (allDeviations.length > 0 && body.confirmed_deviation !== true) {
+    // The frontend already has po.lines/po.packing_orders[].lines (with
+    // variance_qty) from its own GET, so it builds and shows the detailed
+    // warning modal itself before ever calling Approve -- this is a
+    // server-side backstop (never trust the client), not the primary way
+    // the operator learns which materials deviated.
+    return poErr(req, ctx, "PROD_MTS_VERIFY_DEVIATION_NOT_CONFIRMED", 422, "One or more RM/PM lines deviate from the formula's Standard Qty. Confirm before posting.");
+  }
   const materialIds = [
     ...processLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
     ...packingLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
@@ -4733,33 +4756,12 @@ async function runMtsProcessOrderVerify(
     statusIndex += 1;
   }
 
-  let strokeNumber: string | null = null;
-  if (strokeMasterId) {
-    const { data: strokeData, error: strokeError } = await serviceRoleClient.schema("erp_production").from("stroke_master").select("stroke_number").eq("id", strokeMasterId).maybeSingle();
-    if (strokeError) throw new Error("PROD_MTS_VERIFY_STROKE_LOOKUP_FAILED");
-    strokeNumber = toTrimmedString((strokeData as JsonRecord | null)?.stroke_number) || null;
-  }
-  const recoDoc = await generateRecoDocNumber(String(po.company_id));
-  const recoNow = new Date().toISOString();
-  const recoRows: JsonRecord[] = [];
-  const packingRecoRows: JsonRecord[] = [];
-  for (const yieldRow of yields) {
-    const standardRatio = mtsQty(yieldRow.expected_qty) / expectedTotal;
-    for (const line of processLines) {
-      const actualQty = mtsQty(line.actual_qty ?? line.planned_qty);
-      recoRows.push({ company_id: po.company_id, po_number: po.po_number, batch_number: yieldRow.batch_number, po_type: "MTS", prodshade_material_id: po.material_id, stroke_number: strokeNumber, machine_id: po.machine_id ?? null, segment_code: po.segment_code ?? null, batch_started_at: po.batch_started_at ?? null, verified_at: recoNow, process_order_id: id, process_order_line_id: line.id, material_id: line.material_id, line_material_type: "RM", dosage_pct: line.dosage_pct ?? null, actual_material_id: line.actual_material_id ?? null, storage_location_id: line.issue_sloc_id ?? null, standard_qty: mtsQty(mtsQty(line.planned_qty) * standardRatio), actual_qty: mtsQty(actualQty * standardRatio), approved_status: "YES", ap_approved_qty: mtsQty(actualQty * standardRatio), variance_qty: 0, is_formulation_line: line.is_formulation_line !== false, is_voided: false, reco_document_number: recoDoc.docNumber, reco_document_year: recoDoc.docYear, source_txn_type: "PRODUCTION", reference_document_number: String(po.po_number), reference_document_type: "PROC_PO", last_updated_at: recoNow, last_updated_by: ctx.auth_user_id });
-    }
-    const order = packingOrders.find((item) => String(item.id) === String(yieldRow.packing_order_id));
-    const fillQty = mtsQty(order?.fill_qty_per_pack);
-    const standardPacks = mtsQty(yieldRow.expected_qty) / fillQty;
-    const actualPacks = mtsQty(yieldRow.declared_actual_qty) / fillQty;
-    for (const line of linesByPackingOrder.get(String(yieldRow.packing_order_id)) ?? []) {
-      if (String(line.line_type) !== "PM") continue;
-      const standardQty = mtsQty(mtsQty(line.qty_per_pack) * standardPacks);
-      const actualQty = mtsQty(mtsQty(line.qty_per_pack) * actualPacks);
-      packingRecoRows.push({ company_id: po.company_id, po_number: order?.po_number, sku_material_id: yieldRow.sku_material_id, batch_number: yieldRow.batch_number, po_type: "PMTS", finalized_at: recoNow, packing_order_id: yieldRow.packing_order_id, packing_order_line_id: line.id, material_id: toTrimmedString(line.actual_material_id) || line.material_id, formulation_material_id: line.material_id, standard_qty: standardQty, actual_qty: actualQty, approved_status: "YES", ap_approved_qty: actualQty, variance_qty: mtsQty(actualQty - standardQty), is_voided: false, last_updated_at: recoNow, last_updated_by: ctx.auth_user_id, reco_document_number: recoDoc.docNumber, reco_document_year: recoDoc.docYear, source_txn_type: "PRODUCTION", reference_document_number: String(order?.po_number ?? ""), reference_document_type: "PACK_PO" });
-    }
-  }
+  // §138 MTS reco decision (business owner, 2026-09-21): AC10's dispatch-driven
+  // AP Reco derivation never depends on MTS's actual RM/PM consumption -- only
+  // dispatch qty + formulation + costing-vs-WAR rate difference. MTS Verify
+  // therefore never writes process_order_line_reco/packing_order_line_reco;
+  // MTO/HPS/MTEST's own reco-writing logic below (runProcessOrderVerify) is
+  // untouched.
   const postings = await postDocument({
     referenceDocumentType: "PROC_PO",
     referenceDocumentId: id,
@@ -4768,7 +4770,6 @@ async function runMtsProcessOrderVerify(
     context: {
       header: { actual_qty: declaredTotal, verified_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, has_unapproved_deviation: false },
       reservations: reservationUpdates,
-      reco_rows: recoRows,
       machine_stock_log_rows: machineStockLogRows,
       mts_verify: {
         checks: checks.map((code) => ({ check_code: code })),
@@ -4776,7 +4777,6 @@ async function runMtsProcessOrderVerify(
         packing_orders: packingOrders.map((item) => ({ packing_order_id: String(item.id), actual_qty_kg: packingActualQtyById.get(String(item.id)) ?? 0 })),
         process_line_postings: processLinePostings,
         packing_line_updates: packingLineUpdates,
-        packing_reco_rows: packingRecoRows,
         hold_allocations: holdAllocations,
         status_postings: statusPostings,
       },
