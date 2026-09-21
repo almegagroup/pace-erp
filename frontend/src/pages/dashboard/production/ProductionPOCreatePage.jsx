@@ -2787,11 +2787,10 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
   const rowMetrics = effectiveRows.map((r) => computeRowMetrics(r));
   const runningVolume = rowMetrics.reduce((sum, m) => sum + m.volume, 0);
   const totalQty = Number(header?.total_qty ?? 0);
-  const overAllocated = runningVolume > totalQty + 0.0001;
   const shortfall = Math.max(0, Number((totalQty - runningVolume).toFixed(6)));
-  // A matching KG total is not enough: every batch in the selected range must
-  // appear exactly once.  Keep this guard on Page 5 as well as in the Page-6
-  // server validation so an overlap/gap never looks like a valid plan.
+  // Yield may vary, but every physical batch must still appear exactly once.
+  // Keep this guard on Page 5 and in Page 6 so an overlap/gap never looks
+  // like a valid plan.
   const batchCoverage = useMemo(() => {
     const claimed = new Array(batchNumbers.length).fill(false);
     let invalid = effectiveRows.length === 0;
@@ -2831,8 +2830,8 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
             storage_location_id: r.storage_location_id,
           })),
       };
-      if (body.rows.length !== effectiveRows.length || shortfall > 0.0001 || overAllocated || !batchCoverage.complete) {
-        pushToast("Every batch must be assigned exactly once and Page 5 volume must equal Total Qty.", "error");
+      if (body.rows.length !== effectiveRows.length || !batchCoverage.complete) {
+        pushToast("Every batch must be assigned exactly once before you continue.", "error");
         return;
       }
       onContinue(body.rows);
@@ -2843,7 +2842,7 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
     }
   }
 
-  function handleSaveClick() { if (!overAllocated && shortfall <= 0.0001 && batchCoverage.complete) doSave(); }
+  function handleSaveClick() { if (batchCoverage.complete) doSave(); }
 
   if (planQ.isLoading) {
     return <div className="max-w-6xl px-1 py-6 text-sm text-slate-500">Loading packing plan...</div>;
@@ -2875,9 +2874,9 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
           <div className="text-xs font-medium text-slate-500">Total Qty</div>
           <div className="mt-1 text-sm font-medium text-slate-900">{formatPreciseNumber(totalQty, "0.###")} KG</div>
         </div>
-        <div className={`rounded border px-3 py-2 ${overAllocated ? "border-rose-500 bg-rose-50" : "border-slate-200 bg-slate-50"}`}>
+        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">Planned So Far</div>
-          <div className={`mt-1 text-sm font-medium ${overAllocated ? "text-rose-700" : "text-slate-900"}`}>{formatPreciseNumber(runningVolume, "0.###")} KG</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{formatPreciseNumber(runningVolume, "0.###")} KG</div>
         </div>
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">Remaining</div>
@@ -2885,11 +2884,6 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
         </div>
       </div>
 
-      {overAllocated && (
-        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          Planned rows exceed this Process PO's Total Qty. Reduce a row's Outer Unit/Batch or its batch range.
-        </div>
-      )}
       {!batchCoverage.complete && effectiveRows.length > 0 && (
         <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
           Each batch in the selected range must be covered exactly once. Remove any overlap and fill every gap before continuing.
@@ -3001,7 +2995,7 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
         <button type="button" onClick={onBack} className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50">Back</button>
         <button
           type="button"
-          disabled={saving || overAllocated || shortfall > 0.0001 || !batchCoverage.complete}
+          disabled={saving || !batchCoverage.complete}
           onClick={handleSaveClick}
           className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
         >
