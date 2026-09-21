@@ -5184,6 +5184,16 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_VERIFY", "APPROVE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Verify/correction access for this company.");
     }
+    // §138 lock (2026-09-21, business owner): MTS never gets a COR6-style post-Verify
+    // correction/item-add — the frontend already never exposes this UI for po_type
+    // MTS (MtsVerifyWorkspace takes over rendering unconditionally and shows only a
+    // static blocked message once status leaves FINAL), but this handler itself had no
+    // matching guard, so a direct API call could still slip an MTS Process PO through.
+    // Mirrors correctPackingOrderHandler's own isMtsControlledPackingOrder() block on
+    // the Packing PO side.
+    if (String(po.po_type ?? "") === "MTS") {
+      return poErr(req, ctx, "PROD_PO_MTS_CORRECTION_NOT_ALLOWED", 422, "MTS Process POs do not support post-Verify correction or item addition.");
+    }
     if (po.status !== "VERIFIED") {
       return poErr(req, ctx, "PROD_PO_CORRECTION_STATUS_INVALID", 422, "Process PO must be VERIFIED to correct");
     }
