@@ -25,12 +25,10 @@ import {
   createProcessOrder,
   createShift,
   getProcessOrderCreateCapability,
-  getMtsMaterialPlan,
-  saveMtsMaterialPlan,
-  getMtsPackingPlan,
-  saveMtsPackingPlan,
-  getMtsPackingCombine,
-  saveMtsPackingCombine,
+  previewMtsCreationMaterialPlan,
+  previewMtsCreationPackingPlan,
+  previewMtsCreationPackingCombine,
+  commitMtsCreation,
   getPackBom,
   getStrokeMaster,
   listPackBoms,
@@ -99,8 +97,8 @@ const EMPTY_PROCESS = {
   planned_start_date: "",
   mts_segment_code: "",
   mtest_segment_code: "",
-  // MTS Page 3 (2026-09-17 lock) — captured here at Create, not at a later
-  // Start Batch click. See createProcessOrderHandler for the matching backend.
+  // MTS Page 3 — captured for the Page 1–6 browser session, not at a later
+  // Start Batch click.  Page 6 validates it again during atomic creation.
   production_date: "",
   shift_id: "",
   batch_start_serial: "",
@@ -217,10 +215,9 @@ export default function ProductionPOCreatePage() {
   const [saving, setSaving] = useState(false);
   const [processStep, setProcessStep] = useState(1);
   const [processForm, setProcessForm] = useState({ ...EMPTY_PROCESS });
-  // §138.12/§138.15 (2026-09-18) -- Page 4 (MTS RM auto-derive) runs against
-  // the already-created Process PO, so it needs that id + po_number, plus
-  // per-group user overrides (Policy 1/editable case) and R001 manual picks.
-  const [mtsCreatedPo, setMtsCreatedPo] = useState(null); // { id, po_number }
+  // Pages 1-6 are one temporary MTS creation session.  It intentionally has
+  // no server-side draft/PO id; Page 6 owns the only durable write.
+  const [mtsCreationSession, setMtsCreationSession] = useState(null);
   const [mtsPlanOverrides, setMtsPlanOverrides] = useState({}); // { [formulationMaterialId]: rows[] | { actual_material_id } }
   const [packingStep, setPackingStep] = useState(1);
   const [packingForm, setPackingForm] = useState({ ...EMPTY_PACKING });
@@ -489,8 +486,8 @@ export default function ProductionPOCreatePage() {
   }
 
   // MTS Page 3 "Batch Range" — live duplicate-check, debounced as the user
-  // types Start Batch Number / Number of Batches (2026-09-17 lock). Advisory
-  // only — createProcessOrderHandler re-checks server-side right before insert.
+  // types Start Batch Number / Number of Batches. Advisory only — the Page-6
+  // atomic create re-checks server-side before it claims the range.
   const [debouncedBatchRange, setDebouncedBatchRange] = useState({ start: "", count: "" });
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -1176,9 +1173,7 @@ export default function ProductionPOCreatePage() {
       }
     }
 
-    setSaving(true);
-    try {
-      const payload = {
+    const payload = {
         company_id: effectiveCompanyId,
         po_type: processForm.po_type,
         segment_code: derivedSegmentCode,
@@ -1187,9 +1182,9 @@ export default function ProductionPOCreatePage() {
         stroke_master_id: processForm.stroke_master_id,
         planned_start_date: isMts ? undefined : (processForm.planned_start_date || undefined),
         priority: processForm.po_type === "MTEST" ? processForm.priority : undefined,
-        // MTS: planned_qty is always derived server-side from batch_size × number_of_batches
-        // (createProcessOrderHandler ignores planned_qty_kg entirely for MTS) — batch_size is
-        // the per-batch KG already derived above (Liter→KG conversion where applicable).
+        // MTS: batch_size is the per-batch KG already derived above
+        // (Liter→KG conversion where applicable); Page 6 derives total planned
+        // quantity from batch_size × number_of_batches on the server.
         ...(isMts ? {
           batch_size: Number(processForm.planned_qty_kg),
           number_of_batches: Number(processForm.number_of_batches),
@@ -1207,18 +1202,23 @@ export default function ProductionPOCreatePage() {
             storage_location_id: row.storage_location_id,
           })),
       };
+    if (isMts) {
+      // Do not call createProcessOrder here.  Page 3 is only a batch-range
+      // preview; Page 4/5/6 stay in browser state and Page 6 commits all
+      // document/reservation writes in one transaction.
+      setMtsCreationSession({ header: payload, materialGroups: [], packingRows: [] });
+      setMtsPlanOverrides({});
+      setProcessStep(4);
+      toast("MTS creation session started. No Process PO or batch claim exists yet.");
+      return;
+    }
+
+    setSaving(true);
+    try {
       const result = await createProcessOrder(payload);
       toast(`Process PO created${result?.po_number ? `: ${result.po_number}` : "."}`);
       qc.invalidateQueries({ queryKey: ["process-orders"] });
-      if (isMts) {
-        // Page 4 (RM auto-derive) runs against the created order next --
-        // don't reset the form yet, the wizard moves to Step 4 instead.
-        setMtsCreatedPo({ id: result.id, po_number: result.po_number });
-        setMtsPlanOverrides({});
-        setProcessStep(4);
-      } else {
-        resetProcess({ company_id: defaultCompanyId || "" });
-      }
+      resetProcess({ company_id: defaultCompanyId || "" });
     } catch (error) {
       toast(error.message || "Process PO create failed.", "error");
     } finally {
@@ -1875,7 +1875,7 @@ export default function ProductionPOCreatePage() {
                       disabled={saving || (!isMts && shortLineNumbers.length > 0) || machineCapacityCheck.blocked || (isMts && mtsBatchRangeHasDuplicate)}
                       className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
                     >
-                      {saving ? "Saving..." : (isMts ? "Save & Continue to Page 4" : "Create Process PO")}
+                      {saving ? "Saving..." : (isMts ? "Continue to Page 4" : "Create Process PO")}
                     </button>
                   </div>
                 </div>
@@ -1884,34 +1884,40 @@ export default function ProductionPOCreatePage() {
           </form>
         )}
 
-        {activeTab === 0 && processStep === 4 && mtsCreatedPo && (
+        {activeTab === 0 && processStep === 4 && mtsCreationSession && (
           <MtsMaterialPlanStep
-            processOrder={mtsCreatedPo}
+            session={mtsCreationSession}
             overrides={mtsPlanOverrides}
             setOverrides={setMtsPlanOverrides}
             onCancel={() => {
-              setMtsCreatedPo(null);
+              setMtsCreationSession(null);
               setMtsPlanOverrides({});
               resetProcess({ company_id: defaultCompanyId || "" });
             }}
-            onContinue={() => setProcessStep(5)}
+            onContinue={(materialGroups) => {
+              setMtsCreationSession((current) => ({ ...current, materialGroups }));
+              setProcessStep(5);
+            }}
           />
         )}
 
-        {activeTab === 0 && processStep === 5 && mtsCreatedPo && (
+        {activeTab === 0 && processStep === 5 && mtsCreationSession && (
           <MtsPackingPlanStep
-            processOrder={mtsCreatedPo}
+            session={mtsCreationSession}
             onBack={() => setProcessStep(4)}
-            onContinue={() => setProcessStep(6)}
+            onContinue={(packingRows) => {
+              setMtsCreationSession((current) => ({ ...current, packingRows }));
+              setProcessStep(6);
+            }}
           />
         )}
 
-        {activeTab === 0 && processStep === 6 && mtsCreatedPo && (
+        {activeTab === 0 && processStep === 6 && mtsCreationSession && (
           <MtsPackingCombineStep
-            processOrder={mtsCreatedPo}
+            session={mtsCreationSession}
             onBack={() => setProcessStep(5)}
             onDone={() => {
-              setMtsCreatedPo(null);
+              setMtsCreationSession(null);
               setMtsPlanOverrides({});
               resetProcess({ company_id: defaultCompanyId || "" });
             }}
@@ -2355,34 +2361,25 @@ export default function ProductionPOCreatePage() {
   );
 }
 
-// §138.12/§138.14/§138.15 (2026-09-18) -- Page 4: MTS RM Auto-Derive Grid.
-// Runs against the Process PO Create's just-created STANDARD order (see
-// MtsCreatedPo state above). Machine-tracked formulation lines are computed
-// server-side (§138.12's bucket-boundary + smallest-first algorithm); R001
-// (non-machine-tracked) lines need a manual Actual Material pick here, same
-// as MTO/HPS already does. Policy 1 (Current Stroke) is fully editable here;
-// Policy 2 (non-current) is read-only -- editing moves to Final/Verify.
-function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, onContinue }) {
-  const qc = useQueryClient();
+// Page 4 is a stateless server preview over browser session data.  It never
+// owns a Process PO or a reservation; Page 6 is the first durable write.
+function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onContinue }) {
   const [manualPicks, setManualPicks] = useState({});
   const [saving, setSaving] = useState(false);
-  // §138.12 refinement (2026-09-18): groups whose total lands below Standard
-  // Qty after the user's own edits/row-deletions need an explicit confirm
-  // before Save -- this holds the pending confirmation state between the
-  // Save click and the modal's own Confirm/Cancel.
-  const [pendingShortfall, setPendingShortfall] = useState(null); // [{ label, shortQty }]
-
   const planQ = useQuery({
-    queryKey: ["mts-material-plan", processOrder.id],
-    queryFn: () => getMtsMaterialPlan(processOrder.id),
+    queryKey: ["mts-creation-material-plan", session.header],
+    queryFn: () => previewMtsCreationMaterialPlan({ header: session.header }),
   });
 
   const header = planQ.data?.header ?? null;
   const groups = useMemo(() => planQ.data?.groups ?? [], [planQ.data]);
   const materials = planQ.data?.materials ?? {};
   const storageLocations = planQ.data?.storage_locations ?? {};
-  const saved = planQ.data?.saved === true;
-  const isEditable = header?.mts_used_current_stroke === true && !saved;
+  // Both current and non-current MTS strokes are editable throughout the
+  // browser-only creation session.  The non-current distinction is a QA
+  // sign-off after Page 6, not a restriction on making the plan that QA
+  // reviews.  Nothing is durable until the Page-6 atomic commit.
+  const isEditable = true;
 
   function materialLabel(id) {
     const m = materials[id];
@@ -2457,16 +2454,18 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
     && !manualPicks[g.stroke_line_id]
     && !g.rows.some((r) => r.is_formulation_line && r.actual_qty > 0));
 
-  function buildSaveBody(confirmedLabels) {
+  function buildSaveBody() {
     return {
       groups: groups.map((group) => {
         if (group.auto_derive_applicable) {
-          const override = overrides[group.stroke_line_id];
-          if (!override) return null;
+          // Preserve the derived rows as part of the browser-only session even
+          // when the operator has not edited them.  Page 6 re-derives from
+          // current stock, but the persisted snapshot must still show what the
+          // operator saw and accepted on Page 4.
+          const override = overrides[group.stroke_line_id] ?? group.rows;
           return {
             stroke_line_id: group.stroke_line_id,
             rows: override.map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
-            confirmed_shortfall: confirmedLabels?.has(group.stroke_line_id) || undefined,
           };
         }
         const chosen = manualPicks[group.stroke_line_id];
@@ -2475,10 +2474,8 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
     };
   }
 
-  // §138.12 refinement: a group's own total landing below Standard Qty after
-  // the user's edits/deletions is no longer a hard block -- it needs an
-  // explicit "do you agree?" confirm before Save, per business owner lock
-  // 2026-09-18. Over-Standard stays hard-blocked (unchanged).
+  // A short Page-4 group is a hard stop.  There is no "consider shortfall"
+  // path because no document is yet allowed to exist.
   function findShortfallGroups() {
     const found = [];
     for (const group of groups) {
@@ -2497,22 +2494,16 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
     return found;
   }
 
-  async function handleSave(confirmedLabels) {
-    if (!confirmedLabels) {
-      const shortfalls = findShortfallGroups();
-      if (shortfalls.length > 0) {
-        setPendingShortfall(shortfalls);
-        return;
-      }
+  async function handleSave() {
+    const shortfalls = findShortfallGroups();
+    if (shortfalls.length > 0) {
+      pushToast("Every Page 4 group must meet its Standard Qty before Page 5.", "error");
+      return;
     }
     setSaving(true);
     try {
-      const body = buildSaveBody(confirmedLabels ? new Set(confirmedLabels.map((s) => s.label)) : null);
-      await saveMtsMaterialPlan(processOrder.id, body);
-      setPendingShortfall(null);
-      pushToast(`Material plan saved for ${processOrder.po_number}.`);
-      qc.invalidateQueries({ queryKey: ["mts-material-plan", processOrder.id] });
-      qc.invalidateQueries({ queryKey: ["process-orders"] });
+      const body = buildSaveBody();
+      onContinue(body.groups);
     } catch (error) {
       pushToast(error.message || "Save failed.", "error");
     } finally {
@@ -2534,13 +2525,13 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 4</p>
           <h3 className="text-lg font-semibold text-slate-900">RM Auto-Derive Material Table</h3>
         </div>
-        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">{header?.status || "STANDARD"}</span>
+        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">CREATION SESSION</span>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">PO Number</div>
-          <div className="mt-1 text-sm font-medium text-slate-900">{header?.po_number || processOrder.po_number}</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">Created only after Page 6</div>
         </div>
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">Prodshade</div>
@@ -2575,16 +2566,6 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
         </div>
       </div>
 
-      {saved && (
-        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          Material plan already saved for this Process PO -- read-only.
-        </div>
-      )}
-      {!saved && !isEditable && (
-        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          This batch used a Non-Current Stroke -- the auto-derived plan below is read-only here. Edits happen at Final/Verify instead.
-        </div>
-      )}
       {shortGroups.length > 0 && (
         <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
           Insufficient stock (formulation + alternates combined) for: {shortGroups.map((g) => materialLabel(g.stroke_line_material_id)).join(", ")}.
@@ -2644,7 +2625,7 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
                             onChange={(value) => handleSwapMaterial(group, rowIndex, value)}
                             options={materialOptions}
                           />
-                        ) : !group.auto_derive_applicable && !saved ? (
+                        ) : !group.auto_derive_applicable ? (
                           <ErpComboboxField
                             value={manualPicks[group.stroke_line_id] || ""}
                             onChange={(value) => setManualPicks((current) => ({ ...current, [group.stroke_line_id]: value }))}
@@ -2707,88 +2688,41 @@ function MtsMaterialPlanStep({ processOrder, overrides, setOverrides, onCancel, 
       </div>
 
       <div className="flex justify-between">
+        <button type="button" onClick={onCancel} className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50">
+          Cancel / Back to list
+        </button>
         <button
           type="button"
-          onClick={saved ? onContinue : onCancel}
-          className={saved
-            ? "rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700"
-            : "rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"}
+          disabled={saving || shortGroups.length > 0 || manualPickMissing}
+          onClick={handleSave}
+          className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
         >
-          {saved ? "Continue to Page 5" : "Cancel / Back to list"}
+          {saving ? "Checking..." : "Next: Page 5"}
         </button>
-        {!saved && (
-          <button
-            type="button"
-            disabled={saving || shortGroups.length > 0 || manualPickMissing}
-            onClick={() => handleSave()}
-            className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
-          >
-            {saving ? "Saving..." : "Save Material Plan"}
-          </button>
-        )}
       </div>
-
-      <BlockingLayer
-        visible={Boolean(pendingShortfall)}
-        onEscape={() => setPendingShortfall(null)}
-        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
-        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 420, display: "flex", flexDirection: "column", gap: 12 }}
-      >
-        <p className="text-sm font-semibold text-slate-800">Quantity Below Requirement</p>
-        <div className="text-sm text-slate-600">
-          You are taking less than the required quantity for:
-          <ul className="mt-1 list-disc pl-5">
-            {(pendingShortfall ?? []).map((s) => (
-              <li key={s.label}>{materialLabel(s.materialId ?? s.label)} -- short by {formatPreciseNumber(s.shortQty, "0.###")} KG</li>
-            ))}
-          </ul>
-          Do you agree?
-        </div>
-        <div className="flex justify-end gap-2 mt-1">
-          <button
-            type="button"
-            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-            onClick={() => setPendingShortfall(null)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
-            onClick={() => handleSave(pendingShortfall)}
-          >
-            Confirm
-          </button>
-        </div>
-      </BlockingLayer>
     </div>
   );
 }
 
-// §138.16 (2026-09-18) -- Page 5: Packing PO batch->pack-size planning grid.
-// Each row here becomes one Packing PO once Page 6 saves. This page only
-// stages the plan (erp_production.mts_packing_plan_row) -- no Packing PO
-// exists yet.
-function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
-  const qc = useQueryClient();
-  const [rows, setRows] = useState(null); // lazily initialized from server data
-  const [pendingShortfall, setPendingShortfall] = useState(null);
-  const [lossReason, setLossReason] = useState("");
+// Page 5 remains inside the browser-only MTS creation session.  Its rows are
+// validated again at Page 6 before the atomic document-create call.
+function MtsPackingPlanStep({ session, onBack, onContinue }) {
+  const [rows, setRows] = useState(null); // lazily initialized from session data
   const [saving, setSaving] = useState(false);
 
   const planQ = useQuery({
-    queryKey: ["mts-packing-plan", processOrder.id],
-    queryFn: () => getMtsPackingPlan(processOrder.id),
+    queryKey: ["mts-creation-packing-plan", session.header],
+    queryFn: () => previewMtsCreationPackingPlan({ header: session.header }),
   });
 
   const header = planQ.data?.header ?? null;
   const packSizeOptions = planQ.data?.pack_size_options ?? [];
   const storageLocationOptions = planQ.data?.storage_location_options ?? [];
-  const batchNumbers = planQ.data?.batch_numbers ?? [];
+  const batchNumbers = useMemo(() => planQ.data?.batch_numbers ?? [], [planQ.data]);
 
   useEffect(() => {
     if (rows === null && planQ.data) {
-      const existing = (planQ.data.rows ?? []).map((r) => ({
+      const existing = (session.packingRows ?? []).map((r) => ({
         batch_number_from: r.batch_number_from,
         batch_number_to: r.batch_number_to,
         up_to_last_batch: batchNumbers.length > 0 && r.batch_number_to === batchNumbers[batchNumbers.length - 1],
@@ -2801,7 +2735,7 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planQ.data]);
 
-  const effectiveRows = rows ?? [];
+  const effectiveRows = useMemo(() => rows ?? [], [rows]);
 
   function batchIndexOf(bn) {
     return batchNumbers.indexOf(bn);
@@ -2855,6 +2789,26 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
   const totalQty = Number(header?.total_qty ?? 0);
   const overAllocated = runningVolume > totalQty + 0.0001;
   const shortfall = Math.max(0, Number((totalQty - runningVolume).toFixed(6)));
+  // A matching KG total is not enough: every batch in the selected range must
+  // appear exactly once.  Keep this guard on Page 5 as well as in the Page-6
+  // server validation so an overlap/gap never looks like a valid plan.
+  const batchCoverage = useMemo(() => {
+    const claimed = new Array(batchNumbers.length).fill(false);
+    let invalid = effectiveRows.length === 0;
+    for (const row of effectiveRows) {
+      const fromIdx = batchNumbers.indexOf(row.batch_number_from);
+      const toIdx = row.up_to_last_batch ? batchNumbers.length - 1 : batchNumbers.indexOf(row.batch_number_to);
+      if (fromIdx < 0 || toIdx < fromIdx) {
+        invalid = true;
+        continue;
+      }
+      for (let index = fromIdx; index <= toIdx; index += 1) {
+        if (claimed[index]) invalid = true;
+        claimed[index] = true;
+      }
+    }
+    return { complete: !invalid && claimed.length > 0 && claimed.every(Boolean), invalid };
+  }, [batchNumbers, effectiveRows]);
 
   function addRow() {
     setRows((current) => [...current, { batch_number_from: "", batch_number_to: "", up_to_last_batch: false, pack_code_id: "", outer_unit_per_batch: "", storage_location_id: "" }]);
@@ -2863,7 +2817,7 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
     setRows((current) => current.filter((_, i) => i !== index));
   }
 
-  async function doSave(confirmedLoss) {
+  async function doSave() {
     setSaving(true);
     try {
       const body = {
@@ -2876,14 +2830,12 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
             outer_unit_per_batch: Number(r.outer_unit_per_batch),
             storage_location_id: r.storage_location_id,
           })),
-        planned_loss_qty: confirmedLoss ? shortfall : undefined,
-        planned_loss_reason: confirmedLoss ? lossReason || undefined : undefined,
       };
-      await saveMtsPackingPlan(processOrder.id, body);
-      setPendingShortfall(null);
-      pushToast("Packing plan saved.");
-      qc.invalidateQueries({ queryKey: ["mts-packing-plan", processOrder.id] });
-      onContinue();
+      if (body.rows.length !== effectiveRows.length || shortfall > 0.0001 || overAllocated || !batchCoverage.complete) {
+        pushToast("Every batch must be assigned exactly once and Page 5 volume must equal Total Qty.", "error");
+        return;
+      }
+      onContinue(body.rows);
     } catch (error) {
       pushToast(error.message || "Save failed.", "error");
     } finally {
@@ -2891,14 +2843,7 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
     }
   }
 
-  function handleSaveClick() {
-    if (overAllocated) return;
-    if (shortfall > 0.0001) {
-      setPendingShortfall({ shortfall });
-      return;
-    }
-    doSave(false);
-  }
+  function handleSaveClick() { if (!overAllocated && shortfall <= 0.0001 && batchCoverage.complete) doSave(); }
 
   if (planQ.isLoading) {
     return <div className="max-w-6xl px-1 py-6 text-sm text-slate-500">Loading packing plan...</div>;
@@ -2914,13 +2859,13 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 5</p>
           <h3 className="text-lg font-semibold text-slate-900">Batch to Pack-Size Planning</h3>
         </div>
-        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">{header?.status || "STANDARD"}</span>
+        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">CREATION SESSION</span>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">PO Number</div>
-          <div className="mt-1 text-sm font-medium text-slate-900">{header?.po_number}</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">Created only after Page 6</div>
         </div>
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">Batch Range</div>
@@ -2943,6 +2888,11 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
       {overAllocated && (
         <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
           Planned rows exceed this Process PO's Total Qty. Reduce a row's Outer Unit/Batch or its batch range.
+        </div>
+      )}
+      {!batchCoverage.complete && effectiveRows.length > 0 && (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          Each batch in the selected range must be covered exactly once. Remove any overlap and fill every gap before continuing.
         </div>
       )}
 
@@ -3012,7 +2962,7 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
                       <input
                         type="number"
                         step="1"
-                        min="0"
+                        min="1"
                         className="w-24 rounded border border-slate-300 px-2 py-1 text-right text-sm"
                         value={row.outer_unit_per_batch}
                         onChange={(event) => updateRow(index, { outer_unit_per_batch: event.target.value })}
@@ -3051,68 +3001,31 @@ function MtsPackingPlanStep({ processOrder, onBack, onContinue }) {
         <button type="button" onClick={onBack} className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50">Back</button>
         <button
           type="button"
-          disabled={saving || overAllocated}
+          disabled={saving || overAllocated || shortfall > 0.0001 || !batchCoverage.complete}
           onClick={handleSaveClick}
           className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
         >
-          {saving ? "Saving..." : "Next: Page 6"}
+          {saving ? "Checking..." : "Next: Page 6"}
         </button>
       </div>
 
-      <BlockingLayer
-        visible={Boolean(pendingShortfall)}
-        onEscape={() => setPendingShortfall(null)}
-        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
-        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 420, display: "flex", flexDirection: "column", gap: 12 }}
-      >
-        <p className="text-sm font-semibold text-slate-800">SFG Quantity Remaining</p>
-        <p className="text-sm text-slate-600">
-          {formatPreciseNumber(pendingShortfall?.shortfall, "0.###")} KG of SFG output is not covered by any row yet. What do you want to do?
-        </p>
-        <label className="flex flex-col gap-1 text-xs text-slate-600">
-          Reason (optional, for Consider Loss)
-          <input
-            type="text"
-            className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-            value={lossReason}
-            onChange={(event) => setLossReason(event.target.value)}
-          />
-        </label>
-        <div className="flex justify-end gap-2 mt-1">
-          <button
-            type="button"
-            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-            onClick={() => setPendingShortfall(null)}
-          >
-            Back to Entry
-          </button>
-          <button
-            type="button"
-            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
-            onClick={() => doSave(true)}
-          >
-            Consider Loss
-          </button>
-        </div>
-      </BlockingLayer>
     </div>
   );
 }
 
-// §138.16 (2026-09-18) -- Page 6: combined PM auto-derive across every Page-5
-// pack-size row, then Save fans out into N real Packing POs (one per Page-5
-// row). Groups are keyed by PM formulation material -- a PM item shared
+// Page 6: combined PM auto-derive across every Page-5 row, then one atomic
+// commit creates the parent MTS Process PO and every linked PMTS Packing PO.
+// Groups are keyed by PM formulation material -- a PM item shared
 // across pack sizes (Thread, Cable Tie...) shows ONCE with a combined
 // Standard Qty; a pack-specific item (the outer bag) never merges since its
 // own material_id differs per pack size. Same auto_derive_applicable
 // row/override shape as Page 4's MtsMaterialPlanStep, but at PM-storage-
 // location level (no machine bucket) and with Storage Location itself also
 // editable per group (Page 4 only let Actual Material move within a group).
-function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
+function MtsPackingCombineStep({ session, onBack, onDone }) {
   const qc = useQueryClient();
   const [overrides, setOverrides] = useState({}); // material_id -> { rows: [...], storage_location_id }
   const [saving, setSaving] = useState(false);
-  const [pendingShortfall, setPendingShortfall] = useState(null);
 
   const storageOverrides = useMemo(
     () => Object.fromEntries(Object.entries(overrides)
@@ -3121,11 +3034,14 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
     [overrides],
   );
   const combineQ = useQuery({
-    queryKey: ["mts-packing-combine", processOrder.id, storageOverrides],
-    queryFn: () => getMtsPackingCombine(processOrder.id, storageOverrides),
+    queryKey: ["mts-creation-packing-combine", session.header, session.packingRows, storageOverrides],
+    queryFn: () => previewMtsCreationPackingCombine({
+      header: session.header,
+      packing_rows: session.packingRows,
+      storage_overrides: storageOverrides,
+    }),
   });
 
-  const header = combineQ.data?.header ?? null;
   const rowsSummary = combineQ.data?.rows_summary ?? [];
   const groups = useMemo(() => combineQ.data?.groups ?? [], [combineQ.data]);
   const materials = combineQ.data?.materials ?? {};
@@ -3227,13 +3143,11 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
     };
   }
 
-  async function handleSave(confirmedLabels) {
-    if (!confirmedLabels) {
-      const shortfalls = findShortfallGroups();
-      if (shortfalls.length > 0) {
-        setPendingShortfall(shortfalls);
-        return;
-      }
+  async function handleSave() {
+    const shortfalls = findShortfallGroups();
+    if (shortfalls.length > 0) {
+      pushToast("Every PM group must meet its Standard Qty before documents can be created.", "error");
+      return;
     }
     if (groups.some((g) => !storageLocationForGroup(g))) {
       pushToast("Select a Storage Location for every PM group before saving.", "error");
@@ -3241,16 +3155,33 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
     }
     setSaving(true);
     try {
-      const body = buildSaveBody(confirmedLabels ? new Set(confirmedLabels.map((s) => s.label)) : null);
-      const result = await saveMtsPackingCombine(processOrder.id, body);
-      setPendingShortfall(null);
-      pushToast(`${result.po_numbers?.length ?? 0} Packing PO(s) created for ${processOrder.po_number}.`);
-      qc.invalidateQueries({ queryKey: ["mts-packing-combine", processOrder.id] });
+      const body = buildSaveBody(null);
+      const result = await commitMtsCreation({
+        header: session.header,
+        material_groups: session.materialGroups,
+        packing_rows: session.packingRows,
+        pm_groups: body.groups,
+      });
+      const packingCount = result?.packing_orders?.length ?? 0;
+      pushToast(`MTS Process PO ${result?.po_number || ""} and ${packingCount} linked Packing PO(s) created atomically.`);
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-orders"] });
       onDone();
     } catch (error) {
-      pushToast(error.message || "Save failed.", "error");
+      const mustRestart = new Set([
+        "PROD_MTS_INSUFFICIENT_STOCK",
+        "PROD_MTS_MACHINE_BUCKET_SHORT",
+        "PROD_BATCH_RANGE_DUPLICATE",
+      ]).has(error?.code);
+      pushToast(
+        mustRestart
+          ? "Stock or batch availability changed. Nothing was created; start a new MTS entry after arranging stock."
+          : (error.message || "Save failed."),
+        "error",
+      );
+      // The database transaction rolled back. Discard the browser-only session
+      // too, so a shortage/range collision cannot turn into an implicit draft.
+      if (mustRestart) onDone();
     } finally {
       setSaving(false);
     }
@@ -3268,14 +3199,14 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Page 6</p>
-          <h3 className="text-lg font-semibold text-slate-900">Combined PM Auto-Derive &amp; Packing PO Save</h3>
+          <h3 className="text-lg font-semibold text-slate-900">Combined PM Auto-Derive &amp; Atomic Document Create</h3>
         </div>
-        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">{header?.status || "STANDARD"}</span>
+        <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">CREATION SESSION</span>
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 px-4 py-3">
-          <h4 className="text-sm font-semibold text-slate-800">Page 5 Summary -- one Packing PO per row on Save</h4>
+          <h4 className="text-sm font-semibold text-slate-800">Page 5 Summary -- one Packing PO per row on atomic create</h4>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[700px] border-collapse text-sm">
@@ -3405,46 +3336,13 @@ function MtsPackingCombineStep({ processOrder, onBack, onDone }) {
         <button
           type="button"
           disabled={saving || shortGroups.length > 0}
-          onClick={() => handleSave()}
+          onClick={handleSave}
           className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
         >
-          {saving ? "Saving..." : `Save & Create ${rowsSummary.length || ""} Packing PO(s)`}
+          {saving ? "Creating..." : `Create Process PO + ${rowsSummary.length || ""} Packing PO(s)`}
         </button>
       </div>
 
-      <BlockingLayer
-        visible={Boolean(pendingShortfall)}
-        onEscape={() => setPendingShortfall(null)}
-        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
-        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 420, display: "flex", flexDirection: "column", gap: 12 }}
-      >
-        <p className="text-sm font-semibold text-slate-800">Quantity Below Requirement</p>
-        <div className="text-sm text-slate-600">
-          You are taking less than the required quantity for:
-          <ul className="mt-1 list-disc pl-5">
-            {(pendingShortfall ?? []).map((s) => (
-              <li key={s.label}>{materialLabel(s.label)} -- short by {formatPreciseNumber(s.shortQty, "0.###")} KG</li>
-            ))}
-          </ul>
-          Do you agree?
-        </div>
-        <div className="flex justify-end gap-2 mt-1">
-          <button
-            type="button"
-            className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-            onClick={() => setPendingShortfall(null)}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
-            onClick={() => handleSave(pendingShortfall)}
-          >
-            Confirm
-          </button>
-        </div>
-      </BlockingLayer>
     </div>
   );
 }

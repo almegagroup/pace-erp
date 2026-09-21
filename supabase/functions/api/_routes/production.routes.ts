@@ -152,6 +152,12 @@ import {
   getMtsPackingCombineHandler,
   saveMtsPackingCombineHandler,
 } from "../_core/production/mts_packing_combine.handlers.ts";
+import {
+  previewMtsCreationMaterialPlanHandler,
+  previewMtsCreationPackingPlanHandler,
+  previewMtsCreationPackingCombineHandler,
+  createMtsCreationDocumentsHandler,
+} from "../_core/production/mts_creation_session.handlers.ts";
 import { getOrderInformationReportHandler, getBatchCountsReportHandler } from "../_core/production/order_information_system.handlers.ts";
 import { searchBatchVarianceHandler, getBatchVarianceDetailHandler } from "../_core/production/batch_variance_report.handlers.ts";
 import {
@@ -626,6 +632,22 @@ export async function dispatchProductionRoutes(
   if (/^\/api\/production\/process-orders\/[^/]+\/mts-packing-combine$/.test(pathname)) {
     if (req.method === "GET") return await getMtsPackingCombineHandler(req, ctx);
     if (req.method === "POST") return await saveMtsPackingCombineHandler(req, ctx);
+  }
+
+  // MTS creation session: Pages 1-6 are server-recomputed previews only.
+  // No Process/Packing PO, reservation, batch claim or draft exists before
+  // the Page-6 commit endpoint below succeeds atomically.
+  if (pathname === "/api/production/mts-creation/material-plan" && req.method === "POST") {
+    return await previewMtsCreationMaterialPlanHandler(req, ctx);
+  }
+  if (pathname === "/api/production/mts-creation/packing-plan" && req.method === "POST") {
+    return await previewMtsCreationPackingPlanHandler(req, ctx);
+  }
+  if (pathname === "/api/production/mts-creation/packing-combine" && req.method === "POST") {
+    return await previewMtsCreationPackingCombineHandler(req, ctx);
+  }
+  if (pathname === "/api/production/mts-creation/commit" && req.method === "POST") {
+    return await createMtsCreationDocumentsHandler(req, ctx);
   }
 
   // SFG QA /:id actions
