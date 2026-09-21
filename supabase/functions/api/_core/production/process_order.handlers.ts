@@ -37,7 +37,6 @@ import {
   findDuplicateBatchNumbers,
   generateBatchNumber,
   isBatchSeriesAutoGenerate,
-  releaseUnpostedMtsBatchNumberInstancesForProcessOrder,
   resolveMtsBatchRangeNumbers,
   upsertBatchNumberInstanceForProcessOrder,
 } from "./batch_series.handlers.ts";
@@ -1764,7 +1763,7 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
         rows.map((row) => String(row.material_id ?? "")),
         "[process_order.listProcessOrders]",
         "PROD_PO_LIST_FAILED",
-        "id, pace_code, material_name, shade_code",
+        "id, pace_code, material_name, document_name, shade_code",
       ),
       (async () => {
         const map = new Map<string, string>();
@@ -1911,12 +1910,19 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     }
 
     const lines = await fetchOrderLines(id, strokeMasterId);
-    const { data: packOrders, error: packErr } = await serviceRoleClient
+    // A REVERSED parent's own children are ALL reversed by definition -- the
+    // CORS report (ReversalPage.jsx) needs those still-linked lines to show
+    // what was actually reversed, so only exclude REVERSED packing orders
+    // when the parent itself is still active.
+    let packingOrderQuery = serviceRoleClient
       .schema("erp_production")
       .from("packing_order")
       .select("id, po_number, status, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to, pack_code_id, fill_qty_per_pack, num_packs, sku_qty, material_id")
-      .eq("process_order_id", id)
-      .neq("status", "REVERSED");
+      .eq("process_order_id", id);
+    if (poRow.status !== "REVERSED") {
+      packingOrderQuery = packingOrderQuery.neq("status", "REVERSED");
+    }
+    const { data: packOrders, error: packErr } = await packingOrderQuery;
     if (packErr) {
       console.error("[process_order.getProcessOrder] packing-order query failed:", JSON.stringify(packErr));
       throw new Error("PROD_PO_FETCH_FAILED");
@@ -5471,6 +5477,203 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
   }
 }
 
+// P322/P344 are the only two movement types an MTS Verify hold ever posts
+// (Unrestricted->QA / Unrestricted->Blocked); their registered reverses in
+// movement_type_master are P321/P343 (confirmed live 2026-09-21).
+const MTS_HOLD_REVERSAL_MOVEMENT: Record<string, string> = { P322: "P321", P344: "P343" };
+
+// §138 CORS (2026-09-21, business owner design lock): full reversal of a
+// VERIFIED MTS Process PO. Unlike non-MTS CORS (reverseProcessOrderHandler
+// below), this cascades every connected PMTS Packing PO's PM+FG postings in
+// ONE atomic action -- there is no per-Packing-PO reversal step to do first
+// (PMTS children are already blocked from any standalone write, see
+// isMtsControlledPackingOrder() in packing_order.handlers.ts).
+//
+// Movement order matters: any qty an MTS Verify QA hold moved into
+// QUALITY_INSPECTION/BLOCKED is reversed BEFORE the FG/SKU receipt itself,
+// so the FG reversal can always draw its full declared qty from a single
+// UNRESTRICTED balance rather than needing to split across stock types.
+//
+// Batch range release (ALL members, including USED) and every REVERSED
+// status write happen inside complete_process_po_verify's own mts_reverse
+// branch, in the SAME transaction post_document() opens for the movements
+// below (§8D) -- never as a separate follow-up call.
+async function reverseMtsProcessOrderHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+  po: JsonRecord,
+  id: string,
+  reason: string,
+): Promise<Response> {
+  const processLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+
+  const { data: packingOrdersData, error: packingOrdersErr } = await serviceRoleClient
+    .schema("erp_production").from("packing_order")
+    .select("id").eq("process_order_id", id);
+  if (packingOrdersErr) {
+    console.error("[process_order.reverseMtsProcessOrder] packing-order lookup failed:", JSON.stringify(packingOrdersErr));
+    throw new Error("PROD_MTS_REVERSE_PACKING_LOOKUP_FAILED");
+  }
+  const packingOrderIds = ((packingOrdersData ?? []) as JsonRecord[]).map((row) => String(row.id));
+
+  let packingLines: JsonRecord[] = [];
+  if (packingOrderIds.length > 0) {
+    const { data: lineRows, error: lineErr } = await serviceRoleClient
+      .schema("erp_production").from("packing_order_line")
+      .select("id, packing_order_id, line_type, material_id, actual_material_id, actual_qty, issue_sloc_id, stock_ledger_id")
+      .in("packing_order_id", packingOrderIds)
+      .in("line_type", ["PM", "FG"]);
+    if (lineErr) {
+      console.error("[process_order.reverseMtsProcessOrder] packing-line lookup failed:", JSON.stringify(lineErr));
+      throw new Error("PROD_MTS_REVERSE_PACKING_LINE_LOOKUP_FAILED");
+    }
+    packingLines = (lineRows ?? []) as JsonRecord[];
+  }
+
+  const { data: holdPostingsData, error: holdErr } = await serviceRoleClient
+    .schema("erp_inventory").from("stock_status_change_posting")
+    .select("id, material_id, storage_location_id, from_stock_type, to_stock_type, movement_type_code, quantity, uom_code")
+    .eq("reference_document_type", "PROC_PO")
+    .eq("reference_document_id", id)
+    .eq("status", "POSTED");
+  if (holdErr) {
+    console.error("[process_order.reverseMtsProcessOrder] hold-posting lookup failed:", JSON.stringify(holdErr));
+    throw new Error("PROD_MTS_REVERSE_HOLD_LOOKUP_FAILED");
+  }
+  const holdPostings = (holdPostingsData ?? []) as JsonRecord[];
+
+  const materialMap = await getMaterialMapByIds(
+    [
+      ...processLines.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
+      ...packingLines.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
+      ...holdPostings.map((hold) => String(hold.material_id ?? "")),
+    ],
+    "[process_order.reverseMtsProcessOrder]", "PROD_MTS_REVERSE_FAILED", "id, base_uom_code",
+  );
+  const ledgerRefById = await resolveStockLedgerRefsByLedgerIds([
+    ...processLines.map((line) => toTrimmedString(line.stock_ledger_id)),
+    ...packingLines.map((line) => toTrimmedString(line.stock_ledger_id)),
+  ]);
+  const holdRateMap = await fetchUnrestrictedRates(
+    String(po.company_id),
+    holdPostings.map((hold) => ({ materialId: String(hold.material_id), slocId: String(hold.storage_location_id) })),
+  );
+
+  const today = todayIso();
+  const docNumber = String(po.po_number);
+  const revMatDoc = await generateMaterialDocNumber(String(po.company_id));
+  const movements: MovementSpec[] = [];
+
+  for (const line of processLines) {
+    const qty = Number(line.actual_qty ?? 0);
+    if (qty <= 0) continue;
+    const slocId = getIssueStorageLocationId(line);
+    if (!slocId) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const ledgerRef = ledgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+    if (!ledgerRef) throw new Error("PROD_MTS_REVERSE_SOURCE_NOT_FOUND");
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? "KG");
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: "P262", companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: ledgerRef.rate,
+      stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id,
+      reversalOfId: ledgerRef.docId, batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, `MTS_REV_RM:${String(line.id)}`));
+  }
+
+  for (const line of packingLines) {
+    if (String(line.line_type) !== "PM") continue;
+    const qty = Number(line.actual_qty ?? 0);
+    if (qty <= 0) continue;
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    if (!slocId) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const ledgerRef = ledgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+    if (!ledgerRef) throw new Error("PROD_MTS_REVERSE_SOURCE_NOT_FOUND");
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? "KG");
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: "P262", companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: ledgerRef.rate,
+      stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id,
+      reversalOfId: ledgerRef.docId, batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, `MTS_REV_PM:${String(line.id)}`));
+  }
+
+  const holdReversals: JsonRecord[] = [];
+  holdPostings.forEach((hold, index) => {
+    const originalMovementType = toTrimmedString(hold.movement_type_code);
+    const reversalMovementType = MTS_HOLD_REVERSAL_MOVEMENT[originalMovementType];
+    if (!reversalMovementType) throw new Error("PROD_MTS_REVERSE_HOLD_MOVEMENT_TYPE_UNKNOWN");
+    const materialId = String(hold.material_id);
+    const slocId = String(hold.storage_location_id);
+    const qty = Number(hold.quantity ?? 0);
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? toTrimmedString(hold.uom_code) ?? "KG");
+    const rate = holdRateMap.get(`${materialId}|${slocId}`) ?? 0;
+    const outRef = `MTS_REV_HOLD_OUT:${index}`;
+    const inRef = `MTS_REV_HOLD_IN:${index}`;
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: reversalMovementType, companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: rate,
+      stockTypeCode: String(hold.to_stock_type), direction: "OUT", postedBy: ctx.auth_user_id,
+      batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, outRef));
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: reversalMovementType, companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: rate,
+      stockTypeCode: String(hold.from_stock_type), direction: "IN", postedBy: ctx.auth_user_id,
+      batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, inRef));
+    holdReversals.push({
+      original_posting_id: String(hold.id), out_ref: outRef, in_ref: inRef,
+      reversal_movement_type_code: reversalMovementType,
+    });
+  });
+
+  // FG/SKU reversal runs AFTER the hold reversals above, so any qty this
+  // Process PO's own hold moved to QI/Blocked is already back in
+  // UNRESTRICTED by the time this draws the line's full declared qty.
+  for (const line of packingLines) {
+    if (String(line.line_type) !== "FG") continue;
+    const qty = Number(line.actual_qty ?? 0);
+    if (qty <= 0) continue;
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    if (!slocId) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const ledgerRef = ledgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+    if (!ledgerRef) throw new Error("PROD_MTS_REVERSE_SOURCE_NOT_FOUND");
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? "KG");
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: "P102", companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: ledgerRef.rate,
+      stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id,
+      reversalOfId: ledgerRef.docId, batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, `MTS_REV_FG:${String(line.id)}`));
+  }
+
+  if (movements.length === 0) {
+    return poErr(req, ctx, "PROD_MTS_REVERSE_NOTHING_TO_REVERSE", 422, "No postings were found to reverse for this MTS Process PO.");
+  }
+
+  await cancelReservationsForProcessOrder(id, ctx.auth_user_id, new Date().toISOString());
+
+  const postings = await postDocument({
+    referenceDocumentType: "PROC_PO",
+    referenceDocumentId: id,
+    movements,
+    postedBy: ctx.auth_user_id,
+    context: {
+      mts_reverse: { reason, actor_id: ctx.auth_user_id, hold_reversals: holdReversals },
+    },
+  });
+
+  return okResponse({ id, status: "REVERSED", ledger_entries: postings }, ctx.request_id, req);
+}
+
 export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     // ACL-gated via route-acl-registry (PROD_REVERSAL:APPROVE) — no longer a
@@ -5494,6 +5697,21 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
     const reason = toTrimmedString(body.reason);
     if (!reason) {
       return poErr(req, ctx, "PROD_PO_REVERSE_REASON_REQUIRED", 400, "Reason required for CORS reversal");
+    }
+
+    // §138 CORS lock (2026-09-21, business owner): MTS is not a variation of
+    // the generic per-document reversal flow below -- giving CORS on the
+    // parent Process PO must itself cascade-reverse every connected PMTS
+    // Packing PO in one atomic action, never require each child reversed
+    // separately first (the "Reverse all Packing Orders first" gate right
+    // below does not apply to MTS at all). Only a VERIFIED MTS batch has
+    // anything posted to reverse; STANDARD/FINAL-stage cancellation is QA
+    // Reject's job (qaRejectProcessOrderHandler), not CORS.
+    if (po.po_type === "MTS") {
+      if (po.status !== "VERIFIED") {
+        return poErr(req, ctx, "PROD_MTS_REVERSE_STATUS_INVALID", 422, "Only a VERIFIED MTS Process PO can be reversed here. Use QA Reject for an unverified MTS batch.");
+      }
+      return await reverseMtsProcessOrderHandler(req, ctx, po, id, reason);
     }
 
     const { count, error: packingErr } = await serviceRoleClient
@@ -5712,30 +5930,21 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       throw new Error("PROD_PO_REVERSE_FAILED");
     }
 
+    // po_type is never MTS here -- MTS dispatches to reverseMtsProcessOrder
+    // Handler (its own batch-range release) before this function's body runs.
     const batchType = toUpperTrimmedString(po.po_type);
-    if (batchType === "MTS") {
-      // MTS owns a range, not one header batch.  Release each unposted member
-      // after a successful reverse so a fresh Page-6 atomic create can reclaim
-      // the range.  USED batches stay protected for the Verify/genealogy path.
-      await releaseUnpostedMtsBatchNumberInstancesForProcessOrder({
+    const batchNumber = toTrimmedString(po.batch_number);
+    if (batchNumber) {
+      await upsertBatchNumberInstanceForProcessOrder({
+        companyId: String(po.company_id),
+        poType: batchType,
+        prodshadeMaterialId: null,
+        batchNumber,
         processOrderId: id,
-        actorId: ctx.auth_user_id,
-        reason: `MTS Process PO ${String(po.po_number ?? "")} reversed: ${reason}`,
+        authUserId: ctx.auth_user_id,
+        status: "VOIDED",
+        voidedAt: now,
       });
-    } else {
-      const batchNumber = toTrimmedString(po.batch_number);
-      if (batchNumber) {
-        await upsertBatchNumberInstanceForProcessOrder({
-          companyId: String(po.company_id),
-          poType: batchType,
-          prodshadeMaterialId: null,
-          batchNumber,
-          processOrderId: id,
-          authUserId: ctx.auth_user_id,
-          status: "VOIDED",
-          voidedAt: now,
-        });
-      }
     }
 
     return okResponse({ id, status: "REVERSED", ledger_entries: ledgerEntries }, ctx.request_id, req);
