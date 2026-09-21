@@ -308,6 +308,7 @@ export default function MenuShell() {
   const actionButtonRefs = useRef([]);
   const contentRegionRef = useRef(null);
   const openWindowInFlightRef = useRef(false);
+  const backInFlightRef = useRef(false);
   const workContextSelectRef = useRef(null);
   const lastNetworkToastRef = useRef({
     completedAt: 0,
@@ -1079,93 +1080,107 @@ export default function MenuShell() {
   }
 
   const handleBack = useCallback(async () => {
-    if (drawerVisible) {
-      const parentNode =
-        drawerTrail.length > 1 ? drawerTrail[drawerTrail.length - 2] : sidebarRoots[resolvedMenuFocusIndex] ?? null;
-      const parentEntries = parentNode?.children ?? [];
-      const currentMenuCode = drawerTrail[drawerTrail.length - 1]?.item?.menu_code ?? "";
-      const parentIndex = parentEntries.findIndex(
-        (node) => node.item?.menu_code === currentMenuCode
-      );
+    if (backInFlightRef.current) {
+      return;
+    }
+    backInFlightRef.current = true;
 
-      setDrawerPath((currentPath) => currentPath.slice(0, -1));
-      setDrawerFocusIndex(parentIndex >= 0 ? parentIndex : 0);
-
-      window.requestAnimationFrame(() => {
-        const safeIndex = parentIndex >= 0 ? parentIndex : 0;
-        focusElement(
-          drawerButtonRefs.current[safeIndex] ?? drawerButtonRefs.current[0]
+    try {
+      if (drawerVisible) {
+        const parentNode =
+          drawerTrail.length > 1 ? drawerTrail[drawerTrail.length - 2] : sidebarRoots[resolvedMenuFocusIndex] ?? null;
+        const parentEntries = parentNode?.children ?? [];
+        const currentMenuCode = drawerTrail[drawerTrail.length - 1]?.item?.menu_code ?? "";
+        const parentIndex = parentEntries.findIndex(
+          (node) => node.item?.menu_code === currentMenuCode
         );
-      });
-      return;
-    }
 
-    if (runScreenBackInterceptor()) {
-      return;
-    }
+        setDrawerPath((currentPath) => currentPath.slice(0, -1));
+        setDrawerFocusIndex(parentIndex >= 0 ? parentIndex : 0);
 
-    if (stackDepth <= 1) {
-      const homeScreenCode = location.pathname.startsWith("/sa")
-        ? "SA_HOME"
-        : location.pathname.startsWith("/ga")
-          ? "GA_HOME"
-          : "DASHBOARD_HOME";
-      const homePath = location.pathname.startsWith("/sa")
-        ? "/sa/home"
-        : location.pathname.startsWith("/ga")
-          ? "/ga/home"
-          : "/dashboard";
-      if (location.pathname !== homePath) {
-        resetToScreen(homeScreenCode);
+        window.requestAnimationFrame(() => {
+          const safeIndex = parentIndex >= 0 ? parentIndex : 0;
+          focusElement(
+            drawerButtonRefs.current[safeIndex] ?? drawerButtonRefs.current[0]
+          );
+        });
         return;
       }
 
-      await confirmAndRequestLogout();
-      return;
-    }
-
-    const approved = await confirmNavigationLeaveIfNeeded("ACL_VERSION_CENTER");
-    if (!approved) {
-      return;
-    }
-
-    // Sidebar restore only applies when returning to home level (depth 2 → 1).
-    // For drill-through returns (depth 3 → 2) the sidebar is in workspace/rail mode
-    // (collapsed, drawer hidden) so restoring drawer state has no effect — and we must
-    // NOT suppress content focus because the destination list screen needs to re-focus
-    // its previously-selected row.
-    const returningToHomeLevel = stackDepth - 1 <= 1;
-
-    if (returningToHomeLevel) {
-      suppressContentFocusRef.current = true;
-      const originRoute = location.pathname;
-      const ancestorCodes = getAncestorMenuCodes(sidebarRoots, originRoute);
-
-      if (ancestorCodes.length > 0) {
-        // Page lives under a drawer sub-menu — reopen that drawer and focus the item.
-        const trail = resolveDrawerTrail(sidebarRoots, ancestorCodes);
-        const parentNode = trail[trail.length - 1] ?? null;
-        const parentEntries = parentNode?.children ?? [];
-        const itemIndex = parentEntries.findIndex(
-          (entry) => entry.item?.route_path === originRoute
-        );
-        pendingDrawerRestoreRef.current = {
-          drawerPath: ancestorCodes,
-          focusIndex: itemIndex >= 0 ? itemIndex : 0,
-          menuFocusIndex: -1,
-        };
-      } else {
-        // Top-level page — focus the matching sidebar menu button.
-        const topIndex = resolveTopLevelIndex(sidebarRoots, originRoute);
-        pendingDrawerRestoreRef.current = {
-          drawerPath: [],
-          focusIndex: 0,
-          menuFocusIndex: topIndex >= 0 ? topIndex : resolvedMenuFocusIndex,
-        };
+      if (runScreenBackInterceptor()) {
+        return;
       }
-    }
 
-    popScreen();
+      if (stackDepth <= 1) {
+        const homeScreenCode = location.pathname.startsWith("/sa")
+          ? "SA_HOME"
+          : location.pathname.startsWith("/ga")
+            ? "GA_HOME"
+            : "DASHBOARD_HOME";
+        const homePath = location.pathname.startsWith("/sa")
+          ? "/sa/home"
+          : location.pathname.startsWith("/ga")
+            ? "/ga/home"
+            : "/dashboard";
+        if (location.pathname !== homePath) {
+          resetToScreen(homeScreenCode);
+          return;
+        }
+
+        await confirmAndRequestLogout();
+        return;
+      }
+
+      const approved = await confirmNavigationLeaveIfNeeded("ACL_VERSION_CENTER");
+      if (!approved) {
+        return;
+      }
+
+      // Sidebar restore only applies when returning to home level (depth 2 → 1).
+      // For drill-through returns (depth 3 → 2) the sidebar is in workspace/rail mode
+      // (collapsed, drawer hidden) so restoring drawer state has no effect — and we must
+      // NOT suppress content focus because the destination list screen needs to re-focus
+      // its previously-selected row.
+      const returningToHomeLevel = stackDepth - 1 <= 1;
+
+      if (returningToHomeLevel) {
+        suppressContentFocusRef.current = true;
+        const originRoute = location.pathname;
+        const ancestorCodes = getAncestorMenuCodes(sidebarRoots, originRoute);
+
+        if (ancestorCodes.length > 0) {
+          // Page lives under a drawer sub-menu — reopen that drawer and focus the item.
+          const trail = resolveDrawerTrail(sidebarRoots, ancestorCodes);
+          const parentNode = trail[trail.length - 1] ?? null;
+          const parentEntries = parentNode?.children ?? [];
+          const itemIndex = parentEntries.findIndex(
+            (entry) => entry.item?.route_path === originRoute
+          );
+          pendingDrawerRestoreRef.current = {
+            drawerPath: ancestorCodes,
+            focusIndex: itemIndex >= 0 ? itemIndex : 0,
+            menuFocusIndex: -1,
+          };
+        } else {
+          // Top-level page — focus the matching sidebar menu button.
+          const topIndex = resolveTopLevelIndex(sidebarRoots, originRoute);
+          pendingDrawerRestoreRef.current = {
+            drawerPath: [],
+            focusIndex: 0,
+            menuFocusIndex: topIndex >= 0 ? topIndex : resolvedMenuFocusIndex,
+          };
+        }
+      }
+
+      popScreen();
+    } finally {
+      // Keep a single navigation owner until React has consumed the stack
+      // change. Without this, two quick Esc presses can both act on the same
+      // rendered screen and leave route and workspace content out of sync.
+      window.requestAnimationFrame(() => {
+        backInFlightRef.current = false;
+      });
+    }
   }, [drawerTrail, drawerVisible, location.pathname, resolvedMenuFocusIndex, sidebarRoots, stackDepth]);
 
   const handleGoHome = useCallback(async () => {
