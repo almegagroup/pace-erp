@@ -1860,7 +1860,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     // relationship reliably from a single-schema request context, so it 500'd. Fetch
     // both explicitly instead, matching the pattern already used everywhere else in
     // this file (e.g. listProcessOrdersHandler's own stroke/machine lookups).
-    const [materialMap, strokeResult, machineResult] = await Promise.all([
+    const [materialMap, strokeResult, machineResult, shiftResult, companyResult] = await Promise.all([
       getMaterialMapByIds(
         [String(poRow.material_id ?? "")],
         "[process_order.getProcessOrder]",
@@ -1885,14 +1885,28 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
             .eq("id", machineId)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
+      toTrimmedString(poRow.shift_id)
+        ? serviceRoleClient
+            .schema("erp_production")
+            .from("shift_master")
+            .select("id, shift_name")
+            .eq("id", String(poRow.shift_id))
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      serviceRoleClient
+        .schema("erp_master")
+        .from("companies")
+        .select("id, company_code, company_name")
+        .eq("id", String(poRow.company_id))
+        .maybeSingle(),
     ]);
 
     if (strokeResult.error) {
       console.error("[process_order.getProcessOrder] stroke query failed:", JSON.stringify(strokeResult.error));
       throw new Error("PROD_PO_FETCH_FAILED");
     }
-    if (machineResult.error) {
-      console.error("[process_order.getProcessOrder] machine query failed:", JSON.stringify(machineResult.error));
+    if (machineResult.error || shiftResult.error || companyResult.error) {
+      console.error("[process_order.getProcessOrder] machine/shift/company query failed:", JSON.stringify(machineResult.error ?? shiftResult.error ?? companyResult.error));
       throw new Error("PROD_PO_FETCH_FAILED");
     }
 
@@ -1912,7 +1926,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     let enrichedPackingOrders = (packOrders ?? []) as JsonRecord[];
     if (poRow.po_type === "MTS") {
       const packingOrderIds = enrichedPackingOrders.map((row) => String(row.id)).filter(Boolean);
-      const [snapshotResult, planResult, lineResult] = await Promise.all([
+      const [snapshotResult, planResult, lineResult, yieldResult] = await Promise.all([
         serviceRoleClient
           .schema("erp_production")
           .from("mts_creation_snapshot")
@@ -1933,9 +1947,15 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
               .in("packing_order_id", packingOrderIds)
               .order("display_order", { ascending: true })
           : Promise.resolve({ data: [], error: null }),
+        serviceRoleClient
+          .schema("erp_production")
+          .from("mts_batch_yield_variance")
+          .select("id, packing_order_id, packing_plan_row_id, batch_number, sku_material_id, expected_qty, declared_actual_qty, variance_qty, variance_type, uom_code, status")
+          .eq("process_order_id", id)
+          .order("batch_number", { ascending: true }),
       ]);
-      if (snapshotResult.error || planResult.error || lineResult.error) {
-        console.error("[process_order.getProcessOrder] MTS review query failed:", JSON.stringify(snapshotResult.error ?? planResult.error ?? lineResult.error));
+      if (snapshotResult.error || planResult.error || lineResult.error || yieldResult.error) {
+        console.error("[process_order.getProcessOrder] MTS review query failed:", JSON.stringify(snapshotResult.error ?? planResult.error ?? lineResult.error ?? yieldResult.error));
         throw new Error("PROD_PO_FETCH_FAILED");
       }
 
@@ -1987,6 +2007,10 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
       }));
       mtsReview = {
         snapshot: snapshotResult.data ?? null,
+        batch_yield_variances: (yieldResult.data ?? []).map((row) => ({
+          ...row,
+          sku_material: packingMaterialMap.get(String((row as JsonRecord).sku_material_id ?? "")) ?? null,
+        })),
         packing_plan_rows: packingPlanRows.map((row) => ({
           ...row,
           pack_code: packCodeMap.get(String(row.pack_code_id ?? "")) ?? null,
@@ -2001,6 +2025,8 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
         material: materialMap.get(String(poRow.material_id ?? "")) ?? null,
         stroke: strokeResult.data ?? null,
         machine: machineResult.data ?? null,
+        shift: shiftResult.data ?? null,
+        company: companyResult.data ?? null,
         lines,
         packing_orders: enrichedPackingOrders,
         mts_review: mtsReview,
@@ -4351,6 +4377,14 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     const body = await parseBody(req);
+    // MTS is deliberately not a variation of the normal Process-PO Verify
+    // workflow. Its Page-6-created PMTS children supply the SKU output; posting
+    // the generic path would incorrectly receive the prodshade as SFG and would
+    // also make the MTS formulation editable. Keep this branch ahead of the
+    // generic line-update routine so neither of those things can happen.
+    if (po.po_type === "MTS") {
+      return await runMtsProcessOrderVerify(req, ctx, po, id, body);
+    }
     const verifiedQty = parsePositiveNumber(body.verified_qty ?? body.verified_qty_kg) ?? Number(po.actual_qty ?? 0);
     const applyResult = await applyFinalOrVerifyLineUpdates({
       req,
@@ -4367,6 +4401,388 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const code = err instanceof Error ? err.message : "PROD_PO_VERIFY_FAILED";
     return poErr(req, ctx, code, 500, `Verify failed: ${err instanceof Error ? err.message : ""}`);
   }
+}
+
+const MTS_VERIFY_CHECK_CODES = [
+  "PRODSHADE_DESCRIPTION",
+  "STROKE",
+  "MACHINE",
+  "DATE_SHIFT",
+  "BATCH_SIZE_COUNT",
+  "BATCH_RANGE",
+  "PLANNED_OUTPUT",
+  "STORAGE_LOCATION",
+  "PACKING_DECLARATION",
+  "GAIN_LOSS",
+] as const;
+
+function mtsBatchSort(left: string, right: string): number {
+  const leftMatch = left.match(/^(.*?)(\d+)$/);
+  const rightMatch = right.match(/^(.*?)(\d+)$/);
+  if (leftMatch && rightMatch && leftMatch[1] === rightMatch[1]) {
+    return Number(leftMatch[2]) - Number(rightMatch[2]);
+  }
+  return left.localeCompare(right, undefined, { numeric: true });
+}
+
+function mtsQty(value: unknown): number {
+  const quantity = Number(value ?? 0);
+  return Number.isFinite(quantity) ? Number(quantity.toFixed(6)) : 0;
+}
+
+async function computeMtsVerifyAvailabilityRows(
+  companyId: string,
+  needed: Map<string, AvailabilityNeed>,
+  processOrderId: string,
+  packingOrderIds: string[],
+): Promise<AvailabilityRow[]> {
+  const needs = Array.from(needed.values()).filter((item) => item.materialId && item.storageLocationId && item.qty > 0);
+  if (needs.length === 0) return [];
+  const materialIds = [...new Set(needs.map((item) => item.materialId))];
+  const locationIds = [...new Set(needs.map((item) => item.storageLocationId))];
+  const [snapshotResult, reservationResult] = await Promise.all([
+    serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
+      .select("material_id, storage_location_id, quantity")
+      .eq("company_id", companyId).eq("stock_type_code", "UNRESTRICTED")
+      .in("material_id", materialIds).in("storage_location_id", locationIds),
+    serviceRoleClient.schema("erp_production").from("reservation_document")
+      .select("material_id, storage_location_id, balance_qty, source_type, source_id")
+      .eq("company_id", companyId)
+      .in("material_id", materialIds).in("storage_location_id", locationIds)
+      .in("status", RESERVATION_OPEN_STATUSES),
+  ]);
+  if (snapshotResult.error || reservationResult.error) throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+  const available = new Map<string, number>();
+  for (const row of (snapshotResult.data ?? []) as JsonRecord[]) {
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    available.set(key, (available.get(key) ?? 0) + Number(row.quantity ?? 0));
+  }
+  const ownPackingIds = new Set(packingOrderIds);
+  for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    const isOwnProcessReservation = String(row.source_type) === "PROCESS_PO" && String(row.source_id) === processOrderId;
+    const isOwnPackingReservation = String(row.source_type) === "PACKING_PO" && ownPackingIds.has(String(row.source_id));
+    if (isOwnProcessReservation || isOwnPackingReservation) continue;
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    available.set(key, (available.get(key) ?? 0) - Number(row.balance_qty ?? 0));
+  }
+  return needs.map((item) => {
+    const availableQty = Math.max(0, available.get(buildAvailabilityKey(item.materialId, item.storageLocationId)) ?? 0);
+    return {
+      material_id: item.materialId,
+      storage_location_id: item.storageLocationId,
+      needed_qty: item.qty,
+      available_qty: availableQty,
+      short: availableQty < item.qty - EPSILON,
+    };
+  });
+}
+
+async function runMtsProcessOrderVerify(
+  req: Request,
+  ctx: ProdHandlerContext,
+  po: JsonRecord,
+  id: string,
+  body: JsonRecord,
+): Promise<Response> {
+  const action = toUpperTrimmedString(body.mts_action);
+  if (action === "REJECT") {
+    const reason = toTrimmedString(body.reason);
+    if (!reason) return poErr(req, ctx, "PROD_MTS_REJECT_REASON_REQUIRED", 400, "A rejection reason is required.");
+    const { error } = await serviceRoleClient.schema("erp_production").rpc("reject_mts_documents_atomic", {
+      p_process_order_id: id,
+      p_actor_id: ctx.auth_user_id,
+      p_reason: reason,
+    });
+    if (error) {
+      console.error("[process_order.runMtsProcessOrderVerify] reject failed:", JSON.stringify(error));
+      throw new Error("PROD_MTS_REJECT_FAILED");
+    }
+    return okResponse({ id, status: "CANCELLED", action: "REJECTED_AND_RELEASED" }, ctx.request_id, req);
+  }
+  if (action !== "APPROVE") {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_ACTION_REQUIRED", 400, "Choose Approve or Reject for this MTS Process PO.");
+  }
+
+  const submittedChecks = Array.isArray(body.checklist) ? body.checklist.map((item) => toUpperTrimmedString(item)).filter(Boolean) : [];
+  const checks = [...new Set(submittedChecks)];
+  const missingChecks = MTS_VERIFY_CHECK_CODES.filter((code) => !checks.includes(code));
+  if (missingChecks.length > 0) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_CHECKLIST_INCOMPLETE", 422, "Complete every MTS QA checklist item before approving.");
+  }
+  if (checks.some((code) => !MTS_VERIFY_CHECK_CODES.includes(code as typeof MTS_VERIFY_CHECK_CODES[number]))) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_CHECKLIST_INVALID", 400, "The MTS QA checklist contains an unsupported item.");
+  }
+
+  const strokeMasterId = toTrimmedString(po.stroke_master_id) || null;
+  const [processLines, packingResult, yieldResult] = await Promise.all([
+    fetchOrderLines(id, strokeMasterId),
+    serviceRoleClient.schema("erp_production").from("packing_order")
+      .select("id, po_number, status, material_id, fill_qty_per_pack, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to")
+      .eq("process_order_id", id).neq("status", "CANCELLED").neq("status", "REVERSED"),
+    serviceRoleClient.schema("erp_production").from("mts_batch_yield_variance")
+      .select("id, packing_order_id, packing_plan_row_id, batch_number, sku_material_id, expected_qty, declared_actual_qty, variance_qty, variance_type, uom_code, status")
+      .eq("process_order_id", id),
+  ]);
+  if (packingResult.error || yieldResult.error) throw new Error("PROD_MTS_VERIFY_FETCH_FAILED");
+  const packingOrders = (packingResult.data ?? []) as JsonRecord[];
+  const yields = (yieldResult.data ?? []) as JsonRecord[];
+  if (packingOrders.length === 0 || yields.length !== Number(po.number_of_batches ?? 0)) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_DOCUMENTS_INCOMPLETE", 422, "MTS packing declarations are incomplete. Reject this MTS Process PO and create it again.");
+  }
+  if (packingOrders.some((order) => String(order.status) !== "STANDARD") || yields.some((item) => String(item.status) !== "PENDING")) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_STATUS_INVALID", 422, "This MTS Process PO is no longer pending QA verification.");
+  }
+  const packingOrderIds = packingOrders.map((order) => String(order.id));
+  const { data: packingLineData, error: packingLineError } = await serviceRoleClient
+    .schema("erp_production").from("packing_order_line")
+    .select("id, packing_order_id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code, stock_ledger_id")
+    .in("packing_order_id", packingOrderIds).order("display_order", { ascending: true });
+  if (packingLineError) throw new Error("PROD_MTS_VERIFY_FETCH_FAILED");
+  const packingLines = (packingLineData ?? []) as JsonRecord[];
+  const materialIds = [
+    ...processLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
+    ...packingLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
+    ...packingOrders.map((order) => toTrimmedString(order.material_id)),
+  ].filter(Boolean);
+  const materialMap = await getMaterialMapByIds(materialIds, "[process_order.runMtsProcessOrderVerify]", "PROD_MTS_VERIFY_FETCH_FAILED", "id, base_uom_code, material_type");
+  const linesByPackingOrder = new Map<string, JsonRecord[]>();
+  for (const line of packingLines) {
+    const orderId = String(line.packing_order_id);
+    linesByPackingOrder.set(orderId, [...(linesByPackingOrder.get(orderId) ?? []), line]);
+  }
+  const yieldsByPackingOrder = new Map<string, JsonRecord[]>();
+  for (const yieldRow of yields) {
+    const orderId = String(yieldRow.packing_order_id);
+    yieldsByPackingOrder.set(orderId, [...(yieldsByPackingOrder.get(orderId) ?? []), yieldRow]);
+  }
+  for (const [packingOrderId, orderYields] of yieldsByPackingOrder) {
+    const order = packingOrders.find((item) => String(item.id) === packingOrderId);
+    if (!order || orderYields.length === 0 || orderYields.some((item) => String(item.sku_material_id) !== String(order.material_id))) {
+      return poErr(req, ctx, "PROD_MTS_VERIFY_YIELD_INVALID", 422, "MTS batch output does not match its Packing PO declaration.");
+    }
+  }
+
+  const expectedTotal = yields.reduce((sum, item) => sum + mtsQty(item.expected_qty), 0);
+  const declaredTotal = yields.reduce((sum, item) => sum + mtsQty(item.declared_actual_qty), 0);
+  if (expectedTotal <= EPSILON || declaredTotal <= EPSILON) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_OUTPUT_INVALID", 422, "Declared MTS SKU output must be greater than zero.");
+  }
+
+  const pmActualQtyByLine = new Map<string, number>();
+  const packingActualQtyById = new Map<string, number>();
+  for (const order of packingOrders) {
+    const orderId = String(order.id);
+    const fillQty = mtsQty(order.fill_qty_per_pack);
+    if (fillQty <= EPSILON) return poErr(req, ctx, "PROD_MTS_VERIFY_PACK_FILL_INVALID", 422, "A linked MTS Packing PO has no valid fill quantity.");
+    const orderYields = yieldsByPackingOrder.get(orderId) ?? [];
+    const orderActualQty = orderYields.reduce((sum, item) => sum + mtsQty(item.declared_actual_qty), 0);
+    packingActualQtyById.set(orderId, orderActualQty);
+    const actualPacks = orderActualQty / fillQty;
+    for (const line of linesByPackingOrder.get(orderId) ?? []) {
+      if (String(line.line_type) === "PM") pmActualQtyByLine.set(String(line.id), mtsQty(mtsQty(line.qty_per_pack) * actualPacks));
+    }
+  }
+
+  const needs = new Map<string, AvailabilityNeed>();
+  const addNeed = (materialId: string, storageLocationId: string, quantity: number) => {
+    if (!materialId || !storageLocationId || quantity <= EPSILON) return;
+    const key = buildAvailabilityKey(materialId, storageLocationId);
+    const previous = needs.get(key);
+    needs.set(key, { materialId, storageLocationId, qty: (previous?.qty ?? 0) + quantity });
+  };
+  for (const line of processLines) addNeed(toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""), toTrimmedString(line.issue_sloc_id), mtsQty(line.actual_qty ?? line.planned_qty));
+  for (const line of packingLines) {
+    if (String(line.line_type) !== "PM") continue;
+    addNeed(toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""), toTrimmedString(line.issue_sloc_id), pmActualQtyByLine.get(String(line.id)) ?? 0);
+  }
+  const shortages = (await computeMtsVerifyAvailabilityRows(String(po.company_id), needs, id, packingOrderIds)).filter((item) => item.short);
+  if (shortages.length > 0) {
+    return poErr(req, ctx, "PROD_MTS_INSUFFICIENT_STOCK", 422, `Insufficient unrestricted stock for MTS Verify: ${await formatShortageDetail(shortages)}`);
+  }
+
+  const requestedHolds = Array.isArray(body.holds) ? body.holds as JsonRecord[] : [];
+  const remainingPacksByBatch = new Map<string, number>();
+  const holdAllocations: JsonRecord[] = [];
+  for (const yieldRow of yields) {
+    const order = packingOrders.find((item) => String(item.id) === String(yieldRow.packing_order_id));
+    const fillQty = mtsQty(order?.fill_qty_per_pack);
+    remainingPacksByBatch.set(String(yieldRow.id), fillQty > EPSILON ? mtsQty(mtsQty(yieldRow.declared_actual_qty) / fillQty) : 0);
+  }
+  for (const requestedHold of requestedHolds) {
+    const orderId = toTrimmedString(requestedHold.packing_order_id);
+    const fromBatch = toTrimmedString(requestedHold.batch_number_from);
+    const toBatch = toTrimmedString(requestedHold.batch_number_to);
+    const targetStockType = toUpperTrimmedString(requestedHold.target_stock_type);
+    const requestedPacks = mtsQty(requestedHold.qty_packs);
+    if (!orderId || !fromBatch || !toBatch || requestedPacks <= EPSILON) {
+      return poErr(req, ctx, "PROD_MTS_HOLD_INPUT_INVALID", 422, "Every MTS QA hold needs a Packing PO, batch range, stock status, and positive bag quantity.");
+    }
+    if (!["QUALITY_INSPECTION", "BLOCKED"].includes(targetStockType)) {
+      return poErr(req, ctx, "PROD_MTS_HOLD_STATUS_INVALID", 422, "MTS QA hold status must be Quality Inspection or Blocked.");
+    }
+    const order = packingOrders.find((item) => String(item.id) === orderId);
+    if (!order) return poErr(req, ctx, "PROD_MTS_HOLD_PACKING_PO_INVALID", 422, "The selected MTS QA hold Packing PO does not belong to this Process PO.");
+    const orderedYields = [...(yieldsByPackingOrder.get(orderId) ?? [])].sort((left, right) => mtsBatchSort(String(left.batch_number), String(right.batch_number)));
+    const fromIndex = orderedYields.findIndex((item) => String(item.batch_number) === fromBatch);
+    const toIndex = orderedYields.findIndex((item) => String(item.batch_number) === toBatch);
+    if (fromIndex < 0 || toIndex < fromIndex) return poErr(req, ctx, "PROD_MTS_HOLD_RANGE_INVALID", 422, "MTS QA hold batch range is not valid for its selected Packing PO.");
+    let leftToAllocate = requestedPacks;
+    for (const yieldRow of orderedYields.slice(fromIndex, toIndex + 1)) {
+      if (leftToAllocate <= EPSILON) break;
+      const availablePacks = remainingPacksByBatch.get(String(yieldRow.id)) ?? 0;
+      const allocatedPacks = Math.min(availablePacks, leftToAllocate);
+      if (allocatedPacks <= EPSILON) continue;
+      remainingPacksByBatch.set(String(yieldRow.id), mtsQty(availablePacks - allocatedPacks));
+      leftToAllocate = mtsQty(leftToAllocate - allocatedPacks);
+      holdAllocations.push({
+        packing_order_id: orderId,
+        yield_id: String(yieldRow.id),
+        batch_number_from: fromBatch,
+        batch_number_to: toBatch,
+        batch_number: String(yieldRow.batch_number),
+        sku_material_id: String(yieldRow.sku_material_id),
+        target_stock_type: targetStockType,
+        declared_pack_qty: mtsQty(mtsQty(yieldRow.declared_actual_qty) / mtsQty(order.fill_qty_per_pack)),
+        held_pack_qty: allocatedPacks,
+        qty_kg: mtsQty(allocatedPacks * mtsQty(order.fill_qty_per_pack)),
+      });
+    }
+    if (leftToAllocate > EPSILON) return poErr(req, ctx, "PROD_MTS_HOLD_EXCEEDS_DECLARATION", 422, "MTS QA hold bags cannot exceed the declared SKU output for the selected batch range.");
+  }
+
+  const today = todayIso();
+  const docNumber = String(po.po_number);
+  const matDoc = await generateMaterialDocNumber(String(po.company_id));
+  const rateMap = await fetchUnrestrictedRates(String(po.company_id), Array.from(needs.values()).map((item) => ({ materialId: item.materialId, slocId: item.storageLocationId })));
+  const conversionRate = await resolveConversionRate(String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today);
+  if (conversionRate === null) return poErr(req, ctx, "PROD_PO_CONVERSION_RATE_MISSING", 422, "Conversion cost rate is not configured for this segment/prodshade as of the posting date.");
+  const movements: MovementSpec[] = [];
+  const reservationUpdates: JsonRecord[] = [];
+  const machineStockLogRows: JsonRecord[] = [];
+  const processLinePostings: JsonRecord[] = [];
+  const packingLineUpdates: JsonRecord[] = [];
+  let totalInputValue = 0;
+  const reservationMap = await fetchReservationRowsBySourceLineIds([...processLines.map((line) => String(line.id)), ...packingLines.map((line) => String(line.id))]);
+  let machineStorageLocationId: string | null = null;
+  if (toTrimmedString(po.machine_id)) {
+    const { data: machineData, error: machineError } = await serviceRoleClient.schema("erp_master").from("machine_master")
+      .select("storage_location_id").eq("id", String(po.machine_id)).maybeSingle();
+    if (machineError) throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
+    machineStorageLocationId = toTrimmedString((machineData as JsonRecord | null)?.storage_location_id) || null;
+  }
+  const addReservationUpdate = (lineId: string, actualQty: number) => {
+    const reservation = reservationMap.get(lineId);
+    if (!reservation || !RESERVATION_OPEN_STATUSES.includes(String(reservation.status))) return;
+    reservationUpdates.push({ reservation_id: String(reservation.id), issued_qty: actualQty, status: "FULLY_ISSUED" });
+  };
+  for (const line of processLines) {
+    const actualQty = mtsQty(line.actual_qty ?? line.planned_qty);
+    if (actualQty <= EPSILON) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    const rate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
+    totalInputValue += actualQty * rate;
+    const lineRef = `MTS_RM:${String(line.id)}`;
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: actualQty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, lineRef));
+    processLinePostings.push({ process_order_line_id: String(line.id), line_ref: lineRef });
+    addReservationUpdate(String(line.id), actualQty);
+    if (machineStorageLocationId && machineStorageLocationId === slocId) machineStockLogRows.push({ company_id: po.company_id, storage_location_id: slocId, material_id: materialId, machine_id: po.machine_id, batch_number: null, qty: actualQty, direction: "OUT", source_type: "CONSUMPTION", reference_document_type: "PROCESS_PO", reference_document_id: id, created_by: ctx.auth_user_id });
+  }
+  for (const line of packingLines) {
+    const lineType = String(line.line_type);
+    const actualQty = lineType === "PM" ? (pmActualQtyByLine.get(String(line.id)) ?? 0) : lineType === "FG" ? (packingActualQtyById.get(String(line.packing_order_id)) ?? 0) : 0;
+    const lineRef = lineType === "PM" ? `MTS_PM:${String(line.id)}` : lineType === "FG" ? `MTS_SKU:${String(line.id)}` : "";
+    packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: lineRef || null, actual_qty: actualQty });
+    if (lineType !== "PM" || actualQty <= EPSILON) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    const rate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
+    totalInputValue += actualQty * rate;
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: actualQty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, lineRef));
+    addReservationUpdate(String(line.id), actualQty);
+  }
+  const skuUnitValue = declaredTotal > EPSILON ? (totalInputValue / declaredTotal) + Number(conversionRate) : Number(conversionRate);
+  for (const order of packingOrders) {
+    const outputQty = packingActualQtyById.get(String(order.id)) ?? 0;
+    if (outputQty <= EPSILON) continue;
+    const fgLine = (linesByPackingOrder.get(String(order.id)) ?? []).find((line) => String(line.line_type) === "FG");
+    const outputSlocId = toTrimmedString(fgLine?.issue_sloc_id);
+    if (!outputSlocId) return poErr(req, ctx, "PROD_MTS_SKU_SLOC_MISSING", 422, "A linked MTS SKU Packing PO has no output storage location.");
+    const skuMaterialId = String(order.material_id);
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P101", companyId: po.company_id, storageLocationId: outputSlocId, materialId: skuMaterialId, quantity: outputQty, baseUomCode: String((materialMap.get(skuMaterialId) ?? {}).base_uom_code ?? "KG"), unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, `MTS_SKU:${String(fgLine?.id ?? order.id)}`));
+  }
+  const statusPostingGroups = new Map<string, JsonRecord>();
+  for (const allocation of holdAllocations) {
+    const order = packingOrders.find((item) => String(item.id) === String(allocation.packing_order_id));
+    const fgLine = (linesByPackingOrder.get(String(allocation.packing_order_id)) ?? []).find((line) => String(line.line_type) === "FG");
+    const storageLocationId = toTrimmedString(fgLine?.issue_sloc_id);
+    const key = `${allocation.sku_material_id}|${storageLocationId}|${allocation.target_stock_type}`;
+    const group = statusPostingGroups.get(key) ?? { material_id: allocation.sku_material_id, storage_location_id: storageLocationId, target_stock_type: allocation.target_stock_type, quantity: 0, uom_code: "KG", packing_order_id: order?.id ?? null };
+    group.quantity = mtsQty(Number(group.quantity) + Number(allocation.qty_kg));
+    statusPostingGroups.set(key, group);
+  }
+  const statusPostings: JsonRecord[] = [];
+  let statusIndex = 0;
+  for (const group of statusPostingGroups.values()) {
+    const movementTypeCode = group.target_stock_type === "QUALITY_INSPECTION" ? "P322" : "P344";
+    const outRef = `MTS_HOLD_OUT:${statusIndex}`;
+    const inRef = `MTS_HOLD_IN:${statusIndex}`;
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, outRef));
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: group.target_stock_type, direction: "IN", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, inRef));
+    statusPostings.push({ ...group, movement_type_code: movementTypeCode, out_ref: outRef, in_ref: inRef });
+    statusIndex += 1;
+  }
+
+  let strokeNumber: string | null = null;
+  if (strokeMasterId) {
+    const { data: strokeData, error: strokeError } = await serviceRoleClient.schema("erp_production").from("stroke_master").select("stroke_number").eq("id", strokeMasterId).maybeSingle();
+    if (strokeError) throw new Error("PROD_MTS_VERIFY_STROKE_LOOKUP_FAILED");
+    strokeNumber = toTrimmedString((strokeData as JsonRecord | null)?.stroke_number) || null;
+  }
+  const recoDoc = await generateRecoDocNumber(String(po.company_id));
+  const recoNow = new Date().toISOString();
+  const recoRows: JsonRecord[] = [];
+  const packingRecoRows: JsonRecord[] = [];
+  for (const yieldRow of yields) {
+    const standardRatio = mtsQty(yieldRow.expected_qty) / expectedTotal;
+    for (const line of processLines) {
+      const actualQty = mtsQty(line.actual_qty ?? line.planned_qty);
+      recoRows.push({ company_id: po.company_id, po_number: po.po_number, batch_number: yieldRow.batch_number, po_type: "MTS", prodshade_material_id: po.material_id, stroke_number: strokeNumber, machine_id: po.machine_id ?? null, segment_code: po.segment_code ?? null, batch_started_at: po.batch_started_at ?? null, verified_at: recoNow, process_order_id: id, process_order_line_id: line.id, material_id: line.material_id, line_material_type: "RM", dosage_pct: line.dosage_pct ?? null, actual_material_id: line.actual_material_id ?? null, storage_location_id: line.issue_sloc_id ?? null, standard_qty: mtsQty(mtsQty(line.planned_qty) * standardRatio), actual_qty: mtsQty(actualQty * standardRatio), approved_status: "YES", ap_approved_qty: mtsQty(actualQty * standardRatio), variance_qty: 0, is_formulation_line: line.is_formulation_line !== false, is_voided: false, reco_document_number: recoDoc.docNumber, reco_document_year: recoDoc.docYear, source_txn_type: "PRODUCTION", reference_document_number: String(po.po_number), reference_document_type: "PROC_PO", last_updated_at: recoNow, last_updated_by: ctx.auth_user_id });
+    }
+    const order = packingOrders.find((item) => String(item.id) === String(yieldRow.packing_order_id));
+    const fillQty = mtsQty(order?.fill_qty_per_pack);
+    const standardPacks = mtsQty(yieldRow.expected_qty) / fillQty;
+    const actualPacks = mtsQty(yieldRow.declared_actual_qty) / fillQty;
+    for (const line of linesByPackingOrder.get(String(yieldRow.packing_order_id)) ?? []) {
+      if (String(line.line_type) !== "PM") continue;
+      const standardQty = mtsQty(mtsQty(line.qty_per_pack) * standardPacks);
+      const actualQty = mtsQty(mtsQty(line.qty_per_pack) * actualPacks);
+      packingRecoRows.push({ company_id: po.company_id, po_number: order?.po_number, sku_material_id: yieldRow.sku_material_id, batch_number: yieldRow.batch_number, po_type: "PMTS", finalized_at: recoNow, packing_order_id: yieldRow.packing_order_id, packing_order_line_id: line.id, material_id: toTrimmedString(line.actual_material_id) || line.material_id, formulation_material_id: line.material_id, standard_qty: standardQty, actual_qty: actualQty, approved_status: "YES", ap_approved_qty: actualQty, variance_qty: mtsQty(actualQty - standardQty), is_voided: false, last_updated_at: recoNow, last_updated_by: ctx.auth_user_id, reco_document_number: recoDoc.docNumber, reco_document_year: recoDoc.docYear, source_txn_type: "PRODUCTION", reference_document_number: String(order?.po_number ?? ""), reference_document_type: "PACK_PO" });
+    }
+  }
+  const postings = await postDocument({
+    referenceDocumentType: "PROC_PO",
+    referenceDocumentId: id,
+    movements,
+    postedBy: ctx.auth_user_id,
+    context: {
+      header: { actual_qty: declaredTotal, verified_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, has_unapproved_deviation: false },
+      reservations: reservationUpdates,
+      reco_rows: recoRows,
+      machine_stock_log_rows: machineStockLogRows,
+      mts_verify: {
+        checks: checks.map((code) => ({ check_code: code })),
+        yield_ids: yields.map((item) => String(item.id)),
+        packing_orders: packingOrders.map((item) => ({ packing_order_id: String(item.id), actual_qty_kg: packingActualQtyById.get(String(item.id)) ?? 0 })),
+        process_line_postings: processLinePostings,
+        packing_line_updates: packingLineUpdates,
+        packing_reco_rows: packingRecoRows,
+        hold_allocations: holdAllocations,
+        status_postings: statusPostings,
+      },
+    },
+  });
+  return okResponse({ id, status: "VERIFIED", verified_qty: declaredTotal, ledger_entries: postings, message: "MTS QA verification and stock posting completed." }, ctx.request_id, req);
 }
 
 // §131.1 (2026-08-26): extracted so finalizeProcessOrderHandler can run this same
