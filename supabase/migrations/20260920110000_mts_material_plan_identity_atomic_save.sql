@@ -73,8 +73,3 @@ BEGIN
   RETURN v_count;
 END;
 $$;
-
-REVOKE ALL ON FUNCTION erp_production.save_mts_material_plan_atomic(uuid, uuid, date, jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_production.save_mts_material_plan_atomic(uuid, uuid, date, jsonb) TO service_role;
-
-NOTIFY pgrst, 'reload schema';

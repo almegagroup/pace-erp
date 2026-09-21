@@ -90,6 +90,3 @@ begin
   end loop;
 end;
 $$;
-
-revoke all on function erp_production.create_mts_packing_orders_atomic(jsonb) from public;
-grant execute on function erp_production.create_mts_packing_orders_atomic(jsonb) to service_role;

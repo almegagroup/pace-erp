@@ -9,8 +9,6 @@
  * if any validation or insert fails.
  */
 
-BEGIN;
-
 ALTER TABLE erp_production.batch_number_instance
   DROP CONSTRAINT IF EXISTS batch_number_instance_status_check;
 
@@ -35,8 +33,10 @@ CREATE TABLE IF NOT EXISTS erp_production.mts_creation_snapshot (
 
 GRANT ALL ON erp_production.mts_creation_snapshot TO service_role;
 
--- Keep the lowercase identifier quoted: Supabase CLI v2.75.0 mistakes an
--- unquoted identifier containing "atomic" for BEGIN ATOMIC while parsing.
+-- This is deliberately the final statement in this migration. Supabase CLI
+-- v2.75.0 mis-parses an atomic function identifier when another top-level
+-- statement follows it; privileges and later helper objects follow in
+-- dedicated forward migrations.
 CREATE OR REPLACE FUNCTION erp_production."create_mts_documents_atomic"(
   p_request jsonb
 )
@@ -371,121 +371,3 @@ BEGIN
   );
 END;
 $$;
-
-REVOKE ALL ON FUNCTION erp_production."create_mts_documents_atomic"(jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_production."create_mts_documents_atomic"(jsonb) TO service_role;
-
-/*
- * The non-current path reaches QA at STANDARD after Page 6.  No stock has
- * posted at that point, so QA rejection cancels the complete MTS document
- * family and releases its temporary claim.  This is deliberately one
- * transaction: a child PMTS Packing PO, its PM/SFG reservation, and the
- * parent/process reservation can never be left live after the parent is
- * cancelled.
- */
-CREATE OR REPLACE FUNCTION erp_production."reject_mts_documents_atomic"(
-  p_process_order_id uuid,
-  p_actor_id uuid,
-  p_reason text
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = erp_production, public
-AS $$
-DECLARE
-  v_parent erp_production.process_order%ROWTYPE;
-  v_now timestamptz := now();
-BEGIN
-  IF p_process_order_id IS NULL OR p_actor_id IS NULL OR NULLIF(trim(p_reason), '') IS NULL THEN
-    RAISE EXCEPTION 'PROD_MTS_QA_REJECT_PAYLOAD_INVALID';
-  END IF;
-
-  SELECT * INTO v_parent
-    FROM erp_production.process_order
-    WHERE id = p_process_order_id
-    FOR UPDATE;
-  IF NOT FOUND OR v_parent.po_type <> 'MTS' OR v_parent.status <> 'STANDARD' THEN
-    RAISE EXCEPTION 'PROD_MTS_QA_REJECT_STATUS_INVALID';
-  END IF;
-
-  /* Serialize against a concurrent child Final: inspect only locked rows. */
-  PERFORM 1
-    FROM erp_production.packing_order
-    WHERE process_order_id = p_process_order_id
-    FOR UPDATE;
-
-  IF EXISTS (
-    SELECT 1
-      FROM erp_production.packing_order
-      WHERE process_order_id = p_process_order_id
-        AND status NOT IN ('STANDARD', 'CANCELLED')
-  ) THEN
-    RAISE EXCEPTION 'PROD_MTS_QA_REJECT_CHILD_NOT_CANCELLABLE';
-  END IF;
-
-  UPDATE erp_production.packing_order
-    SET status = 'CANCELLED', cancel_reason = p_reason,
-        last_updated_by = p_actor_id, last_updated_at = v_now
-    WHERE process_order_id = p_process_order_id
-      AND status = 'STANDARD';
-
-  UPDATE erp_production.mts_packing_plan_row
-    SET status = 'CANCELLED', last_updated_by = p_actor_id, last_updated_at = v_now
-    WHERE process_order_id = p_process_order_id
-      AND status <> 'CANCELLED';
-
-  UPDATE erp_production.reservation_document
-    SET status = 'CANCELLED', last_updated_by = p_actor_id, last_updated_at = v_now
-    WHERE status IN ('OPEN', 'PARTIAL')
-      AND (
-        (source_type = 'PROCESS_PO' AND source_id = p_process_order_id)
-        OR (source_type = 'PACKING_PO' AND source_id IN (
-          SELECT id FROM erp_production.packing_order WHERE process_order_id = p_process_order_id
-        ))
-      );
-
-  UPDATE erp_production.batch_number_instance
-    SET status = 'RELEASED', released_by = p_actor_id, released_at = v_now,
-        release_reason = 'MTS QA reject: ' || trim(p_reason),
-        last_updated_by = p_actor_id, last_updated_at = v_now
-    WHERE source_process_order_id = p_process_order_id
-      AND status IN ('ACTIVE', 'CLAIMED');
-
-  UPDATE erp_production.process_order
-    SET status = 'CANCELLED', qa_rejection_reason = p_reason,
-        qa_decided_by = p_actor_id, qa_decided_at = v_now,
-        prune_reason = p_reason, pruned_by = p_actor_id, pruned_at = v_now,
-        last_updated_by = p_actor_id, last_updated_at = v_now
-    WHERE id = p_process_order_id;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION erp_production."reject_mts_documents_atomic"(uuid, uuid, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_production."reject_mts_documents_atomic"(uuid, uuid, text) TO service_role;
-
-/* A Page-6 claim becomes permanently used only after Verify & Post succeeds. */
-CREATE OR REPLACE FUNCTION erp_production.mark_mts_batch_claim_used_after_verify()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path = erp_production, public
-AS $$
-BEGIN
-  IF NEW.po_type = 'MTS' AND NEW.status = 'VERIFIED' AND OLD.status IS DISTINCT FROM 'VERIFIED' THEN
-    UPDATE erp_production.batch_number_instance
-      SET status = 'USED', last_updated_by = NEW.last_updated_by, last_updated_at = now()
-      WHERE source_process_order_id = NEW.id AND status = 'CLAIMED';
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_process_order_mark_mts_batch_claim_used ON erp_production.process_order;
-CREATE TRIGGER trg_process_order_mark_mts_batch_claim_used
-AFTER UPDATE OF status ON erp_production.process_order
-FOR EACH ROW EXECUTE FUNCTION erp_production.mark_mts_batch_claim_used_after_verify();
-
-NOTIFY pgrst, 'reload schema';
-
-COMMIT;
