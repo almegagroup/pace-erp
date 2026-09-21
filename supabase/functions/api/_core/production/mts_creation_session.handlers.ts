@@ -275,7 +275,6 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
   const batchIndex = new Map(session.batchNumbers.map((number, index) => [number, index]));
   const claimed = new Array<boolean>(session.batchNumbers.length).fill(false);
   const resolved: ResolvedPackingRow[] = [];
-  let totalVolume = 0;
   for (const [index, row] of rows.entries()) {
     const from = toTrimmedString(row.batch_number_from);
     const to = toTrimmedString(row.batch_number_to);
@@ -297,7 +296,6 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
     const numberOfBatches = toIndex - fromIndex + 1;
     const totalOuterUnit = Number((numberOfBatches * outerPerBatch).toFixed(6));
     const volume = Number((totalOuterUnit * Number(pack.fill_qty ?? 0)).toFixed(6));
-    totalVolume = Number((totalVolume + volume).toFixed(6));
     const sku = await resolveSkuMaterial(session.prodshade, String(pack.pack_code));
     if (!sku) throw new Error("PROD_MTS_PACKING_SKU_NOT_FOUND");
     const bom = await getActivePackBom(session.companyId, String(sku.id));
@@ -314,7 +312,11 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
       outputLine, sfgLine, pmLines: bom.lines.filter((line) => toTrimmedString(line.line_type) === "INPUT"),
     });
   }
-  if (claimed.some((used) => !used) || Math.abs(totalVolume - session.plannedQty) > EPSILON) {
+  // Page 5 declares the actual pack output.  It may be higher or lower than
+  // the process plan; Page 6 must still have exactly one pack choice for each
+  // physical batch so that its PM need and the persisted yield variance are
+  // deterministic.  The atomic Page-6 database trigger records the variance.
+  if (claimed.some((used) => !used)) {
     throw new Error("PROD_MTS_PACKING_PLAN_TOTAL_MISMATCH");
   }
   return resolved;
