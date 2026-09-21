@@ -58,8 +58,8 @@ function machineLabel(machine) {
 // §131.1/§120 + MTS Current/Non-Current Stroke policy (2026-09-17 lock):
 // MTEST always skips plain Approve/Reject. MTS only skips it when the order used
 // its Prodshade's Current Stroke (Policy 1 — QA's real checkpoint there is Verify,
-// not Approve). A non-current-stroke MTS order (Policy 2) shows Approve/Reject
-// exactly like MTO/HPS. Takes the order row (not just po_type) because the MTS
+// not Approval). A non-current-stroke MTS order (Policy 2) has its own read-only
+// Page-4–6 review drawer. Takes the order row (not just po_type) because the MTS
 // case needs mts_used_current_stroke.
 function skipsQaApproval(order) {
   if (order.po_type === "MTEST") return true;
@@ -80,6 +80,117 @@ function statusTone(status) {
   if (status === "BATCH_STARTED") return "bg-emerald-100 text-emerald-700";
   if (status === "CANCELLED") return "bg-slate-100 text-slate-500";
   return "bg-slate-100 text-slate-600";
+}
+
+function qty(value) {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) ? amount.toFixed(3) : "--";
+}
+
+// A non-current MTS entry is not a one-row queue decision.  QA must review the
+// exact Page-4/5/6 plan which Page 6 committed, then decide from the final page.
+// This remains read-only: production's editable window ended at atomic create.
+function MtsQaApprovalReview({ detail, onApprove, onReject, saving }) {
+  const [page, setPage] = useState(1);
+  const review = detail?.mts_review ?? {};
+  const planRows = review?.packing_plan_rows ?? [];
+  const packingOrders = detail?.packing_orders ?? [];
+  const packingById = new Map(packingOrders.map((order) => [order.id, order]));
+  const snapshotCreatedAt = review?.snapshot?.created_at;
+
+  const nav = (target, label) => (
+    <button
+      type="button"
+      onClick={() => setPage(target)}
+      className={`rounded px-3 py-1.5 text-xs font-semibold ${page === target ? "bg-sky-700 text-white" : "border border-slate-300 text-slate-600 hover:bg-slate-50"}`}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="rounded border border-sky-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 bg-sky-50 px-4 py-3">
+        <div>
+          <div className="text-sm font-semibold text-slate-800">MTS Non-Current Stroke — QA Plan Approval</div>
+          <div className="mt-1 text-xs text-slate-500">Read-only Page 4–6 snapshot. Approval makes the parent MTS Process PO Verify-ready; it does not post stock.</div>
+        </div>
+        <div className="flex gap-2">
+          {nav(1, "1. Header & RM")}
+          {nav(2, "2. Batch & Pack")}
+          {nav(3, "3. PM & Decision")}
+        </div>
+      </div>
+
+      {page === 1 && (
+        <div className="space-y-4 p-4">
+          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+            {[
+              ["Process PO", detail.po_number],
+              ["Prodshade", materialLabel(detail.material)],
+              ["Selected Stroke", detail.stroke?.stroke_number],
+              ["Machine", machineLabel(detail.machine)],
+              ["Batch Range", detail.batch_number_from && detail.batch_number_to ? `${detail.batch_number_from} – ${detail.batch_number_to}` : detail.batch_number],
+              ["Batch Size", `${qty(detail.planned_qty / Math.max(Number(detail.number_of_batches ?? 1), 1))} KG`],
+              ["Total Qty", `${qty(detail.planned_qty)} KG`],
+              ["Created", snapshotCreatedAt ? new Date(snapshotCreatedAt).toLocaleString() : "--"],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="text-xs font-medium text-slate-500">{label}</div>
+                <div className="mt-1 text-sm font-medium text-slate-800">{value || "--"}</div>
+              </div>
+            ))}
+          </div>
+          <div className="overflow-x-auto rounded border border-slate-200">
+            <table className="w-full min-w-[900px] border-collapse text-sm">
+              <thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <th className="border-b px-3 py-2 text-left">Formulation Material</th><th className="border-b px-3 py-2 text-right">Dosage %</th><th className="border-b px-3 py-2 text-left">Selected Actual Material</th><th className="border-b px-3 py-2 text-right">Standard Qty</th><th className="border-b px-3 py-2 text-right">Planned Issue Qty</th>
+              </tr></thead>
+              <tbody>{(detail.lines ?? []).map((line) => <tr key={line.id} className="border-b border-slate-100">
+                <td className="px-3 py-2">{materialLabel(line.material) || "--"}</td><td className="px-3 py-2 text-right font-mono">{qty(line.dosage_pct)}</td><td className="px-3 py-2">{materialLabel(line.actual_material) || materialLabel(line.material) || "--"}</td><td className="px-3 py-2 text-right font-mono">{qty(line.planned_qty)}</td><td className="px-3 py-2 text-right font-mono">{qty(line.actual_qty)}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {page === 2 && (
+        <div className="space-y-4 p-4">
+          <p className="text-sm text-slate-600">Every declared batch is assigned to exactly one pack-plan row. Each row already owns one linked PMTS Packing PO.</p>
+          <div className="overflow-x-auto rounded border border-slate-200">
+            <table className="w-full min-w-[980px] border-collapse text-sm">
+              <thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <th className="border-b px-3 py-2 text-left">PMTS Packing PO</th><th className="border-b px-3 py-2 text-left">Batch Range</th><th className="border-b px-3 py-2 text-left">Pack Code</th><th className="border-b px-3 py-2 text-right">Outer Unit / Batch</th><th className="border-b px-3 py-2 text-left">SFG Location</th><th className="border-b px-3 py-2 text-left">Status</th>
+              </tr></thead>
+              <tbody>{planRows.map((row) => {
+                const packing = packingById.get(row.packing_order_id);
+                return <tr key={row.id} className="border-b border-slate-100"><td className="px-3 py-2 font-mono">{packing?.po_number || "--"}</td><td className="px-3 py-2 font-mono">{row.batch_number_from} – {row.batch_number_to}</td><td className="px-3 py-2">{[row.pack_code?.pack_code, row.pack_code?.pack_name].filter(Boolean).join(" - ") || "--"}</td><td className="px-3 py-2 text-right font-mono">{qty(row.outer_unit_per_batch)}</td><td className="px-3 py-2">{[row.storage_location?.code, row.storage_location?.name].filter(Boolean).join(" - ") || "--"}</td><td className="px-3 py-2">{packing?.status || row.status || "--"}</td></tr>;
+              })}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {page === 3 && (
+        <div className="space-y-4 p-4">
+          <p className="text-sm text-slate-600">PM selections below are the exact Page-6 plan. These child Packing POs remain controlled by the common MTS Verify flow.</p>
+          {packingOrders.map((packing) => <div key={packing.id} className="rounded border border-slate-200">
+            <div className="flex flex-wrap justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm"><span className="font-mono font-semibold text-sky-700">{packing.po_number}</span><span>{packing.batch_number_from} – {packing.batch_number_to}</span><span>{[packing.pack_code?.pack_code, packing.pack_code?.pack_name].filter(Boolean).join(" - ") || "PMTS"}</span><span>{packing.status}</span></div>
+            <div className="overflow-x-auto"><table className="w-full min-w-[760px] border-collapse text-sm"><thead><tr className="text-xs uppercase tracking-wide text-slate-500"><th className="border-b px-3 py-2 text-left">Type</th><th className="border-b px-3 py-2 text-left">Formulation Material</th><th className="border-b px-3 py-2 text-left">Selected Actual Material</th><th className="border-b px-3 py-2 text-right">Required Qty</th><th className="border-b px-3 py-2 text-left">Source Location</th></tr></thead><tbody>{(packing.lines ?? []).map((line) => <tr key={line.id} className="border-b border-slate-100"><td className="px-3 py-2">{line.line_type}</td><td className="px-3 py-2">{materialLabel(line.material) || "--"}</td><td className="px-3 py-2">{materialLabel(line.actual_material) || materialLabel(line.material) || "--"}</td><td className="px-3 py-2 text-right font-mono">{qty(line.total_qty)}</td><td className="px-3 py-2">{[line.issue_storage_location?.code, line.issue_storage_location?.name].filter(Boolean).join(" - ") || "--"}</td></tr>)}</tbody></table></div>
+          </div>)}
+          <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-4">
+            <button type="button" onClick={onReject} disabled={saving} className="rounded border border-rose-300 px-4 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50">Reject & Release All</button>
+            <button type="button" onClick={onApprove} disabled={saving} className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">Approve — Ready for Verify</button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-between border-t border-slate-200 px-4 py-3">
+        <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1} className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 disabled:opacity-40">Back</button>
+        <button type="button" onClick={() => setPage((current) => Math.min(3, current + 1))} disabled={page === 3} className="rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-600 disabled:opacity-40">Next</button>
+      </div>
+    </div>
+  );
 }
 
 export default function QAQueuePage() {
@@ -336,6 +447,7 @@ export default function QAQueuePage() {
               <tbody>
                 {filteredQueue.map((order) => {
                   const expanded = expandedOrderId === order.id;
+                  const isMtsApproval = order.po_type === "MTS" && order.mts_used_current_stroke !== true && order.status === "STANDARD";
                   return (
                     <React.Fragment key={order.id}>
                       <tr
@@ -356,7 +468,7 @@ export default function QAQueuePage() {
                           </span>
                         </td>
                         <td className="px-3 py-2">
-                          {order.status === "STANDARD" && !skipsQaApproval(order) ? (
+                          {order.status === "STANDARD" && !skipsQaApproval(order) && order.po_type !== "MTS" ? (
                             <select
                               value={priorityByOrderId[order.id] || "NORMAL"}
                               onChange={(event) => {
@@ -380,7 +492,7 @@ export default function QAQueuePage() {
                           onClick={(event) => event.stopPropagation()}
                         >
                           <div className="flex justify-end gap-2">
-                            {order.status === "STANDARD" && !skipsQaApproval(order) && (
+                            {order.status === "STANDARD" && !skipsQaApproval(order) && order.po_type !== "MTS" && (
                               <>
                                 <button
                                   onClick={() => handleApprove(order.id)}
@@ -476,20 +588,12 @@ export default function QAQueuePage() {
                                 </button>
                               </>
                             )}
-                            {/* MTS Current-vs-Non-Current Stroke policy (2026-09-17 lock) — MTS
-                                never uses Start Batch (batch number is set at Create). Policy 1
-                                (Current Stroke) sits at STANDARD ready for Finalize immediately;
-                                Policy 2 (non-current) sits at QA_APPROVED ready for Finalize once
-                                approved above. Neither shows an action button here. */}
-                            {order.status === "STANDARD" && order.po_type === "MTS" && order.mts_used_current_stroke === true && (
-                              <span className="text-xs font-medium text-emerald-600">Ready for Finalize</span>
-                            )}
-                            {order.status === "QA_APPROVED" && order.po_type === "MTS" && (
-                              <span className="text-xs font-medium text-emerald-600">Ready for Finalize</span>
+                            {order.status === "FINAL" && order.po_type === "MTS" && (
+                              <span className="text-xs font-medium text-emerald-600">Ready for Verify</span>
                             )}
                             {/* §136 -- Start Batch for QA_APPROVED only when NOT Urgent;
-                                an Urgent order must clear MANAGER_APPROVED first. MTS excluded --
-                                see the Ready-for-Finalize branch above. */}
+                                an Urgent order must clear MANAGER_APPROVED first. MTS has no
+                                Start Batch stage and instead proceeds to Verify. */}
                             {order.status === "QA_APPROVED" && order.priority !== "URGENT" && order.po_type !== "MTS" && (
                               <button
                                 onClick={() => setStartBatchOrder(order)}
@@ -518,6 +622,18 @@ export default function QAQueuePage() {
                               <p className="text-sm text-slate-500">Loading line details...</p>
                             ) : detailQ.data?.id !== order.id ? (
                               <p className="text-sm text-slate-400">Select a row to load its component grid.</p>
+                            ) : isMtsApproval ? (
+                              <MtsQaApprovalReview
+                                key={order.id}
+                                detail={detailQ.data}
+                                saving={saving}
+                                onApprove={() => handleApprove(order.id)}
+                                onReject={() => {
+                                  setRejectOrderId(order.id);
+                                  setRejectReason("");
+                                  setRejectMode("qa");
+                                }}
+                              />
                             ) : (
                               <div className="rounded border border-slate-200 bg-white">
                                 <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">

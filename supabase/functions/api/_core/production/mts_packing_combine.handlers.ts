@@ -297,6 +297,7 @@ type CombinedPmGroup = {
   has_alternate: boolean;
   material_group_id: string | null;
   storage_location_id: string;
+  source_storage_location_ids: string[];
   standard_qty: number;
   group_member_ids: string[];
   contributing: Array<{ row_id: string; pack_size_label: string; qty: number }>;
@@ -315,13 +316,21 @@ function buildCombinedPmGroups(rows: ResolvedPage5Row[]): CombinedPmGroup[] {
       if (existing) {
         existing.standard_qty = Number((existing.standard_qty + requiredQty).toFixed(6));
         existing.contributing.push({ row_id: row.id, pack_size_label: row.packSizeLabel, qty: requiredQty });
+        const sourceLocationId = toTrimmedString(line.storage_location_id);
+        if (sourceLocationId && !existing.source_storage_location_ids.includes(sourceLocationId)) {
+          existing.source_storage_location_ids.push(sourceLocationId);
+          // One combined row cannot silently choose between disagreeing Pack
+          // BOM locations. Require an explicit operator choice instead.
+          existing.storage_location_id = "";
+        }
       } else {
         byMaterial.set(materialId, {
           material_id: materialId,
           uom_code: toTrimmedString(line.uom_code) || "KG",
           has_alternate: Boolean(line.has_alternate),
           material_group_id: toTrimmedString(line.material_group_id) || null,
-          storage_location_id: "", // resolved by caller (segment default, user-editable)
+          storage_location_id: toTrimmedString(line.storage_location_id),
+          source_storage_location_ids: [toTrimmedString(line.storage_location_id)].filter(Boolean),
           standard_qty: requiredQty,
           group_member_ids: [materialId],
           contributing: [{ row_id: row.id, pack_size_label: row.packSizeLabel, qty: requiredQty }],
@@ -346,23 +355,54 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
     const rows = resolvedOrError;
 
     const defaultPmSlocId = await resolveDefaultPmStorageLocationId(String(po.company_id), String(po.segment_code ?? ""));
+    // UI location changes re-run this same server computation so Available,
+    // auto-derived rows, and Short always describe the currently selected
+    // location rather than a stale Pack-BOM default.
+    let storageOverrides: Record<string, string> = {};
+    const rawOverrides = new URL(req.url).searchParams.get("storage_overrides");
+    if (rawOverrides) {
+      try {
+        const parsed = JSON.parse(rawOverrides);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          storageOverrides = Object.fromEntries(
+            Object.entries(parsed as Record<string, unknown>)
+              .map(([materialId, locationId]) => [materialId, toTrimmedString(locationId)])
+              .filter(([materialId, locationId]) => materialId && locationId),
+          );
+        }
+      } catch {
+        return combineErr(req, ctx, "PROD_PACK_COMBINE_LOCATION_OVERRIDE_INVALID", 400, "Storage-location preview is invalid");
+      }
+    }
     const groups = buildCombinedPmGroups(rows);
 
     const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(groups.map((g) => g.material_group_id ?? "").filter(Boolean) as string[]);
     for (const group of groups) {
-      group.storage_location_id = defaultPmSlocId ?? "";
+      const requestedLocationId = storageOverrides[group.material_id];
+      if (requestedLocationId) {
+        group.storage_location_id = requestedLocationId;
+      }
+      // Pack BOM location is the design-default. The segment setting is only
+      // a legacy fallback for old BOM lines with no declared location.
+      if (!group.storage_location_id && group.source_storage_location_ids.length === 0) {
+        group.storage_location_id = defaultPmSlocId ?? "";
+      }
       if (group.has_alternate && group.material_group_id) {
         const members = (groupMemberMap.get(group.material_group_id) ?? []).filter((m) => m !== group.material_id);
         group.group_member_ids = [group.material_id, ...members];
       }
     }
 
-    const candidateMaterialIds = [...new Set(groups.flatMap((g) => g.group_member_ids))];
-    const balances = defaultPmSlocId
-      ? await fetchLocationBalances(String(po.company_id), defaultPmSlocId, candidateMaterialIds)
-      : new Map<string, number>();
-
-    const derivedGroups = groups.map((group) => {
+    const remainingByLocation = new Map<string, Map<string, number>>();
+    const derivedGroups = [];
+    for (const group of groups) {
+      let balances = remainingByLocation.get(group.storage_location_id);
+      if (!balances) {
+        balances = group.storage_location_id
+          ? await fetchLocationBalances(String(po.company_id), group.storage_location_id, [...new Set(groups.filter((g) => g.storage_location_id === group.storage_location_id).flatMap((g) => g.group_member_ids))])
+          : new Map<string, number>();
+        remainingByLocation.set(group.storage_location_id, balances);
+      }
       const { rows: derivedRows, short, shortfallQty } = computeMtsAutoDeriveRowsForGroup({
         formulationMaterialId: group.material_id,
         dosagePct: null,
@@ -370,7 +410,10 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
         alternateMaterialIds: group.group_member_ids.filter((m) => m !== group.material_id),
         bucketBalances: balances,
       });
-      return {
+      for (const row of derivedRows) {
+        if (row.actual_qty > EPSILON) balances.set(row.actual_material_id, Number(((balances.get(row.actual_material_id) ?? 0) - row.actual_qty).toFixed(6)));
+      }
+      derivedGroups.push({
         material_id: group.material_id,
         uom_code: group.uom_code,
         auto_derive_applicable: true,
@@ -381,8 +424,8 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
         short,
         shortfall_qty: shortfallQty,
         contributing: group.contributing,
-      };
-    });
+      });
+    }
 
     const materialIds = new Set<string>();
     for (const group of derivedGroups) {
@@ -476,16 +519,21 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
     const bodyGroups = Array.isArray(body.groups) ? (body.groups as JsonRecord[]) : [];
     const bodyGroupByMaterial = new Map(bodyGroups.map((g) => [toTrimmedString(g.material_id), g]));
 
-    // per-row PM qty accumulator: rowId -> Map<actualMaterialId, qty>
+    // per-row PM qty accumulator: rowId -> Map<formulation+actual, qty>.
+    // The same alternate may legally serve more than one formulation group.
     const perRowPmQty = new Map<string, Map<string, number>>();
     for (const row of rows) perRowPmQty.set(row.id, new Map());
     // group storage location chosen (rowId doesn't matter -- PM issue location is
     // per combined-group, shared across every row that draws from that group).
     const groupStorageLocationById = new Map<string, string>();
+    const totalNeedsByLocationMaterial = new Map<string, number>();
 
     for (const group of serverGroups) {
       const bodyGroup = bodyGroupByMaterial.get(group.material_id);
-      const storageLocationId = toTrimmedString(bodyGroup?.storage_location_id) || defaultPmSlocId || "";
+      const storageLocationId = toTrimmedString(bodyGroup?.storage_location_id)
+        || group.storage_location_id
+        || (group.source_storage_location_ids.length === 0 ? defaultPmSlocId : "")
+        || "";
       if (!storageLocationId) {
         return combineErr(req, ctx, "PROD_PACK_COMBINE_PM_SLOC_REQUIRED", 400, `A Storage Location is required for PM group ${group.material_id}`);
       }
@@ -541,6 +589,10 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           return combineErr(req, ctx, "PROD_PACK_COMBINE_PM_SHORTAGE", 422, `Insufficient stock for material ${materialId} at the selected PM storage location`);
         }
       }
+      for (const [materialId, qty] of perMaterialTotal.entries()) {
+        const needKey = `${storageLocationId}::${materialId}`;
+        totalNeedsByLocationMaterial.set(needKey, Number(((totalNeedsByLocationMaterial.get(needKey) ?? 0) + qty).toFixed(6)));
+      }
 
       // Split each (actual_material_id, qty) proportionally back to every
       // contributing Page-5 row, by that row's own share of the group's
@@ -558,54 +610,30 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           allocated = Number((allocated + qty).toFixed(6));
           if (qty <= 0) return;
           const rowMap = perRowPmQty.get(contrib.row_id)!;
-          rowMap.set(finalRow.actual_material_id, Number(((rowMap.get(finalRow.actual_material_id) ?? 0) + qty).toFixed(6)));
+          const allocationKey = `${group.material_id}::${finalRow.actual_material_id}`;
+          rowMap.set(allocationKey, Number(((rowMap.get(allocationKey) ?? 0) + qty).toFixed(6)));
         });
       }
     }
 
-    // §8E: no unbounded id list here -- one packing_order per Page-5 row,
-    // and MTS Packing PO row counts are always small (a handful of pack
-    // sizes per batch range), so a plain sequential loop is fine; each
-    // row's own DB writes are otherwise independent of the others (§8B).
+    // Group-level checks above are not enough when one alternate is used by
+    // multiple formulation groups. Re-check the summed draw from each real
+    // location before creating any document.
+    for (const [needKey, qty] of totalNeedsByLocationMaterial.entries()) {
+      const [storageLocationId, materialId] = needKey.split("::");
+      const balances = await fetchLocationBalances(companyId, storageLocationId, [materialId]);
+      if (qty > Math.max(0, balances.get(materialId) ?? 0) + EPSILON) {
+        return combineErr(req, ctx, "PROD_PACK_COMBINE_PM_SHORTAGE", 422, `Combined demand exceeds available stock for material ${materialId} at the selected PM storage location`);
+      }
+    }
+
+    // Build every header and line before writing. A single database RPC then
+    // owns all inserts, reservations, and staging conversion in one
+    // transaction; a failure cannot leave a partial set of Packing POs.
     const now = new Date().toISOString();
-    const createdIds: string[] = [];
-    const createdPoNumbers: string[] = [];
+    const atomicOrders: JsonRecord[] = [];
     for (const row of rows) {
       const poNumber = await generateGlobalDocNumber("PACK_PO");
-      const { data: packPo, error: insertErr } = await serviceRoleClient
-        .schema("erp_production").from("packing_order")
-        .insert({
-          company_id: companyId,
-          po_number: poNumber,
-          po_type: "PMTS",
-          source_po_type: "MTS",
-          process_order_id: po.id,
-          machine_id: null,
-          material_id: row.skuMaterialId,
-          pack_code_id: row.packCodeId,
-          batch_number_from: row.batchNumberFrom || null,
-          batch_number_to: row.batchNumberTo || null,
-          fill_qty_per_pack: row.fillQty,
-          num_packs: row.totalOuterUnit,
-          sku_qty: row.totalOuterUnit,
-          fg_conversion_qty: 1,
-          sfg_conversion_qty: row.fillQty,
-          planned_qty_kg: row.volume,
-          total_qty_kg: row.volume,
-          status: "STANDARD",
-          segment_code: po.segment_code,
-          created_by: ctx.auth_user_id,
-          created_at: now,
-          last_updated_at: now,
-          last_updated_by: ctx.auth_user_id,
-        })
-        .select("id").single();
-      if (insertErr) {
-        console.error("[mts_packing_combine.save] packing_order insert failed:", JSON.stringify(insertErr));
-        throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-      }
-      const packPoId = (packPo as JsonRecord).id as string;
-
       const pmQtyForRow = perRowPmQty.get(row.id) ?? new Map<string, number>();
       const pmLineInserts: JsonRecord[] = [];
       let displayOrder = 10;
@@ -620,16 +648,16 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
         // item + an alternate.
         const candidateIds = group ? group.group_member_ids : [formulationMaterialId];
         for (const actualMaterialId of candidateIds) {
-          const qty = pmQtyForRow.get(actualMaterialId);
+          const allocationKey = `${formulationMaterialId}::${actualMaterialId}`;
+          const qty = pmQtyForRow.get(allocationKey);
           if (!qty || qty <= 0) continue;
           // A given (formulation, actual) pair is only ever attributed to
           // ONE bomLine per row (Pack BOM never repeats the same formulation
           // material twice within one BOM) -- consume it so a formulation
           // material appearing in more than one bomLine row (shouldn't
           // happen) can't double count.
-          pmQtyForRow.set(actualMaterialId, 0);
+          pmQtyForRow.set(allocationKey, 0);
           pmLineInserts.push({
-            packing_order_id: packPoId,
             line_type: "PM",
             material_id: formulationMaterialId,
             actual_material_id: actualMaterialId === formulationMaterialId ? null : actualMaterialId,
@@ -649,7 +677,6 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
 
       const lineRows: JsonRecord[] = [
         {
-          packing_order_id: packPoId,
           line_type: "FG",
           material_id: row.skuMaterialId,
           batch_number: null,
@@ -664,7 +691,6 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           display_order: 1,
         },
         {
-          packing_order_id: packPoId,
           line_type: "SFG",
           material_id: toTrimmedString(row.sfgLine.material_id),
           batch_number: null, // chosen at Final, same convention as MTO/HPS
@@ -680,57 +706,32 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
         },
         ...pmLineInserts,
       ];
-      const { data: insertedLines, error: lineErr } = await serviceRoleClient
-        .schema("erp_production").from("packing_order_line")
-        .insert(lineRows)
-        .select("id, line_type, material_id, actual_material_id, total_qty, issue_sloc_id, uom_code");
-      if (lineErr) {
-        console.error("[mts_packing_combine.save] line insert failed:", JSON.stringify(lineErr));
-        throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-      }
-
-      const reservationRows = ((insertedLines ?? []) as JsonRecord[])
-        .filter((line) => String(line.line_type) !== "FG")
-        .map((line) => ({
-          source_type: "PACKING_PO",
-          source_id: packPoId,
-          source_line_id: line.id,
-          company_id: companyId,
-          material_id: toTrimmedString(line.actual_material_id) || line.material_id,
-          storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
-          required_qty: Number(line.total_qty ?? 0),
-          uom_code: toTrimmedString(line.uom_code) || "KG",
-          issued_qty: 0,
-          status: "OPEN",
-          batch_number: null,
-          created_by: ctx.auth_user_id,
-          created_at: now,
-          last_updated_by: ctx.auth_user_id,
-          last_updated_at: now,
-        }));
-      if (reservationRows.length > 0) {
-        const { error: reservationErr } = await serviceRoleClient
-          .schema("erp_production").from("reservation_document").insert(reservationRows);
-        if (reservationErr) {
-          console.error("[mts_packing_combine.save] reservation insert failed:", JSON.stringify(reservationErr));
-          throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-        }
-      }
-
-      const { error: convertErr } = await serviceRoleClient
-        .schema("erp_production").from("mts_packing_plan_row")
-        .update({ status: "CONVERTED", packing_order_id: packPoId, last_updated_by: ctx.auth_user_id, last_updated_at: now })
-        .eq("id", row.id);
-      if (convertErr) {
-        console.error("[mts_packing_combine.save] plan-row convert failed:", JSON.stringify(convertErr));
-        throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
-      }
-
-      createdIds.push(packPoId);
-      createdPoNumbers.push(poNumber);
+      atomicOrders.push({
+        plan_row_id: row.id,
+        order: {
+          company_id: companyId, po_number: poNumber, po_type: "PMTS", source_po_type: "MTS",
+          process_order_id: po.id, material_id: row.skuMaterialId, pack_code_id: row.packCodeId,
+          batch_number_from: row.batchNumberFrom || "", batch_number_to: row.batchNumberTo || "",
+          fill_qty_per_pack: row.fillQty, num_packs: row.totalOuterUnit, sku_qty: row.totalOuterUnit,
+          fg_conversion_qty: 1, sfg_conversion_qty: row.fillQty, planned_qty_kg: row.volume,
+          total_qty_kg: row.volume, status: "STANDARD", segment_code: po.segment_code ?? "",
+          actor_id: ctx.auth_user_id, now,
+        },
+        lines: lineRows,
+      });
     }
-
-    return createdOkResponse({ ids: createdIds, po_numbers: createdPoNumbers }, ctx.request_id, req);
+    const { data: created, error: atomicErr } = await serviceRoleClient
+      .schema("erp_production")
+      .rpc("create_mts_packing_orders_atomic", { p_orders: atomicOrders });
+    if (atomicErr) {
+      console.error("[mts_packing_combine.save] atomic save failed:", JSON.stringify(atomicErr));
+      throw new Error("PROD_PACK_COMBINE_SAVE_FAILED");
+    }
+    const createdRows = (created ?? []) as JsonRecord[];
+    return createdOkResponse({
+      ids: createdRows.map((entry) => String(entry.packing_order_id)),
+      po_numbers: createdRows.map((entry) => String(entry.po_number)),
+    }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PACK_COMBINE_SAVE_FAILED";
     return combineErr(req, ctx, code, code === "PROD_PO_NOT_FOUND" ? 404 : 500, "Failed to save combined packing plan");

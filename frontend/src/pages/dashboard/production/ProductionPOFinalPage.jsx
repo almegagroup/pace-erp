@@ -62,10 +62,18 @@ function PACKING_ERR(error) {
     PROD_PACK_STATUS_INVALID: "Action not valid for current status.",
     PROD_PACK_CORRECTION_STATUS_INVALID: "Packing PO must be FINAL to correct.",
     PROD_PACK_SUBSTITUTE_NOT_REGISTERED: "Actual Material must be a registered alternate for that line.",
+    PROD_PACK_MTS_PARENT_VERIFY_REQUIRED: "This PMTS Packing PO is controlled by its parent MTS Process PO. Complete the MTS cycle from the parent Process PO in Verify.",
   };
   const code = error?.code || error?.message || "";
   return map[code] ?? error?.message ?? "Request failed.";
 }
+
+function isMtsControlledPackingPo(po) {
+  return String(po?.po_type || "").toUpperCase() === "PMTS"
+    || String(po?.source_po_type || "").toUpperCase() === "MTS";
+}
+
+const MTS_PACKING_FINAL_BLOCK_MESSAGE = "This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be finalized or corrected separately. Complete the MTS cycle from the parent Process PO in Verify.";
 
 // §83.4.1 addendum (2026-07-21): PM-line Approved/AP-Approved/Variance rule —
 // mirrors computeRowValues() in ProductionPOVerifyPage.jsx / the Process PO
@@ -135,7 +143,9 @@ function PackingPoFinalTab() {
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
   const orderOptions = useMemo(
-    () => (ordersQ.data ?? []).map((order) => ({ value: order.id, label: [order.po_number, materialLabelSimple(order.material), order.po_type].filter(Boolean).join(" - ") || order.po_number })),
+    () => (ordersQ.data ?? [])
+      .filter((order) => !isMtsControlledPackingPo(order))
+      .map((order) => ({ value: order.id, label: [order.po_number, materialLabelSimple(order.material), order.po_type].filter(Boolean).join(" - ") || order.po_number })),
     [ordersQ.data],
   );
 
@@ -147,7 +157,9 @@ function PackingPoFinalTab() {
       const options = Array.isArray(result) ? result : result?.data ?? [];
       const match = options.find((order) => String(order.po_number || "").toUpperCase() === submittedPoNumber.toUpperCase()) ?? null;
       if (!match?.id) return { match: null, blockedMessage: "Packing PO not found." };
-      const blockedMessage = match.status === "REVERSED" ? "This Packing PO is reversed." : "";
+      const blockedMessage = isMtsControlledPackingPo(match)
+        ? MTS_PACKING_FINAL_BLOCK_MESSAGE
+        : (match.status === "REVERSED" ? "This Packing PO is reversed." : "");
       return { match, blockedMessage };
     },
   });
@@ -297,6 +309,10 @@ function PackingPoFinalTab() {
   }
 
   async function handleFinalize() {
+    if (isMtsControlledPackingPo(po)) {
+      toast(MTS_PACKING_FINAL_BLOCK_MESSAGE, "error");
+      return;
+    }
     if (!isBatchBlind) {
       if (!effectiveSfgBatchNumber) {
         toast("Select SFG batch before final posting.", "error");
@@ -365,6 +381,10 @@ function PackingPoFinalTab() {
   }
 
   async function handleCorrect() {
+    if (isMtsControlledPackingPo(po)) {
+      toast(MTS_PACKING_FINAL_BLOCK_MESSAGE, "error");
+      return;
+    }
     // Locked 2026-08-12, corrected same day (business owner override): caller enters a
     // positive QUANTITY and picks the movement type themselves (P101/P102 for FG,
     // P261/P262 for SFG/PM) — the backend never infers direction from a sign.
@@ -494,7 +514,11 @@ function PackingPoFinalTab() {
 
       {po && (
         <ErpSectionCard title={po.status === "FINAL" ? "PR11 Correction Mode" : "PR11 Final"}>
-          {po.status === "REVERSED" ? (
+          {isMtsControlledPackingPo(po) ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {MTS_PACKING_FINAL_BLOCK_MESSAGE}
+            </div>
+          ) : po.status === "REVERSED" ? (
             <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               This Packing PO is reversed. No further action is possible here.
             </div>
@@ -959,11 +983,18 @@ function storageLocationLabel(location) {
 // changed what happens AT Final for MTEST (it now also posts/verifies in that same
 // click), not the status required to reach Final in the first place.
 function requiredFinalStatus(poType) {
-  return String(poType || "").toUpperCase() === "INT" ? "STANDARD" : "BATCH_STARTED";
+  const type = String(poType || "").toUpperCase();
+  if (type === "INT") return "STANDARD";
+  // MTS has no standalone Production Final.  Current MTS is FINAL at Page 6;
+  // non-current MTS becomes FINAL when QA approves its Page-6 plan.  Both go
+  // straight to the common QA Verify workspace.
+  if (type === "MTS") return null;
+  return "BATCH_STARTED";
 }
 
-function validateFinalPoStatus(status, poType) {
-  const required = requiredFinalStatus(poType);
+function validateFinalPoStatus(status, poType, mtsUsedCurrentStroke) {
+  const required = requiredFinalStatus(poType, mtsUsedCurrentStroke);
+  if (required === null) return "MTS Process POs cannot be finalized here. Open MTS Verify to complete the entire MTS cycle.";
   return String(status || "").toUpperCase() === required
     ? ""
     : `This Process PO is not applicable for Final. Only \`${required}\` is allowed for this type.`;
@@ -1055,7 +1086,7 @@ function ProcessPoFinalTab() {
       const options = Array.isArray(result) ? result : result?.data ?? [];
       const match = options.find((order) => String(order.po_number || "").toUpperCase() === submittedPoNumber.toUpperCase()) ?? null;
       if (!match?.id) return { match: null, blockedMessage: "Process PO not found." };
-      const blockedMessage = validateFinalPoStatus(match.status, match.po_type);
+      const blockedMessage = validateFinalPoStatus(match.status, match.po_type, match.mts_used_current_stroke);
       return { match, blockedMessage };
     },
   });
@@ -1206,7 +1237,7 @@ function ProcessPoFinalTab() {
   }
 
   async function handleSave() {
-    if (!po || po.status !== requiredFinalStatus(po.po_type)) return;
+    if (!po || validateFinalPoStatus(po.status, po.po_type, po.mts_used_current_stroke)) return;
     setSaving(true);
     try {
       const inputRows = rows.map((row) => {
@@ -1323,9 +1354,9 @@ function ProcessPoFinalTab() {
 
       {po && (
         <ErpSectionCard title="PR11 Final">
-          {po.status !== requiredFinalStatus(po.po_type) ? (
+          {validateFinalPoStatus(po.status, po.po_type, po.mts_used_current_stroke) ? (
             <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              This Process PO is blocked for Final. Only `{requiredFinalStatus(po.po_type)}` is allowed for this type.
+              {validateFinalPoStatus(po.status, po.po_type, po.mts_used_current_stroke)}
             </div>
           ) : (
             <div className="flex flex-col gap-4">

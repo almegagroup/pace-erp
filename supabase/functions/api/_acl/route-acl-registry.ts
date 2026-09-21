@@ -477,6 +477,13 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // MTS Page 3 "Batch Range" live duplicate-check + "Shift" inline-create — both tightly
   // coupled to Process PO Create, so they ride PROD_PO_CREATE rather than a new resource.
   "GET:/api/production/mts-batch-range-check":       { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  // MTS Pages 1-6 creation-session previews and its single Page-6 commit.
+  // These stay on the existing Process-PO Create resource; the previews have
+  // no durable document side effect and commit is the sole write.
+  "POST:/api/production/mts-creation/material-plan": { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/mts-creation/packing-plan":  { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/mts-creation/packing-combine": { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/mts-creation/commit":        { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/shifts":                      { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
   "POST:/api/production/shifts":                     { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/segment-locations":           { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "VIEW" },

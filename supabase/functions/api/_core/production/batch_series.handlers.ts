@@ -34,7 +34,7 @@ type BatchNumberInstanceRow = {
   po_type: string;
   prodshade_material_id: string | null;
   batch_number: string;
-  status: "ACTIVE" | "VOIDED" | "RELEASED";
+  status: "ACTIVE" | "VOIDED" | "RELEASED" | "CLAIMED" | "USED";
   source_process_order_id: string | null;
   voided_at: string | null;
   released_by: string | null;
@@ -260,6 +260,39 @@ export async function voidBatchNumberInstancesForProcessOrder(processOrderId: st
     console.error("[batch_series.voidBatchNumberInstancesForProcessOrder] update failed:", JSON.stringify(error));
     throw new Error("PROD_BATCH_NUMBER_VOID_FAILED");
   }
+}
+
+// An unposted MTS Process PO owns a whole declared range.  On cancellation or
+// reversal every pre-posting member must become reusable together; releasing
+// only process_order.batch_number (the first member) leaves the rest blocked.
+// USED is intentionally excluded: a successfully posted batch needs the
+// Verify/reversal genealogy path, not a blind range release.
+export async function releaseUnpostedMtsBatchNumberInstancesForProcessOrder(params: {
+  processOrderId: string;
+  actorId: string;
+  reason: string;
+}): Promise<number> {
+  const now = new Date().toISOString();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .update({
+      status: "RELEASED",
+      released_by: params.actorId,
+      released_at: now,
+      release_reason: params.reason,
+      last_updated_at: now,
+      last_updated_by: params.actorId,
+    })
+    .eq("source_process_order_id", params.processOrderId)
+    .eq("po_type", "MTS")
+    .in("status", ["ACTIVE", "VOIDED", "CLAIMED"])
+    .select("id");
+  if (error) {
+    console.error("[batch_series.releaseUnpostedMtsBatchNumberInstancesForProcessOrder] update failed:", JSON.stringify(error));
+    throw new Error("PROD_MTS_BATCH_RANGE_RELEASE_FAILED");
+  }
+  return (data ?? []).length;
 }
 
 // MTS Page 3 batch-range create — single atomic bulk INSERT of every batch
@@ -752,8 +785,10 @@ export async function resolveMtsBatchRangeNumbers(
   return { prefix: toTrimmedString((seriesRow as JsonRecord).prefix), numbers };
 }
 
-// Company-wide ACTIVE-status collision check (matches batch_number_instance's
-// own UNIQUE(company_id, batch_number) shape) -- chunked per §8E since a large
+// Company-wide live-claim collision check (matches batch_number_instance's
+// own UNIQUE(company_id, batch_number) shape) -- a newly committed MTS Page-6
+// document is CLAIMED until Verify makes it USED, and both must be unavailable
+// to a new Page-3 preview. Chunked per §8E since a large
 // Number-of-Batches entry could in theory push the .in() list past a safe URL
 // length, even though today's 500-count cap keeps it well under that.
 export async function findDuplicateBatchNumbers(companyId: string, batchNumbers: string[]): Promise<string[]> {
@@ -764,7 +799,7 @@ export async function findDuplicateBatchNumbers(companyId: string, batchNumbers:
       .from("batch_number_instance")
       .select("batch_number")
       .eq("company_id", companyId)
-      .eq("status", "ACTIVE")
+      .in("status", ["ACTIVE", "CLAIMED", "USED"])
       .in("batch_number", chunk));
   return rows.map((row) => String(row.batch_number));
 }

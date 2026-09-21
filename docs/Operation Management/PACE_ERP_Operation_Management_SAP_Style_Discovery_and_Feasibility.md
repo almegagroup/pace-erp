@@ -24003,7 +24003,7 @@ StrokeMasterPage.jsx-এর সাথে সম্পর্কিত):**
 | Case | Standard page-এ | Edit কোথায় |
 |---|---|---|
 | **Current Stroke** দিয়ে batch | Auto-derive হয়, **পুরোপুরি editable** (উপরের সব override rule Standard-এই প্রযোজ্য) | Standard-এই |
-| **Non-current (অন্য) Stroke** দিয়ে batch | Auto-derive হয়ে দেখাবে, কিন্তু **read-only** — user শুধু Save করতে পারবে | **Final ও Verify-তে** — Verify-তে QA-র existing normal authority দিয়েই edit + post |
+| **Non-current (অন্য) Stroke** দিয়ে batch | Current Stroke-এর মতোই editable — QA যে final plan approve করবে সেটি Production নিজেই Page 1–6-এ ঠিক করবে | Page-6 snapshot-এর পরে শুধু QA Verify-তে actual execution edit + post |
 
 এই mechanism পুরোটাই **MTS-only**, MTO/HPS/INT-এর জন্য প্রযোজ্য না (formulation material সরাসরি
 ব্যবহার হয়, alternate-group থাকলেও optional/manual override হিসেবেই থাকে — §138 এর আগের অংশে
@@ -24297,7 +24297,7 @@ in `saveMtsMaterialPlanHandler`). Frontend: `ProductionPOCreatePage.jsx` gained 
 resetting the form; matches this section's exact table-column lock (`# | Material Type |
 Formulation Material | Dosage % | Actual Material | Storage Location | Standard Qty | Actual Qty
 | Available | Movement Type | AP-Approved | AP Qty | Status`), the repeat-row/first-row-only-
-Standard rule, R001 manual-pick, and Policy 1 (Current Stroke) vs Policy 2 (read-only) editability
+Standard rule, R001 manual-pick, and the shared Current/Non-current Page-1–6 editability
 from §138.14's stage table. Excel export from the mockup was NOT carried into the real page (out
 of scope for this pass — mockup-only, design-approval tool).
 **Verification done (2026-09-18):** live prod DB schema check (`machine_stock_log`,
@@ -24343,6 +24343,275 @@ missing" with no way to clear it — now only the IWC segment uses Liter entry, 
 KG input like MTO/HPS; the stale "RM lines move to a future Page 4" placeholder copy (Page 4 has
 existed since this same day) and the "Create Process PO" button label (relabeled "Save & Continue
 to Page 4" for MTS, since it only creates the header before Page 4 opens) were also corrected.
+
+### 138.15.1 — MTS Final and Verify after the Page-4 plan (✅ DESIGN LOCKED — 2026-09-20)
+
+The Page-4 saved plan remains the recipe record: formulation material, dosage and Standard Qty never
+become the selected alternate. MTS has no Start Batch step.
+
+| Stroke policy | Final entry status | Final actor/edit | Verify actor/edit/post |
+|---|---|---|---|
+| Current Stroke | Page-6 creates `FINAL` | No standalone Final screen | QA may inspect/correct actual issue and posts the atomic P261/P101 transaction |
+| Non-Current Stroke | QA Approval changes `STANDARD → FINAL` | No standalone Final screen; QA approves the Page-6 snapshot | QA has the same Verify authority, performs the final stock check and posts |
+
+For both policies Verify is the common stock-posting checkpoint. MTS split alternate rows are valid
+even where a repeat row has Standard Qty `0` and Actual Qty above `0`; MTS therefore uses automatic
+`YES`/Actual AP values internally and never requires hidden AP-Reco controls. `FINAL` is a
+workflow-ready status only; Verify remains the one atomic posting transaction.
+
+### 138.15.2 — MTS Creation Session → Page-6 Atomic Create → Common QA Verify model (✅ DESIGN LOCKED — 2026-09-20; supersedes the earlier Page-3-create / Page-6-save lifecycle wording in §138.15.1 and §138.16)
+
+**Why this replacement is necessary:** an MTS Process PO must not become a real document merely
+because Page 3 header data was entered. Page 4 (RM), Page 5 (batch-to-pack plan), and Page 6 (PM)
+are one pre-posting decision. If RM is short on Page 4, or RM/PM is short on Page 6, no Process PO,
+Packing PO, reservation, saved draft, batch hold or hard-used batch may exist. The six pages are one temporary
+**MTS Creation Session**, not a Process PO or a resumable server-side draft, until the Page-6 final
+check succeeds.
+
+The historical implementation-status text in §138.15/§138.16 is retained as an audit record only.
+Its Page-3 header creation, Page-4/Page-5 staging against a real Process PO, and Page-6 direct
+Packing-PO creation are **superseded** by this section and must not be extended as the accepted MTS
+workflow.
+
+#### A. One shared model; the only non-current difference is its approval gate
+
+```text
+Pages 1–6: MTS Creation Session (no Process PO, Packing PO, reservation, stock movement, or batch hold)
+        ↓
+Page 6 succeeds: one atomic document-create transaction
+        ↓
+Current Stroke:     Process PO FINAL → common QA Verify & Post
+Non-current Stroke: Process PO STANDARD → QA Approval → Process PO FINAL → common QA Verify & Post
+```
+
+Both policies use the same editable Page 1–6 screens, same in-session data, same Page-6 create
+operation, same linked Packing PO structure, and same QA Verify workspace. Current Stroke simply
+bypasses the QA Approval; non-current inserts that one read-only plan sign-off between Page 6 and
+Verify. Neither policy has Start Batch or a standalone Production Final screen.
+
+`FINAL` here is the status that permits Verify; it never posts stock. Stock posts only on QA's
+successful Verify & Post action.
+
+#### A.1 Non-current QA Approval review drawer
+
+The non-current MTS queue row expands into one read-only, three-page review of the immutable
+Page-6 snapshot. It is not a new document or an editing screen:
+
+1. **Header + Page 4:** Process PO, Prodshade, selected Stroke, machine, batch range/size/total
+   and the formulation/selected RM rows.
+2. **Page 5:** every batch-to-pack row, its batch sub-range, pack code, outer unit per batch,
+   SFG location and linked PMTS Packing PO.
+3. **Page 6 + decision:** each linked PMTS Packing PO and its SFG/PM/SKU lines, followed by the
+   only `Approve — Ready for Verify` and `Reject & Release All` controls.
+
+QA cannot edit the Page-4/5/6 plan here. Approve atomically records the QA decision and changes
+the parent from `STANDARD` to `FINAL`; Reject uses the common pre-posting MTS unwind. MTS has no
+Urgent/Manager branch in this approval drawer.
+
+#### A.2 Closed MTS entry paths and the only correction decisions
+
+All user-facing MTS UI text must be **English**. An MTS document is not editable after the
+Page-6 atomic create: Page 1–6 is the one and only production editing window. The following
+screens must fail clearly through both a UI guard and backend/API guard; hiding a button alone is
+not enough:
+
+| Attempted entry | Required English message / outcome |
+|---|---|
+| MTS Process PO on Production Edit | `MTS Process POs cannot be edited. Reject at QA Approval for a non-current stroke, or reject at Verify once the PO is Verify-ready.` |
+| MTS Process PO on Production Final | `MTS Process POs cannot be finalized here. Open MTS Verify to complete the entire MTS cycle.` |
+| Linked PMTS Packing PO on Production Edit | `This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be edited or cancelled separately. Complete the MTS cycle from the parent Process PO in Verify.` |
+| Linked PMTS Packing PO on Production Final/Correction | `This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be finalized or corrected separately. Complete the MTS cycle from the parent Process PO in Verify.` |
+
+Therefore a PMTS Packing PO must not appear in the standalone Packing-PO Final picker, and a
+manual PO-number lookup must return the same block. The parent MTS Process PO is the **only**
+entry to the MTS Verify workspace and owns the whole Process-and-Packing completion cycle.
+
+There are exactly two pre-posting correction decisions: for a non-current stroke, QA may reject
+at the Approval drawer; after the parent becomes Verify-ready, QA may reject at MTS Verify
+(for both current and non-current strokes). Neither path edits a Process or Packing PO; each uses
+the common atomic unwind, releasing child reservations and the unverified batch claim.
+
+#### B. Page-6 atomic create — all documents or none
+
+When Page 6 has fresh, sufficient RM and PM availability, `Create MTS Documents` runs one database
+transaction. It re-validates every in-session value server-side and then creates together:
+
+1. one MTS `process_order`, covering the entire declared SFG batch range;
+2. its Process-PO component lines and OPEN RM reservations;
+3. one `PMTS packing_order` for each Page-5 row, linked through
+   `packing_order.process_order_id`, with its Packing-PO lines and OPEN PM/SFG reservations;
+4. the durable Page-5 range and Page-6 material-choice snapshots; and
+5. the current/non-current initial Process-PO status stated above.
+
+Any batch collision, RM/PM shortage, alternate/group validation failure, reservation failure, PO
+number failure, or child-Packing-PO failure rolls back the **entire** transaction. No partial
+document, reservation or batch claim remains. Creating documents does not post P261/P101 and does
+not clear reservations.
+
+#### C. Batch numbers — preview first; document claim at Page 6; hard use at successful Verify
+
+Page 3 remains the place where prefix, start number, number of batches, contiguous range and
+duplicate preview are entered. It creates **no durable hold**: if the user backs out or Page 6 is
+short, the range is immediately free because nothing was written. Browser preview is convenience
+only, not a claim.
+
+- Page 6 atomically re-checks the complete range under a database lock together with every document
+  and reservation insert; it never trusts the earlier browser preview. Only a successful Page-6
+  commit creates the documents' temporary batch claim.
+- Successful QA Verify & Post converts that document claim to hard `USED/BLOCKED`
+  production-batch instances. This is the first irreversible use of those numbers.
+- A pre-posting QA rejection releases the document claim automatically. The range becomes available
+  again; no manual Batch Release click is required for MTS.
+- Existing MTO/HPS manual batch-release behavior remains unchanged. Once an MTS Verify & Post has
+  committed, later correction requires the normal controlled reversal path, never an automatic
+  batch release.
+
+If the user cancels a short Page-4/Page-6 creation session, or the Page-6 atomic create fails its
+fresh stock check, there was never a document batch claim to release. The entered range must appear
+as available in the very next MTS creation attempt. No manual release action, hidden timeout or
+stale browser state may keep it unavailable.
+
+##### C.1 Availability display and allocation — reuse the MTO/HPS/MTEST rule
+
+MTS must reuse the established MTO/HPS/MTEST availability rule; it must not introduce a second,
+different availability engine:
+
+```text
+Applicable physical balance
+− every other OPEN/PARTIAL reservation for the same actual material + storage location
+= Net Available
+```
+
+At a later check on a document that already owns a reservation, its own reservation is excluded,
+exactly as the existing MTO/HPS/MTEST Final/Verify checks do. Thus a document cannot block itself,
+while another open document still reduces availability. The auto-derive choice, shortage
+calculation, `Next: Page 5` block, Page-6 create block and final atomic recheck all use **Net
+Available**, never raw physical stock alone.
+
+The only MTS Page-4 variation is the source of the **physical** balance:
+
+- normal machine-tracked input: the selected machine's own machine bucket;
+- cross-machine input: the selected storage location's **Unassigned** machine bucket; and
+- Page-4 non-machine-tracked RM: the ordinary selected-location unrestricted balance.
+
+The reservation deduction, statuses, own-document exclusion, shortage result and concurrency
+behaviour are otherwise the same shared MTO/HPS/MTEST rule. It is not a separate MTS reservation
+model.
+
+Page 6 / Packing has **no machine-wise validation at all**. Its SFG and PM checks use the existing
+Packing-PO material + storage-location availability rule (including ordinary open-reservation
+deduction); neither a machine name nor an Unassigned bucket participates in that check.
+
+The table labels must make the distinction visible — `Physical`, `Reserved`, `Net Available`, then
+`Shortage` — rather than presenting an ambiguous single `Available` value. For Page 4, `Physical`
+must name the relevant machine or `Unassigned` bucket; for Page 6/Packing it means the ordinary
+location-level unrestricted balance.
+
+#### D. One Packing PO per Page-5 row, never one PO per batch
+
+A Page-5 row may intentionally cover a batch sub-range (for example, batches 8–10 with one 40-KG
+pack configuration). That row creates **one** linked PMTS Packing PO. `batch_number_from` and
+`batch_number_to` are manufacturing-trace fields on the header; they do not mean three separate
+Packing POs.
+
+PMTS is batch-blind for inventory and dispatch:
+
+- no standalone PMTS Final, Correction or Verify route; the parent MTS Process PO is the only
+  entry to the common MTS Verify workspace, with no single-SFG-batch picker;
+- SFG availability and reservations use material + storage location, not a selected batch;
+- SFG/PM/SKU stock balances and dispatch stay aggregate; and
+- the header range and the generated per-batch records below retain production genealogy.
+
+This explicitly supersedes the current PMTS single-SFG-batch Final behavior. MTO/HPS/MTEST retain
+their existing batch-specific Packing-PO rules.
+
+#### E. One QA Verify workspace; child Packing POs end at FINAL
+
+QA's MTS Verify screen shows the parent Process PO and every linked PMTS Packing PO together.
+QA reviews/corrects the Process actual RM/output data and the linked Packing PO's actual
+SFG/PM/SKU data in one workspace. There is no Packing-PO `VERIFIED` state.
+
+On **Verify & Post**, one atomic, ordered transaction does all of the following:
+
+1. validates the still-open reservations and fresh physical stock;
+2. posts parent RM issue and SFG output;
+3. posts every linked PMTS Packing PO's SFG/PM issue and SKU output;
+4. clears/fully issues all parent and child reservations;
+5. marks the parent Process PO `VERIFIED` and every linked PMTS Packing PO `FINAL`; and
+6. locks the batch range and writes the per-batch genealogy/allocation rows in the same commit.
+
+This preserves the established Packing-PO semantic — PMTO/PHPS/PMTS stock posts at Packing PO
+`FINAL` — while letting QA perform all MTS Process-and-Packing review at one Verify screen.
+
+#### F. Generated SFG/SKU batch records and allocation
+
+The one parent Process PO and one-per-Page-5-row Packing PO documents do **not** remove batch
+traceability. Verify creates system-owned execution/genealogy records:
+
+- one SFG execution record for every batch in the Process-PO range; and
+- one SKU execution record for every batch assigned to a Page-5 Packing-PO row.
+
+These are records, not separately finalised POs. Inventory and dispatch remain aggregate MTS
+stock; the records retain the individual batch's expected output, actual output, inputs, loss and
+parent/child document references.
+
+RM and PM actual consumption is allocated in ascending declared batch sequence, using each
+batch's own requirement first. This is allocation FIFO for genealogy, not a batch-specific
+dispatch/stock rule.
+
+**Loss allocation is more specific than generic FIFO:**
+
+- if QA enters a lower outer-pack output for a particular batch, its loss belongs to **that same
+  batch**. Example: batches 8, 9 and 10 each expect `90 × 40 = 3,600 KG`; QA records 89 bags for
+  each; each batch receives its own 40-KG loss record.
+- only when every batch's entered pack output meets expectation but aggregate SFG remains unmatched
+  does the residual SFG loss post to the final batch in the ordered range.
+
+The implementation must use the configured/approved loss-posting mechanism; it must not hardcode
+a movement type. The Verify screen must expose batch-level expected versus actual outer-pack
+quantities so the first rule is data-driven, never guessed from one aggregate Packing-PO number.
+
+#### G. QA Reject = atomic unwind before any stock posting
+
+For a non-current stroke, QA can reject at either checkpoint: the initial Approval after Page 6,
+or the final Verify workspace after its approval. A current stroke has the latter checkpoint.
+Before successful Verify & Post, all of these rejections run the same atomic unwind:
+
+1. reverse/void the parent Process PO and every linked PMTS Packing PO while preserving document
+   and rejection audit history;
+2. cancel every still-open parent/child reservation;
+3. release the Process-PO document batch claim/range for immediate reuse; and
+4. leave no stock movement, batch execution record, or partial child document behind.
+
+The UI has no MTS manual batch-release button for this case. A Verify & Post that has already
+committed is different: stock exists, so only the controlled reversal workflow may undo it.
+
+#### H. Page-4 or Page-6 shortage — no resume, no persistence
+
+Page 4 is the first hard stop: if the RM auto-derive/group check is short, `Next: Page 5` is
+blocked. Page 6 is the final hard stop: if its fresh RM/PM preflight is short, `Create MTS
+Documents` is blocked. In either case the user backs out/cancels the temporary creation session,
+arranges the required stock, and starts a **new** MTS Page 1–6 creation.
+
+No Draft Number, Draft Hold, transfer-return action, Pending Drafts worklist, Process PO, Packing
+PO or reservation is created. The new session repeats complete server-side availability,
+allocation and batch-range validation; stale values from the abandoned session are never reused.
+
+#### I. Page 1–6 screen contract after this lock
+
+| Page | User-facing responsibility | Persisted artifact / hard rule |
+|---|---|---|
+| **1 — Company / PO Type / Material** | Start a new MTS creation session and capture Company, `MTS` and Prodshade. | Browser/session state only; no Process PO, draft record or PO number. |
+| **2 — Stroke Gate** | Select and confirm Current or non-current Stroke. Show the non-current confirmation but use the same next screens. | Browser/session state only; no PO, reservation or status transition. |
+| **3 — Header + Batch Range** | Enter Date, Shift, Machine, batch size, start/range, number of batches and derived segment/total. Show duplicate-preview immediately. | Browser/session state only. No Batch Hold is created; Page 6 is the authoritative locked recheck. |
+| **4 — RM auto-derive** | Show the same formulation/alternate algorithm against the selected machine/location. Both Current and non-current strokes use the same locked edit rules. Any group-level RM shortfall hard-blocks `Next: Page 5`. | Browser/session rows only. Do **not** write `process_order_line`, reservations or a draft row. A short session is abandoned and restarted after stock is available. |
+| **5 — Batch to pack-size plan** | Allocate the entered range to pack sizes and F-locations. A row may cover many batches and will later create one PMTS Packing PO. Display expected outer pack and quantity **per batch**, as well as the row total. | Browser/session rows only. A batch may occur in exactly one row; range coverage, pack configuration and total-output validation are repeated at Page 6. |
+| **6 — Combined PM auto-derive + final preflight** | Resolve PM alternatives/locations across all Page-5 rows and run the final fresh RM/PM availability check. | If any item is short, block and abandon/back out — no persistence. If all checks pass, `Create MTS Documents` performs the only atomic real-document create and rechecks fresh RM/PM availability, batch range and every derived allocation. |
+
+Pages 4–6 therefore have ordinary in-session **Back** behavior, but no Draft save/resume behavior.
+None may silently create a production document before the single Page-6 `Create MTS Documents` commit.
+After that commit, the parent/child documents leave the six-page wizard and continue only through
+the Current/non-current approval and common Verify workspace described above.
 
 ### 138.16 — Page 5 & 6: Packing PO Standard (Batch→Pack-Size Planning + PM Auto-Derive) — MTS (✅ DESIGN LOCKED + IMPLEMENTATION CODE-COMPLETE, 2026-09-18)
 

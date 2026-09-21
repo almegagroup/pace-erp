@@ -215,8 +215,19 @@ export const saveMtsMaterialPlan = (id, body) => fetchProd("POST", `/api/product
 // §138.16 (2026-09-18) -- MTS Page 5 batch->pack-size packing plan.
 export const getMtsPackingPlan = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-plan`);
 export const saveMtsPackingPlan = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-packing-plan`, body);
-export const getMtsPackingCombine = (id) => fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-combine`);
+export const getMtsPackingCombine = (id, storageOverrides = null) => {
+  const query = storageOverrides && Object.keys(storageOverrides).length > 0
+    ? `?storage_overrides=${encodeURIComponent(JSON.stringify(storageOverrides))}`
+    : "";
+  return fetchProd("GET", `/api/production/process-orders/${id}/mts-packing-combine${query}`);
+};
 export const saveMtsPackingCombine = (id, body) => fetchProd("POST", `/api/production/process-orders/${id}/mts-packing-combine`, body);
+// MTS Pages 1-6 creation session: preview calls are deliberately stateless;
+// only commit creates Process/Packing POs, reservations and batch claims.
+export const previewMtsCreationMaterialPlan = (body) => fetchProd("POST", "/api/production/mts-creation/material-plan", body);
+export const previewMtsCreationPackingPlan = (body) => fetchProd("POST", "/api/production/mts-creation/packing-plan", body);
+export const previewMtsCreationPackingCombine = (body) => fetchProd("POST", "/api/production/mts-creation/packing-combine", body);
+export const commitMtsCreation = (body) => fetchProd("POST", "/api/production/mts-creation/commit", body);
 
 // —— SFG QA Result Recording ————————————————————————————————————————————————————————
 export const listSfgQaDocuments = (p) => fetchProd("GET", "/api/production/sfg-qa-documents", undefined, p);
