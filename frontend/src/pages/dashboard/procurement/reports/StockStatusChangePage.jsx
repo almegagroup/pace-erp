@@ -207,10 +207,6 @@ export default function StockStatusChangePage() {
         setError(`Line ${index + 1}: material and storage location are required.`);
         return;
       }
-      if (line.isFg && !line.packingPoNumber) {
-        setError(`Line ${index + 1}: Packing PO is required for FG.`);
-        return;
-      }
       if (!line.fromStockType || !line.toStockType) {
         setError(`Line ${index + 1}: pick From and To.`);
         return;
@@ -408,7 +404,7 @@ export default function StockStatusChangePage() {
                           {isFg ? (
                             <input
                               className="min-h-8 w-full border border-slate-300 px-2 py-1 text-xs"
-                              placeholder="Packing PO"
+                              placeholder="Packing PO (blank for MTS SKU)"
                               value={line.packingPoNumber}
                               onChange={(event) => updateLine(line.key, { packingPoNumber: event.target.value })}
                             />
@@ -450,7 +446,7 @@ export default function StockStatusChangePage() {
                         <input
                           type="number"
                           className="min-h-8 w-24 border border-slate-300 px-2 py-1 text-right text-xs"
-                          placeholder={isFg ? "Packs" : "Qty"}
+                          placeholder={isFg ? "Packs / MTS KG" : "Qty"}
                           value={line.quantity}
                           onChange={(event) => updateLine(line.key, { quantity: event.target.value })}
                         />
