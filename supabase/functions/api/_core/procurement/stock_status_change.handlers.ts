@@ -165,6 +165,43 @@ async function getStockTypeBalances(params: {
   return result;
 }
 
+// MTS SKU stock is deliberately aggregate: Verify receives the SKU without a
+// stock batch or Packing PO.  IN13 must therefore accept KG directly for that
+// stock, while retaining the normal FG Packing-PO/bag conversion rule for every
+// other FG line.  Prove the exception from an actual, verified MTS P101 receipt
+// at the selected company/material/location; a blank Packing PO is never a
+// client-side bypass for ordinary FG.
+async function hasVerifiedMtsAggregateSkuStock(params: {
+  companyId: string;
+  materialId: string;
+  storageLocationId: string;
+}): Promise<boolean> {
+  const { data: documents, error: documentError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("stock_document")
+    .select("reference_document_id")
+    .eq("company_id", params.companyId)
+    .eq("material_id", params.materialId)
+    .eq("target_location_id", params.storageLocationId)
+    .eq("movement_type_code", "P101")
+    .eq("reference_document_type", "PROC_PO")
+    .eq("status", "POSTED")
+    .limit(500);
+  if (documentError) throw new Error("SSC_MTS_SOURCE_LOOKUP_FAILED");
+  const processOrderIds = [...new Set((documents ?? []).map((row) => toTrimmedString((row as JsonRecord).reference_document_id)).filter(Boolean))];
+  if (processOrderIds.length === 0) return false;
+  const { data: processOrders, error: processOrderError } = await serviceRoleClient
+    .schema("erp_production")
+    .from("process_order")
+    .select("id")
+    .eq("company_id", params.companyId)
+    .eq("po_type", "MTS")
+    .eq("status", "VERIFIED")
+    .in("id", processOrderIds);
+  if (processOrderError) throw new Error("SSC_MTS_SOURCE_LOOKUP_FAILED");
+  return (processOrders ?? []).length > 0;
+}
+
 // GET /api/procurement/stock-status-change/balance?company_id=&material_id=&storage_location_id=&batch_number=
 export async function getStockStatusChangeBalanceHandler(req: Request, ctx: SscHandlerContext): Promise<Response> {
   try {
@@ -282,11 +319,21 @@ export async function postStockStatusChangeHandler(req: Request, ctx: SscHandler
       }
       const materialType = toUpperTrimmedString(material.material_type);
       const isFg = materialType === "FG";
-      if (isFg && !line.packingPoNumber) {
-        return sscError(req, ctx, "SSC_LINE_PACKING_PO_REQUIRED", 400, `Line ${index + 1}: Packing PO is required for FG.`);
+      const isMtsAggregateSku = isFg && !line.packingPoNumber;
+      if (isMtsAggregateSku) {
+        if (line.batchNumber) {
+          return sscError(req, ctx, "SSC_LINE_MTS_BATCH_NOT_ALLOWED", 400, `Line ${index + 1}: aggregate MTS SKU stock has no batch number.`);
+        }
+        if (!(await hasVerifiedMtsAggregateSkuStock({
+          companyId,
+          materialId: line.materialId,
+          storageLocationId: line.storageLocationId,
+        }))) {
+          return sscError(req, ctx, "SSC_LINE_PACKING_PO_REQUIRED", 400, `Line ${index + 1}: Packing PO is required for FG. Only verified aggregate MTS SKU stock may be posted without one.`);
+        }
       }
       let baseQuantity = line.enteredQuantity;
-      if (isFg) {
+      if (isFg && !isMtsAggregateSku) {
         const packingPo = packingPoMap.get(line.packingPoNumber ?? "");
         const fillQtyPerPack = Number(packingPo?.fill_qty_per_pack ?? 0);
         if (!packingPo || fillQtyPerPack <= 0) {
