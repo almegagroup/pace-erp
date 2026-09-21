@@ -59,6 +59,20 @@ function friendlyQaConfigError(error) {
   return message || "Unable to save QA configuration.";
 }
 
+// MTS Process POs cover a produced batch RANGE, not one batch_number, so
+// row.batch_number is always blank for them -- show the range instead
+// (same shape as ReversalPage.jsx's MTS CORS report).
+function formatBatchDisplay(row) {
+  if (row?.po_type === "MTS") {
+    if (row.batch_number_from && row.batch_number_to) {
+      const count = row.number_of_batches ? ` (${row.number_of_batches})` : "";
+      return `${row.batch_number_from} to ${row.batch_number_to}${count}`;
+    }
+    return "--";
+  }
+  return row?.batch_number || "--";
+}
+
 export default function SfgResultRecordingPage() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
@@ -256,7 +270,7 @@ export default function SfgResultRecordingPage() {
                             className="cursor-pointer border-b border-slate-100 bg-white hover:bg-sky-50"
                           >
                             <td className="px-2 py-1.5 font-mono font-semibold text-sky-700">{row.po_number || "--"}</td>
-                            <td className="px-2 py-1.5 font-mono text-slate-600">{row.batch_number || "--"}</td>
+                            <td className="px-2 py-1.5 font-mono text-slate-600">{formatBatchDisplay(row)}</td>
                             <td className="px-2 py-1.5">{material.material_name || material.pace_code || "--"}</td>
                             <td className="px-2 py-1.5">{material.material_category || "--"}</td>
                             <td className="px-2 py-1.5">{row.stroke_number || "--"}</td>
@@ -758,7 +772,7 @@ function SfgQaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
               <div className="h-8 flex items-center px-1 text-[12px] text-slate-700">{publicStatus || "--"}</div>
             </ErpDenseFormRow>
             <ErpDenseFormRow label="Verified Batch">
-              <div className="h-8 flex items-center px-1 text-[12px] text-slate-700">{row.batch_number || "--"}</div>
+              <div className="h-8 flex items-center px-1 text-[12px] text-slate-700">{formatBatchDisplay(row)}</div>
             </ErpDenseFormRow>
           </div>
 
