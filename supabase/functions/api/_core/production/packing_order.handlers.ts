@@ -1274,7 +1274,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
         status, segment_code, created_by, created_at,
         finalized_at, last_updated_at,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type),
-        process_order:process_order!process_order_id(po_number, batch_number, status)
+        process_order:process_order!process_order_id(po_number, batch_number, batch_number_from, batch_number_to, number_of_batches, status)
       `, { count: "exact" })
       .order("created_at", { ascending: false });
 
@@ -1301,7 +1301,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
       rows.map((row) => String(row.material_id ?? "")),
       "[packing_order.listPackingOrders]",
       "PROD_PACK_LIST_FAILED",
-      "id, pace_code, material_name, shade_code",
+      "id, pace_code, material_name, document_name, shade_code",
     );
 
     // §83.18-REVISED: surface FO-allocation room directly on this list so the Plan

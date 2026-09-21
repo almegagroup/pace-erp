@@ -2453,8 +2453,9 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
   const manualPickMissing = groups.some((g) => !g.auto_derive_applicable
     && !manualPicks[g.stroke_line_id]
     && !g.rows.some((r) => r.is_formulation_line && r.actual_qty > 0));
+  const [deviationModal, setDeviationModal] = useState(null);
 
-  function buildSaveBody() {
+  function buildSaveBody(confirmDeviation) {
     return {
       groups: groups.map((group) => {
         if (group.auto_derive_applicable) {
@@ -2466,6 +2467,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
           return {
             stroke_line_id: group.stroke_line_id,
             rows: override.map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
+            confirmed_deviation: confirmDeviation === true,
           };
         }
         const chosen = manualPicks[group.stroke_line_id];
@@ -2474,41 +2476,52 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
     };
   }
 
-  // A short Page-4 group is a hard stop.  There is no "consider shortfall"
-  // path because no document is yet allowed to exist.
-  function findShortfallGroups() {
+  // §138 deviation-confirm (2026-09-21): a Page-4 group's total departing from
+  // the formula's own Standard Qty -- over OR under -- is a real production
+  // event (alternates substitute at a different ratio, mixing loses/gains
+  // material), not an error. It is never silently accepted: the operator
+  // must explicitly confirm it here before Page 5, mirroring the same gate
+  // enforced server-side in prepareRmLines().
+  function findDeviationGroups() {
     const found = [];
     for (const group of groups) {
       if (!group.auto_derive_applicable || !isEditable) continue;
       const override = overrides[group.stroke_line_id];
       if (!override) continue;
       const total = override.reduce((sum, r) => sum + (Number(r.actual_qty) || 0), 0);
-      if (total < group.standard_qty - EPSILON_FRONTEND) {
+      const deviation = Number((total - group.standard_qty).toFixed(6));
+      if (Math.abs(deviation) > EPSILON_FRONTEND) {
         found.push({
-          label: group.stroke_line_id,
-          materialId: group.stroke_line_material_id,
-          shortQty: Number((group.standard_qty - total).toFixed(6)),
+          strokeLineId: group.stroke_line_id,
+          label: materialLabel(group.stroke_line_material_id),
+          standardQty: group.standard_qty,
+          actualQty: total,
+          deviation,
         });
       }
     }
     return found;
   }
 
-  async function handleSave() {
-    const shortfalls = findShortfallGroups();
-    if (shortfalls.length > 0) {
-      pushToast("Every Page 4 group must meet its Standard Qty before Page 5.", "error");
-      return;
-    }
+  async function doSave(confirmDeviation) {
     setSaving(true);
     try {
-      const body = buildSaveBody();
+      const body = buildSaveBody(confirmDeviation);
       onContinue(body.groups);
     } catch (error) {
       pushToast(error.message || "Save failed.", "error");
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSave() {
+    const deviations = findDeviationGroups();
+    if (deviations.length > 0) {
+      setDeviationModal({ deviations });
+      return;
+    }
+    await doSave(false);
   }
 
   if (planQ.isLoading) {
@@ -2700,6 +2713,54 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
           {saving ? "Checking..." : "Next: Page 5"}
         </button>
       </div>
+
+      <BlockingLayer
+        visible={!!deviationModal}
+        onEscape={() => setDeviationModal(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 480, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-700">RM quantity differs from Standard Qty</p>
+        <p className="text-xs text-slate-500">
+          One or more groups below do not exactly match the formula's Standard Qty. This can be a
+          deliberate alternate-material substitution or a real over/under issue -- confirm to proceed
+          to Page 5, or Cancel to adjust the rows first.
+        </p>
+        <div className="max-h-64 overflow-y-auto rounded border border-slate-200">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                <th className="px-2 py-1 text-left">Material</th>
+                <th className="px-2 py-1 text-right">Standard</th>
+                <th className="px-2 py-1 text-right">Actual</th>
+                <th className="px-2 py-1 text-right">Deviation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(deviationModal?.deviations ?? []).map((d) => (
+                <tr key={d.strokeLineId} className="border-t border-slate-100">
+                  <td className="px-2 py-1">{d.label}</td>
+                  <td className="px-2 py-1 text-right">{formatStockQty(d.standardQty)}</td>
+                  <td className="px-2 py-1 text-right">{formatStockQty(d.actualQty)}</td>
+                  <td className={`px-2 py-1 text-right font-medium ${d.deviation > 0 ? "text-amber-600" : "text-rose-600"}`}>
+                    {d.deviation > 0 ? "+" : ""}{formatStockQty(d.deviation)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex justify-end gap-2 mt-1">
+          <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={() => setDeviationModal(null)}>Cancel</button>
+          <button
+            type="button"
+            className="text-xs bg-sky-600 text-white rounded px-3 py-1"
+            onClick={() => { setDeviationModal(null); doSave(true); }}
+          >
+            Confirm & Continue
+          </button>
+        </div>
+      </BlockingLayer>
     </div>
   );
 }
@@ -3020,6 +3081,7 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
   const qc = useQueryClient();
   const [overrides, setOverrides] = useState({}); // material_id -> { rows: [...], storage_location_id }
   const [saving, setSaving] = useState(false);
+  const [deviationModal, setDeviationModal] = useState(null);
 
   const storageOverrides = useMemo(
     () => Object.fromEntries(Object.entries(overrides)
@@ -3114,42 +3176,45 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
   // backend re-checks the selected location using fresh balances.
   const shortGroups = groups.filter((g) => g.short && storageLocationForGroup(g) === g.storage_location_id);
 
-  function findShortfallGroups() {
+  // §138 deviation-confirm (2026-09-21): same symmetric over/under rule as
+  // Page 4 -- a PM group's total departing from the combined Standard Qty is
+  // a real production event, gated on explicit operator confirmation, never
+  // silently blocked or silently accepted. Mirrors preparePmSelections()'s
+  // server-side gate.
+  function findDeviationGroups() {
     const found = [];
     for (const group of groups) {
       const rows = rowsForGroup(group);
       const total = rows.reduce((sum, r) => sum + (Number(r.actual_qty) || 0), 0);
-      if (total < group.standard_qty - EPSILON_FRONTEND) {
-        found.push({ label: group.material_id, shortQty: Number((group.standard_qty - total).toFixed(6)) });
+      const deviation = Number((total - group.standard_qty).toFixed(6));
+      if (Math.abs(deviation) > EPSILON_FRONTEND) {
+        found.push({
+          materialId: group.material_id,
+          label: materialLabel(group.material_id),
+          standardQty: group.standard_qty,
+          actualQty: total,
+          deviation,
+        });
       }
     }
     return found;
   }
 
-  function buildSaveBody(confirmedLabels) {
+  function buildSaveBody(confirmDeviation) {
     return {
       groups: groups.map((group) => ({
         material_id: group.material_id,
         storage_location_id: storageLocationForGroup(group),
         rows: rowsForGroup(group).map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty })),
-        confirmed_shortfall: confirmedLabels?.has(group.material_id) || undefined,
+        confirmed_deviation: confirmDeviation === true,
       })),
     };
   }
 
-  async function handleSave() {
-    const shortfalls = findShortfallGroups();
-    if (shortfalls.length > 0) {
-      pushToast("Every PM group must meet its Standard Qty before documents can be created.", "error");
-      return;
-    }
-    if (groups.some((g) => !storageLocationForGroup(g))) {
-      pushToast("Select a Storage Location for every PM group before saving.", "error");
-      return;
-    }
+  async function doSave(confirmDeviation) {
     setSaving(true);
     try {
-      const body = buildSaveBody(null);
+      const body = buildSaveBody(confirmDeviation);
       const result = await commitMtsCreation({
         header: session.header,
         material_groups: session.materialGroups,
@@ -3179,6 +3244,19 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSave() {
+    if (groups.some((g) => !storageLocationForGroup(g))) {
+      pushToast("Select a Storage Location for every PM group before saving.", "error");
+      return;
+    }
+    const deviations = findDeviationGroups();
+    if (deviations.length > 0) {
+      setDeviationModal({ deviations });
+      return;
+    }
+    await doSave(false);
   }
 
   if (combineQ.isLoading) {
@@ -3337,6 +3415,53 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
         </button>
       </div>
 
+      <BlockingLayer
+        visible={!!deviationModal}
+        onEscape={() => setDeviationModal(null)}
+        overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+        dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 480, display: "flex", flexDirection: "column", gap: 12 }}
+      >
+        <p className="text-sm font-semibold text-slate-700">PM quantity differs from Standard Qty</p>
+        <p className="text-xs text-slate-500">
+          One or more PM groups below do not exactly match the combined Standard Qty. This can be a
+          deliberate alternate-material substitution or a real over/under issue -- confirm to create
+          the documents, or Cancel to adjust the rows first.
+        </p>
+        <div className="max-h-64 overflow-y-auto rounded border border-slate-200">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr>
+                <th className="px-2 py-1 text-left">Material</th>
+                <th className="px-2 py-1 text-right">Standard</th>
+                <th className="px-2 py-1 text-right">Actual</th>
+                <th className="px-2 py-1 text-right">Deviation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(deviationModal?.deviations ?? []).map((d) => (
+                <tr key={d.materialId} className="border-t border-slate-100">
+                  <td className="px-2 py-1">{d.label}</td>
+                  <td className="px-2 py-1 text-right">{formatStockQty(d.standardQty)}</td>
+                  <td className="px-2 py-1 text-right">{formatStockQty(d.actualQty)}</td>
+                  <td className={`px-2 py-1 text-right font-medium ${d.deviation > 0 ? "text-amber-600" : "text-rose-600"}`}>
+                    {d.deviation > 0 ? "+" : ""}{formatStockQty(d.deviation)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex justify-end gap-2 mt-1">
+          <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={() => setDeviationModal(null)}>Cancel</button>
+          <button
+            type="button"
+            className="text-xs bg-sky-600 text-white rounded px-3 py-1"
+            onClick={() => { setDeviationModal(null); doSave(true); }}
+          >
+            Confirm & Create
+          </button>
+        </div>
+      </BlockingLayer>
     </div>
   );
 }
