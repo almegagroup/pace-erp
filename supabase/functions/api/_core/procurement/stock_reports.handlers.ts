@@ -1189,25 +1189,36 @@ export async function getCurrentStockHandler(
     };
 
     if (pathAMaterialIds.length > 0 && batchNumbers.length === 0 && packingPoNumbers.length === 0) {
-      let snapshotQuery = serviceRoleClient
-        .schema("erp_inventory")
-        .from("stock_snapshot")
-        .select("company_id, material_id, storage_location_id, stock_type_code, quantity, base_uom_code")
-        .in("material_id", pathAMaterialIds)
-        .in("stock_type_code", requestedStockTypes)
-        .eq("company_id", companyId);
-      if (storageLocationIds.length > 0) {
-        snapshotQuery = snapshotQuery.in("storage_location_id", storageLocationIds);
-      }
-      if (!showZero) {
-        snapshotQuery = (snapshotQuery as unknown as { gt: (column: string, value: number) => typeof snapshotQuery })
-          .gt("quantity", 0);
-      }
-      const { data: snapshotRows, error: snapshotError } = await snapshotQuery;
-      if (snapshotError) {
+      // Found live 2026-09-22 (CMP003, "All materials"/"RM+PM+INT+SFG+FG" checked, IN03) --
+      // pathAMaterialIds is every RM/PM/INT material system-wide when no material_id filter is
+      // given (materialQuery above has no company scope either), so this was a plain .in() with
+      // potentially thousands of ids in one GET query string -- the exact §8E cliff already fixed
+      // below for ledgerMaterialIds (SFG/FG), but missed here. Symptom in prod: PostgREST's own
+      // "Warp server error: Thread killed by timeout manager", not a clean 4xx, so it silently
+      // manifested as CURRENT_STOCK_FETCH_FAILED with nothing in postgres_logs to explain why.
+      let typedSnapshotRows: JsonRecord[];
+      try {
+        typedSnapshotRows = await fetchInChunks<JsonRecord>(pathAMaterialIds, (idChunk) => {
+          let snapshotQuery = serviceRoleClient
+            .schema("erp_inventory")
+            .from("stock_snapshot")
+            .select("company_id, material_id, storage_location_id, stock_type_code, quantity, base_uom_code")
+            .in("material_id", idChunk)
+            .in("stock_type_code", requestedStockTypes)
+            .eq("company_id", companyId);
+          if (storageLocationIds.length > 0) {
+            snapshotQuery = snapshotQuery.in("storage_location_id", storageLocationIds);
+          }
+          if (!showZero) {
+            snapshotQuery = (snapshotQuery as unknown as { gt: (column: string, value: number) => typeof snapshotQuery })
+              .gt("quantity", 0);
+          }
+          return snapshotQuery;
+        });
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-      for (const snapshot of (snapshotRows ?? []) as JsonRecord[]) {
+      for (const snapshot of typedSnapshotRows) {
         const materialId = toTrimmedString(snapshot.material_id);
         const material = materialMap.get(materialId);
         if (!material) continue;

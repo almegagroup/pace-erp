@@ -1915,6 +1915,51 @@ async function postDocument(args: {
   return { postings: (Array.isArray(postings) ? postings : []) as Array<{ line_ref: string; stock_document_id: string; stock_ledger_id: string; valuation_rate: number | null }> };
 }
 
+// §138.7/§138.13 — which of this company's storage locations are MTS machine-tracked shop floor
+// locations (any active machine's own storage_location_id, where that machine is either
+// MTS-mapped or carries no po_type restriction at all). Same derivation as
+// location_transfer.handlers.ts's getMtsStorageLocationIds — kept as a local copy here rather
+// than a shared export, matching this file's existing local-postDocument-per-handler-file
+// convention.
+async function getMtsStorageLocationIds(companyId: string): Promise<Set<string>> {
+  const { data: machines, error: machineError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_master")
+    .select("id, storage_location_id")
+    .eq("company_id", companyId)
+    .eq("active", true)
+    .not("storage_location_id", "is", null);
+  if (machineError) throw new Error("PI_MTS_LOCATION_LOOKUP_FAILED");
+  const machineRows = (machines ?? []) as JsonRecord[];
+  const machineIds = machineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+  if (machineIds.length === 0) return new Set();
+
+  const { data: poTypeRows, error: poTypeError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_po_type_map")
+    .select("machine_id, po_type")
+    .in("machine_id", machineIds);
+  if (poTypeError) throw new Error("PI_MTS_LOCATION_LOOKUP_FAILED");
+  const poTypesByMachine = new Map<string, string[]>();
+  for (const row of (poTypeRows ?? []) as JsonRecord[]) {
+    const machineId = toTrimmedString(row.machine_id);
+    const list = poTypesByMachine.get(machineId) ?? [];
+    list.push(toUpperTrimmedString(row.po_type));
+    poTypesByMachine.set(machineId, list);
+  }
+
+  const locationIds = new Set<string>();
+  for (const row of machineRows) {
+    const machineId = toTrimmedString(row.id);
+    const poTypes = poTypesByMachine.get(machineId) ?? [];
+    if (poTypes.length === 0 || poTypes.includes("MTS")) {
+      const locationId = toTrimmedString(row.storage_location_id);
+      if (locationId) locationIds.add(locationId);
+    }
+  }
+  return locationIds;
+}
+
 // §119.10 — live WAR rate at post time (never cached), so PID automatically tracks whatever the
 // WAR/costing engine looks like later (§111 Landed Cost, etc.) without PID's own code changing.
 async function fetchCurrentValuationRates(
@@ -2063,6 +2108,31 @@ export async function postDifferencesHandler(
     // discipline as complete_process_po_verify/§107.8) and handed to complete_pid_post.
     const genealogy = await buildGenealogyAdjustments(companyId, String(document.document_number), batchItems, materialInfo);
 
+    // §138.7 — any variance at an MTS machine-tracked location always corrects the location's
+    // Unassigned bucket (machine_id: null), never a specific machine. PID never attributes a
+    // variance to a machine itself -- if the real cause is machine-specific, the user re-balances
+    // it afterward via IN11's Distribute to Machine (§138.13.1, MANUAL_ALLOT). Same pattern as
+    // Opening Stock (§138.3).
+    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const machineStockLogRows: JsonRecord[] = batchItems
+      .filter((item) => (parseNullableNumber(item.difference_qty) ?? 0) !== 0 && mtsLocationIds.has(toTrimmedString(item.storage_location_id)))
+      .map((item) => {
+        const differenceQty = parseNullableNumber(item.difference_qty) ?? 0;
+        return {
+          company_id: companyId,
+          storage_location_id: toTrimmedString(item.storage_location_id),
+          material_id: toTrimmedString(item.material_id),
+          machine_id: null,
+          batch_number: item.batch_number ?? null,
+          qty: Math.abs(differenceQty),
+          direction: differenceQty > 0 ? "IN" : "OUT",
+          source_type: "PID_ADJUSTMENT",
+          reference_document_type: "PI",
+          reference_document_id: documentId,
+          created_by: ctx.auth_user_id,
+        } as JsonRecord;
+      });
+
     if (movements.length === 0 && genealogy.processOrderRecoRows.length === 0 && genealogy.packingOrderRecoRows.length === 0) {
       // Selected batch was entirely zero-diff and nothing to adjust — still must release those
       // items' blocks and check whether the whole document is now done. post_document requires
@@ -2112,6 +2182,21 @@ export async function postDifferencesHandler(
         packing_order_header_updates: genealogy.packingOrderHeaderUpdates,
       },
     });
+
+    // Only logged once the real stock_ledger posting above has actually succeeded --
+    // machine_stock_log is a side-table (§138.6), not part of post_document's own transaction,
+    // so this is a best-effort follow-up write, not atomic with the posting itself (same pattern
+    // as location_transfer.handlers.ts's postLocationTransfer).
+    if (machineStockLogRows.length > 0) {
+      const { error: machineLogError } = await serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .insert(machineStockLogRows);
+      if (machineLogError) {
+        console.error("[physical_inventory.postDifferences] machine_stock_log insert failed:", JSON.stringify(machineLogError));
+        throw new Error("PI_POST_MACHINE_LOG_FAILED");
+      }
+    }
 
     return okResponse(await hydratePID(documentId), ctx.request_id, req);
   } catch (error) {
