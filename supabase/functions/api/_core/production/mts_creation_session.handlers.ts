@@ -212,8 +212,36 @@ async function fetchCompanyLocations(companyId: string, fOnly = false): Promise<
     .filter((row) => row && !seen.has(String(row.id)) && (seen.add(String(row.id)), true));
 }
 
+// §138.16 (2026-09-22) — "Total Inner Unit" was left a display placeholder ("N/A"/"See Page
+// 6") because no real dataset with `inner_uom_code` set existed to build/verify against at the
+// time. Confirmed against live prod (CMP003): a pack code's inner-unit ratio (e.g. 10 BTL per 1
+// CTN) IS already captured, on the SKU's own ACTIVE Pack BOM, as its `is_primary_container=true`
+// PM line's own `qty` -- no separate conversion factor exists or is needed, this is a direct
+// read, and it varies per SKU (a different pack size can have a different ratio).
+async function resolveInnerUnitsPerOuterUnit(companyId: string, prodshade: JsonRecord, packCode: string): Promise<number | null> {
+  const sku = await resolveSkuMaterial(prodshade, packCode);
+  if (!sku) return null;
+  const { data: bom, error: bomError } = await serviceRoleClient.schema("erp_production").from("pack_bom")
+    .select("id").eq("company_id", companyId).eq("sku_material_id", String(sku.id)).eq("status", "ACTIVE").maybeSingle();
+  if (bomError) throw new Error("PROD_MTS_SESSION_BOM_LOOKUP_FAILED");
+  if (!bom) return null;
+  const { data: line, error: lineError } = await serviceRoleClient.schema("erp_production").from("pack_bom_line")
+    .select("qty").eq("pack_bom_id", String((bom as JsonRecord).id)).eq("is_primary_container", true).maybeSingle();
+  if (lineError) throw new Error("PROD_MTS_SESSION_BOM_LOOKUP_FAILED");
+  const qty = line ? Number((line as JsonRecord).qty ?? 0) : 0;
+  return qty > 0 ? qty : null;
+}
+
 async function buildPackingPlanPreview(session: SessionHeader): Promise<JsonRecord> {
   const [packSizeOptions, locations] = await Promise.all([fetchPackSizeOptions(session.materialId), fetchCompanyLocations(session.companyId, true)]);
+  // §8B INDEPENDENT: each pack option's inner-unit ratio comes from its own, unrelated SKU +
+  // Pack BOM -- resolved in parallel, not one-by-one.
+  const enrichedPackSizeOptions = await Promise.all(packSizeOptions.map(async (option) => {
+    const innerUomCode = toTrimmedString(option.inner_uom_code);
+    if (!innerUomCode) return { ...option, inner_units_per_outer_unit: null };
+    const ratio = await resolveInnerUnitsPerOuterUnit(session.companyId, session.prodshade, toTrimmedString(option.pack_code));
+    return { ...option, inner_units_per_outer_unit: ratio };
+  }));
   // Packing has no machine/shop-floor bucket rule.  A deterministic ordinary
   // F-location order avoids implying that one machine-specific source is
   // preferred for PM availability.
@@ -227,7 +255,7 @@ async function buildPackingPlanPreview(session: SessionHeader): Promise<JsonReco
       batch_number_from: session.batchNumbers[0] ?? null,
       batch_number_to: session.batchNumbers[session.batchNumbers.length - 1] ?? null,
     },
-    pack_size_options: packSizeOptions,
+    pack_size_options: enrichedPackSizeOptions,
     storage_location_options: orderedLocations.map((row) => ({ id: String(row.id), code: String(row.code), name: String(row.name) })),
     batch_numbers: session.batchNumbers,
     rows: [],

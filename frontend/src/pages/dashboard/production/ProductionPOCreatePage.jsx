@@ -2841,8 +2841,14 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
     const outerUnitPerBatch = Number(row.outer_unit_per_batch) || 0;
     const totalOuterUnit = numberOfBatches * outerUnitPerBatch;
     const hasInner = Boolean(pack?.inner_uom_code);
+    // §138.16 (2026-09-22): the SKU's own Pack BOM is_primary_container PM line qty IS the
+    // "inner units per 1 outer unit" ratio (e.g. 10 BTL per 1 CTN) -- backend resolves and
+    // attaches it per pack option as inner_units_per_outer_unit. No BOM/no primary-container
+    // line (or an inner_uom_code-less pack) leaves it null, shown as N/A below.
+    const innerUnitsPerOuterUnit = pack?.inner_units_per_outer_unit != null ? Number(pack.inner_units_per_outer_unit) : null;
+    const totalInnerUnit = hasInner && innerUnitsPerOuterUnit != null ? totalOuterUnit * innerUnitsPerOuterUnit : null;
     const volume = pack ? totalOuterUnit * Number(pack.fill_qty || 0) : 0;
-    return { numberOfBatches, pack, totalOuterUnit, hasInner, volume };
+    return { numberOfBatches, pack, totalOuterUnit, hasInner, innerUnitsPerOuterUnit, totalInnerUnit, volume };
   }
 
   const rowMetrics = effectiveRows.map((r) => computeRowMetrics(r));
@@ -3024,8 +3030,16 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
                       />
                     </td>
                     <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(metrics.totalOuterUnit, "0.###")}</td>
-                    <td className="border-b border-slate-100 px-3 py-2 text-right font-mono text-slate-400">
-                      {metrics.hasInner ? "See Page 6" : "N/A"}
+                    <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">
+                      {!metrics.hasInner ? (
+                        <span className="text-slate-400">N/A</span>
+                      ) : metrics.totalInnerUnit != null ? (
+                        <>
+                          {formatPreciseNumber(metrics.totalInnerUnit, "0.###")} {metrics.pack.inner_uom_code}
+                        </>
+                      ) : (
+                        <span className="text-amber-600" title="No is_primary_container PM line found on this SKU's Pack BOM">--</span>
+                      )}
                     </td>
                     <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(metrics.volume, "0.###")}</td>
                     <td className="border-b border-slate-100 px-3 py-2">
