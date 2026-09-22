@@ -1269,9 +1269,9 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     let query = serviceRoleClient
       .schema("erp_production").from("packing_order")
       .select(`
-        id, company_id, po_number, po_type, source_po_type, process_order_id, material_id,
+        id, company_id, po_number, po_type, source_po_type, process_order_id, material_id, machine_id,
         pack_code_id, fill_qty_per_pack, num_packs, sku_qty, fg_conversion_qty, sfg_conversion_qty, planned_qty_kg, actual_qty_kg,
-        status, segment_code, created_by, created_at,
+        status, segment_code, created_by, created_at, batch_number, batch_number_from, batch_number_to,
         finalized_at, last_updated_at,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type),
         process_order:process_order!process_order_id(po_number, batch_number, batch_number_from, batch_number_to, number_of_batches, status)
@@ -1297,32 +1297,56 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const materialMap = await getMaterialMapByIds(
-      rows.map((row) => String(row.material_id ?? "")),
-      "[packing_order.listPackingOrders]",
-      "PROD_PACK_LIST_FAILED",
-      "id, pace_code, material_name, document_name, shade_code",
-    );
-
-    // §83.18-REVISED: surface FO-allocation room directly on this list so the Plan
-    // Feed "find Packing PO to allocate" flow can show Total/Allocated/Available
-    // before the user commits a qty, instead of only failing at submit time.
     const poIds = rows.map((row) => String(row.id));
-    const allocatedByPo = new Map<string, number>();
-    if (poIds.length > 0) {
-      const { data: allocs, error: allocErr } = await serviceRoleClient
-        .schema("erp_production").from("plan_feed_packing_order_allocation")
-        .select("packing_order_id, allocated_qty_kg")
-        .in("packing_order_id", poIds);
-      if (allocErr) {
-        console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
-        throw new Error("PROD_PACK_LIST_FAILED");
-      }
-      for (const a of (allocs ?? []) as JsonRecord[]) {
-        const key = String(a.packing_order_id);
-        allocatedByPo.set(key, (allocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
-      }
-    }
+    const machineIds = [...new Set(rows.map((row) => String(row.machine_id ?? "")).filter(Boolean))];
+
+    // §8B PERF: INDEPENDENT -- material lookup, machine lookup, and the FO
+    // allocation sum each read only `rows`, never each other's result.
+    const [materialMap, machineById, allocatedByPo] = await Promise.all([
+      getMaterialMapByIds(
+        rows.map((row) => String(row.material_id ?? "")),
+        "[packing_order.listPackingOrders]",
+        "PROD_PACK_LIST_FAILED",
+        "id, pace_code, material_name, document_name, shade_code",
+      ),
+      (async () => {
+        const map = new Map<string, JsonRecord>();
+        if (machineIds.length === 0) return map;
+        const { data: machines, error: machineErr } = await serviceRoleClient
+          .schema("erp_master").from("machine_master")
+          .select("id, machine_code, machine_name")
+          .in("id", machineIds);
+        if (machineErr) {
+          console.error("[packing_order.listPackingOrders] machine query failed:", JSON.stringify(machineErr));
+          throw new Error("PROD_PACK_LIST_FAILED");
+        }
+        for (const machine of (machines ?? []) as JsonRecord[]) {
+          map.set(String(machine.id), machine);
+        }
+        return map;
+      })(),
+      // §83.18-REVISED: surface FO-allocation room directly on this list so the
+      // Plan Feed "find Packing PO to allocate" flow can show Total/Allocated/
+      // Available before the user commits a qty, instead of only failing at
+      // submit time.
+      (async () => {
+        const map = new Map<string, number>();
+        if (poIds.length === 0) return map;
+        const { data: allocs, error: allocErr } = await serviceRoleClient
+          .schema("erp_production").from("plan_feed_packing_order_allocation")
+          .select("packing_order_id, allocated_qty_kg")
+          .in("packing_order_id", poIds);
+        if (allocErr) {
+          console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
+          throw new Error("PROD_PACK_LIST_FAILED");
+        }
+        for (const a of (allocs ?? []) as JsonRecord[]) {
+          const key = String(a.packing_order_id);
+          map.set(key, (map.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
+        }
+        return map;
+      })(),
+    ]);
 
     return okResponse({
       data: rows.map((row) => {
@@ -1331,6 +1355,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
         return {
           ...row,
           material: materialMap.get(String(row.material_id ?? "")) ?? null,
+          machine: machineById.get(String(row.machine_id ?? "")) ?? null,
           fo_allocated_qty_kg: allocatedQty,
           fo_available_qty_kg: Math.max(0, totalQty - allocatedQty),
         };

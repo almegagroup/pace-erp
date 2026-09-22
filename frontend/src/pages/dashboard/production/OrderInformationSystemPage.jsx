@@ -98,6 +98,15 @@ const GRID_COLUMNS = [
   { key: "external_code", label: "External Code", render: (r) => r.external_code || "--" },
   { key: "material_type", label: "Item Type", width: "80px", render: (r) => r.material_type || "--" },
   { key: "stroke_number", label: "Stroke", width: "80px", render: (r) => (r.stroke_number == null ? "--" : String(r.stroke_number)) },
+  // Common across every po_type (MTO/HPS/MTS/INT all require a Machine), not
+  // MTS-specific -- resolved from the owning Process PO's own machine_id.
+  {
+    key: "machine",
+    label: "Machine",
+    width: "140px",
+    render: (r) => [r.machine_code, r.machine_name].filter(Boolean).join(" - ") || "--",
+    copyValue: (r) => [r.machine_code, r.machine_name].filter(Boolean).join(" - "),
+  },
   { key: "movement_type_code", label: "Movement", width: "80px" },
   {
     key: "direction",
