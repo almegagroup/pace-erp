@@ -1319,6 +1319,10 @@ export function getStockLedgerReport(params) {
   return fetchProcurement("GET", "/api/procurement/stock-ledger", undefined, params);
 }
 
+export function getStockLedgerMachineWise(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-ledger/machine-wise", undefined, params);
+}
+
 export function listStockLedgerMovementTypes() {
   return fetchProcurement("GET", "/api/procurement/stock-ledger/movement-types");
 }
@@ -1355,6 +1359,10 @@ export function getCurrentStock(params) {
   return fetchProcurement("GET", "/api/procurement/current-stock", undefined, params);
 }
 
+export function getCurrentStockMachineWise(params) {
+  return fetchProcurement("GET", "/api/procurement/current-stock/machine-wise", undefined, params);
+}
+
 export function searchCurrentStockBatchNumbers(params) {
   return fetchProcurement("GET", "/api/procurement/current-stock/batch-search", undefined, params);
 }
@@ -1369,6 +1377,10 @@ export function getStockValuation(params) {
 
 export function getStockHistory(params) {
   return fetchProcurement("GET", "/api/procurement/stock-history", undefined, params);
+}
+
+export function getStockHistoryMachineWise(params) {
+  return fetchProcurement("GET", "/api/procurement/stock-history/machine-wise", undefined, params);
 }
 
 export function listReservations(params) {

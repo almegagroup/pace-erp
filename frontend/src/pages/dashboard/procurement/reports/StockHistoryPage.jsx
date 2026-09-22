@@ -10,7 +10,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -25,7 +27,8 @@ import {
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
-import { getStockHistory } from "../procurementApi.js";
+import { listMachines } from "../../om/omApi.js";
+import { getStockHistory, getStockHistoryMachineWise } from "../procurementApi.js";
 
 const MATERIAL_TYPE_OPTIONS = ["RM", "PM", "INT", "SFG", "FG"].map((value) => ({ value, label: value }));
 
@@ -98,6 +101,160 @@ function dateRangeInvalid(dateFrom, dateTo) {
   return to.getTime() < from.getTime();
 }
 
+// §138.8 — IN14 "Machine wise stock" drawer bucket set. machine_stock_log has
+// no movement_type_code, only source_type (its own CHECK constraint values) --
+// this is a genuinely different, smaller bucket set than the main report's
+// BUCKET_LABELS above, not a subset of it.
+const MACHINE_BUCKET_LABELS = {
+  TRANSFER: "Transfer (to Unassigned)",
+  CONSUMPTION: "Consumption",
+  PID_ADJUSTMENT: "PID Adjustment",
+  MANUAL_ALLOT: "Manual Allot",
+};
+
+// §138.8 — "Machine wise stock" drawer (business owner, 2026-09-22, full
+// depth: real per-machine Opening -> bucket columns -> Closing). Re-runs the
+// exact same filter criteria the main Stock History report was last executed
+// with, against machine_stock_log instead of get_stock_history(). Own state,
+// own grid, own export; the main report's rows are never touched. Only
+// rendered when the company actually has MTS machines mapped (see
+// hasMtsQuery in the parent component).
+function MachineWiseStockHistoryDrawer({ visible, onClose, params }) {
+  const query = useQuery({
+    queryKey: ["stock-history-machine-wise", params],
+    queryFn: () => getStockHistoryMachineWise(params),
+    enabled: visible && Boolean(params),
+  });
+  const rows = Array.isArray(query.data?.data) ? query.data.data : [];
+  const visibleBuckets = useMemo(
+    () => (Array.isArray(query.data?.visible_buckets) ? query.data.visible_buckets : []),
+    [query.data],
+  );
+  const [exporting, setExporting] = useState(false);
+
+  const columns = useMemo(() => [
+    {
+      key: "material",
+      label: "Material",
+      width: "260px",
+    },
+    { key: "external_code", label: "External Code", width: "150px", render: (row) => row.external_code || "—" },
+    { key: "material_type", label: "Type", width: "80px" },
+    { key: "base_uom_code", label: "UOM", width: "80px" },
+    { key: "storage_location", label: "SLoc", width: "90px" },
+    { key: "machine_label", label: "Machine", width: "150px" },
+    {
+      key: "opening",
+      label: "Opening",
+      width: "110px",
+      align: "right",
+      render: (row) => formatBalanceQuantity(row.opening),
+      copyValue: (row) => formatBalanceQuantity(row.opening),
+      excelValue: (row) => Number(row.opening ?? 0),
+      numFmt: "0.000",
+    },
+    ...visibleBuckets.map((bucketCode) => ({
+      key: `bucket_${bucketCode}`,
+      label: MACHINE_BUCKET_LABELS[bucketCode] || bucketCode,
+      width: "150px",
+      align: "right",
+      render: (row) => {
+        const { text, className } = formatSignedQuantity(row.buckets?.[bucketCode]);
+        return <span className={className}>{text}</span>;
+      },
+      copyValue: (row) => formatSignedQuantity(row.buckets?.[bucketCode]).text,
+      excelColor: (row) => {
+        const { fontArgb } = formatSignedQuantity(row.buckets?.[bucketCode]);
+        return fontArgb ? { fontArgb } : null;
+      },
+      excelValue: (row) => Number(row.buckets?.[bucketCode] ?? 0),
+      numFmt: "0.000;-0.000",
+    })),
+    {
+      key: "closing",
+      label: "Closing",
+      width: "110px",
+      align: "right",
+      render: (row) => formatBalanceQuantity(row.closing),
+      copyValue: (row) => formatBalanceQuantity(row.closing),
+      excelValue: (row) => Number(row.closing ?? 0),
+      numFmt: "0.000",
+    },
+  ], [visibleBuckets]);
+
+  async function handleExport() {
+    if (rows.length === 0) return;
+    setExporting(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `stock_history_machine_wise_${params?.date_from || "from"}_${params?.date_to || "to"}.xlsx`,
+        sheetName: "Machine Wise Stock History",
+        columns,
+        rows,
+        getCellValue: (row, column) =>
+          typeof column.excelValue === "function" ? column.excelValue(row)
+            : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+        getCellColor: (row, column) =>
+          typeof column.excelColor === "function" ? column.excelColor(row) : null,
+        getRowFillArgb: (row) => (row.is_total ? TOTAL_ROW_FILL_ARGB : null),
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <DrawerBase
+      visible={visible}
+      onClose={onClose}
+      onEscape={onClose}
+      side="center"
+      width="min(1240px, calc(100vw - 24px))"
+      title="Machine Wise Stock History"
+      actions={(
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 border border-slate-300 bg-white px-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExport()}
+            disabled={exporting || rows.length === 0}
+            className="h-8 border border-sky-700 bg-sky-100 px-4 text-xs font-semibold uppercase tracking-[0.12em] text-sky-950 disabled:opacity-50"
+          >
+            {exporting ? "Exporting..." : "Export Excel"}
+          </button>
+        </>
+      )}
+    >
+      <p className="mb-3 text-xs text-slate-500">
+        Same filters as the report just executed — company, material types, materials, storage locations, and date range.
+      </p>
+      {query.isLoading ? (
+        <p className="py-6 text-center text-sm text-slate-500">Loading...</p>
+      ) : query.error ? (
+        <p className="py-6 text-center text-sm text-rose-600">{query.error instanceof Error ? query.error.message : "Failed to load machine-wise stock history."}</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-slate-400">No machine-tracked history for this filter.</p>
+      ) : (
+        <ErpDenseGrid
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => row.row_key}
+          virtualize
+          rangeSelect
+          getRowProps={(row) => (row.is_total ? { className: "bg-amber-100 font-semibold border-t-2 border-amber-300" } : {})}
+        />
+      )}
+    </DrawerBase>
+  );
+}
+
 export default function StockHistoryPage() {
   const { runtimeContext } = useMenu();
   // Law 12 (single company shown read-only / locked, multi-company = pick
@@ -146,6 +303,19 @@ export default function StockHistoryPage() {
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [submittedParams, setSubmittedParams] = useState(null);
+  const [machineWiseOpen, setMachineWiseOpen] = useState(false);
+
+  // §138.8 -- "Machine wise stock" button only shows for a company that
+  // actually has MTS machines mapped, same visibility check already
+  // established for IN11's "Distribute to Machine" button (§138.13).
+  const hasMtsQuery = useQuery({
+    queryKey: ["stock-history-has-mts", effectiveCompanyId],
+    queryFn: () => listMachines({ po_type: "MTS", company_id: effectiveCompanyId, active: true }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const hasMts = (hasMtsQuery.data ?? []).length > 0;
 
   const baseColumnDefinitions = useMemo(
     () => [
@@ -241,17 +411,21 @@ export default function StockHistoryPage() {
     }
     setLoading(true);
     setSearched(true);
+    // Captured once here so the "Machine wise stock" drawer (§138.8) re-runs
+    // the EXACT same criteria this search was executed with.
+    const params = {
+      company_ids: companyId,
+      material_types: joinValues(materialTypeValues) || undefined,
+      material_ids: joinValues(materialValues) || undefined,
+      storage_location_ids: joinValues(slocValues) || undefined,
+      date_from: dateFrom,
+      date_to: dateTo,
+    };
     try {
-      const response = await getStockHistory({
-        company_ids: companyId,
-        material_types: joinValues(materialTypeValues) || undefined,
-        material_ids: joinValues(materialValues) || undefined,
-        storage_location_ids: joinValues(slocValues) || undefined,
-        date_from: dateFrom,
-        date_to: dateTo,
-      });
+      const response = await getStockHistory(params);
       setRows(Array.isArray(response?.data) ? response.data : []);
       setVisibleBuckets(Array.isArray(response?.visible_buckets) ? response.visible_buckets : []);
+      setSubmittedParams(params);
       setPage(2);
     } catch (searchError) {
       setRows([]);
@@ -343,6 +517,13 @@ export default function StockHistoryPage() {
                 onClick: () => void handleExportExcel(),
                 disabled: exporting || rows.length === 0,
               },
+              // §138.8 -- hidden entirely (not just disabled) for a company
+              // with no MTS machines mapped, per business owner's own words.
+              ...(hasMts ? [{
+                key: "machine-wise",
+                label: "Machine Wise Stock",
+                onClick: () => setMachineWiseOpen(true),
+              }] : []),
               {
                 key: "search",
                 label: loading ? "Executing..." : "Execute Again",
@@ -489,6 +670,12 @@ export default function StockHistoryPage() {
         }
         onResetColumns={() => setHiddenColumns([])}
         onClose={() => setColumnsOpen(false)}
+      />
+
+      <MachineWiseStockHistoryDrawer
+        visible={machineWiseOpen}
+        onClose={() => setMachineWiseOpen(false)}
+        params={submittedParams}
       />
     </ErpScreenScaffold>
   );

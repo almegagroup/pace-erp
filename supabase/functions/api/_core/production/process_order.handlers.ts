@@ -4699,6 +4699,22 @@ async function runMtsProcessOrderVerify(
     if (machineError) throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
     machineStorageLocationId = toTrimmedString((machineData as JsonRecord | null)?.storage_location_id) || null;
   }
+  // §138.4: an exception ("Select all MTS machines") consumption must log as an
+  // Unassigned-bucket OUT, not a real machine-bucket OUT -- Page 4's own
+  // availability check (buildMtsMaterialPlanGroupsForOrder/saveMtsMaterialPlanHandler)
+  // already reads it that way (isForeignMachine/useUnassignedBucket -> machine_id
+  // filter null), but this Verify-time writer previously tagged every RM line with
+  // po.machine_id regardless, which would falsely deplete that machine's real bucket
+  // at a location it was never actually allotted stock in. Recompute the same
+  // foreign-machine check here from the stroke's own declared location.
+  let isForeignMachineConsumption = false;
+  if (machineStorageLocationId) {
+    const { data: strokeRow, error: strokeErr } = await serviceRoleClient.schema("erp_production").from("stroke_master")
+      .select("default_storage_location_id").eq("id", String(po.stroke_master_id)).maybeSingle();
+    if (strokeErr) throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
+    const strokeShopFloorLocationId = toTrimmedString((strokeRow as JsonRecord | null)?.default_storage_location_id) || null;
+    isForeignMachineConsumption = Boolean(strokeShopFloorLocationId && machineStorageLocationId !== strokeShopFloorLocationId);
+  }
   const addReservationUpdate = (lineId: string, actualQty: number) => {
     const reservation = reservationMap.get(lineId);
     if (!reservation || !RESERVATION_OPEN_STATUSES.includes(String(reservation.status))) return;
@@ -4715,7 +4731,7 @@ async function runMtsProcessOrderVerify(
     movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: actualQty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, lineRef));
     processLinePostings.push({ process_order_line_id: String(line.id), line_ref: lineRef });
     addReservationUpdate(String(line.id), actualQty);
-    if (machineStorageLocationId && machineStorageLocationId === slocId) machineStockLogRows.push({ company_id: po.company_id, storage_location_id: slocId, material_id: materialId, machine_id: po.machine_id, batch_number: null, qty: actualQty, direction: "OUT", source_type: "CONSUMPTION", reference_document_type: "PROCESS_PO", reference_document_id: id, created_by: ctx.auth_user_id });
+    if (machineStorageLocationId && machineStorageLocationId === slocId) machineStockLogRows.push({ company_id: po.company_id, storage_location_id: slocId, material_id: materialId, machine_id: isForeignMachineConsumption ? null : po.machine_id, batch_number: null, qty: actualQty, direction: "OUT", source_type: "CONSUMPTION", reference_document_type: "PROCESS_PO", reference_document_id: id, created_by: ctx.auth_user_id });
   }
   for (const line of packingLines) {
     const lineType = String(line.line_type);
