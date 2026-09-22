@@ -4436,6 +4436,28 @@ function mtsQty(value: unknown): number {
   return Number.isFinite(quantity) ? Number(quantity.toFixed(6)) : 0;
 }
 
+// §138 (2026-09-22, business owner): MTS Verify's RM/PM consumption must post one
+// stock_ledger movement PER BATCH (its own batch_number), not one blended lump sum --
+// stock_snapshot stays blended either way (matches MTO/HPS never splitting the snapshot
+// by batch, §8D), only the ledger gains per-batch genealogy. Splits `totalQty`
+// proportionally by each key's `weight` (a batch's own declared output share); the last
+// weighted entry absorbs the rounding remainder so the split always sums back to exactly
+// `totalQty`, never drifting from what was actually confirmed/entered.
+function splitProportional(totalQty: number, weights: Array<{ key: string; weight: number }>): Array<{ key: string; qty: number }> {
+  const positiveWeights = weights.filter((w) => w.weight > EPSILON);
+  if (totalQty <= EPSILON || positiveWeights.length === 0) return [];
+  const totalWeight = positiveWeights.reduce((sum, w) => sum + w.weight, 0);
+  const result: Array<{ key: string; qty: number }> = [];
+  let allocated = 0;
+  positiveWeights.forEach((w, idx) => {
+    const isLast = idx === positiveWeights.length - 1;
+    const qty = isLast ? mtsQty(totalQty - allocated) : mtsQty(totalQty * (w.weight / totalWeight));
+    if (!isLast) allocated = mtsQty(allocated + qty);
+    if (qty > EPSILON) result.push({ key: w.key, qty });
+  });
+  return result;
+}
+
 async function computeMtsVerifyAvailabilityRows(
   companyId: string,
   needed: Map<string, AvailabilityNeed>,
@@ -4685,6 +4707,17 @@ async function runMtsProcessOrderVerify(
   const rateMap = await fetchUnrestrictedRates(String(po.company_id), Array.from(needs.values()).map((item) => ({ materialId: item.materialId, slocId: item.storageLocationId })));
   const conversionRate = await resolveConversionRate(String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today);
   if (conversionRate === null) return poErr(req, ctx, "PROD_PO_CONVERSION_RATE_MISSING", 422, "Conversion cost rate is not configured for this segment/prodshade as of the posting date.");
+
+  // §138 (2026-09-22): batch-ordered yields, used to distribute RM (whole Process PO
+  // range, weighted by every batch's own declared output) and PM (its own Packing PO's
+  // batches only) actual consumption per batch at posting time -- see splitProportional.
+  const orderedYields = [...yields].sort((a, b) => mtsBatchSort(String(a.batch_number), String(b.batch_number)));
+  const yieldsByPackingOrderSorted = new Map<string, JsonRecord[]>();
+  for (const [orderId, orderYields] of yieldsByPackingOrder) {
+    yieldsByPackingOrderSorted.set(orderId, [...orderYields].sort((a, b) => mtsBatchSort(String(a.batch_number), String(b.batch_number))));
+  }
+  const rmBatchWeights = orderedYields.map((y) => ({ key: String(y.batch_number), weight: mtsQty(y.declared_actual_qty) }));
+
   const movements: MovementSpec[] = [];
   const reservationUpdates: JsonRecord[] = [];
   const machineStockLogRows: JsonRecord[] = [];
@@ -4727,42 +4760,92 @@ async function runMtsProcessOrderVerify(
     const slocId = toTrimmedString(line.issue_sloc_id);
     const rate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
     totalInputValue += actualQty * rate;
-    const lineRef = `MTS_RM:${String(line.id)}`;
-    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: actualQty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, lineRef));
-    processLinePostings.push({ process_order_line_id: String(line.id), line_ref: lineRef });
+    // §138 (2026-09-22): one P261 per batch, its own batch_number, proportional to that
+    // batch's own share of the whole Process PO's declared output -- was previously one
+    // blended lump-sum posting with batch_number: null. process_order_line only has one
+    // stock_ledger_id column, so only the first batch's posting is registered as the
+    // line's idempotency/reversal reference (safe: all batches share the same rate above,
+    // computed once per material+location, not per batch).
+    const perBatch = splitProportional(actualQty, rmBatchWeights);
+    const lineRefs: string[] = [];
+    for (const { key: batchNumber, qty } of perBatch) {
+      const lineRef = `MTS_RM:${String(line.id)}:${batchNumber}`;
+      lineRefs.push(lineRef);
+      movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: qty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, lineRef));
+    }
+    processLinePostings.push({ process_order_line_id: String(line.id), line_ref: lineRefs[0] ?? null });
     addReservationUpdate(String(line.id), actualQty);
     if (machineStorageLocationId && machineStorageLocationId === slocId) machineStockLogRows.push({ company_id: po.company_id, storage_location_id: slocId, material_id: materialId, machine_id: isForeignMachineConsumption ? null : po.machine_id, batch_number: null, qty: actualQty, direction: "OUT", source_type: "CONSUMPTION", reference_document_type: "PROCESS_PO", reference_document_id: id, created_by: ctx.auth_user_id });
   }
   for (const line of packingLines) {
     const lineType = String(line.line_type);
-    const actualQty = lineType === "PM" ? (pmActualQtyByLine.get(String(line.id)) ?? 0) : lineType === "FG" ? (packingActualQtyById.get(String(line.packing_order_id)) ?? 0) : 0;
-    const lineRef = lineType === "PM" ? `MTS_PM:${String(line.id)}` : lineType === "FG" ? `MTS_SKU:${String(line.id)}` : "";
-    packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: lineRef || null, actual_qty: actualQty });
-    if (lineType !== "PM" || actualQty <= EPSILON) continue;
+    if (lineType === "FG") continue; // handled in its own per-batch loop below
+    const actualQty = lineType === "PM" ? (pmActualQtyByLine.get(String(line.id)) ?? 0) : 0;
+    if (lineType !== "PM") {
+      packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: null, actual_qty: actualQty });
+      continue;
+    }
+    if (actualQty <= EPSILON) {
+      packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: null, actual_qty: actualQty });
+      continue;
+    }
     const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
     const slocId = toTrimmedString(line.issue_sloc_id);
     const rate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
     totalInputValue += actualQty * rate;
-    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: actualQty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, lineRef));
+    // §138 (2026-09-22): one P261 per batch WITHIN this line's own Packing PO (a Page-5
+    // row/Packing PO may cover only a sub-range of the Process PO's batches), proportional
+    // to each batch's own declared output share -- same rationale as the RM loop above.
+    const orderYields = yieldsByPackingOrderSorted.get(String(line.packing_order_id)) ?? [];
+    const pmBatchWeights = orderYields.map((y) => ({ key: String(y.batch_number), weight: mtsQty(y.declared_actual_qty) }));
+    const perBatch = splitProportional(actualQty, pmBatchWeights);
+    const lineRefs: string[] = [];
+    for (const { key: batchNumber, qty } of perBatch) {
+      const lineRef = `MTS_PM:${String(line.id)}:${batchNumber}`;
+      lineRefs.push(lineRef);
+      movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: qty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, lineRef));
+    }
+    packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: lineRefs[0] ?? null, actual_qty: actualQty });
     addReservationUpdate(String(line.id), actualQty);
   }
   const skuUnitValue = declaredTotal > EPSILON ? (totalInputValue / declaredTotal) + Number(conversionRate) : Number(conversionRate);
+  // §138 (2026-09-22): one P101 per batch (per yield row), its own batch_number, instead
+  // of one blended lump-sum per Packing PO -- FG/SKU already has exact per-batch qty via
+  // `yields`, no proportional split needed here, just post each batch's own declared_actual_qty.
   for (const order of packingOrders) {
-    const outputQty = packingActualQtyById.get(String(order.id)) ?? 0;
-    if (outputQty <= EPSILON) continue;
-    const fgLine = (linesByPackingOrder.get(String(order.id)) ?? []).find((line) => String(line.line_type) === "FG");
+    const orderId = String(order.id);
+    const orderYields = yieldsByPackingOrderSorted.get(orderId) ?? [];
+    const fgLine = (linesByPackingOrder.get(orderId) ?? []).find((line) => String(line.line_type) === "FG");
+    if (orderYields.length === 0) {
+      if (fgLine) packingLineUpdates.push({ packing_order_line_id: String(fgLine.id), line_ref: null, actual_qty: 0 });
+      continue;
+    }
     const outputSlocId = toTrimmedString(fgLine?.issue_sloc_id);
     if (!outputSlocId) return poErr(req, ctx, "PROD_MTS_SKU_SLOC_MISSING", 422, "A linked MTS SKU Packing PO has no output storage location.");
     const skuMaterialId = String(order.material_id);
-    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P101", companyId: po.company_id, storageLocationId: outputSlocId, materialId: skuMaterialId, quantity: outputQty, baseUomCode: String((materialMap.get(skuMaterialId) ?? {}).base_uom_code ?? "KG"), unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, `MTS_SKU:${String(fgLine?.id ?? order.id)}`));
+    const lineRefs: string[] = [];
+    for (const yieldRow of orderYields) {
+      const outputQty = mtsQty(yieldRow.declared_actual_qty);
+      if (outputQty <= EPSILON) continue;
+      const batchNumber = String(yieldRow.batch_number);
+      const lineRef = `MTS_SKU:${String(fgLine?.id ?? order.id)}:${batchNumber}`;
+      lineRefs.push(lineRef);
+      movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P101", companyId: po.company_id, storageLocationId: outputSlocId, materialId: skuMaterialId, quantity: outputQty, baseUomCode: String((materialMap.get(skuMaterialId) ?? {}).base_uom_code ?? "KG"), unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, lineRef));
+    }
+    if (fgLine) packingLineUpdates.push({ packing_order_line_id: String(fgLine.id), line_ref: lineRefs[0] ?? null, actual_qty: packingActualQtyById.get(orderId) ?? 0 });
   }
+  // §138 (2026-09-22): grouping key now includes batch_number, so a QA hold posting stays
+  // tied to the specific batch it was held from -- holdAllocations is already per-batch
+  // (built off each yield row above), this just stops merging different batches' holds
+  // into one blended posting the way the pre-2026-09-22 grouping did.
   const statusPostingGroups = new Map<string, JsonRecord>();
   for (const allocation of holdAllocations) {
     const order = packingOrders.find((item) => String(item.id) === String(allocation.packing_order_id));
     const fgLine = (linesByPackingOrder.get(String(allocation.packing_order_id)) ?? []).find((line) => String(line.line_type) === "FG");
     const storageLocationId = toTrimmedString(fgLine?.issue_sloc_id);
-    const key = `${allocation.sku_material_id}|${storageLocationId}|${allocation.target_stock_type}`;
-    const group = statusPostingGroups.get(key) ?? { material_id: allocation.sku_material_id, storage_location_id: storageLocationId, target_stock_type: allocation.target_stock_type, quantity: 0, uom_code: "KG", packing_order_id: order?.id ?? null };
+    const batchNumber = String(allocation.batch_number);
+    const key = `${allocation.sku_material_id}|${storageLocationId}|${allocation.target_stock_type}|${batchNumber}`;
+    const group = statusPostingGroups.get(key) ?? { material_id: allocation.sku_material_id, storage_location_id: storageLocationId, target_stock_type: allocation.target_stock_type, batch_number: batchNumber, quantity: 0, uom_code: "KG", packing_order_id: order?.id ?? null };
     group.quantity = mtsQty(Number(group.quantity) + Number(allocation.qty_kg));
     statusPostingGroups.set(key, group);
   }
@@ -4772,8 +4855,9 @@ async function runMtsProcessOrderVerify(
     const movementTypeCode = group.target_stock_type === "QUALITY_INSPECTION" ? "P322" : "P344";
     const outRef = `MTS_HOLD_OUT:${statusIndex}`;
     const inRef = `MTS_HOLD_IN:${statusIndex}`;
-    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, outRef));
-    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: group.target_stock_type, direction: "IN", postedBy: ctx.auth_user_id, batchNumber: null, matDoc, referenceDocumentId: id }, inRef));
+    const batchNumber = String(group.batch_number);
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, outRef));
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: group.target_stock_type, direction: "IN", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, inRef));
     statusPostings.push({ ...group, movement_type_code: movementTypeCode, out_ref: outRef, in_ref: inRef });
     statusIndex += 1;
   }
