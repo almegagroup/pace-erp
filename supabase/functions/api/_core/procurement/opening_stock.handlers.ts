@@ -1582,6 +1582,14 @@ export async function postOpeningStockDocumentHandler(
     // becomes the reference. Generated once, shared by every line's ledger item.
     const matDoc = await generateMaterialDocNumber(String(document.company_id));
 
+    // §138 (2026-09-22, business owner): MTS is the one po_type whose stock_ledger stays
+    // batch-blind everywhere EXCEPT Process PO Verify (the only place batch declarations
+    // are precise enough to be worth posting) -- Opening Stock, PID and any other posting
+    // source must never tag a batch_number for MTS. `line.batch_number` itself is still
+    // captured/stored on opening_stock_line (genealogy/reference only, unaffected by this),
+    // just never forwarded to the actual ledger posting when the document is MTS.
+    const isMtsOpeningDocument = toUpperTrimmedString(document.po_type) === "MTS";
+
     // DEPENDENT: each line posts opening stock and writes back its posting reference, so stock ledger order must remain stable.
     for (const line of lines) {
       if (line.posted_stock_document_id) {
@@ -1606,7 +1614,7 @@ export async function postOpeningStockDocumentHandler(
           p_direction: "IN",
           p_posted_by: ctx.auth_user_id,
           p_reversal_of_id: null,
-          p_batch_number: toTrimmedString(line.batch_number) || null,
+          p_batch_number: isMtsOpeningDocument ? null : (toTrimmedString(line.batch_number) || null),
           p_material_doc_number: matDoc.docNumber,
           p_material_doc_year: matDoc.docYear,
           p_reference_document_number: document.document_number,
