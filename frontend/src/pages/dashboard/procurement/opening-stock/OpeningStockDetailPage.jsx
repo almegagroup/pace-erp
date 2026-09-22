@@ -50,7 +50,7 @@ const CURRENCY_LOCALE_MAP = Object.freeze({
   INR: "en-IN",
   USD: "en-US",
 });
-const BATCH_NUMBER_HELP_TEXT = "MTO/HPS SFG must select a PR22 batch. MTO/HPS FG must select a PR23 packing order; batch is derived automatically. MTS/MTEST can still type batch manually.";
+const BATCH_NUMBER_HELP_TEXT = "MTO/HPS SFG must select a PR22 batch. MTO/HPS FG must select a PR23 packing order; batch is derived automatically. MTEST can still type batch manually. MTS never asks for a batch number or Packing PO -- its opening stock stays blended, quantity + UOM only.";
 
 function createEmptySingleForm() {
   return {
@@ -1188,7 +1188,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                           ) : null}
                         </div>
                       </ErpDenseFormRow>
-                      {!isSfgGenealogy && !isFgGenealogy && (selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG") ? (
+                      {!isSfgGenealogy && !isFgGenealogy && documentPoType !== "MTS" && (selectedEditMaterial?.material_type === "SFG" || selectedEditMaterial?.material_type === "FG") ? (
                         <ErpDenseFormRow label="Batch Number">
                           <input
                             type="text"
@@ -1370,7 +1370,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                 ) : null}
                               </div>
                             </ErpDenseFormRow>
-                          ) : (selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG") ? (
+                          ) : documentPoType !== "MTS" && (selectedSingleMaterial?.material_type === "SFG" || selectedSingleMaterial?.material_type === "FG") ? (
                             <ErpDenseFormRow label="Batch Number">
                               <input
                                 type="text"
@@ -1602,7 +1602,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                                                 </div>
                                               ) : null}
                                             </div>
-                                          ) : material?.material_type === "SFG" || material?.material_type === "FG" ? (
+                                          ) : documentPoType !== "MTS" && (material?.material_type === "SFG" || material?.material_type === "FG") ? (
                                             <input
                                               type="text"
                                               value={row.batch_number}
