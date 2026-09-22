@@ -1,42 +1,12 @@
-/*
- * MTS creation-session redesign (2026-09-20).
- *
- * Page 1-6 is browser-only until this one function commits.  This function
- * owns every durable write: the parent Process PO, Page-4 RM lines and
- * reservations, one PMTS Packing PO per Page-5 row, child lines/reservations,
- * Page-4/5/6 snapshots, and the temporary MTS batch claim.  There is no
- * exception handler intentionally: PostgreSQL rolls back the whole function
- * if any validation or insert fails.
- */
-
-ALTER TABLE erp_production.batch_number_instance
-  DROP CONSTRAINT IF EXISTS batch_number_instance_status_check;
-
-ALTER TABLE erp_production.batch_number_instance
-  ADD CONSTRAINT batch_number_instance_status_check
-  CHECK (status = ANY (ARRAY['ACTIVE', 'VOIDED', 'RELEASED', 'CLAIMED', 'USED']));
-
-COMMENT ON COLUMN erp_production.batch_number_instance.status IS
-'ACTIVE is the established MTO/HPS/MTEST in-process status. CLAIMED is an MTS Page-6-created, pre-post document claim; USED is an MTS batch made irreversible by successful Verify & Post. RELEASED/VOIDED are reusable historical entries.';
-
-CREATE TABLE IF NOT EXISTS erp_production.mts_creation_snapshot (
-  process_order_id uuid PRIMARY KEY
-    REFERENCES erp_production.process_order(id) ON DELETE CASCADE,
-  page4_material_plan jsonb NOT NULL,
-  page5_packing_plan jsonb NOT NULL,
-  page6_pm_plan jsonb NOT NULL,
-  created_by uuid NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  last_updated_by uuid NULL,
-  last_updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-GRANT ALL ON erp_production.mts_creation_snapshot TO service_role;
-
--- This is deliberately the final statement in this migration. Supabase CLI
--- v2.75.0 mis-parses an atomic function identifier when another top-level
--- statement follows it; privileges and later helper objects follow in
--- dedicated forward migrations.
+-- §138 (2026-09-21): Page 4/6 shortfall/excess-confirm mechanism records a
+-- signed variance_qty on RM lines already (process_order_line.variance_qty,
+-- already read by this function). PM lines (packing_order_line) have the
+-- same column (added 2026-07-21, §83.4.1 addendum) but this atomic function
+-- never wrote to it. Adds that one column to the existing INSERT -- no other
+-- behavior changes.
+--
+-- This is deliberately the final statement in this migration (same CLI
+-- parsing workaround as the original 20260920125457 migration).
 CREATE OR REPLACE FUNCTION erp_production."create_mts_documents_atomic"(
   p_request jsonb
 )
@@ -321,7 +291,7 @@ BEGIN
       INSERT INTO erp_production.packing_order_line (
         packing_order_id, line_type, material_id, actual_material_id, batch_number,
         qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code,
-        movement_type_code, has_alternate, material_group_id, display_order
+        movement_type_code, has_alternate, material_group_id, display_order, variance_qty
       ) VALUES (
         v_packing_order_id, v_line->>'line_type', (v_line->>'material_id')::uuid,
         NULLIF(v_line->>'actual_material_id', '')::uuid, NULL,
@@ -330,7 +300,7 @@ BEGIN
         COALESCE(NULLIF(v_line->>'uom_code', ''), 'KG'),
         COALESCE(NULLIF(v_line->>'movement_type_code', ''), CASE WHEN v_line->>'line_type' = 'FG' THEN 'P101' ELSE 'P261' END),
         COALESCE((v_line->>'has_alternate')::boolean, false), NULLIF(v_line->>'material_group_id', '')::uuid,
-        COALESCE((v_line->>'display_order')::integer, 0)
+        COALESCE((v_line->>'display_order')::integer, 0), NULLIF(v_line->>'variance_qty', '')::numeric
       ) RETURNING id INTO v_line_id;
 
       IF v_line->>'line_type' <> 'FG' AND COALESCE((v_line->>'total_qty')::numeric, 0) > 0 THEN

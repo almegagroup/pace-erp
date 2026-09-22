@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -22,9 +23,11 @@ import { MASTER_PICKER_FETCH_LIMIT, useStorageLocationOptionsQuery, useMaterialO
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import { listMachines } from "../../om/omApi.js";
 import {
   createReportLayout,
   deleteReportLayout,
+  getStockLedgerMachineWise,
   getStockLedgerReport,
   listReportLayouts,
   listStockLedgerMovementTypes,
@@ -136,6 +139,106 @@ function dateRangeInvalid(dateFrom, dateTo) {
   return to.getTime() < from.getTime();
 }
 
+function formatDateTimeLocal(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+const MACHINE_WISE_COLUMNS = [
+  { key: "created_at", label: "Date/Time", width: "160px", render: (row) => formatDateTimeLocal(row.created_at) },
+  {
+    key: "material",
+    label: "Material",
+    width: "260px",
+    render: (row) => [row.pace_code, row.document_name || row.material_name].filter(Boolean).join(" — ") || "—",
+  },
+  { key: "external_code", label: "External Code", width: "150px", render: (row) => row.external_code || "—" },
+  { key: "storage_location_code", label: "SLoc", width: "90px", render: (row) => row.storage_location_code || "—" },
+  { key: "machine_label", label: "Machine", width: "150px" },
+  { key: "batch_number", label: "Batch Number", width: "150px", render: (row) => row.batch_number || "—" },
+  { key: "qty", label: "Qty", width: "110px", align: "right", render: (row) => formatQuantity(row.qty) },
+  { key: "base_uom_code", label: "UOM", width: "80px", render: (row) => row.base_uom_code || "—" },
+  { key: "direction", label: "Dir", width: "60px" },
+  { key: "source_type", label: "Source Type", width: "120px" },
+  {
+    key: "reference_document_type",
+    label: "Reference",
+    width: "170px",
+    render: (row) => [row.reference_document_type, row.reference_document_number].filter(Boolean).join(" — ") || "—",
+  },
+  { key: "created_by_display", label: "Posted By", width: "180px", render: (row) => row.created_by_display || "—" },
+];
+
+// §138.8 — "Machine wise stock" drawer (business owner, 2026-09-22). Re-runs
+// the exact same filter criteria the main Stock Ledger report was last
+// executed with, against the machine-attributed ledger (machine_stock_log)
+// instead of stock_ledger -- own state, own grid, own export; the main
+// report's rows are never touched. Only rendered when the company actually
+// has MTS machines mapped (see hasMtsQuery in the parent component) --
+// companies without MTS never see the button at all.
+function MachineWiseStockDrawer({ visible, onClose, params }) {
+  const query = useQuery({
+    queryKey: ["stock-ledger-machine-wise", params],
+    queryFn: () => getStockLedgerMachineWise(params),
+    enabled: visible && Boolean(params),
+    select: (result) => (Array.isArray(result?.data) ? result.data : []),
+  });
+  const rows = query.data ?? [];
+
+  function handleExport() {
+    if (rows.length === 0) return;
+    downloadCsvFile({
+      fileName: `stock_ledger_machine_wise_${params?.date_from || "from"}_${params?.date_to || "to"}.csv`,
+      columns: MACHINE_WISE_COLUMNS.map((column) => ({ key: column.key, label: column.label })),
+      rows,
+    });
+  }
+
+  return (
+    <DrawerBase
+      visible={visible}
+      onClose={onClose}
+      onEscape={onClose}
+      side="center"
+      width="min(1180px, calc(100vw - 24px))"
+      title="Machine Wise Stock"
+      actions={(
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 border border-slate-300 bg-white px-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={rows.length === 0}
+            className="h-8 border border-sky-700 bg-sky-100 px-4 text-xs font-semibold uppercase tracking-[0.12em] text-sky-950 disabled:opacity-50"
+          >
+            Export Excel
+          </button>
+        </>
+      )}
+    >
+      <p className="mb-3 text-xs text-slate-500">
+        Same filters as the report just executed — company, materials, storage locations, batch numbers, and date range.
+      </p>
+      {query.isLoading ? (
+        <p className="py-6 text-center text-sm text-slate-500">Loading...</p>
+      ) : query.error ? (
+        <p className="py-6 text-center text-sm text-rose-600">{query.error instanceof Error ? query.error.message : "Failed to load machine-wise stock."}</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-slate-400">No machine-tracked movements for this filter.</p>
+      ) : (
+        <ErpDenseGrid columns={MACHINE_WISE_COLUMNS} rows={rows} rowKey={(row) => row.id} virtualize />
+      )}
+    </DrawerBase>
+  );
+}
+
 export default function StockLedgerReportPage() {
   const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
@@ -173,6 +276,16 @@ export default function StockLedgerReportPage() {
     { enabled: Boolean(effectiveCompanyId) },
   );
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
+  // §138.8 -- "Machine wise stock" button only shows for a company that
+  // actually has MTS machines mapped, same company-level visibility check
+  // already established for IN11's "Distribute to Machine" button (§138.13).
+  const hasMtsQuery = useQuery({
+    queryKey: ["stock-ledger-has-mts", effectiveCompanyId],
+    queryFn: () => listMachines({ po_type: "MTS", company_id: effectiveCompanyId, active: true }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const hasMts = (hasMtsQuery.data ?? []).length > 0;
   const movementTypesQuery = useQuery({
     queryKey: ["procurement-stock-ledger-movement-types"],
     queryFn: () => listStockLedgerMovementTypes(),
@@ -245,6 +358,7 @@ export default function StockLedgerReportPage() {
   // like Process PO's step pages or SAP MB52/ZMB51's Execute -> report screen
   // — never both visible at once.
   const [page, setPage] = useState(1);
+  const [machineWiseOpen, setMachineWiseOpen] = useState(false);
 
   const columnDefinitions = useMemo(
     () => [
@@ -513,6 +627,13 @@ export default function StockLedgerReportPage() {
                 onClick: handleExport,
                 disabled: filteredRows.length === 0,
               },
+              // §138.8 -- hidden entirely (not just disabled) for a company
+              // with no MTS machines mapped, per business owner's own words.
+              ...(hasMts ? [{
+                key: "machine-wise",
+                label: "Machine Wise Stock",
+                onClick: () => setMachineWiseOpen(true),
+              }] : []),
               {
                 key: "search",
                 label: reportQuery.isFetching ? "Searching..." : "Search Again",
@@ -706,6 +827,12 @@ export default function StockLedgerReportPage() {
           setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
         }}
         onClose={() => setColumnsOpen(false)}
+      />
+
+      <MachineWiseStockDrawer
+        visible={machineWiseOpen}
+        onClose={() => setMachineWiseOpen(false)}
+        params={submittedFilters}
       />
     </ErpScreenScaffold>
   );

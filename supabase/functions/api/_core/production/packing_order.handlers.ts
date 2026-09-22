@@ -1269,12 +1269,12 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     let query = serviceRoleClient
       .schema("erp_production").from("packing_order")
       .select(`
-        id, company_id, po_number, po_type, source_po_type, process_order_id, material_id,
+        id, company_id, po_number, po_type, source_po_type, process_order_id, material_id, machine_id,
         pack_code_id, fill_qty_per_pack, num_packs, sku_qty, fg_conversion_qty, sfg_conversion_qty, planned_qty_kg, actual_qty_kg,
-        status, segment_code, created_by, created_at,
+        status, segment_code, created_by, created_at, batch_number, batch_number_from, batch_number_to,
         finalized_at, last_updated_at,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type),
-        process_order:process_order!process_order_id(po_number, batch_number, status)
+        process_order:process_order!process_order_id(po_number, batch_number, batch_number_from, batch_number_to, number_of_batches, status)
       `, { count: "exact" })
       .order("created_at", { ascending: false });
 
@@ -1297,32 +1297,56 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const materialMap = await getMaterialMapByIds(
-      rows.map((row) => String(row.material_id ?? "")),
-      "[packing_order.listPackingOrders]",
-      "PROD_PACK_LIST_FAILED",
-      "id, pace_code, material_name, shade_code",
-    );
-
-    // §83.18-REVISED: surface FO-allocation room directly on this list so the Plan
-    // Feed "find Packing PO to allocate" flow can show Total/Allocated/Available
-    // before the user commits a qty, instead of only failing at submit time.
     const poIds = rows.map((row) => String(row.id));
-    const allocatedByPo = new Map<string, number>();
-    if (poIds.length > 0) {
-      const { data: allocs, error: allocErr } = await serviceRoleClient
-        .schema("erp_production").from("plan_feed_packing_order_allocation")
-        .select("packing_order_id, allocated_qty_kg")
-        .in("packing_order_id", poIds);
-      if (allocErr) {
-        console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
-        throw new Error("PROD_PACK_LIST_FAILED");
-      }
-      for (const a of (allocs ?? []) as JsonRecord[]) {
-        const key = String(a.packing_order_id);
-        allocatedByPo.set(key, (allocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
-      }
-    }
+    const machineIds = [...new Set(rows.map((row) => String(row.machine_id ?? "")).filter(Boolean))];
+
+    // §8B PERF: INDEPENDENT -- material lookup, machine lookup, and the FO
+    // allocation sum each read only `rows`, never each other's result.
+    const [materialMap, machineById, allocatedByPo] = await Promise.all([
+      getMaterialMapByIds(
+        rows.map((row) => String(row.material_id ?? "")),
+        "[packing_order.listPackingOrders]",
+        "PROD_PACK_LIST_FAILED",
+        "id, pace_code, material_name, document_name, shade_code",
+      ),
+      (async () => {
+        const map = new Map<string, JsonRecord>();
+        if (machineIds.length === 0) return map;
+        const { data: machines, error: machineErr } = await serviceRoleClient
+          .schema("erp_master").from("machine_master")
+          .select("id, machine_code, machine_name")
+          .in("id", machineIds);
+        if (machineErr) {
+          console.error("[packing_order.listPackingOrders] machine query failed:", JSON.stringify(machineErr));
+          throw new Error("PROD_PACK_LIST_FAILED");
+        }
+        for (const machine of (machines ?? []) as JsonRecord[]) {
+          map.set(String(machine.id), machine);
+        }
+        return map;
+      })(),
+      // §83.18-REVISED: surface FO-allocation room directly on this list so the
+      // Plan Feed "find Packing PO to allocate" flow can show Total/Allocated/
+      // Available before the user commits a qty, instead of only failing at
+      // submit time.
+      (async () => {
+        const map = new Map<string, number>();
+        if (poIds.length === 0) return map;
+        const { data: allocs, error: allocErr } = await serviceRoleClient
+          .schema("erp_production").from("plan_feed_packing_order_allocation")
+          .select("packing_order_id, allocated_qty_kg")
+          .in("packing_order_id", poIds);
+        if (allocErr) {
+          console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
+          throw new Error("PROD_PACK_LIST_FAILED");
+        }
+        for (const a of (allocs ?? []) as JsonRecord[]) {
+          const key = String(a.packing_order_id);
+          map.set(key, (map.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
+        }
+        return map;
+      })(),
+    ]);
 
     return okResponse({
       data: rows.map((row) => {
@@ -1331,6 +1355,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
         return {
           ...row,
           material: materialMap.get(String(row.material_id ?? "")) ?? null,
+          machine: machineById.get(String(row.machine_id ?? "")) ?? null,
           fo_allocated_qty_kg: allocatedQty,
           fo_available_qty_kg: Math.max(0, totalQty - allocatedQty),
         };
@@ -2341,22 +2366,6 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     }
 
     const poData = po as JsonRecord;
-    // §136 (2026-09-04) — inherits the parent Process PO's own urgent_posting_date
-    // exactly (never recomputed independently here) -- the two steps can happen
-    // on different real days, so only the value actually stored on the source
-    // Process PO is authoritative. NORMAL-priority (or no linked Process PO,
-    // e.g. an MTS/MTEST-sourced batch) falls back to today, unchanged.
-    let today = todayIso();
-    if (toTrimmedString(poData.process_order_id)) {
-      const { data: sourceProcessOrder } = await serviceRoleClient
-        .schema("erp_production").from("process_order")
-        .select("priority, urgent_posting_date").eq("id", poData.process_order_id).maybeSingle();
-      const sourcePriority = (sourceProcessOrder as JsonRecord | null)?.priority;
-      const sourceUrgentDate = toTrimmedString((sourceProcessOrder as JsonRecord | null)?.urgent_posting_date);
-      if (sourcePriority === "URGENT" && sourceUrgentDate) {
-        today = sourceUrgentDate;
-      }
-    }
     const docNumber = poData.po_number as string;
 
     const { data: segConfig } = await serviceRoleClient
@@ -2458,6 +2467,32 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
       poData.process_order_id = selectedSfgBatch.process_order_id;
       poData.machine_id = toTrimmedString(selectedSfgBatch.machine?.id) || null;
     }
+
+    // §136 (2026-09-04) — inherits the parent Process PO's own urgent_posting_date
+    // exactly (never recomputed independently here) -- the two steps can happen
+    // on different real days, so only the value actually stored on the source
+    // Process PO is authoritative. NORMAL-priority (or no linked Process PO,
+    // e.g. an MTS/MTEST-sourced batch) falls back to today, unchanged.
+    //
+    // Found live 2026-09-17: this block used to run BEFORE the SFG-batch-driven
+    // poData.process_order_id reassignment above, so it always read the row's
+    // pre-Final process_order_id (frequently still unset at that point -- the
+    // real source Process PO is only resolved once the SFG batch is picked,
+    // right here at Final) and silently fell back to today's real date every
+    // time, even for a genuinely URGENT source batch. Must run AFTER the
+    // reassignment so it reads the actual, final process_order_id.
+    let today = todayIso();
+    if (toTrimmedString(poData.process_order_id)) {
+      const { data: sourceProcessOrder } = await serviceRoleClient
+        .schema("erp_production").from("process_order")
+        .select("priority, urgent_posting_date").eq("id", poData.process_order_id).maybeSingle();
+      const sourcePriority = (sourceProcessOrder as JsonRecord | null)?.priority;
+      const sourceUrgentDate = toTrimmedString((sourceProcessOrder as JsonRecord | null)?.urgent_posting_date);
+      if (sourcePriority === "URGENT" && sourceUrgentDate) {
+        today = sourceUrgentDate;
+      }
+    }
+
     const materialMap = await getMaterialMapByIds(
       lineRows.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
       "[packing_order.finalizePackingOrder]",

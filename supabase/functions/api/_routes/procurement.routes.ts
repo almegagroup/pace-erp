@@ -87,7 +87,10 @@ import {
 } from "../_core/procurement/report_layout.handlers.ts";
 import {
   getCurrentStockHandler,
+  getCurrentStockMachineWiseHandler,
   getStockHistoryHandler,
+  getStockHistoryMachineWiseHandler,
+  getStockLedgerMachineWiseHandler,
   getStockLedgerReportHandler,
   listReservationsHandler,
   listStockLedgerMovementTypesHandler,
@@ -625,6 +628,8 @@ export async function dispatchProcurementRoutes(
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":
       return await getStockLedgerReportHandler(req, ctx);
+    case "GET:/api/procurement/stock-ledger/machine-wise":
+      return await getStockLedgerMachineWiseHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger/movement-types":
       return await listStockLedgerMovementTypesHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger/batch-search":
@@ -641,6 +646,8 @@ export async function dispatchProcurementRoutes(
       return await searchCurrentStockPackingPoNumbersHandler(req, ctx);
     case "GET:/api/procurement/current-stock":
       return await getCurrentStockHandler(req, ctx);
+    case "GET:/api/procurement/current-stock/machine-wise":
+      return await getCurrentStockMachineWiseHandler(req, ctx);
     case "GET:/api/procurement/dispatch-report":
       return await getDispatchReportHandler(req, ctx);
     case "GET:/api/procurement/batch-costing-report":
@@ -651,6 +658,8 @@ export async function dispatchProcurementRoutes(
       return await listManualCostingRowsHandler(req, ctx);
     case "GET:/api/procurement/stock-history":
       return await getStockHistoryHandler(req, ctx);
+    case "GET:/api/procurement/stock-history/machine-wise":
+      return await getStockHistoryMachineWiseHandler(req, ctx);
     case "GET:/api/procurement/stock-valuation":
       return await getStockValuationHandler(req, ctx);
     case "GET:/api/procurement/reservations":

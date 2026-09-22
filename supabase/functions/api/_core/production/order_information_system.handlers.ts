@@ -134,14 +134,14 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         if (processOrderIds.length > 0) {
           const { data: parents, error: parentErr } = await serviceRoleClient
             .schema("erp_production").from("process_order")
-            .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id")
+            .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id, machine_id")
             .in("id", processOrderIds);
           if (parentErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
           processOrders = (parents ?? []) as JsonRecord[];
         }
       } else {
         let pq = serviceRoleClient.schema("erp_production").from("process_order")
-          .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id")
+          .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id, machine_id")
           .eq("po_number", poNumber);
         if (companyIds) pq = pq.in("company_id", companyIds);
         const { data, error } = await pq;
@@ -182,7 +182,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       if (processOrderIds.length > 0) {
         const { data: parents, error: parentErr } = await serviceRoleClient
           .schema("erp_production").from("process_order")
-          .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id")
+          .select("id, company_id, po_number, po_type, batch_number, status, stroke_master_id, machine_id")
           .in("id", processOrderIds);
         if (parentErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
         processOrders = (parents ?? []) as JsonRecord[];
@@ -436,6 +436,21 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       : [];
     const strokeNumberById = new Map(strokeRows.map((r) => [String(r.id), r.stroke_number]));
 
+    // Machine column (business owner, 2026-09-22) -- every Process PO type that
+    // requires a machine (MTO/HPS/MTS/INT) carries machine_id directly on
+    // process_order, so this is a plain bulk resolve, no join to machine_stock_log
+    // needed (that side-table is only for MTS shop-floor sub-bucket attribution,
+    // §138.6 -- a completely different concern from "which machine ran this PO").
+    // Common across every po_type, not MTS-specific.
+    const machineIds = [...new Set(processOrders.map((o) => toTrimmedString(o.machine_id)).filter(Boolean))];
+    const machineRows = machineIds.length > 0
+      ? await fetchInChunks<JsonRecord>(machineIds, (idChunk) =>
+          serviceRoleClient.schema("erp_master").from("machine_master")
+            .select("id, machine_code, machine_name").in("id", idChunk))
+          .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
+      : [];
+    const machineById = new Map(machineRows.map((r) => [String(r.id), r]));
+
     const processOrderById = new Map(processOrders.map((o) => [String(o.id), o]));
     const processOrderByBatch = new Map(
       processOrders.filter((o) => toTrimmedString(o.batch_number)).map((o) => [toTrimmedString(o.batch_number), o]),
@@ -497,6 +512,8 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         pace_code: material?.pace_code ?? null,
         material_type: material?.material_type ?? null,
         stroke_number: owningOrder ? strokeNumberById.get(toTrimmedString(owningOrder.stroke_master_id)) ?? null : null,
+        machine_code: owningOrder ? (machineById.get(toTrimmedString(owningOrder.machine_id))?.machine_code ?? null) : null,
+        machine_name: owningOrder ? (machineById.get(toTrimmedString(owningOrder.machine_id))?.machine_name ?? null) : null,
         movement_type_code: row.movement_type_code,
         direction: row.direction,
         // Signed: negative for OUT, positive for IN (posted_quantity is a GENERATED column
