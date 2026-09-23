@@ -1004,19 +1004,23 @@ function computeRowValues(row) {
   const planned = Number(row.planned_qty || 0);
   const actual = Number(row.actual_qty || 0);
   const autoYes = Math.abs(actual - planned) < 0.0001;
-  const approved = autoYes ? "YES" : (row.approved_status || "YES");
+  // §104.7 two-layer model (business owner ask, 2026-09-23): Actual matching
+  // Standard is no longer a hard lock to YES -- the user can still choose
+  // NO/PARTIAL on such a line to bill AP less than what was physically
+  // produced. autoYes is kept only as the default when the user hasn't
+  // touched this line's Approved dropdown yet (row.approved_status is still
+  // its initial "YES").
+  const approved = row.approved_status || "YES";
   let apApproved = actual;
   let variance = 0;
-  if (!autoYes) {
-    if (approved === "NO") {
-      apApproved = planned;
-      variance = actual - planned;
-    } else if (approved === "PARTIAL") {
-      apApproved = Number(row.ap_approved_qty || 0);
-      variance = actual - apApproved;
-    } else {
-      apApproved = actual;
-    }
+  if (approved === "NO") {
+    apApproved = planned;
+    variance = actual - planned;
+  } else if (approved === "PARTIAL") {
+    apApproved = Number(row.ap_approved_qty || 0);
+    variance = actual - apApproved;
+  } else {
+    apApproved = actual;
   }
   return { planned, actual, autoYes, approved, apApproved, variance };
 }
@@ -1249,8 +1253,8 @@ function ProcessPoFinalTab() {
           actual_material_id: row.actual_material_id || undefined,
           storage_location_id: row.issue_sloc_id || undefined,
           actual_qty: values.actual,
-          approved_status: values.autoYes ? undefined : row.approved_status,
-          ap_approved_qty: values.autoYes ? undefined : (row.approved_status === "PARTIAL" ? Number(row.ap_approved_qty || 0) : undefined),
+          approved_status: row.approved_status || undefined,
+          ap_approved_qty: row.approved_status === "PARTIAL" ? Number(row.ap_approved_qty || 0) : undefined,
           is_rm: true,
         };
       });
@@ -1471,21 +1475,17 @@ function ProcessPoFinalTab() {
                             </td>
                             {!hideRmApproval && (
                               <td className="px-3 py-2">
-                                {values.autoYes && row.id ? (
-                                  <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">* YES</span>
-                                ) : (
-                                  <ErpComboboxField
-                                    value={row.approved_status}
-                                    onChange={(value) => updateRow(row.key, { approved_status: value })}
-                                    options={["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }))}
-                                    hideBlank
-                                  />
-                                )}
+                                <ErpComboboxField
+                                  value={row.approved_status}
+                                  onChange={(value) => updateRow(row.key, { approved_status: value })}
+                                  options={["YES", "NO", "PARTIAL"].map((value) => ({ value, label: value }))}
+                                  hideBlank
+                                />
                               </td>
                             )}
                             {!hideRmApproval && (
                               <td className="px-3 py-2 text-right">
-                                {row.approved_status === "PARTIAL" && !values.autoYes ? (
+                                {row.approved_status === "PARTIAL" ? (
                                   <input
                                     type="number"
                                     min="0"

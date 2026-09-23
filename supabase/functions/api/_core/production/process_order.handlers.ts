@@ -964,7 +964,17 @@ function computeApprovalValues(
   actualQty: number,
   bodyLine: JsonRecord,
 ): { approved_status: string; ap_approved_qty: number; variance_qty: number } | Response {
-  if (qtysEffectivelyMatch(plannedQty, actualQty)) {
+  const approvedStatusRaw = toUpperTrimmedString(bodyLine.approved_status);
+
+  // Business owner ask (2026-09-23): a line whose Actual happens to equal
+  // Standard is no longer force-approved to YES -- the caller may still
+  // explicitly choose NO/PARTIAL to bill AP less than what was physically
+  // produced, decoupling the AP Reco layer from the physical-variance layer
+  // (§104.7's two-layer Stock vs AP Reco model). Only auto-approve to YES
+  // when the caller sends no explicit override at all -- this keeps the
+  // original convenience (no decision needed for a line nobody touched)
+  // without silently discarding an explicit PARTIAL/NO on a matching line.
+  if (!approvedStatusRaw && qtysEffectivelyMatch(plannedQty, actualQty)) {
     return {
       approved_status: "YES",
       ap_approved_qty: actualQty,
@@ -972,7 +982,7 @@ function computeApprovalValues(
     };
   }
 
-  const approvedStatus = toUpperTrimmedString(bodyLine.approved_status);
+  const approvedStatus = approvedStatusRaw;
   if (!approvedStatus || !["YES", "NO", "PARTIAL"].includes(approvedStatus)) {
     return poErr(req, ctx, "PROD_PO_APPROVED_STATUS_REQUIRED", 400, "approved_status required when Actual differs from Standard");
   }

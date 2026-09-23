@@ -157,7 +157,7 @@ export async function listPlanFeedHandler(req: Request, ctx: ProdHandlerContext)
     let query = serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select(`
-        id, company_id, fo_number, party_id, customer_address_id, party_name, sku, material_id,
+        id, company_id, fo_number, order_serial_number, party_id, customer_address_id, party_name, sku, material_id,
         description, ordered_qty_kg, pack_qty, order_date,
         scheduled_delivery_date, status, ordered_stroke_number, cancelled_at,
         created_by, created_at, last_updated_at
@@ -577,6 +577,7 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
 
     const companyId = toTrimmedString(body.company_id);
     const foNumber = toTrimmedString(body.fo_number);
+    const orderSerialNumber = toTrimmedString(body.order_serial_number) || null;
     const partyId = toTrimmedString(body.party_id) || null;
     const customerAddressId = toTrimmedString(body.customer_address_id) || null;
     const partyName = toTrimmedString(body.party_name);
@@ -617,6 +618,7 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
         company_id: companyId,
         fo_number: foNumber,
         original_fo_number: foNumber,
+        order_serial_number: orderSerialNumber,
         party_id: partyId,
         customer_address_id: customerAddressId,
         party_name: partyName,
@@ -804,6 +806,9 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     }
     if (body.ordered_stroke_number !== undefined) {
       updates.ordered_stroke_number = toTrimmedString(body.ordered_stroke_number) || null;
+    }
+    if (body.order_serial_number !== undefined) {
+      updates.order_serial_number = toTrimmedString(body.order_serial_number) || null;
     }
     if (body.order_confirmation_date !== undefined) {
       const orderConfirmationDate = toTrimmedString(body.order_confirmation_date);
@@ -1514,7 +1519,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     let foQuery = serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select(`
-        id, company_id, fo_number, original_fo_number, party_id, party_name, sku, description, material_id,
+        id, company_id, fo_number, original_fo_number, order_serial_number, party_id, party_name, sku, description, material_id,
         ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
         ordered_stroke_number, order_confirmation_date, formula_confirmation_date
       `)
@@ -1812,6 +1817,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       }
       return {
         id: foId,
+        order_serial_number: fo.order_serial_number,
         fo_number: fo.fo_number,
         original_fo_number: fo.original_fo_number,
         order_confirmation_date: fo.order_confirmation_date,
