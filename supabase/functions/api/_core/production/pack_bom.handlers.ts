@@ -236,6 +236,60 @@ async function getCompanyFStorageLocations(companyId: string): Promise<JsonRecor
     .filter((location) => toTrimmedString(location.code).startsWith("F"));
 }
 
+// Business owner rule (2026-09-23): a Fixed Pack BOM's PM lines default to the
+// packing-location counterpart of the SFG line's own shop-floor location —
+// S00X -> P00X, same digits (e.g. SFG at S001 "Putty Shop Floor" -> PM lines
+// default to P001 "Putty Packing Location"). Verified against every existing
+// CMP003/CMP006 Fixed BOM: 260/260 PM lines' SFG location matched this pattern,
+// zero exceptions. Returns null (never guesses) when the SFG code doesn't match
+// S\d+, or no active P-code location exists for this company — caller leaves
+// storage_location_id unset in that case; this is a default, never a hard block.
+async function derivePmStorageLocationId(companyId: string, sfgStorageLocationId: string): Promise<string | null> {
+  const trimmedSfgId = toTrimmedString(sfgStorageLocationId);
+  if (!trimmedSfgId) return null;
+  const { data: sfgLocation, error: sfgLocationError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("code")
+    .eq("id", trimmedSfgId)
+    .maybeSingle();
+  if (sfgLocationError) {
+    console.error("[pack_bom.derivePmStorageLocationId] sfg location lookup failed:", JSON.stringify(sfgLocationError));
+    return null;
+  }
+  const sfgCode = toTrimmedString((sfgLocation as JsonRecord | null)?.code);
+  const match = sfgCode.match(/^S(\d+)$/);
+  if (!match) return null;
+  const targetCode = `P${match[1]}`;
+
+  const { data: maps, error: mapError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_plant_map")
+    .select("storage_location_id")
+    .eq("company_id", companyId)
+    .eq("active", true);
+  if (mapError) {
+    console.error("[pack_bom.derivePmStorageLocationId] plant map lookup failed:", JSON.stringify(mapError));
+    return null;
+  }
+  const locationIds = [...new Set(((maps ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
+  if (locationIds.length === 0) return null;
+
+  const { data: pLocation, error: pLocationError } = await serviceRoleClient
+    .schema("erp_inventory")
+    .from("storage_location_master")
+    .select("id")
+    .eq("code", targetCode)
+    .eq("active", true)
+    .in("id", locationIds)
+    .maybeSingle();
+  if (pLocationError) {
+    console.error("[pack_bom.derivePmStorageLocationId] p-location lookup failed:", JSON.stringify(pLocationError));
+    return null;
+  }
+  return toTrimmedString((pLocation as JsonRecord | null)?.id) || null;
+}
+
 async function getActiveStrokeLocationsForPoType(poType: string): Promise<Map<string, string>> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
@@ -299,6 +353,7 @@ function normalizeLine(line: JsonRecord, idx: number): JsonRecord {
     has_alternate: line.has_alternate === true || line.has_alternate === "true",
     material_group_id: toTrimmedString(line.material_group_id),
     is_primary_container: line.is_primary_container === true || line.is_primary_container === "true",
+    storage_location_id: toTrimmedString(line.storage_location_id),
     display_order: Number.isFinite(Number(line.display_order)) ? Number(line.display_order) : idx,
   };
 }
@@ -843,6 +898,12 @@ export async function createPackBomHandler(
       sfgMaterialId = String(prodshade.id);
     }
 
+    // Fixed-BOM PM lines default to the SFG location's own packing-location
+    // counterpart (S00X -> P00X) unless the caller explicitly sent one per line.
+    const defaultPmStorageLocationId = (bomRequired && sfgStorageLocationId)
+      ? await derivePmStorageLocationId(companyId, sfgStorageLocationId)
+      : null;
+
     // Check no existing DRAFT or ACTIVE BOM for this company + SKU
     const { count: existingCount } = await serviceRoleClient
       .schema("erp_production")
@@ -924,7 +985,7 @@ export async function createPackBomHandler(
         material_id: toTrimmedString(line.material_id),
         qty: bomRequired ? parsePositiveNumber(line.qty) : null,
         uom_code: toTrimmedString(line.uom_code) || null,
-        storage_location_id: null,
+        storage_location_id: toTrimmedString(line.storage_location_id) || defaultPmStorageLocationId,
         movement_type_code: "P261",
         has_alternate: Boolean(line.has_alternate),
         material_group_id: toTrimmedString(line.material_group_id) || null,

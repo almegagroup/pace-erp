@@ -155,11 +155,19 @@ export default function PackBomCreatePage() {
   const selectedSku = eligibleSkus.find((sku) => sku.id === skuMaterialId) ?? null;
   const packCode = selectedSku?.pack_code_row ?? {};
   const bomRequired = packCode?.bom_required !== false;
-  const outputLocations = (storageLocationsQ.data?.data ?? storageLocationsQ.data ?? [])
-    .filter((location) => String(location?.code ?? "").startsWith("F"));
+  const allStorageLocations = storageLocationsQ.data?.data ?? storageLocationsQ.data ?? [];
+  const outputLocations = allStorageLocations.filter((location) => String(location?.code ?? "").startsWith("F"));
   const outputLocationOptions = outputLocations.map((location) => ({ value: location.id, label: slocLabel(location) }));
   const autoOutputStorageLocationId = outputStorageLocationId || (outputLocationOptions.length === 1 ? outputLocationOptions[0].value : "");
   const sfgLineLocation = selectedSku?.stroke_master?.default_storage_location ?? null;
+  // Business owner rule (2026-09-23): Fixed BOM PM lines default to the SFG
+  // location's own packing-location counterpart, S00X -> P00X, same digits.
+  const derivedPmStorageLocationId = (() => {
+    const match = String(sfgLineLocation?.code ?? "").match(/^S(\d+)$/);
+    if (!match) return "";
+    const targetCode = `P${match[1]}`;
+    return allStorageLocations.find((location) => location?.code === targetCode)?.id ?? "";
+  })();
   const has2Layers = Boolean(packCode.inner_uom_code);
   const innerPmLine = pmLines.find((line) => line.is_primary_container);
   const innerPmQtyNum = Number(innerPmLine?.qty);
@@ -245,6 +253,7 @@ export default function PackBomCreatePage() {
         has_alternate: Boolean(line.has_alternate),
         material_group_id: line.has_alternate ? (line.material_group_id || null) : null,
         is_primary_container: Boolean(line.is_primary_container),
+        storage_location_id: line.storage_location_id || null,
       })),
     });
   }
@@ -409,6 +418,8 @@ export default function PackBomCreatePage() {
                   sfgQtyPerInner={sfgQtyPerInner}
                   onSfgQtyPerInnerChange={setSfgQtyPerInner}
                   baseUomCode={selectedSku?.base_uom_code || "KG"}
+                  storageLocations={allStorageLocations}
+                  defaultStorageLocationId={bomRequired ? derivedPmStorageLocationId : ""}
                 />
               </ErpSectionCard>
             )}

@@ -381,9 +381,9 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
 // Same mechanism as Stroke Master RM lines (material_category_group alternates)
 // but PM-only, no Dosage%, absolute Qty per outer pack unit, UOM auto-derived
 // from the selected PM material's base_uom_code (locked spec: not editable).
-export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled, qtyDisabled = false, innerUomCode = "", sfgQtyPerInner = "", onSfgQtyPerInnerChange = null, baseUomCode = "KG" }) {
+export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled, qtyDisabled = false, innerUomCode = "", sfgQtyPerInner = "", onSfgQtyPerInnerChange = null, baseUomCode = "KG", storageLocations = [], defaultStorageLocationId = "" }) {
   function addLine() {
-    setLines((l) => [...l, { _key: Math.random().toString(36).slice(2), material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", is_primary_container: false }]);
+    setLines((l) => [...l, { _key: Math.random().toString(36).slice(2), material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", is_primary_container: false, storage_location_id: defaultStorageLocationId }]);
   }
   function removeLine(key) { setLines((l) => l.filter((row) => row._key !== key)); }
   function updateLine(key, patch) {
@@ -410,6 +410,7 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
   const materialOptions = materials.map((m) => ({ value: m.id, label: materialLabel(m) }));
   const materialLabelById = new Map(materials.map((m) => [m.id, materialLabel(m)]));
   const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
+  const storageLocationOptions = storageLocations.map((loc) => ({ value: loc.id, label: [loc.code, loc.name].filter(Boolean).join(" — ") }));
   const sfgPerInnerNum = Number(sfgQtyPerInner);
   const perInnerEditable = Boolean(onSfgQtyPerInnerChange) && !disabled;
 
@@ -434,6 +435,7 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
             </th>
             <th className={`${th} min-w-[150px]`}>Group</th>
             <th className={`${th} min-w-[180px]`}>Members</th>
+            <th className={`${th} min-w-[180px]`}>Storage Location</th>
             {!disabled && <th className={th}></th>}
           </tr>
         </thead>
@@ -536,6 +538,15 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
                       )}
                     </>
                   ) : "—"}
+                </td>
+                <td className={td}>
+                  <ErpComboboxField
+                    value={line.storage_location_id ?? ""}
+                    onChange={(v) => updateLine(line._key, { storage_location_id: v })}
+                    options={storageLocationOptions}
+                    placeholder="-- Select --"
+                    disabled={disabled}
+                  />
                 </td>
                 {!disabled && (
                   <td className={td}>
