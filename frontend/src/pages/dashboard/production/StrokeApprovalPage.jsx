@@ -129,8 +129,19 @@ export default function StrokeApprovalPage() {
     select: (d) => d?.data ?? [],
     enabled: Boolean(expandedCompanyId),
   });
-  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
-  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
+  // Company-scoped (via material_company_ext), matching groupsQ/storageLocationsQ
+  // above and the same fix applied to StrokeMasterPage's create/edit form --
+  // previously unscoped, dumping every company's RM/INT materials into one list.
+  const rmMaterialsQ = useQuery({
+    queryKey: ["om-materials", "RM", expandedCompanyId],
+    queryFn: () => listMaterials({ material_type: "RM", limit: 500, company_id: expandedCompanyId || undefined }),
+    select: (d) => d?.data ?? [],
+  });
+  const intMaterialsQ = useQuery({
+    queryKey: ["om-materials", "INT", expandedCompanyId],
+    queryFn: () => listMaterials({ material_type: "INT", limit: 500, company_id: expandedCompanyId || undefined }),
+    select: (d) => d?.data ?? [],
+  });
   const storageLocationsQ = useQuery({
     queryKey: ["om-storage-locations", expandedCompanyId],
     queryFn: () => listStorageLocations({ company_id: expandedCompanyId, is_active: true }),

@@ -9,7 +9,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -24,8 +26,10 @@ import {
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
+import { listMachines } from "../../om/omApi.js";
 import {
   getCurrentStock,
+  getCurrentStockMachineWise,
   searchCurrentStockBatchNumbers,
   searchCurrentStockPackingPoNumbers,
 } from "../procurementApi.js";
@@ -152,6 +156,103 @@ const NUMERIC_COLUMN_KEYS = new Set([
   "intransit_qty",
 ]);
 
+const MACHINE_WISE_COLUMNS = [
+  {
+    key: "material",
+    label: "Material",
+    width: "260px",
+    render: (row) => [row.pace_code, row.document_name || row.material_name].filter(Boolean).join(" — ") || "—",
+  },
+  { key: "external_code", label: "External Code", width: "150px", render: (row) => row.external_code || "—" },
+  { key: "material_type", label: "Type", width: "80px", render: (row) => row.material_type || "—" },
+  { key: "storage_location_code", label: "SLoc", width: "90px", render: (row) => row.storage_location_code || "—" },
+  { key: "machine_label", label: "Machine", width: "150px" },
+  { key: "batch_number", label: "Batch Number", width: "150px", render: (row) => row.batch_number || "—" },
+  { key: "unrestricted_qty", label: "Unrestricted (Machine)", width: "150px", align: "right", render: (row) => formatQuantity(row.unrestricted_qty) },
+  { key: "base_uom_code", label: "UOM", width: "80px", render: (row) => row.base_uom_code || "—" },
+];
+
+// §138.8 — "Machine wise stock" drawer (business owner, 2026-09-22). Re-runs
+// the exact same filter criteria the main Current Stock report was last
+// executed with, aggregating machine_stock_log into a current per-machine
+// balance instead of stock_snapshot. Own state, own grid, own export; the
+// main report's rows are never touched. Only rendered when the company
+// actually has MTS machines mapped (see hasMtsQuery in the parent
+// component) — companies without MTS never see the button at all. Only the
+// Unrestricted-equivalent qty splits by machine (business owner confirmed) —
+// Reserved/QI/Blocked/Net Available have no machine dimension here.
+function MachineWiseStockDrawer({ visible, onClose, params }) {
+  const query = useQuery({
+    queryKey: ["current-stock-machine-wise", params],
+    queryFn: () => getCurrentStockMachineWise(params),
+    enabled: visible && Boolean(params),
+    select: (result) => (Array.isArray(result?.data) ? result.data : []),
+  });
+  const rows = query.data ?? [];
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    if (rows.length === 0) return;
+    setExporting(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `current_stock_machine_wise_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        sheetName: "Machine Wise Stock",
+        columns: MACHINE_WISE_COLUMNS,
+        rows,
+        getCellValue: (row, column) =>
+          column.key === "unrestricted_qty" ? Number(row?.unrestricted_qty ?? 0) : (row?.[column.key] ?? "—"),
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <DrawerBase
+      visible={visible}
+      onClose={onClose}
+      onEscape={onClose}
+      side="center"
+      width="min(1000px, calc(100vw - 24px))"
+      title="Machine Wise Stock"
+      actions={(
+        <>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-8 border border-slate-300 bg-white px-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExport()}
+            disabled={exporting || rows.length === 0}
+            className="h-8 border border-sky-700 bg-sky-100 px-4 text-xs font-semibold uppercase tracking-[0.12em] text-sky-950 disabled:opacity-50"
+          >
+            {exporting ? "Exporting..." : "Export Excel"}
+          </button>
+        </>
+      )}
+    >
+      <p className="mb-3 text-xs text-slate-500">
+        Same filters as the report just executed — company, materials, storage locations, batch numbers.
+      </p>
+      {query.isLoading ? (
+        <p className="py-6 text-center text-sm text-slate-500">Loading...</p>
+      ) : query.error ? (
+        <p className="py-6 text-center text-sm text-rose-600">{query.error instanceof Error ? query.error.message : "Failed to load machine-wise stock."}</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-slate-400">No machine-tracked stock for this filter.</p>
+      ) : (
+        <ErpDenseGrid columns={MACHINE_WISE_COLUMNS} rows={rows} rowKey={(row, index) => `${row.material_id}-${row.storage_location_code}-${row.machine_label}-${index}`} virtualize />
+      )}
+    </DrawerBase>
+  );
+}
+
 export default function CurrentStockPage() {
   const { runtimeContext } = useMenu();
   // Business decision (2026-08-04): single company at a time, never multi —
@@ -188,6 +289,16 @@ export default function CurrentStockPage() {
     { enabled: Boolean(effectiveCompanyId) },
   );
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
+  // §138.8 -- "Machine wise stock" button only shows for a company that
+  // actually has MTS machines mapped, same visibility check already
+  // established for IN11's "Distribute to Machine" button (§138.13).
+  const hasMtsQuery = useQuery({
+    queryKey: ["current-stock-has-mts", effectiveCompanyId],
+    queryFn: () => listMachines({ po_type: "MTS", company_id: effectiveCompanyId, active: true }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const hasMts = (hasMtsQuery.data ?? []).length > 0;
 
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
@@ -245,6 +356,8 @@ export default function CurrentStockPage() {
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
   const [exporting, setExporting] = useState(false);
+  const [submittedParams, setSubmittedParams] = useState(null);
+  const [machineWiseOpen, setMachineWiseOpen] = useState(false);
   // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views,
   // like Process PO's step pages or SAP MB52/ZMB51's Execute -> report screen
   // — never both visible at once.
@@ -316,18 +429,23 @@ export default function CurrentStockPage() {
     setError("");
     setSearched(true);
     setPlanningAlertsOnly(false);
+    // Captured once here so the "Machine wise stock" drawer (§138.8) re-runs
+    // the EXACT same criteria this search was executed with, even if the
+    // filter panel is changed afterwards without re-searching.
+    const params = {
+      company_ids: companyId,
+      material_ids: joinValues(materialValues) || undefined,
+      storage_location_ids: joinValues(slocValues) || undefined,
+      batch_numbers: joinValues(batchValues) || undefined,
+      packing_po_numbers: joinValues(packingPoValues) || undefined,
+      material_types: materialTypes.join(",") || undefined,
+      stock_types: stockTypes.join(",") || undefined,
+      show_zero: showZero ? "true" : "false",
+    };
     try {
-      const response = await getCurrentStock({
-        company_ids: companyId,
-        material_ids: joinValues(materialValues) || undefined,
-        storage_location_ids: joinValues(slocValues) || undefined,
-        batch_numbers: joinValues(batchValues) || undefined,
-        packing_po_numbers: joinValues(packingPoValues) || undefined,
-        material_types: materialTypes.join(",") || undefined,
-        stock_types: stockTypes.join(",") || undefined,
-        show_zero: showZero ? "true" : "false",
-      });
+      const response = await getCurrentStock(params);
       setRows(Array.isArray(response?.data) ? response.data : []);
+      setSubmittedParams(params);
       setPage(2);
     } catch (searchError) {
       setRows([]);
@@ -440,6 +558,13 @@ export default function CurrentStockPage() {
                 onClick: () => void handleExportExcel(),
                 disabled: exporting || displayedRows.length === 0,
               },
+              // §138.8 -- hidden entirely (not just disabled) for a company
+              // with no MTS machines mapped, per business owner's own words.
+              ...(hasMts ? [{
+                key: "machine-wise",
+                label: "Machine Wise Stock",
+                onClick: () => setMachineWiseOpen(true),
+              }] : []),
               {
                 key: "search",
                 label: loading ? "Searching..." : "Search Again",
@@ -611,6 +736,12 @@ export default function CurrentStockPage() {
         }
         onResetColumns={() => setVisibleColumns(DEFAULT_VISIBLE_COLUMNS)}
         onClose={() => setColumnsOpen(false)}
+      />
+
+      <MachineWiseStockDrawer
+        visible={machineWiseOpen}
+        onClose={() => setMachineWiseOpen(false)}
+        params={submittedParams}
       />
     </ErpScreenScaffold>
   );

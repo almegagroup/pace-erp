@@ -1,0 +1,5 @@
+DROP TRIGGER IF EXISTS trg_cancel_virtual_mts_sfg_reservation ON erp_production.reservation_document;
+
+CREATE TRIGGER trg_cancel_virtual_mts_sfg_reservation
+AFTER INSERT ON erp_production.reservation_document
+FOR EACH ROW EXECUTE FUNCTION erp_production.cancel_virtual_mts_sfg_reservation();

@@ -28,6 +28,16 @@ export type RouteAclMeta =
 
 const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
+  // Runtime Communication configuration dynamically verifies the requested
+  // page's EDIT ACL in its page-local company. A static resource here would
+  // incorrectly evaluate only the session-selected company.
+  "GET:/api/communication/action-visibility":       { skipAcl: true },
+  "GET:/api/communication/configuration":           { skipAcl: true },
+  "GET:/api/communication/rules":                   { skipAcl: true },
+  "POST:/api/communication/rules/save":             { skipAcl: true },
+  "POST:/api/communication/rules/activate":         { skipAcl: true },
+  "POST:/api/communication/rules/deactivate":       { skipAcl: true },
+
   // ── Procurement: CSN ─────────────────────────────────────────────────────
   "GET:/api/procurement/csns":                        { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/csns/available-for-sto":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
@@ -191,6 +201,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/location-transfer-availability-preview": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_REQ", action: "WRITE" },
   "GET:/api/procurement/location-transfer-workbench": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
   "POST:/api/procurement/location-transfer-postings": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
+  // §138.13/§138.13.1 -- IN11's "Distribute to Machine" drawer rides on the
+  // same PROC_LOC_TRANSFER_POST grant IN11 posting already uses, deliberately
+  // -- it's the same page, same workbench, just a different attribution action.
+  "GET:/api/procurement/machine-distribution/unassigned": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
+  "POST:/api/procurement/machine-distribution/assign":    { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/balance":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
   "POST:/api/procurement/stock-status-change/postings": { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/postings":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
@@ -232,6 +247,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // (same pattern as POST /api/workflow/decision's Gate-2) — see
   // dynamicAclRoutes in scripts/route-acl-registry-guard.mjs.
   "GET:/api/procurement/stock-ledger":                { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  "GET:/api/procurement/stock-ledger/machine-wise":   { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/movement-types": { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/batch-search":   { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/po-search":      { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
@@ -246,7 +262,9 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/current-stock/batch-search":  { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/current-stock/po-search":     { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/current-stock":               { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
+  "GET:/api/procurement/current-stock/machine-wise":  { skipAcl: false, resourceCode: "PROC_CURRENT_STOCK",  action: "VIEW" },
   "GET:/api/procurement/stock-history":               { skipAcl: false, resourceCode: "PROC_STOCK_HISTORY",  action: "VIEW" },
+  "GET:/api/procurement/stock-history/machine-wise":  { skipAcl: false, resourceCode: "PROC_STOCK_HISTORY",  action: "VIEW" },
   "GET:/api/procurement/reservations":                { skipAcl: false, resourceCode: "PROC_RESERVATION_LIST", action: "VIEW" },
   "GET:/api/procurement/stock-valuation":             { skipAcl: false, resourceCode: "PROC_STOCK_VALUATION", action: "VIEW" },
 
@@ -459,6 +477,18 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/batch-series":                { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "VIEW" },
   "POST:/api/production/batch-series":               { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "WRITE" },
   "GET:/api/production/batch-numbers":               { skipAcl: false, resourceCode: "PROD_BATCH_RELEASE", action: "VIEW" },
+  // MTS Page 3 "Batch Range" live duplicate-check + "Shift" inline-create — both tightly
+  // coupled to Process PO Create, so they ride PROD_PO_CREATE rather than a new resource.
+  "GET:/api/production/mts-batch-range-check":       { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  // MTS Pages 1-6 creation-session previews and its single Page-6 commit.
+  // These stay on the existing Process-PO Create resource; the previews have
+  // no durable document side effect and commit is the sole write.
+  "POST:/api/production/mts-creation/material-plan": { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/mts-creation/packing-plan":  { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/mts-creation/packing-combine": { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/mts-creation/commit":        { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+  "GET:/api/production/shifts":                      { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+  "POST:/api/production/shifts":                     { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
   "GET:/api/production/segment-locations":           { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "VIEW" },
   "POST:/api/production/segment-locations":          { skipAcl: false, resourceCode: "SA_PROD_SEGMENT_LOCATIONS", action: "WRITE" },
   "GET:/api/production/conversion-rates":            { skipAcl: false, resourceCode: "ACC_CONVERSION_COST", action: "VIEW" },
@@ -652,6 +682,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/admin/users/state":                           { skipAcl: true },
   "POST:/api/admin/users/role":                            { skipAcl: true },
   "PATCH:/api/admin/users/scope/primary-company":          { skipAcl: true },
+  // Communication enrollment is SA/admin governed in its handlers. It has no
+  // company report-data access and no browser-direct table access.
+  "GET:/api/admin/communication/pages":                    { skipAcl: true },
+  "GET:/api/admin/communication/enrollment":               { skipAcl: true },
+  "POST:/api/admin/communication/enrollment":              { skipAcl: true },
   "GET:/api/admin/audit":                                  { skipAcl: true },
   "GET:/api/admin/sessions":                               { skipAcl: true },
   "POST:/api/admin/sessions/revoke":                       { skipAcl: true },
@@ -1641,6 +1676,37 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/process-orders\/[^/]+\/prune$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_EDIT", action: "EDIT" } },
+  },
+  {
+    // §138.12/§138.15 (2026-09-18) — MTS Page 4 RM auto-derive material plan.
+    // Rides PROD_PO_CREATE like every other Process PO Create-flow lookup
+    // above (mts-batch-range-check, shifts) — this is still part of the same
+    // Standard-stage create flow for MTS, just a second request instead of
+    // being inline in the create body.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/mts-material-plan$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    },
+  },
+  {
+    // §138.16 (2026-09-18) — MTS Page 5 batch->pack-size packing plan. Same
+    // continuum as mts-material-plan above, still Process PO Create/Standard
+    // territory, so rides the same PROD_PO_CREATE resource.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/mts-packing-plan$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    },
+  },
+  {
+    // §138.16 (2026-09-18) — MTS Page 6 combined PM auto-derive + N-way
+    // Packing PO save. Same continuum, same PROD_PO_CREATE resource.
+    pattern: /^\/api\/production\/process-orders\/[^/]+\/mts-packing-combine$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
+      POST: { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "WRITE" },
+    },
   },
   {
     pattern: /^\/api\/production\/sfg-qa-documents\/[^/]+$/,

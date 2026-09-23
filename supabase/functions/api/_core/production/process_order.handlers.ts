@@ -27,15 +27,21 @@ import {
   toUpperTrimmedString,
   parsePositiveNumber,
   parseNonNegativeNumber,
+  parsePositiveInt,
   getIdFromPath,
 } from "./production.shared.ts";
 import {
   activateReleasedBatchNumberInstance,
+  bulkInsertBatchNumberInstances,
   findReleasedBatchNumberInstances,
+  findDuplicateBatchNumbers,
   generateBatchNumber,
+  isBatchSeriesAutoGenerate,
+  resolveMtsBatchRangeNumbers,
   upsertBatchNumberInstanceForProcessOrder,
 } from "./batch_series.handlers.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockPostingResult = { stock_document_id: string; stock_ledger_id: string };
@@ -69,6 +75,22 @@ function addDaysIso(input: string, days: number): string {
   const date = new Date(`${input}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+// MTS Page 3 "Date" field (2026-09-17 lock) — declared physical-production
+// date, current-3-days..current only, never future. Deliberately a separate,
+// narrower window from manualDocumentDateWindow.ts's 3-CALENDAR-MONTH window
+// (that one is for backdated documents generally; this is "which of the last
+// few days did this actually run"). Informational only — Verify's own
+// posting_date uses this value directly as a label, same pattern as the
+// existing URGENT Current-1 label above; no derivation happens here.
+const PRODUCTION_DATE_WINDOW_DAYS = 3;
+const PRODUCTION_DATE_WINDOW_MESSAGE = "Date must be within the previous 3 days and cannot be in the future.";
+function isProductionDateWithinWindow(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const today = todayIso();
+  const lower = addDaysIso(today, -PRODUCTION_DATE_WINDOW_DAYS);
+  return value >= lower && value <= today;
 }
 
 function poErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
@@ -270,6 +292,7 @@ async function buildAllowedAlternateIdsByStrokeLines(
   strokeLines: JsonRecord[],
   logPrefix: string,
   errorCode: string,
+  keyForLine: (strokeLine: JsonRecord) => string = (strokeLine) => String(strokeLine.material_id ?? ""),
 ): Promise<Map<string, string[]>> {
   const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(
     strokeLines.map((line) => String(line.material_group_id ?? "")),
@@ -291,7 +314,8 @@ async function buildAllowedAlternateIdsByStrokeLines(
       if (memberId && memberId !== formulationMaterialId) allowedIds.add(memberId);
     }
 
-    allowedMap.set(formulationMaterialId, Array.from(allowedIds));
+    const lineKey = keyForLine(strokeLine);
+    if (lineKey) allowedMap.set(lineKey, Array.from(allowedIds));
   }
   return allowedMap;
 }
@@ -303,7 +327,7 @@ async function fetchOrderLines(orderId: string, strokeMasterId: string | null = 
     .select(`
       id, process_order_id, material_id, planned_qty, actual_qty, uom_code,
       issue_sloc_id, is_rm, display_order, stock_ledger_id,
-      actual_material_id, dosage_pct, is_formulation_line,
+      actual_material_id, dosage_pct, is_formulation_line, stroke_line_id,
       approved_status, ap_approved_qty, variance_qty
     `)
     .eq("process_order_id", orderId)
@@ -465,6 +489,176 @@ async function resolveOutputStorageLocationId(strokeMasterId: string | null, poT
     throw new Error("PROD_PO_FETCH_FAILED");
   }
   return toTrimmedString((data as JsonRecord | null)?.default_storage_location_id) || null;
+}
+
+// ---------------------------------------------------------------------------
+// §138.12 — MTS Alternate-Group Auto-Derive (Page 4).
+//
+// Aggregates every machine-bucket (machine_id = a SPECIFIC machine, not NULL)
+// machine_stock_log row into one running balance per material -- same
+// derivation shape as location_transfer.handlers.ts's fetchUnassignedBuckets,
+// just filtered to one machine instead of the shared Unassigned bucket. The
+// §138.3 bucket boundary is structural here: this function never reads any
+// row belonging to a different machine or to Unassigned.
+// ---------------------------------------------------------------------------
+export async function fetchMachineBucketBalances(
+  companyId: string,
+  storageLocationId: string,
+  machineId: string | null,
+  materialIds: string[],
+): Promise<Map<string, number>> {
+  const balances = new Map<string, number>();
+  if (materialIds.length === 0) return balances;
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchAllRows<JsonRecord>((from, to) => {
+      const query = serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .select("material_id, qty, direction")
+        .eq("company_id", companyId)
+        .eq("storage_location_id", storageLocationId)
+        .in("material_id", materialIds);
+      return machineId
+        ? query.eq("machine_id", machineId).range(from, to)
+        : query.is("machine_id", null).range(from, to);
+    });
+  } catch {
+    throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
+  }
+  for (const row of rows) {
+    const materialId = toTrimmedString(row.material_id);
+    if (!materialId) continue;
+    const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
+    const qty = Number(row.qty ?? 0) * sign;
+    balances.set(materialId, Number(((balances.get(materialId) ?? 0) + qty).toFixed(6)));
+  }
+  return balances;
+}
+
+// MTS Page 4 uses the same availability semantic as MTO/HPS/MTEST.  The
+// machine (or Unassigned) bucket answers only "which physical shelf"; it
+// does not bypass the ordinary open-reservation deduction for that material
+// and storage location.  The caller may then allocate several formulation
+// groups from the returned shared map without double-counting a bucket.
+export async function fetchNetMachineBucketBalances(
+  companyId: string,
+  storageLocationId: string,
+  machineId: string | null,
+  materialIds: string[],
+): Promise<Map<string, number>> {
+  const balances = await fetchMachineBucketBalances(companyId, storageLocationId, machineId, materialIds);
+  const ids = [...new Set(materialIds.filter(Boolean))];
+  if (ids.length === 0) return balances;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("reservation_document")
+    .select("material_id, balance_qty")
+    .eq("company_id", companyId)
+    .eq("storage_location_id", storageLocationId)
+    .in("material_id", ids)
+    .in("status", RESERVATION_OPEN_STATUSES);
+  if (error) {
+    console.error("[process_order.fetchNetMachineBucketBalances] reservation query failed:", JSON.stringify(error));
+    throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+  }
+  for (const row of (data ?? []) as JsonRecord[]) {
+    const materialId = toTrimmedString(row.material_id);
+    if (!materialId) continue;
+    balances.set(materialId, Number(((balances.get(materialId) ?? 0) - Number(row.balance_qty ?? 0)).toFixed(6)));
+  }
+  return balances;
+}
+
+type MtsAutoDeriveRow = {
+  stroke_line_id: string;
+  stroke_line_material_id: string; // formulation/declared item — constant across a group's split rows
+  actual_material_id: string; // real material this specific row draws from
+  is_formulation_line: boolean; // true only on the first (Standard-carrying) row of the group
+  dosage_pct: number | null;
+  planned_qty: number; // Standard Qty — non-zero only on the first row
+  actual_qty: number; // this row's own resolved qty
+  available_qty: number; // this row's actual_material_id's own bucket/location balance (for display)
+  variance_qty?: number; // Standard − confirmed-shortfall total, only set on the first row when the user explicitly accepted an under-qty save
+};
+
+type MtsAutoDeriveGroupResult = {
+  stroke_line_id: string;
+  stroke_line_material_id: string;
+  auto_derive_applicable: boolean; // false = R001-style, non-machine-tracked, manual pick required
+  storage_location_id: string;
+  standard_qty: number;
+  dosage_pct: number | null;
+  rows: MtsAutoDeriveRow[];
+  group_member_ids: string[]; // formulation item + registered alternates, for the manual-pick/override dropdown
+  short: boolean; // whole group (formulation + alternates) insufficient vs standard_qty
+  shortfall_qty: number;
+};
+
+// §138.12 algorithm: formulation item first (if its own bucket has stock),
+// then group alternates smallest-available-first, each fully exhausted
+// before moving to the next, until standardQty is met or the whole group is
+// exhausted (hard block). Never reads Unassigned or another machine's bucket
+// -- bucketBalances is expected to already be scoped that way by the caller.
+export function computeMtsAutoDeriveRowsForGroup(params: {
+  strokeLineId?: string;
+  formulationMaterialId: string;
+  dosagePct: number | null;
+  standardQty: number;
+  alternateMaterialIds: string[]; // group members excluding the formulation item itself
+  bucketBalances: Map<string, number>;
+}): { rows: MtsAutoDeriveRow[]; short: boolean; shortfallQty: number } {
+  const { strokeLineId: requestedStrokeLineId, formulationMaterialId, dosagePct, standardQty, alternateMaterialIds, bucketBalances } = params;
+  const strokeLineId = requestedStrokeLineId || formulationMaterialId;
+
+  // Order: formulation item's own bucket first (regardless of size -- it's
+  // the "correct" material, group is only a fallback), then alternates
+  // smallest-available-first.
+  const candidates = [
+    formulationMaterialId,
+    ...[...new Set(alternateMaterialIds)]
+      .filter((id) => id !== formulationMaterialId)
+      .sort((a, b) => (bucketBalances.get(a) ?? 0) - (bucketBalances.get(b) ?? 0)),
+  ];
+
+  const rows: MtsAutoDeriveRow[] = [];
+  let remaining = standardQty;
+  for (const materialId of candidates) {
+    if (remaining <= EPSILON) break;
+    const available = Math.max(0, bucketBalances.get(materialId) ?? 0);
+    if (available <= EPSILON) continue;
+    const draw = Math.min(available, remaining);
+    rows.push({
+      stroke_line_id: strokeLineId,
+      stroke_line_material_id: formulationMaterialId,
+      actual_material_id: materialId,
+      is_formulation_line: rows.length === 0,
+      dosage_pct: rows.length === 0 ? dosagePct : null,
+      planned_qty: rows.length === 0 ? standardQty : 0,
+      actual_qty: Number(draw.toFixed(6)),
+      available_qty: Number(available.toFixed(6)),
+    });
+    remaining = Number((remaining - draw).toFixed(6));
+  }
+
+  const short = remaining > EPSILON;
+  // A group that never found any stock at all (rows.length === 0) still
+  // needs one row to carry the Standard Qty / hard-block detail -- reuses
+  // the formulation item itself as a placeholder row (actual_qty 0).
+  if (rows.length === 0) {
+    rows.push({
+      stroke_line_id: strokeLineId,
+      stroke_line_material_id: formulationMaterialId,
+      actual_material_id: formulationMaterialId,
+      is_formulation_line: true,
+      dosage_pct: dosagePct,
+      planned_qty: standardQty,
+      actual_qty: 0,
+      available_qty: 0,
+    });
+  }
+
+  return { rows, short, shortfallQty: short ? Number(remaining.toFixed(6)) : 0 };
 }
 
 async function postStockMovement(params: {
@@ -856,7 +1050,13 @@ async function applyFinalOrVerifyLineUpdates(params: {
 
     if (existingLine) {
       const plannedQty = Number(existingLine.planned_qty ?? 0);
-      const approval = computeApprovalValues(req, ctx, plannedQty, actualQty, bodyLine);
+      // §138.17: MTS has no AP/Reco approval workflow. Split alternate rows
+      // legitimately have Standard=0 with Actual>0, so the generic deviation
+      // rule would otherwise reject a valid MTS Final/Verify payload merely
+      // because its hidden Approved fields were not supplied.
+      const approval = po.po_type === "MTS"
+        ? { approved_status: "YES", ap_approved_qty: actualQty, variance_qty: 0 }
+        : computeApprovalValues(req, ctx, plannedQty, actualQty, bodyLine);
       if (approval instanceof Response) return { response: approval };
       const nextRequiredQty = actualQty;
 
@@ -1550,7 +1750,8 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
         material_id, stroke_master_id, machine_id, batch_number,
         planned_qty, actual_qty, status, priority,
         qa_decided_by, qa_decided_at, manager_decided_by, manager_decided_at,
-        batch_started_at, finalized_at, verified_at, created_by, created_at
+        batch_started_at, finalized_at, verified_at, created_by, created_at,
+        mts_used_current_stroke, batch_number_from, batch_number_to, number_of_batches
       `, { count: "exact" })
       .order("created_at", { ascending: false });
 
@@ -1588,7 +1789,7 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
         rows.map((row) => String(row.material_id ?? "")),
         "[process_order.listProcessOrders]",
         "PROD_PO_LIST_FAILED",
-        "id, pace_code, material_name, shade_code",
+        "id, pace_code, material_name, document_name, shade_code",
       ),
       (async () => {
         const map = new Map<string, string>();
@@ -1684,7 +1885,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
     // relationship reliably from a single-schema request context, so it 500'd. Fetch
     // both explicitly instead, matching the pattern already used everywhere else in
     // this file (e.g. listProcessOrdersHandler's own stroke/machine lookups).
-    const [materialMap, strokeResult, machineResult] = await Promise.all([
+    const [materialMap, strokeResult, machineResult, shiftResult, companyResult] = await Promise.all([
       getMaterialMapByIds(
         [String(poRow.material_id ?? "")],
         "[process_order.getProcessOrder]",
@@ -1695,7 +1896,9 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
         ? serviceRoleClient
             .schema("erp_production")
             .from("stroke_master")
-            .select("id, stroke_number, description, status")
+            // default_storage_location_id needed so PR10 Edit (ProductionPOEditPage.jsx)
+            // can filter its Machine dropdown by §138.1's mapping, same as Create.
+            .select("id, stroke_number, description, status, default_storage_location_id")
             .eq("id", strokeMasterId)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
@@ -1707,27 +1910,145 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
             .eq("id", machineId)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
+      toTrimmedString(poRow.shift_id)
+        ? serviceRoleClient
+            .schema("erp_production")
+            .from("shift_master")
+            .select("id, shift_name")
+            .eq("id", String(poRow.shift_id))
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      serviceRoleClient
+        .schema("erp_master")
+        .from("companies")
+        .select("id, company_code, company_name")
+        .eq("id", String(poRow.company_id))
+        .maybeSingle(),
     ]);
 
     if (strokeResult.error) {
       console.error("[process_order.getProcessOrder] stroke query failed:", JSON.stringify(strokeResult.error));
       throw new Error("PROD_PO_FETCH_FAILED");
     }
-    if (machineResult.error) {
-      console.error("[process_order.getProcessOrder] machine query failed:", JSON.stringify(machineResult.error));
+    if (machineResult.error || shiftResult.error || companyResult.error) {
+      console.error("[process_order.getProcessOrder] machine/shift/company query failed:", JSON.stringify(machineResult.error ?? shiftResult.error ?? companyResult.error));
       throw new Error("PROD_PO_FETCH_FAILED");
     }
 
     const lines = await fetchOrderLines(id, strokeMasterId);
-    const { data: packOrders, error: packErr } = await serviceRoleClient
+    // A REVERSED parent's own children are ALL reversed by definition -- the
+    // CORS report (ReversalPage.jsx) needs those still-linked lines to show
+    // what was actually reversed, so only exclude REVERSED packing orders
+    // when the parent itself is still active.
+    let packingOrderQuery = serviceRoleClient
       .schema("erp_production")
       .from("packing_order")
-      .select("id, po_number, status, planned_qty_kg, actual_qty_kg")
-      .eq("process_order_id", id)
-      .neq("status", "REVERSED");
+      .select("id, po_number, status, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to, pack_code_id, fill_qty_per_pack, num_packs, sku_qty, material_id")
+      .eq("process_order_id", id);
+    if (poRow.status !== "REVERSED") {
+      packingOrderQuery = packingOrderQuery.neq("status", "REVERSED");
+    }
+    const { data: packOrders, error: packErr } = await packingOrderQuery;
     if (packErr) {
       console.error("[process_order.getProcessOrder] packing-order query failed:", JSON.stringify(packErr));
       throw new Error("PROD_PO_FETCH_FAILED");
+    }
+
+    let mtsReview: JsonRecord | null = null;
+    let enrichedPackingOrders = (packOrders ?? []) as JsonRecord[];
+    if (poRow.po_type === "MTS") {
+      const packingOrderIds = enrichedPackingOrders.map((row) => String(row.id)).filter(Boolean);
+      const [snapshotResult, planResult, lineResult, yieldResult] = await Promise.all([
+        serviceRoleClient
+          .schema("erp_production")
+          .from("mts_creation_snapshot")
+          .select("page4_material_plan, page5_packing_plan, page6_pm_plan, created_at, created_by")
+          .eq("process_order_id", id)
+          .maybeSingle(),
+        serviceRoleClient
+          .schema("erp_production")
+          .from("mts_packing_plan_row")
+          .select("id, packing_order_id, batch_number_from, batch_number_to, pack_code_id, outer_unit_per_batch, storage_location_id, display_order, status")
+          .eq("process_order_id", id)
+          .order("display_order", { ascending: true }),
+        packingOrderIds.length > 0
+          ? serviceRoleClient
+              .schema("erp_production")
+              .from("packing_order_line")
+              .select("id, packing_order_id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code, movement_type_code, has_alternate, display_order, variance_qty")
+              .in("packing_order_id", packingOrderIds)
+              .order("display_order", { ascending: true })
+          : Promise.resolve({ data: [], error: null }),
+        serviceRoleClient
+          .schema("erp_production")
+          .from("mts_batch_yield_variance")
+          .select("id, packing_order_id, packing_plan_row_id, batch_number, sku_material_id, expected_qty, declared_actual_qty, variance_qty, variance_type, uom_code, status")
+          .eq("process_order_id", id)
+          .order("batch_number", { ascending: true }),
+      ]);
+      if (snapshotResult.error || planResult.error || lineResult.error || yieldResult.error) {
+        console.error("[process_order.getProcessOrder] MTS review query failed:", JSON.stringify(snapshotResult.error ?? planResult.error ?? lineResult.error ?? yieldResult.error));
+        throw new Error("PROD_PO_FETCH_FAILED");
+      }
+
+      const packingLines = (lineResult.data ?? []) as JsonRecord[];
+      const packingPlanRows = (planResult.data ?? []) as JsonRecord[];
+      const packCodeIds = [...new Set([
+        ...packingPlanRows.map((row) => toTrimmedString(row.pack_code_id)),
+        ...enrichedPackingOrders.map((row) => toTrimmedString(row.pack_code_id)),
+      ].filter(Boolean))];
+      const locationIds = [...new Set([
+        ...packingPlanRows.map((row) => toTrimmedString(row.storage_location_id)),
+        ...packingLines.map((line) => toTrimmedString(line.issue_sloc_id)),
+      ].filter(Boolean))];
+      const [packingMaterialMap, packCodeResult, locationResult] = await Promise.all([
+        getMaterialMapByIds(
+          packingLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
+          "[process_order.getProcessOrder]",
+          "PROD_PO_FETCH_FAILED",
+          "id, pace_code, material_name, shade_code, base_uom_code",
+        ),
+        packCodeIds.length > 0
+          ? serviceRoleClient.schema("erp_production").from("pack_code_master").select("id, pack_code, pack_name, pack_type").in("id", packCodeIds)
+          : Promise.resolve({ data: [], error: null }),
+        locationIds.length > 0
+          ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (packCodeResult.error || locationResult.error) {
+        console.error("[process_order.getProcessOrder] MTS review label lookup failed:", JSON.stringify(packCodeResult.error ?? locationResult.error));
+        throw new Error("PROD_PO_FETCH_FAILED");
+      }
+      const packCodeMap = new Map(((packCodeResult.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+      const locationMap = new Map(((locationResult.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+      const linesByPackingOrder = new Map<string, JsonRecord[]>();
+      for (const line of packingLines) {
+        const packingOrderId = String(line.packing_order_id ?? "");
+        const item = {
+          ...line,
+          material: packingMaterialMap.get(String(line.material_id ?? "")) ?? null,
+          actual_material: packingMaterialMap.get(String(line.actual_material_id ?? "")) ?? null,
+          issue_storage_location: locationMap.get(String(line.issue_sloc_id ?? "")) ?? null,
+        };
+        linesByPackingOrder.set(packingOrderId, [...(linesByPackingOrder.get(packingOrderId) ?? []), item]);
+      }
+      enrichedPackingOrders = enrichedPackingOrders.map((packingOrder) => ({
+        ...packingOrder,
+        pack_code: packCodeMap.get(String(packingOrder.pack_code_id ?? "")) ?? null,
+        lines: linesByPackingOrder.get(String(packingOrder.id)) ?? [],
+      }));
+      mtsReview = {
+        snapshot: snapshotResult.data ?? null,
+        batch_yield_variances: (yieldResult.data ?? []).map((row) => ({
+          ...row,
+          sku_material: packingMaterialMap.get(String((row as JsonRecord).sku_material_id ?? "")) ?? null,
+        })),
+        packing_plan_rows: packingPlanRows.map((row) => ({
+          ...row,
+          pack_code: packCodeMap.get(String(row.pack_code_id ?? "")) ?? null,
+          storage_location: locationMap.get(String(row.storage_location_id ?? "")) ?? null,
+        })),
+      };
     }
 
     return okResponse({
@@ -1736,8 +2057,11 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
         material: materialMap.get(String(poRow.material_id ?? "")) ?? null,
         stroke: strokeResult.data ?? null,
         machine: machineResult.data ?? null,
+        shift: shiftResult.data ?? null,
+        company: companyResult.data ?? null,
         lines,
-        packing_orders: packOrders ?? [],
+        packing_orders: enrichedPackingOrders,
+        mts_review: mtsReview,
       },
     }, ctx.request_id, req);
   } catch (err) {
@@ -1791,7 +2115,6 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const materialId = toTrimmedString(body.material_id || body.prodshade_material_id);
     const strokeId = toTrimmedString(body.stroke_master_id) || null;
     const machineId = toTrimmedString(body.machine_id) || null;
-    const plannedQty = parsePositiveNumber(body.planned_qty ?? body.planned_qty_kg);
     const plannedStartDate = toTrimmedString(body.planned_start_date) || null;
     const notes = toTrimmedString(body.notes);
     const lineOverrideMap = buildLineOverrideMap(body.line_location_overrides);
@@ -1801,8 +2124,39 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     // other po_type keeps setting it later at qaApproveProcessOrderHandler, unchanged.
     const priorityInput = poType === "MTEST" ? (toUpperTrimmedString(body.priority) || "NORMAL") : null;
 
+    // MTS Page 3 (2026-09-17 lock) — Production Date, Shift, Batch Range and
+    // Batch Size (per-batch qty, Prodshade's own base UoM) are all captured
+    // right here at Create, not at a later "Start Batch" click like MTO/HPS/INT.
+    // planned_qty for MTS is always derived (number_of_batches × batch_size),
+    // never trusted directly from the body.
+    const isMtsCreate = poType === "MTS";
+    const productionDate = isMtsCreate ? (toTrimmedString(body.production_date) || null) : null;
+    const shiftId = isMtsCreate ? (toTrimmedString(body.shift_id) || null) : null;
+    const batchStartSerial = isMtsCreate ? parsePositiveInt(body.batch_start_serial) : null;
+    const numberOfBatches = isMtsCreate ? parsePositiveInt(body.number_of_batches) : null;
+    const batchSize = isMtsCreate ? parsePositiveNumber(body.batch_size) : null;
+    const plannedQty = isMtsCreate
+      ? (numberOfBatches && batchSize ? numberOfBatches * batchSize : null)
+      : parsePositiveNumber(body.planned_qty ?? body.planned_qty_kg);
+    // Set below (server-side, from mts_current_stroke) once the chosen stroke is
+    // fetched and validated — never trust a client-sent flag for this.
+    let mtsUsedCurrentStroke: boolean | null = null;
+
     if (!companyId || !VALID_PO_TYPES.has(poType) || !VALID_SEGMENTS.has(segmentCode) || !materialId || !plannedQty) {
       return poErr(req, ctx, "PROD_PO_INVALID", 400, "company_id, po_type, segment_code, material_id, planned_qty required");
+    }
+    // MTS has no Page-3 durable-create endpoint.  The current UI keeps Pages
+    // 1–5 in browser state and Page 6 calls create_mts_documents_atomic once;
+    // keep this backend guard as well so a stale browser bundle or direct API
+    // call cannot recreate the legacy header-first flow.
+    if (isMtsCreate) {
+      return poErr(req, ctx, "PROD_MTS_PAGE6_ATOMIC_CREATE_REQUIRED", 422, "MTS Process Orders are created only after Page 6. Complete the Page 1–6 flow and use the atomic create action.");
+    }
+    if (isMtsCreate && (!productionDate || !shiftId || !batchStartSerial || !numberOfBatches || !batchSize)) {
+      return poErr(req, ctx, "PROD_PO_MTS_FIELDS_REQUIRED", 400, "production_date, shift_id, batch_start_serial, number_of_batches, batch_size required for MTS");
+    }
+    if (productionDate && !isProductionDateWithinWindow(productionDate)) {
+      return poErr(req, ctx, "PROD_PO_PRODUCTION_DATE_OUTSIDE_ALLOWED_WINDOW", 400, PRODUCTION_DATE_WINDOW_MESSAGE);
     }
     if (priorityInput && !["NORMAL", "URGENT"].includes(priorityInput)) {
       return poErr(req, ctx, "PROD_PO_PRIORITY_INVALID", 400, "priority must be NORMAL or URGENT");
@@ -1836,7 +2190,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const { data: stroke, error: strokeErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_master")
-        .select("status, company_id, prodshade_material_id, material_type, conversion_factor")
+        .select("status, company_id, prodshade_material_id, material_type, conversion_factor, stroke_number")
         .eq("id", strokeId)
         .maybeSingle();
       if (strokeErr) {
@@ -1849,6 +2203,26 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const strokeRow = stroke as JsonRecord;
       if (String(strokeRow.company_id ?? "") !== companyId || String(strokeRow.prodshade_material_id ?? "") !== materialId) {
         return poErr(req, ctx, "PROD_PO_STROKE_MATERIAL_MISMATCH", 422, "Stroke master must belong to the selected company and Prodshade");
+      }
+      // MTS Current-vs-Non-Current Stroke policy (2026-09-17 lock) — server-side
+      // truth, never trusted from the client. Current Stroke = Policy 1 (skips
+      // QA approval, no Start Batch — finalize straight from STANDARD). Any
+      // other stroke = Policy 2 (classic Standard -> QA Approved -> Final ->
+      // Verify, same as MTO/HPS, just without a Start Batch step either).
+      if (isMtsCreate) {
+        const { data: currentStrokeRow, error: currentStrokeErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("mts_current_stroke")
+          .select("stroke_number")
+          .eq("company_id", companyId)
+          .eq("prodshade_material_id", materialId)
+          .maybeSingle();
+        if (currentStrokeErr) {
+          console.error("[process_order.createProcessOrder] mts_current_stroke lookup failed:", JSON.stringify(currentStrokeErr));
+          throw new Error("PROD_PO_CREATE_FAILED");
+        }
+        const currentStrokeNumber = toTrimmedString((currentStrokeRow as JsonRecord | null)?.stroke_number);
+        mtsUsedCurrentStroke = Boolean(currentStrokeNumber) && currentStrokeNumber === toTrimmedString(strokeRow.stroke_number);
       }
       if (poType !== "INT") {
         const { data: applicability, error: applicabilityErr } = await serviceRoleClient
@@ -1874,13 +2248,28 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
           return poErr(req, ctx, "PROD_PO_MACHINE_CAPACITY_NOT_CONFIGURED", 422, "Selected machine must have a positive KG capacity, or a Litre capacity with a valid Stroke conversion factor");
         }
         const maxPlannedQty = capacityKg * MACHINE_CAPACITY_TOLERANCE;
-        if (plannedQty > maxPlannedQty + 0.000001) {
-          return poErr(req, ctx, "PROD_PO_MACHINE_CAPACITY_EXCEEDED", 422, `Planned batch quantity cannot exceed ${maxPlannedQty.toFixed(3)} KG (110% of selected machine capacity)`);
+        // MTS Page 3 declares a whole Batch Range (Number of Batches × Batch
+        // Size) in one PO -- the machine capacity limit is per single physical
+        // batch/pour, so it must check batchSize alone here, never the range's
+        // total. Every other po_type is still one PO = one batch, unchanged.
+        const capacityCheckQty = isMtsCreate ? (batchSize as number) : plannedQty;
+        if (capacityCheckQty > maxPlannedQty + 0.000001) {
+          return poErr(req, ctx, "PROD_PO_MACHINE_CAPACITY_EXCEEDED", 422, `Batch quantity cannot exceed ${maxPlannedQty.toFixed(3)} KG (110% of selected machine capacity)`);
         }
       }
     }
 
-    if (strokeId) {
+    // §138.12/§138.14 (2026-09-18 fix, found live via a real Page 3 click-
+    // through): this up-front fast-fail check was never guarded for MTS,
+    // even though the later prepopulation block was. It checks each
+    // formulation line's OWN default_storage_location_id (R001 or S001)
+    // against generic location-level UNRESTRICTED stock -- no group/alternate
+    // substitution, no machine-bucket awareness -- so it always 422'd MTS
+    // Create with PROD_PO_INSUFFICIENT_STOCK before Page 4 (the real,
+    // machine-bucket-aware, group-alternate-aware check) ever got a chance to
+    // run. MTS has no lines at Create time at all now (see the later,
+    // already-guarded prepopulation block) so there is nothing here to check.
+    if (strokeId && !isMtsCreate) {
       const { data: strokeLines, error: strokeLinesErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
@@ -1936,6 +2325,26 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
+    // MTS Page 3 — resolve the declared Batch Range into concrete batch numbers
+    // and re-check for collisions server-side (the frontend's own live check via
+    // mts-batch-range-check is advisory only; a second tab/request could race it).
+    let mtsBatchNumbers: string[] = [];
+    let mtsBatchNumberFrom: string | null = null;
+    let mtsBatchNumberTo: string | null = null;
+    if (isMtsCreate) {
+      const rangeResult = await resolveMtsBatchRangeNumbers(companyId, materialId, batchStartSerial as number, numberOfBatches as number);
+      if ("errorCode" in rangeResult) {
+        return poErr(req, ctx, rangeResult.errorCode, rangeResult.status, rangeResult.message);
+      }
+      const duplicates = await findDuplicateBatchNumbers(companyId, rangeResult.numbers);
+      if (duplicates.length > 0) {
+        return poErr(req, ctx, "PROD_PO_BATCH_RANGE_DUPLICATE", 409, `Batch number(s) already active: ${duplicates.join(", ")}`);
+      }
+      mtsBatchNumbers = rangeResult.numbers;
+      mtsBatchNumberFrom = rangeResult.numbers[0];
+      mtsBatchNumberTo = rangeResult.numbers[rangeResult.numbers.length - 1];
+    }
+
     const poNumber = await generateGlobalDocNumber("PROC_PO");
     const now = new Date().toISOString();
 
@@ -1954,6 +2363,17 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
         notes: notes || null,
         status: "STANDARD",
         ...(priorityInput ? { priority: priorityInput } : {}),
+        ...(isMtsCreate ? {
+          production_date: productionDate,
+          shift_id: shiftId,
+          batch_number_from: mtsBatchNumberFrom,
+          batch_number_to: mtsBatchNumberTo,
+          number_of_batches: numberOfBatches,
+          // Mirrors the range's start so existing display/reversal code that
+          // already reads process_order.batch_number needs no branching.
+          batch_number: mtsBatchNumberFrom,
+          mts_used_current_stroke: mtsUsedCurrentStroke,
+        } : {}),
         created_by: ctx.auth_user_id,
         created_at: now,
         last_updated_at: now,
@@ -1967,9 +2387,48 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     const poId = String((insertedPo as JsonRecord).id);
+
+    if (isMtsCreate && mtsBatchNumbers.length > 0) {
+      // 2026-09-18 fix: one atomic bulk INSERT (not N separate upserts) so a
+      // collision on any single batch number fails the WHOLE range instead
+      // of leaving it half-inserted — see bulkInsertBatchNumberInstances's
+      // own comment for the race this closes. On the rare loss (someone else
+      // grabbed a colliding batch number in the gap between our earlier
+      // advisory check and this insert), the process_order row we just
+      // created is invalid (its declared range was never actually reserved)
+      // and must be compensated away — no lines exist yet at this point in
+      // the flow, so deleting the PO row alone is enough.
+      const bulkResult = await bulkInsertBatchNumberInstances({
+        companyId,
+        poType: "MTS",
+        prodshadeMaterialId: materialId,
+        batchNumbers: mtsBatchNumbers,
+        processOrderId: poId,
+        authUserId: ctx.auth_user_id,
+      });
+      if (!bulkResult.ok) {
+        const { error: rollbackErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("process_order")
+          .delete()
+          .eq("id", poId);
+        if (rollbackErr) {
+          console.error("[process_order.createProcessOrder] compensating rollback failed:", JSON.stringify(rollbackErr));
+        }
+        return poErr(req, ctx, "PROD_PO_BATCH_RANGE_RACE_LOST", 409, "Someone else just used a batch number in this range. Please re-check the range and try again.");
+      }
+    }
     const insertedLines: JsonRecord[] = [];
 
-    if (strokeId) {
+    // §138.12/§138.14 (2026-09-18): MTS never gets the naive 1:1
+    // formulation-material line here — its RM lines only exist once Page 4's
+    // auto-derive (machine-bucket-aware, possibly multi-row per formulation
+    // item) has run, via saveMtsMaterialPlanHandler below. Creating a
+    // placeholder 1:1 line here would (a) ignore the machine bucket entirely,
+    // reserving/checking against the stroke's declared location as a whole
+    // instead of the specific machine's own sub-bucket, and (b) leave a
+    // stray line behind if Page 4 later needs a different row count.
+    if (strokeId && !isMtsCreate) {
       const { data: strokeLines, error: strokeLineErr } = await serviceRoleClient
         .schema("erp_production")
         .from("stroke_line")
@@ -2022,7 +2481,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
-    const manualLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const manualLines = isMtsCreate ? [] : (Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : []);
     if (manualLines.length > 0) {
       const manualRows = manualLines.map((line, index) => ({
         process_order_id: poId,
@@ -2096,6 +2555,630 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
   }
 }
 
+// ---------------------------------------------------------------------------
+// §138.12/§138.14/§138.15 — MTS Page 4: RM auto-derive material plan.
+//
+// GET returns a computed preview (machine-bucket-aware for machine-tracked
+// stroke lines, real §83.5 location-level check for R001 lines) WITHOUT
+// writing anything. POST persists it. Both share the same computation
+// (`buildMtsMaterialPlanGroupsForOrder`) so the preview a user reviews on
+// Page 4 is byte-for-byte what gets validated/saved -- there is no second,
+// divergent code path.
+// ---------------------------------------------------------------------------
+
+type MtsPlanGroup = {
+  stroke_line_id: string;
+  stroke_line_material_id: string;
+  auto_derive_applicable: boolean;
+  storage_location_id: string;
+  dosage_pct: number | null;
+  standard_qty: number;
+  rows: MtsAutoDeriveRow[];
+  group_member_ids: string[];
+  short: boolean;
+  shortfall_qty: number;
+};
+
+async function fetchMtsPoAndStrokeLines(id: string): Promise<{
+  po: JsonRecord;
+  strokeLines: JsonRecord[];
+  machineStorageLocationId: string | null;
+  strokeShopFloorLocationId: string | null;
+}> {
+  const po = await fetchProcessOrder(id);
+  if (!po) throw new Error("PROD_PO_NOT_FOUND");
+  if (po.po_type !== "MTS") throw new Error("PROD_PO_MTS_PLAN_WRONG_TYPE");
+
+  const strokeMasterId = toTrimmedString(po.stroke_master_id);
+  if (!strokeMasterId) throw new Error("PROD_PO_MTS_PLAN_STROKE_MISSING");
+
+  const { data: strokeLines, error: strokeLineErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_line")
+    .select("id, material_id, alternate_material_id, material_group_id, dosage_pct, display_order, default_storage_location_id")
+    .eq("stroke_master_id", strokeMasterId)
+    .order("display_order");
+  if (strokeLineErr) {
+    console.error("[process_order.mtsMaterialPlan] stroke-line query failed:", JSON.stringify(strokeLineErr));
+    throw new Error("PROD_PO_MTS_PLAN_FAILED");
+  }
+
+  const machineId = toTrimmedString(po.machine_id);
+  let machineStorageLocationId: string | null = null;
+  if (machineId) {
+    const { data: machineRow, error: machineErr } = await serviceRoleClient
+      .schema("erp_master")
+      .from("machine_master")
+      .select("storage_location_id")
+      .eq("id", machineId)
+      .maybeSingle();
+    if (machineErr) {
+      console.error("[process_order.mtsMaterialPlan] machine query failed:", JSON.stringify(machineErr));
+      throw new Error("PROD_PO_MTS_PLAN_FAILED");
+    }
+    machineStorageLocationId = toTrimmedString((machineRow as JsonRecord | null)?.storage_location_id) || null;
+  }
+
+  const { data: strokeRow, error: strokeErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("stroke_master")
+    .select("default_storage_location_id")
+    .eq("id", strokeMasterId)
+    .maybeSingle();
+  if (strokeErr) {
+    console.error("[process_order.mtsMaterialPlan] stroke location query failed:", JSON.stringify(strokeErr));
+    throw new Error("PROD_PO_MTS_PLAN_FAILED");
+  }
+  const strokeShopFloorLocationId = toTrimmedString((strokeRow as JsonRecord | null)?.default_storage_location_id) || null;
+
+  return { po, strokeLines: (strokeLines ?? []) as JsonRecord[], machineStorageLocationId, strokeShopFloorLocationId };
+}
+
+async function resolveMtsPlanCompanyAndAuth(
+  req: Request,
+  ctx: ProdHandlerContext,
+  action: "VIEW" | "WRITE",
+): Promise<{ po: JsonRecord } | { errorResponse: Response }> {
+  const id = getIdFromPath(req);
+  if (!id) return { errorResponse: poErr(req, ctx, "PROD_PO_ID_MISSING", 400, "ID required") };
+  const po = await fetchProcessOrder(id);
+  if (!po) return { errorResponse: poErr(req, ctx, "PROD_PO_NOT_FOUND", 404, "Not found") };
+  try {
+    await assertCompanyScope(ctx, String(po.company_id ?? ""));
+  } catch {
+    return { errorResponse: poErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.") };
+  }
+  if (po.po_type !== "MTS") {
+    return { errorResponse: poErr(req, ctx, "PROD_PO_MTS_PLAN_WRONG_TYPE", 422, "Material plan is only for MTS Process Orders") };
+  }
+  if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_CREATE", action))) {
+    return { errorResponse: poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have access for this company.") };
+  }
+  if (po.status !== "STANDARD") {
+    return { errorResponse: poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, "Material plan can only be reviewed/saved while at STANDARD") };
+  }
+  return { po };
+}
+
+// Header block for Page 4 -- Prodshade/Description/Stroke/Machine/Batch
+// range + Per-Batch and Total Qty (§138.15: "both must show, per-batch alone
+// looks like a mismatch against the total").
+async function buildMtsPlanHeader(po: JsonRecord): Promise<JsonRecord> {
+  const numberOfBatches = Number(po.number_of_batches ?? 0);
+  const totalQty = Number(po.planned_qty ?? 0);
+  const batchSize = numberOfBatches > 0 ? Number((totalQty / numberOfBatches).toFixed(6)) : totalQty;
+
+  const materialMap = await getMaterialMapByIds(
+    [String(po.material_id ?? "")], "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED", "id, pace_code, material_name, document_name",
+  );
+  const prodshade = materialMap.get(String(po.material_id ?? "")) ?? null;
+
+  let strokeNumber: string | null = null;
+  const strokeMasterId = toTrimmedString(po.stroke_master_id);
+  if (strokeMasterId) {
+    const { data: strokeRow } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("stroke_number").eq("id", strokeMasterId).maybeSingle();
+    strokeNumber = toTrimmedString((strokeRow as JsonRecord | null)?.stroke_number) || null;
+  }
+
+  let machineLabel: string | null = null;
+  const machineId = toTrimmedString(po.machine_id);
+  if (machineId) {
+    const { data: machineRow } = await serviceRoleClient
+      .schema("erp_master").from("machine_master")
+      .select("machine_code, machine_name").eq("id", machineId).maybeSingle();
+    const m = machineRow as JsonRecord | null;
+    machineLabel = m ? [toTrimmedString(m.machine_code), toTrimmedString(m.machine_name)].filter(Boolean).join(" - ") || null : null;
+  }
+
+  return {
+    po_number: po.po_number,
+    status: po.status,
+    mts_used_current_stroke: po.mts_used_current_stroke === true,
+    prodshade_pace_code: toTrimmedString(prodshade?.pace_code),
+    prodshade_material_name: toTrimmedString(prodshade?.material_name),
+    prodshade_description: toTrimmedString(prodshade?.document_name),
+    stroke_number: strokeNumber,
+    machine_label: machineLabel,
+    batch_number_from: po.batch_number_from ?? null,
+    batch_number_to: po.batch_number_to ?? null,
+    number_of_batches: numberOfBatches,
+    batch_size: batchSize,
+    total_qty: totalQty,
+  };
+}
+
+export async function getMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const auth = await resolveMtsPlanCompanyAndAuth(req, ctx, "VIEW");
+    if ("errorResponse" in auth) return auth.errorResponse;
+    const po = auth.po;
+    const id = String(po.id);
+    const header = await buildMtsPlanHeader(po);
+
+    const existingLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+    if (existingLines.length > 0) {
+      // Already saved once -- rebuild the same group shape from what is
+      // actually persisted, so revisiting Page 4 shows real state, not a
+      // fresh recompute that could disagree with it.
+      const byStrokeLine = new Map<string, JsonRecord[]>();
+      for (const line of existingLines) {
+        // Do not merge two declared Stroke Lines merely because they share a
+        // material. Stroke 0064, for example, legitimately uses Dolomite at
+        // two different dosages. Old records predate stroke_line_id, so keep
+        // their legacy fallback rather than making a destructive guess.
+        const key = toTrimmedString(line.stroke_line_id) || `legacy:${String(line.material_id)}:${String(line.display_order)}`;
+        const list = byStrokeLine.get(key) ?? [];
+        list.push(line);
+        byStrokeLine.set(key, list);
+      }
+      const groups: MtsPlanGroup[] = [];
+      for (const [strokeLineId, lines] of byStrokeLine.entries()) {
+        const firstLine = lines.find((l) => l.is_formulation_line !== false) ?? lines[0];
+        const formulationMaterialId = String(firstLine.material_id);
+        groups.push({
+          stroke_line_id: strokeLineId,
+          stroke_line_material_id: formulationMaterialId,
+          auto_derive_applicable: true,
+          storage_location_id: toTrimmedString(firstLine.issue_sloc_id) || "",
+          dosage_pct: firstLine.dosage_pct === null || firstLine.dosage_pct === undefined ? null : Number(firstLine.dosage_pct),
+          standard_qty: Number(firstLine.planned_qty ?? 0),
+          rows: lines.map((l) => ({
+            stroke_line_id: strokeLineId,
+            stroke_line_material_id: formulationMaterialId,
+            actual_material_id: toTrimmedString(l.actual_material_id) || formulationMaterialId,
+            is_formulation_line: l.is_formulation_line !== false,
+            dosage_pct: l.dosage_pct === null || l.dosage_pct === undefined ? null : Number(l.dosage_pct),
+            planned_qty: Number(l.planned_qty ?? 0),
+            actual_qty: Number(l.actual_qty ?? 0),
+            available_qty: 0,
+          })),
+          group_member_ids: [],
+          short: false,
+          shortfall_qty: 0,
+        });
+      }
+      const savedMaterialIds = new Set<string>();
+      for (const group of groups) {
+        savedMaterialIds.add(group.stroke_line_material_id);
+        for (const row of group.rows) savedMaterialIds.add(row.actual_material_id);
+      }
+      const savedMaterialMap = await getMaterialMapByIds(
+        [...savedMaterialIds], "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED", "id, pace_code, material_name, base_uom_code, material_type",
+      );
+      const savedSlocIds = new Set(groups.map((g) => g.storage_location_id).filter(Boolean));
+      const savedSlocMap = await getStorageLocationMapByIds([...savedSlocIds], "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED");
+      return okResponse({
+        saved: true,
+        header,
+        groups,
+        materials: Object.fromEntries([...savedMaterialMap.entries()]),
+        storage_locations: Object.fromEntries([...savedSlocMap.entries()]),
+      }, ctx.request_id, req);
+    }
+
+    const { strokeLines, machineStorageLocationId, strokeShopFloorLocationId } = await fetchMtsPoAndStrokeLines(id);
+    const machineId = toTrimmedString(po.machine_id);
+    const groups = await buildMtsMaterialPlanGroupsForOrder(
+      String(po.company_id), strokeLines, machineStorageLocationId, strokeShopFloorLocationId, machineId, Number(po.planned_qty ?? 0),
+    );
+
+    const materialIds = new Set<string>();
+    for (const group of groups) {
+      materialIds.add(group.stroke_line_material_id);
+      for (const row of group.rows) materialIds.add(row.actual_material_id);
+      for (const memberId of group.group_member_ids) materialIds.add(memberId);
+    }
+    const materialMap = await getMaterialMapByIds(
+      [...materialIds], "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED", "id, pace_code, material_name, base_uom_code, material_type",
+    );
+    const slocIds = new Set(groups.map((g) => g.storage_location_id));
+    const slocMap = await getStorageLocationMapByIds([...slocIds], "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED");
+
+    return okResponse({
+      saved: false,
+      header,
+      groups,
+      materials: Object.fromEntries([...materialMap.entries()].map(([k, v]) => [k, v])),
+      storage_locations: Object.fromEntries([...slocMap.entries()].map(([k, v]) => [k, v])),
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_MTS_PLAN_FAILED";
+    return poErr(req, ctx, code, code === "PROD_PO_NOT_FOUND" ? 404 : 500, "Failed to load material plan");
+  }
+}
+
+// Thin wrapper so buildMtsMaterialPlanGroups (which needs the real machine_id
+// for the bucket read) can stay a pure function of its inputs.
+export async function buildMtsMaterialPlanGroupsForOrder(
+  companyId: string,
+  strokeLines: JsonRecord[],
+  machineStorageLocationId: string | null,
+  strokeShopFloorLocationId: string | null,
+  machineId: string,
+  totalPlannedQty: number,
+): Promise<MtsPlanGroup[]> {
+  if (strokeLines.length === 0) return [];
+  const allowedAlternateMap = await buildAllowedAlternateIdsByStrokeLines(
+    strokeLines, "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED",
+    (line) => toTrimmedString(line.id) || String(line.material_id ?? ""),
+  );
+  const normalMachineTrackedLines = machineStorageLocationId
+    ? strokeLines.filter((line) => toTrimmedString(line.default_storage_location_id) === machineStorageLocationId)
+    : [];
+  // §138.4: selecting an MTS machine at another shop-floor location is an
+  // explicit exception. The selected location's Unassigned bucket supplies
+  // the shop-floor stroke lines; bulk/R001 lines remain ordinary manual picks.
+  const isForeignMachine = Boolean(
+    machineStorageLocationId && strokeShopFloorLocationId && machineStorageLocationId !== strokeShopFloorLocationId,
+  );
+  const machineTrackedLines = isForeignMachine
+    ? strokeLines.filter((line) => toTrimmedString(line.default_storage_location_id) === strokeShopFloorLocationId)
+    : normalMachineTrackedLines;
+  const manualPickLines = strokeLines.filter((line) => !machineTrackedLines.includes(line));
+
+  const machineCandidateIds = new Set<string>();
+  for (const line of machineTrackedLines) {
+    machineCandidateIds.add(String(line.material_id));
+    for (const altId of allowedAlternateMap.get(String(line.id)) ?? []) machineCandidateIds.add(altId);
+  }
+  const bucketBalances = (machineStorageLocationId && machineId)
+    ? await fetchNetMachineBucketBalances(companyId, machineStorageLocationId, isForeignMachine ? null : machineId, [...machineCandidateIds])
+    : new Map<string, number>();
+
+  const groups: MtsPlanGroup[] = [];
+  for (const line of machineTrackedLines) {
+    const strokeLineId = String(line.id);
+    const formulationMaterialId = String(line.material_id);
+    const hasDosage = line.dosage_pct !== null && line.dosage_pct !== undefined;
+    const dosagePct = Number(line.dosage_pct ?? 0);
+    const standardQty = Number(((dosagePct / 100) * totalPlannedQty).toFixed(6));
+    const alternateIds = allowedAlternateMap.get(strokeLineId) ?? [];
+    const { rows, short, shortfallQty } = computeMtsAutoDeriveRowsForGroup({
+      strokeLineId,
+      formulationMaterialId,
+      dosagePct: hasDosage ? dosagePct : null,
+      standardQty,
+      alternateMaterialIds: alternateIds,
+      bucketBalances,
+    });
+    // A machine bucket is one physical pool.  Subsequent formulation groups
+    // must only see what this group did not already allocate from it.
+    for (const row of rows) {
+      if (row.actual_qty > EPSILON) {
+        bucketBalances.set(
+          row.actual_material_id,
+          Number(((bucketBalances.get(row.actual_material_id) ?? 0) - row.actual_qty).toFixed(6)),
+        );
+      }
+    }
+    groups.push({
+      stroke_line_id: strokeLineId,
+      stroke_line_material_id: formulationMaterialId,
+      auto_derive_applicable: true,
+      storage_location_id: isForeignMachine ? String(machineStorageLocationId) : String(line.default_storage_location_id),
+      dosage_pct: hasDosage ? dosagePct : null,
+      standard_qty: standardQty,
+      rows,
+      group_member_ids: [formulationMaterialId, ...alternateIds],
+      short,
+      shortfall_qty: shortfallQty,
+    });
+  }
+
+  if (manualPickLines.length > 0) {
+    const needed = new Map<string, AvailabilityNeed>();
+    for (const line of manualPickLines) {
+      const strokeLineId = String(line.id);
+      const formulationMaterialId = String(line.material_id);
+      const locationId = String(line.default_storage_location_id);
+      const candidateIds = [formulationMaterialId, ...(allowedAlternateMap.get(strokeLineId) ?? [])];
+      for (const candidateId of candidateIds) {
+        // computeAvailabilityRows deliberately ignores zero-quantity entries.
+        // Page 4 needs the live balance for every manual-pick choice, not a
+        // requested quantity at preview time, so use a harmless positive probe.
+        needed.set(buildAvailabilityKey(candidateId, locationId), { materialId: candidateId, storageLocationId: locationId, qty: 1 });
+      }
+    }
+    const availabilityRows = needed.size > 0 ? await computeAvailabilityRows(companyId, needed) : [];
+    const availabilityByKey = new Map(availabilityRows.map((row) => [buildAvailabilityKey(row.material_id, row.storage_location_id), row.available_qty]));
+
+    for (const line of manualPickLines) {
+      const strokeLineId = String(line.id);
+      const formulationMaterialId = String(line.material_id);
+      const hasDosage = line.dosage_pct !== null && line.dosage_pct !== undefined;
+      const dosagePct = Number(line.dosage_pct ?? 0);
+      const standardQty = Number(((dosagePct / 100) * totalPlannedQty).toFixed(6));
+      const locationId = String(line.default_storage_location_id);
+      const alternateIds = allowedAlternateMap.get(strokeLineId) ?? [];
+      const candidateIds = [formulationMaterialId, ...alternateIds];
+      groups.push({
+        stroke_line_id: strokeLineId,
+        stroke_line_material_id: formulationMaterialId,
+        auto_derive_applicable: false,
+        storage_location_id: locationId,
+        dosage_pct: hasDosage ? dosagePct : null,
+        standard_qty: standardQty,
+        rows: candidateIds.map((candidateId) => ({
+          stroke_line_id: strokeLineId,
+          stroke_line_material_id: formulationMaterialId,
+          actual_material_id: candidateId,
+          is_formulation_line: candidateId === formulationMaterialId,
+          dosage_pct: candidateId === formulationMaterialId ? (hasDosage ? dosagePct : null) : null,
+          planned_qty: candidateId === formulationMaterialId ? standardQty : 0,
+          actual_qty: 0,
+          available_qty: availabilityByKey.get(buildAvailabilityKey(candidateId, locationId)) ?? 0,
+        })),
+        group_member_ids: candidateIds,
+        short: (availabilityByKey.get(buildAvailabilityKey(formulationMaterialId, locationId)) ?? 0) < standardQty - EPSILON
+          && alternateIds.every((altId) => (availabilityByKey.get(buildAvailabilityKey(altId, locationId)) ?? 0) < standardQty - EPSILON),
+        shortfall_qty: 0,
+      });
+    }
+  }
+
+  return groups;
+}
+
+export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const auth = await resolveMtsPlanCompanyAndAuth(req, ctx, "WRITE");
+    if ("errorResponse" in auth) return auth.errorResponse;
+    const po = auth.po;
+    const id = String(po.id);
+    const companyId = String(po.company_id);
+
+    const existingLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+    if (existingLines.length > 0) {
+      // v1 scope (2026-09-18): re-save/redo is not supported yet -- once
+      // Page 4 has been saved once, further changes happen the normal way
+      // (edit/correct at a later stage). Avoids having to also tear down
+      // and re-create reservations here.
+      return poErr(req, ctx, "PROD_PO_MTS_PLAN_ALREADY_SAVED", 409, "Material plan already saved for this Process Order");
+    }
+
+    const { strokeLines, machineStorageLocationId, strokeShopFloorLocationId } = await fetchMtsPoAndStrokeLines(id);
+    if (strokeLines.length === 0) {
+      return poErr(req, ctx, "PROD_PO_MTS_PLAN_NO_STROKE_LINES", 422, "This stroke has no RM lines configured");
+    }
+    const machineId = toTrimmedString(po.machine_id);
+    const totalPlannedQty = Number(po.planned_qty ?? 0);
+    const isEditable = po.mts_used_current_stroke === true; // §138.12 stage/editability table
+
+    const serverGroups = await buildMtsMaterialPlanGroupsForOrder(
+      companyId, strokeLines, machineStorageLocationId, strokeShopFloorLocationId, machineId, totalPlannedQty,
+    );
+
+    const body = await parseBody(req);
+    const bodyGroupsByStrokeLine = new Map<string, JsonRecord>();
+    for (const entry of (Array.isArray(body.groups) ? body.groups : []) as JsonRecord[]) {
+      const key = toTrimmedString(entry.stroke_line_id);
+      if (key) bodyGroupsByStrokeLine.set(key, entry);
+    }
+
+    const shortGroupLabels: string[] = [];
+    const finalRows: Array<{
+      stroke_line_id: string;
+      stroke_line_material_id: string;
+      actual_material_id: string;
+      is_formulation_line: boolean;
+      dosage_pct: number | null;
+      planned_qty: number;
+      actual_qty: number;
+      storage_location_id: string;
+      variance_qty?: number;
+    }> = [];
+
+    for (const group of serverGroups) {
+      if (group.auto_derive_applicable) {
+        // Policy 1 (Current Stroke) is fully editable at Standard; Policy 2
+        // is read-only here (edit moves to Final/Verify per §138.12's stage
+        // table) -- either way, an override is only ever a same-group
+        // material swap layered on the server's own freshly-computed rows,
+        // never an arbitrary client-invented row set.
+        const override = isEditable ? bodyGroupsByStrokeLine.get(group.stroke_line_id) : null;
+        const overrideRows = override && Array.isArray(override.rows) ? (override.rows as JsonRecord[]) : null;
+
+        let rows = group.rows;
+        if (overrideRows && overrideRows.length > 0) {
+          const allowedIds = new Set(group.group_member_ids);
+          const seen = new Set<string>();
+          let sumQty = 0;
+          const mapped: MtsAutoDeriveRow[] = [];
+          for (const [index, r] of overrideRows.entries()) {
+            const actualMaterialId = toTrimmedString(r.actual_material_id);
+            if (!actualMaterialId || !allowedIds.has(actualMaterialId)) {
+              return poErr(req, ctx, "PROD_PO_MTS_PLAN_MATERIAL_NOT_IN_GROUP", 422, "actual_material_id must be the formulation item or a registered alternate for this line");
+            }
+            if (seen.has(actualMaterialId)) {
+              return poErr(req, ctx, "PROD_PO_MTS_PLAN_DUPLICATE_MATERIAL", 422, "The same material cannot be selected twice within one formulation line");
+            }
+            seen.add(actualMaterialId);
+            const qty = Number(parseNonNegativeNumber(r.actual_qty) ?? 0);
+            sumQty = Number((sumQty + qty).toFixed(6));
+            mapped.push({
+              stroke_line_id: group.stroke_line_id,
+              stroke_line_material_id: group.stroke_line_material_id,
+              actual_material_id: actualMaterialId,
+              is_formulation_line: index === 0,
+              dosage_pct: index === 0 ? group.dosage_pct : null,
+              planned_qty: index === 0 ? group.standard_qty : 0,
+              actual_qty: qty,
+              available_qty: 0,
+            });
+          }
+          // §138.12 refinement (2026-09-18): over-Standard stays a hard block
+          // (never allowed); under-Standard is allowed ONLY when the client
+          // sends an explicit confirmed_shortfall flag for this group (the
+          // frontend's own "you are taking less than required, do you agree?"
+          // modal) -- an unconfirmed under-total is still rejected, just with
+          // a distinct code so the frontend knows to show that modal rather
+          // than treating it as a plain validation error.
+          if (sumQty > group.standard_qty + EPSILON) {
+            return poErr(req, ctx, "PROD_PO_MTS_PLAN_QTY_MISMATCH", 422, `Row quantities for ${group.stroke_line_material_id} exceed the Standard Qty`);
+          }
+          if (sumQty < group.standard_qty - EPSILON && override?.confirmed_shortfall !== true) {
+            return poErr(req, ctx, "PROD_PO_MTS_PLAN_SHORTFALL_NOT_CONFIRMED", 422, `Row quantities for ${group.stroke_line_material_id} are below the Standard Qty and have not been confirmed`);
+          }
+          // Record the confirmed shortfall (if any) on the group's own first
+          // row so it stays visible/auditable after save -- variance_qty is
+          // an existing, general-purpose column, not repurposed from another
+          // meaning (process_order_line_reco's own variance_qty is a
+          // different, Verify-time concept; this is Standard-time only).
+          if (mapped.length > 0) {
+            mapped[0].planned_qty = group.standard_qty;
+            mapped[0].variance_qty = Number((group.standard_qty - sumQty).toFixed(6));
+          }
+          rows = mapped;
+        }
+
+        if (group.short) shortGroupLabels.push(group.stroke_line_material_id);
+        for (const row of rows) {
+          finalRows.push({ ...row, stroke_line_id: group.stroke_line_id, storage_location_id: group.storage_location_id });
+        }
+      } else {
+        // R001-style: client MUST supply exactly one manual pick.
+        const override = bodyGroupsByStrokeLine.get(group.stroke_line_id);
+        const chosenMaterialId = toTrimmedString(override?.actual_material_id);
+        if (!chosenMaterialId || !group.group_member_ids.includes(chosenMaterialId)) {
+          return poErr(req, ctx, "PROD_PO_MTS_PLAN_MATERIAL_REQUIRED", 422, `An Actual Material must be selected for ${group.stroke_line_material_id}`);
+        }
+        const chosenRow = group.rows.find((r) => r.actual_material_id === chosenMaterialId);
+        const available = chosenRow?.available_qty ?? 0;
+        if (available < group.standard_qty - EPSILON) {
+          shortGroupLabels.push(group.stroke_line_material_id);
+        }
+        finalRows.push({
+          stroke_line_id: group.stroke_line_id,
+          stroke_line_material_id: group.stroke_line_material_id,
+          actual_material_id: chosenMaterialId,
+          is_formulation_line: true,
+          dosage_pct: group.dosage_pct,
+          planned_qty: group.standard_qty,
+          actual_qty: group.standard_qty,
+          storage_location_id: group.storage_location_id,
+        });
+      }
+    }
+
+    // Validate the completed plan as one allocation, rather than validating
+    // each group independently against the same physical stock.  A material
+    // can be an allowed alternate for more than one formulation line.
+    const autoStrokeLineIds = new Set(
+      serverGroups.filter((group) => group.auto_derive_applicable).map((group) => group.stroke_line_id),
+    );
+    const machineNeeds = new Map<string, number>();
+    const manualNeeds = new Map<string, AvailabilityNeed>();
+    const labelsByNeedKey = new Map<string, string[]>();
+    for (const row of finalRows) {
+      if (row.actual_qty <= EPSILON) continue;
+      if (autoStrokeLineIds.has(row.stroke_line_id)) {
+        machineNeeds.set(row.actual_material_id, Number(((machineNeeds.get(row.actual_material_id) ?? 0) + row.actual_qty).toFixed(6)));
+      } else {
+        const key = buildAvailabilityKey(row.actual_material_id, row.storage_location_id);
+        const current = manualNeeds.get(key);
+        manualNeeds.set(key, {
+          materialId: row.actual_material_id,
+          storageLocationId: row.storage_location_id,
+          qty: Number(((current?.qty ?? 0) + row.actual_qty).toFixed(6)),
+        });
+        labelsByNeedKey.set(key, [...(labelsByNeedKey.get(key) ?? []), row.stroke_line_material_id]);
+      }
+    }
+    if (machineNeeds.size > 0) {
+      const useUnassignedBucket = Boolean(
+        machineStorageLocationId && strokeShopFloorLocationId && machineStorageLocationId !== strokeShopFloorLocationId,
+      );
+      const freshBalances = machineStorageLocationId && machineId
+        ? await fetchMachineBucketBalances(companyId, machineStorageLocationId, useUnassignedBucket ? null : machineId, [...machineNeeds.keys()])
+        : new Map<string, number>();
+      for (const [materialId, qty] of machineNeeds.entries()) {
+        if (qty > Math.max(0, freshBalances.get(materialId) ?? 0) + EPSILON) {
+          for (const row of finalRows.filter((r) => r.actual_material_id === materialId && autoStrokeLineIds.has(r.stroke_line_id))) {
+            shortGroupLabels.push(row.stroke_line_material_id);
+          }
+        }
+      }
+    }
+    if (manualNeeds.size > 0) {
+      const availabilityRows = await computeAvailabilityRows(companyId, manualNeeds);
+      for (const row of availabilityRows) {
+        if (row.short) shortGroupLabels.push(...(labelsByNeedKey.get(buildAvailabilityKey(row.material_id, row.storage_location_id)) ?? []));
+      }
+    }
+
+    if (shortGroupLabels.length > 0) {
+      const detail = await formatMaterialLabels([...new Set(shortGroupLabels)]);
+      return poErr(req, ctx, "PROD_PO_INSUFFICIENT_STOCK", 422, `Insufficient stock (formulation + alternates combined) for: ${detail}`);
+    }
+
+    const lineRows = finalRows.map((row, index) => ({
+      process_order_id: id,
+      stroke_line_id: row.stroke_line_id,
+      material_id: row.stroke_line_material_id,
+      actual_material_id: row.actual_material_id === row.stroke_line_material_id ? null : row.actual_material_id,
+      planned_qty: row.planned_qty,
+      actual_qty: row.actual_qty,
+      uom_code: "KG",
+      issue_sloc_id: row.storage_location_id,
+      is_rm: true,
+      display_order: index,
+      dosage_pct: row.dosage_pct,
+      is_formulation_line: row.is_formulation_line,
+      // §138.12: AP-Approved defaults to Yes for every row, including
+      // auto-derived split rows (business owner, 2026-09-18).
+      approved_status: "YES",
+      ap_approved_qty: row.actual_qty,
+      // Confirmed-shortfall audit trail (2026-09-18 refinement) -- non-zero
+      // only on a group's first row, only when the user explicitly accepted
+      // an under-Standard save via the confirm modal.
+      variance_qty: row.variance_qty ?? null,
+    }));
+
+    const atomicLines = lineRows.map((line) => ({ ...line, company_id: companyId }));
+    const { data: linesCreated, error: saveErr } = await serviceRoleClient
+      .schema("erp_production")
+      .rpc("save_mts_material_plan_atomic", {
+        p_process_order_id: id,
+        p_actor_id: ctx.auth_user_id,
+        p_required_by_date: toTrimmedString(po.production_date) || null,
+        p_lines: atomicLines,
+      });
+    if (saveErr) {
+      console.error("[process_order.saveMtsMaterialPlan] atomic save failed:", JSON.stringify(saveErr));
+      throw new Error("PROD_PO_MTS_PLAN_SAVE_FAILED");
+    }
+
+    return createdOkResponse({ id, lines_created: Number(linesCreated ?? lineRows.length) }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PO_MTS_PLAN_SAVE_FAILED";
+    return poErr(req, ctx, code, code === "PROD_PO_NOT_FOUND" ? 404 : 500, "Failed to save material plan");
+  }
+}
+
 export async function pruneProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -2111,6 +3194,9 @@ export async function pruneProcessOrderHandler(req: Request, ctx: ProdHandlerCon
     }
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Process PO for this company.");
+    }
+    if (po.po_type === "MTS") {
+      return poErr(req, ctx, "PROD_PO_MTS_EDIT_NOT_APPLICABLE", 422, "MTS Process POs cannot be edited. Reject at QA Approval for a non-current stroke, or reject at Verify once the PO is Verify-ready.");
     }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_PRUNE_STATUS_INVALID", 422, "Prune allowed only at STANDARD");
@@ -2278,10 +3364,70 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
     if (po.po_type === "MTEST") {
       return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "MTEST Process Orders skip QA approval — start batch directly from STANDARD");
     }
+    // MTS Policy 1 (Current Stroke) skips the extra QA Approval review: Page 6
+    // creates the parent directly in FINAL, ready for the common Verify step.
+    if (po.po_type === "MTS" && po.mts_used_current_stroke === true) {
+      return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "MTS Process Orders using the Current Stroke skip QA approval — they are ready for Verify after Page 6");
+    }
 
     const lines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
     if (lines.length === 0) {
       return poErr(req, ctx, "PROD_PO_NO_LINES", 422, "Cannot approve without RM lines");
+    }
+
+    // MTS Policy 2 (non-current stroke): Pages 1-6 are editable for the
+    // operator, then QA signs off that immutable, Page-6-created plan.  There
+    // is deliberately no separate Production Final screen afterwards.  QA
+    // approval moves the parent straight to FINAL, making it eligible for the
+    // common MTS Verify workspace.  Child PMTS orders remain STANDARD until
+    // that one Verify-and-post action finalizes them together.
+    if (po.po_type === "MTS") {
+      const [snapshotResult, packingResult] = await Promise.all([
+        serviceRoleClient
+          .schema("erp_production")
+          .from("mts_creation_snapshot")
+          .select("process_order_id")
+          .eq("process_order_id", id)
+          .maybeSingle(),
+        serviceRoleClient
+          .schema("erp_production")
+          .from("packing_order")
+          .select("id, status, po_type")
+          .eq("process_order_id", id),
+      ]);
+      if (snapshotResult.error || packingResult.error) {
+        console.error("[process_order.qaApproveProcessOrder] MTS review lookup failed:", JSON.stringify(snapshotResult.error ?? packingResult.error));
+        throw new Error("PROD_MTS_QA_APPROVE_FAILED");
+      }
+      const children = (packingResult.data ?? []) as JsonRecord[];
+      if (!snapshotResult.data || children.length === 0 || children.some((child) => child.po_type !== "PMTS" || child.status !== "STANDARD")) {
+        return poErr(req, ctx, "PROD_MTS_QA_APPROVE_STATE_INVALID", 422, "MTS approval requires its original Page-6 snapshot and untouched linked PMTS Packing POs");
+      }
+
+      const now = new Date().toISOString();
+      const { data: updated, error } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order")
+        .update({
+          status: "FINAL",
+          priority: "NORMAL",
+          qa_decided_by: ctx.auth_user_id,
+          qa_decided_at: now,
+          last_updated_at: now,
+          last_updated_by: ctx.auth_user_id,
+        })
+        .eq("id", id)
+        .eq("status", "STANDARD")
+        .select("id")
+        .maybeSingle();
+      if (error) {
+        console.error("[process_order.qaApproveProcessOrder] MTS update failed:", JSON.stringify(error));
+        throw new Error("PROD_MTS_QA_APPROVE_FAILED");
+      }
+      if (!updated) {
+        return poErr(req, ctx, "PROD_MTS_QA_APPROVE_STATE_INVALID", 422, "MTS Process PO changed while QA was reviewing it; reload the queue");
+      }
+      return okResponse({ id, status: "FINAL", priority: "NORMAL" }, ctx.request_id, req);
     }
 
     // §136 (2026-09-04) — QA sets Priority here (Normal default, Urgent
@@ -2466,11 +3612,37 @@ export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandler
     if (po.po_type === "INT") {
       return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "INT Process Orders skip QA approval — use Reverse instead of QA Reject");
     }
+    // MTS Policy 1 (Current Stroke) — same as QA Approve, this order never had a
+    // QA-approval checkpoint to reject at.
+    if (po.po_type === "MTS" && po.mts_used_current_stroke === true) {
+      return poErr(req, ctx, "PROD_PO_QA_NOT_APPLICABLE", 422, "MTS Process Orders using the Current Stroke skip QA approval — use Reverse instead of QA Reject");
+    }
 
     const body = await parseBody(req);
     const reason = toTrimmedString(body.reason);
     if (!reason) {
       return poErr(req, ctx, "PROD_QA_REJECT_REASON_MISSING", 400, "reason required");
+    }
+
+    // MTS Page 6 creates the parent, every linked PMTS Packing PO, every
+    // reservation, and the temporary batch claim as one unit.  Its QA-reject
+    // path must unwind that same unit; asking QA to cancel children separately
+    // would leave a half-rejected MTS session and keep stock/range blocked.
+    if (po.po_type === "MTS") {
+      const { error: rejectErr } = await serviceRoleClient
+        .schema("erp_production")
+        .rpc("reject_mts_documents_atomic", {
+          p_process_order_id: id,
+          p_actor_id: ctx.auth_user_id,
+          p_reason: reason,
+        });
+      if (rejectErr) {
+        console.error("[process_order.qaRejectProcessOrder] MTS atomic reject failed:", JSON.stringify(rejectErr));
+        const message = String((rejectErr as { message?: string }).message ?? "");
+        if (message.includes("PROD_MTS_")) return poErr(req, ctx, message.split(":" )[0], 422, "MTS QA reject could not safely cancel its linked documents");
+        throw new Error("PROD_PO_QA_REJECT_FAILED");
+      }
+      return okResponse({ id, status: "CANCELLED" }, ctx.request_id, req);
     }
 
     const now = new Date().toISOString();
@@ -2523,19 +3695,25 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Start Batch access for this company.");
     }
 
-    // §131.1 (2026-08-26): MTS skips the QA_APPROVED gate entirely — QA is not even the
-    // actor there, so there is no separate "QA approves" step to wait for, ever.
+    // MTS Page 3 (2026-09-17 lock) — Start Batch no longer exists for MTS at all.
+    // The batch range is declared and its batch_number_instance rows go ACTIVE
+    // at Create itself (createProcessOrderHandler), not at a later click. An MTS
+    // PO reaches Verify from Page 6 (current stroke) or QA Approval (non-current
+    // stroke). Fail loud instead of letting this stale route silently regenerate
+    // a second, conflicting batch number.
+    if (po.po_type === "MTS") {
+      return poErr(req, ctx, "PROD_PO_START_BATCH_NOT_APPLICABLE", 422, "MTS Process Orders do not use Start Batch — Page 6 controls the batch plan and then leads to Verify.");
+    }
+
     // §136 (2026-09-04): an URGENT MTO/HPS PO must clear Manager Approval first —
     // MANAGER_APPROVED replaces QA_APPROVED as the required status for it specifically.
     // §136 follow-up (2026-09-08): MTEST also has no QA_APPROVED step (§131.1 — QA is the
     // only actor, Standard creation IS the approval), but an URGENT MTEST PO still needs
     // Manager Approval before Start Batch, same as URGENT MTO/HPS — the required status
     // just starts from STANDARD instead of QA_APPROVED, since MTEST never passes through it.
-    const requiredStatus = po.po_type === "MTS"
-      ? "STANDARD"
-      : po.po_type === "MTEST"
-        ? (po.priority === "URGENT" ? "MANAGER_APPROVED" : "STANDARD")
-        : (po.priority === "URGENT" ? "MANAGER_APPROVED" : "QA_APPROVED");
+    const requiredStatus = po.po_type === "MTEST"
+      ? (po.priority === "URGENT" ? "MANAGER_APPROVED" : "STANDARD")
+      : (po.priority === "URGENT" ? "MANAGER_APPROVED" : "QA_APPROVED");
     if (po.status !== requiredStatus) {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Must be ${requiredStatus} to start batch`);
     }
@@ -2543,7 +3721,6 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
     const batchTypeMap: Record<string, string> = {
       MTO: "MTO",
       HPS: "HPS",
-      MTS: "MTS",
       MTEST: "MTEST",
     };
     const batchType = batchTypeMap[String(po.po_type)];
@@ -2576,6 +3753,15 @@ export async function startBatchHandler(req: Request, ctx: ProdHandlerContext): 
       // Caller hasn't explicitly chosen to skip yet — surface the choice instead of silently picking one.
       return poErr(req, ctx, "PROD_BATCH_RELEASED_AVAILABLE", 409, "Released batch numbers are available for this company and PO type");
     } else {
+      // MTS-only: SA can mark a Prodshade's batch series manual-entry-only
+      // (unchecked "auto-generate" on SA Batch Series) for a production line
+      // where the batch number is decided by hand (e.g. a pre-printed
+      // pack-size run) rather than sequentially assigned. This screen has no
+      // manual-entry input yet -- fail loud instead of silently ignoring the
+      // setting and auto-generating anyway.
+      if (batchType === "MTS" && !(await isBatchSeriesAutoGenerate(companyId, batchType, prodshadeId))) {
+        return poErr(req, ctx, "PROD_PO_MANUAL_BATCH_NUMBER_REQUIRED", 422, "This Prodshade's batch series is manual-entry-only -- Start Batch cannot auto-generate a number for it yet");
+      }
       batchNumber = await generateBatchNumber(companyId, batchType, prodshadeId);
     }
     const now = new Date().toISOString();
@@ -2899,8 +4085,14 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), finalResourceCode, "WRITE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
     }
+    // MTS has no standalone Production Final screen.  Current-stroke MTS
+    // reaches FINAL at Page 6; non-current MTS reaches FINAL when QA approves
+    // its Page-6 plan.  Both continue directly to common QA Verify.
+    if (po.po_type === "MTS") {
+      return poErr(req, ctx, "PROD_PO_MTS_FINAL_NOT_APPLICABLE", 422, "MTS Process Orders move directly from Page 6 or QA Approval to Verify");
+    }
     // Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
-    // §83.5) so it finalizes directly from STANDARD. Every other po_type still needs
+    // §83.5) so it finalizes directly from STANDARD. MTO/HPS/MTEST still need
     // BATCH_STARTED (reached via Start Batch — MTEST skips the QA_APPROVED gate before
     // that per §131.1, but still needs BATCH_STARTED to reach Final). MTEST does NOT use
     // the postsAtFinal/INT branch below (its posting shape — RM+PM+SFG+QI-release+reco —
@@ -2908,7 +4100,14 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     // write further down runs, MTEST calls runProcessOrderVerify() directly (see the
     // po.po_type === "MTEST" branch right after that write) so Final absorbs Verify in
     // one request, same posting logic verifyProcessOrderHandler uses for MTO/HPS/MTS.
-    const requiredStatus = po.po_type === "INT" ? "STANDARD" : "BATCH_STARTED";
+    // MTS does not have a standalone Production Final step. It reaches FINAL at
+    // Page 6 for a current stroke, or after the non-current QA Approval review,
+    // then proceeds to its own Verify action.
+    const requiredStatus = po.po_type === "INT"
+      ? "STANDARD"
+      : po.po_type === "MTS"
+        ? (po.mts_used_current_stroke === true ? "STANDARD" : "QA_APPROVED")
+        : "BATCH_STARTED";
     if (po.status !== requiredStatus) {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Must be ${requiredStatus} to finalize`);
     }
@@ -3210,6 +4409,14 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
 
     const body = await parseBody(req);
+    // MTS is deliberately not a variation of the normal Process-PO Verify
+    // workflow. Its Page-6-created PMTS children supply the SKU output; posting
+    // the generic path would incorrectly receive the prodshade as SFG and would
+    // also make the MTS formulation editable. Keep this branch ahead of the
+    // generic line-update routine so neither of those things can happen.
+    if (po.po_type === "MTS") {
+      return await runMtsProcessOrderVerify(req, ctx, po, id, body);
+    }
     const verifiedQty = parsePositiveNumber(body.verified_qty ?? body.verified_qty_kg) ?? Number(po.actual_qty ?? 0);
     const applyResult = await applyFinalOrVerifyLineUpdates({
       req,
@@ -3226,6 +4433,488 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     const code = err instanceof Error ? err.message : "PROD_PO_VERIFY_FAILED";
     return poErr(req, ctx, code, 500, `Verify failed: ${err instanceof Error ? err.message : ""}`);
   }
+}
+
+const MTS_VERIFY_CHECK_CODES = [
+  "PRODSHADE_DESCRIPTION",
+  "STROKE",
+  "MACHINE",
+  "DATE_SHIFT",
+  "BATCH_SIZE_COUNT",
+  "BATCH_RANGE",
+  "PLANNED_OUTPUT",
+  "STORAGE_LOCATION",
+  "PACKING_DECLARATION",
+  "GAIN_LOSS",
+] as const;
+
+function mtsBatchSort(left: string, right: string): number {
+  const leftMatch = left.match(/^(.*?)(\d+)$/);
+  const rightMatch = right.match(/^(.*?)(\d+)$/);
+  if (leftMatch && rightMatch && leftMatch[1] === rightMatch[1]) {
+    return Number(leftMatch[2]) - Number(rightMatch[2]);
+  }
+  return left.localeCompare(right, undefined, { numeric: true });
+}
+
+function mtsQty(value: unknown): number {
+  const quantity = Number(value ?? 0);
+  return Number.isFinite(quantity) ? Number(quantity.toFixed(6)) : 0;
+}
+
+// §138 (2026-09-22, business owner): MTS Verify's RM/PM consumption must post one
+// stock_ledger movement PER BATCH (its own batch_number), not one blended lump sum --
+// stock_snapshot stays blended either way (matches MTO/HPS never splitting the snapshot
+// by batch, §8D), only the ledger gains per-batch genealogy. Splits `totalQty`
+// proportionally by each key's `weight` (a batch's own declared output share); the last
+// weighted entry absorbs the rounding remainder so the split always sums back to exactly
+// `totalQty`, never drifting from what was actually confirmed/entered.
+function splitProportional(totalQty: number, weights: Array<{ key: string; weight: number }>): Array<{ key: string; qty: number }> {
+  const positiveWeights = weights.filter((w) => w.weight > EPSILON);
+  if (totalQty <= EPSILON || positiveWeights.length === 0) return [];
+  const totalWeight = positiveWeights.reduce((sum, w) => sum + w.weight, 0);
+  const result: Array<{ key: string; qty: number }> = [];
+  let allocated = 0;
+  positiveWeights.forEach((w, idx) => {
+    const isLast = idx === positiveWeights.length - 1;
+    const qty = isLast ? mtsQty(totalQty - allocated) : mtsQty(totalQty * (w.weight / totalWeight));
+    if (!isLast) allocated = mtsQty(allocated + qty);
+    if (qty > EPSILON) result.push({ key: w.key, qty });
+  });
+  return result;
+}
+
+async function computeMtsVerifyAvailabilityRows(
+  companyId: string,
+  needed: Map<string, AvailabilityNeed>,
+  processOrderId: string,
+  packingOrderIds: string[],
+): Promise<AvailabilityRow[]> {
+  const needs = Array.from(needed.values()).filter((item) => item.materialId && item.storageLocationId && item.qty > 0);
+  if (needs.length === 0) return [];
+  const materialIds = [...new Set(needs.map((item) => item.materialId))];
+  const locationIds = [...new Set(needs.map((item) => item.storageLocationId))];
+  const [snapshotResult, reservationResult] = await Promise.all([
+    serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
+      .select("material_id, storage_location_id, quantity")
+      .eq("company_id", companyId).eq("stock_type_code", "UNRESTRICTED")
+      .in("material_id", materialIds).in("storage_location_id", locationIds),
+    serviceRoleClient.schema("erp_production").from("reservation_document")
+      .select("material_id, storage_location_id, balance_qty, source_type, source_id")
+      .eq("company_id", companyId)
+      .in("material_id", materialIds).in("storage_location_id", locationIds)
+      .in("status", RESERVATION_OPEN_STATUSES),
+  ]);
+  if (snapshotResult.error || reservationResult.error) throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+  const available = new Map<string, number>();
+  for (const row of (snapshotResult.data ?? []) as JsonRecord[]) {
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    available.set(key, (available.get(key) ?? 0) + Number(row.quantity ?? 0));
+  }
+  const ownPackingIds = new Set(packingOrderIds);
+  for (const row of (reservationResult.data ?? []) as JsonRecord[]) {
+    const isOwnProcessReservation = String(row.source_type) === "PROCESS_PO" && String(row.source_id) === processOrderId;
+    const isOwnPackingReservation = String(row.source_type) === "PACKING_PO" && ownPackingIds.has(String(row.source_id));
+    if (isOwnProcessReservation || isOwnPackingReservation) continue;
+    const key = buildAvailabilityKey(String(row.material_id), String(row.storage_location_id));
+    available.set(key, (available.get(key) ?? 0) - Number(row.balance_qty ?? 0));
+  }
+  return needs.map((item) => {
+    const availableQty = Math.max(0, available.get(buildAvailabilityKey(item.materialId, item.storageLocationId)) ?? 0);
+    return {
+      material_id: item.materialId,
+      storage_location_id: item.storageLocationId,
+      needed_qty: item.qty,
+      available_qty: availableQty,
+      short: availableQty < item.qty - EPSILON,
+    };
+  });
+}
+
+async function runMtsProcessOrderVerify(
+  req: Request,
+  ctx: ProdHandlerContext,
+  po: JsonRecord,
+  id: string,
+  body: JsonRecord,
+): Promise<Response> {
+  const action = toUpperTrimmedString(body.mts_action);
+  if (action === "REJECT") {
+    const reason = toTrimmedString(body.reason);
+    if (!reason) return poErr(req, ctx, "PROD_MTS_REJECT_REASON_REQUIRED", 400, "A rejection reason is required.");
+    const { error } = await serviceRoleClient.schema("erp_production").rpc("reject_mts_documents_atomic", {
+      p_process_order_id: id,
+      p_actor_id: ctx.auth_user_id,
+      p_reason: reason,
+    });
+    if (error) {
+      console.error("[process_order.runMtsProcessOrderVerify] reject failed:", JSON.stringify(error));
+      throw new Error("PROD_MTS_REJECT_FAILED");
+    }
+    return okResponse({ id, status: "CANCELLED", action: "REJECTED_AND_RELEASED" }, ctx.request_id, req);
+  }
+  if (action !== "APPROVE") {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_ACTION_REQUIRED", 400, "Choose Approve or Reject for this MTS Process PO.");
+  }
+
+  const submittedChecks = Array.isArray(body.checklist) ? body.checklist.map((item) => toUpperTrimmedString(item)).filter(Boolean) : [];
+  const checks = [...new Set(submittedChecks)];
+  const missingChecks = MTS_VERIFY_CHECK_CODES.filter((code) => !checks.includes(code));
+  if (missingChecks.length > 0) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_CHECKLIST_INCOMPLETE", 422, "Complete every MTS QA checklist item before approving.");
+  }
+  if (checks.some((code) => !MTS_VERIFY_CHECK_CODES.includes(code as typeof MTS_VERIFY_CHECK_CODES[number]))) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_CHECKLIST_INVALID", 400, "The MTS QA checklist contains an unsupported item.");
+  }
+
+  const strokeMasterId = toTrimmedString(po.stroke_master_id) || null;
+  const [processLines, packingResult, yieldResult] = await Promise.all([
+    fetchOrderLines(id, strokeMasterId),
+    serviceRoleClient.schema("erp_production").from("packing_order")
+      .select("id, po_number, status, material_id, fill_qty_per_pack, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to")
+      .eq("process_order_id", id).neq("status", "CANCELLED").neq("status", "REVERSED"),
+    serviceRoleClient.schema("erp_production").from("mts_batch_yield_variance")
+      .select("id, packing_order_id, packing_plan_row_id, batch_number, sku_material_id, expected_qty, declared_actual_qty, variance_qty, variance_type, uom_code, status")
+      .eq("process_order_id", id),
+  ]);
+  if (packingResult.error || yieldResult.error) throw new Error("PROD_MTS_VERIFY_FETCH_FAILED");
+  const packingOrders = (packingResult.data ?? []) as JsonRecord[];
+  const yields = (yieldResult.data ?? []) as JsonRecord[];
+  if (packingOrders.length === 0 || yields.length !== Number(po.number_of_batches ?? 0)) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_DOCUMENTS_INCOMPLETE", 422, "MTS packing declarations are incomplete. Reject this MTS Process PO and create it again.");
+  }
+  if (packingOrders.some((order) => String(order.status) !== "STANDARD") || yields.some((item) => String(item.status) !== "PENDING")) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_STATUS_INVALID", 422, "This MTS Process PO is no longer pending QA verification.");
+  }
+  const packingOrderIds = packingOrders.map((order) => String(order.id));
+  const { data: packingLineData, error: packingLineError } = await serviceRoleClient
+    .schema("erp_production").from("packing_order_line")
+    .select("id, packing_order_id, line_type, material_id, actual_material_id, qty_per_pack, total_qty, actual_qty, issue_sloc_id, uom_code, stock_ledger_id, variance_qty")
+    .in("packing_order_id", packingOrderIds).order("display_order", { ascending: true });
+  if (packingLineError) throw new Error("PROD_MTS_VERIFY_FETCH_FAILED");
+  const packingLines = (packingLineData ?? []) as JsonRecord[];
+
+  // §138 (2026-09-21): Page 4/6's RM/PM total may have been saved with a
+  // confirmed deviation from the formula's own Standard Qty (either
+  // direction). That confirmation happened well before Verify, possibly by
+  // a different person -- QA must see and re-confirm it one last time here,
+  // right before the irreversible stock posting. Never gates or classifies
+  // the deviation (no approved_status/AP-approved concept for MTS), purely
+  // a final "are you sure" before Approve commits.
+  const rmDeviations = processLines
+    .filter((line) => Math.abs(mtsQty(line.variance_qty)) > EPSILON)
+    .map((line) => ({ material_id: toTrimmedString(line.actual_material_id) || String(line.material_id), variance_qty: mtsQty(line.variance_qty) }));
+  const pmDeviations = packingLines
+    .filter((line) => String(line.line_type) === "PM" && Math.abs(mtsQty(line.variance_qty)) > EPSILON)
+    .map((line) => ({ material_id: toTrimmedString(line.actual_material_id) || String(line.material_id), variance_qty: mtsQty(line.variance_qty) }));
+  const allDeviations = [...rmDeviations, ...pmDeviations];
+  if (allDeviations.length > 0 && body.confirmed_deviation !== true) {
+    // The frontend already has po.lines/po.packing_orders[].lines (with
+    // variance_qty) from its own GET, so it builds and shows the detailed
+    // warning modal itself before ever calling Approve -- this is a
+    // server-side backstop (never trust the client), not the primary way
+    // the operator learns which materials deviated.
+    return poErr(req, ctx, "PROD_MTS_VERIFY_DEVIATION_NOT_CONFIRMED", 422, "One or more RM/PM lines deviate from the formula's Standard Qty. Confirm before posting.");
+  }
+  const materialIds = [
+    ...processLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
+    ...packingLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
+    ...packingOrders.map((order) => toTrimmedString(order.material_id)),
+  ].filter(Boolean);
+  const materialMap = await getMaterialMapByIds(materialIds, "[process_order.runMtsProcessOrderVerify]", "PROD_MTS_VERIFY_FETCH_FAILED", "id, base_uom_code, material_type");
+  const linesByPackingOrder = new Map<string, JsonRecord[]>();
+  for (const line of packingLines) {
+    const orderId = String(line.packing_order_id);
+    linesByPackingOrder.set(orderId, [...(linesByPackingOrder.get(orderId) ?? []), line]);
+  }
+  const yieldsByPackingOrder = new Map<string, JsonRecord[]>();
+  for (const yieldRow of yields) {
+    const orderId = String(yieldRow.packing_order_id);
+    yieldsByPackingOrder.set(orderId, [...(yieldsByPackingOrder.get(orderId) ?? []), yieldRow]);
+  }
+  for (const [packingOrderId, orderYields] of yieldsByPackingOrder) {
+    const order = packingOrders.find((item) => String(item.id) === packingOrderId);
+    if (!order || orderYields.length === 0 || orderYields.some((item) => String(item.sku_material_id) !== String(order.material_id))) {
+      return poErr(req, ctx, "PROD_MTS_VERIFY_YIELD_INVALID", 422, "MTS batch output does not match its Packing PO declaration.");
+    }
+  }
+
+  const expectedTotal = yields.reduce((sum, item) => sum + mtsQty(item.expected_qty), 0);
+  const declaredTotal = yields.reduce((sum, item) => sum + mtsQty(item.declared_actual_qty), 0);
+  if (expectedTotal <= EPSILON || declaredTotal <= EPSILON) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_OUTPUT_INVALID", 422, "Declared MTS SKU output must be greater than zero.");
+  }
+
+  const pmActualQtyByLine = new Map<string, number>();
+  const packingActualQtyById = new Map<string, number>();
+  for (const order of packingOrders) {
+    const orderId = String(order.id);
+    const fillQty = mtsQty(order.fill_qty_per_pack);
+    if (fillQty <= EPSILON) return poErr(req, ctx, "PROD_MTS_VERIFY_PACK_FILL_INVALID", 422, "A linked MTS Packing PO has no valid fill quantity.");
+    const orderYields = yieldsByPackingOrder.get(orderId) ?? [];
+    const orderActualQty = orderYields.reduce((sum, item) => sum + mtsQty(item.declared_actual_qty), 0);
+    packingActualQtyById.set(orderId, orderActualQty);
+    const actualPacks = orderActualQty / fillQty;
+    for (const line of linesByPackingOrder.get(orderId) ?? []) {
+      if (String(line.line_type) === "PM") pmActualQtyByLine.set(String(line.id), mtsQty(mtsQty(line.qty_per_pack) * actualPacks));
+    }
+  }
+
+  const needs = new Map<string, AvailabilityNeed>();
+  const addNeed = (materialId: string, storageLocationId: string, quantity: number) => {
+    if (!materialId || !storageLocationId || quantity <= EPSILON) return;
+    const key = buildAvailabilityKey(materialId, storageLocationId);
+    const previous = needs.get(key);
+    needs.set(key, { materialId, storageLocationId, qty: (previous?.qty ?? 0) + quantity });
+  };
+  for (const line of processLines) addNeed(toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""), toTrimmedString(line.issue_sloc_id), mtsQty(line.actual_qty ?? line.planned_qty));
+  for (const line of packingLines) {
+    if (String(line.line_type) !== "PM") continue;
+    addNeed(toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""), toTrimmedString(line.issue_sloc_id), pmActualQtyByLine.get(String(line.id)) ?? 0);
+  }
+  const shortages = (await computeMtsVerifyAvailabilityRows(String(po.company_id), needs, id, packingOrderIds)).filter((item) => item.short);
+  if (shortages.length > 0) {
+    return poErr(req, ctx, "PROD_MTS_INSUFFICIENT_STOCK", 422, `Insufficient unrestricted stock for MTS Verify: ${await formatShortageDetail(shortages)}`);
+  }
+
+  const requestedHolds = Array.isArray(body.holds) ? body.holds as JsonRecord[] : [];
+  const remainingPacksByBatch = new Map<string, number>();
+  const holdAllocations: JsonRecord[] = [];
+  for (const yieldRow of yields) {
+    const order = packingOrders.find((item) => String(item.id) === String(yieldRow.packing_order_id));
+    const fillQty = mtsQty(order?.fill_qty_per_pack);
+    remainingPacksByBatch.set(String(yieldRow.id), fillQty > EPSILON ? mtsQty(mtsQty(yieldRow.declared_actual_qty) / fillQty) : 0);
+  }
+  for (const requestedHold of requestedHolds) {
+    const orderId = toTrimmedString(requestedHold.packing_order_id);
+    const fromBatch = toTrimmedString(requestedHold.batch_number_from);
+    const toBatch = toTrimmedString(requestedHold.batch_number_to);
+    const targetStockType = toUpperTrimmedString(requestedHold.target_stock_type);
+    const requestedPacks = mtsQty(requestedHold.qty_packs);
+    if (!orderId || !fromBatch || !toBatch || requestedPacks <= EPSILON) {
+      return poErr(req, ctx, "PROD_MTS_HOLD_INPUT_INVALID", 422, "Every MTS QA hold needs a Packing PO, batch range, stock status, and positive bag quantity.");
+    }
+    if (!["QUALITY_INSPECTION", "BLOCKED"].includes(targetStockType)) {
+      return poErr(req, ctx, "PROD_MTS_HOLD_STATUS_INVALID", 422, "MTS QA hold status must be Quality Inspection or Blocked.");
+    }
+    const order = packingOrders.find((item) => String(item.id) === orderId);
+    if (!order) return poErr(req, ctx, "PROD_MTS_HOLD_PACKING_PO_INVALID", 422, "The selected MTS QA hold Packing PO does not belong to this Process PO.");
+    const orderedYields = [...(yieldsByPackingOrder.get(orderId) ?? [])].sort((left, right) => mtsBatchSort(String(left.batch_number), String(right.batch_number)));
+    const fromIndex = orderedYields.findIndex((item) => String(item.batch_number) === fromBatch);
+    const toIndex = orderedYields.findIndex((item) => String(item.batch_number) === toBatch);
+    if (fromIndex < 0 || toIndex < fromIndex) return poErr(req, ctx, "PROD_MTS_HOLD_RANGE_INVALID", 422, "MTS QA hold batch range is not valid for its selected Packing PO.");
+    let leftToAllocate = requestedPacks;
+    for (const yieldRow of orderedYields.slice(fromIndex, toIndex + 1)) {
+      if (leftToAllocate <= EPSILON) break;
+      const availablePacks = remainingPacksByBatch.get(String(yieldRow.id)) ?? 0;
+      const allocatedPacks = Math.min(availablePacks, leftToAllocate);
+      if (allocatedPacks <= EPSILON) continue;
+      remainingPacksByBatch.set(String(yieldRow.id), mtsQty(availablePacks - allocatedPacks));
+      leftToAllocate = mtsQty(leftToAllocate - allocatedPacks);
+      holdAllocations.push({
+        packing_order_id: orderId,
+        yield_id: String(yieldRow.id),
+        batch_number_from: fromBatch,
+        batch_number_to: toBatch,
+        batch_number: String(yieldRow.batch_number),
+        sku_material_id: String(yieldRow.sku_material_id),
+        target_stock_type: targetStockType,
+        declared_pack_qty: mtsQty(mtsQty(yieldRow.declared_actual_qty) / mtsQty(order.fill_qty_per_pack)),
+        held_pack_qty: allocatedPacks,
+        qty_kg: mtsQty(allocatedPacks * mtsQty(order.fill_qty_per_pack)),
+      });
+    }
+    if (leftToAllocate > EPSILON) return poErr(req, ctx, "PROD_MTS_HOLD_EXCEEDS_DECLARATION", 422, "MTS QA hold bags cannot exceed the declared SKU output for the selected batch range.");
+  }
+
+  const today = todayIso();
+  const docNumber = String(po.po_number);
+  const matDoc = await generateMaterialDocNumber(String(po.company_id));
+  const rateMap = await fetchUnrestrictedRates(String(po.company_id), Array.from(needs.values()).map((item) => ({ materialId: item.materialId, slocId: item.storageLocationId })));
+  const conversionRate = await resolveConversionRate(String(po.company_id), String(po.segment_code ?? ""), String(po.material_id), today);
+  if (conversionRate === null) return poErr(req, ctx, "PROD_PO_CONVERSION_RATE_MISSING", 422, "Conversion cost rate is not configured for this segment/prodshade as of the posting date.");
+
+  // §138 (2026-09-22): batch-ordered yields, used to distribute RM (whole Process PO
+  // range, weighted by every batch's own declared output) and PM (its own Packing PO's
+  // batches only) actual consumption per batch at posting time -- see splitProportional.
+  const orderedYields = [...yields].sort((a, b) => mtsBatchSort(String(a.batch_number), String(b.batch_number)));
+  const yieldsByPackingOrderSorted = new Map<string, JsonRecord[]>();
+  for (const [orderId, orderYields] of yieldsByPackingOrder) {
+    yieldsByPackingOrderSorted.set(orderId, [...orderYields].sort((a, b) => mtsBatchSort(String(a.batch_number), String(b.batch_number))));
+  }
+  const rmBatchWeights = orderedYields.map((y) => ({ key: String(y.batch_number), weight: mtsQty(y.declared_actual_qty) }));
+
+  const movements: MovementSpec[] = [];
+  const reservationUpdates: JsonRecord[] = [];
+  const machineStockLogRows: JsonRecord[] = [];
+  const processLinePostings: JsonRecord[] = [];
+  const packingLineUpdates: JsonRecord[] = [];
+  let totalInputValue = 0;
+  const reservationMap = await fetchReservationRowsBySourceLineIds([...processLines.map((line) => String(line.id)), ...packingLines.map((line) => String(line.id))]);
+  let machineStorageLocationId: string | null = null;
+  if (toTrimmedString(po.machine_id)) {
+    const { data: machineData, error: machineError } = await serviceRoleClient.schema("erp_master").from("machine_master")
+      .select("storage_location_id").eq("id", String(po.machine_id)).maybeSingle();
+    if (machineError) throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
+    machineStorageLocationId = toTrimmedString((machineData as JsonRecord | null)?.storage_location_id) || null;
+  }
+  // §138.4: an exception ("Select all MTS machines") consumption must log as an
+  // Unassigned-bucket OUT, not a real machine-bucket OUT -- Page 4's own
+  // availability check (buildMtsMaterialPlanGroupsForOrder/saveMtsMaterialPlanHandler)
+  // already reads it that way (isForeignMachine/useUnassignedBucket -> machine_id
+  // filter null), but this Verify-time writer previously tagged every RM line with
+  // po.machine_id regardless, which would falsely deplete that machine's real bucket
+  // at a location it was never actually allotted stock in. Recompute the same
+  // foreign-machine check here from the stroke's own declared location.
+  let isForeignMachineConsumption = false;
+  if (machineStorageLocationId) {
+    const { data: strokeRow, error: strokeErr } = await serviceRoleClient.schema("erp_production").from("stroke_master")
+      .select("default_storage_location_id").eq("id", String(po.stroke_master_id)).maybeSingle();
+    if (strokeErr) throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
+    const strokeShopFloorLocationId = toTrimmedString((strokeRow as JsonRecord | null)?.default_storage_location_id) || null;
+    isForeignMachineConsumption = Boolean(strokeShopFloorLocationId && machineStorageLocationId !== strokeShopFloorLocationId);
+  }
+  const addReservationUpdate = (lineId: string, actualQty: number) => {
+    const reservation = reservationMap.get(lineId);
+    if (!reservation || !RESERVATION_OPEN_STATUSES.includes(String(reservation.status))) return;
+    reservationUpdates.push({ reservation_id: String(reservation.id), issued_qty: actualQty, status: "FULLY_ISSUED" });
+  };
+  for (const line of processLines) {
+    const actualQty = mtsQty(line.actual_qty ?? line.planned_qty);
+    if (actualQty <= EPSILON) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    const rate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
+    totalInputValue += actualQty * rate;
+    // §138 (2026-09-22): one P261 per batch, its own batch_number, proportional to that
+    // batch's own share of the whole Process PO's declared output -- was previously one
+    // blended lump-sum posting with batch_number: null. process_order_line only has one
+    // stock_ledger_id column, so only the first batch's posting is registered as the
+    // line's idempotency/reversal reference (safe: all batches share the same rate above,
+    // computed once per material+location, not per batch).
+    const perBatch = splitProportional(actualQty, rmBatchWeights);
+    const lineRefs: string[] = [];
+    for (const { key: batchNumber, qty } of perBatch) {
+      const lineRef = `MTS_RM:${String(line.id)}:${batchNumber}`;
+      lineRefs.push(lineRef);
+      movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: qty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, lineRef));
+    }
+    processLinePostings.push({ process_order_line_id: String(line.id), line_ref: lineRefs[0] ?? null });
+    addReservationUpdate(String(line.id), actualQty);
+    if (machineStorageLocationId && machineStorageLocationId === slocId) machineStockLogRows.push({ company_id: po.company_id, storage_location_id: slocId, material_id: materialId, machine_id: isForeignMachineConsumption ? null : po.machine_id, batch_number: null, qty: actualQty, direction: "OUT", source_type: "CONSUMPTION", reference_document_type: "PROCESS_PO", reference_document_id: id, created_by: ctx.auth_user_id });
+  }
+  for (const line of packingLines) {
+    const lineType = String(line.line_type);
+    if (lineType === "FG") continue; // handled in its own per-batch loop below
+    const actualQty = lineType === "PM" ? (pmActualQtyByLine.get(String(line.id)) ?? 0) : 0;
+    if (lineType !== "PM") {
+      packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: null, actual_qty: actualQty });
+      continue;
+    }
+    if (actualQty <= EPSILON) {
+      packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: null, actual_qty: actualQty });
+      continue;
+    }
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    const rate = rateMap.get(`${materialId}|${slocId}`) ?? 0;
+    totalInputValue += actualQty * rate;
+    // §138 (2026-09-22): one P261 per batch WITHIN this line's own Packing PO (a Page-5
+    // row/Packing PO may cover only a sub-range of the Process PO's batches), proportional
+    // to each batch's own declared output share -- same rationale as the RM loop above.
+    const orderYields = yieldsByPackingOrderSorted.get(String(line.packing_order_id)) ?? [];
+    const pmBatchWeights = orderYields.map((y) => ({ key: String(y.batch_number), weight: mtsQty(y.declared_actual_qty) }));
+    const perBatch = splitProportional(actualQty, pmBatchWeights);
+    const lineRefs: string[] = [];
+    for (const { key: batchNumber, qty } of perBatch) {
+      const lineRef = `MTS_PM:${String(line.id)}:${batchNumber}`;
+      lineRefs.push(lineRef);
+      movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P261", companyId: po.company_id, storageLocationId: slocId, materialId, quantity: qty, baseUomCode: String((materialMap.get(materialId) ?? {}).base_uom_code ?? line.uom_code ?? "KG"), unitValue: rate, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, lineRef));
+    }
+    packingLineUpdates.push({ packing_order_line_id: String(line.id), line_ref: lineRefs[0] ?? null, actual_qty: actualQty });
+    addReservationUpdate(String(line.id), actualQty);
+  }
+  const skuUnitValue = declaredTotal > EPSILON ? (totalInputValue / declaredTotal) + Number(conversionRate) : Number(conversionRate);
+  // §138 (2026-09-22): one P101 per batch (per yield row), its own batch_number, instead
+  // of one blended lump-sum per Packing PO -- FG/SKU already has exact per-batch qty via
+  // `yields`, no proportional split needed here, just post each batch's own declared_actual_qty.
+  for (const order of packingOrders) {
+    const orderId = String(order.id);
+    const orderYields = yieldsByPackingOrderSorted.get(orderId) ?? [];
+    const fgLine = (linesByPackingOrder.get(orderId) ?? []).find((line) => String(line.line_type) === "FG");
+    if (orderYields.length === 0) {
+      if (fgLine) packingLineUpdates.push({ packing_order_line_id: String(fgLine.id), line_ref: null, actual_qty: 0 });
+      continue;
+    }
+    const outputSlocId = toTrimmedString(fgLine?.issue_sloc_id);
+    if (!outputSlocId) return poErr(req, ctx, "PROD_MTS_SKU_SLOC_MISSING", 422, "A linked MTS SKU Packing PO has no output storage location.");
+    const skuMaterialId = String(order.material_id);
+    const lineRefs: string[] = [];
+    for (const yieldRow of orderYields) {
+      const outputQty = mtsQty(yieldRow.declared_actual_qty);
+      if (outputQty <= EPSILON) continue;
+      const batchNumber = String(yieldRow.batch_number);
+      const lineRef = `MTS_SKU:${String(fgLine?.id ?? order.id)}:${batchNumber}`;
+      lineRefs.push(lineRef);
+      movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode: "P101", companyId: po.company_id, storageLocationId: outputSlocId, materialId: skuMaterialId, quantity: outputQty, baseUomCode: String((materialMap.get(skuMaterialId) ?? {}).base_uom_code ?? "KG"), unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, lineRef));
+    }
+    if (fgLine) packingLineUpdates.push({ packing_order_line_id: String(fgLine.id), line_ref: lineRefs[0] ?? null, actual_qty: packingActualQtyById.get(orderId) ?? 0 });
+  }
+  // §138 (2026-09-22): grouping key now includes batch_number, so a QA hold posting stays
+  // tied to the specific batch it was held from -- holdAllocations is already per-batch
+  // (built off each yield row above), this just stops merging different batches' holds
+  // into one blended posting the way the pre-2026-09-22 grouping did.
+  const statusPostingGroups = new Map<string, JsonRecord>();
+  for (const allocation of holdAllocations) {
+    const order = packingOrders.find((item) => String(item.id) === String(allocation.packing_order_id));
+    const fgLine = (linesByPackingOrder.get(String(allocation.packing_order_id)) ?? []).find((line) => String(line.line_type) === "FG");
+    const storageLocationId = toTrimmedString(fgLine?.issue_sloc_id);
+    const batchNumber = String(allocation.batch_number);
+    const key = `${allocation.sku_material_id}|${storageLocationId}|${allocation.target_stock_type}|${batchNumber}`;
+    const group = statusPostingGroups.get(key) ?? { material_id: allocation.sku_material_id, storage_location_id: storageLocationId, target_stock_type: allocation.target_stock_type, batch_number: batchNumber, quantity: 0, uom_code: "KG", packing_order_id: order?.id ?? null };
+    group.quantity = mtsQty(Number(group.quantity) + Number(allocation.qty_kg));
+    statusPostingGroups.set(key, group);
+  }
+  const statusPostings: JsonRecord[] = [];
+  let statusIndex = 0;
+  for (const group of statusPostingGroups.values()) {
+    const movementTypeCode = group.target_stock_type === "QUALITY_INSPECTION" ? "P322" : "P344";
+    const outRef = `MTS_HOLD_OUT:${statusIndex}`;
+    const inRef = `MTS_HOLD_IN:${statusIndex}`;
+    const batchNumber = String(group.batch_number);
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, outRef));
+    movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: group.target_stock_type, direction: "IN", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, inRef));
+    statusPostings.push({ ...group, movement_type_code: movementTypeCode, out_ref: outRef, in_ref: inRef });
+    statusIndex += 1;
+  }
+
+  // §138 MTS reco decision (business owner, 2026-09-21): AC10's dispatch-driven
+  // AP Reco derivation never depends on MTS's actual RM/PM consumption -- only
+  // dispatch qty + formulation + costing-vs-WAR rate difference. MTS Verify
+  // therefore never writes process_order_line_reco/packing_order_line_reco;
+  // MTO/HPS/MTEST's own reco-writing logic below (runProcessOrderVerify) is
+  // untouched.
+  const postings = await postDocument({
+    referenceDocumentType: "PROC_PO",
+    referenceDocumentId: id,
+    movements,
+    postedBy: ctx.auth_user_id,
+    context: {
+      header: { actual_qty: declaredTotal, verified_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, has_unapproved_deviation: false },
+      reservations: reservationUpdates,
+      machine_stock_log_rows: machineStockLogRows,
+      mts_verify: {
+        checks: checks.map((code) => ({ check_code: code })),
+        yield_ids: yields.map((item) => String(item.id)),
+        packing_orders: packingOrders.map((item) => ({ packing_order_id: String(item.id), actual_qty_kg: packingActualQtyById.get(String(item.id)) ?? 0 })),
+        process_line_postings: processLinePostings,
+        packing_line_updates: packingLineUpdates,
+        hold_allocations: holdAllocations,
+        status_postings: statusPostings,
+      },
+    },
+  });
+  return okResponse({ id, status: "VERIFIED", verified_qty: declaredTotal, ledger_entries: postings, message: "MTS QA verification and stock posting completed." }, ctx.request_id, req);
 }
 
 // §131.1 (2026-08-26): extracted so finalizeProcessOrderHandler can run this same
@@ -3272,7 +4961,23 @@ async function runProcessOrderVerify(
     // touches the database until that single transactional call.
     const movements: MovementSpec[] = [];
     const reservationUpdates: Array<{ reservation_id: string; issued_qty: number; status: string }> = [];
+    const machineStockLogRows: JsonRecord[] = [];
     const reservationMap = await fetchReservationRowsBySourceLineIds(lines.map((line) => String(line.id)));
+
+    // MTS bucket attribution must move with the real P261 issue. A normal
+    // machine consumes its own bucket; §138.4 foreign-machine override
+    // consumes the selected location's Unassigned bucket. R001/manual lines
+    // are deliberately absent from this side-table.
+    let mtsMachineStorageLocationId: string | null = null;
+    let mtsConsumptionMachineId: string | null = null;
+    if (po.po_type === "MTS" && toTrimmedString(po.machine_id)) {
+      const { data: machineRow, error: machineErr } = await serviceRoleClient
+        .schema("erp_master").from("machine_master")
+        .select("storage_location_id").eq("id", String(po.machine_id)).maybeSingle();
+      if (machineErr) throw new Error("PROD_PO_MACHINE_BUCKET_LOOKUP_FAILED");
+      mtsMachineStorageLocationId = toTrimmedString((machineRow as JsonRecord | null)?.storage_location_id) || null;
+      mtsConsumptionMachineId = mtsMachineStorageLocationId === shopfloorSlocId ? String(po.machine_id) : null;
+    }
 
     // §106: one Material Document for the whole Verify event — every RM/INT issue (P261),
     // the SFG receipt (P101) and the QI auto-release (P321) are items under it; the
@@ -3362,6 +5067,22 @@ async function runProcessOrderVerify(
         matDoc: verifyMatDoc,
         referenceDocumentId: String(po.id),
       }, String(line.id)));
+
+      if (mtsMachineStorageLocationId && slocId === mtsMachineStorageLocationId) {
+        machineStockLogRows.push({
+          company_id: po.company_id,
+          storage_location_id: slocId,
+          material_id: movementMaterialId,
+          machine_id: mtsConsumptionMachineId,
+          batch_number: batchNumber,
+          qty: actualQty,
+          direction: "OUT",
+          source_type: "CONSUMPTION",
+          reference_document_type: "PROCESS_PO",
+          reference_document_id: po.id,
+          created_by: ctx.auth_user_id,
+        });
+      }
 
       // Reservation arithmetic is unchanged — still computed here, just applied inside
       // the transaction instead of in its own round trip.
@@ -3542,6 +5263,7 @@ async function runProcessOrderVerify(
         },
         reservations: reservationUpdates,
         reco_rows: recoRows,
+        machine_stock_log_rows: machineStockLogRows,
       },
     });
 
@@ -3593,6 +5315,16 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     }
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_VERIFY", "APPROVE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Verify/correction access for this company.");
+    }
+    // §138 lock (2026-09-21, business owner): MTS never gets a COR6-style post-Verify
+    // correction/item-add — the frontend already never exposes this UI for po_type
+    // MTS (MtsVerifyWorkspace takes over rendering unconditionally and shows only a
+    // static blocked message once status leaves FINAL), but this handler itself had no
+    // matching guard, so a direct API call could still slip an MTS Process PO through.
+    // Mirrors correctPackingOrderHandler's own isMtsControlledPackingOrder() block on
+    // the Packing PO side.
+    if (String(po.po_type ?? "") === "MTS") {
+      return poErr(req, ctx, "PROD_PO_MTS_CORRECTION_NOT_ALLOWED", 422, "MTS Process POs do not support post-Verify correction or item addition.");
     }
     if (po.status !== "VERIFIED") {
       return poErr(req, ctx, "PROD_PO_CORRECTION_STATUS_INVALID", 422, "Process PO must be VERIFIED to correct");
@@ -3871,6 +5603,203 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
   }
 }
 
+// P322/P344 are the only two movement types an MTS Verify hold ever posts
+// (Unrestricted->QA / Unrestricted->Blocked); their registered reverses in
+// movement_type_master are P321/P343 (confirmed live 2026-09-21).
+const MTS_HOLD_REVERSAL_MOVEMENT: Record<string, string> = { P322: "P321", P344: "P343" };
+
+// §138 CORS (2026-09-21, business owner design lock): full reversal of a
+// VERIFIED MTS Process PO. Unlike non-MTS CORS (reverseProcessOrderHandler
+// below), this cascades every connected PMTS Packing PO's PM+FG postings in
+// ONE atomic action -- there is no per-Packing-PO reversal step to do first
+// (PMTS children are already blocked from any standalone write, see
+// isMtsControlledPackingOrder() in packing_order.handlers.ts).
+//
+// Movement order matters: any qty an MTS Verify QA hold moved into
+// QUALITY_INSPECTION/BLOCKED is reversed BEFORE the FG/SKU receipt itself,
+// so the FG reversal can always draw its full declared qty from a single
+// UNRESTRICTED balance rather than needing to split across stock types.
+//
+// Batch range release (ALL members, including USED) and every REVERSED
+// status write happen inside complete_process_po_verify's own mts_reverse
+// branch, in the SAME transaction post_document() opens for the movements
+// below (§8D) -- never as a separate follow-up call.
+async function reverseMtsProcessOrderHandler(
+  req: Request,
+  ctx: ProdHandlerContext,
+  po: JsonRecord,
+  id: string,
+  reason: string,
+): Promise<Response> {
+  const processLines = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+
+  const { data: packingOrdersData, error: packingOrdersErr } = await serviceRoleClient
+    .schema("erp_production").from("packing_order")
+    .select("id").eq("process_order_id", id);
+  if (packingOrdersErr) {
+    console.error("[process_order.reverseMtsProcessOrder] packing-order lookup failed:", JSON.stringify(packingOrdersErr));
+    throw new Error("PROD_MTS_REVERSE_PACKING_LOOKUP_FAILED");
+  }
+  const packingOrderIds = ((packingOrdersData ?? []) as JsonRecord[]).map((row) => String(row.id));
+
+  let packingLines: JsonRecord[] = [];
+  if (packingOrderIds.length > 0) {
+    const { data: lineRows, error: lineErr } = await serviceRoleClient
+      .schema("erp_production").from("packing_order_line")
+      .select("id, packing_order_id, line_type, material_id, actual_material_id, actual_qty, issue_sloc_id, stock_ledger_id")
+      .in("packing_order_id", packingOrderIds)
+      .in("line_type", ["PM", "FG"]);
+    if (lineErr) {
+      console.error("[process_order.reverseMtsProcessOrder] packing-line lookup failed:", JSON.stringify(lineErr));
+      throw new Error("PROD_MTS_REVERSE_PACKING_LINE_LOOKUP_FAILED");
+    }
+    packingLines = (lineRows ?? []) as JsonRecord[];
+  }
+
+  const { data: holdPostingsData, error: holdErr } = await serviceRoleClient
+    .schema("erp_inventory").from("stock_status_change_posting")
+    .select("id, material_id, storage_location_id, from_stock_type, to_stock_type, movement_type_code, quantity, uom_code")
+    .eq("reference_document_type", "PROC_PO")
+    .eq("reference_document_id", id)
+    .eq("status", "POSTED");
+  if (holdErr) {
+    console.error("[process_order.reverseMtsProcessOrder] hold-posting lookup failed:", JSON.stringify(holdErr));
+    throw new Error("PROD_MTS_REVERSE_HOLD_LOOKUP_FAILED");
+  }
+  const holdPostings = (holdPostingsData ?? []) as JsonRecord[];
+
+  const materialMap = await getMaterialMapByIds(
+    [
+      ...processLines.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
+      ...packingLines.map((line) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "")),
+      ...holdPostings.map((hold) => String(hold.material_id ?? "")),
+    ],
+    "[process_order.reverseMtsProcessOrder]", "PROD_MTS_REVERSE_FAILED", "id, base_uom_code",
+  );
+  const ledgerRefById = await resolveStockLedgerRefsByLedgerIds([
+    ...processLines.map((line) => toTrimmedString(line.stock_ledger_id)),
+    ...packingLines.map((line) => toTrimmedString(line.stock_ledger_id)),
+  ]);
+  const holdRateMap = await fetchUnrestrictedRates(
+    String(po.company_id),
+    holdPostings.map((hold) => ({ materialId: String(hold.material_id), slocId: String(hold.storage_location_id) })),
+  );
+
+  const today = todayIso();
+  const docNumber = String(po.po_number);
+  const revMatDoc = await generateMaterialDocNumber(String(po.company_id));
+  const movements: MovementSpec[] = [];
+
+  for (const line of processLines) {
+    const qty = Number(line.actual_qty ?? 0);
+    if (qty <= 0) continue;
+    const slocId = getIssueStorageLocationId(line);
+    if (!slocId) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const ledgerRef = ledgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+    if (!ledgerRef) throw new Error("PROD_MTS_REVERSE_SOURCE_NOT_FOUND");
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? "KG");
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: "P262", companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: ledgerRef.rate,
+      stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id,
+      reversalOfId: ledgerRef.docId, batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, `MTS_REV_RM:${String(line.id)}`));
+  }
+
+  for (const line of packingLines) {
+    if (String(line.line_type) !== "PM") continue;
+    const qty = Number(line.actual_qty ?? 0);
+    if (qty <= 0) continue;
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    if (!slocId) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const ledgerRef = ledgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+    if (!ledgerRef) throw new Error("PROD_MTS_REVERSE_SOURCE_NOT_FOUND");
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? "KG");
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: "P262", companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: ledgerRef.rate,
+      stockTypeCode: "UNRESTRICTED", direction: "IN", postedBy: ctx.auth_user_id,
+      reversalOfId: ledgerRef.docId, batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, `MTS_REV_PM:${String(line.id)}`));
+  }
+
+  const holdReversals: JsonRecord[] = [];
+  holdPostings.forEach((hold, index) => {
+    const originalMovementType = toTrimmedString(hold.movement_type_code);
+    const reversalMovementType = MTS_HOLD_REVERSAL_MOVEMENT[originalMovementType];
+    if (!reversalMovementType) throw new Error("PROD_MTS_REVERSE_HOLD_MOVEMENT_TYPE_UNKNOWN");
+    const materialId = String(hold.material_id);
+    const slocId = String(hold.storage_location_id);
+    const qty = Number(hold.quantity ?? 0);
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? toTrimmedString(hold.uom_code) ?? "KG");
+    const rate = holdRateMap.get(`${materialId}|${slocId}`) ?? 0;
+    const outRef = `MTS_REV_HOLD_OUT:${index}`;
+    const inRef = `MTS_REV_HOLD_IN:${index}`;
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: reversalMovementType, companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: rate,
+      stockTypeCode: String(hold.to_stock_type), direction: "OUT", postedBy: ctx.auth_user_id,
+      batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, outRef));
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: reversalMovementType, companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: rate,
+      stockTypeCode: String(hold.from_stock_type), direction: "IN", postedBy: ctx.auth_user_id,
+      batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, inRef));
+    holdReversals.push({
+      original_posting_id: String(hold.id), out_ref: outRef, in_ref: inRef,
+      reversal_movement_type_code: reversalMovementType,
+    });
+  });
+
+  // FG/SKU reversal runs AFTER the hold reversals above, so any qty this
+  // Process PO's own hold moved to QI/Blocked is already back in
+  // UNRESTRICTED by the time this draws the line's full declared qty.
+  for (const line of packingLines) {
+    if (String(line.line_type) !== "FG") continue;
+    const qty = Number(line.actual_qty ?? 0);
+    if (qty <= 0) continue;
+    const slocId = toTrimmedString(line.issue_sloc_id);
+    if (!slocId) continue;
+    const materialId = toTrimmedString(line.actual_material_id) || String(line.material_id);
+    const ledgerRef = ledgerRefById.get(toTrimmedString(line.stock_ledger_id)) ?? null;
+    if (!ledgerRef) throw new Error("PROD_MTS_REVERSE_SOURCE_NOT_FOUND");
+    const baseUom = String(materialMap.get(materialId)?.base_uom_code ?? "KG");
+    movements.push(toMovement({
+      documentNumber: docNumber, documentDate: today, postingDate: today,
+      movementTypeCode: "P102", companyId: po.company_id, storageLocationId: slocId,
+      materialId, quantity: qty, baseUomCode: baseUom, unitValue: ledgerRef.rate,
+      stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id,
+      reversalOfId: ledgerRef.docId, batchNumber: null, matDoc: revMatDoc, referenceDocumentId: id,
+    }, `MTS_REV_FG:${String(line.id)}`));
+  }
+
+  if (movements.length === 0) {
+    return poErr(req, ctx, "PROD_MTS_REVERSE_NOTHING_TO_REVERSE", 422, "No postings were found to reverse for this MTS Process PO.");
+  }
+
+  await cancelReservationsForProcessOrder(id, ctx.auth_user_id, new Date().toISOString());
+
+  const postings = await postDocument({
+    referenceDocumentType: "PROC_PO",
+    referenceDocumentId: id,
+    movements,
+    postedBy: ctx.auth_user_id,
+    context: {
+      mts_reverse: { reason, actor_id: ctx.auth_user_id, hold_reversals: holdReversals },
+    },
+  });
+
+  return okResponse({ id, status: "REVERSED", ledger_entries: postings }, ctx.request_id, req);
+}
+
 export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     // ACL-gated via route-acl-registry (PROD_REVERSAL:APPROVE) — no longer a
@@ -3894,6 +5823,21 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
     const reason = toTrimmedString(body.reason);
     if (!reason) {
       return poErr(req, ctx, "PROD_PO_REVERSE_REASON_REQUIRED", 400, "Reason required for CORS reversal");
+    }
+
+    // §138 CORS lock (2026-09-21, business owner): MTS is not a variation of
+    // the generic per-document reversal flow below -- giving CORS on the
+    // parent Process PO must itself cascade-reverse every connected PMTS
+    // Packing PO in one atomic action, never require each child reversed
+    // separately first (the "Reverse all Packing Orders first" gate right
+    // below does not apply to MTS at all). Only a VERIFIED MTS batch has
+    // anything posted to reverse; STANDARD/FINAL-stage cancellation is QA
+    // Reject's job (qaRejectProcessOrderHandler), not CORS.
+    if (po.po_type === "MTS") {
+      if (po.status !== "VERIFIED") {
+        return poErr(req, ctx, "PROD_MTS_REVERSE_STATUS_INVALID", 422, "Only a VERIFIED MTS Process PO can be reversed here. Use QA Reject for an unverified MTS batch.");
+      }
+      return await reverseMtsProcessOrderHandler(req, ctx, po, id, reason);
     }
 
     const { count, error: packingErr } = await serviceRoleClient
@@ -4112,14 +6056,15 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       throw new Error("PROD_PO_REVERSE_FAILED");
     }
 
+    // po_type is never MTS here -- MTS dispatches to reverseMtsProcessOrder
+    // Handler (its own batch-range release) before this function's body runs.
+    const batchType = toUpperTrimmedString(po.po_type);
     const batchNumber = toTrimmedString(po.batch_number);
     if (batchNumber) {
-      const batchType = toUpperTrimmedString(po.po_type);
-      const prodshadeMaterialId = batchType === "MTS" ? String(po.material_id ?? "") : null;
       await upsertBatchNumberInstanceForProcessOrder({
         companyId: String(po.company_id),
         poType: batchType,
-        prodshadeMaterialId,
+        prodshadeMaterialId: null,
         batchNumber,
         processOrderId: id,
         authUserId: ctx.auth_user_id,

@@ -35,6 +35,8 @@ const ERRORS = {
   PROD_BOM_ALREADY_EXISTS: "A DRAFT or ACTIVE Pack BOM already exists for this company and SKU.",
   PROD_BOM_SCOPE_VIOLATION: "You do not have access to create a Pack BOM for this company.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
+  PROD_BOM_SKU_BASE_UOM_MISSING: "This SKU has no Base UOM set — fix it in Material Master first.",
+  PROD_BOM_INNER_LAYER_MISSING: "This pack code requires an inner-layer PM line (e.g. Bottle/Pouch) — add one and mark it \"Is Primary Container\" in the exact unit the pack code declares.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
@@ -78,6 +80,12 @@ export default function PackBomCreatePage() {
   const [skuMaterialId, setSkuMaterialId] = useState("");
   const [outputStorageLocationId, setOutputStorageLocationId] = useState("");
   const [sfgQty, setSfgQty] = useState("");
+  // Only used when the pack code declares an inner_uom_code (2 alternate layers) — the user
+  // enters the concrete, physically-known figure (how much product per 1 Inner pack, e.g. per
+  // Bottle) instead of the derived Outer-pack total, which is computed from this x the Inner
+  // PM line's own qty (how many Inner packs per Outer pack) instead of asking the user to do
+  // that multiplication by hand.
+  const [sfgQtyPerInner, setSfgQtyPerInner] = useState("");
   const [pmLines, setPmLines] = useState([]);
 
   const [groupModal, setGroupModal] = useState(null);
@@ -98,6 +106,7 @@ export default function PackBomCreatePage() {
     setSkuMaterialId("");
     setOutputStorageLocationId("");
     setSfgQty("");
+    setSfgQtyPerInner("");
     setPmLines([]);
     setStep(1);
   }
@@ -151,6 +160,15 @@ export default function PackBomCreatePage() {
   const outputLocationOptions = outputLocations.map((location) => ({ value: location.id, label: slocLabel(location) }));
   const autoOutputStorageLocationId = outputStorageLocationId || (outputLocationOptions.length === 1 ? outputLocationOptions[0].value : "");
   const sfgLineLocation = selectedSku?.stroke_master?.default_storage_location ?? null;
+  const has2Layers = Boolean(packCode.inner_uom_code);
+  const innerPmLine = pmLines.find((line) => line.is_primary_container);
+  const innerPmQtyNum = Number(innerPmLine?.qty);
+  // Single-layer pack codes (e.g. 450/599/000 — no inner_uom_code) keep entering the Outer-pack
+  // total directly, exactly as before — this only changes behavior once a pack code actually
+  // declares an inner_uom_code (§retail-pack-layers).
+  const effectiveSfgQty = has2Layers
+    ? (sfgQtyPerInner && Number.isFinite(innerPmQtyNum) && innerPmQtyNum > 0 ? Number(sfgQtyPerInner) * innerPmQtyNum : "")
+    : sfgQty;
 
   function openCreateGroupModal(onCreated) {
     setGroupForm({ group_name: "", description: "" });
@@ -211,14 +229,15 @@ export default function PackBomCreatePage() {
 
   function handleSubmit() {
     if (!autoOutputStorageLocationId) { toast("Select OUTPUT F-location.", "error"); return; }
-    if (bomRequired && !Number(sfgQty)) { toast("Enter SFG input qty.", "error"); return; }
+    if (bomRequired && has2Layers && !Number(sfgQtyPerInner)) { toast(`Enter SFG qty per ${packCode.inner_uom_code}.`, "error"); return; }
+    if (bomRequired && !Number(effectiveSfgQty)) { toast(has2Layers ? "Enter the Inner-layer PM line's qty too." : "Enter SFG input qty.", "error"); return; }
     const validPm = pmLines.filter((line) => line.material_id && (!bomRequired || Number(line.qty) > 0));
     submitMutation.mutate({
       company_id: effectiveCompanyId,
       po_type: poType,
       sku_material_id: skuMaterialId,
       output_storage_location_id: autoOutputStorageLocationId,
-      sfg_qty: bomRequired ? Number(sfgQty) : null,
+      sfg_qty: bomRequired ? Number(effectiveSfgQty) : null,
       pm_lines: validPm.map((line) => ({
         material_id: line.material_id,
         qty: bomRequired ? Number(line.qty) : null,
@@ -280,7 +299,7 @@ export default function PackBomCreatePage() {
               <div><p className="text-xs text-slate-400">Company</p><p className="font-semibold">{companyLabel(selectedCompany)}</p></div>
               <div><p className="text-xs text-slate-400">Type</p><p className="font-semibold">{poType} / {packingPoTypeForProcessType(poType)}</p></div>
               <div><p className="text-xs text-slate-400">FG SKU</p><p className="font-semibold">{skuLabel(selectedSku)}</p></div>
-              <div><p className="text-xs text-slate-400">Base UOM / BOM</p><p className="font-semibold">KG / {bomRequired ? "Required" : "Not Required"}</p></div>
+              <div><p className="text-xs text-slate-400">Base UOM / BOM</p><p className="font-semibold">{selectedSku?.base_uom_code || "KG"} / {bomRequired ? "Required" : "Not Required"}</p></div>
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
@@ -299,7 +318,14 @@ export default function PackBomCreatePage() {
                   <tr className="border-t">
                     <td className="py-2 px-3 font-semibold">OUTPUT</td>
                     <td className="py-2 px-3">{skuLabel(selectedSku)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{bomRequired ? "1" : "Calculated"}</td>
+                    <td className="py-2 px-3 text-right font-mono">
+                      {bomRequired ? "1" : "Calculated"}
+                      {bomRequired && Number(effectiveSfgQty) > 0 ? (
+                        <div className="mt-0.5 text-[11px] font-semibold text-sky-700">
+                          = {Number(effectiveSfgQty)} {selectedSku?.base_uom_code || "KG"}
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="py-2 px-3">{packCode.outer_uom_code || "KG"}</td>
                     <td className="py-2 px-3 min-w-[240px]">
                       {outputLocationOptions.length === 1 ? (
@@ -321,14 +347,25 @@ export default function PackBomCreatePage() {
                       blank Prodshade/location, which is confusing rather than informative. */}
                   {packCode.pack_type !== "MTEST" && (
                     <tr className="border-t">
-                      <td className="py-2 px-3 font-semibold">INPUT / SFG</td>
+                      <td className="py-2 px-3 font-semibold">
+                        INPUT / SFG
+                        {has2Layers ? <div className="mt-0.5 text-[10px] font-normal text-slate-400">derived, per {packCode.outer_uom_code}</div> : null}
+                      </td>
                       <td className="py-2 px-3">{materialLabel(selectedSku?.prodshade)}</td>
                       <td className="py-2 px-3 text-right">
                         {bomRequired ? (
-                          <input className="h-8 w-28 border border-slate-300 rounded px-2 text-right font-mono" type="number" min="0" step="0.001" value={sfgQty} onChange={(event) => setSfgQty(event.target.value)} />
+                          has2Layers ? (
+                            Number(effectiveSfgQty) > 0 ? (
+                              <span className="whitespace-nowrap font-mono text-sm">= {Number(effectiveSfgQty)}</span>
+                            ) : (
+                              <span className="whitespace-nowrap text-[11px] text-amber-600">set per-{packCode.inner_uom_code} qty on the Inner-layer PM line below</span>
+                            )
+                          ) : (
+                            <input className="h-8 w-28 border border-slate-300 rounded px-2 text-right font-mono" type="number" min="0" step="0.001" value={sfgQty} onChange={(event) => setSfgQty(event.target.value)} />
+                          )
                         ) : "Calculated"}
                       </td>
-                      <td className="py-2 px-3">KG</td>
+                      <td className="py-2 px-3">{selectedSku?.base_uom_code || "KG"}</td>
                       <td className="py-2 px-3">{slocLabel(sfgLineLocation)}</td>
                       <td className="py-2 px-3 font-mono">P261</td>
                     </tr>
@@ -350,6 +387,16 @@ export default function PackBomCreatePage() {
                     This pack code is non-fixed. Material/group mapping stays editable here, while quantity can remain blank until Packing PO time.
                   </p>
                 )}
+                {bomRequired && packCode.inner_uom_code && (
+                  <p className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+                    This pack code has 2 alternate layers. Add the{" "}
+                    <span className="font-mono font-semibold">{packCode.inner_uom_code}</span> material below, tick its{" "}
+                    <span className="font-semibold">Inner Layer?</span> checkbox, then fill in both numbers that appear:
+                    how much product per 1 {packCode.inner_uom_code}, and its own Qty ={" "}
+                    <span className="font-semibold">how many {packCode.inner_uom_code} go into 1 {packCode.outer_uom_code}</span>{" "}
+                    (e.g. bottles per carton). The outer layer itself needs no flag — its total is derived automatically above.
+                  </p>
+                )}
                 <PackBomLinesTable
                   lines={pmLines}
                   setLines={setPmLines}
@@ -358,6 +405,10 @@ export default function PackBomCreatePage() {
                   onCreateGroup={openCreateGroupModal}
                   onAddMember={(groupId) => setMemberModal(groupId)}
                   qtyDisabled={!bomRequired}
+                  innerUomCode={packCode.inner_uom_code || ""}
+                  sfgQtyPerInner={sfgQtyPerInner}
+                  onSfgQtyPerInnerChange={setSfgQtyPerInner}
+                  baseUomCode={selectedSku?.base_uom_code || "KG"}
                 />
               </ErpSectionCard>
             )}

@@ -281,15 +281,35 @@ export default function ChangePackBomApprovalPage() {
                               {editLines.length === 0 ? (
                                 <p className="text-slate-400 text-sm">No change lines recorded.</p>
                               ) : (
-                                <PackBomChangeLinesTable
-                                  lines={editLines}
-                                  setLines={setEditLines}
-                                  materials={pmMaterials}
-                                  groups={groups}
-                                  onCreateGroup={openCreateGroupModal}
-                                  onAddMember={(groupId) => setMemberModal(groupId)}
-                                  editable={r.status === "DRAFT"}
-                                />
+                                <>
+                                  {detail.bom?.pack_code_row?.inner_uom_code && (
+                                    <p className="mb-2 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+                                      This pack code has 2 alternate layers. The Inner-layer material must be in{" "}
+                                      <span className="font-mono font-semibold">{detail.bom.pack_code_row.inner_uom_code}</span> with its{" "}
+                                      <span className="font-semibold">Inner Layer?</span> checkbox ticked — the outer layer (
+                                      <span className="font-mono font-semibold">{detail.bom.pack_code_row.outer_uom_code}</span>) needs no flag.
+                                    </p>
+                                  )}
+                                  <PackBomChangeLinesTable
+                                    lines={editLines}
+                                    setLines={setEditLines}
+                                    materials={pmMaterials}
+                                    groups={groups}
+                                    onCreateGroup={openCreateGroupModal}
+                                    onAddMember={(groupId) => setMemberModal(groupId)}
+                                    editable={r.status === "DRAFT"}
+                                    innerUomCode={detail.bom?.pack_code_row?.inner_uom_code || ""}
+                                    sfgQtyPerInner={(() => {
+                                      // Read-only reference here too -- derived from the saved
+                                      // Outer total ÷ whichever proposed line is flagged Inner.
+                                      const sfgTotal = Number(detail.bom?.sfg_qty);
+                                      const innerLine = editLines.find((line) => line.is_primary_container);
+                                      const innerQty = Number(innerLine?.qty);
+                                      return sfgTotal > 0 && innerQty > 0 ? sfgTotal / innerQty : "";
+                                    })()}
+                                    baseUomCode={detail.bom?.sku?.base_uom_code || "KG"}
+                                  />
+                                </>
                               )}
                             </div>
 

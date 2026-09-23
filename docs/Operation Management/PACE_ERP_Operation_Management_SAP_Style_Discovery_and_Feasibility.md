@@ -18691,7 +18691,15 @@ split workflow অনুযায়ী।
 
 ---
 
-## Section 121 — Inventory Location Transfer Redesign: IN10 (MB21/MB22-style) + IN11 (MIGO-style) (✅ DESIGN LOCKED — 2026-08-17, IMPLEMENTATION NOT STARTED)
+## Section 121 — Inventory Location Transfer Redesign: IN10 (MB21/MB22-style) + IN11 (MIGO-style) (✅ DESIGN LOCKED — 2026-08-17, ✅ IMPLEMENTATION COMPLETE — corrected ২০২৬-০৯-১৬, stale)
+
+**Status correction (২০২৬-০৯-১৬):** এই heading আগে "IMPLEMENTATION NOT STARTED" বলছিল — সেটা stale,
+business owner ধরিয়ে দেন। Code verify করা হয়েছে: `location_transfer.handlers.ts` (নিজের comment-এই
+"IN10 / IN11 location transfer request + posting workbench handlers"), আর frontend-এ
+`LocationTransferRequestWorkspacePage.jsx`, `LocationTransferRequestListPage.jsx`,
+`LocationTransferWorkbenchPage.jsx` — সবই বাস্তবে আছে, **fully operational**। §138-এর MTS
+machine-respect chain (Phase 2 — warehouse→machine transfer) এখন এই already-built IN10/IN11-এর
+উপরেই বসবে, নতুন কোনো "Pull List" page লাগবে না (§138.13 দেখো)।
 
 **Scope boundary:** this section is only for **same-company, storage-location-to-storage-location transfer** inside the Inventory menu. It deliberately does **not** reuse the existing PTO approval model, because that model is for cross-company / plant-transfer business (`erp_procurement.plant_transfer_order`, approval-driven, transport/GST-heavy, procurement-owned). This new design is the PACE equivalent of **SAP MB21 + MB22 + MIGO** for internal location transfer work.
 
@@ -23551,3 +23559,1290 @@ here).
 - **Frontend:** new `RecoDataPage.jsx` (Page 1 + Page 2, `ErpDenseGrid`) and
   `RecoSummaryDataPage.jsx` (Page 3), new `getRecoData()` in `procurementApi.js`, route + screen
   registry entries following the AC09 (`ACC_BATCH_COSTING_REPORT`) pattern exactly.
+
+## Section 138 — MTS Machine-Respect Shop Floor Stock: Machine+Sloc mapping, normal vs exception consumption, packet-surplus Keep/Allot, PID integration (✅ DESIGN LOCKED — 2026-09-15, IMPLEMENTATION NOT STARTED)
+
+**পটভূমি:** MTS batch series checkbox (§সংশ্লিষ্ট commit, migration `20260915150000`) implement
+করার পরে business owner একটা নতুন, deeper সমস্যা তুললেন — MTS-এর অনেক item শপ ফ্লোর location
+থেকে consume হয়, আর শপ ফ্লোরে একাধিক machine থাকে। এখন পর্যন্ত সিস্টেমে stock শুধু
+(material + storage_location)-ভিত্তিক ব্লেন্ডেড — machine কোনো dimension না। কিন্তু বাস্তবে একটা
+item-এর মোট requirement (উদাহরণ: ১৪০ কেজি) দুটো machine-এ ভাগ হয়ে issue হয় (১০০+৪০, সমান ভাগ
+না) — যে machine-এ যতটা প্রয়োজন সেই machine-এর নিজের staged stock থেকেই সেটা consume হওয়া
+উচিত, blended শপ ফ্লোর total থেকে না। পুরো এই section-টা সেই আলোচনার লকড ফলাফল — কোনো কোড এখনো
+লেখা হয়নি, পরের session-এ task brief লিখে implementation শুরু হবে।
+
+### 138.1 — Machine + Storage Location mapping (LOCKED, বিস্তারিত ২০২৬-০৯-১৬)
+
+- নতুন mapping: **Company + Machine + Storage Location** — Prodshade বা PO Type মিশিয়ে key
+  বানানো হবে না (প্রথমে `Company+Machine+MTS Type+Prodshade+Sloc` প্রস্তাব করা হয়েছিল, পরে
+  business owner নিজেই সরিয়ে দেন)। কারণ: Prodshade-এর নিজেরই একটা Default SFG Storage Location
+  আছে (Stroke Master-এর already-locked mandatory field, §83.3) — তাই Machine-কে সরাসরি Sloc-এর
+  সাথে bind করলে, যে যে Prodshade-এর default location সেই Sloc, তারা automatically সেই
+  machine-গুলোর সাথে জুড়ে যায়। আলাদা করে Prodshade ধরে রাখাটা redundant।
+- **UI (২০২৬-০৯-১৬ finalize):** existing SA Machine Master page (`SAMachineMaster.jsx`)-এ একটা
+  **নতুন Tab** যোগ হবে — সেখানে Company + Storage Location-এর সাথে Machine map করা হবে (§138.1-এ
+  আগে ভাবা হয়েছিল inline checkbox/multi-select PO-Type-এর মতো একই field হিসেবে বসবে — সেটা
+  সংশোধিত, এটা এখন নিজের আলাদা Tab)।
+- **Cardinality (২০২৬-০৯-১৬ lock):** এক Machine **ঠিক একটাই** Storage Location-এ mapped থাকবে
+  (single FK-জাতীয় সম্পর্ক, many-to-many না) — একবারে একটার বেশি location-এ mapped থাকবে না।
+  ভবিষ্যতে machine সরানো হলে mapping **change করা যাবে** (নতুন location-এ re-map), কিন্তু যেকোনো
+  মুহূর্তে একটাই active location থাকবে।
+- **Existing machine setup (২০২৬-০৯-১৬ lock):** কোনো auto-backfill/default হবে না — সব existing
+  machine-এর mapping **SA manually UI দিয়েই** বসাবে। নতুন mapping ফাঁকা অবস্থায় শুরু হবে।
+
+### 138.2 — Normal case: machine-respect availability + consumption (LOCKED)
+
+- Process PO Create-এ Machine dropdown **normally** সেই Stroke-এর declared SFG default
+  location অনুযায়ী filter হয়ে আসবে (§138.1-এর mapping ব্যবহার করে)।
+- এই normal case-এ **machine+location-wise real balance/sub-pool** track হবে — একটা item-এর
+  স্টক machine-ভিত্তিক ভাগ হয়ে থাকবে (100kg @Machine-1, 40kg @Machine-2 উদাহরণ)।
+  Availability check আর consumption দুটোই এই machine-নির্দিষ্ট sub-pool-এর বিরুদ্ধেই হবে,
+  ব্লেন্ডেড location total-এর বিরুদ্ধে না।
+- **Requirement derivation:** dosage% × planned/actual Batch Size = কত লাগবে, সাথে কোন
+  Process PO কোন machine-এ assign হয়েছে — এই দুটো মিলিয়েই machine-wise requirement আগে থেকে
+  derive করা যায় (guess করার দরকার নেই), যা warehouse→শপ ফ্লোর+machine transfer planning-এর
+  ভিত্তি হবে।
+
+### 138.3 — Unified "Unassigned" bucket model — machine-respect stock-এর আসল ভিত্তি (LOCKED, ২০২৬-০৯-১৫ refinement)
+
+আলোচনার একদম শেষে business owner-এর কয়েকটা পরপর খটকা (R001→S001 transfer কীভাবে machine-এ
+ভাগ হয়? Opening Stock-এও কি machine breakup লাগবে? Exception-এর leftover আর normal
+transfer-এর unallotted stock কি একই না আলাদা?) — এই সবগুলো **একটাই root সিদ্ধান্তে** মিলে গেছে,
+যেটা এখন গোটা §138-এর ভিত্তি:
+
+> **R001→S001-এর মতো Stores pull-list transfer কখনোই machine-targeted হয় না — এটা সবসময়
+> "Unassigned"-এই পড়ে। Machine-ভিত্তিক ভাগ করাটা সবসময় একটা সম্পূর্ণ আলাদা, পরের ধাপ (§138.9-এর
+> "Assign to Machine" action), transfer-এর মুহূর্তে না।**
+
+কারণ: Stores-এর pull-list mechanism machine-aware না, ও শুধু location-ভিত্তিক total requirement
+দেখে transfer করে। তাই প্রতিটা (company + storage_location + material)-এর জন্য মাত্র **দুই
+ধরনের bucket** থাকে:
+
+1. **নির্দিষ্ট Machine bucket** — একটা করে প্রতিটা real machine-এর জন্য (§138.1 mapping অনুযায়ী)।
+2. **একটাই "Unassigned" bucket** — machine-tag ছাড়া সব stock এখানেই থাকে, উৎস যাই হোক না কেন।
+
+এই একটা model দিয়ে সব খটকা resolve হয়:
+
+- **R001→S001 transfer** → সবসময় Unassigned bucket-এ IN entry।
+- **Opening Stock** → আলাদা কোনো machine-breakup mechanism লাগে না — এটাও Unassigned-এই পড়বে
+  (আজকের মতোই enter হবে), পরে দরকার হলে §138.9-এর একই "Assign to Machine" mechanism দিয়ে
+  machine-এ ভাগ করা যাবে।
+- **Exception case-এর leftover** আর **normal transfer-এর unallotted stock** — দুটোই **হুবহু একই
+  Unassigned bucket**-এ পড়ে, আলাদা করে track করার বা "কোনটা কোথা থেকে এলো" মনে রাখার দরকার নেই।
+  Allot করার mechanism-ও একটাই (§138.9)।
+
+### 138.4 — Exception case: cross-location/foreign machine override (LOCKED, সংশোধিত)
+
+- Process PO Create-এ একটা checkbox — **"Select all MTS machines"** — টিক দিলে location-filter
+  বাইপাস হয়ে সব machine (অন্য location-এরও) দেখাবে।
+- Exception-এ ব্যবহারের জন্য Stores **আলাদা, নিজস্ব pull-list transfer** করবে (সেটাও অন্য সব
+  transfer-এর মতোই Unassigned bucket-এই পড়বে, §138.3)।
+- Availability check হবে **শুধু সেই location-এর Unassigned balance-এর বিরুদ্ধে** — ব্লেন্ডেড
+  location total-এর বিরুদ্ধে **না** (আগের draft-এ এটা ভুলভাবে "blended total" লেখা হয়েছিল,
+  সংশোধন করা হলো)। এটা জরুরি, কারণ blended total-এ অন্য machine-এর জন্য already-allotted stock-ও
+  ধরা পড়ত — exception case ভুল করে সেটা "টেনে নিতে" পারত, পরে সেই machine-এর real batch-এ
+  ঘাটতি তৈরি হতো।
+- Posting: এটা একটা **আসল, সাধারণ P261** (stock_ledger-এ real posting, movement_type সহ) —
+  Unassigned bucket থেকে OUT। `machine_id` field-এ কে আসলে consume করলো সেটা **শুধু informational
+  tag হিসেবে** থাকবে (reporting-এর জন্য) — এটা কোনো machine-নির্দিষ্ট balance তৈরি করে না, তাই
+  negative হওয়ার প্রশ্নই নেই।
+
+### 138.5 — Packet-size concept বাতিল (REJECTED, ২০২৬-০৯-১৫) — user base UoM-এই transfer করবে
+
+আগের draft-এ একটা "Packet-size surplus: Keep/Allot/Cancel modal" mechanism ছিল (fixed packet
+size-এ RM issue হলে surplus তৈরি হওয়ার ধারণা) — **business owner এটা পুরোপুরি বাতিল করেছেন**:
+কোনো packet-size concept থাকবে না, user সবসময় **base UoM-এই transfer/issue** করবে (continuous
+qty, packet-multiple-এর কোনো rounding/surplus সমস্যা নেই)। তাই এই মেকানিজম সম্পূর্ণ বাদ — কোনো
+modal, কোনো "packet size" field, কোনো surplus-handling logic লাগবে না।
+
+**Exception case (§138.4)-এর consumption তাহলে সরল থাকে:** যত KG লাগবে, ততটুকুই সরাসরি
+Unassigned bucket থেকে issue হবে — কোনো surplus বাঁচার প্রশ্নই নেই।
+
+### 138.6 — stock_ledger অপরিবর্তিত, `machine_stock_log` side-table-এর schema + semantics (LOCKED, সংশোধিত)
+
+**মূল সিদ্ধান্ত অপরিবর্তিত: machine attribution `stock_ledger`/`stock_snapshot`/
+`reservation_document`-এ কোনো নতুন column হিসেবে যাবে না — core engine সম্পূর্ণ machine-agnostic
+থেকে যাবে।**
+
+- **Normal case-এর consumption + reservation দুটোই already-existing reference link দিয়ে derive
+  করা যায়, নতুন tracking লাগে না:**
+  - `stock_ledger.reference_document_id` → সেই Process PO → তার নিজের `machine_id` — join করলেই
+    machine বের হয়ে যায়।
+  - `reservation_document` → source Process PO (§83.5) → `machine_id` — একই pattern।
+- **নতুন `machine_stock_log` side-table** (নাম tentative), প্রতিটা row একটা bucket-এর IN/OUT
+  entry (§138.3-এর two-bucket-type model অনুযায়ী — Machine bucket বা Unassigned bucket):
+  - `company_id`, `storage_location_id`, `material_id`, `machine_id` (**NULL মানে Unassigned
+    bucket** — নিজস্ব real machine না)
+  - `batch_number` (প্রযোজ্য হলে)
+  - `qty`, `direction` (IN/OUT)
+  - `source_type`: `TRANSFER` | `CONSUMPTION` | `PID_ADJUSTMENT` | `MANUAL_ALLOT`
+  - `reference_document_type` + `reference_document_id`, `created_by`, `created_at`
+  - কোনো `movement_type` column লাগবে না — নিচে ব্যাখ্যা।
+- **`source_type`-ভিত্তিক আচরণ, প্রতিটার bucket-effect আলাদা:**
+
+  | source_type | Real `stock_ledger` posting? | Bucket effect |
+  |---|---|---|
+  | **TRANSFER** | হ্যাঁ (R001→S001 movement, existing movement_type) | Unassigned bucket-এ IN |
+  | **CONSUMPTION** (normal case) | হ্যাঁ (P261, existing movement_type) | সেই machine-এর bucket থেকে OUT |
+  | ~~EXCEPTION_SPEND~~ | হ্যাঁ (P261) | **এটা আলাদা source_type না** — এটাও আসলে সাধারণ CONSUMPTION-ই, শুধু Unassigned bucket থেকে OUT হয় (machine bucket থেকে না), আর `machine_id` column-এ informational tag থাকে (§138.4) |
+  | **PID_ADJUSTMENT** | হ্যাঁ (PI movement type) | **সবসময় Unassigned bucket-এ** correction — কখনো সরাসরি কোনো নির্দিষ্ট machine bucket-এ না (সংশোধিত ২০২৬-০৯-১৬, §138.7 দেখো) |
+  | **MANUAL_ALLOT** | **না** — কোনো physical movement নেই | **Paired double-entry**: Unassigned bucket থেকে OUT + নির্বাচিত machine bucket-এ IN, একই qty, একটা common reference দিয়ে জোড়া লাগানো |
+
+  **কেন MANUAL_ALLOT-এর জন্য কোনো movement_type লাগে না:** material physically সরছেই না (ওটা
+  ওই location-এই ছিল, শুধু label বদলাচ্ছে) — তাই `movement_type_master`-এর ধারণাটাই এখানে
+  প্রযোজ্য না। বাকি সব source_type-এর একটা করে real physical movement আছে, তাই তাদের real
+  `movement_type` `stock_ledger`-এই থাকে (আলাদা করে `machine_stock_log`-এ রাখার দরকার নেই)।
+- **কেন এই সিদ্ধান্ত:** এটা ঠিক §83.15.1-এর batch-level stock precedent-এর মতোই — machine একটা
+  **reporting/attribution layer**, engine-এর hard-enforced dimension না। এতে core §8C posting
+  engine একদম অক্ষত থাকে, কোনো নতুন migration risk নেই `post_stock_movement()`-এ।
+
+### 138.7 — PID (Physical Inventory): কোনো machine column না, variance সবসময় Unassigned bucket-এ (LOCKED, দ্বিতীয়বার সংশোধিত ২০২৬-০৯-১৬)
+
+**প্রথম প্রস্তাব ছিল PID পুরোপুরি location-level-ই থাকবে (machine touch করবে না) — এই session-এর
+শুরুতে এটা ভুল প্রমাণিত হয়েছিল business owner-এর push back-এ**, আর তখন সিদ্ধান্ত হয়েছিল PID-এ
+system-derived, read-only একটা mandatory machine column যোগ হবে (প্রতিটা machine-এর জন্য আলাদা
+row)। **§138.13/§138.13.1 (IN11-এর "Distribute to Machine" বাটন) lock হওয়ার পরে business owner
+এটা আবার revisit করে উল্টে দিয়েছেন (২০২৬-০৯-১৬):**
+
+> "sono ami ki bolchi, opening stock r PID te user sloc e bosak, unassigned hoye thakbe, user
+> IN11 e giye distribute korbe, tahole extra dorkar e nai।"
+
+**চূড়ান্ত, locked design — PID-এর mandatory machine-column ধারণাটাই বাতিল:**
+- PID **MTS machine-tracked location-সহ সব location-এ অপরিবর্তিত থাকবে** — কোনো নতুন Machine
+  column, কোনো per-machine row-split লাগবে না। Counter আজকের মতোই শুধু location-level Actual Qty
+  গুনে বসাবে (§130-এর existing PID mechanism অক্ষত)।
+- যেকোনো variance (§138.6-এর `PID_ADJUSTMENT`) **সবসময় সেই location-এর Unassigned bucket-এই
+  correction হবে** — কখনো সরাসরি কোনো নির্দিষ্ট machine bucket-এ না। Opening Stock ইতিমধ্যেই
+  এই একই pattern-এ আছে (§138.3 — "আলাদা কোনো machine-breakup mechanism লাগে না, এটাও
+  Unassigned-এই পড়বে")। PID এখন **সেই একই নিয়মে unified**।
+- যদি variance আসলে কোনো নির্দিষ্ট machine-এর কাছেই (over/under) হয়, PID নিজে সেটা attribute
+  করার চেষ্টা করবে না — Unassigned bucket-এ correction হওয়ার পরে user (Production) IN11-এ গিয়ে
+  **"Distribute to Machine"** (§138.13.1, `MANUAL_ALLOT`) দিয়ে সেই correction machine-ভিত্তিক
+  ভাগ করে নেবে, ঠিক যেভাবে normal transfer/opening stock-এর Unassigned balance distribute হয়।
+- **আগের এই section-এর প্রথম সংশোধন (machine column, mandatory per-machine row, system-derived
+  read-only) এখন পুরোপুরি superseded** — সেই approach-এর মূল যুক্তি ছিল "PID যদি machine sub-pool
+  ঠিক না করে, future availability check ভুল হবে" — কিন্তু এখন সেই sub-pool correction PID-এর
+  ভেতরেই করতে হবে না, IN11-এর already-locked Distribute-to-Machine mechanism-ই সেটা আলাদা ধাপে
+  করে দেয়। তাই দুটো mechanism-কে জোর করে এক জায়গায় মেলানোর দরকার নেই — PID সরল থাকে,
+  distribution আলাদা, দুই ধাপেই কাজ ঠিকভাবে হয়।
+
+### 138.8 — IN02 (Stock Ledger) / IN03 (Current Stock): machine column report-level join-এ, core snapshot-এ না (LOCKED)
+
+- `stock_ledger`/`stock_snapshot` অপরিবর্তিত (§138.6), কিন্তু user-কে machine-wise stock ঠিকই
+  দেখাতে হবে — এটা **report layer-এর join দিয়ে** হবে, ঠিক যেভাবে IN03 আজ FG-এর
+  batch/Packing-PO-level breakdown দেখায় (§116, `stock_ledger`+`stock_document`+`packing_order`
+  join করে, কোনো আলাদা snapshot dimension ছাড়াই)।
+- IN02/IN03 machine column/filter §138.6-এর `machine_stock_log` side-table + existing
+  reference-document derivation join করে দেখাবে — শুধু MTS machine-tracked location-এর row-এই
+  প্রযোজ্য।
+
+### 138.9 — Unassigned balance পরে machine-এ Allot করার mechanism (SUPERSEDED — resolved by §138.13/§138.13.1, ২০২৬-০৯-১৬)
+
+**⚠️ নিচের "IN03-তে Assign to Machine button" design এখন আর locked না — business owner
+(২০২৬-০৯-১৫) সরাসরি বলেছেন এই mechanism-টা তিনি নিজে design করবেন, আর তাতে "pull list" ধারণা
+আনতে হবে — machine-এ distribution আসলে **সেই pull-list flow-এর মধ্যেই** থাকবে, IN03-তে আলাদা
+বাটন হিসেবে না। পুরনো content নিচে শুধু historical reference হিসেবে রাখা হলো — implement করার
+আগে business owner-এর নতুন pull-list design অপেক্ষা করতে হবে (§138.11-এ open item হিসেবে
+tracked)।**
+
+<details>
+<summary>পুরনো draft (superseded) — IN03 "Assign to Machine" button</summary>
+
+- আলাদা নতুন page বানানো হবে না, আর Location Transfer page-এও না (Allot একটা pure attribution
+  action, কোনো `stock_ledger` posting নেই — তাই transfer-এর সাথে না মিলিয়ে reporting/management
+  page-এই রাখা ভালো, business owner-এর সিদ্ধান্ত) — **শুধু IN03 (Current Stock) page-এ একটা
+  "Assign to Machine" button** যোগ হবে।
+- **Company-scoped:** button শুধু সেই company-গুলোর জন্যই দেখাবে যাদের MTS আছে — ঠিক যেভাবে
+  existing "Current Stroke" button company-wise conditionally দেখানো হয় (§ upar), একই pattern।
+- Button শুধু তখনই **active** যখন row-টা একটা MTS machine-tracked শপ ফ্লোর location-এর, আর তার
+  **unassigned balance > 0**। Unassigned না থাকলে button **inactive/greyed out**।
+- Click করলে সেই location+material-এর মোট unassigned qty দেখাবে। **Partial distribution
+  সমর্থিত (Option B, business owner-এর explicit পছন্দ — "আরো flexible")** — user মোট unassigned-এর
+  পুরোটা distribute করতে বাধ্য না, যেকোনো অংশ (≤ total unassigned) বেছে এক বা একাধিক machine-এ
+  ভাগ করে দিতে পারবে; বাকিটা unassigned-ই থেকে যাবে, পরে আবার আলাদা করে distribute করা যাবে।
+- **Distribute button-এর validation rule:** per-machine split entry-গুলোর যোগফল ঠিক ততটুকুই হতে
+  হবে যতটুকু user distribute করতে চেয়েছে (exact match) — তবেই Distribute button active হবে।
+  Sum কম/বেশি হলে button disabled থাকবে।
+- এটা কোনো actual stock movement/posting না (material physically সরছে না, ওটা ওই location-এই
+  ছিল) — শুধু §138.6-এর `machine_stock_log` side-table-এ `MANUAL_ALLOT` paired entry পড়বে
+  (Unassigned bucket থেকে OUT + target machine bucket-এ IN, একই qty, একটা common reference দিয়ে
+  linked), attribution বদলাবে মাত্র। কোনো `stock_ledger` posting লাগবে না, `movement_type`ও লাগবে
+  না।
+
+</details>
+
+### 138.10 — CMP003 লাইভ data দিয়ে verify করা আসল ছবি (২০২৬-০৯-১৫)
+
+Design lock করার সময় CMP003-এর ৫টা real MTS Prodshade-এর Stroke formulation সরাসরি Prod DB-তে
+দেখা হয়েছে (§ agreement অনুযায়ী কখনো ধরে না নিয়ে verify করা) — একটা গুরুত্বপূর্ণ বাস্তবতা ধরা
+পড়েছে:
+
+- **প্রতিটা Stroke-এর RM line-এর নিজের storage location আছে (`stroke_line.default_storage_
+  location_id`), যেটা সেই Stroke-এর নিজের overall declared SFG location থেকে আলাদা হতে পারে।**
+  উদাহরণ, SFG-00188 (TRUCARE WALL PUTTY WHITE, stroke 0064, নিজের declared location S001):
+  - DOLOMITE 240# (43.35%), WHITE CEMENT JK (15%) — issue location **R001** (RM store), S001
+    না।
+  - VAE POWDER DA 1100 (1.2%), GABROSA M700 (0.39%), Sodium Gluconate (0.03%), PULMIX 4033
+    (0.03%) — issue location **S001** (শপ ফ্লোর নিজে)।
+  - (7 lines, total dosage 100.00 — verify করা, একটাই active stroke_master row, কোনো duplicate
+    revision মেশেনি।)
+- **তার মানে: ভারী/বেশি dosage-এর RM (Dolomite, Cement) সরাসরি RM store থেকে আসে, শপ ফ্লোরে
+  staged থাকেই না। শুধু কম-dosage additive-গুলোই শপ ফ্লোরে staged থাকে** — machine-respect
+  tracking (§138.1-138.9) বাস্তবে **শুধু এই ছোট-dosage, শপ-ফ্লোর-staged additive line-গুলোর
+  জন্যই প্রাসঙ্গিক**, পুরো RM list-এর জন্য না।
+- SFG-00063 (AP SC VITALIA NEO, নিজের declared location S003) — এর **একটাও material S003-এ
+  নেই** (WATER+HIMFLOWCRETE → T003 tank, বাকি → R003 RM store)। এই একটা প্রোডাক্টে
+  machine-respect stock সমস্যাটাই প্রযোজ্য না।
+- একই additive (যেমন VAE POWDER DA 1100) **একাধিক আলাদা Prodshade-এই** ব্যবহার হয় (SFG-188,
+  189, 190, 191 — চারটাতেই), সবগুলোই একই S001 শপ ফ্লোর location-এর material — এটাই আসল কারণ কেন
+  machine-respect tracking দরকার (একই additive, একই শপ ফ্লোর, কিন্তু আলাদা machine-এ আলাদা
+  Prodshade-এর batch একসাথে চলতে পারে)।
+
+### 138.11 — এখনো খোলা প্রশ্ন (implementation শুরুর আগে lock করতে হবে)
+
+- ~~Scope: শুধু MTS, নাকি MTO/HPS/INT-ও একইভাবে machine-respect stock চাইবে?~~ — **RESOLVED
+  (২০২৬-০৯-১৫):** machine-wise stock tracking **শুধু MTS-এর জন্য**। MTO/HPS-এর শপ ফ্লোরেও একাধিক
+  machine physically থাকে, কিন্তু ওদের জন্য এই tracking mechanism বানানো হচ্ছে না — business
+  owner-এর নিজের ভাষায়, "Machine wise stock sudhu MTS er, onno shop floor e ekadhik machine
+  ache, kintu MTS chara machine esie stock maintain hobena।"
+- ~~Packet size mechanism-এর বিস্তারিত~~ — **RESOLVED (২০২৬-০৯-১৫): পুরো ধারণাটাই বাতিল (§138.5)।**
+  কোনো packet-size/surplus mechanism থাকবে না — user সবসময় base UoM-এ continuous qty transfer/issue
+  করবে।
+- ~~`machine_stock_log` টেবিলের সঠিক schema এখনো draft করা হয়নি~~ — **RESOLVED (২০২৬-০৯-১৫):**
+  পুরো draft schema (columns + `source_type` behavior table) §138.6-এ lock করা হয়েছে।
+- ~~Standard-এ hard-block severity — "aro onek conditions" এখনো design হয়নি~~ — **RESOLVED
+  (২০২৬-০৯-১৬): §138.12-ই সেই conditions।** business owner স্পষ্ট করেছেন যে এই item আলাদা কোনো
+  future কাজ ছিল না — machine+Sloc mapping অনুযায়ী normal/exception case নির্ধারণ, group-এর মধ্যে
+  formulation-priority + smallest-first auto-derive algorithm, machine-bucket boundary, আর
+  group-সহ-সব-মিলিয়েও stock কম হলে hard block (§138.12-এর ৫ নম্বর point) — এই পুরো mechanism-টাই
+  ছিল সেই "আরও অনেক শর্ত"। Standard-এর hard-block severity এখন পুরোপুরি lock, আলাদা dedicated
+  session লাগবে না।
+- ~~Warehouse → শপ ফ্লোর + machine transfer — এখনো খোলা, business owner নিজে design করবেন~~ —
+  **RESOLVED (২০২৬-০৯-১৬): §138.13-এ পুরোপুরি lock।** পুরনো §138.9-এর "IN03-তে Assign to Machine
+  button" draft, আর এই session-এরই শুরুতে discuss করা standalone "Pull List" page concept —
+  দুটোই **superseded/abandoned**। চূড়ান্ত design: Stores↔Production-এর মধ্যে quantity verbally
+  ঠিক হবে, তারপর already-built **IN10 (request create) + IN11 (post/receive)**-ই পুরো transfer
+  করবে, আর IN11-এর ভেতরেই একটা নতুন **"Distribute to Machine"** বাটন (MTS-company-scoped) বসবে —
+  বিস্তারিত §138.13।
+- **PR10 Edit-এ MTS support — এখনো খোলা, পরে একসাথে হবে (২০২৬-০৯-১৬ আপডেট):** `ProductionPOEditPage.jsx`-এর
+  `validateEditablePo()` আজও শুধু **MTO/HPS-only** ("PR10 edit is available only for MTO or HPS
+  Process POs") — MTS Process PO Standard-এ QA approval-এর আগে edit করার window পুরো §138-এর বাইরের,
+  আগে থেকেই deferred একটা item (CLAUDE.md §6 "MTS/INT-এর 'before Final' window... deferred")।
+  Business owner confirm করেছেন: এটা **এখন আলাদা করে করা হবে না** — MTS-এর পুরো production design
+  (batch qty entry, Stroke selection mechanism, ইত্যাদি সব একসাথে) সম্পূর্ণ locked হওয়ার পরে, PR10
+  Edit-এর MTS support **আর machine-respect location-filter দুটোই একসাথে** সেই session-এ করা হবে।
+  Prerequisite (harmless, already done): `getProcessOrderHandler`-এর response-এ Stroke-এর
+  `default_storage_location_id` যোগ করা হয়েছে (commit `ccb813d`) — আজ কোনো UI এটা ব্যবহার করছে না,
+  কিন্তু MTS edit window বানানোর সময় এই field-টা রেডিই থাকবে।
+- **Phase 1 (Foundation) — ✅ IMPLEMENTED (২০২৬-০৯-১৬)।** Machine+Sloc mapping
+  (`machine_master.storage_location_id` + FK, company-scope validated), `machine_stock_log`
+  side-table (schema অনুযায়ী), `SAMachineMaster.jsx`-এ নতুন Storage
+  Location Mapping Tab, আর Process PO **Create**-এ (Edit-এ না, উপরের point দেখো) MTS-only
+  machine dropdown location-filter + "Select all MTS machines" checkbox — সব dev-এ migrate+verify
+  করা হয়েছে, guard/lint clean।
+- **Phase 2 (Transfer/Distribution, §138.13/§138.13.1) — ✅ IMPLEMENTED (২০২৬-০৯-১৬), `machine_stock_log`-এর
+  প্রথম real writer-দুটোই।** IN10/IN11-এর নিজস্ব UI/lifecycle অপরিবর্তিত (ইতিমধ্যেই fully
+  operational, §121), কিন্তু **`postLocationTransferHandler`/`reverseLocationTransferPostingHandler`-এ
+  একটা ছোট follow-up step যোগ হয়েছে** — এই দুটোই `location_transfer.handlers.ts`-এর existing
+  handler, নতুন file/endpoint না। **TRANSFER writer (২০২৬-০৯-১৬, দ্বিতীয় পাস — প্রথম পাসে বাদ পড়ে
+  গিয়েছিল, নিজেই ধরা পড়ে ঠিক করা হয়েছে):** P311 post হওয়ার পরে, target location MTS-tracked হলে
+  একটা `machine_stock_log` IN entry (Unassigned bucket, `source_type=TRANSFER`) লেখা হয় — এটা না
+  থাকলে Distribute-to-Machine grid কখনো কিছু দেখাত না, যদিও `stock_ledger`-এ আসল transfer ঠিকই
+  posted হতো। P312 reversal-এও সমান্তরাল OUT entry লেখা হয়, **কিন্তু আগে check করে সেই qty এখনো
+  পুরোপুরি Unassigned-এ আছে কিনা** — মাঝখানে কিছু অংশ Distribute-to-Machine দিয়ে কোনো machine-এ
+  চলে গিয়ে থাকলে reversal block হয় (`LTR_REVERSE_MACHINE_LOG_INSUFFICIENT`, "pull it back to
+  Unassigned first")। এই দুই writer পাশাপাশি নতুন দুটো backend handler —
+  `listUnassignedMachineStockHandler` (`GET /api/procurement/machine-distribution/unassigned` —
+  company-র সব MTS machine-tracked location মিলিয়ে Unassigned bucket balance, item+location-ভিত্তিক
+  aggregate করে) আর `postMachineDistributionHandler` (`POST /api/procurement/machine-distribution/assign`
+  — §138.6-এর `MANUAL_ALLOT` paired double-entry লেখে, একটা bulk `INSERT`-এ সব split atomic ভাবে,
+  cross-location machine assign আর duplicate machine block করে, live Unassigned balance-এর বিরুদ্ধে
+  re-validate করে)। সবগুলোই existing `PROC_LOC_TRANSFER_POST` ACL resource-ই reuse করে (VIEW/WRITE) —
+  IN11-এর existing user-রাই automatic access পায়, কোনো নতুন ACL grant লাগেনি। Frontend:
+  `LocationTransferWorkbenchPage.jsx`-এ নতুন `DistributeToMachineDrawer` (center drawer, ErpDenseGrid +
+  all-column search + per-item `MachineSplitPanel` sub-view) আর header-এ "Distribute to Machine" বাটন —
+  `listMachines({po_type:"MTS"})`-এর result খালি থাকলে বাটন page-এই দেখাবে না (company-level
+  visibility), grid খালি থাকলে ("কোনো MTS location-এ Unassigned নেই") save করা যাবে না (item-level
+  inactive condition, business owner-এর exact rule)। **`deno check` (এই session-এ প্রথমবার npm
+  distribution দিয়ে locally install করা হয়েছে, যেহেতু `deno.land`-এর নিজস্ব installer proxy-blocked)
+  before/after তুলনায় ০টা নতুন error** — `location_transfer.handlers.ts` (baseline ১, pre-existing
+  `.ilike()` noise), `procurement.routes.ts` (baseline ১০১, pre-existing অন্য file-এর noise),
+  `route-acl-registry.ts` (baseline ০)। সব guard (route-acl-registry, stock-posting,
+  hardcoded-role-check, wrong-company-source, jsx-no-undef, frontend-payload) + `eslint` clean।
+
+  **🔴→✅ Real ACL bug found + fixed live, prod ও dev দুটোতেই (২০২৬-০৯-১৬)।** ধরে নেওয়া হয়েছিল
+  IN11-এর existing user-রাই automatic access পাবে (যেহেতু "IN10/IN11 already fully implemented ও
+  operational") — business owner push back করলেন ("IN10 ar IN11 er access to sobar ache nei"),
+  সরাসরি prod DB query করে confirm হলো: `CAP_LOC_TRANSFER_POST`/`CAP_LOC_TRANSFER_REQ`/
+  `CAP_LOC_TRANSFER_REVERSE` — তিনটাই CMP003/005/006/011-এ **শুধু "ACL-MASTER" work context**-এ
+  granted ছিল, বাকি ১৫টা real department work context (STORES, PRODUCTION, QUALITY, LOGISTICS,
+  ACCOUNTS, ...) কোনোটাই না — অর্থাৎ আজ পর্যন্ত prod-এ শুধু ACL-MASTER-tier user IN10/IN11 আসলে
+  ব্যবহার করতে পারত, বাকি সবাই 403 পেত। ঠিক CLAUDE.md pattern #5 (ACL-MASTER maintenance drift)।
+  **Fix (business owner confirm: সব department-এ broad, শুধু Stores+Production না):**
+  `erp_master.company_module_map`-এ `MOD_PRODUCTION` enabled company গুলো বের করে
+  (CMP003/005/006/011/014, prod-এ) — প্রতিটার সব active, non-ACL-MASTER work context-এ তিনটা
+  capability-ই grant করা হলো (`acl.work_context_capabilities` INSERT, `ON CONFLICT DO NOTHING`),
+  তারপর প্রতিটা company-র জন্য নতুন `acl_versions` row (version bump, কারণ পুরনো version আগেই
+  source_captured ছিল — re-capture no-op) → `capture_acl_version_source` → `generate_acl_snapshot`
+  — CLAUDE.md §8-এর established 4-step MCP sequence। **Prod-এ live verify করা হয়েছে:**
+  `acl.precomputed_acl_view`-এ real user (ACCOUNTS/STORES work context) এখন `PROC_LOC_TRANSFER_POST`
+  VIEW+WRITE `decision=ALLOW` দেখাচ্ছে। CMP003→v106, CMP005→v3, CMP006→v106, CMP011→v3,
+  CMP014→v24। **Dev-এও same fix করা হয়েছে** (dev-এ CMP003/005/006 পাওয়া গেছে, CMP011/CMP014 dev-এ
+  exist করে না — dev/prod company_code একই code হলেও আলাদা company, seeded data আলাদা, এটা আগে
+  থেকেই জানা ছিল) — dev-এ আগে থেকে **কোনো** work context-েই এই capability ছিল না (এমনকি
+  ACL-MASTER-ও না), সব active work context-এ grant করে version bump (CMP003→v40, CMP005→v33,
+  CMP006→v39)। **Sidebar visibility** (`erp_menu.menu_snapshot`) আলাদা করে rebuild করা হয়নি —
+  existing ৩০০s TTL cache-এর মাধ্যমেই next login/request-এ নিজে থেকে ঠিক হয়ে যাবে (§8-PERF-এর
+  established read-first-then-rebuild mechanism), তবে backend route-level access (আসল
+  authorization, `precomputed_acl_view`-নির্ভর) এখনই কার্যকর।
+
+  **এখনো বাকি:** live end-to-end click-through (dev/prod server-এ আসল browser test) — এই environment-এ
+  কোনো browser login নেই, তাই শুধু SQL দিয়ে ACL+data structure verify করা হয়েছে, UI click করে দেখা
+  হয়নি।
+- Phase 3 (Consumption/hard-block conditions, §138.12-এ DESIGN LOCKED), Phase 4 (IN02/IN03 reporting),
+  Phase 5 (PID, §138.7-এ DESIGN LOCKED — কোনো নতুন UI লাগবে না, শুধু PID_ADJUSTMENT-এর backend writer)
+  এখনো implementation শুরু হয়নি — শুধু Phase 4-এর বিস্তারিত design এখনো বাকি।
+
+### 138.12 — MTS Alternate-Group Auto-Derive Mechanism (LOCKED, ২০২৬-০৯-১৬)
+
+**প্রেক্ষাপট:** Stroke Line-এর `material_group_id` (Material Category Group, §এ আগে থেকেই আছে —
+"Has Alternate" mechanism) দিয়ে একই formulation item-এর কয়েকটা interchangeable alternate থাকতে
+পারে। Prod DB-তে verify করা (২০২৬-০৯-১৬): এই group membership **material-এর fixed property না,
+প্রতিটা stroke-line-এই আলাদাভাবে সেট হয়** — যেমন VAE POWDER DA 1100 (RM-00095) বেশিরভাগ MTS
+stroke-এ "RDP" group-এর সদস্য, কিন্তু stroke 0001-এ "RDP_PLC" নামের **আলাদা** group-এর সদস্য।
+তাই auto-derive সবসময় **সেই নির্দিষ্ট stroke-line-এর নিজের `material_group_id`** থেকেই member
+list নেবে, material-এর কোনো global/other-formulation group থেকে না।
+
+**MTS-এর জন্য মূল সিদ্ধান্ত (business owner, ২০২৬-০৯-১৬):** MTS-এ user manually Actual Qty তুলবে
+না — **system নিজে থেকে actual item + qty derive করবে**, দরকারে একাধিক row-ও add করবে। এই পুরো
+mechanism **শুধু MTS-এর জন্য** (§138.1-138.11-এর MTS-only scope lock-এরই সম্প্রসারণ)।
+
+**Precondition — কখন auto-derive প্রযোজ্য:** শুধু তখনই, যখন stroke-line-এর নিজের
+`default_storage_location_id` **সেই stroke-master-এরই declared shop-floor location**-এর সাথে
+মেলে (§138.1-এর machine-mapped location)। Prod DB-তে verify করা (CMP003, MTS stroke "00790908"
+/ SFG-00188): GABROSA M700 (MHEC group)-এর location = S003 = stroke-এর নিজের declared location
+→ auto-derive প্রযোজ্য। কিন্তু WHITE CEMENT JK (WHITE_CEMENT_NORMAL group)-এর location সবসময়
+R001 ("PUTTY RM", plain bulk godown, কোনো machine নেই ওখানে) — stroke-এর নিজের S00x location
+থেকে আলাদা → **auto-derive প্রযোজ্য না, group থাকলেও actual item manually বেছে নিতে হবে।**
+
+**Auto-derive algorithm (normal case — machine নিজের bucket):**
+
+1. **Bucket boundary — কখনো ভাঙা যাবে না:** শুধু সেই machine-এর নিজের bucket-এর ভিতরেই candidate
+   খোঁজা হবে। Formulation item (যেমন DA 1100) machine-এর bucket-এ না থাকলেও, সেই location-এর
+   Unassigned bucket-এ থাকলেও **কখনো সেখান থেকে টেনে নেওয়া যাবে না** — এটা §138.3/§138.4-এর
+   machine/Unassigned বিভাজনের ধারাবাহিকতা।
+2. **Priority order:** প্রথমে formulation item নিজে (যা machine-এর bucket-এ available), তারপর
+   group-এর বাকি সদস্যরা — **ছোট available quantity আগে সম্পূর্ণ শেষ করে**, তারপর পরের সদস্যে।
+   (কারণ: ছোট leftover অন্য কোথাও "আটকে" না রেখে আগে ক্লিয়ার করা)।
+3. প্রতিটা exhausted item = একটা আলাদা row। **শুধু original/formulation row-এর Standard (dosage_pct
+   + planned_qty) অপরিবর্তিত থাকে** — নতুন auto-added row-গুলোর Standard/dosage = **0**, ঠিক
+   §83.4-এর existing "Final: can add items, Standard=0" rule-এর মতোই (কোডে already আছে,
+   `is_formulation_line: false`, `applyFinalOrVerifyLineUpdates`-এ) — শুধু নতুন করে এটা Standard
+   stage-এও ব্যবহার হবে MTS-এর জন্য।
+4. **Worked example (business owner-এর দেওয়া, ২০২৬-০৯-১৬):** Requirement = DA 1100-এর 78 KG,
+   machine 5KL1-এর bucket-এ VINNAPASS 5010-N=49 KG, ELOTEX 60W=100 KG (DA 1100 নিজে 0 KG) —
+
+   | Row | Material | Standard | Actual Qty |
+   |---|---|---|---|
+   | Original | VINNAPASS 5010-N | 78 KG | 49 KG (পুরো) |
+   | নতুন (auto) | ELOTEX 60W | 0 | 29 KG (78−49) |
+
+   একই logic ৩+ item-এও বাড়ে (ছোট-থেকে-বড় ক্রমে exhaust)। **DA 1100 নিজে bucket-এ কিছু থাকলে
+   (যেমন 6 KG) সেটাই সবার আগে ব্যবহার হবে**, তারপর group-এর বাকি সদস্য ছোট-প্রথম ক্রমে — কারণ
+   formulation item-ই "সঠিক" material, group শুধু fallback।
+5. **Insufficient stock:** পুরো group (formulation + সব alternate) machine-এর bucket-এ মিলিয়েও
+   requirement-এর কম হলে (যেমন 78 লাগবে, সব মিলিয়ে 76) → **§83.5-এর existing severity rule
+   অনুযায়ী hard block**, Save হবে না। System কখনো নিজে থেকে Unassigned bucket-এ fallback করবে
+   না (bucket boundary অক্ষত থাকে) — user-কে হয় exception-case checkbox ব্যবহার করতে হবে, নাহলে
+   আগে ওই machine-এ transfer/assign করে আনতে হবে। এই scenario বাস্তবে Phase 2 (pull-list,
+   §138.11-এর ৫ নম্বর point)-এর সঠিক design/implementation হলে প্রায় ঘটবেই না — root-cause fix
+   ওখানেই, এই hard-block শুধু safety net হিসেবে থেকে যাবে।
+
+**Exception case (foreign machine, §138.4):** ঠিক একই algorithm, শুধু candidate-এর source
+machine-এর bucket-এর বদলে **সেই location-এর Unassigned bucket**।
+
+**User override rules:**
+- Auto-picked item বদলানো যাবে, কিন্তু **শুধু সেই stroke-line-এর নিজের group-এর সদস্যদের মধ্যেই**
+- Qty বদলালে বাকি row-গুলো recalculate হবে (মোট আবার Standard-এর সমান রাখতে)
+- Auto-generated row delete করা যাবে
+- নতুন item row manually add করা যাবে (existing Final/Verify add-line mechanism reuse)
+- **Duplicate prevention:** একই formulation-line-এর জন্য তৈরি row-গুলোর মধ্যে একই material
+  দুইবার select করা যাবে না — অন্য কোনো sibling-row-এ ইতিমধ্যে ব্যবহৃত item সেই row-এর dropdown-এ
+  **disabled/greyed out** থাকবে। কোনো auto-recalculate/merge চেষ্টা করা হবে না duplicate হলে —
+  user চাইলে একটা row delete করে qty manually মিলিয়ে নেবে।
+
+**✅ "Qty বদলালে recalculate" ও "row delete"-এর ঠিক mechanics — LOCKED (2026-09-18), 🔴 real gap
+confirmed in already-merged code (#504), not yet fixed:**
+- **Auto-vanish on full-qty override:** কোনো row-এর Actual Qty user বাড়িয়ে সেই group-এর পুরো
+  Standard Qty-এর সমান বা তার বেশি করে দিলে, সেই একই formulation-line-এর বাকি sibling row-গুলো
+  **automatically vanish** করবে (তাদের আর কোনো qty contribute করার দরকার নেই)। এটা "recalculate"
+  বুলেটের আসল অর্থ — automatic redistribution/rebalancing কোনো ২+ বাকি sibling-এর মধ্যে করার
+  চেষ্টা করা হবে **না** (কোনো unambiguous "fair split" নেই), শুধু full-qty override-এ সম্পূর্ণ
+  vanish।
+- **Row delete = real UI control লাগবে:** এখনো `MtsMaterialPlanStep`-এ কোনো "Remove row" বাটনই
+  নেই (merged #504 এতে শুধু material-swap dropdown + qty input আছে) — এটা তৈরি করতে হবে।
+- **Under-qty confirm modal (নতুন lock, 2026-09-18):** user ইচ্ছাকৃতভাবে একটা group-এর row(গুলো)
+  delete/qty-কমিয়ে সেই group-এর total **Standard Qty-এর কমে** নামিয়ে আনলে — এটা আর হার্ড-ব্লক না
+  (আগে `PROD_PO_MTS_PLAN_QTY_MISMATCH` দিয়ে ব্লক করত)। Save করতে গেলে একটা modal (English) আসবে:
+  "You are taking less than the required quantity for &lt;item&gt;. Do you agree?" — **Cancel**
+  = form-এ ফেরত (কিছু save হবে না), **Confirm** = shortfall accept করে save এগোবে। **Over-qty
+  (Standard-এর বেশি)** এখনো hard-block-ই থাকবে (এটা user explicitly allow করতে বলেননি) — শুধু
+  under-qty confirm-করে-allow হবে।
+- **Backend পরিবর্তন লাগবে:** `saveMtsMaterialPlanHandler`-এর group-per-group qty check
+  (`Math.abs(sumQty - group.standard_qty) > EPSILON` → reject) বদলে `sumQty > group.standard_qty
+  + EPSILON` (over এখনো block) বনাম `sumQty < group.standard_qty - EPSILON` (under — client-এর
+  একটা explicit `confirmed_shortfall: true` flag ছাড়া reject, flag থাকলে allow, আর কোন কোন group
+  shortfall-এ ছিল সেটা response/persisted data-তে track করা দরকার — কোন field-এ রাখা হবে সেটা
+  implementation-এর সময় ঠিক করতে হবে, `process_order`-এর existing `has_unapproved_deviation`
+  field অন্য অর্থে ব্যবহৃত, তাই ওটা reuse না করে আলাদা track করাই নিরাপদ)।
+- **Page 6-এও একই rule প্রযোজ্য** — §138.16-এ note করা আছে, এখানে দ্বিতীয়বার লেখা হলো না।
+
+**Stage/editability — "Current Stroke" status-এর উপর নির্ভরশীল (§ আগের "Current Stroke" redesign,
+StrokeMasterPage.jsx-এর সাথে সম্পর্কিত):**
+
+| Case | Standard page-এ | Edit কোথায় |
+|---|---|---|
+| **Current Stroke** দিয়ে batch | Auto-derive হয়, **পুরোপুরি editable** (উপরের সব override rule Standard-এই প্রযোজ্য) | Standard-এই |
+| **Non-current (অন্য) Stroke** দিয়ে batch | Current Stroke-এর মতোই editable — QA যে final plan approve করবে সেটি Production নিজেই Page 1–6-এ ঠিক করবে | Page-6 snapshot-এর পরে শুধু QA Verify-তে actual execution edit + post |
+
+এই mechanism পুরোটাই **MTS-only**, MTO/HPS/INT-এর জন্য প্রযোজ্য না (formulation material সরাসরি
+ব্যবহার হয়, alternate-group থাকলেও optional/manual override হিসেবেই থাকে — §138 এর আগের অংশে
+verify করা আছে, HPS/INT sample stroke-এ কোনো shop-floor location-ই নেই)।
+
+### 138.13 — Phase 2: Warehouse→Machine Distribution — IN10/IN11 reuse, নতুন "Distribute to Machine" বাটন (LOCKED + ✅ IMPLEMENTED, ২০২৬-০৯-১৬)
+
+**প্রেক্ষাপট:** §138.12-এর auto-derive-এও যদি machine-এর নিজের bucket-এ formulation+group মিলিয়ে
+requirement-এর তুলনায় কম stock থাকে (§138.12 point 5, hard block), root-cause fix হলো warehouse
+(R001)-এর ample stock থেকে সেই নির্দিষ্ট machine-এ transfer করে আনা। প্রথমে একটা standalone
+**"Pull List"** page design করার চেষ্টা হয়েছিল (prodshade-row entry → MT-তে required qty → system
+নিজে থেকে R001-এর group-wise item-split derive করবে) — কিন্তু derive করতে গিয়ে ধরা পড়ে R001-এ
+প্রায় সব item-এরই "ample" quantity থাকে (business owner: "R001 to warehouse okhane to sober e
+onek quantity thakbe"), তাই ওখানে group-wise smallest-first split করার কোনো বাস্তব প্রয়োজনই নেই —
+warehouse থেকে যেকোনো valid item-ই তোলা যায়, স্বয়ংক্রিয় derive করার দরকার নেই। এই realization-এর
+পরে business owner পুরো standalone Pull List page-টাই **বাতিল** করেন।
+
+**চূড়ান্ত design — already-built IN10/IN11 reuse, কোনো নতুন page না:**
+
+- **Mechanism:** Production, Stores-কে **verbally** বলবে কত qty লাগবে (কোন item, কোন location
+  থেকে) — কোনো system-generated pull-list/request document লাগবে না। Stores সেই অনুযায়ী **IN10**
+  (Location Transfer Request, MB21/MB22-style) দিয়ে **P311** post করবে (R001 → সেই machine-এর
+  নিজের mapped storage location)। Production সেটা **IN11** (posting/receiving workbench,
+  MIGO-style) দিয়ে receive করবে। IN10/IN11 দুটোই **আগে থেকেই fully implemented ও operational**
+  (§121 দেখো — এই session-এ ধরা পড়েছিল doc-এর একটা stale note "IMPLEMENTATION NOT STARTED" বলছিল,
+  correct করা হয়েছে) — নতুন কোনো transfer mechanism বানাতে হবে না।
+- **ACL:** যে যে company-তে এই Operation Management project map করা আছে, তাদের **সব user**-এর
+  জন্য IN10 আর IN11-এর **full access** (VIEW/WRITE/EDIT/APPROVE যা যা প্রযোজ্য) — আলাদা কোনো
+  role-tier গেটিং না।
+- **"Distribute to Machine" বাটন — IN11-এর ভিতরে, নতুন কোনো page না:** যে যে company-তে MTS-এর
+  কোনো prodshade আছে, শুধু তাদের জন্যই এই বাটন IN11 page-এ visible থাকবে; MTS নেই এমন company-তে
+  বাটনটাই থাকবে না।
+- **বাটনের ধরন — general/independent, কোনো নির্দিষ্ট transfer-এর সাথে বাঁধা না (business owner,
+  ২০২৬-০৯-১৬):** এটা IN11-এর Post Transfer/Reverse Transfer/Display History-র মতোই একটা
+  **আলাদা, সবসময়-উপস্থিত সাধারণ বাটন** — কোনো একটা নির্দিষ্ট transfer সবেমাত্র Post হওয়ার সাথে
+  bind করা না, page-এর যেকোনো সময় click করা যায়।
+- **বাটনের enable/disable condition:** বাটনটা **inactive** থাকবে যদি সেই company-র কোনো MTS-mapped
+  SFG storage location-এই **কোনো Unassigned item** না থাকে (অর্থাৎ distribute করার মতো কিছুই নেই —
+  §138.3-এর Unassigned bucket concept-এর সরাসরি ব্যবহার)। যেকোনো একটা MTS SFG location-এ যদি
+  Unassigned bucket-এ কিছু থাকে, বাটন active থাকবে।
+- **Standard-এ insufficient-stock hard-block-এর সাথে সংযোগ:** §138.12 point 5-এর hard block হলে
+  Production, IN11-এ গিয়ে (verbal কথা বলে Stores-কে IN10 post করাবে, তারপর) এই বাটন দিয়ে সেই
+  machine-এ item distribute করে আনবে, তারপর আবার Standard-এ ফিরে auto-derive re-run করবে — এভাবেই
+  root-cause resolve হয়, hard block শুধু safety net হিসেবে থেকে যায়।
+
+**✅ Drawer flow lock + implement হয়েছে — §138.13.1 দেখো।**
+
+#### 138.13.1 — Drawer flow: item grid → per-item machine-split, `MANUAL_ALLOT` reuse (LOCKED + ✅ IMPLEMENTED, ২০২৬-০৯-১৬)
+
+**Drawer-এর প্রথম view — ErpDenseGrid, company-র সব MTS location একসাথে:**
+
+- প্রতিটা row = একটা Unassigned item। কোনো আলাদা Prodshade pre-select ধাপ নেই — সেই company-র
+  **সব MTS machine-tracked shop-floor location মিলিয়ে** যত item-এর Unassigned bucket-এ balance
+  > 0 আছে, সবগুলো এক grid-এ, নিচের columns সহ:
+  - Item Name (`material_code — material_name`, §8A অনুযায়ী)
+  - **Storage Location** (per row, বাধ্যতামূলক — কারণ **একই item একাধিক shop floor-এ থাকতে
+    পারে**, আর "Assign" click করলে ঠিক কোন location-এর machine list আনতে হবে সেটা জানতে এই column-ই
+    একমাত্র উৎস)
+  - Unassigned Qty
+  - "Assign" বাটন (per row)
+- Grid-এর উপরে **all-column search bar** (existing `ErpDenseGrid` pattern-এর মতোই) — item name,
+  location code যেকোনোটা দিয়ে filter করা যায়।
+
+**"Assign" click করলে — সেই row-এর machine-split sub-view:**
+
+- সেই row-এর নিজের **Storage Location** ধরে `machine_master.storage_location_id` মিলিয়ে শুধু সেই
+  location-এর machine list আসবে (§138.1 mapping)।
+- প্রতিটা machine-এর পাশে একটা manual qty input field।
+- নিচে **live running balance** — মোট Unassigned qty থেকে এখন পর্যন্ত type করা সব machine-এর qty
+  বাদ দিয়ে যা বাকি থাকছে, সেটা real-time দেখাবে (negative হলে block, §138.9-এর পুরনো draft-এর
+  "sum exact/কম match" validation-ই বহাল — sum কখনো original Unassigned qty-এর বেশি হতে পারবে না,
+  কম হতে পারে)।
+
+**Save behavior — per-item বা bulk, partial সমর্থিত:**
+
+- User একটা item করেই Save করতে পারে, অথবা grid-এর একাধিক item-এ qty বসিয়ে **একসাথে Save**
+  করতে পারে।
+- যে item-এ কোনো qty বসানো হয়নি, বা যেটুকু বসানো হয়েছে তার বাইরে যা বাকি থাকল — সেটুকু
+  **Unassigned bucket-এই থেকে যাবে**, grid থেকে বাদ যাবে না, পরে আবার এসে distribute করা যায়।
+
+**Underlying posting mechanism — কোনো নতুন design না, §138.6-এর already-locked `MANUAL_ALLOT`-ই
+reuse:** এই Save action **কোনো real `stock_ledger` posting করবে না** (material physically সরছে
+না, ওটা ওই location-এই ছিল, শুধু machine-tag বদলাচ্ছে) — শুধু `machine_stock_log` side-table-এ
+**paired double-entry** লিখবে: Unassigned bucket থেকে OUT + নির্বাচিত machine bucket-এ IN, একই
+qty, একটা common reference দিয়ে জোড়া লাগানো, `source_type = MANUAL_ALLOT`। কোনো `movement_type`
+লাগবে না, `post_stock_movement()`/§8C engine touch হবে না। (§138.9-এর পুরনো superseded draft-এ
+প্রায় এই একই mechanism আগে থেকেই lock ছিল — শুধু হোস্ট page IN03-এর বদলে এখন IN11।)
+
+**§138.9 status:** উপরের পুরনো `<details>` draft এখন থেকে **fully superseded by §138.13/§138.13.1**
+ধরা হবে — mechanism-টা একই থেকে গেছে (`MANUAL_ALLOT` paired entry, partial-distribution সমর্থিত),
+শুধু host page IN03 থেকে IN11-এ সরে গেছে, আর grid-এ Storage Location column + all-column search
+নতুন যোগ হয়েছে।
+
+### 138.14 — MTS Process PO Create (Page 1-3): Current/Non-Current Stroke Policy + Batch Range (✅ DESIGN LOCKED — 2026-09-17/18, IMPLEMENTATION CODE-COMPLETE, UNCOMMITTED — live browser click-through still pending)
+
+**পটভূমি:** §138-এর machine-respect mechanism ঠিক করার পাশাপাশি একই সেশনে business owner MTS
+Process PO Create-এর পুরো Page 1-3 flow নতুন করে design করেন — batch number আর কবে QA approval
+লাগবে, দুটোই একসাথে redesign হয়েছে। Recovered/consolidated from same-day chat transcript
+(2026-09-17/18), যেহেতু এই design-টা আগে কখনো doc-এ লেখা হয়নি — শুধু chat-এই ছিল।
+
+**Page 1 — Company/PO Type/Material:** অপরিবর্তিত, শুধু `prodshadeLabel()`-এর label array-তে
+`document_name` যোগ করা হয়েছে (আগে code/shade/material_name-ই দেখাত, description বাদ পড়ত)।
+
+**Page 2 — Stroke Gate (নতুন mechanism):**
+- MTS-only: dropdown-এ সেই Prodshade-এর **Current Stroke** (§ উপরে `erp_production.mts_current_stroke`)
+  default-select হয়ে যায়, dropdown-এ তার পাশে "— Current" ট্যাগ দেখায়।
+- User অন্য (non-current) stroke বেছে নিলে একটা Cancel/Confirm warning modal আসে ("তুমি non-current
+  stroke বেছেছ, confirm করবে?") — Cancel করলে আগের selection ফিরে আসে (dropdown কখনো
+  `processForm.stroke_master_id` touch করে না যতক্ষণ না Confirm করা হয়), Confirm করলে সেটাই বসে।
+- Current Stroke বাছলে কোনো warning ছাড়াই সরাসরি বসে যায়।
+
+**Page 3 — Header + Batch Range (RM Table Page 4-এ পিছিয়ে গেছে, ব্যবসা owner-এর নিজের decision):**
+- **Machine** — আগে থেকে থাকা §138.4 exception checkbox ("Select all MTS machines") সহ, অপরিবর্তিত।
+- **Date** — user manually দেয়, allowed range = current−3 দিন থেকে current (future date একদম না)।
+  এটা শুধু "কবে physically produce হয়েছে" record করে — posting_date-এর সাথে সরাসরি কোনো derivation
+  নেই এই মুহূর্তে (§136 Urgent-এর existing `addDaysIso()` fixed-offset pattern-এর generalization,
+  fixed −1-এর বদলে user-এর দেওয়া date; native date math month/year boundary নিজে থেকেই সামলায়)।
+- **Shift** — pre-set list নেই, company-wise, field-এর সাথেই inline "+ New" (type করে save করলেই
+  dropdown-এ যোগ হয়ে যায়) — নতুন `erp_production.shift_master` table।
+- **Batch Range** — Start Batch Number (numeric অংশ শুধু, prefix সেই Prodshade-এর
+  `batch_number_series.prefix` থেকে auto-resolve), Number of Batches, To Batch (auto-derived
+  = Start + Count − 1)। Duplicate-check **Prodshade-scoped**, pack-size-এর সাথে কোনো সম্পর্ক নেই
+  (একটা প্রথম প্রস্তাব pack-size-scoped cycle_number ছিল, business owner explicitly reject করেছেন
+  — "pack size er sathe kono somporko nei")। Already-active batch number দিলে **live red warning +
+  Save button disable** (server round-trip advisory check + Create-time server-side re-check, দুটোই)।
+- **Batch Size** — Prodshade-এর নিজের base UoM-এ সরাসরি এন্ট্রি (এই Prodshade-এর base_uom_code=KG
+  বলে সরাসরি KG) — পুরনো MTS Liter→KG conversion mechanism (§ উপরে, 2026-07-24) touch করা হয়নি,
+  পাশাপাশি রাখা হয়েছে (batch size ইনপুট এখনো Liter নিতে পারে যেখানে stroke-এর conversion factor
+  আছে, ভিতরে KG-তে convert হয়ে যায় — Number of Batches এই derived KG-কে multiply করে)।
+  **Total Qty = Number of Batches × Batch Size (KG)।**
+- RM Table (Standard/Actual পাশাপাশি, AP-Approved) — **Page 4-এ**, এখানে না।
+
+**Workflow branching — দুটো policy, batch range নির্ধারিত হয় Page 2-এর stroke choice দিয়ে:**
+
+| | Policy 1 — Current Stroke | Policy 2 — Non-current Stroke |
+|---|---|---|
+| Create-এ status | STANDARD | STANDARD |
+| QA Approval | **Skip** — কোনো Approve/Reject বাটন নেই | MTO/HPS-এর মতোই Approve/Reject |
+| QA Reject-এ | প্রযোজ্য না (কখনো এই gate-এ পৌঁছায় না) | Status → CANCELLED, batch range-এর সব `batch_number_instance` **ACTIVE→VOIDED** automatic (manual Manager/SA release লাগে না — bag-এর গায়ে batch number আগেই প্রিন্ট করা, তাই একই number দিয়ে সাথে সাথে আবার entry করা যায়) |
+| Start Batch | **নেই কোনো policy-তেই** — batch number Create-এই set হয়ে গেছে | নেই |
+| Finalize শুরু হয় | সরাসরি STANDARD থেকে | QA_APPROVED থেকে (Approve-এর পরে) |
+| Verify | আলাদা, QA করে (অপরিবর্তিত `verifyProcessOrderHandler`, stock post এখানেই) | আলাদা, QA করে |
+
+**Server-side truth, client bishash kora hoyni:** `process_order.mts_used_current_stroke`
+(migration `20260918100000_mts_current_stroke_qa_policy.sql`) Create-এর সময়ই set হয়ে যায় —
+`erp_production.mts_current_stroke` table-এ সেই (company, Prodshade)-এর current stroke_number-এর
+সাথে chosen stroke-এর নিজের stroke_number মিলিয়ে (client-এর পাঠানো কোনো flag কখনো trust করা হয়
+না)। Current Stroke row না থাকলে (mechanism এখনো set হয়নি) ডিফল্ট **Policy 2** ধরা হয় (নিরাপদ
+দিকে ভুল করা — বেশি strict flow-ই default)।
+
+**Reservation — machine + storage location কীভাবে কাজ করবে (LOCKED, ২০২৬-০৯-১৫, কোনো নতুন tracking
+লাগে না):** `reservation_document` ইতিমধ্যেই সেই source Process PO-র সাথে link করা থাকে (§83.5),
+আর Process PO নিজেই তার `machine_id` রাখে। তাই **Machine-wise Reserved qty = `reservation_document`
+→ source Process PO → `machine_id`** — শুধু একটা JOIN। Normal-case Consumption-ও সেই একই ভাবে
+(`stock_ledger.reference_document_id` → Process PO → `machine_id`)। `machine_stock_log` side-table
+(§138.6) শুধু দুটো জায়গায় লাগে যেখানে কোনো Process PO নেই সরাসরি: Warehouse→Shopfloor Transfer, আর
+Exception-case Keep/Allot। CORS (full reversal)-ও একই যুক্তিতে "just works" হওয়ার কথা — reversal
+posting-ও সেই একই Process PO-র `reference_document_id` বহন করে, তাই machine-join reversal-কেও
+সঠিক machine-এ attribute করে দেবে, আলাদা কোনো mechanism ছাড়াই। **এটা propose, business owner-এর
+final confirm বাকি।**
+
+**⚠️ Explicitly deferred (business owner directive, 2026-09-18) — Page 4/5/6 শেষ হওয়ার পরে আলাদা
+session:**
+- **PR10 Edit-এ MTS support** — §138.11-এ আগে থেকেই flagged, এখনো একই অবস্থায়।
+- **CORS (full reversal) for MTS** — উপরের propose-টা confirm করতে হবে, আর actual reversal
+  handler-এ machine_stock_log-এর ভূমিকা (যদি লাগে) design করতে হবে।
+- **Partial Reversal (PR19) for MTS** — machine bucket-এ salvage/return কোথায় যাবে (নিজের machine,
+  নাকি Unassigned) — এখনো resolve হয়নি।
+
+**Implementation status (code-complete, uncommitted — commit করার অনুমতি এখনো নেওয়া হয়নি):**
+- Migrations: `20260917140000_mts_page3_shift_batch_range.sql` (`shift_master` table +
+  `process_order`-এ `production_date`/`shift_id`/`batch_number_from`/`batch_number_to`/
+  `number_of_batches`), `20260918100000_mts_current_stroke_qa_policy.sql`
+  (`mts_used_current_stroke`) — দুটোই dev-এ apply + migration-integrity reconcile করা হয়েছে,
+  আলাদা কোনো drift ধরা পড়েনি (dev-এ একটা pre-existing, unrelated "communication enrollment/rule"
+  ৯টা migration drift ধরা পড়েছিল একই সময়ে — এই session-এর কাজের সাথে সম্পর্কহীন, touch করা হয়নি)।
+- Backend: `shift_master.handlers.ts` (নতুন), `batch_series.handlers.ts` (batch-range
+  duplicate-check + void mechanism), `process_order.handlers.ts` (MTS field parsing/validation,
+  server-side policy flag, QA approve/reject policy gate, Start Batch removal, Finalize gate fix,
+  list handler-এর select-এ নতুন column যোগ)।
+- Routes + ACL: `production.routes.ts` (৩টা নতুন route, সব `PROD_PO_CREATE` resource reuse করে),
+  `route-acl-registry.ts`।
+- Frontend: `prodApi.js` (নতুন API call), `ProductionPOCreatePage.jsx` (Page 2 Stroke Gate + Page 3
+  পুরো নতুন MTS branch), `QAQueuePage.jsx` (`skipsQaApproval()` policy-aware করা, Start Batch বাটন
+  MTS-এ কখনো না দেখানো, "Ready for Finalize" badge)।
+- Verification: `deno check` (নতুন কোনো error না, শুধু already-accepted `.ilike()` typing noise +
+  pre-existing unrelated file errors), `eslint` (0 নতুন warning), সব CI guard (route-acl-registry,
+  stock-posting, jsx-no-undef, hardcoded-role-check, wrong-company-source) clean।
+- **এখনো বাকি:** deployed app-এ real browser click-through (এই environment-এ dev login নেই),
+  আর business owner-এর explicit commit permission (এখনো commit/push হয়নি ইচ্ছাকৃতভাবে)।
+
+**✅ RESOLVED (2026-09-18) — batch-range race condition।** Business owner নিজেই ধরিয়ে দেন: PO
+save না হওয়া পর্যন্ত, দুইজন user একই সাথে overlapping batch range নিলে কী হয়? মূল গঠনগত সমস্যা —
+`createProcessOrderHandler` আগে duplicate-check (SELECT) করে *তারপর* N-টা আলাদা batch number আলাদা
+আলাদা করে insert করত (`Promise.all`) — দুইটা concurrent request-ই check pass করে ফেলতে পারত
+(কেউই তখনো insert করেনি), তারপর প্রতিটা নিজের নিজের row insert করতে গিয়ে একটাই row-এ collision
+হলে **শুধু সেই একটা row fail করত, বাকি ৩৯টা successfully insert হয়ে যেত** — অর্থাৎ একটা আধা-insert
+হওয়া batch range, PO তার পুরো range দাবি করছে অথচ মাঝখানে একটা batch number আসলে নেই। Business
+owner-এর প্রস্তাবিত "TEMP hold + TTL" mechanism (booking-system-এর মতো soft lock) discuss করে
+বাতিল হয়েছে — কারণ TTL expiry নিজেই আরেকটা race/complexity আনে (cron/lazy-expiry, "user চলে গেছে"
+reliably detect করার কোনো উপায় নেই ব্রাউজার বন্ধ/crash হলে), আর collision বাস্তবে rare event
+(দুইজন ঠিক একই মুহূর্তে ঠিক একই Prodshade-এ Save চাপা)। **Simpler fix, already database-এর নিজের
+`UNIQUE(company_id, batch_number)` constraint ব্যবহার করে (dev-এ verify করা আছে):**
+`batch_series.handlers.ts`-এ নতুন `bulkInsertBatchNumberInstances()` — পুরো range-টা **একটাই bulk
+INSERT statement**-এ যায় (N-টা আলাদা call না), তাই Postgres নিজেই কোনো একটা row collide করলে
+**পুরো statement fail করে**, আধা-insert হওয়ার কোনো উপায় নেই। এই insert fail হলে (rare race,
+আসলেই ঘটলে) caller (`createProcessOrderHandler`) সেই মুহূর্তে তৈরি হওয়া `process_order` row-টা
+**compensating delete** করে দেয় (তখনো কোনো line insert হয়নি বলে শুধু PO row-ই delete করলেই যথেষ্ট)
+এবং user-কে স্পষ্ট `PROD_PO_BATCH_RANGE_RACE_LOST` (409) error দেয় — "আবার range check করে try
+করুন"। এটা true DB-transaction-এর মতো ১০০% bulletproof না (PO insert আর batch insert দুটো আলাদা
+statement, মাঝে এক মুহূর্তের জন্য PO row exist করে বৈধ batch range ছাড়াই) — কিন্তু **duplicate/আধা
+batch range কখনো persist করবে না**, যেটাই আসল data-integrity গ্যারান্টি। পুরোপুরি bulletproof
+(single-transaction RPC, §8D pattern) ভবিষ্যতে করা যায় যদি দরকার পড়ে, কিন্তু এই মুহূর্তে over-engineering
+মনে হচ্ছে rare-event-এর জন্য।
+
+### 138.15 — Page 4: RM Auto-Derive Grid — Material Table structure (✅ DESIGN LOCKED + IMPLEMENTATION CODE-COMPLETE — 2026-09-18, see this section's own "Implementation status" block below; live click-through still pending)
+
+**Scope:** §138.12-এর auto-derive algorithm-কে আসলে Page 4-এর "Material Table"-এ কীভাবে দেখানো
+হবে — এটা এখনো শুধু একটা interactive Artifact mockup-এ আছে, কোনো real backend handler বা frontend
+page কোডে লেখা হয়নি।
+
+**Structural lock (business owner correction, 2026-09-18) — প্রথম mockup ভুল ছিল:** প্রথম draft
+প্রতিটা auto-added alternate-কে indent+"AUTO" badge দিয়ে আলাদা row হিসেবে দেখিয়েছিল, existing
+Process PO Item Table থেকে সম্পূর্ণ আলাদা style-এ। **সঠিক design existing table-এর column সেট-ই
+হুবহু (কোনো extra formatting/pace-code sub-line ছাড়া):**
+
+```
+# | Material Type | Formulation Material | Dosage % | Actual Material | Storage Location |
+Standard Qty | Actual Qty | Available | Movement Type | AP-Approved | AP Qty | Status
+```
+
+- **Formulation Material** column সবসময় declared/dosage item দেখায় (যেমন GABROSA M700) — এটা
+  কখনো বদলায় না।
+- **Actual Material** column-এ যা genuinely draw হচ্ছে সেটা দেখায় (formulation item নিজে যদি
+  available থাকে তবে সেটাই, নাহলে group-এর alternate)।
+- একটা formulation line-এর requirement মেটাতে যদি **একাধিক alternate লাগে**, তাহলে সেই formulation
+  **row হিসেবে ততবার repeat হবে যতবার আলাদা Actual Material লাগে** — Dosage % আর Standard Qty
+  **শুধু প্রথম row-এ** দেখাবে, বাকি repeat row-এ ফাঁকা/dash।
+- একটা item-এর জন্য row তখনই বসে যখন সেই item থেকে **actually কিছু টানা হয়েছে** (qty > 0) —
+  formulation item নিজের bucket-এ 0 থাকলে তার জন্য আলাদা "Actual=0" row বসে না, সরাসরি alternate-এর
+  row থেকেই শুরু হয়।
+- **R001 (non-machine-tracked) line-ও real availability check পায়** — প্রথম mockup ভুল করে এদের
+  "N/A" দেখিয়েছিল, ধরে নিয়েছিল machine-bucket check না থাকলে কোনো check-ই দরকার নেই। **সংশোধন:**
+  এই line-গুলো existing §83.5 location-level (blended, reservation-aware) check-ই পায়, শুধু
+  §138.12-এর group/alternate auto-derive mechanism প্রযোজ্য না (auto-derive শুধু machine-tracked
+  line-এর জন্য, §138.12-এর precondition অনুযায়ী)।
+- **Warning শুধু তখনই একটা formulation line-কে নাম ধরে mention করবে যখন সেই group-এর সব member
+  মিলিয়েও requirement মেটে না** — কোনো individual alternate সম্পূর্ণ exhaust হয়ে গেলেই (normal,
+  প্রত্যাশিত) সেটা আলাদা করে "short" হিসেবে flag হবে না, শুধু group-level shortfall হলেই সেই লাইনের
+  নাম warning banner-এ আসবে।
+- Header-এ **Batch Size (per batch)** আর **Total Qty (Number of Batches × Batch Size)** — দুটোই
+  আলাদা করে দেখাতে হবে (শুধু per-batch দেখালে মোট qty visually mismatch মনে হয়)।
+
+**✅ RESOLVED (2026-09-18) — AP-Approved default for auto-derived rows = Yes।** Business owner
+confirm করেছেন: Standard=0 এমন repeat row সহ **সব row-এর AP-Approved default Yes** — আলাদা কোনো
+বিশেষ নিয়ম লাগবে না। Mockup-এ যা assumption হিসেবে ধরা হয়েছিল সেটাই এখন locked।
+
+**✅ RESOLVED (2026-09-18) — user override + add-line rules, Page 4-এর জন্য:**
+- **R001 (non-machine-tracked) line-এ group থাকলেও** (যেমন White Cement JK-এর
+  `WHITE_CEMENT_NORMAL`) auto-derive কখনো চলবে না (§138.12-এর precondition অনুযায়ী) — user
+  manually Actual Material বেছে নেবে, ঠিক MTO/HPS-এ আজ যেভাবে হয় সেই একই dropdown mechanism।
+- **Auto-derived Actual Material-ও user বদলাতে পারবে** — কিন্তু শুধু সেই stroke-line-এর নিজের
+  group-এর সদস্যদের মধ্যেই (§138.12-এ আগে থেকেই লক করা "User override rules", এখানে পুনঃনিশ্চিত)।
+- **এই সবকিছুর পরেও নতুন item row manually add করা যাবে** — MTO/HPS/MTEST-এ Final-এ existing
+  "Standard=0, নতুন material add" mechanism (`is_formulation_line: false`)-ই MTS-এর Standard
+  stage-এ reuse হবে (§138.12-এ আগে থেকেই লক)।
+
+**Verification (mockup-এর জন্যই, real prod data দিয়ে):** CMP003, Stroke 0064 / SFG-00188 (TRUCARE
+WALL PUTTY WHITE), Machine 5KL-1 (ASCL/PRD/01, S001-mapped, capacity 5000 KG), ৭টা real RM line
+(৪টা S001/machine-tracked — GABROSA M700/MHEC group, PULMIX 4033, Sodium Gluconate 98%, VAE
+POWDER DA 1100/RDP group; ৩টা R001 — Dolomite 240# ×2, White Cement JK) — সব prod DB থেকে সরাসরি
+query করে আনা, কোনো ধরে নেওয়া নেই। Fabricated demo stock (কল্পিত সংখ্যা, কোনো DB-তে লেখা হয়নি)
+দিয়ে ইচ্ছাকৃতভাবে ৩টা line short দেখানো হয়েছে hard-block behavior verify করার জন্য।
+
+**✅ Implementation status (2026-09-18) — backend + frontend CODE-COMPLETE, UNCOMMITTED, mjs
+guards + real-data algorithm verification done; live click-through NOT done (no dev login in
+this environment).** `getMtsMaterialPlanHandler`/`saveMtsMaterialPlanHandler`
+(`process_order.handlers.ts`) implement the full auto-derive computation
+(`computeMtsAutoDeriveRowsForGroup`, machine-bucket reads via `fetchMachineBucketBalances`) +
+R001 manual-pick + hard-block, exactly per this section's lock — new routes
+`GET`/`POST /api/production/process-orders/:id/mts-material-plan` (`production.routes.ts`,
+`route-acl-registry.ts`, riding `PROD_PO_CREATE`). `createProcessOrderHandler`'s naive 1:1
+stroke-line prepopulation is now skipped for MTS (`!isMtsCreate` guard) — MTS lines only get
+written by this new save handler, never at Create. Reservation for MTS lines is written directly
+(actual_qty as required_qty, not via `reserve_process_order_materials()`, which reserves
+`planned_qty` — deliberately 0 on split rows here per this section's own point 3) — documented
+known gap: this insert has no advisory-lock, unlike that RPC, so two concurrent Page 4 saves for
+the same machine bucket could theoretically over-reserve (accepted for v1, see the code comment
+in `saveMtsMaterialPlanHandler`). Frontend: `ProductionPOCreatePage.jsx` gained `processStep===4`
+(`MtsMaterialPlanStep` component) — Create's success path for MTS moves here instead of
+resetting the form; matches this section's exact table-column lock (`# | Material Type |
+Formulation Material | Dosage % | Actual Material | Storage Location | Standard Qty | Actual Qty
+| Available | Movement Type | AP-Approved | AP Qty | Status`), the repeat-row/first-row-only-
+Standard rule, R001 manual-pick, and the shared Current/Non-current Page-1–6 editability
+from §138.14's stage table. Excel export from the mockup was NOT carried into the real page (out
+of scope for this pass — mockup-only, design-approval tool).
+**Verification done (2026-09-18):** live prod DB schema check (`machine_stock_log`,
+`stroke_line`, `material_category_group_member`, `machine_master`, `reservation_document`,
+`process_order_line` — every column this code touches confirmed to exist with matching types);
+real dataset re-confirmed (CMP003 Stroke 0064/SFG-00188, Machine 5KL-1/S001, same 4
+machine-tracked + 3 R001 split as this section's own worked example, group memberships for
+MHEC/RDP/WHITE_CEMENT_NORMAL pulled live). The real `computeMtsAutoDeriveRowsForGroup` function
+(imported directly from `process_order.handlers.ts`, not a re-implementation) was unit-tested
+against this section's own locked worked example (DA 1100/78 KG/VINNAPAS-49+ELOTEX-29) plus 3
+more cases (formulation-item-used-first, hard-block shortfall math, empty-bucket placeholder row
+matching prod's real current zero-row `machine_stock_log` state) — all passed exactly. All 18
+`scripts/*.mjs` CI guards pass (`company-scope-write-acl-guard.mjs` caught a real gap in this
+session's earlier `shift_master.handlers.ts::createShiftHandler` — missing secondary EDIT-level
+ACL check at the caller-supplied `company_id`, fixed via `canMaintainCompanyResource`). **Not yet
+done:** live logged-in click-through in the deployed app; commit/push (holding for explicit
+permission per standing session rule).
+
+**⚠️ Real bug found + fixed same day, via live click-through (2026-09-18) — a stroke-line
+up-front stock check was never guarded for MTS.** `createProcessOrderHandler` has always had
+TWO stroke-line-driven blocks: (a) an early "fast-fail" availability check (before the PO insert
+at all) using each formulation line's own `default_storage_location_id` against generic
+location-level UNRESTRICTED stock — no group/alternate substitution, no machine-bucket awareness;
+(b) the naive 1:1 line-prepopulation block right before the PO insert. This session's original
+§138.15 implementation guarded only (b) with `!isMtsCreate` — (a) was missed. Result: every real
+MTS Create attempt 422'd with `PROD_PO_INSUFFICIENT_STOCK` (e.g. real click-through on Stroke
+0064: "Insufficient UNRESTRICTED stock for 6 material(s): RM-00084 — DOLOMITE 24...") before Page
+4 ever got a chance to run its own correct check — MTS never even reached the `process_order`
+insert. **Verified clean via direct prod DB query:** the failed attempts left zero orphaned rows
+(`batch_number_instance` had zero rows for either failed attempt's declared range, `process_order`
+had no MTS row at all for the company) — the up-front check fires before batch-range resolution
+AND before the PO insert, so a 422 here is a clean no-op, nothing to roll back. **Fixed:** guarded
+block (a) with the same `!isMtsCreate` condition as (b); also gated off a related frontend-only
+waste — `availabilityPreviewProcessOrder`'s background query was firing for MTS even though its
+own Material Table/short-stock UI is hidden for MTS (mirrors the same "not guarded for MTS" class
+of miss). Same session also fixed 3 other live-test findings on Page 3: **Segment** was a manual
+IWC/POWDER dropdown for no reason — real prod data confirmed (7 of 8 real MTS strokes are
+`base_uom_code='KG'`/POWDER, only 1 is `base_uom_code='L'`/IWC with a real conversion factor) —
+now auto-derived from the Stroke's own `base_uom_code`, read-only, no manual pick; **Batch Size**
+previously forced every MTS stroke through Liter-entry + a conversion-factor requirement
+regardless of segment, so a genuine POWDER (KG-native) stroke always hit "conversion factor
+missing" with no way to clear it — now only the IWC segment uses Liter entry, POWDER gets a plain
+KG input like MTO/HPS; the stale "RM lines move to a future Page 4" placeholder copy (Page 4 has
+existed since this same day) and the "Create Process PO" button label (relabeled "Save & Continue
+to Page 4" for MTS, since it only creates the header before Page 4 opens) were also corrected.
+
+### 138.15.1 — MTS Final and Verify after the Page-4 plan (✅ DESIGN LOCKED — 2026-09-20)
+
+The Page-4 saved plan remains the recipe record: formulation material, dosage and Standard Qty never
+become the selected alternate. MTS has no Start Batch step.
+
+| Stroke policy | Final entry status | Final actor/edit | Verify actor/edit/post |
+|---|---|---|---|
+| Current Stroke | Page-6 creates `FINAL` | No standalone Final screen | QA may inspect/correct actual issue and posts the atomic P261/P101 transaction |
+| Non-Current Stroke | QA Approval changes `STANDARD → FINAL` | No standalone Final screen; QA approves the Page-6 snapshot | QA has the same Verify authority, performs the final stock check and posts |
+
+For both policies Verify is the common stock-posting checkpoint. MTS split alternate rows are valid
+even where a repeat row has Standard Qty `0` and Actual Qty above `0`; MTS therefore uses automatic
+`YES`/Actual AP values internally and never requires hidden AP-Reco controls. `FINAL` is a
+workflow-ready status only; Verify remains the one atomic posting transaction.
+
+### 138.15.2 — MTS Creation Session → Page-6 Atomic Create → Common QA Verify model (✅ DESIGN LOCKED — 2026-09-20; supersedes the earlier Page-3-create / Page-6-save lifecycle wording in §138.15.1 and §138.16)
+
+**Why this replacement is necessary:** an MTS Process PO must not become a real document merely
+because Page 3 header data was entered. Page 4 (RM), Page 5 (batch-to-pack plan), and Page 6 (PM)
+are one pre-posting decision. If RM is short on Page 4, or RM/PM is short on Page 6, no Process PO,
+Packing PO, reservation, saved draft, batch hold or hard-used batch may exist. The six pages are one temporary
+**MTS Creation Session**, not a Process PO or a resumable server-side draft, until the Page-6 final
+check succeeds.
+
+The historical implementation-status text in §138.15/§138.16 is retained as an audit record only.
+Its Page-3 header creation, Page-4/Page-5 staging against a real Process PO, and Page-6 direct
+Packing-PO creation are **superseded** by this section and must not be extended as the accepted MTS
+workflow.
+
+#### A. One shared model; the only non-current difference is its approval gate
+
+```text
+Pages 1–6: MTS Creation Session (no Process PO, Packing PO, reservation, stock movement, or batch hold)
+        ↓
+Page 6 succeeds: one atomic document-create transaction
+        ↓
+Current Stroke:     Process PO FINAL → common QA Verify & Post
+Non-current Stroke: Process PO STANDARD → QA Approval → Process PO FINAL → common QA Verify & Post
+```
+
+Both policies use the same editable Page 1–6 screens, same in-session data, same Page-6 create
+operation, same linked Packing PO structure, and same QA Verify workspace. Current Stroke simply
+bypasses the QA Approval; non-current inserts that one read-only plan sign-off between Page 6 and
+Verify. Neither policy has Start Batch or a standalone Production Final screen.
+
+`FINAL` here is the status that permits Verify; it never posts stock. Stock posts only on QA's
+successful Verify & Post action.
+
+#### A.1 Non-current QA Approval review drawer
+
+The non-current MTS queue row expands into one read-only, three-page review of the immutable
+Page-6 snapshot. It is not a new document or an editing screen:
+
+1. **Header + Page 4:** Process PO, Prodshade, selected Stroke, machine, batch range/size/total
+   and the formulation/selected RM rows.
+2. **Page 5:** every batch-to-pack row, its batch sub-range, pack code, outer unit per batch,
+   SFG location and linked PMTS Packing PO.
+3. **Page 6 + decision:** each linked PMTS Packing PO and its SFG/PM/SKU lines, followed by the
+   only `Approve — Ready for Verify` and `Reject & Release All` controls.
+
+QA cannot edit the Page-4/5/6 plan here. Approve atomically records the QA decision and changes
+the parent from `STANDARD` to `FINAL`; Reject uses the common pre-posting MTS unwind. MTS has no
+Urgent/Manager branch in this approval drawer.
+
+#### A.2 Closed MTS entry paths and the only correction decisions
+
+All user-facing MTS UI text must be **English**. An MTS document is not editable after the
+Page-6 atomic create: Page 1–6 is the one and only production editing window. The following
+screens must fail clearly through both a UI guard and backend/API guard; hiding a button alone is
+not enough:
+
+| Attempted entry | Required English message / outcome |
+|---|---|
+| MTS Process PO on Production Edit | `MTS Process POs cannot be edited. Reject at QA Approval for a non-current stroke, or reject at Verify once the PO is Verify-ready.` |
+| MTS Process PO on Production Final | `MTS Process POs cannot be finalized here. Open MTS Verify to complete the entire MTS cycle.` |
+| Linked PMTS Packing PO on Production Edit | `This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be edited or cancelled separately. Complete the MTS cycle from the parent Process PO in Verify.` |
+| Linked PMTS Packing PO on Production Final/Correction | `This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be finalized or corrected separately. Complete the MTS cycle from the parent Process PO in Verify.` |
+
+Therefore a PMTS Packing PO must not appear in the standalone Packing-PO Final picker, and a
+manual PO-number lookup must return the same block. The parent MTS Process PO is the **only**
+entry to the MTS Verify workspace and owns the whole Process-and-Packing completion cycle.
+
+There are exactly two pre-posting correction decisions: for a non-current stroke, QA may reject
+at the Approval drawer; after the parent becomes Verify-ready, QA may reject at MTS Verify
+(for both current and non-current strokes). Neither path edits a Process or Packing PO; each uses
+the common atomic unwind, releasing child reservations and the unverified batch claim.
+
+#### B. Page-6 atomic create — all documents or none
+
+When Page 6 has fresh, sufficient RM and PM availability, `Create MTS Documents` runs one database
+transaction. It re-validates every in-session value server-side and then creates together:
+
+1. one MTS `process_order`, covering the entire declared SFG batch range;
+2. its Process-PO component lines and OPEN RM reservations;
+3. one `PMTS packing_order` for each Page-5 row, linked through
+   `packing_order.process_order_id`, with its Packing-PO lines and OPEN PM/SFG reservations;
+4. the durable Page-5 range and Page-6 material-choice snapshots; and
+5. the current/non-current initial Process-PO status stated above.
+
+Any batch collision, RM/PM shortage, alternate/group validation failure, reservation failure, PO
+number failure, or child-Packing-PO failure rolls back the **entire** transaction. No partial
+document, reservation or batch claim remains. Creating documents does not post P261/P101 and does
+not clear reservations.
+
+#### C. Batch numbers — preview first; document claim at Page 6; hard use at successful Verify
+
+Page 3 remains the place where prefix, start number, number of batches, contiguous range and
+duplicate preview are entered. It creates **no durable hold**: if the user backs out or Page 6 is
+short, the range is immediately free because nothing was written. Browser preview is convenience
+only, not a claim.
+
+- Page 6 atomically re-checks the complete range under a database lock together with every document
+  and reservation insert; it never trusts the earlier browser preview. Only a successful Page-6
+  commit creates the documents' temporary batch claim.
+- Successful QA Verify & Post converts that document claim to hard `USED/BLOCKED`
+  production-batch instances. This is the first irreversible use of those numbers.
+- A pre-posting QA rejection releases the document claim automatically. The range becomes available
+  again; no manual Batch Release click is required for MTS.
+- Existing MTO/HPS manual batch-release behavior remains unchanged. Once an MTS Verify & Post has
+  committed, later correction requires the normal controlled reversal path, never an automatic
+  batch release.
+
+If the user cancels a short Page-4/Page-6 creation session, or the Page-6 atomic create fails its
+fresh stock check, there was never a document batch claim to release. The entered range must appear
+as available in the very next MTS creation attempt. No manual release action, hidden timeout or
+stale browser state may keep it unavailable.
+
+##### C.1 Availability display and allocation — reuse the MTO/HPS/MTEST rule
+
+MTS must reuse the established MTO/HPS/MTEST availability rule; it must not introduce a second,
+different availability engine:
+
+```text
+Applicable physical balance
+− every other OPEN/PARTIAL reservation for the same actual material + storage location
+= Net Available
+```
+
+At a later check on a document that already owns a reservation, its own reservation is excluded,
+exactly as the existing MTO/HPS/MTEST Final/Verify checks do. Thus a document cannot block itself,
+while another open document still reduces availability. The auto-derive choice, shortage
+calculation, `Next: Page 5` block, Page-6 create block and final atomic recheck all use **Net
+Available**, never raw physical stock alone.
+
+The only MTS Page-4 variation is the source of the **physical** balance:
+
+- normal machine-tracked input: the selected machine's own machine bucket;
+- cross-machine input: the selected storage location's **Unassigned** machine bucket; and
+- Page-4 non-machine-tracked RM: the ordinary selected-location unrestricted balance.
+
+The reservation deduction, statuses, own-document exclusion, shortage result and concurrency
+behaviour are otherwise the same shared MTO/HPS/MTEST rule. It is not a separate MTS reservation
+model.
+
+Page 6 / Packing has **no machine-wise validation at all**. Its SFG and PM checks use the existing
+Packing-PO material + storage-location availability rule (including ordinary open-reservation
+deduction); neither a machine name nor an Unassigned bucket participates in that check.
+
+The table labels must make the distinction visible — `Physical`, `Reserved`, `Net Available`, then
+`Shortage` — rather than presenting an ambiguous single `Available` value. For Page 4, `Physical`
+must name the relevant machine or `Unassigned` bucket; for Page 6/Packing it means the ordinary
+location-level unrestricted balance.
+
+#### D. One Packing PO per Page-5 row, never one PO per batch
+
+A Page-5 row may intentionally cover a batch sub-range (for example, batches 8–10 with one 40-KG
+pack configuration). That row creates **one** linked PMTS Packing PO. `batch_number_from` and
+`batch_number_to` are manufacturing-trace fields on the header; they do not mean three separate
+Packing POs.
+
+PMTS is batch-blind for inventory and dispatch:
+
+- no standalone PMTS Final, Correction or Verify route; the parent MTS Process PO is the only
+  entry to the common MTS Verify workspace, with no single-SFG-batch picker;
+- SFG availability and reservations use material + storage location, not a selected batch;
+- SFG/PM/SKU stock balances and dispatch stay aggregate; and
+- the header range and the generated per-batch records below retain production genealogy.
+
+This explicitly supersedes the current PMTS single-SFG-batch Final behavior. MTO/HPS/MTEST retain
+their existing batch-specific Packing-PO rules.
+
+#### E. One QA Verify workspace; child Packing POs end at FINAL
+
+QA's MTS Verify screen shows the parent Process PO and every linked PMTS Packing PO together.
+QA reviews/corrects the Process actual RM/output data and the linked Packing PO's actual
+SFG/PM/SKU data in one workspace. There is no Packing-PO `VERIFIED` state.
+
+On **Verify & Post**, one atomic, ordered transaction does all of the following:
+
+1. validates the still-open reservations and fresh physical stock;
+2. posts parent RM issue and SFG output;
+3. posts every linked PMTS Packing PO's SFG/PM issue and SKU output;
+4. clears/fully issues all parent and child reservations;
+5. marks the parent Process PO `VERIFIED` and every linked PMTS Packing PO `FINAL`; and
+6. locks the batch range and writes the per-batch genealogy/allocation rows in the same commit.
+
+This preserves the established Packing-PO semantic — PMTO/PHPS/PMTS stock posts at Packing PO
+`FINAL` — while letting QA perform all MTS Process-and-Packing review at one Verify screen.
+
+#### F. Generated SFG/SKU batch records and allocation
+
+The one parent Process PO and one-per-Page-5-row Packing PO documents do **not** remove batch
+traceability. Verify creates system-owned execution/genealogy records:
+
+- one SFG execution record for every batch in the Process-PO range; and
+- one SKU execution record for every batch assigned to a Page-5 Packing-PO row.
+
+These are records, not separately finalised POs. Inventory and dispatch remain aggregate MTS
+stock; the records retain the individual batch's expected output, actual output, inputs, loss and
+parent/child document references.
+
+RM and PM actual consumption is allocated in ascending declared batch sequence, using each
+batch's own requirement first. This is allocation FIFO for genealogy, not a batch-specific
+dispatch/stock rule.
+
+**Loss allocation is more specific than generic FIFO:**
+
+- if QA enters a lower outer-pack output for a particular batch, its loss belongs to **that same
+  batch**. Example: batches 8, 9 and 10 each expect `90 × 40 = 3,600 KG`; QA records 89 bags for
+  each; each batch receives its own 40-KG loss record.
+- only when every batch's entered pack output meets expectation but aggregate SFG remains unmatched
+  does the residual SFG loss post to the final batch in the ordered range.
+
+The implementation must use the configured/approved loss-posting mechanism; it must not hardcode
+a movement type. The Verify screen must expose batch-level expected versus actual outer-pack
+quantities so the first rule is data-driven, never guessed from one aggregate Packing-PO number.
+
+#### G. QA Reject = atomic unwind before any stock posting
+
+For a non-current stroke, QA can reject at either checkpoint: the initial Approval after Page 6,
+or the final Verify workspace after its approval. A current stroke has the latter checkpoint.
+Before successful Verify & Post, all of these rejections run the same atomic unwind:
+
+1. reverse/void the parent Process PO and every linked PMTS Packing PO while preserving document
+   and rejection audit history;
+2. cancel every still-open parent/child reservation;
+3. release the Process-PO document batch claim/range for immediate reuse; and
+4. leave no stock movement, batch execution record, or partial child document behind.
+
+The UI has no MTS manual batch-release button for this case. A Verify & Post that has already
+committed is different: stock exists, so only the controlled reversal workflow may undo it.
+
+#### H. Page-4 or Page-6 shortage — no resume, no persistence
+
+Page 4 is the first hard stop: if the RM auto-derive/group check is short, `Next: Page 5` is
+blocked. Page 6 is the final hard stop: if its fresh RM/PM preflight is short, `Create MTS
+Documents` is blocked. In either case the user backs out/cancels the temporary creation session,
+arranges the required stock, and starts a **new** MTS Page 1–6 creation.
+
+No Draft Number, Draft Hold, transfer-return action, Pending Drafts worklist, Process PO, Packing
+PO or reservation is created. The new session repeats complete server-side availability,
+allocation and batch-range validation; stale values from the abandoned session are never reused.
+
+#### I. Page 1–6 screen contract after this lock
+
+| Page | User-facing responsibility | Persisted artifact / hard rule |
+|---|---|---|
+| **1 — Company / PO Type / Material** | Start a new MTS creation session and capture Company, `MTS` and Prodshade. | Browser/session state only; no Process PO, draft record or PO number. |
+| **2 — Stroke Gate** | Select and confirm Current or non-current Stroke. Show the non-current confirmation but use the same next screens. | Browser/session state only; no PO, reservation or status transition. |
+| **3 — Header + Batch Range** | Enter Date, Shift, Machine, batch size, start/range, number of batches and derived segment/total. Show duplicate-preview immediately. | Browser/session state only. No Batch Hold is created; Page 6 is the authoritative locked recheck. |
+| **4 — RM auto-derive** | Show the same formulation/alternate algorithm against the selected machine/location. Both Current and non-current strokes use the same locked edit rules. Any group-level RM shortfall hard-blocks `Next: Page 5`. | Browser/session rows only. Do **not** write `process_order_line`, reservations or a draft row. A short session is abandoned and restarted after stock is available. |
+| **5 — Batch to pack-size plan** | Allocate the entered range to pack sizes and F-locations. A row may cover many batches and will later create one PMTS Packing PO. Display expected outer pack and quantity **per batch**, as well as the row total. | Browser/session rows only. A batch may occur in exactly one row; range coverage, pack configuration and total-output validation are repeated at Page 6. |
+| **6 — Combined PM auto-derive + final preflight** | Resolve PM alternatives/locations across all Page-5 rows and run the final fresh RM/PM availability check. | If any item is short, block and abandon/back out — no persistence. If all checks pass, `Create MTS Documents` performs the only atomic real-document create and rechecks fresh RM/PM availability, batch range and every derived allocation. |
+
+Pages 4–6 therefore have ordinary in-session **Back** behavior, but no Draft save/resume behavior.
+None may silently create a production document before the single Page-6 `Create MTS Documents` commit.
+After that commit, the parent/child documents leave the six-page wizard and continue only through
+the Current/non-current approval and common Verify workspace described above.
+
+### 138.16 — Page 5 & 6: Packing PO Standard (Batch→Pack-Size Planning + PM Auto-Derive) — MTS (✅ DESIGN LOCKED + IMPLEMENTATION CODE-COMPLETE, 2026-09-18)
+
+**Implementation status (2026-09-18, same-day code-complete):** Page 5 backend
+(`mts_packing_plan.handlers.ts`, `erp_production.mts_packing_plan_row` staging table,
+`packing_order.batch_number_from/to` + `process_order.planned_loss_qty/reason` columns —
+migrations `20260918140000`/`20260918150000`) + frontend (`MtsPackingPlanStep`) are done —
+batch-range→pack-size grid, "Up to Last Batch" + availability-first batch dropdown sort, running
+SFG-balance hard block, Consider-Loss shortfall modal. Page 6 backend
+(`mts_packing_combine.handlers.ts`) + frontend (`MtsPackingCombineStep`) are done — combined PM
+auto-derive across every Page-5 row (grouped by formulation material, location-level not
+machine-bucket, both Actual Material and Storage Location editable), proportional per-row split
+on Save, N separate real `packing_order`+`packing_order_line`(+reservations) records created (one
+per Page-5 row), each `mts_packing_plan_row` flipped to `CONVERTED`. Page 4's own gap-fixes
+(auto-vanish on qty-raise, explicit row-delete, under-Standard Consider-Loss-style confirm modal —
+same three rules on Page 6's combined table too) are also implemented. All touched/new backend
+files `deno check` clean (only the same pre-existing, unrelated `.ilike()`/`.localeCompare()`/
+`SESSION_IDLE_EXPIRED` typing-noise errors already tolerated elsewhere in this domain); frontend
+`eslint` clean (only the same 4 pre-existing `exhaustive-deps` warnings). Migration integrity
+reconciled and confirmed `in_sync` against Dev (only the pre-existing, unrelated 9-migration
+`communication_enrollment/rule` REMOTE_ONLY drift remains).
+**Deliberately NOT built this pass (flagged, not forgotten):** (1) "Total Inner Unit" on Page 5 is
+a display placeholder ("N/A"/"See Page 6") rather than a fully computed inner-uom ratio — no real
+dataset with `inner_uom_code` set exists yet to build/verify against; (2) the Approve→FINAL
+lifecycle cascade from a Process PO onto its child MTS Packing PO(s) was NOT built — this
+project's own established convention (`reverseProcessOrderHandler`'s "Reverse all Packing Orders
+first" hard block, `cancelPackingOrderHandler`'s per-PO-only cancel) never auto-cascades a
+status change onto child documents anywhere, and Approve's own FINAL transition mechanics for MTS
+are entangled with the separately-flagged "Verify redesign for MTS" session the business owner
+has not yet held — building a cascade now would guess at undesigned lifecycle mechanics. What WAS
+added: `qaRejectProcessOrderHandler` now hard-blocks a Policy-2 MTS reject with
+`PROD_PO_HAS_PACKING_ORDERS` whenever active (non-CANCELLED/REVERSED) child Packing PO(s) exist —
+consistent with the existing reverse/cancel convention, closes the real orphan-data risk (a
+rejected Process PO leaving live Packing PO(s) referencing a now-dead formulation) without
+inventing new cascade semantics. (3) No live click-through in a running app — this environment has
+no way to authenticate into the deployed app or invoke the edge functions directly; verification
+here is schema-level (Dev DB column/table checks) + static (`deno check`/`eslint`) + hand-traced
+algorithm review, not an actual end-to-end Page 1→6 run against real data. **Not yet done:**
+`OM-IMPLEMENTATION-LOG.md` was not updated with this entry — a follow-up documentation-sync task.
+
+**Scope/continuum:** Page 5 & 6 are the **Packing PO** half of the same numbered flow that starts
+at Process PO entry — Page 1-4 (§138.14/§138.15) build and save the Process PO's own header +
+RM plan; Page 5 & 6 build and save the resulting Packing PO(s) that will eventually pack that
+Process PO's SFG output. All six pages are one continuous sitting for a single production run —
+Page 4's Save (material plan saved) is what enables "Next" into Page 5.
+
+**Verification dataset (real, prod, 2026-09-18):** CMP003, Prodshade 00790908 (SFG-00188,
+Stroke 0064), 3 real ACTIVE Pack BOMs (all `bom_required=true`, SFG issue from S001/P261, FG
+receipt to F003/P101):
+
+| SKU | Pack Size | SFG Input | PM lines |
+|---|---|---|---|
+| FG-00391 (00790908320) | 20 KG BAG | 20 KG | EXT PUTTY 20KG bag (has_alternate), Cable Tie, Label, Ribbon 0.02625 MTR, **Thread 4.42 MTR**, Ink/Additive/Cleaning (BTL) |
+| FG-00392 (00790908330) | 30 KG BAG | 30 KG | EXT PUTTY 30KG bag (no alternate), Cable Tie, Label, Ribbon, **Thread 5.74 MTR**, Ink/Additive/Cleaning |
+| FG-00393 (00790908340) | 40 KG BAG | 40 KG | AP EXT WALLPUTTY 40KG WOVENSACK (has_alternate), Cable Tie, Label, Ribbon, **Thread 5.74 MTR**, Ink/Additive/Cleaning |
+
+`prodshade_pack_config` maps all 3 pack codes (320/330/340) to this Prodshade, `pack_code_master.
+description` = "20 BAG"/"30 BAG"/"40 BAG" (this is the Pack Size dropdown's label source),
+`fill_qty` = 20/30/40, `inner_uom_code` = NULL for all three (no Inner Unit concept for this
+Prodshade's packs — confirmed a real 2-layer example exists elsewhere in the system, e.g. pack
+code "050 Bottle" with `outer_uom_code=CTN`/`inner_uom_code=BTL`, so the Inner Unit column is a
+real, general mechanism, just greyed out for this specific dataset).
+
+**F-location numeric correspondence (real, prod, confirmed same day):** `storage_location_master`
+is global (no `company_id` column); company-scoping is via `storage_location_plant_map`. CMP003
+now has 3 active F-locations (business owner added F001/F002 live during this design session to
+demonstrate the multi-location case): S001 "PUTTY SHOP FLOOR" ↔ F001 "PUTTY FINISH GOODS
+LOCATION", S002 "TLA SHOP FLOOR" ↔ F002 "TA CTG FINISH GOODS LOCATION", S003 "ADMIX SHOP FLOOR
+LOCATION" ↔ F003 "ADMIX FINISH GOODS LOCATION" — the numeric suffix always matches by business
+naming convention, confirmed real, not assumed.
+
+#### Page 5 — Batch → Pack-Size Planning Grid
+
+**Header:** same fields as Page 4's header (Prodshade code+name, Description, Stroke Number,
+Machine, Batch Range From-To, Number of Batches, Batch Size/batch, Total Qty) **plus** the now-real
+**Process PO Number** (the PO already exists at this point — created at the Page 3→4 transition).
+
+**Grid, one row per pack-size allocation (each row → one Packing PO on Save):**
+
+`From Batch` — `To Batch` (dropdown, sourced from this Process PO's own declared batch range;
+batch numbers already consumed by an earlier row are disabled in later rows' dropdowns — no
+double-allocation of the same physical batch to two different pack sizes) → `Number of Batches`
+(derived, To−From+1) → `Pack Size` (dropdown, `prodshade_pack_config` → `pack_code_master.
+description` for this Prodshade) → `Outer Unit / Batch` (user entry) → `Total Outer Unit`
+(= Number of Batches × Outer Unit/Batch) → `Total Inner Unit` (auto-resolved if the pack code has
+`inner_uom_code`, otherwise greyed/N-A) → `Volume` (auto = Total Outer Unit × `fill_qty`, KG,
+shows the pack's own UOM) → `Storage Location` (FG/SKU's own location — see below; SFG's own
+location is fixed/derived from the Stroke, not user-editable here).
+
+**From/To Batch dropdown mechanics — "Up to Last Batch" checkbox + availability-first sort order
+(LOCKED, 2026-09-18):**
+- Each row gets an **"Up to Last Batch"** checkbox. Checking it auto-fills `To Batch` with the
+  Process PO's own actual final batch number in the declared range (resolved dynamically from
+  that PO's `batch_number_to`, never hardcoded) and disables manual entry/selection of `To Batch`
+  for that row while checked.
+- **Both** `From Batch` and `To Batch` dropdowns sort **available-first, taken-last**: the still-
+  unclaimed batch numbers (starting right after whatever the previous row's own last-claimed batch
+  was) list first/at the top; batch numbers already claimed by an earlier row list **after** them,
+  shown disabled — not merely disabled-in-place at their original numeric position mixed among the
+  available ones.
+- **Worked example (locked):** a 40-batch Process PO. Row 1: user does NOT check "Up to Last
+  Batch", manually picks batch 26 as `To Batch` (From defaults to the first unclaimed batch, 1) →
+  Row 1 claims batches 1–26. Adding Row 2: its `From Batch` dropdown now shows 27 onward first
+  (available), with 1–26 pushed below, disabled. If Row 2 then checks "Up to Last Batch" (with
+  `From Batch`=27), `To Batch` auto-resolves to 40 → Row 2 claims 27–40. The same available-first/
+  disabled-after ordering applies to Row 2's own `To Batch` dropdown too, whether or not "Up to
+  Last Batch" is checked.
+
+**Storage Location dropdown (SKU/OUTPUT side only — SFG side is fixed):** options = every active
+F-prefixed location mapped to this company via `storage_location_plant_map` (NOT
+`material_plant_ext`, which only holds one `default_storage_location_id` per material+company,
+not a multi-option list). Sort + default: the F-location whose numeric suffix matches the SFG's
+own S-location suffix (e.g. Stroke 0064's S001 → F001) sorts first and is the default selection;
+the rest follow in code order. User can still override to any other active F-location in the
+list. *(Open edge case, not yet resolved: if a future S-number has no matching F-number at all —
+e.g. S005 exists but no F005 — fall back to [decide when it actually happens; not real today].)*
+
+**Running SFG-balance hard block (per row, live as rows are added):** below the grid, a display
+area shows, per row already built, how much SKU is being received (P101) and how much SFG is
+being issued (P261) for that row. The system tracks a running cumulative SFG total across every
+row built so far and compares it against the Process PO's own Total Qty. If a new/edited row's own
+Volume would push the cumulative total **past** the remaining SFG balance, that row's own `Outer
+Unit / Batch` field gets a red hard-block alert asking to adjust the qty, and the **Next Page**
+button is disabled until fixed. This can never be bypassed — it is a hard block, not a warning.
+
+**End-of-entry reconciliation (soft, only fires when the user tries to leave Page 5 with SFG still
+unallocated):** if, after the user has finished adding rows, some SFG balance still remains
+un-packed and the user clicks Next, a modal appears (English) stating the remaining SFG qty and
+offering two choices:
+- **Back to Entry** — returns to Page 5 to add more rows.
+- **Consider Loss** — accepts the remainder as loss.
+
+**"Consider Loss" — two-phase design, LOCKED (2026-09-18):** Because Page 5 runs *before* the
+SFG is physically produced/verified (Page 3→4→5→6 all happen before Finalize/Verify), no real
+stock movement can be posted for this qty at Page 5 time — there is no `stock_ledger` entry for
+this SFG yet at all. So:
+- **Now (Page 5, this section's scope):** clicking Consider Loss only **captures** the qty (+
+  optional reason) as a new field on the Process PO record (e.g. `planned_loss_qty`) — pure
+  data capture, zero stock/costing effect.
+- **Later (deferred, explicitly NOT part of this section — the business owner has separately
+  flagged Process PO's own Verify step for MTS as "redesign a bit later"):** the actual write-off
+  **posting** mechanism (which movement type, how it reconciles against the real `verified_qty`
+  which may differ from the planned Total Qty this loss was computed against) will be designed as
+  part of that later Verify-redesign session, using this captured `planned_loss_qty` as its input.
+  Do not build any stock-posting logic for this loss qty before that session locks the mechanism.
+
+#### Page 6 — Combined PM Auto-Derive Table + Multi-PO Save
+
+**No difference from Page 4's auto-derive table mechanism** (§138.12's algorithm — formulation/
+declared item first if available, then group alternates smallest-available-first, per-group hard
+block, repeat-row-per-actual-material display rule) with two changes:
+1. **No machine-bucket concept.** PM items are not machine-tracked. The stock check is against
+   whatever storage location that specific PM line's own Pack BOM declares (location-level, same
+   shape as Page 4's R001 lines) — not a machine's own sub-bucket.
+2. **Both Actual Material (within the item's own group) and Storage Location are user-editable**
+   on every auto-derive row here (Page 4 only let the Actual Material move within a group; the
+   Storage Location itself came from the stroke and wasn't user-editable there).
+
+**Confirmed 2026-09-18: the auto-vanish / row-delete / under-qty-confirm rules locked for Page 4
+(§138.12's "Qty বদলালে recalculate ও row delete" refinement, above) apply identically here** —
+raising one row's Actual Qty to meet/exceed a (combined, across pack sizes) group's Standard Qty
+vanishes its siblings; rows can be explicitly deleted; landing a group's total below Standard
+after edits/deletions requires the same English confirm modal before Save, same backend
+over-still-blocked/under-confirmable split. Not a separate mechanism — same code path Page 4 uses,
+just fed this page's own combined-per-item totals instead of Page 4's per-Process-PO ones.
+
+**Header:** same identity fields as Page 5's header, plus a summary strip of the rows about to
+become Packing POs: `Pack Size | Batch sub-range | Total Outer Unit | Volume (KG)` — one line per
+Page 5 row, so the user can cross-check the PM totals below against exactly which POs will be
+created.
+
+**The combined table itself (LOCKED mechanic — this is the one piece that is NOT just "Page 4
+again"):** the PM requirement is derived from **every Page 5 row combined**, not per-row.
+- A PM item whose material/qty genuinely differs per pack size (e.g. the outer bag itself — 20KG
+  bag vs 30KG bag vs 40KG bag are different materials) gets its **own row per pack size** — never
+  merged, since they are not the same requirement.
+- A PM item that is **common across pack sizes** (e.g. Thread, Cable Tie, Label, Ribbon, Ink,
+  Additive, Cleaning — all present in every one of the 3 real Pack BOMs above, just at different
+  per-unit qty) shows **once**, with the header's per-row qty **totalled** across every
+  contributing pack size (e.g. real data: Thread's combined Standard Qty = 20KG-row's `4.42 ×
+  Total Outer Unit(20KG)` + 30KG-row's `5.74 × Total Outer Unit(30KG)` + 40KG-row's `5.74 × Total
+  Outer Unit(40KG)`) — Standard, Actual, and AP-Reco totals all follow this same combine-then-total
+  rule.
+- **Why combined, not per-row:** a shared PM item's real stock is one physical pool. Running
+  Page 4's own per-group stock check independently, three separate times (once per pack size),
+  would let each check pass against the same physical stock the others are also counting on,
+  over-allocating it (a double/triple-count race, structurally the same class of bug §8D exists
+  to prevent for stock postings). Checking the item exactly once, against its true combined
+  requirement, is the only way to get a correct answer.
+- Auto-derive/substitution decisions made here (swap to a group alternate, change storage
+  location) are **not row-scoped** — a swap for a shared item like Thread applies identically to
+  every Packing PO whose own line uses that item, since it is the same underlying requirement
+  split across them.
+
+**Save — creates every Page 5 row's own Packing PO in one action (confirmed 2026-09-18):** Page 6
+itself never persists anything until Save. On Save, the system creates **N separate
+`packing_order` (+ their own `packing_order_line` rows)**, one per Page 5 row — Page 6's combined
+table is a computation/UI layer only, not a shared/merged document. Each individual Packing PO's
+own PM line quantities are **split back out proportionally** from the combined table's resolved
+per-unit result: a shared item's total actual-material/qty is divided across the contributing
+Packing POs using the same Pack-BOM-per-unit-qty × that row's own Total Outer Unit math Page 5
+already computed for it (i.e. the split is fully deterministic from data already on hand, not a
+new allocation decision) — a pack-size-specific item (the outer bag itself) goes only to its own
+one Packing PO, unsplit.
+
+#### Approve/Reject/Final/Verify lifecycle for MTS Packing PO(s) — mirrors Process PO's own two-policy split (LOCKED, 2026-09-18)
+
+**No separate QA action exists for the Packing PO(s) at all.** The Process PO's own existing QA
+decision (§138.14's `qaApproveProcessOrderHandler`/`qaRejectProcessOrderHandler`) governs every
+Packing PO created from it — this is intentional reuse of an already-built mechanism, not a new
+one:
+
+- **Current Stroke (Policy 1):** same as Process PO's own Page 3/4 — Standard and Final happen
+  together (no separate QA click), Verify stays a separate action. This applies identically to the
+  Packing PO(s): once Page 5/6 are saved, the Packing PO(s) move straight through to Final in the
+  same motion, with their own Verify staying separate.
+- **Non-current Stroke (Policy 2):** stops at STANDARD. At this stage, item lines remain
+  add/editable in **both** Page 4 (Process PO RM) and Page 6 (Packing PO PM) — the QA reviewer
+  sees the full plan, RM and PM together, before deciding. **Approve** → both the Process PO and
+  every one of its Packing PO(s) move to FINAL together, where Actual Qty and AP-Approved become
+  editable (same mechanism MTO/HPS's own Final page already has) — Verify then happens as its own
+  separate, later action, same as always. **Reject** → cascades exactly like the already-built
+  Process PO reject path: PO(s) CANCELLED, and — per the already-locked rule this codebase already
+  follows — every associated `reservation_document` also cancelled. No new reject mechanism is
+  needed; the existing `qaRejectProcessOrderHandler` pattern (status CANCELLED + reservation
+  cancel + `voidBatchNumberInstancesForProcessOrder` for the Process PO's own batch numbers) is
+  simply extended to cascade onto the Packing PO(s) created from it.
+
+**Implementation status: design fully locked in this section. Nothing has been coded yet** —
+backend handlers (Page 5's batch-range/pack-size grid + running-balance check + loss capture;
+Page 6's combined PM auto-derive + N-way Packing PO creation; the Approve/Reject cascade onto
+child Packing PO(s)), and the real frontend pages, are all still to be built. Next step: write the
+implementation the same way Page 4 was built — real handlers against real schema, verified with
+real prod data, then all `scripts/*.mjs` guards, before moving on.

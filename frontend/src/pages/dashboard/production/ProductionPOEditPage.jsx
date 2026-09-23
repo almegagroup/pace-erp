@@ -80,6 +80,9 @@ function storageLocationLabel(location) {
 function validateEditablePo(po) {
   if (!po) return "";
   const poType = String(po.po_type || "").toUpperCase();
+  if (poType === "MTS") {
+    return "MTS Process POs cannot be edited. Reject at QA Approval for a non-current stroke, or reject at Verify once the PO is Verify-ready.";
+  }
   if (!["MTO", "HPS"].includes(poType)) {
     return "PR10 edit is available only for MTO or HPS Process POs.";
   }
@@ -127,8 +130,16 @@ function slocLabel(location) {
   return [location?.code || location?.location_code, location?.name || location?.location_name].filter(Boolean).join(" - ");
 }
 
+function isMtsControlledPackingPo(po) {
+  return String(po?.po_type || "").toUpperCase() === "PMTS"
+    || String(po?.source_po_type || "").toUpperCase() === "MTS";
+}
+
 function packingBlockMessage(po) {
   if (!po) return "";
+  if (isMtsControlledPackingPo(po)) {
+    return "This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be edited or cancelled separately. Complete the MTS cycle from the parent Process PO in Verify.";
+  }
   if (String(po.status || "").toUpperCase() !== "STANDARD") {
     return "Packing PO PM lines are editable only at STANDARD status.";
   }
@@ -544,8 +555,8 @@ function ProcessPoEditTab() {
   const blockMessage = useMemo(() => validateEditablePo(po), [po]);
 
   const machinesQ = useQuery({
-    queryKey: ["production-edit-machines", po?.company_id],
-    queryFn: () => listMachines({ company_id: po.company_id, active: true }),
+    queryKey: ["production-edit-machines", po?.company_id, po?.po_type],
+    queryFn: () => listMachines({ company_id: po.company_id, active: true, po_type: po.po_type || undefined }),
     enabled: Boolean(po?.company_id && !blockMessage),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });

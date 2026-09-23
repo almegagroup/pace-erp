@@ -546,6 +546,35 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
+> ### 📍 2026-09-22 session note — sequencing decision (business owner), পরের session এটা সবার আগে পড়ো
+>
+> **প্রেক্ষাপট:** এই session-টা ছিল MTS (Make-to-Stock, IWC/Powder) batch-wise stock posting
+> নিয়ে — Process PO Verify-তে RM/PM issue ও FG/SKU receipt এখন প্রতিটা batch-এর জন্য আলাদা
+> `stock_ledger` row হিসেবে post হয় (`batch_number` সহ, `splitProportional()` helper দিয়ে
+> qty ভাগ করে), কিন্তু `stock_snapshot` (running balance) আগের মতোই blended থাকে — আর
+> Opening Stock ও PID **কখনোই** MTS-এর জন্য batch_number/Packing-PO post করে না (business
+> owner: "MTS make-to-stock, dispatch batch/Packing-PO-wise না")। এই ৩টা fix
+> (`process_order.handlers.ts`-এ per-batch split, `opening_stock.handlers.ts` +
+> `OpeningStockDetailPage.jsx`-এ MTS-এর জন্য batch field blocked) commit+push হয়ে গেছে।
+> ⚠️ এই session-এর পূর্ণ MTS/§138 design narrative (Page 5 Total Inner Unit ratio লজিক,
+> Pack BOM `is_primary_container` PM line দিয়ে inner-unit derive করা, PR10 MTS-এ edit না
+> থাকার lock ইত্যাদি) এখনো এই doc-এ formally লেখা হয়নি — সেটা একটা আলাদা pending task, এই
+> note-টা শুধু নিচের sequencing decision-টা record করার জন্য।
+>
+> **🔒 Sequencing decision (business owner, 2026-09-22) — এই ক্রম মানতে হবে:**
+> **SFG Result Recording (PR18 redesign) এবং Inward QA redesign — দুটোই DEFERRED।**
+> এগুলোর আগে করতে হবে: **(1) Dispatch for MTS**, তারপর **(2) Inward for Bulk** — এই দুটোর
+> design + implementation **সম্পূর্ণ শেষ হওয়ার পরেই** SFG Result Recording ও Inward QA
+> redesign-এ ফিরে আসতে হবে। নতুন session এই ক্রম উল্টে ফেলবে না, নিজে থেকে SFG/Inward QA
+> নিয়ে কাজ শুরু করার আগে business owner কনফার্ম করে নেবে যে Dispatch-for-MTS ও
+> Inward-for-Bulk আসলেই শেষ হয়েছে কিনা।
+>
+> **এখনো uncommitted (এই session-এ):** `ProductionPOCreatePage.jsx` (Page 5 "Total Inner
+> Unit" column — pack-এর `is_primary_container` PM line থেকে dynamic ratio দেখানো) ও
+> `mts_creation_session.handlers.ts` (`resolveInnerUnitsPerOuterUnit()` নতুন helper,
+> `buildPackingPlanPreview`-এ enrich) — locally verified (`deno check`/`eslint` clean,
+> zero নতুন error), কিন্তু commit/push-এর জন্য business owner-এর explicit permission বাকি।
+>
 > ### 📍 2026-08-19 session handoff — নতুন session এটা সবার আগে পড়ো
 >
 > **এই session এ কী হয়েছে (সংক্ষেপে):** পুরো session টা ছিল live bug-triage sprint — deployed

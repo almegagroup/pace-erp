@@ -241,6 +241,7 @@ async function fetchProcessOrdersByIds(processOrderIds: string[]): Promise<Map<s
     .from("process_order")
     .select(`
       id, company_id, po_number, po_type, material_id, stroke_master_id, batch_number,
+      batch_number_from, batch_number_to, number_of_batches,
       actual_qty, planned_qty, status, verified_at
     `)
     .in("id", ids);
@@ -307,6 +308,13 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: ProdHandlerCont
     po_number: processOrder.po_number ?? null,
     po_type: processOrder.po_type ?? null,
     verified_at: processOrder.verified_at ?? null,
+    // MTS has no single batch_number (a Process PO covers a produced batch
+    // RANGE, not one batch) -- carry the raw range fields so the frontend can
+    // show "BM00101 to BM00110 (10)" instead of a blank Batch Number, same
+    // pattern already used by ReversalPage.jsx's MTS CORS report.
+    batch_number_from: processOrder.batch_number_from ?? null,
+    batch_number_to: processOrder.batch_number_to ?? null,
+    number_of_batches: processOrder.number_of_batches ?? null,
     stroke_number: strokeNumberMap.get(String(processOrder.stroke_master_id ?? "")) || null,
     material,
     storage_location_id: storageLocationId || null,
@@ -406,7 +414,7 @@ export async function listSfgQaDocumentsHandler(req: Request, ctx: ProdHandlerCo
       .schema("erp_production")
       .from("process_order")
       .select(
-        "id, company_id, po_number, po_type, material_id, stroke_master_id, batch_number, actual_qty, planned_qty, status, verified_at, sfg_qa_document!left(id, status)",
+        "id, company_id, po_number, po_type, material_id, stroke_master_id, batch_number, batch_number_from, batch_number_to, number_of_batches, actual_qty, planned_qty, status, verified_at, sfg_qa_document!left(id, status)",
         { count: "exact" },
       )
       .eq("status", "VERIFIED")
@@ -514,6 +522,11 @@ export async function listSfgQaDocumentsHandler(req: Request, ctx: ProdHandlerCo
           po_type: processOrder.po_type ?? null,
           verified_at: processOrder.verified_at ?? null,
           batch_number: qaDoc.batch_number ?? processOrder.batch_number ?? null,
+          // MTS carries no single batch_number (see fetchQaDocumentDetails) --
+          // same raw range fields here so the list row can show it too.
+          batch_number_from: processOrder.batch_number_from ?? null,
+          batch_number_to: processOrder.batch_number_to ?? null,
+          number_of_batches: processOrder.number_of_batches ?? null,
           material: materialMap.get(String(processOrder.material_id ?? "")) ?? null,
           material_id: processOrder.material_id,
           stroke_number: strokeNumberMap.get(String(processOrder.stroke_master_id ?? "")) || null,

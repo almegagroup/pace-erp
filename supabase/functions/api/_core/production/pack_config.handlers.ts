@@ -9,6 +9,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -29,6 +30,28 @@ function packError(req: Request, ctx: ProdHandlerContext, code: string, status: 
 
 function normalizeNullableString(value: unknown): string {
   return toTrimmedString(value ?? "");
+}
+
+async function ensureUomExists(code: string): Promise<boolean> {
+  if (!code) return false;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("uom_master")
+    .select("code")
+    .eq("code", code)
+    .maybeSingle();
+  return !error && Boolean(data?.code);
+}
+
+const BILLING_UOM_VALUES = new Set(["PER_OUTER_UOM", "PER_INNER_UOM", "PER_BASE_UOM"]);
+
+// PER_INNER_UOM only makes sense once a pack code actually declares an inner layer — without
+// this, saving billing_uom=PER_INNER_UOM on a single-layer pack code would leave costing/billing
+// with a unit that doesn't exist anywhere on the material.
+function validateBillingUom(billingUom: string, innerUomCode: string | null): string | null {
+  if (!BILLING_UOM_VALUES.has(billingUom)) return "PROD_PACK_CODE_INVALID_BILLING_UOM";
+  if (billingUom === "PER_INNER_UOM" && !innerUomCode) return "PROD_PACK_CODE_BILLING_REQUIRES_INNER_UOM";
+  return null;
 }
 
 function buildFgSku(prodshadeCode: string, packCode: string): string {
@@ -56,7 +79,7 @@ async function resolveProdshadeRow(materialId: string): Promise<JsonRecord | nul
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, shade_code, material_name, document_name, production_mode, external_code")
+    .select("id, shade_code, material_name, document_name, production_mode, external_code, base_uom_code")
     .eq("id", materialId)
     .maybeSingle();
   if (error) {
@@ -121,6 +144,8 @@ async function ensureFgMaterialForConfig(
   if (!resolved.prodshade || !resolved.packCodeRow || !resolved.skuString) {
     return { fgMaterialId: null, fgPaceCode: null };
   }
+  const prodshadeBaseUom = normalizeNullableString(resolved.prodshade.base_uom_code);
+  if (!prodshadeBaseUom) throw new Error("PROD_PACK_CONFIG_PRODSHADE_BASE_UOM_MISSING");
   const prodshadeDescription = normalizeNullableString(
     resolved.prodshade.document_name ?? resolved.prodshade.material_name ?? resolved.skuString,
   );
@@ -162,7 +187,7 @@ async function ensureFgMaterialForConfig(
       material_name: skuString,
       short_name: shortName,
       material_type: "FG",
-      base_uom_code: "KG",
+      base_uom_code: prodshadeBaseUom,
       shade_code: shadeCode || null,
       pack_code: packCode || null,
       procurement_type: "IN_HOUSE",
@@ -281,7 +306,7 @@ export async function listPackCodesHandler(req: Request, ctx: ProdHandlerContext
     const { data, error } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_code_master")
-      .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, active, created_at")
+      .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, outer_uom_code, inner_uom_code, active, created_at")
       .order("pack_code");
     if (error) {
       console.error("[pack_config.listPackCodes] query failed:", JSON.stringify(error));
@@ -306,20 +331,34 @@ export async function createPackCodeHandler(req: Request, ctx: ProdHandlerContex
     const billingUom = toUpperTrimmedString(body.billing_uom);
     const description = toTrimmedString(body.description);
     const bomRequired = body.bom_required === true || body.bom_required === "true";
+    const outerUomCode = toUpperTrimmedString(body.outer_uom_code) || null;
+    const innerUomCode = toUpperTrimmedString(body.inner_uom_code) || null;
 
     if (!packCode || !packName || !packType || !billingUom) {
       return packError(req, ctx, "PROD_PACK_CODE_INVALID", 400, "pack_code, pack_name, pack_type, and billing_uom are required");
     }
+    if (outerUomCode && !(await ensureUomExists(outerUomCode))) {
+      return packError(req, ctx, "PROD_PACK_CODE_INVALID_OUTER_UOM", 400, "outer_uom_code is not a valid UOM");
+    }
+    if (innerUomCode && !(await ensureUomExists(innerUomCode))) {
+      return packError(req, ctx, "PROD_PACK_CODE_INVALID_INNER_UOM", 400, "inner_uom_code is not a valid UOM");
+    }
+    const billingUomError = validateBillingUom(billingUom, innerUomCode);
+    if (billingUomError) return packError(req, ctx, billingUomError, 400, "Invalid billing_uom");
 
+    // Identity is (pack_code, pack_type) — the same trailing pack_code digits legitimately
+    // repeat across different pack_type rows (Asian Paints' own external SKU numbering reuses
+    // digits across Bag vs Jar/Drum families), so the duplicate check must match that scope.
     const { data: existing, error: existingErr } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_code_master")
       .select("id")
       .eq("pack_code", packCode)
+      .eq("pack_type", packType)
       .maybeSingle();
     if (existingErr) throw new Error("PROD_PACK_CODE_LOOKUP_FAILED");
     if (existing) {
-      return packError(req, ctx, "PROD_PACK_CODE_EXISTS", 409, "Pack code already exists");
+      return packError(req, ctx, "PROD_PACK_CODE_EXISTS", 409, "This pack code already exists for this pack type");
     }
 
     const { data, error } = await serviceRoleClient
@@ -332,9 +371,11 @@ export async function createPackCodeHandler(req: Request, ctx: ProdHandlerContex
         billing_uom: billingUom,
         bom_required: bomRequired,
         description: description || null,
+        outer_uom_code: outerUomCode,
+        inner_uom_code: innerUomCode,
         active: true,
       })
-      .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, active, created_at")
+      .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, outer_uom_code, inner_uom_code, active, created_at")
       .single();
 
     if (error) throw new Error("PROD_PACK_CODE_CREATE_FAILED");
@@ -354,24 +395,36 @@ export async function updatePackCodeHandler(req: Request, ctx: ProdHandlerContex
     if (!id) return packError(req, ctx, "PROD_PACK_CODE_ID_MISSING", 400, "ID required");
 
     const body = await parseBody(req);
+    const outerUomCode = toUpperTrimmedString(body.outer_uom_code) || null;
+    const innerUomCode = toUpperTrimmedString(body.inner_uom_code) || null;
     const updates = {
       pack_name: toTrimmedString(body.pack_name ?? body.description) || null,
       pack_type: toUpperTrimmedString(body.pack_type) || null,
       billing_uom: toUpperTrimmedString(body.billing_uom) || null,
       bom_required: body.bom_required === true || body.bom_required === "true",
       description: toTrimmedString(body.description) || null,
+      outer_uom_code: outerUomCode,
+      inner_uom_code: innerUomCode,
     };
 
     if (!updates.pack_name || !updates.pack_type || !updates.billing_uom) {
       return packError(req, ctx, "PROD_PACK_CODE_INVALID", 400, "pack_name, pack_type, and billing_uom are required");
     }
+    if (outerUomCode && !(await ensureUomExists(outerUomCode))) {
+      return packError(req, ctx, "PROD_PACK_CODE_INVALID_OUTER_UOM", 400, "outer_uom_code is not a valid UOM");
+    }
+    if (innerUomCode && !(await ensureUomExists(innerUomCode))) {
+      return packError(req, ctx, "PROD_PACK_CODE_INVALID_INNER_UOM", 400, "inner_uom_code is not a valid UOM");
+    }
+    const billingUomError = validateBillingUom(updates.billing_uom, innerUomCode);
+    if (billingUomError) return packError(req, ctx, billingUomError, 400, "Invalid billing_uom");
 
     const { data, error } = await serviceRoleClient
       .schema("erp_production")
       .from("pack_code_master")
       .update(updates)
       .eq("id", id)
-      .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, active, created_at")
+      .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, description, outer_uom_code, inner_uom_code, active, created_at")
       .maybeSingle();
 
     if (error) throw new Error("PROD_PACK_CODE_UPDATE_FAILED");
@@ -411,13 +464,34 @@ export async function togglePackCodeHandler(req: Request, ctx: ProdHandlerContex
 export async function listApprovedProdshadesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    // Both optional and backward-compatible -- existing callers (Pack Config,
+    // SA Pack Code Master) pass neither and keep getting every company's
+    // every-po_type approved Prodshade, exactly as before. A caller that DOES
+    // pass these (e.g. SA Batch Series's MTS Prodshade picker) gets scoped
+    // down to just the Prodshades that actually have an approved stroke of
+    // that po_type in that company -- otherwise every SFG material in the
+    // company shows regardless of whether it's ever been used for that
+    // po_type at all.
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const poType = toTrimmedString(url.searchParams.get("po_type") ?? "").toUpperCase();
+    if (companyId) {
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return packError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
     // PostgREST cannot embed across schemas — stroke_master is in erp_production,
     // material_master is in erp_master — so resolve in two queries + in-memory join.
-    const { data: strokes, error } = await serviceRoleClient
+    let strokeQuery = serviceRoleClient
       .schema("erp_production")
       .from("stroke_master")
       .select("prodshade_material_id")
       .in("status", ["ACTIVE", "APPROVED"]);
+    if (companyId) strokeQuery = strokeQuery.eq("company_id", companyId);
+    if (poType) strokeQuery = strokeQuery.eq("po_type", poType);
+    const { data: strokes, error } = await strokeQuery;
     if (error) {
       console.error("[pack_config.listApprovedProdshades] stroke query failed:", JSON.stringify(error));
       throw new Error("PROD_PRODSHADE_LIST_FAILED");

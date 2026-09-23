@@ -102,6 +102,16 @@ function mapSourceTypeToPackingType(sourceType: string): string {
   return "";
 }
 
+// PMTS children are created only by the parent MTS Process PO's Page-6
+// transaction. Their edit/final/correction lifecycle belongs exclusively to
+// the parent MTS Verify workspace.
+function isMtsControlledPackingOrder(po: JsonRecord): boolean {
+  return toUpperTrimmedString(po.po_type) === "PMTS"
+    || toUpperTrimmedString(po.source_po_type) === "MTS";
+}
+
+const MTS_PACKING_PARENT_VERIFY_MESSAGE = "This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be edited, finalized, or corrected separately. Complete the MTS cycle from the parent Process PO in Verify.";
+
 function todayIso(): string { return todayIsoInKolkata(); }
 
 function buildAvailabilityKey(materialId: string, storageLocationId: string): string {
@@ -1259,12 +1269,12 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     let query = serviceRoleClient
       .schema("erp_production").from("packing_order")
       .select(`
-        id, company_id, po_number, po_type, source_po_type, process_order_id, material_id,
+        id, company_id, po_number, po_type, source_po_type, process_order_id, material_id, machine_id,
         pack_code_id, fill_qty_per_pack, num_packs, sku_qty, fg_conversion_qty, sfg_conversion_qty, planned_qty_kg, actual_qty_kg,
-        status, segment_code, created_by, created_at,
+        status, segment_code, created_by, created_at, batch_number, batch_number_from, batch_number_to,
         finalized_at, last_updated_at,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type),
-        process_order:process_order!process_order_id(po_number, batch_number, status)
+        process_order:process_order!process_order_id(po_number, batch_number, batch_number_from, batch_number_to, number_of_batches, status)
       `, { count: "exact" })
       .order("created_at", { ascending: false });
 
@@ -1287,32 +1297,56 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const materialMap = await getMaterialMapByIds(
-      rows.map((row) => String(row.material_id ?? "")),
-      "[packing_order.listPackingOrders]",
-      "PROD_PACK_LIST_FAILED",
-      "id, pace_code, material_name, shade_code",
-    );
-
-    // §83.18-REVISED: surface FO-allocation room directly on this list so the Plan
-    // Feed "find Packing PO to allocate" flow can show Total/Allocated/Available
-    // before the user commits a qty, instead of only failing at submit time.
     const poIds = rows.map((row) => String(row.id));
-    const allocatedByPo = new Map<string, number>();
-    if (poIds.length > 0) {
-      const { data: allocs, error: allocErr } = await serviceRoleClient
-        .schema("erp_production").from("plan_feed_packing_order_allocation")
-        .select("packing_order_id, allocated_qty_kg")
-        .in("packing_order_id", poIds);
-      if (allocErr) {
-        console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
-        throw new Error("PROD_PACK_LIST_FAILED");
-      }
-      for (const a of (allocs ?? []) as JsonRecord[]) {
-        const key = String(a.packing_order_id);
-        allocatedByPo.set(key, (allocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
-      }
-    }
+    const machineIds = [...new Set(rows.map((row) => String(row.machine_id ?? "")).filter(Boolean))];
+
+    // §8B PERF: INDEPENDENT -- material lookup, machine lookup, and the FO
+    // allocation sum each read only `rows`, never each other's result.
+    const [materialMap, machineById, allocatedByPo] = await Promise.all([
+      getMaterialMapByIds(
+        rows.map((row) => String(row.material_id ?? "")),
+        "[packing_order.listPackingOrders]",
+        "PROD_PACK_LIST_FAILED",
+        "id, pace_code, material_name, document_name, shade_code",
+      ),
+      (async () => {
+        const map = new Map<string, JsonRecord>();
+        if (machineIds.length === 0) return map;
+        const { data: machines, error: machineErr } = await serviceRoleClient
+          .schema("erp_master").from("machine_master")
+          .select("id, machine_code, machine_name")
+          .in("id", machineIds);
+        if (machineErr) {
+          console.error("[packing_order.listPackingOrders] machine query failed:", JSON.stringify(machineErr));
+          throw new Error("PROD_PACK_LIST_FAILED");
+        }
+        for (const machine of (machines ?? []) as JsonRecord[]) {
+          map.set(String(machine.id), machine);
+        }
+        return map;
+      })(),
+      // §83.18-REVISED: surface FO-allocation room directly on this list so the
+      // Plan Feed "find Packing PO to allocate" flow can show Total/Allocated/
+      // Available before the user commits a qty, instead of only failing at
+      // submit time.
+      (async () => {
+        const map = new Map<string, number>();
+        if (poIds.length === 0) return map;
+        const { data: allocs, error: allocErr } = await serviceRoleClient
+          .schema("erp_production").from("plan_feed_packing_order_allocation")
+          .select("packing_order_id, allocated_qty_kg")
+          .in("packing_order_id", poIds);
+        if (allocErr) {
+          console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
+          throw new Error("PROD_PACK_LIST_FAILED");
+        }
+        for (const a of (allocs ?? []) as JsonRecord[]) {
+          const key = String(a.packing_order_id);
+          map.set(key, (map.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
+        }
+        return map;
+      })(),
+    ]);
 
     return okResponse({
       data: rows.map((row) => {
@@ -1321,6 +1355,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
         return {
           ...row,
           material: materialMap.get(String(row.material_id ?? "")) ?? null,
+          machine: machineById.get(String(row.machine_id ?? "")) ?? null,
           fo_allocated_qty_kg: allocatedQty,
           fo_available_qty_kg: Math.max(0, totalQty - allocatedQty),
         };
@@ -1861,7 +1896,7 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
 
     const { data: poRow, error: poErr2 } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
-      .select("id, company_id, status, num_packs, fill_qty_per_pack, pack_code_id, po_type")
+      .select("id, company_id, status, num_packs, fill_qty_per_pack, pack_code_id, po_type, source_po_type")
       .eq("id", id).maybeSingle();
     if (poErr2) throw new Error("PROD_PACK_EDIT_FAILED");
     if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
@@ -1873,6 +1908,9 @@ export async function editPackingOrderHandler(req: Request, ctx: ProdHandlerCont
     }
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
+    if (isMtsControlledPackingOrder(po)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if (String(po.status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Packing PO is editable only at STANDARD status.");
@@ -2069,7 +2107,7 @@ export async function cancelPackingOrderHandler(req: Request, ctx: ProdHandlerCo
 
     const { data: poRow, error: poErr2 } = await serviceRoleClient
       .schema("erp_production").from("packing_order")
-      .select("id, status, company_id").eq("id", id).maybeSingle();
+      .select("id, status, company_id, po_type, source_po_type").eq("id", id).maybeSingle();
     if (poErr2) throw new Error("PROD_PACK_CANCEL_FAILED");
     if (!poRow) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Packing PO not found");
     try {
@@ -2079,6 +2117,9 @@ export async function cancelPackingOrderHandler(req: Request, ctx: ProdHandlerCo
     }
     if (!(await canMaintainCompanyResource(ctx, String((poRow as JsonRecord).company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
+    if (isMtsControlledPackingOrder(poRow as JsonRecord)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if (String((poRow as JsonRecord).status) !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Only a STANDARD Packing PO can be cancelled here. A finalised PO must be reversed.");
@@ -2115,7 +2156,7 @@ export async function updatePackingOrderLinesHandler(req: Request, ctx: ProdHand
     if (!id) return packErr(req, ctx, "PROD_PACK_ID_MISSING", 400, "ID required");
 
     const { data: po } = await serviceRoleClient.schema("erp_production").from("packing_order")
-      .select("id, status, company_id").eq("id", id).maybeSingle();
+      .select("id, status, company_id, po_type, source_po_type").eq("id", id).maybeSingle();
     if (!po) return packErr(req, ctx, "PROD_PACK_NOT_FOUND", 404, "Not found");
     try {
       await assertPackingCompanyScope(ctx, String((po as JsonRecord).company_id ?? ""));
@@ -2124,6 +2165,9 @@ export async function updatePackingOrderLinesHandler(req: Request, ctx: ProdHand
     }
     if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), "PROD_PO_EDIT", "EDIT"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have edit access to Packing PO for this company.");
+    }
+    if (isMtsControlledPackingOrder(po as JsonRecord)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_LOCKED", 422, "Lines editable only at STANDARD status");
@@ -2219,6 +2263,9 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const packFinalResourceCode = (po as JsonRecord).po_type === "PTEST" ? "PROD_MTEST_PACK_PO_FINAL" : "PROD_PO_FINAL";
     if (!(await canMaintainCompanyResource(ctx, String((po as JsonRecord).company_id ?? ""), packFinalResourceCode, "WRITE"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have Final posting access for this company.");
+    }
+    if (isMtsControlledPackingOrder(po as JsonRecord)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if ((po as JsonRecord).status !== "STANDARD") {
       return packErr(req, ctx, "PROD_PACK_STATUS_INVALID", 422, "Must be STANDARD to finalize");
@@ -2809,6 +2856,9 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     }
     if (!(await canMaintainCompanyResource(ctx, String(poData.company_id ?? ""), "PROD_PO_FINAL", "WRITE"))) {
       return packErr(req, ctx, "PROD_PACK_COMPANY_ACCESS_DENIED", 403, "You do not have correction access for this company.");
+    }
+    if (isMtsControlledPackingOrder(poData)) {
+      return packErr(req, ctx, "PROD_PACK_MTS_PARENT_VERIFY_REQUIRED", 422, MTS_PACKING_PARENT_VERIFY_MESSAGE);
     }
     if (poData.status !== "FINAL") {
       return packErr(req, ctx, "PROD_PACK_CORRECTION_STATUS_INVALID", 422, "Packing PO must be FINAL to correct");

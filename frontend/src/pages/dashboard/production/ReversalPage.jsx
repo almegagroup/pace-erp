@@ -178,6 +178,68 @@ function PackingLinesReadOnly({ po }) {
   );
 }
 
+// §138 CORS (2026-09-21): MTS Process PO reversal is not the same shape as
+// MTO/HPS -- one CORS on the parent cascades through every connected PMTS
+// Packing PO's own PM/FG lines in one atomic action, so a single table
+// listing every reversing leg (RM + PM + FG, across all linked Packing POs)
+// is what actually shows "what this Reverse click will undo", matching
+// PR20's own dense reversal-report layout.
+function MtsProcessLinesReadOnly({ po }) {
+  const rmRows = (po.lines ?? []).map((row) => ({
+    key: `rm-${row.id}`,
+    lineType: "RM",
+    poNumber: po.po_number,
+    material: materialLabel(row.actual_material) || materialLabel(row.material) || "--",
+    sloc: slocLabel(row.issue_storage_location) || "--",
+    qty: row.actual_qty,
+    movement: "P261",
+  }));
+  const packingRows = (po.packing_orders ?? []).flatMap((order) =>
+    (order.lines ?? [])
+      .filter((line) => line.line_type === "PM" || line.line_type === "FG")
+      .map((line) => ({
+        key: `${order.id}-${line.id}`,
+        lineType: line.line_type,
+        poNumber: order.po_number,
+        material: materialLabel(line.actual_material) || materialLabel(line.material) || "--",
+        sloc: slocLabel(line.issue_storage_location) || "--",
+        qty: line.actual_qty,
+        movement: line.line_type === "FG" ? "P101" : "P261",
+      })));
+  const rows = [...rmRows, ...packingRows];
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
+      <table className="w-full min-w-[900px] border-collapse text-sm">
+        <thead>
+          <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <th className="border-b px-3 py-2 text-left">Type</th>
+            <th className="border-b px-3 py-2 text-left">PO #</th>
+            <th className="border-b px-3 py-2 text-left">Material</th>
+            <th className="border-b px-3 py-2 text-left">Storage Location</th>
+            <th className="border-b px-3 py-2 text-right">Qty</th>
+            <th className="border-b px-3 py-2 text-left">Movement</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-slate-400">No lines.</td></tr>
+          ) : rows.map((row) => (
+            <tr key={row.key} className="border-b border-slate-100">
+              <td className="px-3 py-2 font-semibold">{row.lineType}</td>
+              <td className="px-3 py-2 font-mono">{row.poNumber || "--"}</td>
+              <td className="px-3 py-2">{row.material}</td>
+              <td className="px-3 py-2">{row.sloc}</td>
+              <td className="px-3 py-2 text-right font-mono">{qtyFmt(row.qty)}</td>
+              <td className="px-3 py-2 font-mono">{row.movement}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function ReversalPage() {
   const qc = useQueryClient();
   const [poNumberInput, setPoNumberInput] = useState("");
@@ -227,6 +289,7 @@ export default function ReversalPage() {
 
   const po = detailQ.data ?? null;
   const isProcess = matchType === "PROCESS";
+  const isMts = isProcess && po?.po_type === "MTS";
 
   useEffect(() => {
     setReason("");
@@ -274,7 +337,9 @@ export default function ReversalPage() {
     const confirmed = await openActionConfirm({
       eyebrow: isProcess ? "Process PO" : "Packing PO",
       title: `Reverse this ${isProcess ? "Process" : "Packing"} PO?`,
-      message: "This cancels open reservations and reverses any posted stock. This cannot be undone.",
+      message: isMts
+        ? "This reverses this MTS batch and every linked Packing PO in one action, releases the batch number, and cannot be undone."
+        : "This cancels open reservations and reverses any posted stock. This cannot be undone.",
       confirmLabel: "Reverse",
     });
     if (!confirmed) return;
@@ -283,8 +348,9 @@ export default function ReversalPage() {
       if (isProcess) {
         const response = await reverseProcessOrder(po.id, { reason: reason.trim() });
         setResult(response);
-        toast("Process PO reversed.");
+        toast(isMts ? "MTS Process PO and its Packing PO(s) reversed." : "Process PO reversed.");
         qc.invalidateQueries({ queryKey: ["process-orders"] });
+        if (isMts) qc.invalidateQueries({ queryKey: ["pack-orders"] });
       } else {
         await reversePackingOrder(po.id);
         toast("Packing PO reversed.");
@@ -361,7 +427,15 @@ export default function ReversalPage() {
             <div><span className="block text-xs text-slate-400">Status</span><p>{po.status || "--"}</p></div>
             <div><span className="block text-xs text-slate-400">Company</span><p>{companyLabel(company) || "--"}</p></div>
             <div><span className="block text-xs text-slate-400">Type</span><p>{isProcess ? (po.po_type || "--") : `${po.source_po_type || "--"} / ${po.po_type || "--"}`}</p></div>
-            {isProcess ? (
+            {isMts ? (
+              <>
+                <div><span className="block text-xs text-slate-400">Batch Range</span><p className="font-mono">{po.batch_number_from && po.batch_number_to ? `${po.batch_number_from} to ${po.batch_number_to}` : "--"} {po.number_of_batches ? `(${po.number_of_batches})` : ""}</p></div>
+                <div><span className="block text-xs text-slate-400">Machine</span><p>{po.machine?.machine_name || po.machine?.machine_code || "--"}</p></div>
+                <div><span className="block text-xs text-slate-400">Stroke #</span><p>{po.stroke?.stroke_number || "--"}</p></div>
+                <div><span className="block text-xs text-slate-400">Prodshade</span><p>{materialLabel(po.material) || "--"}</p></div>
+                <div><span className="block text-xs text-slate-400">Linked Packing PO(s)</span><p className="font-mono">{(po.packing_orders ?? []).map((order) => order.po_number).join(", ") || "--"}</p></div>
+              </>
+            ) : isProcess ? (
               <>
                 <div><span className="block text-xs text-slate-400">Batch #</span><p className="font-mono">{po.batch_number || "--"}</p></div>
                 <div><span className="block text-xs text-slate-400">Machine</span><p>{po.machine?.machine_name || po.machine?.machine_code || "--"}</p></div>
@@ -378,7 +452,7 @@ export default function ReversalPage() {
           </div>
 
           <div className="mt-4">
-            {isProcess ? <ProcessLinesReadOnly po={po} /> : <PackingLinesReadOnly po={po} />}
+            {isMts ? <MtsProcessLinesReadOnly po={po} /> : isProcess ? <ProcessLinesReadOnly po={po} /> : <PackingLinesReadOnly po={po} />}
           </div>
 
           {!alreadyReversed && isProcess ? (

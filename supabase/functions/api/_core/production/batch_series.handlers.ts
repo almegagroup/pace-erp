@@ -12,6 +12,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
@@ -33,7 +34,7 @@ type BatchNumberInstanceRow = {
   po_type: string;
   prodshade_material_id: string | null;
   batch_number: string;
-  status: "ACTIVE" | "VOIDED" | "RELEASED";
+  status: "ACTIVE" | "VOIDED" | "RELEASED" | "CLAIMED" | "USED";
   source_process_order_id: string | null;
   voided_at: string | null;
   released_by: string | null;
@@ -71,7 +72,7 @@ function parseNumberingMethod(value: unknown, fallback = "PLAIN"): string {
   return normalized;
 }
 
-function buildPreviewBatchNumber(row: JsonRecord, nextCount: number, today = new Date()): string {
+export function buildPreviewBatchNumber(row: JsonRecord, nextCount: number, today = new Date()): string {
   const prefix = toTrimmedString(row.prefix);
   const numberingMethod = parseNumberingMethod(row.numbering_method, "PLAIN");
   const serialPadWidth = parseSerialPadWidth(row.serial_pad_width, 5);
@@ -100,7 +101,7 @@ async function getMaterialMapByIds(
   const { data: mats, error: matErr } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, pace_code, material_name, shade_code")
+    .select("id, pace_code, material_name, document_name, shade_code")
     .in("id", matIds);
   if (matErr) {
     console.error(`${logPrefix} material query failed:`, JSON.stringify(matErr));
@@ -242,6 +243,105 @@ export async function activateReleasedBatchNumberInstance(params: {
   };
 }
 
+// MTS QA Reject (Policy 2, at STANDARD) — void every ACTIVE batch_number_instance
+// row for this PO's range in one statement, no manual Manager/SA release needed
+// (lighter than the CORS-reversal release mechanism, since stock was never
+// posted at STANDARD). Duplicate-check only ever treats ACTIVE as blocking, so
+// this makes the same batch numbers immediately reusable by a fresh entry.
+export async function voidBatchNumberInstancesForProcessOrder(processOrderId: string, actorId: string): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .update({ status: "VOIDED", voided_at: now, last_updated_at: now, last_updated_by: actorId })
+    .eq("source_process_order_id", processOrderId)
+    .eq("status", "ACTIVE");
+  if (error) {
+    console.error("[batch_series.voidBatchNumberInstancesForProcessOrder] update failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_NUMBER_VOID_FAILED");
+  }
+}
+
+// An unposted MTS Process PO owns a whole declared range.  On cancellation or
+// reversal every pre-posting member must become reusable together; releasing
+// only process_order.batch_number (the first member) leaves the rest blocked.
+// USED is intentionally excluded: a successfully posted batch needs the
+// Verify/reversal genealogy path, not a blind range release.
+export async function releaseUnpostedMtsBatchNumberInstancesForProcessOrder(params: {
+  processOrderId: string;
+  actorId: string;
+  reason: string;
+}): Promise<number> {
+  const now = new Date().toISOString();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .update({
+      status: "RELEASED",
+      released_by: params.actorId,
+      released_at: now,
+      release_reason: params.reason,
+      last_updated_at: now,
+      last_updated_by: params.actorId,
+    })
+    .eq("source_process_order_id", params.processOrderId)
+    .eq("po_type", "MTS")
+    .in("status", ["ACTIVE", "VOIDED", "CLAIMED"])
+    .select("id");
+  if (error) {
+    console.error("[batch_series.releaseUnpostedMtsBatchNumberInstancesForProcessOrder] update failed:", JSON.stringify(error));
+    throw new Error("PROD_MTS_BATCH_RANGE_RELEASE_FAILED");
+  }
+  return (data ?? []).length;
+}
+
+// MTS Page 3 batch-range create — single atomic bulk INSERT of every batch
+// number in the range, instead of N separate upserts (2026-09-18 fix). The
+// earlier N-separate-calls shape had a real race: two concurrent Creates
+// could both pass the advisory duplicate-check (neither has inserted yet),
+// then each insert its own rows independently -- if only ONE row in a range
+// collided, that range would end up PARTIALLY inserted (some ACTIVE, one
+// missing) while its process_order row still claims the full range. A
+// single multi-row INSERT is one statement: erp_production.batch_number_
+// instance's own UNIQUE(company_id, batch_number) constraint makes Postgres
+// reject the WHOLE statement if any one row collides, so it is impossible to
+// end up with a half-inserted range. The caller must still compensate by
+// deleting the just-created process_order row when this returns ok:false --
+// see createProcessOrderHandler.
+export async function bulkInsertBatchNumberInstances(params: {
+  companyId: string;
+  poType: string;
+  prodshadeMaterialId: string | null;
+  batchNumbers: string[];
+  processOrderId: string;
+  authUserId: string;
+}): Promise<{ ok: true } | { ok: false }> {
+  const now = new Date().toISOString();
+  const rows = params.batchNumbers.map((batchNumber) => ({
+    company_id: params.companyId,
+    po_type: params.poType,
+    prodshade_material_id: params.prodshadeMaterialId,
+    batch_number: batchNumber,
+    status: "ACTIVE",
+    source_process_order_id: params.processOrderId,
+    created_at: now,
+    last_updated_at: now,
+    last_updated_by: params.authUserId,
+  }));
+  const { error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_instance")
+    .insert(rows);
+  if (error) {
+    if ((error as { code?: string }).code === "23505") {
+      return { ok: false };
+    }
+    console.error("[batch_series.bulkInsertBatchNumberInstances] insert failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_NUMBER_BULK_INSERT_FAILED");
+  }
+  return { ok: true };
+}
+
 export async function upsertBatchNumberInstanceForProcessOrder(params: {
   companyId: string;
   poType: string;
@@ -335,7 +435,8 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       .schema("erp_production").from("batch_number_series")
       .select(`
         id, company_id, prodshade_material_id, batch_type, prefix,
-        current_count, numbering_method, serial_pad_width, reset_period, active, created_at
+        current_count, numbering_method, serial_pad_width, reset_period,
+        auto_generate, active, created_at
       `)
       .order("batch_type").order("prefix");
 
@@ -357,7 +458,9 @@ export async function listBatchSeriesHandler(req: Request, ctx: ProdHandlerConte
       data: rows.map((row) => ({
         ...row,
         material: materialMap.get(String(row.prodshade_material_id ?? "")) ?? null,
-        next_batch_preview: buildPreviewBatchNumber(
+        // Manual-entry series (SA unchecked auto_generate, MTS-only today) has
+        // no meaningful "next" number -- the user types it by hand each time.
+        next_batch_preview: row.auto_generate === false ? null : buildPreviewBatchNumber(
           row,
           Number(row.current_count ?? 0) >= ((10 ** Number(row.serial_pad_width ?? 5)) - 1)
             ? 1
@@ -385,6 +488,11 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     // MTS (IWC+Powder) is per-Prodshade; MTO/HPS/MTEST are company-level (83.7, corrected 2026-07-11).
     const isCompanyLevel = batchType === "MTO" || batchType === "HPS" || batchType === "MTEST";
     const materialId = isCompanyLevel ? null : (toTrimmedString(body.prodshade_material_id) || null);
+    // Manual-entry-only is an MTS choice (the SA Batch Series "Starting Count"
+    // checkbox) -- company-level types always auto-generate, whatever the
+    // caller sends is ignored for them so a stray/forged field can't disable
+    // batch numbering for MTO/HPS/MTEST.
+    const autoGenerate = isCompanyLevel ? true : body.auto_generate !== false;
     let currentCount = 0;
 
     const VALID_TYPES = new Set(["MTO","HPS","MTS","MTEST"]);
@@ -414,6 +522,7 @@ export async function createBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
         numbering_method: numberingMethod,
         serial_pad_width: serialPadWidth,
         reset_period: numberingMethod === "MONTHLY_RESET_MONYY" ? null : null,
+        auto_generate: autoGenerate,
         active: true,
         created_by: ctx.auth_user_id,
       })
@@ -442,7 +551,7 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
     const { data: existing, error: existingErr } = await serviceRoleClient
       .schema("erp_production")
       .from("batch_number_series")
-      .select("id, serial_pad_width")
+      .select("id, batch_type, serial_pad_width")
       .eq("id", id)
       .maybeSingle();
     if (existingErr) {
@@ -471,6 +580,11 @@ export async function updateBatchSeriesHandler(req: Request, ctx: ProdHandlerCon
       const serialPadWidth = parseSerialPadWidth(body.serial_pad_width ?? (existing as JsonRecord).serial_pad_width ?? 5, 5);
       const maxCount = (10 ** serialPadWidth) - 1;
       if (Number.isInteger(n) && n >= 0 && n <= maxCount) updates.current_count = n;
+    }
+    // Manual-entry-only is an MTS choice -- company-level types (MTO/HPS/MTEST)
+    // always auto-generate, whatever the caller sends is ignored for them.
+    if (body.auto_generate !== undefined) {
+      updates.auto_generate = String((existing as JsonRecord).batch_type) === "MTS" ? body.auto_generate !== false : true;
     }
 
     const { error } = await serviceRoleClient
@@ -572,6 +686,122 @@ export async function listBatchNumbersHandler(req: Request, ctx: ProdHandlerCont
     const code = err instanceof Error ? err.message : "PROD_BATCH_NUMBER_LIST_FAILED";
     return batchError(req, ctx, code, 500, "Batch number list failed");
   }
+}
+
+// GET /api/production/mts-batch-range-check?company_id=&prodshade_material_id=&start_serial=&count=
+// MTS Page 3 "Batch Range" -- live duplicate-check as the user types Start
+// Batch Number + Number of Batches. Prodshade-scoped only (no pack-size
+// dimension, per the 2026-09-17 lock). Also re-run server-side inside
+// createProcessOrderHandler right before insert -- this endpoint alone is
+// advisory (a second browser tab could race it).
+export async function checkMtsBatchRangeHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const prodshadeMaterialId = toTrimmedString(url.searchParams.get("prodshade_material_id") ?? "");
+    const startSerial = Number(url.searchParams.get("start_serial") ?? "");
+    const count = Number(url.searchParams.get("count") ?? "");
+
+    if (!companyId || !prodshadeMaterialId) {
+      return batchError(req, ctx, "PROD_BATCH_RANGE_INVALID", 400, "company_id and prodshade_material_id required");
+    }
+    if (!Number.isInteger(startSerial) || startSerial < 1 || !Number.isInteger(count) || count < 1 || count > 500) {
+      return batchError(req, ctx, "PROD_BATCH_RANGE_INVALID", 400, "start_serial (>=1) and count (1-500) required");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return batchError(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
+    const batchNumbers = await resolveMtsBatchRangeNumbers(companyId, prodshadeMaterialId, startSerial, count);
+    if ("errorCode" in batchNumbers) {
+      return batchError(req, ctx, batchNumbers.errorCode, batchNumbers.status, batchNumbers.message);
+    }
+
+    const duplicates = await findDuplicateBatchNumbers(companyId, batchNumbers.numbers);
+
+    return okResponse({
+      prefix: batchNumbers.prefix,
+      from_batch_number: batchNumbers.numbers[0],
+      to_batch_number: batchNumbers.numbers[batchNumbers.numbers.length - 1],
+      duplicates,
+      has_duplicate: duplicates.length > 0,
+    }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_BATCH_RANGE_CHECK_FAILED";
+    return batchError(req, ctx, code, 500, "Batch range check failed");
+  }
+}
+
+type MtsBatchRangeResolution =
+  | { prefix: string; numbers: string[] }
+  | { errorCode: string; status: number; message: string };
+
+// Shared by the standalone check endpoint above AND createProcessOrderHandler's
+// own server-side re-check at Create -- one place resolves the MTS Prodshade's
+// active series + formats the requested range into concrete batch numbers.
+export async function resolveMtsBatchRangeNumbers(
+  companyId: string,
+  prodshadeMaterialId: string,
+  startSerial: number,
+  count: number,
+): Promise<MtsBatchRangeResolution> {
+  const { data: seriesRow, error: seriesErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_series")
+    .select("prefix, numbering_method, serial_pad_width")
+    .eq("company_id", companyId)
+    .eq("batch_type", "MTS")
+    .eq("prodshade_material_id", prodshadeMaterialId)
+    .eq("active", true)
+    .maybeSingle();
+  if (seriesErr) {
+    console.error("[batch_series.resolveMtsBatchRangeNumbers] series lookup failed:", JSON.stringify(seriesErr));
+    return { errorCode: "PROD_BATCH_RANGE_CHECK_FAILED", status: 500, message: "Batch range check failed" };
+  }
+  if (!seriesRow) {
+    return {
+      errorCode: "PROD_BATCH_SERIES_NOT_CONFIGURED",
+      status: 422,
+      message: "No MTS batch number series configured for this Prodshade",
+    };
+  }
+
+  const maxSerial = (10 ** Number((seriesRow as JsonRecord).serial_pad_width ?? 5)) - 1;
+  if (startSerial + count - 1 > maxSerial) {
+    return {
+      errorCode: "PROD_BATCH_RANGE_OVERFLOW",
+      status: 422,
+      message: `Batch range exceeds the series' maximum serial (${maxSerial})`,
+    };
+  }
+
+  const numbers: string[] = [];
+  for (let i = 0; i < count; i++) {
+    numbers.push(buildPreviewBatchNumber(seriesRow as JsonRecord, startSerial + i));
+  }
+  return { prefix: toTrimmedString((seriesRow as JsonRecord).prefix), numbers };
+}
+
+// Company-wide live-claim collision check (matches batch_number_instance's
+// own UNIQUE(company_id, batch_number) shape) -- a newly committed MTS Page-6
+// document is CLAIMED until Verify makes it USED, and both must be unavailable
+// to a new Page-3 preview. Chunked per §8E since a large
+// Number-of-Batches entry could in theory push the .in() list past a safe URL
+// length, even though today's 500-count cap keeps it well under that.
+export async function findDuplicateBatchNumbers(companyId: string, batchNumbers: string[]): Promise<string[]> {
+  if (batchNumbers.length === 0) return [];
+  const rows = await fetchInChunks<JsonRecord>(batchNumbers, (chunk) =>
+    serviceRoleClient
+      .schema("erp_production")
+      .from("batch_number_instance")
+      .select("batch_number")
+      .eq("company_id", companyId)
+      .in("status", ["ACTIVE", "CLAIMED", "USED"])
+      .in("batch_number", chunk));
+  return rows.map((row) => String(row.batch_number));
 }
 
 export async function releaseBatchNumberHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -680,4 +910,30 @@ export async function generateBatchNumber(
     throw new Error(`PROD_BATCH_SERIES_NOT_FOUND: type=${batchType}`);
   }
   return String(row.batch_number);
+}
+
+// Whether Start Batch should auto-generate this (company, batch_type,
+// Prodshade)'s next batch number, or the SA has marked it manual-entry-only
+// (checkbox on SA Batch Series — real MTS/Powder production types where the
+// batch number is decided by hand, e.g. a pre-printed pack-size run). No
+// matching row (company-level MTO/HPS/MTEST, or a series that predates this
+// column) defaults to true -- unchanged, pre-existing behavior.
+export async function isBatchSeriesAutoGenerate(
+  companyId: string,
+  batchType: string,
+  prodshadeId: string | null,
+): Promise<boolean> {
+  let query = serviceRoleClient
+    .schema("erp_production")
+    .from("batch_number_series")
+    .select("auto_generate")
+    .eq("company_id", companyId)
+    .eq("batch_type", batchType);
+  query = prodshadeId ? query.eq("prodshade_material_id", prodshadeId) : query.is("prodshade_material_id", null);
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    console.error("[batch_series.isBatchSeriesAutoGenerate] query failed:", JSON.stringify(error));
+    throw new Error("PROD_BATCH_SERIES_GENERATE_FAILED");
+  }
+  return (data as JsonRecord | null)?.auto_generate !== false;
 }

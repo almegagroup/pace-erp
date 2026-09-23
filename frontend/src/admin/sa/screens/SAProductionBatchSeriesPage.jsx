@@ -11,8 +11,9 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates
 import { pushToast } from "../../../store/uiToast.js";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
-import { listBatchSeries, createBatchSeries, updateBatchSeries } from "../../../pages/dashboard/production/prodApi.js";
-import { listCompaniesForOm, listMaterials } from "../../../pages/dashboard/om/omApi.js";
+import { listBatchSeries, createBatchSeries, updateBatchSeries, listApprovedProdshades } from "../../../pages/dashboard/production/prodApi.js";
+import { listCompaniesForOm } from "../../../pages/dashboard/om/omApi.js";
+import { materialLabel } from "../../../pages/dashboard/production/strokeShared.jsx";
 
 const BATCH_TYPES = [
   { value: "MTO", label: "MTO - Admix (company-level)" },
@@ -42,6 +43,9 @@ const EMPTY_FORM = {
   current_count: "0",
   numbering_method: "PLAIN",
   serial_pad_width: "5",
+  // MTS-only choice (checkbox); company-level types always auto-generate and
+  // never show this checkbox at all, so this default never matters for them.
+  auto_generate: true,
 };
 
 function friendly(code) {
@@ -69,27 +73,30 @@ export default function SAProductionBatchSeriesPage() {
     queryKey: ["om-companies"],
     queryFn: () => listCompaniesForOm(),
   });
-  const sfgMaterialsQ = useQuery({
-    queryKey: ["om-materials", "SFG"],
-    queryFn: () => listMaterials({ material_type: "SFG", limit: 500 }),
-    select: (data) => data?.data ?? [],
-  });
-  const intMaterialsQ = useQuery({
-    queryKey: ["om-materials", "INT"],
-    queryFn: () => listMaterials({ material_type: "INT", limit: 500 }),
-    select: (data) => data?.data ?? [],
+  // MTS is the only batch_type that goes per-Prodshade (see requiresProdshade
+  // below). Scoped to the create form's own Company AND its own batch_type
+  // (via listApprovedProdshades's company_id/po_type filters) -- previously
+  // this pulled every SFG material mapped to the company regardless of
+  // whether it had ever been used for MTS at all (137 SFG materials for one
+  // real company, only 5 of which are actual MTS Prodshades). Now only
+  // Prodshades with an approved MTS stroke in this company show up.
+  const prodshadesQ = useQuery({
+    queryKey: ["prod-approved-prodshades", form.company_id, form.batch_type],
+    queryFn: () => listApprovedProdshades({ company_id: form.company_id || undefined, po_type: form.batch_type }),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+    enabled: requiresProdshade(form.batch_type) && Boolean(form.company_id),
   });
 
   const companies = companiesQ.data ?? [];
-  const prodshadeMaterials = [...(sfgMaterialsQ.data ?? []), ...(intMaterialsQ.data ?? [])];
+  const prodshadeMaterials = prodshadesQ.data ?? [];
   const companyOptions = companies.map((company) => ({
     value: company.id,
     label: `${company.company_code} - ${company.company_name}`,
   }));
   const companyLabelById = new Map(companies.map((company) => [company.id, `${company.company_code} - ${company.company_name}`]));
   const prodshadeOptions = prodshadeMaterials.map((material) => ({
-    value: material.id,
-    label: `${material.pace_code ?? "-"} - ${material.material_name ?? ""}`,
+    value: material.material_id,
+    label: [material.external_code ?? "-", material.material_name, material.document_name].filter(Boolean).join(" — "),
   }));
 
   const listQ = useQuery({
@@ -120,6 +127,7 @@ export default function SAProductionBatchSeriesPage() {
         numbering_method: form.numbering_method,
         serial_pad_width: parseInt(form.serial_pad_width, 10) || 5,
         prodshade_material_id: requiresProdshade(form.batch_type) ? form.prodshade_material_id : null,
+        auto_generate: form.auto_generate,
       });
       toast("Batch series created.");
       setCreateOpen(false);
@@ -140,6 +148,7 @@ export default function SAProductionBatchSeriesPage() {
       active: seriesRow.active,
       numbering_method: seriesRow.numbering_method || "PLAIN",
       serial_pad_width: String(seriesRow.serial_pad_width ?? 5),
+      auto_generate: seriesRow.auto_generate ?? true,
     });
   }
 
@@ -153,6 +162,7 @@ export default function SAProductionBatchSeriesPage() {
         active: editDraft.active,
         numbering_method: editDraft.numbering_method,
         serial_pad_width: parseInt(editDraft.serial_pad_width, 10) || 5,
+        auto_generate: editDraft.auto_generate,
       });
       toast("Series updated.");
       setEditSeries(null);
@@ -221,15 +231,15 @@ export default function SAProductionBatchSeriesPage() {
                     <span className="rounded bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">{row.batch_type}</span>
                   </td>
                   <td className="px-3 py-2 text-slate-500">
-                    {row.material ? `${row.material.pace_code ?? "-"} - ${row.material.material_name ?? ""}` : "Company-level"}
+                    {row.material ? materialLabel(row.material) : "Company-level"}
                   </td>
                   <td className="px-3 py-2 font-mono font-semibold">{row.prefix}</td>
                   <td className="px-3 py-2 text-slate-600">
                     {NUMBERING_METHOD_OPTIONS.find((option) => option.value === row.numbering_method)?.label ?? (row.numbering_method || "PLAIN")}
                   </td>
                   <td className="px-3 py-2 text-right font-mono">{row.serial_pad_width ?? 5}</td>
-                  <td className="px-3 py-2 text-right font-mono">{row.current_count}</td>
-                  <td className="px-3 py-2 font-mono text-slate-400">{row.next_batch_preview || "-"}</td>
+                  <td className="px-3 py-2 text-right font-mono">{row.auto_generate === false ? <span className="text-slate-400">n/a</span> : row.current_count}</td>
+                  <td className="px-3 py-2 font-mono text-slate-400">{row.auto_generate === false ? "Manual entry" : (row.next_batch_preview || "-")}</td>
                   <td className="px-3 py-2">
                     <span className={`rounded-full px-2 py-0.5 text-xs ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
                       {row.active ? "Active" : "Inactive"}
@@ -249,14 +259,14 @@ export default function SAProductionBatchSeriesPage() {
         <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Company <span className="text-rose-500">*</span></label>
-            <ErpComboboxField value={form.company_id} onChange={(value) => setForm((current) => ({ ...current, company_id: value }))} options={companyOptions} />
+            <ErpComboboxField value={form.company_id} onChange={(value) => setForm((current) => ({ ...current, company_id: value, prodshade_material_id: "" }))} options={companyOptions} />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Batch Type <span className="text-rose-500">*</span></label>
             <select
               className="rounded border border-slate-300 px-2 py-1.5 text-sm"
               value={form.batch_type}
-              onChange={(event) => setForm((current) => ({ ...current, batch_type: event.target.value, prodshade_material_id: "" }))}
+              onChange={(event) => setForm((current) => ({ ...current, batch_type: event.target.value, prodshade_material_id: "", auto_generate: true }))}
             >
               {BATCH_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
             </select>
@@ -268,7 +278,14 @@ export default function SAProductionBatchSeriesPage() {
                 value={form.prodshade_material_id}
                 onChange={(value) => setForm((current) => ({ ...current, prodshade_material_id: value }))}
                 options={prodshadeOptions}
-                emptyStateLabel="No SFG/INT prodshades found"
+                disabled={!form.company_id}
+                emptyStateLabel={
+                  !form.company_id
+                    ? "Select a Company first"
+                    : prodshadesQ.isLoading
+                    ? "Loading..."
+                    : `No approved ${form.batch_type} Prodshade found for this company`
+                }
               />
             </div>
           )}
@@ -305,16 +322,31 @@ export default function SAProductionBatchSeriesPage() {
               />
             </div>
           </div>
+          {form.batch_type === "MTS" && (
+            <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={form.auto_generate}
+                onChange={(event) => setForm((current) => ({ ...current, auto_generate: event.target.checked }))}
+              />
+              Auto-generate batch numbers for this Prodshade
+            </label>
+          )}
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-slate-600">Starting Count</label>
             <input
               type="number"
               min="0"
-              className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+              disabled={form.batch_type === "MTS" && !form.auto_generate}
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono disabled:bg-slate-100 disabled:text-slate-400"
               value={form.current_count}
               onChange={(event) => setForm((current) => ({ ...current, current_count: event.target.value }))}
             />
-            <p className="text-xs text-slate-400">Backend will generate the next preview using these rules.</p>
+            {form.batch_type === "MTS" && !form.auto_generate ? (
+              <p className="text-xs text-slate-400">Not applicable -- this Prodshade's batch number is typed by hand at Start Batch every time.</p>
+            ) : (
+              <p className="text-xs text-slate-400">Backend will generate the next preview using these rules.</p>
+            )}
           </div>
           <div className="flex gap-3 pt-2">
             <button type="submit" disabled={saving} className="rounded bg-sky-600 px-5 py-2 text-sm text-white hover:bg-sky-700 disabled:opacity-50">Create Series</button>
@@ -329,7 +361,7 @@ export default function SAProductionBatchSeriesPage() {
             <div className="space-y-1 rounded bg-slate-50 px-3 py-2 text-xs text-slate-500">
               <p><span className="font-medium">Company:</span> {companyLabelById.get(editSeries.company_id) ?? "-"}</p>
               <p><span className="font-medium">Type:</span> {editSeries.batch_type}</p>
-              {editSeries.material && <p><span className="font-medium">Prodshade:</span> {editSeries.material.pace_code ?? "-"} - {editSeries.material.material_name ?? ""}</p>}
+              {editSeries.material && <p><span className="font-medium">Prodshade:</span> {materialLabel(editSeries.material)}</p>}
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">Prefix</label>
@@ -363,16 +395,31 @@ export default function SAProductionBatchSeriesPage() {
                 />
               </div>
             </div>
+            {editSeries.batch_type === "MTS" && (
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={editDraft.auto_generate}
+                  onChange={(event) => setEditDraft((current) => ({ ...current, auto_generate: event.target.checked }))}
+                />
+                Auto-generate batch numbers for this Prodshade
+              </label>
+            )}
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">Current Count</label>
               <input
                 type="number"
                 min="0"
-                className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono"
+                disabled={editSeries.batch_type === "MTS" && !editDraft.auto_generate}
+                className="rounded border border-slate-300 px-2 py-1.5 text-sm font-mono disabled:bg-slate-100 disabled:text-slate-400"
                 value={editDraft.current_count}
                 onChange={(event) => setEditDraft((current) => ({ ...current, current_count: event.target.value }))}
               />
-              <p className="text-xs text-slate-400">Save to refresh backend-calculated next batch preview.</p>
+              {editSeries.batch_type === "MTS" && !editDraft.auto_generate ? (
+                <p className="text-xs text-slate-400">Not applicable -- this Prodshade's batch number is typed by hand at Start Batch every time.</p>
+              ) : (
+                <p className="text-xs text-slate-400">Save to refresh backend-calculated next batch preview.</p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <input

@@ -56,6 +56,14 @@ export function dosageSumOf(lines) {
   return lines.reduce((s, l) => s + (parseFloat(l.dosage_pct) || 0), 0);
 }
 
+// Includes document_name (the human-recognizable product description) alongside
+// pace_code/material_name -- ErpComboboxField's search only matches label text,
+// and material_name alone is often just an internal numeric code, not something
+// a user would actually type to find a material.
+export function materialLabel(m) {
+  return [m?.pace_code ?? "—", m?.material_name, m?.document_name].filter(Boolean).join(" — ");
+}
+
 // DrawerBase renders `actions` as a raw node, not a descriptor array — turn
 // our {label, tone, onClick, disabled} list into real <button> elements.
 export function renderDrawerActions(items) {
@@ -106,7 +114,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
   const sum = dosageSumOf(lines);
   const materialLabelById = new Map(
     [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
-      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
+      .map((m) => [m.id, materialLabel(m)]),
   );
 
   const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
@@ -137,7 +145,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
         <tbody>
           {lines.map((line, i) => {
             const itemOptions = (materialsByType[line.line_material_type] ?? []).map((m) => ({
-              value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
+              value: m.id, label: materialLabel(m),
             }));
             const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
             const selectedGroup = groups.find((g) => g.id === line.material_group_id);
@@ -260,7 +268,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
 
   const materialLabelById = new Map(
     [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
-      .map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]),
+      .map((m) => [m.id, materialLabel(m)]),
   );
   const groupLabelById = new Map(groups.map((g) => [g.id, `${g.group_code} — ${g.group_name}`]));
 
@@ -285,7 +293,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
       <tbody>
         {lines.map((line, i) => {
           const itemOptions = (materialsByType[line.line_material_type] ?? []).map((m) => ({
-            value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`,
+            value: m.id, label: materialLabel(m),
           }));
           const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
           const selectedGroup = groups.find((g) => g.id === line.new_group_id);
@@ -373,7 +381,7 @@ export function ChangeBomLinesTable({ lines, setLines, materialsByType, groups, 
 // Same mechanism as Stroke Master RM lines (material_category_group alternates)
 // but PM-only, no Dosage%, absolute Qty per outer pack unit, UOM auto-derived
 // from the selected PM material's base_uom_code (locked spec: not editable).
-export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled, qtyDisabled = false }) {
+export function PackBomLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, disabled, qtyDisabled = false, innerUomCode = "", sfgQtyPerInner = "", onSfgQtyPerInnerChange = null, baseUomCode = "KG" }) {
   function addLine() {
     setLines((l) => [...l, { _key: Math.random().toString(36).slice(2), material_id: "", qty: "", uom_code: "", has_alternate: false, material_group_id: "", is_primary_container: false }]);
   }
@@ -383,12 +391,27 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
   }
   function updateMaterial(key, materialId) {
     const mat = materials.find((m) => m.id === materialId);
-    updateLine(key, { material_id: materialId, uom_code: mat?.base_uom_code ?? "" });
+    const line = lines.find((l) => l._key === key);
+    // A line already flagged as the inner layer must keep the pack code's declared
+    // inner_uom_code, never the newly-picked material's own base UOM -- the sync only
+    // matches on that exact unit (§retail-pack-layers).
+    const uomCode = line?.is_primary_container && innerUomCode ? innerUomCode : (mat?.base_uom_code ?? "");
+    updateLine(key, { material_id: materialId, uom_code: uomCode });
+  }
+  function toggleInnerLayer(key, checked) {
+    const line = lines.find((l) => l._key === key);
+    const mat = materials.find((m) => m.id === line?.material_id);
+    updateLine(key, {
+      is_primary_container: checked,
+      uom_code: checked && innerUomCode ? innerUomCode : (mat?.base_uom_code ?? line?.uom_code ?? ""),
+    });
   }
 
-  const materialOptions = materials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }));
-  const materialLabelById = new Map(materials.map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]));
+  const materialOptions = materials.map((m) => ({ value: m.id, label: materialLabel(m) }));
+  const materialLabelById = new Map(materials.map((m) => [m.id, materialLabel(m)]));
   const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
+  const sfgPerInnerNum = Number(sfgQtyPerInner);
+  const perInnerEditable = Boolean(onSfgQtyPerInnerChange) && !disabled;
 
   const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
   const td = "py-1.5 px-2 align-top";
@@ -400,10 +423,15 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
           <tr className="bg-slate-50">
             <th className={th}>#</th>
             <th className={`${th} min-w-[220px]`}>PM Material</th>
-            <th className={`${th} text-right`}>Qty</th>
+            <th className={`${th} text-right`}>Qty (per Outer)</th>
             <th className={th}>UOM</th>
             <th className={th}>Alternate?</th>
-            <th className={th}>Primary Container?</th>
+            <th className={`${th} min-w-[170px]`}>
+              Inner Layer?
+              {innerUomCode ? (
+                <div className="mt-0.5 font-normal normal-case text-slate-400">must be {innerUomCode}</div>
+              ) : null}
+            </th>
             <th className={`${th} min-w-[150px]`}>Group</th>
             <th className={`${th} min-w-[180px]`}>Members</th>
             {!disabled && <th className={th}></th>}
@@ -412,6 +440,8 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
         <tbody>
           {lines.map((line, i) => {
             const selectedGroup = groups.find((g) => g.id === line.material_group_id);
+            const pmQtyNum = Number(line.qty);
+            const showInnerPreview = Boolean(line.is_primary_container) && Number.isFinite(sfgPerInnerNum) && sfgPerInnerNum > 0 && Number.isFinite(pmQtyNum) && pmQtyNum > 0;
             return (
               <tr key={line._key ?? i} className="border-b border-slate-100">
                 <td className={`${td} text-slate-400`}>{i + 1}</td>
@@ -443,12 +473,35 @@ export function PackBomLinesTable({ lines, setLines, materials, groups, onCreate
                   />
                 </td>
                 <td className={td}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(line.is_primary_container)}
-                    disabled={disabled}
-                    onChange={(e) => updateLine(line._key, { is_primary_container: e.target.checked })}
-                  />
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(line.is_primary_container)}
+                      disabled={disabled}
+                      onChange={(e) => toggleInnerLayer(line._key, e.target.checked)}
+                    />
+                    <span className="text-xs text-slate-600">Yes</span>
+                  </label>
+                  {Boolean(line.is_primary_container) && innerUomCode && (
+                    <div className="mt-1 flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1 whitespace-nowrap">
+                        <span className="text-[10px] text-slate-400">per 1 {line.uom_code || innerUomCode}:</span>
+                        <input
+                          type="number" min="0" step="0.0001"
+                          className="h-6 w-16 border border-slate-300 rounded px-1 text-xs font-mono text-right disabled:bg-slate-50"
+                          value={sfgQtyPerInner}
+                          disabled={!perInnerEditable}
+                          onChange={(e) => onSfgQtyPerInnerChange?.(e.target.value)}
+                        />
+                        <span className="text-[10px] text-slate-400">{baseUomCode}</span>
+                      </div>
+                      {showInnerPreview ? (
+                        <span className="whitespace-nowrap text-[11px] font-semibold text-sky-700">
+                          → {(sfgPerInnerNum * pmQtyNum).toFixed(4)} {baseUomCode} per Outer
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
                 </td>
                 <td className={td}>
                   {line.has_alternate ? (
@@ -508,7 +561,7 @@ const CHANGE_ACTION_COLORS = { ADD: "bg-emerald-100 text-emerald-800", REMOVE: "
 // CRUD on PM rows (add new / remove existing / edit qty or substitute item).
 // `lines` shape: { _key, action, bom_line_id, old_material_id, material_id,
 //   qty, uom_code, has_alternate, material_group_id, marked_remove }
-export function PackBomChangeLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, editable }) {
+export function PackBomChangeLinesTable({ lines, setLines, materials, groups, onCreateGroup, onAddMember, editable, innerUomCode = "", sfgQtyPerInner = "", onSfgQtyPerInnerChange = null, baseUomCode = "KG" }) {
   function updateLine(key, patch) {
     setLines((l) => l.map((row) => (row._key === key ? { ...row, ...patch } : row)));
   }
@@ -529,12 +582,25 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
   }
   function updateMaterial(key, materialId) {
     const mat = materials.find((m) => m.id === materialId);
-    updateLine(key, { material_id: materialId, uom_code: mat?.base_uom_code ?? "" });
+    const line = lines.find((l) => l._key === key);
+    // A line already flagged as the inner layer must keep the pack code's declared
+    // inner_uom_code, never the newly-picked material's own base UOM.
+    const uomCode = line?.is_primary_container && innerUomCode ? innerUomCode : (mat?.base_uom_code ?? "");
+    updateLine(key, { material_id: materialId, uom_code: uomCode });
+  }
+  function toggleInnerLayer(key, checked) {
+    const line = lines.find((l) => l._key === key);
+    const mat = materials.find((m) => m.id === line?.material_id);
+    updateLine(key, {
+      is_primary_container: checked,
+      uom_code: checked && innerUomCode ? innerUomCode : (mat?.base_uom_code ?? line?.uom_code ?? ""),
+    });
   }
 
-  const materialOptions = materials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }));
-  const materialLabelById = new Map(materials.map((m) => [m.id, `${m.pace_code ?? "—"} — ${m.material_name ?? ""}`]));
+  const materialOptions = materials.map((m) => ({ value: m.id, label: materialLabel(m) }));
+  const materialLabelById = new Map(materials.map((m) => [m.id, materialLabel(m)]));
   const groupOptions = groups.map((g) => ({ value: g.id, label: `${g.group_code} — ${g.group_name}` }));
+  const sfgPerInnerNum = Number(sfgQtyPerInner);
 
   const th = "text-left py-1.5 px-2 border-b text-[10px] uppercase tracking-wide text-slate-500 font-semibold";
   const td = "py-1.5 px-2 align-top";
@@ -551,7 +617,12 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
             <th className={`${th} text-right`}>Qty</th>
             <th className={th}>UOM</th>
             <th className={th}>Alternate?</th>
-            <th className={th}>Primary Container?</th>
+            <th className={`${th} min-w-[170px]`}>
+              Inner Layer?
+              {innerUomCode ? (
+                <div className="mt-0.5 font-normal normal-case text-slate-400">must be {innerUomCode}</div>
+              ) : null}
+            </th>
             <th className={`${th} min-w-[150px]`}>Group</th>
             <th className={`${th} min-w-[160px]`}>Members</th>
             {editable && <th className={th}></th>}
@@ -563,6 +634,9 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
             const isAdd = line.action === "ADD";
             const rowEditable = editable && !removed;
             const selectedGroup = groups.find((g) => g.id === line.material_group_id);
+            const pmQtyNum = Number(line.qty);
+            const showInnerPreview = Boolean(line.is_primary_container) && Number.isFinite(sfgPerInnerNum) && sfgPerInnerNum > 0 && Number.isFinite(pmQtyNum) && pmQtyNum > 0;
+            const perInnerEditable = Boolean(onSfgQtyPerInnerChange) && rowEditable;
 
             return (
               <tr key={line._key ?? i} className={`border-b border-slate-100 ${removed ? "opacity-50 bg-rose-50" : isAdd ? "bg-emerald-50/60" : ""}`}>
@@ -606,12 +680,35 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
                   />
                 </td>
                 <td className={td}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(line.is_primary_container)}
-                    disabled={!rowEditable}
-                    onChange={(e) => updateLine(line._key, { is_primary_container: e.target.checked })}
-                  />
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(line.is_primary_container)}
+                      disabled={!rowEditable}
+                      onChange={(e) => toggleInnerLayer(line._key, e.target.checked)}
+                    />
+                    <span className="text-xs text-slate-600">Yes</span>
+                  </label>
+                  {Boolean(line.is_primary_container) && innerUomCode && (
+                    <div className="mt-1 flex flex-col gap-0.5">
+                      <div className="flex items-center gap-1 whitespace-nowrap">
+                        <span className="text-[10px] text-slate-400">per 1 {line.uom_code || innerUomCode}:</span>
+                        <input
+                          type="number" min="0" step="0.0001"
+                          className="h-6 w-16 border border-slate-300 rounded px-1 text-xs font-mono text-right disabled:bg-slate-50"
+                          value={sfgQtyPerInner}
+                          disabled={!perInnerEditable}
+                          onChange={(e) => onSfgQtyPerInnerChange?.(e.target.value)}
+                        />
+                        <span className="text-[10px] text-slate-400">{baseUomCode}</span>
+                      </div>
+                      {showInnerPreview ? (
+                        <span className="whitespace-nowrap text-[11px] font-semibold text-sky-700">
+                          → {(sfgPerInnerNum * pmQtyNum).toFixed(4)} {baseUomCode} per Outer
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
                 </td>
                 <td className={td}>
                   {line.has_alternate ? (

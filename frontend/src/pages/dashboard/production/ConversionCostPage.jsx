@@ -10,7 +10,7 @@
  * Authority: Frontend
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
@@ -35,6 +35,8 @@ const ERRORS = {
   PROD_CONV_RATE_VALUE_INVALID: "Rate must be a number ≥ 0.",
   PROD_CONV_RATE_EXISTS:        "A rate for this company/segment/prodshade already has that valid-from date. Pick a different date.",
   PROD_CONV_RATE_PRODSHADE_INVALID: "Select an approved Prodshade for the selected company and segment.",
+  PROD_CONV_RATE_MARGIN_INVALID: "Margin Cost must be a number (negative allowed).",
+  PROD_CONV_RATE_MARGIN_NOT_ALLOWED: "Margin Cost only applies to IWC/POWDER (MTS).",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
@@ -42,8 +44,17 @@ function companyLabel(c) {
   return [c?.company_code, c?.company_name].filter(Boolean).join(" — ");
 }
 
+// MTS only — the segment splits into Conversion Cost + Margin Cost (Margin may be negative);
+// Net Conversion Cost = the sum. Every other segment keeps a single conversion cost figure.
+const MARGIN_ELIGIBLE_SEGMENTS = new Set(["IWC", "POWDER"]);
+
 const todayIso = () => new Date().toISOString().slice(0, 10);
-const emptyForm = () => ({ id: "", segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: todayIso(), conversion_rate_per_kg: "" });
+const emptyForm = () => ({ id: "", segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: todayIso(), conversion_rate_per_kg: "", margin_cost_per_kg: "" });
+function netRateOf(conversion, margin) {
+  const c = Number(conversion);
+  const m = Number(margin);
+  return (Number.isFinite(c) ? c : 0) + (Number.isFinite(m) ? m : 0);
+}
 
 export default function ConversionCostPage() {
   const qc = useQueryClient();
@@ -84,6 +95,33 @@ export default function ConversionCostPage() {
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
   const rows = listQ.data ?? [];
+  const isMarginSegment = MARGIN_ELIGIBLE_SEGMENTS.has(form.segment_code);
+
+  // Prefill support for a brand-new dated row: fetch this exact scope's own history
+  // (independent of the page-level segment filter) so we can find its current row and
+  // carry its Conversion/Margin cost forward — user only edits what's actually changing.
+  const scopeReady = form.scope === "DEFAULT" || (form.scope === "OVERRIDE" && !!form.prodshade_material_id);
+  const scopeRatesQ = useQuery({
+    queryKey: ["conversion-rates-scope", effectiveCompanyId, form.segment_code],
+    queryFn: () => listConversionRates({ company_id: effectiveCompanyId, segment_code: form.segment_code }),
+    enabled: !!effectiveCompanyId && editorOpen && !form.id && scopeReady,
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
+  });
+  const currentRateForScope = useMemo(() => {
+    const list = scopeRatesQ.data ?? [];
+    return list.find((r) => r.is_current && (
+      form.scope === "OVERRIDE" ? r.prodshade_material_id === form.prodshade_material_id : !r.prodshade_material_id
+    )) ?? null;
+  }, [scopeRatesQ.data, form.scope, form.prodshade_material_id]);
+
+  useEffect(() => {
+    if (!editorOpen || form.id || !scopeReady || !currentRateForScope) return;
+    setForm((f) => ({
+      ...f,
+      conversion_rate_per_kg: String(currentRateForScope.conversion_rate_per_kg ?? ""),
+      margin_cost_per_kg: currentRateForScope.margin_cost_per_kg != null ? String(currentRateForScope.margin_cost_per_kg) : "",
+    }));
+  }, [currentRateForScope, editorOpen, form.id, scopeReady]);
 
   async function handleSave(e) {
     e.preventDefault();
@@ -100,6 +138,14 @@ export default function ConversionCostPage() {
       toast("Rate must be a number ≥ 0.", "error");
       return;
     }
+    let marginNum = null;
+    if (isMarginSegment) {
+      marginNum = form.margin_cost_per_kg === "" ? 0 : Number(form.margin_cost_per_kg);
+      if (!Number.isFinite(marginNum)) {
+        toast("Margin Cost must be a number (negative allowed).", "error");
+        return;
+      }
+    }
     setSaving(true);
     try {
       const payload = {
@@ -108,6 +154,7 @@ export default function ConversionCostPage() {
         prodshade_material_id: form.scope === "OVERRIDE" ? form.prodshade_material_id : null,
         valid_from: form.valid_from,
         conversion_rate_per_kg: rateNum,
+        margin_cost_per_kg: marginNum,
       };
       if (form.id) {
         await updateConversionRate(form.id, payload);
@@ -169,7 +216,9 @@ export default function ConversionCostPage() {
                 <th className="text-left py-2 px-3 border-b">Scope</th>
                 <th className="text-left py-2 px-3 border-b">Valid From</th>
                 <th className="text-left py-2 px-3 border-b">Valid To</th>
-                <th className="text-right py-2 px-3 border-b">Rate / KG (₹)</th>
+                <th className="text-right py-2 px-3 border-b">Net Conversion Cost / KG (₹)</th>
+                <th className="text-right py-2 px-3 border-b">Conversion Cost / KG (₹)</th>
+                <th className="text-right py-2 px-3 border-b">Margin Cost / KG (₹)</th>
                 <th className="text-left py-2 px-3 border-b">Status</th>
                 <th className="text-right py-2 px-3 border-b">Action</th>
               </tr>
@@ -185,7 +234,13 @@ export default function ConversionCostPage() {
                   </td>
                   <td className="py-2 px-3 font-mono">{r.valid_from}</td>
                   <td className="py-2 px-3 font-mono text-slate-400">{r.valid_to ?? "—"}</td>
-                  <td className="py-2 px-3 text-right font-mono font-semibold">{Number(r.conversion_rate_per_kg).toFixed(4)}</td>
+                  <td className="py-2 px-3 text-right font-mono font-semibold">
+                    {Number(r.net_conversion_rate_per_kg ?? r.conversion_rate_per_kg).toFixed(4)}
+                  </td>
+                  <td className="py-2 px-3 text-right font-mono">{Number(r.conversion_rate_per_kg).toFixed(4)}</td>
+                  <td className="py-2 px-3 text-right font-mono">
+                    {MARGIN_ELIGIBLE_SEGMENTS.has(r.segment_code) ? Number(r.margin_cost_per_kg ?? 0).toFixed(4) : "—"}
+                  </td>
                   <td className="py-2 px-3">
                     {r.is_current
                       ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Current</span>
@@ -203,6 +258,7 @@ export default function ConversionCostPage() {
                           prodshade_material_id: r.prodshade_material_id ?? "",
                           valid_from: r.valid_from,
                           conversion_rate_per_kg: String(r.conversion_rate_per_kg ?? ""),
+                          margin_cost_per_kg: r.margin_cost_per_kg != null ? String(r.margin_cost_per_kg) : "",
                         });
                         setEditorOpen(true);
                       }}
@@ -247,10 +303,28 @@ export default function ConversionCostPage() {
             <input type="date" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.valid_from} onChange={(e) => setForm((f) => ({ ...f, valid_from: e.target.value }))} required />
             <p className="text-xs text-slate-400">Applies from this date until a later-dated row supersedes it. Back-dated postings pick the rate valid on their posting date.</p>
           </div>
+          {!form.id && scopeReady && currentRateForScope && (
+            <p className="text-xs text-sky-700 bg-sky-50 rounded px-3 py-2">
+              Prefilled from the current rate (effective since {currentRateForScope.valid_from}). Edit only what is changing, then Save — the new value applies from your chosen Valid From date.
+            </p>
+          )}
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-600">Conversion Rate / KG (₹) <span className="text-rose-500">*</span></label>
+            <label className="text-xs font-medium text-slate-600">Conversion Cost / KG (₹) <span className="text-rose-500">*</span></label>
             <input type="number" min="0" step="0.0001" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.conversion_rate_per_kg} onChange={(e) => setForm((f) => ({ ...f, conversion_rate_per_kg: e.target.value }))} required placeholder="e.g. 1.95" />
           </div>
+          {isMarginSegment && (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">Margin Cost / KG (₹)</label>
+              <input type="number" step="0.0001" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.margin_cost_per_kg} onChange={(e) => setForm((f) => ({ ...f, margin_cost_per_kg: e.target.value }))} placeholder="e.g. -0.50 (negative allowed)" />
+              <p className="text-xs text-slate-400">MTS only. May be negative.</p>
+            </div>
+          )}
+          {isMarginSegment && (
+            <div className="flex flex-col gap-1 bg-slate-50 rounded px-3 py-2">
+              <span className="text-xs font-medium text-slate-600">Net Conversion Cost / KG (₹)</span>
+              <span className="font-mono font-semibold text-sm">{netRateOf(form.conversion_rate_per_kg, form.margin_cost_per_kg).toFixed(4)}</span>
+            </div>
+          )}
           {form.id && form.scope === "OVERRIDE" && (
             <p className="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2">
               Changing a segment default into an override means the default no longer covers the other Prodshades. Add a separate default if they still need one.

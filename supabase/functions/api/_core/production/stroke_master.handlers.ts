@@ -154,7 +154,7 @@ async function getMaterialMapByIds(ids: string[]): Promise<Map<string, JsonRecor
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, pace_code, material_name, shade_code, pack_code, base_uom_code")
+    .select("id, pace_code, material_name, document_name, shade_code, pack_code, base_uom_code")
     .in("id", uniqueIds);
   if (error) {
     console.error("[stroke_master.getMaterialMapByIds] query failed:", JSON.stringify(error));

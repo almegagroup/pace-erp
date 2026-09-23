@@ -5744,3 +5744,209 @@ but were missing `cellNavigate` on their grids (added everywhere -- 2+3+1+3 grid
 the established no-hotkeys convention (matches `POCreatePage.jsx`'s precedent, confirmed earlier
 this session) but do have `cellNavigate` on every grid. `eslint`/`jsx-no-undef-guard` clean across
 all 6 newly-touched files.
+
+## 2026-09-17/18 — MTS Process PO Create (Page 1-3): Current/Non-Current Stroke Policy + Batch Range — CODE-COMPLETE, UNCOMMITTED
+
+**Scope:** feasibility doc §138.14 (design detail there — this entry is the implementation-side
+record). Continuation of the same-day §138 machine-respect-stock design session — this half
+covers *when* MTS needs QA approval and *how* the batch number/range gets declared at Create,
+not the machine-bucket stock mechanism itself (§138.1-138.13, still not implemented).
+
+**Design recovered from chat, not previously in any doc** — written into feasibility §138.14 in
+this same pass, since a doc-first-workflow miss (same class as the historical PR09 gap, CLAUDE.md
+§6) would have repeated otherwise.
+
+**Locked design, summarized (full detail in §138.14):**
+- Page 2 Stroke Gate: MTS-only Current-Stroke default + non-current confirm modal.
+- Page 3: Date (current-3-days..current, no future), Shift (company-wise, inline-create), Batch
+  Range (Start/Count/To, Prodshade-scoped duplicate-check, live red-warning + Save-disable),
+  Batch Size (Prodshade base UoM, existing Liter->KG stroke-conversion path kept alongside).
+- Two QA policies keyed by a new server-computed `mts_used_current_stroke` flag (never trusted
+  from the client): Policy 1 (Current Stroke) skips QA approval entirely; Policy 2 (non-current)
+  keeps the classic Approve/Reject. **Neither policy uses Start Batch any more** — batch number is
+  set at Create, and Finalize now accepts STANDARD (Policy 1) or QA_APPROVED (Policy 2) directly.
+- QA Reject on a Policy-2 MTS order auto-voids that PO's `batch_number_instance` range
+  (ACTIVE->VOIDED, no manual Manager/SA release step) so the same pre-printed batch numbers are
+  immediately reusable.
+- Reservation needs no new mechanism (`reservation_document` -> source Process PO -> `machine_id`,
+  a plain join) — locked 2026-09-15, recovered from chat into §138.14 the same way.
+
+**Real bug found and fixed while wiring the Finalize gate:** `finalizeProcessOrderHandler`'s
+`requiredStatus` still demanded `BATCH_STARTED` for every non-INT po_type — since MTS no longer
+reaches that status at all, every MTS PO created under the new Page 3 flow would have been
+permanently stuck (STANDARD forever, no path to Finalize) had this not been caught before
+shipping. Fixed alongside the QA-policy gating, not as an afterthought.
+
+**Files changed (all uncommitted — commit permission not yet given, per explicit standing
+instruction this session):**
+- Migrations: `20260917140000_mts_page3_shift_batch_range.sql` (`erp_production.shift_master`
+  table; `process_order` gains `production_date`, `shift_id`, `batch_number_from`,
+  `batch_number_to`, `number_of_batches`), `20260918100000_mts_current_stroke_qa_policy.sql`
+  (`process_order.mts_used_current_stroke`). Both applied to dev, migration-integrity reconciled.
+- New file: `supabase/functions/api/_core/production/shift_master.handlers.ts` (list/create,
+  company-scoped, case-insensitive dedupe/reactivate).
+- `batch_series.handlers.ts`: exported `buildPreviewBatchNumber`; new
+  `resolveMtsBatchRangeNumbers()`, `findDuplicateBatchNumbers()` (chunked per §8E),
+  `checkMtsBatchRangeHandler`, `voidBatchNumberInstancesForProcessOrder()`.
+- `process_order.handlers.ts`: `createProcessOrderHandler` parses/validates the new MTS fields,
+  resolves the batch range server-side, re-checks duplicates before insert, bulk-creates
+  `batch_number_instance` rows (`Promise.all`, §8B — independent rows), computes
+  `mts_used_current_stroke` from `mts_current_stroke` (never the client); `qaApproveProcessOrderHandler`/
+  `qaRejectProcessOrderHandler` block Policy-1 MTS with a clear error and let Policy-2 through
+  unchanged (same shape as the existing INT/MTEST blocks); reject also calls the new void helper;
+  `startBatchHandler` now rejects MTS outright (`PROD_PO_START_BATCH_NOT_APPLICABLE`);
+  `finalizeProcessOrderHandler`'s status gate fixed as above; `listProcessOrdersHandler`'s select
+  extended with the new columns so the QA Queue page can read them.
+- `production.routes.ts` / `route-acl-registry.ts`: 3 new routes
+  (`GET /shifts`, `POST /shifts`, `GET /mts-batch-range-check`), all riding the existing
+  `PROD_PO_CREATE` resource (VIEW for reads, WRITE for the shift create) rather than a new
+  resource code.
+- Frontend: `prodApi.js` (3 new API functions); `ProductionPOCreatePage.jsx` — Page 2 Stroke Gate
+  (Current-Stroke default + `BlockingLayer` confirm/cancel modal) and a full Page 3 MTS-only
+  rewrite (Date/Shift/Batch-Range/Batch-Size UI, live debounced duplicate-check query, Material
+  Table + short-stock gate hidden for MTS with a note that it moves to Page 4);
+  `QAQueuePage.jsx` — `skipsQaApproval()` now takes the row (not just `po_type`) so it can read
+  `mts_used_current_stroke`; Start Batch button removed for MTS in both statuses it used to show
+  in, replaced with a plain "Ready for Finalize" label; Batch# column shows the full range
+  (`EVxxxx – EVyyyy`) for MTS.
+
+**Verification:** `deno check` on every touched backend file — zero new errors (only the
+already-accepted `.ilike()` typing noise, shared by ~10 other handler files already, plus 3
+unrelated pre-existing errors reached via the same route-file's import graph). `eslint` on both
+touched frontend files — zero new warnings (4 pre-existing `exhaustive-deps` warnings on
+untouched lines, unrelated). All CI guards clean: route-acl-registry-guard (0 missing matches),
+stock-posting-guard (still 12/12 baseline, no new direct `post_stock_movement` callers),
+jsx-no-undef-guard (0 violations), hardcoded-role-check-guard (0 new patterns),
+wrong-company-source-guard (0 violations). Migration-integrity probe run against dev after each
+migration — this session's own 2 migrations are clean/in-sync (a separate, pre-existing 9-migration
+drift from an unrelated "communication enrollment/rule" module was found and reported to the
+business owner, not touched).
+
+**Not yet done:**
+- Live browser click-through on the deployed app — no dev login available in this environment,
+  verification was code-check + guard-script only.
+- Commit/push — explicitly withheld pending the business owner's permission (standing rule this
+  session, restated after an earlier unauthorized-implementation incident on the same feature).
+- PR10 Edit, CORS (full reversal), and Partial Reversal (PR19) for MTS — all three explicitly
+  deferred by the business owner (2026-09-18) to a session after Page 4/5/6, not touched here.
+
+## 2026-09-18 — Page 4 (MTS RM Auto-Derive Material Plan) — CODE-COMPLETE, UNCOMMITTED
+
+Implements feasibility §138.12/§138.15 for real (supersedes the "zero real code" line above,
+which was true only until this same-day follow-up). Full detail + verification results are
+written into §138.15's own "✅ Implementation status" block — not repeated here to avoid drift
+between the two documents; read that section for the complete file list, the reservation-writing
+design decision (direct insert, not `reserve_process_order_materials()`), and the documented v1
+concurrency gap.
+
+**Summary for this log's own purpose (files touched, one line each):**
+- `process_order.handlers.ts` — new `fetchMachineBucketBalances`, `computeMtsAutoDeriveRowsForGroup`
+  (exported for testing), `getMtsMaterialPlanHandler`, `saveMtsMaterialPlanHandler`,
+  `buildMtsMaterialPlanGroupsForOrder`, `buildMtsPlanHeader`; `createProcessOrderHandler`'s stroke-line
+  prepopulation now skips MTS (`!isMtsCreate`).
+- `production.routes.ts` / `route-acl-registry.ts` — new `:id/mts-material-plan` GET+POST route,
+  riding `PROD_PO_CREATE`.
+- `prodApi.js` — `getMtsMaterialPlan`/`saveMtsMaterialPlan` wrappers.
+- `ProductionPOCreatePage.jsx` — new `processStep===4` / `MtsMaterialPlanStep` component; MTS
+  Create's success path moves here instead of resetting the form.
+- `shift_master.handlers.ts` — unrelated real bug caught by `company-scope-write-acl-guard.mjs`
+  while running the full guard suite for this task: `createShiftHandler` resolved a caller-supplied
+  `company_id` and wrote without a secondary EDIT-level ACL check at that specific company
+  (only membership was checked). Fixed via `canMaintainCompanyResource(..., "PROD_PO_CREATE",
+  "WRITE")`, same pattern used throughout `process_order.handlers.ts`.
+
+**Verification:** `deno check` clean on every touched backend file (only the same 4 pre-existing,
+unrelated errors reachable via import graph — `pack_bom.handlers.ts`, `shift_master.handlers.ts`'s
+`.ilike()`, `stroke_master.handlers.ts`, `_pipeline/session.ts`, all confirmed untouched by this
+change). `eslint` clean on all touched frontend files (same 4 pre-existing unrelated warnings).
+**All 18 `scripts/*.mjs` CI guards pass**, including `dependency-provisioning-check.mjs`. Real-data
+verification: live prod DB schema cross-check for every table/column this code touches, plus a
+standalone Deno script importing the real `computeMtsAutoDeriveRowsForGroup` function and running
+it against this section's own locked worked example (DA 1100/78 KG split) and 3 more cases — all
+exact matches. No live logged-in click-through (no dev login in this environment).
+
+**Not yet done:** live click-through; commit/push (withheld pending permission, per standing rule).
+
+## 2026-09-20 — MTS Page 4-6 Continuity, Atomicity and Rule Re-verification — DEPLOYED
+
+**Scope:** continuation of feasibility §138.12/§138.15/§138.16. This entry supersedes the
+previous Page-4 note's "uncommitted", direct-insert and v1-concurrency-gap wording: the work is
+committed, pushed to `dev`, deployed, and the relevant material-plan and packing-order writes are
+now atomic.
+
+**Implemented:**
+- Page 4 uses the immutable `stroke_line_id` as its per-line identity. Two formulation lines that
+  declare the same material (the real `0064`/Dolomite shape) therefore remain two independent
+  recipe requirements, alternate groups and saved rows; `process_order_line.stroke_line_id`
+  preserves that identity after save.
+- A normal MTS machine reads only its own bucket. When the user deliberately selects a foreign
+  machine, Page 4 reads that selected location's `machine_id IS NULL` (Unassigned) bucket; the
+  original recipe/default dosage is still displayed even when an alternate supplies all quantity.
+- Page 4 supports adding/removing an alternate row. The shortfall confirmation names the
+  formulation material rather than exposing an internal id.
+- `save_mts_material_plan_atomic()` inserts every Page-4 line and its reservations in one
+  transaction under an order lock. The existing Packing-PO atomic save remains in the same flow.
+- Page 6 sends a storage-location override back to the server; the server recomputes availability,
+  allocations and shortage for that selected location rather than retaining stale default-location
+  figures.
+- Process-PO Verify now appends the matching MTS bucket `OUT` rows inside
+  `complete_process_po_verify()` / `post_document`'s transaction. A verified issue therefore
+  cannot remain falsely available for a later auto-derive. The bucket lookup now has a composite
+  index on company, location, machine and material.
+
+**Migrations applied to Dev and reconciled:**
+`20260919184410_mts_packing_atomic_save`,
+`20260920110000_mts_material_plan_identity_atomic_save`,
+`20260920111000_mts_machine_consumption_atomic`, and
+`20260920112000_mts_machine_bucket_lookup_index`.
+
+**Mandatory-rule review:**
+- **R-01:** Page 4/6 labels resolve material and storage-location code/name from server maps; an
+  unresolved reference renders `--`, never a UUID.
+- **R-02:** both derived grids use React Query with stable keys; Page-6's selected location is in
+  the query key, so changing it gets fresh server data without a `useEffect` reload hack.
+- **R-03:** these are single-order planning endpoints; all display labels are bulk-resolved in the
+  endpoint response, with no frontend per-row detail calls.
+- **R-04:** all DDL/function/index changes are versioned migration files. Only Dev migration-history
+  metadata was repaired administratively after MCP had recorded timestamp versions instead of the
+  committed filename versions; no schema or business data was changed by that repair.
+- **R-05:** Page 4-6 are a bounded creation wizard, not report/heavy-query screens; a selection
+  screen is not applicable.
+
+**Verification:** all 18 repository `scripts/*.mjs` checks pass locally. This includes route/ACL
+registry (0 missing), company-scope (0), company-scope write ACL (0), frontend payload (0), JSX
+undefined component (0), stock posting (12/12 baseline), migration column/order scans, and the
+strict SU24 dependency-manifest check. The Dev migration canonical diff is zero rows after repair
+(`578` local/remote migrations). The generated SU24 live dependency-gap query returns zero rows
+for CMP003/CMP006; approver-map integrity returns zero rows. Touched frontend/backend modules also
+passed esbuild syntax parsing and `git diff --check`. Render Dev deployed commit `c320a95f` with
+status `live`.
+
+**Known external findings, not changed by this MTS scope:** repository-wide ACL-MASTER drift is
+still reported for CMP003/CMP005/CMP007, and CMP007 has 90 uncaptured
+`work_context_capabilities` rows. These are pre-existing ACL business-configuration/snapshot
+issues outside the MTS resource and require an ACL-owner decision; the MTS SU24 target-company
+dependency check itself is clean. A signed-in browser click-through was not available in this
+terminal session; no user session was impersonated.
+
+## 2026-09-20 — MTS Non-Current Final and Common Verify — DEPLOYED
+
+**Scope:** feasibility §138.15.1. This completes the workflow after the Page-4 material plan:
+MTS has no Batch Start checkpoint. Current-stroke MTS becomes eligible for Final from `STANDARD`;
+non-current-stroke MTS becomes eligible from `QA_APPROVED`.
+
+**Implemented:**
+- PR11 Final now lists both eligible MTS paths. A non-current-stroke order shows an explicit
+  notice that Production may correct actual issue there and QA will review/post it at Verify.
+- Verify remains the common QA posting checkpoint for current and non-current MTS. Its existing
+  atomic Verify transaction posts the final material movements and corresponding MTS bucket
+  consumption together.
+- MTS Final/Verify accepts a split alternate issue row whose planned quantity is zero and actual
+  quantity is positive. Since MTS does not expose the generic AP controls, the server records the
+  internally required approval values from that actual quantity rather than rejecting the update
+  for hidden `approved_status` input.
+
+**Verification:** frontend Final page and process-order handler parse cleanly with esbuild;
+`git diff --check`, route/ACL registry (0 missing), company-scope (0), JSX undefined component
+(0), and stock-posting baseline (12/12) pass. Render Dev deployed commit `1ca52b81` with status
+`live`. A signed-in browser E2E was not available, so no user session was impersonated.

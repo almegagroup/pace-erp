@@ -232,6 +232,14 @@ export default function ChangePackBomPage() {
             <p className="text-xs text-slate-500 mb-3">
               Click "Remove" to mark a line for removal, edit qty/material/group inline, or "+ Add PM Line" for new components.
             </p>
+            {bom.pack_code_row?.inner_uom_code && (
+              <p className="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+                This pack code has 2 alternate layers. The Inner-layer material must be in{" "}
+                <span className="font-mono font-semibold">{bom.pack_code_row.inner_uom_code}</span> with its{" "}
+                <span className="font-semibold">Inner Layer?</span> checkbox ticked — the outer layer (
+                <span className="font-mono font-semibold">{bom.pack_code_row.outer_uom_code}</span>) needs no flag.
+              </p>
+            )}
             <PackBomChangeLinesTable
               lines={changes}
               setLines={setChanges}
@@ -240,6 +248,17 @@ export default function ChangePackBomPage() {
               onCreateGroup={openCreateGroupModal}
               onAddMember={(groupId) => setMemberModal(groupId)}
               editable
+              innerUomCode={bom.pack_code_row?.inner_uom_code || ""}
+              sfgQtyPerInner={(() => {
+                // Read-only reference here (SFG recipe isn't part of this change-request
+                // flow) -- derived from the saved Outer total ÷ whichever proposed line is
+                // currently flagged as the Inner layer.
+                const sfgTotal = Number((bom.lines ?? []).find((line) => line.line_type === "SFG")?.qty);
+                const innerLine = changes.find((line) => line.is_primary_container);
+                const innerQty = Number(innerLine?.qty);
+                return sfgTotal > 0 && innerQty > 0 ? sfgTotal / innerQty : "";
+              })()}
+              baseUomCode={bom.sku?.base_uom_code || "KG"}
             />
             <div className="flex justify-end mt-3">
               <button

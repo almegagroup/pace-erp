@@ -16,10 +16,15 @@ import {
   listMachines,
   updateMachine,
   toggleMachine,
+  listPlantAssignments,
 } from "../../../pages/dashboard/om/omApi.js";
 import { useAdminCompaniesQuery } from "../../../hooks/queries/useAdminMasterQueries.js";
 import { useCostCentersQuery, useUomsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 const MACHINE_TYPES = ["MIXER", "FILLING", "PACKAGING", "REACTOR", "OTHER"];
+// Only the Process PO types that actually require a machine assignment
+// (process_order.handlers.ts's own REQUIRED_MACHINE_TYPES) -- MTEST never
+// shows a Machine field on Process PO Create at all, so it's excluded here.
+const MACHINE_PO_TYPES = ["MTO", "HPS", "MTS", "INT"];
 
 const ERROR_LABELS = {
   OM_MACHINE_LIST_FAILED:   "Failed to load machines.",
@@ -27,6 +32,9 @@ const ERROR_LABELS = {
   OM_MACHINE_UPDATE_FAILED: "Could not save changes.",
   OM_MACHINE_TOGGLE_FAILED: "Could not change active status.",
   OM_MACHINE_EXISTS:        "A machine with this code already exists in this company.",
+  OM_MACHINE_PO_TYPE_SAVE_FAILED: "Could not save PO Types for this machine.",
+  OM_MACHINE_STORAGE_LOCATION_INVALID: "Storage location does not belong to this company.",
+  OM_LOCATION_LIST_FAILED:  "Failed to load storage locations.",
   COMPANY_LIST_FAILED:      "Failed to load company list.",
   CC_LIST_FAILED:           "Failed to load cost centers.",
 };
@@ -36,6 +44,7 @@ function label(code) {
 }
 
 export default function SAMachineMaster() {
+  const [activeTab, setActiveTab] = useState("register");
   const [filterCompany, setFilterCompany] = useState("");
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState("");
@@ -71,6 +80,58 @@ export default function SAMachineMaster() {
   });
   const loading = machinesLoading || companiesLoading || costCentersLoading || uomsLoading;
 
+  // ── Sloc Mapping tab ───────────────────────────────────────────
+  const [slocCompany, setSlocCompany] = useState("");
+  const [slocDrafts, setSlocDrafts]   = useState({}); // machine_id -> pending storage_location_id
+  const [slocSavingId, setSlocSavingId] = useState(null);
+  const {
+    data: slocLocations = [],
+    isLoading: slocLocationsLoading,
+  } = useQuery({
+    queryKey: ["om", "plant-assignments", slocCompany],
+    queryFn: () => listPlantAssignments({ company_id: slocCompany }),
+    enabled: Boolean(slocCompany),
+    select: (result) => (Array.isArray(result?.data) ? result.data : Array.isArray(result) ? result : []),
+  });
+  const slocMachines = slocCompany ? rows.filter((r) => r.company_id === slocCompany) : [];
+
+  function slocDraftFor(machine) {
+    return Object.prototype.hasOwnProperty.call(slocDrafts, machine.id)
+      ? slocDrafts[machine.id]
+      : (machine.storage_location_id ?? "");
+  }
+
+  async function saveSlocMapping(machine) {
+    const nextLocationId = slocDraftFor(machine) || null;
+    setSlocSavingId(machine.id);
+    setError("");
+    setNotice("");
+    try {
+      await updateMachine({
+        id: machine.id,
+        machine_name: machine.machine_name,
+        machine_type: machine.machine_type,
+        capacity_per_batch: machine.capacity_per_batch ?? null,
+        capacity_uom_code: machine.capacity_uom_code ?? null,
+        cost_center_id: machine.cost_center_id ?? null,
+        description: machine.description ?? null,
+        storage_location_id: nextLocationId,
+      });
+      setNotice(`${machine.machine_code} storage location updated.`);
+      setSlocDrafts((d) => {
+        const next = { ...d };
+        delete next[machine.id];
+        return next;
+      });
+      await queryClient.invalidateQueries({ queryKey: ["admin", "machines"] });
+      await refetchMachines();
+    } catch (e) {
+      setError(label(e instanceof Error ? e.message : "OM_MACHINE_UPDATE_FAILED"));
+    } finally {
+      setSlocSavingId(null);
+    }
+  }
+
   // inline edit
   const [editId, setEditId]       = useState(null);
   const [editDraft, setEditDraft] = useState({});
@@ -85,7 +146,12 @@ export default function SAMachineMaster() {
     capacity_uom_code: "",
     cost_center_id: "",
     description: "",
+    po_types: [],
   });
+
+  function togglePoType(list, poType) {
+    return list.includes(poType) ? list.filter((t) => t !== poType) : [...list, poType];
+  }
 
   async function refreshData() {
     setError("");
@@ -111,6 +177,7 @@ export default function SAMachineMaster() {
       capacity_uom_code: row.capacity_uom_code ?? "",
       cost_center_id: row.cost_center_id ?? "",
       description: row.description ?? "",
+      po_types: row.po_types ?? [],
     });
     setError("");
     setNotice("");
@@ -138,6 +205,7 @@ export default function SAMachineMaster() {
         capacity_uom_code: editDraft.capacity_uom_code?.trim().toUpperCase() || null,
         cost_center_id: editDraft.cost_center_id || null,
         description: editDraft.description?.trim() || null,
+        po_types: editDraft.po_types ?? [],
       });
       setNotice("Machine updated.");
       setEditId(null);
@@ -187,8 +255,9 @@ export default function SAMachineMaster() {
         capacity_uom_code: form.capacity_uom_code.trim().toUpperCase() || null,
         cost_center_id: form.cost_center_id || null,
         description: form.description.trim() || null,
+        po_types: form.po_types,
       });
-      setForm((f) => ({ ...f, machine_code: "", machine_name: "", capacity_per_batch: "", capacity_uom_code: "", cost_center_id: "", description: "" }));
+      setForm((f) => ({ ...f, machine_code: "", machine_name: "", capacity_per_batch: "", capacity_uom_code: "", cost_center_id: "", description: "", po_types: [] }));
       setNotice("Machine created.");
       await queryClient.invalidateQueries({ queryKey: ["admin", "machines"] });
       await refreshData();
@@ -220,6 +289,108 @@ export default function SAMachineMaster() {
         ...(notice ? [{ key: "notice", tone: "success", message: notice }] : []),
       ]}
     >
+      <div className="mb-4 flex gap-2 border-b border-slate-200">
+        {[
+          { key: "register", label: "Machine Register" },
+          { key: "sloc", label: "Storage Location Mapping" },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${
+              activeTab === tab.key
+                ? "border-sky-600 text-sky-900"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "sloc" && (
+        <ErpSectionCard eyebrow="§138.1 — MTS machine-respect stock foundation" title="Machine ↔ Storage Location mapping">
+          <p className="mb-3 text-xs text-slate-500">
+            Each machine maps to exactly one storage location (re-mappable later). This mapping
+            is used to filter the Machine dropdown on MTS Process PO Create.
+          </p>
+          <div className="mb-3 flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Company</label>
+            <select
+              value={slocCompany}
+              onChange={(e) => setSlocCompany(e.target.value)}
+              className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+            >
+              <option value="">— select company —</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>{c.company_code} | {c.company_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {!slocCompany && (
+            <p className="px-3 py-6 text-center text-sm text-slate-400">Select a company to see its machine list.</p>
+          )}
+
+          {slocCompany && (
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Name</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Storage Location</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(machinesLoading || slocLocationsLoading) && (
+                    <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
+                  )}
+                  {!machinesLoading && !slocLocationsLoading && slocMachines.length === 0 && (
+                    <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-400">No machines in this company.</td></tr>
+                  )}
+                  {slocMachines.map((machine) => {
+                    const draftValue = slocDraftFor(machine);
+                    const isDirty = draftValue !== (machine.storage_location_id ?? "");
+                    return (
+                      <tr key={machine.id} className="border-b border-slate-100">
+                        <td className="px-3 py-2 font-mono text-slate-900 whitespace-nowrap">{machine.machine_code}</td>
+                        <td className="px-3 py-2 text-slate-900">{machine.machine_name}</td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={draftValue}
+                            onChange={(e) => setSlocDrafts((d) => ({ ...d, [machine.id]: e.target.value }))}
+                            className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                          >
+                            <option value="">— not mapped —</option>
+                            {slocLocations.map((loc) => (
+                              <option key={loc.id} value={loc.id}>{loc.code} — {loc.name}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            disabled={!isDirty || slocSavingId === machine.id}
+                            onClick={() => void saveSlocMapping(machine)}
+                            className="border border-sky-600 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-900 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {slocSavingId === machine.id ? "Saving..." : "Save"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </ErpSectionCard>
+      )}
+
+      {activeTab === "register" && (
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_380px]">
         {/* ── Left: list ── */}
         <ErpSectionCard eyebrow="Machine Register" title="All machines">
@@ -245,6 +416,8 @@ export default function SAMachineMaster() {
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Code</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Name</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Type</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">PO Types</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Storage Location</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Capacity</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Cost Center</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
@@ -253,10 +426,10 @@ export default function SAMachineMaster() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
+                  <tr><td colSpan={10} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>
                 )}
                 {!loading && displayRows.length === 0 && (
-                  <tr><td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">No machines found.</td></tr>
+                  <tr><td colSpan={10} className="px-3 py-6 text-center text-sm text-slate-400">No machines found.</td></tr>
                 )}
                 {displayRows.map((row) => {
                   const isEditing = editId === row.id;
@@ -298,6 +471,35 @@ export default function SAMachineMaster() {
                               {row.machine_type}
                             </span>
                           )}
+                        </td>
+                        <td className="px-3 py-2" onClick={(e) => isEditing && e.stopPropagation()}>
+                          {isEditing ? (
+                            <div className="flex flex-wrap gap-2">
+                              {MACHINE_PO_TYPES.map((t) => (
+                                <label key={t} className="flex items-center gap-1 text-[11px] font-medium text-slate-700">
+                                  <input
+                                    type="checkbox"
+                                    checked={editDraft.po_types.includes(t)}
+                                    onChange={() => setEditDraft((d) => ({ ...d, po_types: togglePoType(d.po_types, t) }))}
+                                  />
+                                  {t}
+                                </label>
+                              ))}
+                            </div>
+                          ) : (row.po_types ?? []).length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {row.po_types.map((t) => (
+                                <span key={t} className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">{t}</span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400" title="Not configured yet -- shows for every PO type until set">All (unconfigured)</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
+                          {row.storage_location
+                            ? `${row.storage_location.code} — ${row.storage_location.name}`
+                            : <span className="text-xs text-slate-400" title="Map from the Storage Location Mapping tab">— not mapped —</span>}
                         </td>
                         <td className="px-3 py-2 text-slate-600">
                           {isEditing ? (
@@ -387,7 +589,7 @@ export default function SAMachineMaster() {
                       </tr>
                       {isEditing && (
                         <tr className="bg-sky-50">
-                          <td colSpan={8} className="px-3 pb-2">
+                          <td colSpan={10} className="px-3 pb-2">
                             <label className="text-[11px] font-semibold text-slate-600">Description</label>
                             <input
                               value={editDraft.description}
@@ -453,6 +655,23 @@ export default function SAMachineMaster() {
               </select>
             </label>
 
+            <div className="grid gap-1 text-xs font-semibold text-slate-700">
+              PO Types
+              <div className="flex flex-wrap gap-3 rounded border border-slate-300 bg-[#fffef7] px-2 py-1.5">
+                {MACHINE_PO_TYPES.map((t) => (
+                  <label key={t} className="flex items-center gap-1 text-xs font-normal text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={form.po_types.includes(t)}
+                      onChange={() => setForm((f) => ({ ...f, po_types: togglePoType(f.po_types, t) }))}
+                    />
+                    {t}
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] font-normal text-slate-400">Which Process PO type(s) this machine may be used for. Leave unchecked to allow every type until you decide (Process PO Create won't filter it out).</p>
+            </div>
+
             <div className="grid grid-cols-2 gap-2">
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 Capacity
@@ -515,6 +734,7 @@ export default function SAMachineMaster() {
           </div>
         </ErpSectionCard>
       </div>
+      )}
     </ErpScreenScaffold>
   );
 }

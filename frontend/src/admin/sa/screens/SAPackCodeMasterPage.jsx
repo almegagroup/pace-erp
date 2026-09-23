@@ -21,15 +21,24 @@ import {
   upsertPackConfig,
   deletePackConfig,
 } from "../../../pages/dashboard/production/prodApi.js";
+import { listUoms } from "../../../pages/dashboard/om/omApi.js";
 
 const TABS = ["Pack Code Catalog", "Prodshade Pack Config"];
-const PACK_TYPE_OPTIONS = ["CONSUMER", "DRUM", "BARREL", "IBC", "TANKER", "MTEST"];
-const BILLING_UOM_OPTIONS = ["PER_UNIT", "PER_KG"];
+// Must match erp_production.pack_code_master's pack_type CHECK constraint exactly.
+const PACK_TYPE_OPTIONS = ["BAG", "BARREL", "BOTTLE", "CARTON", "DRUM", "IBC", "JAR", "MTEST", "PACKET", "TANKER"];
+// Must match the billing_uom CHECK constraint. PER_INNER_UOM only makes sense once the pack
+// code declares an inner_uom_code — gated in the dropdown below, not just in this list.
+const BILLING_UOM_OPTIONS = ["PER_OUTER_UOM", "PER_INNER_UOM", "PER_BASE_UOM"];
 
 const ERRORS = {
   PROD_PACK_CODE_NOT_FOUND: "Pack code not found.",
-  PROD_PACK_CODE_EXISTS: "Pack code already exists.",
+  PROD_PACK_CODE_EXISTS: "This pack code already exists for this pack type.",
   PROD_PACK_CODE_INVALID: "Pack code, description, pack type, and billing UOM are required.",
+  PROD_PACK_CODE_INVALID_OUTER_UOM: "Outer UOM is not a valid UOM.",
+  PROD_PACK_CODE_INVALID_INNER_UOM: "Inner UOM is not a valid UOM.",
+  PROD_PACK_CODE_INVALID_BILLING_UOM: "Billing UOM must be Per Outer UOM, Per Inner UOM, or Per Base UOM.",
+  PROD_PACK_CODE_BILLING_REQUIRES_INNER_UOM: "Per Inner UOM billing needs an Inner UOM set on this pack code first.",
+  PROD_PACK_CONFIG_PRODSHADE_BASE_UOM_MISSING: "This Prodshade has no Base UOM set — fix it in Material Master before linking a pack code.",
   PROD_PACK_CONFIG_NOT_FOUND: "Pack config not found.",
   PROD_PACK_CONFIG_EXISTS: "A config for this prodshade + pack code already exists.",
   PROD_PACK_CONFIG_DELETE_BLOCKED_BOM_EXISTS: "Delete blocked: a Pack BOM already exists for this FG SKU.",
@@ -75,11 +84,12 @@ const EMPTY_CONFIG_FORM = {
 
 const EMPTY_PACK_CODE_FORM = {
   pack_code: "",
-  pack_name: "",
   description: "",
   pack_type: PACK_TYPE_OPTIONS[0],
   billing_uom: BILLING_UOM_OPTIONS[0],
   bom_required: true,
+  outer_uom_code: "",
+  inner_uom_code: "",
 };
 
 export default function SAPackCodeMasterPage() {
@@ -108,6 +118,14 @@ export default function SAPackCodeMasterPage() {
     queryFn: () => listPackCodes({}),
     select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
   });
+
+  const uomsQ = useQuery({
+    queryKey: ["uoms-for-pack-code"],
+    queryFn: () => listUoms({}),
+    select: (d) => (Array.isArray(d) ? d : d?.data ?? []),
+    enabled: packCodeDrawerOpen,
+  });
+  const uomOptions = uomsQ.data ?? [];
 
   const prodshadesQ = useQuery({
     queryKey: ["approved-prodshades"],
@@ -182,11 +200,12 @@ export default function SAPackCodeMasterPage() {
     setEditingPackCode(code);
     setPackCodeForm({
       pack_code: code.pack_code ?? "",
-      pack_name: code.pack_name ?? code.description ?? "",
       description: code.description ?? code.pack_name ?? "",
       pack_type: code.pack_type ?? PACK_TYPE_OPTIONS[0],
       billing_uom: code.billing_uom ?? BILLING_UOM_OPTIONS[0],
       bom_required: code.bom_required !== false,
+      outer_uom_code: code.outer_uom_code ?? "",
+      inner_uom_code: code.inner_uom_code ?? "",
     });
     setPackCodeDrawerOpen(true);
   }
@@ -223,11 +242,15 @@ export default function SAPackCodeMasterPage() {
     try {
       const payload = {
         pack_code: packCodeForm.pack_code.trim().toUpperCase(),
-        pack_name: packCodeForm.pack_name.trim() || packCodeForm.description.trim(),
+        // pack_name has no independent UI — it always mirrors description, so the two
+        // never desync (previously pack_name kept its old value after description changed).
+        pack_name: packCodeForm.description.trim(),
         description: packCodeForm.description.trim(),
         pack_type: packCodeForm.pack_type,
         billing_uom: packCodeForm.billing_uom,
         bom_required: packCodeForm.bom_required,
+        outer_uom_code: packCodeForm.outer_uom_code || null,
+        inner_uom_code: packCodeForm.inner_uom_code || null,
       };
 
       if (editingPackCode) {
@@ -336,6 +359,8 @@ export default function SAPackCodeMasterPage() {
                     <th className="border-b px-3 py-2 text-left">Pack Code</th>
                     <th className="border-b px-3 py-2 text-left">Description</th>
                     <th className="border-b px-3 py-2 text-left">Pack Type</th>
+                    <th className="border-b px-3 py-2 text-left">Inner UOM</th>
+                    <th className="border-b px-3 py-2 text-left">Outer UOM</th>
                     <th className="border-b px-3 py-2 text-left">Billing UOM</th>
                     <th className="border-b px-3 py-2 text-left">BOM Required</th>
                     <th className="border-b px-3 py-2 text-left">Status</th>
@@ -348,6 +373,8 @@ export default function SAPackCodeMasterPage() {
                       <td className="px-3 py-2 font-mono font-semibold text-slate-800">{code.pack_code}</td>
                       <td className="px-3 py-2 text-slate-700">{code.description || code.pack_name || "—"}</td>
                       <td className="px-3 py-2 text-slate-600">{code.pack_type || "—"}</td>
+                      <td className="px-3 py-2 font-mono text-slate-600">{code.inner_uom_code || "—"}</td>
+                      <td className="px-3 py-2 font-mono text-slate-600">{code.outer_uom_code || "—"}</td>
                       <td className="px-3 py-2 text-slate-600">{code.billing_uom || "—"}</td>
                       <td className="px-3 py-2">
                         {code.bom_required ? (
@@ -576,31 +603,43 @@ export default function SAPackCodeMasterPage() {
             <input
               className="rounded border border-slate-300 px-2 py-1.5 text-sm"
               value={packCodeForm.description}
-              onChange={(event) =>
-                setPackCodeForm((current) => ({
-                  ...current,
-                  description: event.target.value,
-                  pack_name: current.pack_name || event.target.value,
-                }))
-              }
+              onChange={(event) => setPackCodeForm((current) => ({ ...current, description: event.target.value }))}
               placeholder="Informational display text"
               required
             />
           </div>
 
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">
+              Pack Type <span className="text-rose-500">*</span>
+            </label>
+            <select
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={packCodeForm.pack_type}
+              onChange={(event) => setPackCodeForm((current) => ({ ...current, pack_type: event.target.value }))}
+            >
+              {packTypeOptions.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="grid gap-4 md:grid-cols-2">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">
-                Pack Type <span className="text-rose-500">*</span>
+                Outer UOM <span className="font-normal text-slate-400">(dispatch layer, e.g. Carton)</span>
               </label>
               <select
                 className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                value={packCodeForm.pack_type}
-                onChange={(event) => setPackCodeForm((current) => ({ ...current, pack_type: event.target.value }))}
+                value={packCodeForm.outer_uom_code}
+                onChange={(event) => setPackCodeForm((current) => ({ ...current, outer_uom_code: event.target.value }))}
               >
-                {packTypeOptions.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
+                <option value="">— None —</option>
+                {uomOptions.map((uom) => (
+                  <option key={uom.code} value={uom.code}>
+                    {uom.code} — {uom.name ?? ""}
                   </option>
                 ))}
               </select>
@@ -608,20 +647,51 @@ export default function SAPackCodeMasterPage() {
 
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">
-                Billing UOM <span className="text-rose-500">*</span>
+                Inner UOM <span className="font-normal text-slate-400">(optional — e.g. Bottle/Pouch)</span>
               </label>
               <select
                 className="rounded border border-slate-300 px-2 py-1.5 text-sm"
-                value={packCodeForm.billing_uom}
-                onChange={(event) => setPackCodeForm((current) => ({ ...current, billing_uom: event.target.value }))}
+                value={packCodeForm.inner_uom_code}
+                onChange={(event) => {
+                  const nextInnerUom = event.target.value;
+                  setPackCodeForm((current) => ({
+                    ...current,
+                    inner_uom_code: nextInnerUom,
+                    // Clearing Inner UOM invalidates a PER_INNER_UOM billing choice — fall back
+                    // to Outer rather than leaving a now-impossible value silently selected.
+                    billing_uom: !nextInnerUom && current.billing_uom === "PER_INNER_UOM" ? "PER_OUTER_UOM" : current.billing_uom,
+                  }));
+                }}
               >
-                {BILLING_UOM_OPTIONS.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
+                <option value="">— None (single layer) —</option>
+                {uomOptions.map((uom) => (
+                  <option key={uom.code} value={uom.code}>
+                    {uom.code} — {uom.name ?? ""}
                   </option>
                 ))}
               </select>
+              <p className="text-xs text-slate-500">
+                Set this when the pack has 2 alternate layers (e.g. Bottle inside a Carton). Pack BOM will require a PM line
+                in this exact unit before it can be saved.
+              </p>
             </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-slate-600">
+              Billing UOM <span className="text-rose-500">*</span>
+            </label>
+            <select
+              className="rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={packCodeForm.billing_uom}
+              onChange={(event) => setPackCodeForm((current) => ({ ...current, billing_uom: event.target.value }))}
+            >
+              {BILLING_UOM_OPTIONS.map((value) => (
+                <option key={value} value={value} disabled={value === "PER_INNER_UOM" && !packCodeForm.inner_uom_code}>
+                  {value}
+                </option>
+              ))}
+            </select>
           </div>
 
           <label className="flex items-center gap-2 text-sm text-slate-700">

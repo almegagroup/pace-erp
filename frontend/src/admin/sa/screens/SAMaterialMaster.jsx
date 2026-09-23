@@ -69,6 +69,8 @@ const ERROR_MESSAGES = {
   OM_MATERIAL_TYPE_CATEGORY_LIST_FAILED: "Failed to load material categories.",
   OM_INVALID_MATERIAL_TYPE_CATEGORY: "Category name is required.",
   OM_INVALID_MATERIAL_TYPE: "Invalid material type.",
+  OM_MATERIAL_BASE_UOM_LOCKED: "Base UOM can't be changed once stock movements exist for this material.",
+  OM_MATERIAL_INVALID_UOM: "Invalid base UOM code.",
 };
 
 function friendly(code) {
@@ -1076,6 +1078,12 @@ function UomConversionsTab({ uoms }) {
   const [factors, setFactors] = useState({}); // map: `${material_id}_alt1` or `_alt2` → string value
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  // Custom conversion row (not tied to purchase_uom_code/issue_uom_code) --
+  // e.g. NOS->BTL for a purchased consumable whose pack size varies by
+  // vendor/delivery (variable_conversion=true, factor is just the current
+  // default GRN pre-fills, not enforced). Only one open at a time.
+  const [customForm, setCustomForm] = useState(null); // { materialId, fromUom, toUom, factor, variable } | null
+  const [savingCustom, setSavingCustom] = useState(false);
 
   const uomMap = Object.fromEntries(uoms.map((u) => [u.code, u.name]));
 
@@ -1169,6 +1177,44 @@ function UomConversionsTab({ uoms }) {
     }
   }
 
+  function openCustomForm(mat) {
+    setCustomForm({ materialId: mat.id, fromUom: "", toUom: mat.base_uom_code, factor: "", variable: false });
+    setError("");
+  }
+
+  function closeCustomForm() {
+    setCustomForm(null);
+  }
+
+  async function saveCustomConversion() {
+    if (!customForm) return;
+    const { materialId, fromUom, toUom, factor, variable } = customForm;
+    const parsedFactor = parseFloat(factor);
+    if (!fromUom || !toUom || fromUom === toUom || !parsedFactor || parsedFactor <= 0) {
+      setError("From UOM, To UOM (different from From), and a positive factor are required.");
+      return;
+    }
+    setSavingCustom(true);
+    setError("");
+    setNotice("");
+    try {
+      await createMaterialUomConversion({
+        material_id: materialId,
+        from_uom_code: fromUom,
+        to_uom_code: toUom,
+        conversion_factor: parsedFactor,
+        variable_conversion: variable,
+      });
+      setNotice(`${fromUom} → ${toUom} conversion added.`);
+      setCustomForm(null);
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "OM_UOM_CONVERSION_CREATE_FAILED");
+    } finally {
+      setSavingCustom(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / CONV_PAGE_SIZE));
 
   return (
@@ -1217,7 +1263,7 @@ function UomConversionsTab({ uoms }) {
               <th className="px-3 py-2 font-semibold text-slate-600">Alt UOM 2</th>
               <th className="px-3 py-2 font-semibold text-slate-600">1 Alt2 = ? Alt1</th>
               <th className="px-3 py-2 font-semibold text-slate-600"></th>
-              <th className="px-3 py-2 font-semibold text-slate-600">Other Conversions (auto-synced, read-only)</th>
+              <th className="px-3 py-2 font-semibold text-slate-600">Other Conversions</th>
             </tr>
           </thead>
           <tbody>
@@ -1312,23 +1358,93 @@ function UomConversionsTab({ uoms }) {
                     ) : null}
                   </td>
 
-                  {/* Other conversions — e.g. Pack BOM's auto-synced outer-unit->KG row for
-                      FG SKUs (pack_bom.handlers.ts's syncPackBomConversions). Read-only here:
-                      editing would fight the sync, which is the source of truth for these. */}
+                  {/* Other conversions — existing rows (e.g. Pack BOM's auto-synced
+                      outer-unit->KG row, pack_bom.handlers.ts's syncPackBomConversions)
+                      stay display-only here, editing those would fight the sync. "+ Add"
+                      is for a genuinely new row this material doesn't have yet — e.g. a
+                      purchased consumable's Packet->Bottle where the vendor's pack size
+                      varies (variable_conversion=true, factor is just GRN's default). */}
                   <td className="px-3 py-2 text-slate-600">
                     {(() => {
                       const others = (conversions[mat.id] ?? []).filter(
                         (row) => row.from_uom_code !== alt1 && row.from_uom_code !== alt2,
                       );
-                      if (others.length === 0) return <span className="text-slate-200">—</span>;
+                      const isOpen = customForm?.materialId === mat.id;
                       return (
-                        <div className="flex flex-col gap-0.5">
-                          {others.map((row) => (
-                            <span key={row.id} className="font-mono text-[11px]">
-                              {row.from_uom_code} → {row.to_uom_code} ={" "}
-                              {row.variable_conversion ? "variable" : Number(row.conversion_factor)}
-                            </span>
-                          ))}
+                        <div className="flex flex-col gap-1">
+                          {others.length === 0 ? (
+                            <span className="text-slate-200">—</span>
+                          ) : (
+                            <div className="flex flex-col gap-0.5">
+                              {others.map((row) => (
+                                <span key={row.id} className="font-mono text-[11px]">
+                                  {row.from_uom_code} → {row.to_uom_code} ={" "}
+                                  {row.variable_conversion ? "variable" : Number(row.conversion_factor)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {isOpen ? (
+                            <div className="flex flex-wrap items-center gap-1 border border-sky-300 bg-sky-50 p-1.5">
+                              <select
+                                value={customForm.fromUom}
+                                onChange={(e) => setCustomForm((prev) => ({ ...prev, fromUom: e.target.value.toUpperCase() }))}
+                                className="h-7 border border-slate-300 bg-white px-1 text-[11px] text-slate-900 outline-none focus:border-sky-500"
+                              >
+                                <option value="">From UOM</option>
+                                {uoms.map((u) => <option key={u.code} value={u.code}>{u.code}</option>)}
+                              </select>
+                              <span className="text-[11px] text-slate-500">→</span>
+                              <select
+                                value={customForm.toUom}
+                                onChange={(e) => setCustomForm((prev) => ({ ...prev, toUom: e.target.value.toUpperCase() }))}
+                                className="h-7 border border-slate-300 bg-white px-1 text-[11px] text-slate-900 outline-none focus:border-sky-500"
+                              >
+                                <option value="">To UOM</option>
+                                {uoms.map((u) => <option key={u.code} value={u.code}>{u.code}</option>)}
+                              </select>
+                              <input
+                                type="number"
+                                min="0.0001"
+                                step="any"
+                                value={customForm.factor}
+                                onChange={(e) => setCustomForm((prev) => ({ ...prev, factor: e.target.value }))}
+                                placeholder="Factor"
+                                className="h-7 w-16 border border-slate-300 bg-white px-1 text-[11px] text-slate-900 outline-none focus:border-sky-500"
+                              />
+                              <label className="flex items-center gap-1 text-[11px] text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  checked={customForm.variable}
+                                  onChange={(e) => setCustomForm((prev) => ({ ...prev, variable: e.target.checked }))}
+                                />
+                                Variable
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => void saveCustomConversion()}
+                                disabled={savingCustom}
+                                className="h-7 border border-sky-700 bg-sky-100 px-2 text-[11px] font-semibold text-sky-950 disabled:opacity-40"
+                              >
+                                {savingCustom ? "..." : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={closeCustomForm}
+                                className="h-7 border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openCustomForm(mat)}
+                              className="w-fit border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600 hover:border-sky-400 hover:text-sky-700"
+                            >
+                              + Add
+                            </button>
+                          )}
                         </div>
                       );
                     })()}
