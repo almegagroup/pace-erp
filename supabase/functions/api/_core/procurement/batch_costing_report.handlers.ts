@@ -31,6 +31,7 @@ import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { materialMap, packCodeRow, resolvePmComposition } from "../production/ac07_costing.handlers.ts";
+import { resolveAc06RatesAsOf } from "../production/ac06_workspace.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type BatchCostingHandlerContext = {
@@ -108,11 +109,18 @@ async function actualPackingOrderPmLines(packingOrder: JsonRecord): Promise<Json
 
 type RateInfo = { rate: number | null; wastage_other_pct: number; costing_group_name: string | null; source: string };
 
+// §139 asOfDate -- for MTO/HPS/MTEST, the SO's own so_date decides which
+// side of a mid-month AC06 rate split applies (business owner directive,
+// feasibility §139). Every real (non-MANUAL) month lookup below goes through
+// the shared, date-aware resolveAc06RatesAsOf() -- never a bespoke re-query
+// here -- so this report and AC07's preview always agree on how a split
+// resolves.
 async function resolveRatesForMaterials(
   companyId: string,
   soLineId: string,
   costingRateMonth: string,
   materialIds: string[],
+  asOfDate: string,
 ): Promise<Map<string, RateInfo>> {
   const result = new Map<string, RateInfo>();
   if (materialIds.length === 0) return result;
@@ -137,33 +145,12 @@ async function resolveRatesForMaterials(
   if (monthErr) throw new Error("BCR_MONTH_LOOKUP_FAILED");
   if (!monthRow) return result;
 
-  const monthLabel = `AC06 · ${monthYear(costingRateMonth)} (${monthRow.status === "CLOSED" ? "Closed" : "Open"})`;
-  if (monthRow.status === "CLOSED") {
-    const { data: archive, error: archErr } = await serviceRoleClient.schema("erp_production").from("ac06_month_archive")
-      .select("id").eq("source_month_id", textValue(monthRow.id)).maybeSingle();
-    if (archErr) throw new Error("BCR_ARCHIVE_LOOKUP_FAILED");
-    if (archive?.id) {
-      const rows = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_production")
-        .from("ac06_month_archive_line").select("material_id, rate, wastage_other_pct, costing_group_name_snapshot")
-        .eq("archive_id", textValue(archive.id)).in("material_id", chunk));
-      for (const row of rows) result.set(textValue(row.material_id), {
-        rate: row.rate === null ? null : Number(row.rate),
-        wastage_other_pct: Number(row.wastage_other_pct ?? 0),
-        costing_group_name: (row.costing_group_name_snapshot as string) ?? null,
-        source: monthLabel,
-      });
-    }
-  } else {
-    const rows = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_production")
-      .from("ac06_month_line").select("material_id, rate, wastage_other_pct, costing_group_name_snapshot")
-      .eq("month_id", textValue(monthRow.id)).in("material_id", chunk));
-    for (const row of rows) result.set(textValue(row.material_id), {
-      rate: row.rate === null ? null : Number(row.rate),
-      wastage_other_pct: Number(row.wastage_other_pct ?? 0),
-      costing_group_name: (row.costing_group_name_snapshot as string) ?? null,
-      source: monthLabel,
-    });
-  }
+  const resolved = await resolveAc06RatesAsOf(
+    { id: textValue(monthRow.id), rate_month: textValue(monthRow.rate_month), status: textValue(monthRow.status) },
+    materialIds,
+    asOfDate,
+  ).catch(() => { throw new Error("BCR_RATE_RESOLVE_FAILED"); });
+  for (const [materialId, info] of resolved) result.set(materialId, info as RateInfo);
   return result;
 }
 
@@ -222,7 +209,7 @@ export async function getBatchCostingReportHandler(req: Request, ctx: BatchCosti
     const soIds = uniqueValues([...invoices.map((row) => row.so_id), ...soLines.map((row) => row.so_id)]);
     const salesOrders = await fetchInChunks<JsonRecord>(soIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("sales_order")
-      .select("id, customer_po_number, dispatch_type, dispatch_category").in("id", chunk));
+      .select("id, so_date, customer_po_number, dispatch_type, dispatch_category").in("id", chunk));
     const soById = new Map(salesOrders.map((row) => [textValue(row.id), row]));
 
     const materialIds = uniqueValues(invoiceLines.map((row) => row.material_id));
@@ -321,6 +308,11 @@ export async function getBatchCostingReportHandler(req: Request, ctx: BatchCosti
       const { invoice, material, soLine, so, dcLine, packingOrder, actualStroke, soStroke, lines } = batch;
       const tallyDate = textValue(invoice.tally_invoice_date);
       const costingRateMonth = textValue(soLine.costing_rate_month);
+      // §139: the SO's own so_date decides which side of a mid-month AC06
+      // rate split applies -- falls back to the Tally Invoice Date only if
+      // the SO row somehow carries no date (so_date is NOT NULL at creation,
+      // this is a defensive fallback, not the primary path).
+      const rateAsOfDate = textValue(so.so_date) || tallyDate;
       const fgType = upperValue(soLine.fg_type);
       const packQty = rounded(lines.reduce((sum, line) => sum + numberValue(dcLine.pack_qty), 0), 6) || Number(dcLine.pack_qty ?? 0);
       const baseQty = rounded(lines.reduce((sum, line) => sum + numberValue(line.quantity), 0), 6);
@@ -361,7 +353,7 @@ export async function getBatchCostingReportHandler(req: Request, ctx: BatchCosti
         ...strokeLines.filter((row) => textValue(row.stroke_master_id) === textValue(soStroke?.id)).map((row) => row.material_id),
         ...strokeLines.filter((row) => textValue(row.stroke_master_id) === textValue(actualStroke?.id)).map((row) => row.material_id),
       ]);
-      const rateByMaterial = await resolveRatesForMaterials(companyId, textValue(soLine.id), costingRateMonth, strokeMaterialIds);
+      const rateByMaterial = await resolveRatesForMaterials(companyId, textValue(soLine.id), costingRateMonth, strokeMaterialIds, rateAsOfDate);
 
       let rmcSo: number | null = 0;
       let rmcDispatched = 0;
@@ -427,7 +419,7 @@ export async function getBatchCostingReportHandler(req: Request, ctx: BatchCosti
       }
       const pmMaterialIds = uniqueValues(pmLinesRaw.map((row) => row.material_id));
       const pmMaterials = await materialMap(pmMaterialIds);
-      const pmRateByMaterial = await resolveRatesForMaterials(companyId, textValue(soLine.id), costingRateMonth, pmMaterialIds);
+      const pmRateByMaterial = await resolveRatesForMaterials(companyId, textValue(soLine.id), costingRateMonth, pmMaterialIds, rateAsOfDate);
       let pmcPerKg = 0;
       let anyPmRate = false;
       for (const line of pmLinesRaw) {

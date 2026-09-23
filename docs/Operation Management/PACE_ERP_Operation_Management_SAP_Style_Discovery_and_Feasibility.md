@@ -24846,3 +24846,243 @@ Page 6's combined PM auto-derive + N-way Packing PO creation; the Approve/Reject
 child Packing PO(s)), and the real frontend pages, are all still to be built. Next step: write the
 implementation the same way Page 4 was built — real handlers against real schema, verified with
 real prod data, then all `scripts/*.mjs` guards, before moving on.
+
+## Section 139
+
+### 139.1 — AC06 Intra-Month Rate Split (mid-month RM/PM rate change) — ✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE (2026-09-23)
+
+**Business problem (business owner, 2026-09-23):** AC06 (Monthly Costing Rate Workspace) stores
+exactly one rate per `(month, source_sloc_group, material)` — calendar-month granularity only, no
+intra-month date precision. For MTS specifically, a mid-month RM/PM rate change never flows into
+the Reco layer (MTS has no `process_order_line_reco`/`packing_order_line_reco` write at all,
+locked earlier this session) — so the SKU's own costing rate must instead reflect the new RM rate
+from the exact date it changes onward, and AC06 could not represent that: only one rate per item
+per month existed.
+
+**Locked solution (business owner's own proposal, refined during design review):**
+- Every AC06 item row (grouped or standalone) gets an "Enter"/insert icon at its far left. Clicking
+  it creates an identical duplicate row directly below — same material, same SLOC/Costing Group —
+  with Rate and Wastage %/OTHER left blank and a new **Effective Date** field, for the user to fill
+  in.
+- Downstream rate resolution compares a real transaction's own date against each row's
+  `effective_date`: on/after the split's effective date, the new (split) rate applies; before it,
+  the original rate still applies.
+- Using the split feature is **optional** — a month with no split behaves exactly as before.
+- Because AC06 already has an approval/verification workflow, a split row can be added even after
+  the month's rates are already approved — and doing so is **auto-approved** regardless of who adds
+  it (subject to already holding `ACC_SLOC_COSTING_RATE:WRITE`, the same access every rate save
+  already requires) — later edits to that split row also auto-approve. Once the month is closed, no
+  further change is possible at all, same as every other AC06 mutation.
+
+**Which date decides (business owner, 2026-09-23):** confirmed per-consumer, not a single universal
+rule — for MTO/HPS/MTEST (the only real consumer today, via the Batch Costing Report / SO01's
+"Costing Rate Month"), the deciding date is the **Sales Order's own `so_date`**, not the production
+date and not the Tally Invoice Date. MTS will resolve its own rate through **AC05** (not yet
+designed/built — held pending this fix and a separate vendor-code design), calling into this same
+AC06 resolution mechanism with whatever date AC05's own design settles on; that decision is
+deferred to the AC05 design session, not made here.
+
+**Difficulties identified before implementing (grounded in the real code, not assumed):**
+1. `ac06_month_line`'s unique constraint was `(month_id, source_sloc_group_id, material_id)` —
+   exactly one row per item per month, DB-enforced. A split row directly violates this unless the
+   constraint itself changes.
+2. Every real rate consumer (`ac07_costing.handlers.ts`'s costing preview, and the actually-live
+   `batch_costing_report.handlers.ts` that SO01's Costing Rate Month column feeds) resolved a rate
+   as a flat `material_id → rate` map for a chosen month — no date compare existed anywhere.
+3. Group bulk-rate actions (`assignAc06CostingGroupHandler`'s "apply the group's rate to every
+   member", `unassignAc06CostingGroupHandler`, `deleteAc06CostingGroupHandler`) all touch every row
+   matching `costing_group_id`/`source_sloc_group_id` broadly — undefended, these would touch a
+   split row too and corrupt it.
+4. `ac06_month_archive_line` (the CLOSED-month snapshot) has the identical one-row-per-item
+   constraint, and the Batch Costing Report resolves a CLOSED month's rate from this table, not the
+   live one — so the archive needed the same widening, not just the live table.
+5. Next-month carry-forward (`getMonth()`'s auto-open-new-month logic) blindly copied every row of
+   the prior month verbatim — with split rows this would either duplicate rows illegally or silently
+   drop the "actually in effect at month end" rate.
+
+**What was built (all five difficulties above closed):**
+- **Migration `20260923090000_ac06_intra_month_rate_split.sql`** — `effective_date date NOT NULL`
+  (backfilled to each month's own start date for every pre-existing row) + `parent_line_id uuid`
+  (NULL = primary row, set = a split row, pointing at its material's primary row) added to
+  `ac06_month_line`; unique constraint widened to
+  `(month_id, source_sloc_group_id, material_id, effective_date)`; `rate`/`wastage_other_pct`
+  loosened to nullable (a fresh split row starts blank) with the `rate >= 0` CHECK adjusted to allow
+  NULL. `ac06_month_archive_line` gets a matching `effective_date` column + widened unique
+  constraint. `close_ac06_month()` and `verify_ac06_rate_scopes()` both rewritten: close now carries
+  `effective_date` (and every existing accumulated column from the three migrations since v3 — see
+  the migration's own header comment) into the archive; verify now explicitly rejects any
+  `parent_line_id IS NOT NULL` row from ever being selected for the manual bulk-Verify action
+  (defense in depth — the frontend never lists one as selectable either).
+  **Real pre-existing bug found and fixed while rewriting `close_ac06_month()`:** the 2026-09-05
+  `wastage_other_pct` migration added the archive column and its own comment said it would be
+  "captured on the immutable per-month archive", but the function's INSERT was never actually
+  updated to populate it — every closed month before this fix archived `wastage_other_pct = 0`
+  regardless of the live value at close time. Fixed in the same pass since the new resolver reads
+  wastage from archived rows too.
+- **`ac06_workspace.handlers.ts`:**
+  - `insertAc06RateSplitHandler` (`POST /api/production/ac06/rates/split`) — creates the blank
+    split row, default `effective_date` = one day after the latest existing effective date for that
+    material (clamped to the month's last day), `rate`/`wastage_other_pct` NULL. Requires
+    `ACC_SLOC_COSTING_RATE:WRITE`, same as a normal rate save — matches the business owner's "jader
+    access ache tari korte parbe" (whoever already has rate-write access can do this).
+  - `deleteAc06RateSplitHandler` (`POST /api/production/ac06/rates/split/delete`) — removes a
+    mistakenly-added split row; the delete query itself filters `parent_line_id IS NOT NULL`, so a
+    primary row can never be removed through this path even by a malformed request.
+  - `saveAc06RatesHandler` extended: a split row always saves as `VERIFIED` (bypassing the normal
+    Accounts-saves/Auditor-verifies split, per the auto-approve directive), never cascades its rate
+    to its Costing Group's other members (unlike a primary/group-lead row), and accepts an optional
+    `effective_date` in the same call, validated to fall within that month and to not collide with a
+    sibling split (the DB's own unique constraint is the backstop, surfaced as a friendly
+    `AC06_SPLIT_DATE_CONFLICT` error).
+  - `getMonth()`'s carry-forward logic reworked: for each `(source_sloc_group_id, material_id)`, it
+    now finds the row with the **latest** `effective_date` among all of that material's rows
+    (primary + any splits) in the prior month and carries forward **that row's rate/wastage** —
+    while still copying structural fields (Costing Group membership, display order, exclusion) from
+    the true primary row. The new month always seeds with exactly one row per material
+    (`parent_line_id = NULL`, `effective_date` = the new month's own start) — a split row is never
+    itself carried forward as a split.
+  - Every group-management handler (`assignAc06CostingGroupHandler`, `unassignAc06CostingGroupHandler`,
+    `setAc06MaterialInclusionHandler`, `ensureScopeRows`) now filters `parent_line_id IS NULL` on
+    every broad select/update touching `ac06_month_line`, so a split row is structurally invisible to
+    group join/leave/rate-broadcast/inclusion actions — it is purely one material's own value
+    history, never a group-wide concern.
+  - `rowsForDisplay()` (the workspace grid's own row decorator) reworked so a split row is grouped
+    into the **same display unit** as its primary (keyed by material, not by each row's own id) and
+    sorted directly beneath it (primary first, then splits by `effective_date`), and is never itself
+    eligible to become a Costing Group's "lead" row.
+  - New exported **`resolveAc06RatesAsOf(monthRow, materialIds, asOfDate)`** — the one shared,
+    date-aware resolver every real consumer must go through: for each material, picks the row whose
+    `effective_date` is the closest one at-or-before `asOfDate` (open month → `ac06_month_line`,
+    closed month → `ac06_month_archive_line`), falling back to the earliest row if every candidate's
+    date is somehow after `asOfDate`. Verified against real Dev data in a rolled-back transaction: a
+    material's rate as of a date before an inserted split resolves to the original rate, as of a
+    date after resolves to the split's rate.
+- **`batch_costing_report.handlers.ts`** — `resolveRatesForMaterials()` rewritten to call
+  `resolveAc06RatesAsOf()` instead of its own bespoke month/archive lookup; `sales_order` select
+  widened to include `so_date`, and every call site now passes `so.so_date` (falling back to the
+  Tally Invoice Date only as a defensive fallback, since `so_date` is `NOT NULL` at SO creation) as
+  the resolution date — this is the concrete implementation of "SO date decides" above.
+- **`ac07_costing.handlers.ts`** — its own AC06 rate-lookup block replaced with the same shared
+  `resolveAc06RatesAsOf()` call. Since this is a what-if preview with no real dispatch to compare
+  against, it defaults `asOfDate` to today, with a new optional `as_of_date` query param so the
+  preview can also answer "what would this cost as of date X" against a split rate (frontend not
+  wired to this new param yet — out of scope this pass, the preview still works unchanged by
+  default).
+- **Frontend (`SlocCostingGroupPage.jsx`, AC06's Rate Input tab):** a leftmost icon column — a
+  standalone row's own insert icon adds a split row beneath it; a split row itself shows a Remove
+  icon instead. New **Effective Date** column, editable (native date input, `min` clamped to the
+  month) only for split rows — a primary row always shows "Month start", read-only. Rate/Wastage
+  inputs now also accept edits for split rows (previously gated to standalone/group-lead only) and
+  never cascade a split row's value to its Costing Group siblings. Status column shows "Verified
+  (auto)"/"Draft" for a split row instead of the normal PENDING/VERIFIED label, and the Entry column
+  shows "Rate Change" for one. The manual bulk-Verify checkbox column excludes split rows from
+  `pendingIds` (matching the backend RPC's own defensive exclusion).
+- **Routes + ACL:** `POST /api/production/ac06/rates/split` and
+  `POST /api/production/ac06/rates/split/delete`, both registered in
+  `route-acl-registry.ts` under the same `ACC_SLOC_COSTING_RATE:WRITE` resource/action every other
+  rate-save call already uses.
+
+**Verified:** migration applied to Dev (`ytapuwiqicmvpanmzelb`), reconciled to the local filename
+timestamp per §8A, `NOTIFY pgrst, 'reload schema'` issued. Schema confirmed live (new
+columns/constraints exist exactly as designed). A rolled-back transaction against a real Dev
+`ac06_month_line` row (standalone material, rate 4.56789) inserted a split row (effective_date
+2026-05-15, rate 5.5) and confirmed: resolving as of 2026-05-10 returns the original 4.56789,
+resolving as of 2026-05-20 returns the split's 5.5 — the exact date-boundary behavior the design
+calls for.
+
+**Not yet done:** AC05 itself (deferred, per the business owner's own sequencing — vendor-code
+Primary/override mapping and AC05's UI are separate, still-pending design items); live click-through
+in the deployed app (no dev login in this environment — verification here is schema-level + a
+rolled-back-transaction SQL simulation + static `deno check`/`eslint`, not an actual browser
+session); AC07's frontend does not yet expose the new `as_of_date` param (the backend supports it,
+nothing consumes it yet).
+
+## Section 140
+
+### 140.1 — Company Vendor Code (AC11) — ✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE (2026-09-23)
+
+**Business context:** Asian Paints assigns PACE its own identity within Asian Paints' system as a
+"Vendor Code" — distinct from `erp_procurement.vendor_master`, which is PACE's own RM/PM suppliers.
+Business owner's discovery (this session): the same vendor code can be shared across different PACE
+companies (Nuance 1); a single company can also hold multiple vendor codes, where one is the default
+(Primary) for every Prodshade+Stroke and any other is used only for specific Prodshade+Stroke
+overrides (Nuance 2) — dispatch-time costing for an SKU resolves through whichever vendor code
+applies to its Stroke. This is a real prerequisite for AC05 (MTS SKU costing), since a vendor code
+determines the costing/billing context a dispatch falls under.
+
+**Locked design (business owner, 2026-09-23):**
+- Vendor code itself is a **global** entity — SA creates it once (**SA "Vendor Code Master"**,
+  `/sa/production/vendor-code-master`), no company scope at creation.
+- A new **Accounts ACL page, tx_code AC11, "Company Vendor Code"**
+  (`/dashboard/production/company-vendor-code`) is where each company: (a) picks which of the
+  globally-created vendor codes apply to it, (b) chooses exactly one as **Primary**, (c) maps
+  specific Prodshade+Stroke combinations onto a non-primary vendor code as an override.
+- **Auto-primary rule (business owner, confirmed 2026-09-23):** a company that has only ever mapped
+  ONE vendor code has that one as Primary automatically — no manual step needed. Only once a second
+  (or later) vendor code is added does the company need to explicitly choose which one is Primary
+  (via "Set Primary"); the newly-added one never silently becomes Primary on its own.
+- **Company Vendor Code page is not a one-time setup** — an ACL user can come back anytime to add
+  another vendor code, change which one is Primary, or add/remove Prodshade+Stroke overrides; the
+  "Add a vendor code" picker is always populated live from the SA-created global list (the still-
+  unmapped ones), never a fixed one-time selection.
+
+**Schema (migration `20260923120000_company_vendor_code.sql`, `erp_production` schema):**
+- `vendor_code_master` — global list (`vendor_code` UNIQUE, `description`, `active`). SA-only writes.
+- `company_vendor_code_map` — `(company_id, vendor_code_id)` UNIQUE, `is_primary` boolean. A partial
+  unique index `uq_company_vendor_code_primary ON (company_id) WHERE is_primary AND active`
+  guarantees exactly one active Primary per company at the DB level — a race between two saves can
+  never leave zero or two.
+- `vendor_code_stroke_override` — `(company_id, stroke_master_id)` UNIQUE (one Stroke can only ever
+  be overridden onto one vendor code — a second override for the same Stroke replaces, not adds),
+  `company_vendor_code_map_id` `ON DELETE CASCADE` (removing a company's mapped vendor code also
+  removes any override that pointed at it).
+
+**Backend (`vendor_code.handlers.ts`):**
+- SA: `listVendorCodesHandler`/`createVendorCodeHandler`/`updateVendorCodeHandler` — gated by
+  `assertSARole` (same pattern as `batch_series.handlers.ts`'s SA Batch Series page).
+- ACL Accounts (`ACC_COMPANY_VENDOR_CODE` resource, `CAP_PROC_ACCOUNTS` capability — same capability
+  AC04's Conversion Cost Config already uses): `getCompanyVendorCodeWorkspaceHandler` (one combined
+  GET returning `mapped`/`available`/`overrides`, resolving Prodshade+Stroke names via
+  `stroke_master`/`material_master` joins), `mapCompanyVendorCodeHandler` (the company's first-ever
+  mapped vendor code auto-sets `is_primary=true`; every later one defaults `false`),
+  `setCompanyVendorCodePrimaryHandler` (clears the old Primary, then sets the new one — two separate
+  updates so the partial unique index never sees a transient conflict), `unmapCompanyVendorCodeHandler`
+  (blocks removing the current Primary — a different one must be set Primary first),
+  `createVendorCodeOverrideHandler` (rejects overriding onto the Primary itself — that is already the
+  default, an override there would be a meaningless no-op — and validates the Stroke belongs to the
+  same company), `deleteVendorCodeOverrideHandler`.
+- Exported `resolveVendorCodeForStroke(companyId, strokeMasterId)` — the shared resolver for future
+  consumers (AC05, dispatch): the Stroke's own override if one exists, else the company's Primary.
+  Not wired into anything yet (AC05 itself is still pending) — built now so AC05 has a ready-made,
+  already-correct resolver to call into rather than re-deriving this logic later.
+
+**Frontend:** `SAVendorCodeMasterPage.jsx` (SA, simple create/edit CRUD, mirrors
+`SAProductionBatchSeriesPage.jsx`'s structure) + `CompanyVendorCodePage.jsx` (ACL Accounts,
+company-scoped via `TransactionCompanySelector`): mapped-vendor-codes table with inline "Set
+Primary"/"Remove", an "Add a vendor code" picker sourced live from the workspace's `available` list
+(the SA-created codes not yet mapped to this company), and a Prodshade→Stroke override section
+(Prodshade combobox filters the Stroke combobox via `listStrokeMasters`, non-primary-only vendor
+code picker for the override target).
+
+**ACL provisioning (Dev, `ytapuwiqicmvpanmzelb`):** `erp_menu.menu_master`/`acl.menu_master` row
+(`ACC_COMPANY_VENDOR_CODE`, tx_code AC11) + `erp_menu.menu_tree` under `GRP_ACL_ACCOUNTS` +
+`CAP_PROC_ACCOUNTS` VIEW/WRITE via live `acl.capability_menu_actions`, then the full §8 4-step
+sequence: since all 4 active companies' `acl_versions` already had `source_captured_at` populated
+(a prior capture, so re-capturing the same version would have been a no-op per §8's documented
+correction), a **new** `acl_versions` row was created per company (version bumped, e.g. v40→v41),
+captured, snapshotted (`generate_acl_snapshot`), then `rebuild_acl_menu_snapshot` re-run for every
+user with an active work context in those 4 companies (22 snapshot rows confirmed for
+`ACC_COMPANY_VENDOR_CODE` afterward). **Prod still needs the same 4-step sequence** (pure data
+config, not a migration) before this page will appear for any prod ACL user.
+
+**Verified:** migration applied to Dev, reconciled to local filename timestamp, `NOTIFY pgrst,
+'reload schema'` issued, `deno check`/`eslint` clean on every touched/new file (zero new errors
+against the established baseline), `jsx-no-undef-guard`/`frontend-payload-guard`/
+`migration-integrity-check` all pass (`in_sync: true`). A rolled-back transaction against real Dev
+data confirmed the one-Primary-per-company DB constraint actually fires (a second `is_primary=true`
+insert for the same company is rejected).
+
+**Not yet done:** AC05 itself — this feature exists to unblock it, per the business owner's own
+stated order (Vendor Code → AC05 → Dispatch); wiring `resolveVendorCodeForStroke()` into any real
+consumer; prod ACL provisioning (dev-only so far, same as every other ACL data change this session);
+live click-through in the deployed app.

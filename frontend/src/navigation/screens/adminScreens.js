@@ -332,6 +332,14 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  SA_VENDOR_CODE_MASTER: {
+    screen_code: "SA_VENDOR_CODE_MASTER",
+    route: "/sa/production/vendor-code-master",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_PROD_SEGMENT_LOCATIONS: {
     screen_code: "SA_PROD_SEGMENT_LOCATIONS",
     route: "/sa/production/segment-locations",

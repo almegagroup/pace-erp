@@ -16,10 +16,12 @@ import {
   createAc06CostingGroup,
   createAc06SlocGroup,
   deleteAc06CostingGroup,
+  deleteAc06RateSplit,
   deleteAc06SlocGroup,
   getAc06History,
   getAc06Report,
   getAc06Workspace,
+  insertAc06RateSplit,
   saveAc06Rates,
   setAc06MaterialInclusion,
   unassignAc06CostingGroup,
@@ -191,6 +193,7 @@ export default function SlocCostingGroupPage() {
   const [tab, setTab] = useState("dashboard");
   const [rateDraft, setRateDraft] = useState({});
   const [wastageDraft, setWastageDraft] = useState({});
+  const [effectiveDateDraft, setEffectiveDateDraft] = useState({});
   const [selectedForVerify, setSelectedForVerify] = useState([]);
   const [exportingRates, setExportingRates] = useState(false);
   const [slocName, setSlocName] = useState("");
@@ -313,6 +316,7 @@ export default function SlocCostingGroupPage() {
       .filter(
         (row) =>
           row.verification_status === "PENDING" &&
+          !row.is_rate_split &&
           (row.is_standalone || row.is_group_lead),
       )
       .map((row) => row.id),
@@ -394,14 +398,21 @@ export default function SlocCostingGroupPage() {
     setRateDraft((current) => {
       const next = { ...current };
       rows.forEach((row) => {
-        if (!(row.id in next)) next[row.id] = String(row.rate ?? "0");
+        if (!(row.id in next)) next[row.id] = row.rate === null || row.rate === undefined ? "" : String(row.rate);
       });
       return next;
     });
     setWastageDraft((current) => {
       const next = { ...current };
       rows.forEach((row) => {
-        if (!(row.id in next)) next[row.id] = String(row.wastage_other_pct ?? "0");
+        if (!(row.id in next)) next[row.id] = row.wastage_other_pct === null || row.wastage_other_pct === undefined ? "" : String(row.wastage_other_pct);
+      });
+      return next;
+    });
+    setEffectiveDateDraft((current) => {
+      const next = { ...current };
+      rows.forEach((row) => {
+        if (!(row.id in next)) next[row.id] = row.effective_date || "";
       });
       return next;
     });
@@ -525,10 +536,13 @@ export default function SlocCostingGroupPage() {
     if (!/^\d*\.?\d*$/.test(value)) return;
     setRateDraft((current) => {
       const next = { ...current, [row.id]: value };
-      if (row.costing_group_id)
+      // A rate-split row (§139) is one material's own mid-month change --
+      // it never cascades to its Costing Group's other members, unlike a
+      // primary/group-lead row's rate.
+      if (row.costing_group_id && !row.is_rate_split)
         rows
           .filter(
-            (candidate) => candidate.costing_group_id === row.costing_group_id,
+            (candidate) => candidate.costing_group_id === row.costing_group_id && !candidate.is_rate_split,
           )
           .forEach((candidate) => {
             next[candidate.id] = value;
@@ -543,14 +557,19 @@ export default function SlocCostingGroupPage() {
     if (!/^\d*\.?\d*$/.test(value)) return;
     setWastageDraft((current) => {
       const next = { ...current, [row.id]: value };
-      if (row.costing_group_id)
+      if (row.costing_group_id && !row.is_rate_split)
         rows
-          .filter((candidate) => candidate.costing_group_id === row.costing_group_id)
+          .filter((candidate) => candidate.costing_group_id === row.costing_group_id && !candidate.is_rate_split)
           .forEach((candidate) => {
             next[candidate.id] = value;
           });
       return next;
     });
+  }
+
+  // §139 -- Effective Date input for a split row only.
+  function setSplitEffectiveDate(row, value) {
+    setEffectiveDateDraft((current) => ({ ...current, [row.id]: value }));
   }
 
   function handleRatePaste(event, row) {
@@ -933,12 +952,13 @@ export default function SlocCostingGroupPage() {
                               rate_month: month,
                               updates: visibleRateRows
                                 .filter(
-                                  (row) => row.is_standalone || row.is_group_lead,
+                                  (row) => row.is_standalone || row.is_group_lead || row.is_rate_split,
                                 )
                                 .map((row) => ({
                                   line_id: row.id,
                                   rate: rateDraft[row.id] ?? row.rate,
                                   wastage_other_pct: wastageDraft[row.id] ?? row.wastage_other_pct,
+                                  ...(row.is_rate_split ? { effective_date: effectiveDateDraft[row.id] ?? row.effective_date } : {}),
                                 })),
                             }),
                           )
@@ -993,6 +1013,56 @@ export default function SlocCostingGroupPage() {
                 </div>
                 <ErpDenseGrid
                   columns={[
+                    {
+                      // §139 -- "Enter" icon: add a blank rate-change row
+                      // directly below this material (same material/group,
+                      // a fresh Effective Date, blank Rate/Wastage). A split
+                      // row itself gets a Remove icon instead, never a
+                      // second insert -- one level of split per material.
+                      key: "split",
+                      label: "",
+                      width: "40px",
+                      render: (row) =>
+                        canRate && workspace.month?.status !== "CLOSED" ? (
+                          row.is_rate_split ? (
+                            <button
+                              type="button"
+                              title="Remove this rate-change row"
+                              disabled={busy}
+                              onClick={() =>
+                                void withBusy(() =>
+                                  deleteAc06RateSplit({
+                                    company_id: companyId,
+                                    rate_month: month,
+                                    line_id: row.id,
+                                  }),
+                                )
+                              }
+                              className="h-6 w-6 border border-rose-300 bg-rose-50 text-xs font-bold text-rose-700 disabled:opacity-40"
+                            >
+                              &minus;
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              title="Add a mid-month rate-change row for this item"
+                              disabled={busy}
+                              onClick={() =>
+                                void withBusy(() =>
+                                  insertAc06RateSplit({
+                                    company_id: companyId,
+                                    rate_month: month,
+                                    line_id: row.id,
+                                  }),
+                                )
+                              }
+                              className="h-6 w-6 border border-sky-300 bg-sky-50 text-xs font-bold text-sky-800 disabled:opacity-40"
+                            >
+                              &#8629;
+                            </button>
+                          )
+                        ) : null,
+                    },
                     {
                       key: "verify",
                       label: (
@@ -1055,14 +1125,15 @@ export default function SlocCostingGroupPage() {
                       render: (row) =>
                         canRate &&
                         workspace.month?.status !== "CLOSED" &&
-                        (row.is_standalone || row.is_group_lead) ? (
+                        (row.is_standalone || row.is_group_lead || row.is_rate_split) ? (
                           <input
-                            value={rateDraft[row.id] ?? row.rate ?? "0"}
+                            value={rateDraft[row.id] ?? row.rate ?? ""}
                             onChange={(event) =>
                               setGroupRate(row, event.target.value)
                             }
                             onPaste={(event) => handleRatePaste(event, row)}
                             inputMode="decimal"
+                            placeholder={row.is_rate_split ? "New rate" : undefined}
                             className="h-8 w-32 border border-slate-300 px-2 font-mono"
                           />
                         ) : (
@@ -1078,9 +1149,9 @@ export default function SlocCostingGroupPage() {
                       render: (row) =>
                         canRate &&
                         workspace.month?.status !== "CLOSED" &&
-                        (row.is_standalone || row.is_group_lead) ? (
+                        (row.is_standalone || row.is_group_lead || row.is_rate_split) ? (
                           <input
-                            value={wastageDraft[row.id] ?? row.wastage_other_pct ?? "0"}
+                            value={wastageDraft[row.id] ?? row.wastage_other_pct ?? ""}
                             onChange={(event) => setGroupWastage(row, event.target.value)}
                             inputMode="decimal"
                             className="h-8 w-24 border border-slate-300 px-2 font-mono"
@@ -1091,17 +1162,55 @@ export default function SlocCostingGroupPage() {
                           </span>
                         ),
                     },
-                    { key: "verification_status", label: "Status", width: "110px" },
+                    {
+                      // §139 -- only a split row's own effective_date is
+                      // editable; a primary row always shows the month's
+                      // first day, read-only (it is not itself a choice).
+                      key: "effective_date",
+                      label: "Effective Date",
+                      width: "140px",
+                      render: (row) =>
+                        row.is_rate_split ? (
+                          canRate && workspace.month?.status !== "CLOSED" ? (
+                            <input
+                              type="date"
+                              min={month ? `${month}-01` : undefined}
+                              value={effectiveDateDraft[row.id] ?? row.effective_date ?? ""}
+                              onChange={(event) => setSplitEffectiveDate(row, event.target.value)}
+                              className="h-8 w-36 border border-slate-300 px-2 font-mono text-xs"
+                            />
+                          ) : (
+                            <span className="font-mono text-xs">{row.effective_date || "-"}</span>
+                          )
+                        ) : (
+                          <span className="text-xs text-slate-400">Month start</span>
+                        ),
+                    },
+                    {
+                      key: "verification_status",
+                      label: "Status",
+                      width: "110px",
+                      render: (row) =>
+                        row.is_rate_split ? (
+                          <span className="text-emerald-700" title="Rate-change rows auto-verify on save">
+                            {row.verification_status === "VERIFIED" ? "Verified (auto)" : "Draft"}
+                          </span>
+                        ) : (
+                          row.verification_status
+                        ),
+                    },
                     {
                       key: "lead",
                       label: "Entry",
                       width: "110px",
                       render: (row) =>
-                        row.is_standalone
-                          ? "Standalone"
-                          : row.is_group_lead
-                            ? "Group Lead"
-                            : "Auto-filled",
+                        row.is_rate_split
+                          ? "Rate Change"
+                          : row.is_standalone
+                            ? "Standalone"
+                            : row.is_group_lead
+                              ? "Group Lead"
+                              : "Auto-filled",
                     },
                   ]}
                   rows={visibleRateRows}

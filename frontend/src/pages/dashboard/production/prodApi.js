@@ -57,6 +57,18 @@ export const deletePackConfig = (id) => fetchProd("DELETE", `/api/production/pac
 export const listBatchSeries = (p) => fetchProd("GET", "/api/production/batch-series", undefined, p);
 export const createBatchSeries = (body) => fetchProd("POST", "/api/production/batch-series", body);
 export const updateBatchSeries = (id, body) => fetchProd("PATCH", `/api/production/batch-series/${id}`, body);
+
+// Vendor Code (§140) -- SA global master
+export const listVendorCodes = (p) => fetchProd("GET", "/api/production/vendor-codes", undefined, p);
+export const createVendorCode = (body) => fetchProd("POST", "/api/production/vendor-codes", body);
+export const updateVendorCode = (id, body) => fetchProd("PATCH", `/api/production/vendor-codes/${id}`, body);
+// Vendor Code (§140) -- ACL Accounts "Company Vendor Code" (AC11)
+export const getCompanyVendorCodeWorkspace = (p) => fetchProd("GET", "/api/production/company-vendor-codes", undefined, p);
+export const mapCompanyVendorCode = (body) => fetchProd("POST", "/api/production/company-vendor-codes/map", body);
+export const setCompanyVendorCodePrimary = (body) => fetchProd("POST", "/api/production/company-vendor-codes/primary", body);
+export const unmapCompanyVendorCode = (body) => fetchProd("POST", "/api/production/company-vendor-codes/unmap", body);
+export const createVendorCodeOverride = (body) => fetchProd("POST", "/api/production/company-vendor-codes/override", body);
+export const deleteVendorCodeOverride = (body) => fetchProd("POST", "/api/production/company-vendor-codes/override/delete", body);
 export const listBatchNumbers = (p) => fetchProd("GET", "/api/production/batch-numbers", undefined, p);
 export const releaseBatchNumber = (id, body) => fetchProd("POST", `/api/production/batch-numbers/${id}/release`, body);
 // MTS Page 3 "Batch Range" live duplicate-check (2026-09-17)
@@ -94,6 +106,8 @@ export const assignAc06CostingGroup = (body) => fetchProd("POST", "/api/producti
 export const unassignAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups/unassign", body);
 export const setAc06MaterialInclusion = (body) => fetchProd("POST", "/api/production/ac06/material-inclusion", body);
 export const saveAc06Rates = (body) => fetchProd("POST", "/api/production/ac06/rates", body);
+export const insertAc06RateSplit = (body) => fetchProd("POST", "/api/production/ac06/rates/split", body);
+export const deleteAc06RateSplit = (body) => fetchProd("POST", "/api/production/ac06/rates/split/delete", body);
 export const verifyAc06Rates = (body) => fetchProd("POST", "/api/production/ac06/verify", body);
 export const closeAc06Month = (body) => fetchProd("POST", "/api/production/ac06/close", body);
 export const getAc06Report = (p) => fetchProd("GET", "/api/production/ac06/report", undefined, p);

@@ -45,6 +45,24 @@ function previousMonthOf(rateMonth: string): string {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
 }
 
+// Intra-month rate-split support (feasibility §139) -- the last calendar day
+// of a rate_month, and a plain +1-day step, both in UTC to match the date
+// strings this file already stores/compares everywhere else.
+function monthEndOf(rateMonth: string): string {
+  const [year, month] = rateMonth.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month, 0));
+  return date.toISOString().slice(0, 10);
+}
+function addOneDay(dateValue: string): string {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+function isValidDateString(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime());
+}
+
 function ids(input: unknown): string[] {
   return [...new Set((Array.isArray(input) ? input : []).map(toTrimmedString).filter(Boolean))];
 }
@@ -153,19 +171,50 @@ async function getMonth(ctx: ProdHandlerContext, companyId: string, rateMonth: s
   // Carry-forward copies structure/rates, but never carries verification into a new month.
   if (prior?.id) {
     const [{ data: priorLines, error: linesError }, { data: priorConfigs, error: configsError }] = await Promise.all([
-      db.from("ac06_month_line").select("source_sloc_group_id, material_id, costing_group_id, costing_group_name_snapshot, rate, wastage_other_pct, excluded_from_rate_input, display_order").eq("month_id", prior.id),
+      db.from("ac06_month_line").select("source_sloc_group_id, material_id, costing_group_id, costing_group_name_snapshot, rate, wastage_other_pct, excluded_from_rate_input, display_order, parent_line_id, effective_date").eq("month_id", prior.id),
       db.from("ac06_month_group_config").select("source_sloc_group_id, costing_group_id, material_id, source_sloc_group_name_snapshot, costing_group_name_snapshot").eq("month_id", prior.id),
     ]);
     if (linesError || configsError) throw new Error("AC06_CARRY_FORWARD_READ_FAILED");
     const priorLineMaterialIds = ids((priorLines ?? []).map((line: Row) => line.material_id));
     const priorMaterials = await materialMap(priorLineMaterialIds);
-    const eligiblePriorLines = (priorLines as Row[]).filter((line) =>
-      isAc06EligibleMaterial(priorMaterials.get(toTrimmedString(line.material_id))),
-    );
+    // §139 intra-month rate split: the prior month can hold more than one row
+    // per (source_sloc_group_id, material_id) -- its primary (parent_line_id
+    // NULL) plus any split rows. The next month must start from whatever rate
+    // was actually in effect at the prior month's end (the row with the
+    // latest effective_date among ALL of that material's rows), not blindly
+    // from the primary's own rate -- otherwise a late-month split silently
+    // gets dropped the moment the month rolls over. Structural fields
+    // (costing group, display order, exclusion) still come from the primary,
+    // since those describe the material's setup, not its value history.
+    const priorPrimaryByKey = new Map<string, Row>();
+    const priorLatestByKey = new Map<string, Row>();
+    for (const line of (priorLines ?? []) as Row[]) {
+      const key = `${toTrimmedString(line.source_sloc_group_id)}|${toTrimmedString(line.material_id)}`;
+      if (!line.parent_line_id) priorPrimaryByKey.set(key, line);
+      const existingLatest = priorLatestByKey.get(key);
+      if (!existingLatest || toTrimmedString(line.effective_date) > toTrimmedString(existingLatest.effective_date)) {
+        priorLatestByKey.set(key, line);
+      }
+    }
+    const eligiblePriorLines: Row[] = [...priorPrimaryByKey.entries()]
+      .filter(([, primary]) => isAc06EligibleMaterial(priorMaterials.get(toTrimmedString(primary.material_id))))
+      .map(([key, primary]) => {
+        const latest = priorLatestByKey.get(key) ?? primary;
+        return {
+          source_sloc_group_id: primary.source_sloc_group_id, material_id: primary.material_id,
+          costing_group_id: primary.costing_group_id, costing_group_name_snapshot: primary.costing_group_name_snapshot,
+          excluded_from_rate_input: primary.excluded_from_rate_input, display_order: primary.display_order,
+          rate: latest.rate, wastage_other_pct: latest.wastage_other_pct,
+        };
+      });
     const eligiblePriorMaterialIds = new Set(ids(eligiblePriorLines.map((line) => line.material_id)));
     if (eligiblePriorLines.length) {
       const { error } = await db.from("ac06_month_line").insert(eligiblePriorLines.map((line) => ({
-        ...line, month_id: created.id, company_id: companyId, verification_status: "PENDING", rate_changed_at: now,
+        source_sloc_group_id: line.source_sloc_group_id, material_id: line.material_id,
+        costing_group_id: line.costing_group_id, costing_group_name_snapshot: line.costing_group_name_snapshot,
+        rate: line.rate, wastage_other_pct: line.wastage_other_pct, excluded_from_rate_input: line.excluded_from_rate_input,
+        display_order: line.display_order, effective_date: rateMonth, parent_line_id: null,
+        month_id: created.id, company_id: companyId, verification_status: "PENDING", rate_changed_at: now,
         rate_changed_by: ctx.auth_user_id, created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
       })));
       if (error) throw new Error("AC06_CARRY_FORWARD_WRITE_FAILED");
@@ -236,7 +285,7 @@ async function ensureScopeRows(ctx: ProdHandlerContext, month: Row, slocGroup: R
   if (!materialIds.length) return;
   const db = serviceRoleClient.schema("erp_production");
   const { data: existing, error } = await db.from("ac06_month_line").select("material_id")
-    .eq("month_id", month.id).eq("source_sloc_group_id", slocGroupId).in("material_id", materialIds);
+    .eq("month_id", month.id).eq("source_sloc_group_id", slocGroupId).is("parent_line_id", null).in("material_id", materialIds);
   if (error) throw new Error("AC06_SCOPE_SYNC_FAILED");
   const existingIds = new Set(ids((existing ?? []).map((row: Row) => row.material_id)));
   const missing = materialIds.filter((id) => !existingIds.has(id));
@@ -246,6 +295,7 @@ async function ensureScopeRows(ctx: ProdHandlerContext, month: Row, slocGroup: R
   const inserts = missing.map((material_id, index) => ({
     month_id: month.id, company_id: companyId, source_sloc_group_id: slocGroupId, material_id,
     rate: 0, wastage_other_pct: defaultWastageOtherPct(missingMaterials.get(material_id)),
+    effective_date: toTrimmedString(month.rate_month), parent_line_id: null,
     verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id,
     display_order: index, created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
   }));
@@ -269,31 +319,45 @@ async function ensureScopeRows(ctx: ProdHandlerContext, month: Row, slocGroup: R
 // unrelated to name sorting, since saveAc06RatesHandler/verify_ac06_rate_scopes
 // already resolve the leader that way).
 function rowsForDisplay(lines: Row[], materials: Map<string, Row>, groups: Map<string, Row>): Row[] {
+  // §139 intra-month rate split: a split row (parent_line_id set) shares its
+  // material/group with its parent but must never itself be treated as the
+  // group-lead/siblings computation -- only primary rows (parent_line_id
+  // NULL) participate in "who is this Costing Group's lead" resolution.
+  const primaryLines = lines.filter((line) => !line.parent_line_id);
   const byGroup = new Map<string, Row[]>();
-  for (const line of lines) {
+  for (const line of primaryLines) {
     const key = toTrimmedString(line.costing_group_id);
     const list = byGroup.get(key) ?? []; list.push(line); byGroup.set(key, list);
   }
   const decorated: Row[] = lines.map((line): Row => {
     const groupId = toTrimmedString(line.costing_group_id);
+    const isSplit = Boolean(line.parent_line_id);
     const siblings = (byGroup.get(groupId) ?? []).sort((a, b) => Number(a.display_order ?? 0) - Number(b.display_order ?? 0));
     const material = materials.get(toTrimmedString(line.material_id));
     return {
       ...line, pace_code: material?.pace_code ?? null, material_external_code: material?.external_code ?? null,
       material_name: material?.material_name ?? null, material_type: material?.material_type ?? null,
       base_uom_code: material?.base_uom_code ?? null, costing_group_name: groupId ? groups.get(groupId)?.group_name ?? line.costing_group_name_snapshot ?? null : null,
-      is_group_lead: Boolean(groupId) && toTrimmedString(siblings[0]?.id) === toTrimmedString(line.id),
+      is_group_lead: !isSplit && Boolean(groupId) && toTrimmedString(siblings[0]?.id) === toTrimmedString(line.id),
       is_standalone: !groupId,
       is_excluded: Boolean(line.excluded_from_rate_input),
+      is_rate_split: isSplit,
     };
   });
+  // Every row of one material (primary + its split rows) must stay grouped
+  // into the same display unit -- keyed by the PRIMARY's identity
+  // (costing_group_id when grouped, else the material itself), never by each
+  // row's own id, or a split row would land in its own orphan unit.
   const units = new Map<string, Row[]>();
   for (const row of decorated) {
-    const key = toTrimmedString(row.costing_group_id) || `standalone-${toTrimmedString(row.id)}`;
+    const key = toTrimmedString(row.costing_group_id) || `standalone-${toTrimmedString(row.material_id)}`;
     units.set(key, [...(units.get(key) ?? []), row]);
   }
   return [...units.values()]
-    .map((members) => [...members].sort((a, b) => String(a.material_name ?? "").localeCompare(String(b.material_name ?? ""))))
+    .map((members) => [...members].sort((a, b) =>
+      String(a.material_name ?? "").localeCompare(String(b.material_name ?? "")) ||
+      Number(a.is_rate_split) - Number(b.is_rate_split) ||
+      String(a.effective_date ?? "").localeCompare(String(b.effective_date ?? ""))))
     .sort((a, b) => String(a[0]?.material_name ?? "").localeCompare(String(b[0]?.material_name ?? "")))
     .flat();
 }
@@ -367,16 +431,157 @@ export async function saveAc06RatesHandler(req: Request, ctx: ProdHandlerContext
         const materialLabel = material.get(toTrimmedString(line.material_id))?.material_name ?? toTrimmedString(line.material_id);
         return ac06Error(req, ctx, "AC06_WASTAGE_VALUE_INVALID", 400, `Wastage %/OTHER "${toTrimmedString(wastageRaw)}" for ${materialLabel} is not a valid non-negative decimal.`);
       }
+      // §139 intra-month rate split: a split row (parent_line_id set) always
+      // auto-verifies on save regardless of who saved it (subject to already
+      // holding ACC_SLOC_COSTING_RATE:WRITE, checked above) -- business owner
+      // directive, this bypasses the normal Accounts-saves/Auditor-verifies
+      // split. A split row also never cascades to its Costing Group's other
+      // members -- it is one material's own mid-month change, never a
+      // group-wide rate reset -- so it always targets only its own id, and
+      // may carry its own effective_date (validated to fall inside this
+      // month; a duplicate date for the same material is caught by the DB's
+      // own unique constraint below).
+      const isSplitRow = Boolean(line.parent_line_id);
+      let effectiveDate = toTrimmedString(line.effective_date);
+      if (isSplitRow && update.effective_date !== undefined) {
+        const requested = toTrimmedString(update.effective_date);
+        const monthEndValue = monthEndOf(rateMonth);
+        if (!isValidDateString(requested) || requested < rateMonth || requested > monthEndValue) {
+          const material = await materialMap([toTrimmedString(line.material_id)]);
+          const materialLabel = material.get(toTrimmedString(line.material_id))?.material_name ?? toTrimmedString(line.material_id);
+          return ac06Error(req, ctx, "AC06_SPLIT_DATE_INVALID", 400, `Effective date for ${materialLabel} must fall within ${rateMonth}.`);
+        }
+        effectiveDate = requested;
+      }
       const groupId = toTrimmedString(line.costing_group_id);
-      const statusFields = canVerifyOwnSave
+      const statusFields = isSplitRow || canVerifyOwnSave
         ? { verification_status: "VERIFIED", verified_at: now, verified_by: ctx.auth_user_id }
         : { verification_status: "PENDING", verified_at: null, verified_by: null };
-      const targetQuery = db.from("ac06_month_line").update({ rate, wastage_other_pct: wastage, ...statusFields, rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id);
-      const { error: updateError } = groupId ? await targetQuery.eq("costing_group_id", groupId) : await targetQuery.eq("id", line.id);
-      if (updateError) throw new Error("AC06_RATE_SAVE_FAILED");
+      const targetQuery = db.from("ac06_month_line").update({ rate, wastage_other_pct: wastage, effective_date: effectiveDate, ...statusFields, rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id);
+      const { error: updateError } = (groupId && !isSplitRow) ? await targetQuery.eq("costing_group_id", groupId).is("parent_line_id", null) : await targetQuery.eq("id", line.id);
+      if (updateError) {
+        if ((updateError as { code?: string }).code === "23505") {
+          const material = await materialMap([toTrimmedString(line.material_id)]);
+          const materialLabel = material.get(toTrimmedString(line.material_id))?.material_name ?? toTrimmedString(line.material_id);
+          return ac06Error(req, ctx, "AC06_SPLIT_DATE_CONFLICT", 409, `Another rate-change row for ${materialLabel} already uses that effective date.`);
+        }
+        throw new Error("AC06_RATE_SAVE_FAILED");
+      }
     }
     return okResponse({ data: { saved: lineIds.length } }, ctx.request_id, req);
   } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_RATE_SAVE_FAILED", "Unable to save monthly costing rates."); }
+}
+
+// §139 intra-month rate split -- "Enter" icon on a Rate Input row: create a
+// blank draft row (same material/group as the clicked row's primary) with a
+// default effective_date, ready for the grid's normal rate/wastage inputs
+// (routed through saveAc06RatesHandler above) to fill in and auto-verify.
+export async function insertAc06RateSplitHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id));
+    const rateMonth = monthStart(body.rate_month); const lineId = toTrimmedString(body.line_id);
+    if (!companyId || !rateMonth || !lineId) return ac06Error(req, ctx, "AC06_SPLIT_INVALID", 400, "company_id, rate_month, and line_id are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_RATE", "WRITE"); if (accessError) return accessError;
+    const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Closed month cannot be changed.");
+    const db = serviceRoleClient.schema("erp_production");
+    const { data: source, error: sourceError } = await db.from("ac06_month_line").select("*").eq("id", lineId).eq("month_id", month.id).maybeSingle();
+    if (sourceError || !source) return ac06Error(req, ctx, "AC06_SPLIT_LINE_INVALID", 404, "Rate row not found for this month.");
+    if (source.excluded_from_rate_input) return ac06Error(req, ctx, "AC06_SPLIT_EXCLUDED", 409, "Include this item before adding a rate-change row.");
+    const primaryId = toTrimmedString(source.parent_line_id) || toTrimmedString(source.id);
+    const { data: siblings, error: siblingsError } = await db.from("ac06_month_line").select("id, effective_date")
+      .eq("month_id", month.id).or(`id.eq.${primaryId},parent_line_id.eq.${primaryId}`);
+    if (siblingsError) throw new Error("AC06_SPLIT_FAILED");
+    const monthEndValue = monthEndOf(rateMonth);
+    const latestEffective = ((siblings ?? []) as Row[]).reduce((max, row) => {
+      const value = toTrimmedString(row.effective_date); return value > max ? value : max;
+    }, rateMonth);
+    const proposedDate = addOneDay(latestEffective);
+    const effectiveDate = proposedDate > monthEndValue ? monthEndValue : proposedDate;
+    if (effectiveDate <= latestEffective) return ac06Error(req, ctx, "AC06_SPLIT_MONTH_FULL", 409, "Every day of this month already has a rate-change row for this item.");
+    const now = new Date().toISOString();
+    const { data: inserted, error: insertError } = await db.from("ac06_month_line").insert({
+      month_id: month.id, company_id: companyId, source_sloc_group_id: source.source_sloc_group_id,
+      material_id: source.material_id, costing_group_id: source.costing_group_id,
+      costing_group_name_snapshot: source.costing_group_name_snapshot,
+      parent_line_id: primaryId, effective_date: effectiveDate,
+      rate: null, wastage_other_pct: null, verification_status: "PENDING",
+      display_order: source.display_order, rate_changed_at: now, rate_changed_by: ctx.auth_user_id,
+      created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
+    }).select("*").single();
+    if (insertError || !inserted) throw new Error("AC06_SPLIT_FAILED");
+    return okResponse({ data: inserted }, ctx.request_id, req);
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_SPLIT_FAILED", "Unable to add a rate-change row."); }
+}
+
+// §139 -- remove a not-yet-useful (or mistakenly added) split row. Never
+// removes a primary row (parent_line_id IS NULL is excluded by the delete
+// filter itself, not just by validation).
+export async function deleteAc06RateSplitHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req); const companyId = await companyScope(ctx, toTrimmedString(body.company_id));
+    const rateMonth = monthStart(body.rate_month); const lineId = toTrimmedString(body.line_id);
+    if (!companyId || !rateMonth || !lineId) return ac06Error(req, ctx, "AC06_SPLIT_DELETE_INVALID", 400, "company_id, rate_month, and line_id are required.");
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_RATE", "WRITE"); if (accessError) return accessError;
+    const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Closed month cannot be changed.");
+    const db = serviceRoleClient.schema("erp_production");
+    const { data: deleted, error } = await db.from("ac06_month_line").delete()
+      .eq("id", lineId).eq("month_id", month.id).not("parent_line_id", "is", null).select("id").maybeSingle();
+    if (error) throw new Error("AC06_SPLIT_DELETE_FAILED");
+    if (!deleted) return ac06Error(req, ctx, "AC06_SPLIT_NOT_FOUND", 404, "Rate-change row not found, or it is a primary row that cannot be removed here.");
+    return okResponse({ data: { id: lineId, deleted: true } }, ctx.request_id, req);
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_SPLIT_DELETE_FAILED", "Unable to remove the rate-change row."); }
+}
+
+// §139 -- shared date-aware AC06 rate resolver. Every real consumer of an
+// AC06 rate (AC07's costing preview, the Batch Costing Report) must resolve
+// through this one function rather than re-implementing "pick the row" --
+// picks, per material, the row whose effective_date is the closest one
+// at-or-before asOfDate; if every candidate's effective_date is AFTER
+// asOfDate (shouldn't normally happen -- the primary row's effective_date is
+// always that month's first day), falls back to the earliest row so a rate
+// is never silently dropped.
+export type Ac06ResolvedRate = { rate: number | null; wastage_other_pct: number; costing_group_name: string | null; source: string };
+export async function resolveAc06RatesAsOf(
+  monthRow: { id: string; rate_month: string; status: string },
+  materialIds: string[],
+  asOfDate: string,
+): Promise<Map<string, Ac06ResolvedRate>> {
+  const result = new Map<string, Ac06ResolvedRate>();
+  if (!materialIds.length) return result;
+  const db = serviceRoleClient.schema("erp_production");
+  const monthLabel = `AC06 · ${toTrimmedString(monthRow.rate_month).slice(0, 7)} (${monthRow.status === "CLOSED" ? "Closed" : "Open"})`;
+  const effectiveAsOf = asOfDate && asOfDate >= toTrimmedString(monthRow.rate_month) ? asOfDate : toTrimmedString(monthRow.rate_month);
+  let rows: Row[];
+  if (monthRow.status === "CLOSED") {
+    const { data: archive, error: archErr } = await db.from("ac06_month_archive").select("id").eq("source_month_id", monthRow.id).maybeSingle();
+    if (archErr) throw new Error("AC06_RATE_RESOLVE_FAILED");
+    if (!archive?.id) return result;
+    rows = await fetchInChunks<Row>(materialIds, (chunk) => db.from("ac06_month_archive_line")
+      .select("material_id, rate, wastage_other_pct, costing_group_name_snapshot, effective_date")
+      .eq("archive_id", toTrimmedString(archive.id)).in("material_id", chunk));
+  } else {
+    rows = await fetchInChunks<Row>(materialIds, (chunk) => db.from("ac06_month_line")
+      .select("material_id, rate, wastage_other_pct, costing_group_name_snapshot, effective_date")
+      .eq("month_id", monthRow.id).in("material_id", chunk));
+  }
+  const byMaterial = new Map<string, Row[]>();
+  for (const row of rows) {
+    const key = toTrimmedString(row.material_id);
+    byMaterial.set(key, [...(byMaterial.get(key) ?? []), row]);
+  }
+  for (const [materialId, candidates] of byMaterial) {
+    const sorted = [...candidates].sort((a, b) => toTrimmedString(a.effective_date).localeCompare(toTrimmedString(b.effective_date)));
+    const eligible = sorted.filter((row) => toTrimmedString(row.effective_date) <= effectiveAsOf);
+    const winner = eligible.length ? eligible[eligible.length - 1] : sorted[0];
+    if (!winner) continue;
+    result.set(materialId, {
+      rate: winner.rate === null || winner.rate === undefined ? null : Number(winner.rate),
+      wastage_other_pct: Number(winner.wastage_other_pct ?? 0),
+      costing_group_name: (winner.costing_group_name_snapshot as string) ?? null,
+      source: monthLabel,
+    });
+  }
+  return result;
 }
 
 export async function verifyAc06RatesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -430,10 +635,14 @@ export async function assignAc06CostingGroupHandler(req: Request, ctx: ProdHandl
     const db = serviceRoleClient.schema("erp_production"); const { data: group } = await db.from("ac06_costing_group").select("*").eq("id", groupId).eq("company_id", companyId).eq("active", true).maybeSingle();
     if (!group) return ac06Error(req, ctx, "AC06_ASSIGN_SCOPE_INVALID", 409, "Costing Group is not active in the selected company.");
     await ensureScopeRows(ctx, month, { id: group.sloc_group_id, company_id: companyId, group_name: "" });
-    const { data: scopeRows, error } = await db.from("ac06_month_line").select("id, material_id, rate, display_order, excluded_from_rate_input").eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).in("material_id", materialIds);
+    // §139: group membership/rate actions operate on primary rows only --
+    // a material's split (mid-month rate-change) rows are excluded from every
+    // query and update below, so joining/leaving/re-rating a Costing Group
+    // never touches them.
+    const { data: scopeRows, error } = await db.from("ac06_month_line").select("id, material_id, rate, display_order, excluded_from_rate_input").eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).is("parent_line_id", null).in("material_id", materialIds);
     if (error || (scopeRows ?? []).length !== materialIds.length) return ac06Error(req, ctx, "AC06_ASSIGN_SCOPE_INVALID", 409, "Every item must be eligible in the parent SLOC Group.");
     if ((scopeRows ?? []).some((row: Row) => row.excluded_from_rate_input)) return ac06Error(req, ctx, "AC06_ASSIGN_EXCLUDED", 409, "Include excluded items before assigning them to a Costing Group.");
-    const { data: existingGroupRows, error: existingGroupError } = await db.from("ac06_month_line").select("id, rate, display_order").eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).eq("costing_group_id", group.id);
+    const { data: existingGroupRows, error: existingGroupError } = await db.from("ac06_month_line").select("id, rate, display_order").eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).eq("costing_group_id", group.id).is("parent_line_id", null);
     if (existingGroupError) throw new Error("AC06_ASSIGN_FAILED");
     const linesById = new Map<string, Row>();
     for (const line of [...(existingGroupRows ?? []), ...(scopeRows ?? [])] as Row[]) linesById.set(toTrimmedString(line.id), line);
@@ -441,9 +650,9 @@ export async function assignAc06CostingGroupHandler(req: Request, ctx: ProdHandl
     const groupRate = rateValue(groupLeader?.rate) ?? "0";
     const now = new Date().toISOString();
     const commonUpdate = { rate: groupRate, verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id };
-    const { error: existingUpdateError } = await db.from("ac06_month_line").update(commonUpdate).eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).eq("costing_group_id", group.id);
+    const { error: existingUpdateError } = await db.from("ac06_month_line").update(commonUpdate).eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).eq("costing_group_id", group.id).is("parent_line_id", null);
     if (existingUpdateError) throw new Error("AC06_ASSIGN_FAILED");
-    const { error: updateError } = await db.from("ac06_month_line").update({ ...commonUpdate, costing_group_id: group.id, costing_group_name_snapshot: group.group_name }).eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).in("material_id", materialIds);
+    const { error: updateError } = await db.from("ac06_month_line").update({ ...commonUpdate, costing_group_id: group.id, costing_group_name_snapshot: group.group_name }).eq("month_id", month.id).eq("source_sloc_group_id", group.sloc_group_id).is("parent_line_id", null).in("material_id", materialIds);
     if (updateError) throw new Error("AC06_ASSIGN_FAILED");
     const { data: parent } = await db.from("ac06_sloc_group").select("group_name").eq("id", group.sloc_group_id).single();
     await db.from("ac06_month_group_config").upsert(materialIds.map((material_id) => ({ month_id: month.id, company_id: companyId, source_sloc_group_id: group.sloc_group_id, costing_group_id: group.id, material_id, source_sloc_group_name_snapshot: parent?.group_name ?? "", costing_group_name_snapshot: group.group_name, last_updated_at: now, last_updated_by: ctx.auth_user_id })), { onConflict: "month_id,source_sloc_group_id,material_id" });
@@ -468,7 +677,7 @@ export async function setAc06MaterialInclusionHandler(req: Request, ctx: ProdHan
     const db = serviceRoleClient.schema("erp_production");
     const { data: lines, error: lineError } = await db.from("ac06_month_line")
       .select("id, source_sloc_group_id, material_id")
-      .eq("month_id", month.id).eq("company_id", companyId).in("id", lineIds);
+      .eq("month_id", month.id).eq("company_id", companyId).is("parent_line_id", null).in("id", lineIds);
     if (lineError || (lines ?? []).length !== lineIds.length) {
       return ac06Error(req, ctx, "AC06_MATERIAL_INCLUSION_SCOPE_INVALID", 409, "Every selected item must belong to the current company and month.");
     }
@@ -668,7 +877,7 @@ export async function unassignAc06CostingGroupHandler(req: Request, ctx: ProdHan
     if (!companyId || !rateMonth || !lineIds.length) return ac06Error(req, ctx, "AC06_UNASSIGN_INVALID", 400, "company_id, rate_month, and line_ids are required.");
     const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE"); if (accessError) return accessError;
     const month = await getMonth(ctx, companyId, rateMonth); if (month.status === "CLOSED") return ac06Error(req, ctx, "AC06_MONTH_CLOSED", 409, "Closed month cannot be changed.");
-    const db = serviceRoleClient.schema("erp_production"); const { data: rows, error } = await db.from("ac06_month_line").select("id, source_sloc_group_id, material_id").eq("month_id", month.id).in("id", lineIds);
+    const db = serviceRoleClient.schema("erp_production"); const { data: rows, error } = await db.from("ac06_month_line").select("id, source_sloc_group_id, material_id").eq("month_id", month.id).is("parent_line_id", null).in("id", lineIds);
     if (error || (rows ?? []).length !== lineIds.length) return ac06Error(req, ctx, "AC06_UNASSIGN_INVALID", 409, "Selected row is outside this monthly scope.");
     const now = new Date().toISOString(); const { error: updateError } = await db.from("ac06_month_line").update({ costing_group_id: null, costing_group_name_snapshot: null, verification_status: "PENDING", rate_changed_at: now, rate_changed_by: ctx.auth_user_id, last_updated_at: now, last_updated_by: ctx.auth_user_id }).eq("month_id", month.id).in("id", lineIds);
     if (updateError) throw new Error("AC06_UNASSIGN_FAILED");

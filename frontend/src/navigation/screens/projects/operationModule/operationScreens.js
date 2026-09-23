@@ -1002,6 +1002,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  ACC_COMPANY_VENDOR_CODE: {
+    screen_code: "ACC_COMPANY_VENDOR_CODE",
+    route: "/dashboard/production/company-vendor-code",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   ACC_AC07_ADMIX_COSTING: {
     screen_code: "ACC_AC07_ADMIX_COSTING",
     route: "/dashboard/production/admix-costing",
