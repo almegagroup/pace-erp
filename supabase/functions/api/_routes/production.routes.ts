@@ -25,6 +25,17 @@ import {
   setMtsCurrentStrokeHandler,
 } from "../_core/production/stroke_master.handlers.ts";
 import {
+  listVendorCodesHandler,
+  createVendorCodeHandler,
+  updateVendorCodeHandler,
+  getCompanyVendorCodeWorkspaceHandler,
+  mapCompanyVendorCodeHandler,
+  setCompanyVendorCodePrimaryHandler,
+  unmapCompanyVendorCodeHandler,
+  createVendorCodeOverrideHandler,
+  deleteVendorCodeOverrideHandler,
+} from "../_core/production/vendor_code.handlers.ts";
+import {
   listPackCodesHandler,
   createPackCodeHandler,
   updatePackCodeHandler,
@@ -70,10 +81,12 @@ import {
   createAc06CostingGroupHandler,
   createAc06SlocGroupHandler,
   deleteAc06CostingGroupHandler,
+  deleteAc06RateSplitHandler,
   deleteAc06SlocGroupHandler,
   getAc06HistoryHandler,
   getAc06ReportHandler,
   getAc06WorkspaceHandler,
+  insertAc06RateSplitHandler,
   listAc06ApprovedMonthsHandler,
   saveAc06RatesHandler,
   setAc06MaterialInclusionHandler,
@@ -248,6 +261,25 @@ export async function dispatchProductionRoutes(
     case "POST:/api/production/pack-configs":
       return await upsertPackConfigHandler(req, ctx);
 
+    // Vendor Code (§140) -- SA global master
+    case "GET:/api/production/vendor-codes":
+      return await listVendorCodesHandler(req, ctx);
+    case "POST:/api/production/vendor-codes":
+      return await createVendorCodeHandler(req, ctx);
+    // Vendor Code (§140) -- ACL Accounts "Company Vendor Code" (AC11)
+    case "GET:/api/production/company-vendor-codes":
+      return await getCompanyVendorCodeWorkspaceHandler(req, ctx);
+    case "POST:/api/production/company-vendor-codes/map":
+      return await mapCompanyVendorCodeHandler(req, ctx);
+    case "POST:/api/production/company-vendor-codes/primary":
+      return await setCompanyVendorCodePrimaryHandler(req, ctx);
+    case "POST:/api/production/company-vendor-codes/unmap":
+      return await unmapCompanyVendorCodeHandler(req, ctx);
+    case "POST:/api/production/company-vendor-codes/override":
+      return await createVendorCodeOverrideHandler(req, ctx);
+    case "POST:/api/production/company-vendor-codes/override/delete":
+      return await deleteVendorCodeOverrideHandler(req, ctx);
+
     // Batch Series (SA config)
     case "GET:/api/production/batch-series":
       return await listBatchSeriesHandler(req, ctx);
@@ -305,6 +337,10 @@ export async function dispatchProductionRoutes(
       return await setAc06MaterialInclusionHandler(req, ctx);
     case "POST:/api/production/ac06/rates":
       return await saveAc06RatesHandler(req, ctx);
+    case "POST:/api/production/ac06/rates/split":
+      return await insertAc06RateSplitHandler(req, ctx);
+    case "POST:/api/production/ac06/rates/split/delete":
+      return await deleteAc06RateSplitHandler(req, ctx);
     case "POST:/api/production/ac06/verify":
       return await verifyAc06RatesHandler(req, ctx);
     case "POST:/api/production/ac06/close":
@@ -470,6 +506,11 @@ export async function dispatchProductionRoutes(
   // Pack Configs /:id
   if (/^\/api\/production\/pack-configs\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deletePackConfigHandler(req, ctx);
+  }
+
+  // Vendor Code (§140) /:id
+  if (/^\/api\/production\/vendor-codes\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateVendorCodeHandler(req, ctx);
   }
 
   // AC06 SLOC/Costing Group /:id maintenance

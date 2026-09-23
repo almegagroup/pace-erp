@@ -70,6 +70,7 @@ import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
 import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
+import SAVendorCodeMasterPage from "../admin/sa/screens/SAVendorCodeMasterPage.jsx";
 import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
 import SAPackCodeMasterPage from "../admin/sa/screens/SAPackCodeMasterPage.jsx";
 import SAHome from "../admin/sa/screens/SAHome.jsx";
@@ -224,6 +225,7 @@ import SfgResultRecordingPage from "../pages/dashboard/production/SfgResultRecor
 import FgStockBreakdownPage from "../pages/dashboard/production/FgStockBreakdownPage.jsx";
 import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatchReversalPage.jsx";
 import ConversionCostPage from "../pages/dashboard/production/ConversionCostPage.jsx";
+import CompanyVendorCodePage from "../pages/dashboard/production/CompanyVendorCodePage.jsx";
 import AdmixCostingPage from "../pages/dashboard/production/AdmixCostingPage.jsx";
 import MtsSkuMonthlyRatePage from "../pages/dashboard/production/MtsSkuMonthlyRatePage.jsx";
 import SlocCostingGroupPage from "../pages/dashboard/production/SlocCostingGroupPage.jsx";
@@ -386,6 +388,10 @@ export default function AppRouter() {
                     <Route
                       path="production/batch-series"
                       element={<SAProductionBatchSeriesPage />}
+                    />
+                    <Route
+                      path="production/vendor-code-master"
+                      element={<SAVendorCodeMasterPage />}
                     />
                     <Route
                       path="production/segment-locations"
@@ -942,6 +948,7 @@ export default function AppRouter() {
                   <Route path="production/rm-pm-sale-report" element={<RmPmSaleReportPage />} />
                   <Route path="production/excess-consumption-report" element={<ExcessConsumptionReportPage />} />
                   <Route path="production/conversion-cost" element={<ConversionCostPage />} />
+                  <Route path="production/company-vendor-code" element={<CompanyVendorCodePage />} />
                   <Route path="production/admix-costing" element={<AdmixCostingPage />} />
                   <Route path="production/mts-sku-monthly-rate" element={<MtsSkuMonthlyRatePage />} />
                   <Route path="production/sloc-costing-group" element={<SlocCostingGroupPage />} />

@@ -18,6 +18,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { errorResponse, okResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, toTrimmedString, toUpperTrimmedString } from "./production.shared.ts";
+import { resolveAc06RatesAsOf } from "./ac06_workspace.handlers.ts";
 
 type Row = Record<string, unknown>;
 
@@ -265,6 +266,10 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
     const skuMaterialId = toTrimmedString(url.searchParams.get("sku_material_id"));
     const strokeIds = ids(url.searchParams.get("stroke_ids")?.split(","));
     const ac06MonthId = toTrimmedString(url.searchParams.get("ac06_month_id")); // absent/empty => Manual
+    // §139: this is a what-if preview with no real dispatch to date against,
+    // so it defaults to today -- an explicit as_of_date lets the preview
+    // still answer "what would this cost on date X" against a split rate.
+    const asOfDate = toTrimmedString(url.searchParams.get("as_of_date")) || new Date().toISOString().slice(0, 10);
 
     if (!companyId || !skuMaterialId || !strokeIds.length) {
       return ac07Error(req, ctx, "AC07_COSTING_INVALID", 400, "company_id, sku_material_id and at least one stroke are required.");
@@ -309,7 +314,10 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
 
     const materials = await materialMap([...rmIntMaterialIds, ...pmMaterialIds]);
 
-    // AC06 rates (skipped entirely in Manual mode -- frontend shows blank inputs)
+    // AC06 rates (skipped entirely in Manual mode -- frontend shows blank inputs).
+    // §139: resolved through the shared, date-aware resolveAc06RatesAsOf() --
+    // this preview and the Batch Costing Report must always agree on how a
+    // mid-month rate split resolves, so neither re-implements the lookup.
     const rateByMaterial = new Map<string, { rate: number | null; wastage_other_pct: number; costing_group_name: string | null }>();
     if (ac06MonthId) {
       const { data: monthRow, error: monthErr } = await serviceRoleClient.schema("erp_production").from("ac06_month")
@@ -317,34 +325,12 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
       if (monthErr) throw new Error("AC07_MONTH_LOOKUP_FAILED");
       if (!monthRow) return ac07Error(req, ctx, "AC07_MONTH_NOT_FOUND", 404, "Costing month not found for this company.");
       const allMaterialIds = [...rmIntMaterialIds, ...pmMaterialIds];
-      if (monthRow.status === "CLOSED") {
-        const { data: archive, error: archErr } = await serviceRoleClient.schema("erp_production").from("ac06_month_archive")
-          .select("id").eq("source_month_id", ac06MonthId).maybeSingle();
-        if (archErr) throw new Error("AC07_ARCHIVE_LOOKUP_FAILED");
-        if (archive?.id) {
-          const rows = await fetchInChunks<Row>(allMaterialIds, (chunk) => serviceRoleClient.schema("erp_production")
-            .from("ac06_month_archive_line").select("material_id, rate, wastage_other_pct, costing_group_name_snapshot")
-            .eq("archive_id", archive.id).in("material_id", chunk));
-          for (const row of rows) rateByMaterial.set(toTrimmedString(row.material_id), {
-            rate: row.rate === null ? null : Number(row.rate),
-            wastage_other_pct: Number(row.wastage_other_pct ?? 0),
-            costing_group_name: (row.costing_group_name_snapshot as string) ?? null,
-          });
-        }
-      } else {
-        // ac06_month_line (live/open months) snapshots the group name as
-        // costing_group_name_snapshot -- NOT source_sloc_group_name_snapshot,
-        // which only exists on the archive table. Selecting the wrong column
-        // name here 500'd every open-month selection (found live 2026-09-05).
-        const rows = await fetchInChunks<Row>(allMaterialIds, (chunk) => serviceRoleClient.schema("erp_production")
-          .from("ac06_month_line").select("material_id, rate, wastage_other_pct, costing_group_name_snapshot")
-          .eq("month_id", ac06MonthId).in("material_id", chunk));
-        for (const row of rows) rateByMaterial.set(toTrimmedString(row.material_id), {
-          rate: row.rate === null ? null : Number(row.rate),
-          wastage_other_pct: Number(row.wastage_other_pct ?? 0),
-          costing_group_name: (row.costing_group_name_snapshot as string) ?? null,
-        });
-      }
+      const resolved = await resolveAc06RatesAsOf(
+        { id: toTrimmedString(monthRow.id), rate_month: toTrimmedString(monthRow.rate_month), status: toTrimmedString(monthRow.status) },
+        allMaterialIds,
+        asOfDate,
+      ).catch(() => { throw new Error("AC07_RATE_RESOLVE_FAILED"); });
+      for (const [materialId, info] of resolved) rateByMaterial.set(materialId, info);
     }
 
     const rmIntRows = rmIntMaterialIds.map((materialId) => {

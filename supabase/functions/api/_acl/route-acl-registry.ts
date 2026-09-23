@@ -309,7 +309,17 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/ac06/costing-groups/assign": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
   "POST:/api/production/ac06/costing-groups/unassign": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
   "POST:/api/production/ac06/material-inclusion":    { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
+  "GET:/api/production/vendor-codes":                { skipAcl: false, resourceCode: "SA_VENDOR_CODE_MASTER", action: "VIEW" },
+  "POST:/api/production/vendor-codes":               { skipAcl: false, resourceCode: "SA_VENDOR_CODE_MASTER", action: "WRITE" },
+  "GET:/api/production/company-vendor-codes":        { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "VIEW" },
+  "POST:/api/production/company-vendor-codes/map":   { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
+  "POST:/api/production/company-vendor-codes/primary": { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
+  "POST:/api/production/company-vendor-codes/unmap": { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
+  "POST:/api/production/company-vendor-codes/override": { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
+  "POST:/api/production/company-vendor-codes/override/delete": { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
   "POST:/api/production/ac06/rates":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_RATE", action: "WRITE" },
+  "POST:/api/production/ac06/rates/split":           { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_RATE", action: "WRITE" },
+  "POST:/api/production/ac06/rates/split/delete":    { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_RATE", action: "WRITE" },
   "POST:/api/production/ac06/verify":                { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_VERIFY", action: "WRITE" },
   "POST:/api/production/ac06/close":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_CLOSE", action: "WRITE" },
   "GET:/api/production/ac06/report":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
@@ -1507,6 +1517,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/production\/batch-series\/[^/]+$/,
     methods: { PATCH: { skipAcl: false, resourceCode: "SA_PROD_BATCH_SERIES", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/production\/vendor-codes\/[^/]+$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "SA_VENDOR_CODE_MASTER", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/production\/batch-numbers\/[^/]+\/release$/,
