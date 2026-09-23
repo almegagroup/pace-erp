@@ -216,9 +216,9 @@ export default function ConversionCostPage() {
                 <th className="text-left py-2 px-3 border-b">Scope</th>
                 <th className="text-left py-2 px-3 border-b">Valid From</th>
                 <th className="text-left py-2 px-3 border-b">Valid To</th>
+                <th className="text-right py-2 px-3 border-b">Net Conversion Cost / KG (₹)</th>
                 <th className="text-right py-2 px-3 border-b">Conversion Cost / KG (₹)</th>
                 <th className="text-right py-2 px-3 border-b">Margin Cost / KG (₹)</th>
-                <th className="text-right py-2 px-3 border-b">Net Conversion Cost / KG (₹)</th>
                 <th className="text-left py-2 px-3 border-b">Status</th>
                 <th className="text-right py-2 px-3 border-b">Action</th>
               </tr>
@@ -234,12 +234,12 @@ export default function ConversionCostPage() {
                   </td>
                   <td className="py-2 px-3 font-mono">{r.valid_from}</td>
                   <td className="py-2 px-3 font-mono text-slate-400">{r.valid_to ?? "—"}</td>
-                  <td className="py-2 px-3 text-right font-mono font-semibold">{Number(r.conversion_rate_per_kg).toFixed(4)}</td>
+                  <td className="py-2 px-3 text-right font-mono font-semibold">
+                    {Number(r.net_conversion_rate_per_kg ?? r.conversion_rate_per_kg).toFixed(4)}
+                  </td>
+                  <td className="py-2 px-3 text-right font-mono">{Number(r.conversion_rate_per_kg).toFixed(4)}</td>
                   <td className="py-2 px-3 text-right font-mono">
                     {MARGIN_ELIGIBLE_SEGMENTS.has(r.segment_code) ? Number(r.margin_cost_per_kg ?? 0).toFixed(4) : "—"}
-                  </td>
-                  <td className="py-2 px-3 text-right font-mono font-semibold">
-                    {MARGIN_ELIGIBLE_SEGMENTS.has(r.segment_code) ? Number(r.net_conversion_rate_per_kg ?? r.conversion_rate_per_kg).toFixed(4) : "—"}
                   </td>
                   <td className="py-2 px-3">
                     {r.is_current
