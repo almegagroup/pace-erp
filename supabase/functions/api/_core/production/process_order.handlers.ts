@@ -1202,6 +1202,22 @@ async function applyFinalOrVerifyLineUpdates(params: {
     const approval = computeApprovalValues(req, ctx, 0, actualQty, bodyLine);
     if (approval instanceof Response) return { response: approval };
 
+    // Found live 2026-09-23 (CMP003, PO 9300000479): a "+ Add Row" line saved
+    // with no Storage Location used to insert here first and only get
+    // rejected later, in the stock-posting loop's own PROD_PO_SLOC_MISSING
+    // check -- by then this row (and its reservation_document) was already
+    // committed, since this whole loop runs with no transaction. The
+    // frontend never learns this line's real id after a failed request, so
+    // every retry (with id="") inserted ANOTHER brand-new duplicate line --
+    // 7 duplicates of RM-00046 accumulated this way, and the original
+    // null-SLoc orphan kept blocking every subsequent Verify attempt
+    // regardless of what the currently-visible row showed. Validating here,
+    // before any write, stops the very first bad insert from ever happening.
+    const newLineSlocId = toTrimmedString(bodyLine.storage_location_id) || null;
+    if (actualQty > 0 && !newLineSlocId) {
+      return { response: poErr(req, ctx, "PROD_PO_SLOC_MISSING", 422, `Storage location required for ${materialId}`) };
+    }
+
     const { data: insertedLine, error: insertLineErr } = await serviceRoleClient
       .schema("erp_production")
       .from("process_order_line")
@@ -1211,7 +1227,7 @@ async function applyFinalOrVerifyLineUpdates(params: {
         planned_qty: 0,
         actual_qty: actualQty,
         uom_code: toTrimmedString(bodyLine.uom_code) || "KG",
-        issue_sloc_id: toTrimmedString(bodyLine.storage_location_id) || null,
+        issue_sloc_id: newLineSlocId,
         is_rm: bodyLine.is_rm !== false,
         display_order: nextDisplayOrder++,
         dosage_pct: parseNonNegativeNumber(bodyLine.dosage_pct),
