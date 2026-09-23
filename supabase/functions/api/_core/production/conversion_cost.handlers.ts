@@ -31,6 +31,9 @@ type JsonRecord = Record<string, unknown>;
 // Segment codes the config recognises — must match VALID_SEGMENTS in process_order.handlers.ts /
 // segment_location.handlers.ts.
 const VALID_SEGMENTS = new Set(["ADMIX", "HPS", "IWC", "POWDER", "INT"]);
+// MTS split into Conversion Cost + Margin Cost (Margin may be negative); Net = the sum.
+// Every other segment stays a single conversion_rate_per_kg, margin_cost_per_kg always NULL.
+const MARGIN_ELIGIBLE_SEGMENTS = new Set(["IWC", "POWDER"]);
 const STROKE_TYPES_BY_SEGMENT: Record<string, string[]> = {
   ADMIX: ["MTO"],
   HPS: ["HPS"],
@@ -122,7 +125,7 @@ export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerC
 
     let query = serviceRoleClient
       .schema("erp_production").from("conversion_cost_config")
-      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg, created_at, created_by, updated_at, updated_by")
+      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg, margin_cost_per_kg, created_at, created_by, updated_at, updated_by")
       .order("company_id").order("segment_code")
       .order("prodshade_material_id", { nullsFirst: true })
       .order("valid_from", { ascending: true });
@@ -162,8 +165,12 @@ export async function listConversionRatesHandler(req: Request, ctx: ProdHandlerC
       data: rows.map((row) => {
         const company = companyMap.get(String(row.company_id ?? "")) ?? null;
         const prodshade = row.prodshade_material_id ? (materialMap.get(String(row.prodshade_material_id)) ?? null) : null;
+        const marginCost = row.margin_cost_per_kg === null || row.margin_cost_per_kg === undefined
+          ? null : Number(row.margin_cost_per_kg);
         return {
           ...row,
+          margin_cost_per_kg: marginCost,
+          net_conversion_rate_per_kg: Number(row.conversion_rate_per_kg ?? 0) + (marginCost ?? 0),
           valid_to: validToById.get(String(row.id)) ?? null,
           is_current: validToById.get(String(row.id)) === null,
           company_code: company ? String((company as JsonRecord).company_code ?? "") : null,
@@ -230,6 +237,29 @@ export async function listConversionRateProdshadesHandler(req: Request, ctx: Pro
   }
 }
 
+// Resolves the margin_cost_per_kg to store, given the segment and the raw body value (or the
+// existing row's value on an update where the body omits it). Returns an error code on invalid
+// input, or the resolved value (null for non-MTS segments, a finite number for IWC/POWDER).
+function resolveMarginCost(
+  segmentCode: string,
+  marginRaw: unknown,
+  fallbackRaw: unknown,
+): { errorCode: string | null; value: number | null } {
+  const isMtsSegment = MARGIN_ELIGIBLE_SEGMENTS.has(segmentCode);
+  if (!isMtsSegment) {
+    if (marginRaw !== undefined && marginRaw !== null && marginRaw !== "" && Number(marginRaw) !== 0) {
+      return { errorCode: "PROD_CONV_RATE_MARGIN_NOT_ALLOWED", value: null };
+    }
+    return { errorCode: null, value: null };
+  }
+  const raw = marginRaw !== undefined ? marginRaw : fallbackRaw;
+  const num = raw === undefined || raw === null || raw === "" ? 0 : Number(raw);
+  if (!Number.isFinite(num)) {
+    return { errorCode: "PROD_CONV_RATE_MARGIN_INVALID", value: null };
+  }
+  return { errorCode: null, value: num };
+}
+
 async function assertEligibleProdshade(companyId: string, segmentCode: string, materialId: string): Promise<boolean> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production").from("stroke_master")
@@ -277,6 +307,13 @@ export async function createConversionRateHandler(req: Request, ctx: ProdHandler
     if (rateRaw === undefined || rateRaw === null || rateRaw === "" || !Number.isFinite(rate) || rate < 0) {
       return convError(req, ctx, "PROD_CONV_RATE_VALUE_INVALID", 400, "conversion_rate_per_kg must be a number ≥ 0");
     }
+    const margin = resolveMarginCost(segmentCode, body.margin_cost_per_kg, undefined);
+    if (margin.errorCode) {
+      return convError(req, ctx, margin.errorCode, 400,
+        margin.errorCode === "PROD_CONV_RATE_MARGIN_NOT_ALLOWED"
+          ? "margin_cost_per_kg only applies to IWC/POWDER segments."
+          : "margin_cost_per_kg must be a number.");
+    }
     if (prodshadeMaterialId && !await assertEligibleProdshade(companyId, segmentCode, prodshadeMaterialId)) {
       return convError(req, ctx, "PROD_CONV_RATE_PRODSHADE_INVALID", 400, "The selected Prodshade is not approved for this company and segment.");
     }
@@ -289,6 +326,7 @@ export async function createConversionRateHandler(req: Request, ctx: ProdHandler
         prodshade_material_id: prodshadeMaterialId,
         valid_from: validFrom,
         conversion_rate_per_kg: rate,
+        margin_cost_per_kg: margin.value,
         created_by: ctx.auth_user_id,
       })
       .select("id").single();
@@ -319,7 +357,7 @@ export async function updateConversionRateHandler(req: Request, ctx: ProdHandler
     if (!id) return convError(req, ctx, "PROD_CONV_RATE_INVALID", 400, "Conversion rate id is required");
     const { data: existing, error: existingError } = await serviceRoleClient
       .schema("erp_production").from("conversion_cost_config")
-      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg")
+      .select("id, company_id, segment_code, prodshade_material_id, valid_from, conversion_rate_per_kg, margin_cost_per_kg")
       .eq("id", id).maybeSingle();
     if (existingError) throw new Error("PROD_CONV_RATE_UPDATE_FAILED");
     if (!existing) return convError(req, ctx, "PROD_CONV_RATE_NOT_FOUND", 404, "Conversion rate not found");
@@ -347,6 +385,13 @@ export async function updateConversionRateHandler(req: Request, ctx: ProdHandler
     if (!Number.isFinite(rate) || rate < 0) {
       return convError(req, ctx, "PROD_CONV_RATE_VALUE_INVALID", 400, "conversion_rate_per_kg must be a number ≥ 0");
     }
+    const margin = resolveMarginCost(segmentCode, body.margin_cost_per_kg, current.margin_cost_per_kg);
+    if (margin.errorCode) {
+      return convError(req, ctx, margin.errorCode, 400,
+        margin.errorCode === "PROD_CONV_RATE_MARGIN_NOT_ALLOWED"
+          ? "margin_cost_per_kg only applies to IWC/POWDER segments."
+          : "margin_cost_per_kg must be a number.");
+    }
     if (prodshadeMaterialId && !await assertEligibleProdshade(String(current.company_id), segmentCode, prodshadeMaterialId)) {
       return convError(req, ctx, "PROD_CONV_RATE_PRODSHADE_INVALID", 400, "The selected Prodshade is not approved for this company and segment.");
     }
@@ -358,6 +403,7 @@ export async function updateConversionRateHandler(req: Request, ctx: ProdHandler
         prodshade_material_id: prodshadeMaterialId,
         valid_from: validFrom,
         conversion_rate_per_kg: rate,
+        margin_cost_per_kg: margin.value,
         updated_at: new Date().toISOString(),
         updated_by: ctx.auth_user_id,
       })
