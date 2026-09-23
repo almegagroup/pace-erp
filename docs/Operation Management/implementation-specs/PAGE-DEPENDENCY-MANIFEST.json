@@ -6920,6 +6920,76 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/production/CompanyVendorCodePage.jsx",
+    "dependencyCount": 8,
+    "deps": [
+      {
+        "fn": "getCompanyVendorCodeWorkspace",
+        "method": "GET",
+        "path": "/api/production/company-vendor-codes",
+        "resourceCode": "ACC_COMPANY_VENDOR_CODE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "mapCompanyVendorCode",
+        "method": "POST",
+        "path": "/api/production/company-vendor-codes/map",
+        "resourceCode": "ACC_COMPANY_VENDOR_CODE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "setCompanyVendorCodePrimary",
+        "method": "POST",
+        "path": "/api/production/company-vendor-codes/primary",
+        "resourceCode": "ACC_COMPANY_VENDOR_CODE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "unmapCompanyVendorCode",
+        "method": "POST",
+        "path": "/api/production/company-vendor-codes/unmap",
+        "resourceCode": "ACC_COMPANY_VENDOR_CODE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "createVendorCodeOverride",
+        "method": "POST",
+        "path": "/api/production/company-vendor-codes/override",
+        "resourceCode": "ACC_COMPANY_VENDOR_CODE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "deleteVendorCodeOverride",
+        "method": "POST",
+        "path": "/api/production/company-vendor-codes/override/delete",
+        "resourceCode": "ACC_COMPANY_VENDOR_CODE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listApprovedProdshades",
+        "method": "GET",
+        "path": "/api/production/prodshades",
+        "resourceCode": "PROD_PO_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStrokeMasters",
+        "method": "GET",
+        "path": "/api/production/stroke-masters",
+        "resourceCode": "PROD_STROKE_MASTER",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/production/ConversionCostPage.jsx",
     "dependencyCount": 3,
     "deps": [
@@ -8277,7 +8347,7 @@
         "fn": "createAc06SlocGroup",
         "method": "POST",
         "path": "/api/production/ac06/sloc-groups",
-          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
         "action": "WRITE",
         "skipAcl": false
       },
@@ -8285,7 +8355,7 @@
         "fn": "createAc06CostingGroup",
         "method": "POST",
         "path": "/api/production/ac06/costing-groups",
-          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
         "action": "WRITE",
         "skipAcl": false
       },
@@ -8293,42 +8363,42 @@
         "fn": "assignAc06CostingGroup",
         "method": "POST",
         "path": "/api/production/ac06/costing-groups/assign",
-          "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
         "action": "WRITE",
-          "skipAcl": false
-        },
-        {
-          "fn": "updateAc06SlocGroup",
-          "method": "PATCH",
-          "path": "/api/production/ac06/sloc-groups/:id",
-          "resourceCode": "ACC_SLOC_COSTING_SETUP",
-          "action": "WRITE",
-          "skipAcl": false
-        },
-        {
-          "fn": "deleteAc06SlocGroup",
-          "method": "DELETE",
-          "path": "/api/production/ac06/sloc-groups/:id",
-          "resourceCode": "ACC_SLOC_COSTING_SETUP",
-          "action": "DELETE",
-          "skipAcl": false
-        },
-        {
-          "fn": "updateAc06CostingGroup",
-          "method": "PATCH",
-          "path": "/api/production/ac06/costing-groups/:id",
-          "resourceCode": "ACC_SLOC_COSTING_SETUP",
-          "action": "WRITE",
-          "skipAcl": false
-        },
-        {
-          "fn": "deleteAc06CostingGroup",
-          "method": "DELETE",
-          "path": "/api/production/ac06/costing-groups/:id",
-          "resourceCode": "ACC_SLOC_COSTING_SETUP",
-          "action": "DELETE",
-          "skipAcl": false
-        },
+        "skipAcl": false
+      },
+      {
+        "fn": "updateAc06SlocGroup",
+        "method": "PATCH",
+        "path": "/api/production/ac06/sloc-groups/:id",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "deleteAc06SlocGroup",
+        "method": "DELETE",
+        "path": "/api/production/ac06/sloc-groups/:id",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "action": "DELETE",
+        "skipAcl": false
+      },
+      {
+        "fn": "updateAc06CostingGroup",
+        "method": "PATCH",
+        "path": "/api/production/ac06/costing-groups/:id",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "deleteAc06CostingGroup",
+        "method": "DELETE",
+        "path": "/api/production/ac06/costing-groups/:id",
+        "resourceCode": "ACC_SLOC_COSTING_SETUP",
+        "action": "DELETE",
+        "skipAcl": false
+      },
       {
         "fn": "unassignAc06CostingGroup",
         "method": "POST",
