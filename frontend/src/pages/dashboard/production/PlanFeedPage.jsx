@@ -215,7 +215,7 @@ function gridCellValue(row, column) {
 
 function emptyFo() {
   return {
-    fo_number: "", party_id: "", party_name: "", material_id: "", sku: "", description: "",
+    fo_number: "", order_serial_number: "", party_id: "", party_name: "", material_id: "", sku: "", description: "",
     ordered_qty_kg: "", pack_qty: "", order_date: localIsoDate(), scheduled_delivery_date: "", ordered_stroke_number: "",
   };
 }
@@ -440,6 +440,7 @@ export default function PlanFeedPage() {
       await createPlanFeed({
         company_id: effectiveCompanyId,
         fo_number: form.fo_number,
+        order_serial_number: form.order_serial_number || undefined,
         party_id: form.party_id || undefined,
         customer_address_id: selectedAddressId || undefined,
         party_name: selectedParty?.customer_name || form.party_name,
@@ -566,6 +567,7 @@ export default function PlanFeedPage() {
         order_date: row.order_date ?? "",
         scheduled_delivery_date: row.scheduled_delivery_date ?? "",
         ordered_stroke_number: row.ordered_stroke_number ?? "",
+        order_serial_number: row.order_serial_number ?? "",
         order_confirmation_date: row.order_confirmation_date ?? "",
         formula_confirmation_date: row.formula_confirmation_date ?? "",
       });
@@ -610,6 +612,7 @@ export default function PlanFeedPage() {
         order_date: editDraft.order_date,
         scheduled_delivery_date: editDraft.scheduled_delivery_date,
         ordered_stroke_number: editDraft.ordered_stroke_number?.trim() || null,
+        order_serial_number: editDraft.order_serial_number?.trim() || null,
         order_confirmation_date: editDraft.order_confirmation_date || null,
         formula_confirmation_date: editDraft.formula_confirmation_date || null,
       };
@@ -770,6 +773,7 @@ export default function PlanFeedPage() {
   const [totalFiltersOpen, setTotalFiltersOpen] = useState(false);
   const [exportingTotal, setExportingTotal] = useState(false);
   const totalColumns = useMemo(() => [
+    { key: "order_serial_number", label: "Order Serial No.", width: "140px", render: (r) => <span className="font-mono">{r.order_serial_number || "--"}</span> },
     { key: "fo_number", label: "FO #", width: "140px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
     { key: "original_fo_number", label: "Original FO #", width: "140px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
     { key: "party_name", label: "Party", width: "200px" },
@@ -869,6 +873,10 @@ export default function PlanFeedPage() {
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">FO Number <span className="text-rose-500">*</span></label>
               <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.fo_number} onChange={e => setForm(f => ({ ...f, fo_number: e.target.value }))} required placeholder="e.g. FO-2026-001" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-600 font-medium">Order Serial Number</label>
+              <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.order_serial_number} onChange={e => setForm(f => ({ ...f, order_serial_number: e.target.value }))} placeholder="Optional" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-slate-600 font-medium">PO Type (for Party filter)</label>
@@ -1353,6 +1361,10 @@ export default function PlanFeedPage() {
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">FO Delivery Date (Proposed Dispatch)</label>
                     <input key={`${editData.id}-delivery-date`} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.scheduled_delivery_date} onChange={e => setEditDraft(d => ({ ...d, scheduled_delivery_date: e.target.value }))} disabled={editData.status === "CANCELLED"} required />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-slate-600 font-medium">Order Serial Number</label>
+                    <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.order_serial_number ?? ""} onChange={e => setEditDraft(d => ({ ...d, order_serial_number: e.target.value }))} disabled={editData.status === "CANCELLED"} placeholder="Optional" />
                   </div>
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-600 font-medium">Order Confirmation Date</label>
