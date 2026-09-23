@@ -1211,6 +1211,17 @@ function ProcessPoFinalTab() {
 
   async function handleSave() {
     if (!po || po.status !== requiredFinalStatus(po.po_type)) return;
+    // Found live 2026-09-23: a line with Actual Qty > 0 but no Storage
+    // Location used to reach the server before being rejected -- by then it
+    // was already inserted (no transaction), and a retry with the same
+    // blank row created ANOTHER duplicate instead of fixing the first.
+    // Blocking here, before any request, means a bad Save never writes
+    // anything.
+    const missingSlocRow = rows.find((row) => Number(row.actual_qty || 0) > 0 && !row.issue_sloc_id);
+    if (missingSlocRow) {
+      toast(`Select a Storage Location for ${missingSlocRow.material_label || "the line with a blank Storage Location"} before saving.`, "error");
+      return;
+    }
     setSaving(true);
     try {
       const inputRows = rows.map((row) => {
