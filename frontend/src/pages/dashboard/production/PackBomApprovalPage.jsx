@@ -13,7 +13,7 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates
 import { pushToast } from "../../../store/uiToast.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { approvePackBom, getPackBom, listPackBoms, rejectPackBom } from "./prodApi.js";
-import { addMaterialCategoryMember, createMaterialCategoryGroup, listMaterialCategoryGroups, listMaterials } from "../om/omApi.js";
+import { addMaterialCategoryMember, createMaterialCategoryGroup, listMaterialCategoryGroups, listMaterials, listStorageLocations } from "../om/omApi.js";
 import { GroupCreateModal, MemberAddModal, PackBomLinesTable } from "./strokeShared.jsx";
 
 const STATUS_COLORS = {
@@ -88,10 +88,16 @@ export default function PackBomApprovalPage() {
     select: (d) => d?.data ?? [],
     enabled: Boolean(groupsCompanyId),
   });
+  const storageLocationsQ = useQuery({
+    queryKey: ["om-storage-locations", groupsCompanyId, "active"],
+    queryFn: () => listStorageLocations({ company_id: groupsCompanyId, is_active: true }),
+    enabled: Boolean(groupsCompanyId),
+  });
 
   const boms = bomsQ.data ?? [];
   const pmMaterials = pmMaterialsQ.data ?? [];
   const groups = groupsQ.data ?? [];
+  const storageLocations = storageLocationsQ.data?.data ?? storageLocationsQ.data ?? [];
   const detailPackCode = detail?.pack_code_row ?? {};
   const detailSfgQty = (detail?.lines ?? []).find((line) => line.line_type === "SFG")?.qty ?? null;
   // Read-only here (SFG recipe isn't part of what this page lets a Manager change) --
@@ -127,6 +133,7 @@ export default function PackBomApprovalPage() {
         has_alternate: Boolean(line.material_group_id),
         material_group_id: line.material_group_id ?? "",
         is_primary_container: Boolean(line.is_primary_container),
+        storage_location_id: line.storage_location_id ?? "",
       })));
     } catch {
       toast("Failed to load Pack BOM detail.", "error");
@@ -189,6 +196,7 @@ export default function PackBomApprovalPage() {
         material_id: line.material_id,
         qty: Number(line.qty),
         uom_code: line.uom_code,
+        storage_location_id: line.storage_location_id || null,
         movement_type_code: "P261",
         has_alternate: line.has_alternate,
         material_group_id: line.has_alternate ? (line.material_group_id || null) : null,
@@ -342,6 +350,7 @@ export default function PackBomApprovalPage() {
                                 innerUomCode={detailPackCode.inner_uom_code || ""}
                                 sfgQtyPerInner={detailSfgQtyPerInner}
                                 baseUomCode={detail.sku?.base_uom_code || "KG"}
+                                storageLocations={storageLocations}
                               />
                             </div>
 

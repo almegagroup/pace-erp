@@ -813,6 +813,13 @@ export default function ProductionPOCreatePage() {
   const packingHasShortage = packingPmRowsWithAvailability.some((line) => line.short > 0);
   const packingMissingPmSloc = packingEffectivePmLines.some((line) => !line.storage_location_id);
   const packingMissingManualMaterial = !packingBomRequired && packingManualPmLines.some((line) => !line.material_id);
+  // Business owner rule (2026-09-23): every non-fixed pack code except 000 (tanker,
+  // genuinely has no packaging material) must have at least one PM line before the
+  // Packing PO can be created -- 599/001(MTEST)/etc. previously let the manual PM
+  // table stay empty (`.some()` on an empty array is always false, so the existing
+  // material/sloc checks never caught it).
+  const packingRequiresAtLeastOnePm = !packingBomRequired && String(packingSku?.pack_code ?? "") !== "000";
+  const packingMissingAnyPmLine = packingRequiresAtLeastOnePm && packingManualPmLines.length === 0;
 
   const strokeLines = Array.isArray(strokeDetailQ.data?.lines) ? strokeDetailQ.data.lines : [];
   const strokePreviewRows = useMemo(
@@ -1238,6 +1245,10 @@ export default function ProductionPOCreatePage() {
     }
     if (!isMtestPackingSku && !packingBomRequired && !packingFillQtyPerPack) {
       toast("Fill Qty Per Pack is required for this pack code.", "error");
+      return;
+    }
+    if (packingMissingAnyPmLine) {
+      toast("At least one PM line is required for this pack code.", "error");
       return;
     }
     if (packingMissingManualMaterial) {
@@ -2203,6 +2214,11 @@ export default function ProductionPOCreatePage() {
                             <tr>
                               <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">
                                 No PM lines added yet.
+                                {packingRequiresAtLeastOnePm ? (
+                                  <div className="mt-1 text-xs font-medium text-rose-500">
+                                    At least one PM line is required for this pack code — add one to enable Create.
+                                  </div>
+                                ) : null}
                               </td>
                             </tr>
                           ) : packingPmRowsWithAvailability.map((line) => {
@@ -2305,7 +2321,8 @@ export default function ProductionPOCreatePage() {
                     </button>
                     <button
                       type="submit"
-                      disabled={saving || packingAvailabilityPreviewQ.isFetching || packingHasShortage}
+                      disabled={saving || packingAvailabilityPreviewQ.isFetching || packingHasShortage || packingMissingAnyPmLine}
+                      title={packingMissingAnyPmLine ? "At least one PM line is required for this pack code." : undefined}
                       className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
                     >
                       {saving ? "Creating..." : packingAvailabilityPreviewQ.isFetching ? "Checking Stock..." : "Create Packing PO"}
