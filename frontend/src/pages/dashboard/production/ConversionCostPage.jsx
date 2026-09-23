@@ -37,6 +37,8 @@ const ERRORS = {
   PROD_CONV_RATE_PRODSHADE_INVALID: "Select an approved Prodshade for the selected company and segment.",
   PROD_CONV_RATE_MARGIN_INVALID: "Margin Cost must be a number (negative allowed).",
   PROD_CONV_RATE_MARGIN_NOT_ALLOWED: "Margin Cost only applies to IWC/POWDER (MTS).",
+  PROD_CONV_RATE_TRANSPORT_INVALID: "Transportation Cost must be a number.",
+  PROD_CONV_RATE_TRANSPORT_NOT_ALLOWED: "Transportation Cost only applies to IWC/POWDER (MTS).",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
@@ -44,16 +46,19 @@ function companyLabel(c) {
   return [c?.company_code, c?.company_name].filter(Boolean).join(" — ");
 }
 
-// MTS only — the segment splits into Conversion Cost + Margin Cost (Margin may be negative);
-// Net Conversion Cost = the sum. Every other segment keeps a single conversion cost figure.
+// MTS only — the segment splits into Conversion Cost + Margin Cost (Margin may be negative)
+// + Transportation Cost (optional, may be left blank at any entry). Net Conversion Cost =
+// the sum of all three. Every other segment keeps a single conversion cost figure.
 const MARGIN_ELIGIBLE_SEGMENTS = new Set(["IWC", "POWDER"]);
+const TRANSPORTATION_ELIGIBLE_SEGMENTS = new Set(["IWC", "POWDER"]);
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
-const emptyForm = () => ({ id: "", segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: todayIso(), conversion_rate_per_kg: "", margin_cost_per_kg: "" });
-function netRateOf(conversion, margin) {
+const emptyForm = () => ({ id: "", segment_code: "ADMIX", scope: "DEFAULT", prodshade_material_id: "", valid_from: todayIso(), conversion_rate_per_kg: "", margin_cost_per_kg: "", transportation_cost_per_kg: "" });
+function netRateOf(conversion, margin, transportation) {
   const c = Number(conversion);
   const m = Number(margin);
-  return (Number.isFinite(c) ? c : 0) + (Number.isFinite(m) ? m : 0);
+  const t = Number(transportation);
+  return (Number.isFinite(c) ? c : 0) + (Number.isFinite(m) ? m : 0) + (Number.isFinite(t) ? t : 0);
 }
 
 export default function ConversionCostPage() {
@@ -96,6 +101,7 @@ export default function ConversionCostPage() {
   });
   const rows = listQ.data ?? [];
   const isMarginSegment = MARGIN_ELIGIBLE_SEGMENTS.has(form.segment_code);
+  const isTransportationSegment = TRANSPORTATION_ELIGIBLE_SEGMENTS.has(form.segment_code);
 
   // Prefill support for a brand-new dated row: fetch this exact scope's own history
   // (independent of the page-level segment filter) so we can find its current row and
@@ -120,6 +126,7 @@ export default function ConversionCostPage() {
       ...f,
       conversion_rate_per_kg: String(currentRateForScope.conversion_rate_per_kg ?? ""),
       margin_cost_per_kg: currentRateForScope.margin_cost_per_kg != null ? String(currentRateForScope.margin_cost_per_kg) : "",
+      transportation_cost_per_kg: currentRateForScope.transportation_cost_per_kg != null ? String(currentRateForScope.transportation_cost_per_kg) : "",
     }));
   }, [currentRateForScope, editorOpen, form.id, scopeReady]);
 
@@ -146,6 +153,14 @@ export default function ConversionCostPage() {
         return;
       }
     }
+    let transportationNum = null;
+    if (isTransportationSegment) {
+      transportationNum = form.transportation_cost_per_kg === "" ? 0 : Number(form.transportation_cost_per_kg);
+      if (!Number.isFinite(transportationNum)) {
+        toast("Transportation Cost must be a number.", "error");
+        return;
+      }
+    }
     setSaving(true);
     try {
       const payload = {
@@ -155,6 +170,7 @@ export default function ConversionCostPage() {
         valid_from: form.valid_from,
         conversion_rate_per_kg: rateNum,
         margin_cost_per_kg: marginNum,
+        transportation_cost_per_kg: transportationNum,
       };
       if (form.id) {
         await updateConversionRate(form.id, payload);
@@ -219,6 +235,7 @@ export default function ConversionCostPage() {
                 <th className="text-right py-2 px-3 border-b">Net Conversion Cost / KG (₹)</th>
                 <th className="text-right py-2 px-3 border-b">Conversion Cost / KG (₹)</th>
                 <th className="text-right py-2 px-3 border-b">Margin Cost / KG (₹)</th>
+                <th className="text-right py-2 px-3 border-b">Transportation Cost / KG (₹)</th>
                 <th className="text-left py-2 px-3 border-b">Status</th>
                 <th className="text-right py-2 px-3 border-b">Action</th>
               </tr>
@@ -241,6 +258,9 @@ export default function ConversionCostPage() {
                   <td className="py-2 px-3 text-right font-mono">
                     {MARGIN_ELIGIBLE_SEGMENTS.has(r.segment_code) ? Number(r.margin_cost_per_kg ?? 0).toFixed(4) : "—"}
                   </td>
+                  <td className="py-2 px-3 text-right font-mono">
+                    {TRANSPORTATION_ELIGIBLE_SEGMENTS.has(r.segment_code) ? Number(r.transportation_cost_per_kg ?? 0).toFixed(4) : "—"}
+                  </td>
                   <td className="py-2 px-3">
                     {r.is_current
                       ? <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Current</span>
@@ -259,6 +279,7 @@ export default function ConversionCostPage() {
                           valid_from: r.valid_from,
                           conversion_rate_per_kg: String(r.conversion_rate_per_kg ?? ""),
                           margin_cost_per_kg: r.margin_cost_per_kg != null ? String(r.margin_cost_per_kg) : "",
+                          transportation_cost_per_kg: r.transportation_cost_per_kg != null ? String(r.transportation_cost_per_kg) : "",
                         });
                         setEditorOpen(true);
                       }}
@@ -319,10 +340,17 @@ export default function ConversionCostPage() {
               <p className="text-xs text-slate-400">MTS only. May be negative.</p>
             </div>
           )}
-          {isMarginSegment && (
+          {isTransportationSegment && (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-slate-600">Transportation Cost / KG (₹)</label>
+              <input type="number" step="0.0001" className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.transportation_cost_per_kg} onChange={(e) => setForm((f) => ({ ...f, transportation_cost_per_kg: e.target.value }))} placeholder="e.g. 0.25 (optional, may be left blank)" />
+              <p className="text-xs text-slate-400">MTS only. Optional — leave blank if not applicable.</p>
+            </div>
+          )}
+          {(isMarginSegment || isTransportationSegment) && (
             <div className="flex flex-col gap-1 bg-slate-50 rounded px-3 py-2">
               <span className="text-xs font-medium text-slate-600">Net Conversion Cost / KG (₹)</span>
-              <span className="font-mono font-semibold text-sm">{netRateOf(form.conversion_rate_per_kg, form.margin_cost_per_kg).toFixed(4)}</span>
+              <span className="font-mono font-semibold text-sm">{netRateOf(form.conversion_rate_per_kg, form.margin_cost_per_kg, form.transportation_cost_per_kg).toFixed(4)}</span>
             </div>
           )}
           {form.id && form.scope === "OVERRIDE" && (
