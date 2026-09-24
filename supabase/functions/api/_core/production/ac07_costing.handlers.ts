@@ -58,7 +58,7 @@ export async function materialMap(materialIds: string[]): Promise<Map<string, Ro
   const result = new Map<string, Row>();
   if (!materialIds.length) return result;
   const rows = await fetchInChunks<Row>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
-    .select("id, pace_code, external_code, material_name, document_name, material_type, material_category, shade_code, pack_code").in("id", chunk));
+    .select("id, pace_code, external_code, material_name, document_name, material_type, material_category, shade_code, pack_code, base_uom_code").in("id", chunk));
   for (const row of rows) result.set(toTrimmedString(row.id), row);
   return result;
 }
@@ -76,7 +76,9 @@ export async function packCodeRow(packCode: string): Promise<Row | null> {
   return (data as Row) ?? null;
 }
 
-async function resolveProdshade(sku: Row): Promise<Row | null> {
+// Exported for AC05 MTS SKU Costing. SKU-to-Prodshade identity is always
+// shade_code based; prodshade_pack_config is pack configuration, not identity.
+export async function resolveProdshade(sku: Row): Promise<Row | null> {
   const shadeCode = toTrimmedString(sku.shade_code);
   if (!shadeCode) return null;
   const { data, error } = await serviceRoleClient.schema("erp_master").from("material_master")
@@ -102,7 +104,10 @@ export async function resolvePmComposition(skuMaterialId: string, sku: Row): Pro
       .select("line_type, material_id, qty, uom_code, is_primary_container").eq("pack_bom_id", ownBom.id);
     if (lineErr) throw new Error("AC07_PACK_BOM_LINE_LOOKUP_FAILED");
     const rows = (allLines ?? []) as Row[];
-    const pmLines = rows.filter((r) => r.line_type === "PM");
+    // The persisted Pack-BOM enum calls packaging components `INPUT`; older
+    // payloads may still carry `PM`. Keep the shared composition normalised
+    // here so AC05/AC07/AC08 all consume the same real PM set.
+    const pmLines = rows.filter((r) => r.line_type === "PM" || r.line_type === "INPUT");
     // Fixed-BOM pack codes always carry the OUTPUT row's own qty -- that IS
     // the per-pack fill, so Per Pack Qty is read-only and comes from here,
     // never a user-typed default.

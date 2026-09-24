@@ -70,12 +70,15 @@ import {
   getDerivedOpeningRateHandler,
 } from "../_core/production/conversion_cost.handlers.ts";
 import {
-  listMtsSkuRateHandler,
-  saveMtsSkuRateDraftHandler,
-  listDraftMtsSkuRatesHandler,
-  approveMtsSkuRateHandler,
-  listApprovedMonthsForSkuHandler,
-} from "../_core/production/mts_sku_rate.handlers.ts";
+  createAc05RateRowHandler,
+  deleteAc05PendingRowHandler,
+  getAc05PendingCountHandler,
+  listAc05EligibleSkusHandler,
+  listAc05RatesHandler,
+  listAc05VendorCodesHandler,
+  resolveAc05RateForSoHandler,
+  updateAc05PendingRowHandler,
+} from "../_core/production/ac05_mts_sku_rate.handlers.ts";
 import {
   assignAc06CostingGroupHandler,
   closeAc06MonthHandler,
@@ -318,16 +321,18 @@ export async function dispatchProductionRoutes(
     // §104.8 — suggested opening rate for a produced material (stroke-derived), used by IN05
     case "GET:/api/production/derived-opening-rate":
       return await getDerivedOpeningRateHandler(req, ctx);
-    case "GET:/api/production/mts-sku-rates":
-      return await listMtsSkuRateHandler(req, ctx);
-    case "POST:/api/production/mts-sku-rates/draft":
-      return await saveMtsSkuRateDraftHandler(req, ctx);
-    case "GET:/api/production/mts-sku-rates/pending-drafts":
-      return await listDraftMtsSkuRatesHandler(req, ctx);
-    case "POST:/api/production/mts-sku-rates/approve":
-      return await approveMtsSkuRateHandler(req, ctx);
-    case "GET:/api/production/mts-sku-rates/available-months":
-      return await listApprovedMonthsForSkuHandler(req, ctx);
+    case "GET:/api/production/ac05-mts-sku-rates":
+      return await listAc05RatesHandler(req, ctx);
+    case "POST:/api/production/ac05-mts-sku-rates":
+      return await createAc05RateRowHandler(req, ctx);
+    case "GET:/api/production/ac05-mts-sku-rates/vendor-codes":
+      return await listAc05VendorCodesHandler(req, ctx);
+    case "GET:/api/production/ac05-mts-sku-rates/eligible-skus":
+      return await listAc05EligibleSkusHandler(req, ctx);
+    case "GET:/api/production/ac05-mts-sku-rates/pending-count":
+      return await getAc05PendingCountHandler(req, ctx);
+    case "GET:/api/production/ac05-mts-sku-rates/resolve":
+      return await resolveAc05RateForSoHandler(req, ctx);
     case "GET:/api/production/ac06/workspace":
       return await getAc06WorkspaceHandler(req, ctx);
     case "POST:/api/production/ac06/sloc-groups":
@@ -776,6 +781,12 @@ export async function dispatchProductionRoutes(
   }
   if (/^\/api\/production\/pack-bom-change-requests\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
     return await rejectPackBomChangeRequestHandler(req, ctx);
+  }
+  if (/^\/api\/production\/ac05-mts-sku-rates\/[^/]+\/rate$/.test(pathname) && req.method === "POST") {
+    return await updateAc05PendingRowHandler(req, ctx);
+  }
+  if (/^\/api\/production\/ac05-mts-sku-rates\/[^/]+\/delete$/.test(pathname) && req.method === "POST") {
+    return await deleteAc05PendingRowHandler(req, ctx);
   }
   return null;
 }

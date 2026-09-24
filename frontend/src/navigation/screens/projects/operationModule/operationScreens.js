@@ -1045,9 +1045,9 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
-  ACC_MTS_SKU_MONTHLY_RATE: {
-    screen_code: "ACC_MTS_SKU_MONTHLY_RATE",
-    route: "/dashboard/production/mts-sku-monthly-rate",
+  ACC_AC05_MTS_SKU_COSTING: {
+    screen_code: "ACC_AC05_MTS_SKU_COSTING",
+    route: "/dashboard/production/ac05-mts-sku-costing",
     universe: "ACL",
     type: SCREEN_TYPE.FULL,
     keepAlive: false,

@@ -379,6 +379,36 @@ export async function isPrimaryVendorCodeForCompany(companyId: string, vendorCod
   return Boolean(data?.is_primary);
 }
 
+// AC05's rate-entry save freezes the currently applicable MTS Stroke onto the
+// new effective-dated rate row. This deliberately resolves a data-hygiene tie
+// deterministically rather than making a manual rate entry impossible.
+export async function resolveStrokeForProdshadeAndVendorCode(
+  companyId: string,
+  prodshadeMaterialId: string,
+  companyVendorCodeMapId: string,
+): Promise<{ stroke_master_id: string } | null> {
+  const db = serviceRoleClient.schema("erp_production");
+  const { data: mapping, error: mappingError } = await db.from("company_vendor_code_map")
+    .select("id, vendor_code_id").eq("id", companyVendorCodeMapId).eq("company_id", companyId).eq("active", true).maybeSingle();
+  if (mappingError) throw new Error("VENDOR_CODE_STROKE_RESOLVE_FAILED");
+  if (!mapping) return null;
+  const isPrimary = await isPrimaryVendorCodeForCompany(companyId, toTrimmedString(mapping.vendor_code_id));
+  const { data: strokes, error: strokesError } = await db.from("stroke_master")
+    .select("id, approved_at").eq("company_id", companyId).eq("prodshade_material_id", prodshadeMaterialId)
+    .eq("po_type", "MTS").eq("status", "APPROVED").order("approved_at", { ascending: false, nullsFirst: false });
+  if (strokesError) throw new Error("VENDOR_CODE_STROKE_RESOLVE_FAILED");
+  const candidates = (strokes ?? []) as Row[];
+  if (!candidates.length) return null;
+  const strokeIds = ids(candidates.map((row) => row.id));
+  const overrideRows = await fetchInChunks<Row>(strokeIds, (chunk) => db.from("vendor_code_stroke_override")
+    .select("stroke_master_id, company_vendor_code_map_id").eq("company_id", companyId).eq("active", true).in("stroke_master_id", chunk));
+  const overrideMapByStroke = new Map(overrideRows.map((row) => [toTrimmedString(row.stroke_master_id), toTrimmedString(row.company_vendor_code_map_id)]));
+  const match = candidates.find((stroke) => isPrimary
+    ? !overrideMapByStroke.has(toTrimmedString(stroke.id))
+    : overrideMapByStroke.get(toTrimmedString(stroke.id)) === companyVendorCodeMapId);
+  return match ? { stroke_master_id: toTrimmedString(match.id) } : null;
+}
+
 // ---------------------------------------------------------------------------
 // Shared resolver -- for AC05/dispatch (future consumers): which vendor code
 // applies to a given company+Stroke -- the Stroke's own override if one

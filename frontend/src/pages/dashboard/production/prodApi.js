@@ -91,11 +91,16 @@ export const updateConversionRate = (id, body) => fetchProd("PATCH", `/api/produ
 export const listConversionRateProdshades = (p) => fetchProd("GET", "/api/production/conversion-rate-prodshades", undefined, p);
 // §104.8 — stroke-derived opening-rate suggestion, consumed by IN05 Opening Stock
 export const getDerivedOpeningRate = (p) => fetchProd("GET", "/api/production/derived-opening-rate", undefined, p);
-export const listMtsSkuRates = (p) => fetchProd("GET", "/api/production/mts-sku-rates", undefined, p);
-export const saveMtsSkuRateDraft = (body) => fetchProd("POST", "/api/production/mts-sku-rates/draft", body);
-export const listPendingMtsSkuRateDrafts = (p) => fetchProd("GET", "/api/production/mts-sku-rates/pending-drafts", undefined, p);
-export const approveMtsSkuRate = (body) => fetchProd("POST", "/api/production/mts-sku-rates/approve", body);
-export const listApprovedMtsSkuMonths = (p) => fetchProd("GET", "/api/production/mts-sku-rates/available-months", undefined, p);
+// AC05 MTS SKU Costing (§142). Manual rate fields are authoritative; the list
+// endpoint's `verification` object is display-only and has no write API.
+export const listAc05MtsSkuRates = (p) => fetchProd("GET", "/api/production/ac05-mts-sku-rates", undefined, p);
+export const listAc05MtsSkuVendorCodes = (p) => fetchProd("GET", "/api/production/ac05-mts-sku-rates/vendor-codes", undefined, p);
+export const listAc05MtsSkuEligibleSkus = (p) => fetchProd("GET", "/api/production/ac05-mts-sku-rates/eligible-skus", undefined, p);
+export const createAc05MtsSkuRate = (body) => fetchProd("POST", "/api/production/ac05-mts-sku-rates", body);
+export const updateAc05MtsSkuPendingRate = (id, body) => fetchProd("POST", `/api/production/ac05-mts-sku-rates/${id}/rate`, body);
+export const deleteAc05MtsSkuPendingRate = (id, body) => fetchProd("POST", `/api/production/ac05-mts-sku-rates/${id}/delete`, body);
+export const pendingAc05MtsSkuRateCount = (p) => fetchProd("GET", "/api/production/ac05-mts-sku-rates/pending-count", undefined, p);
+export const resolveAc05MtsSkuRateForSo = (p) => fetchProd("GET", "/api/production/ac05-mts-sku-rates/resolve", undefined, p);
 // ── AC06 Monthly Costing Rate Workspace (PO11-parity, Dispatch rate source) ───
 export const getAc06Workspace = (p) => fetchProd("GET", "/api/production/ac06/workspace", undefined, p);
 export const createAc06SlocGroup = (body) => fetchProd("POST", "/api/production/ac06/sloc-groups", body);

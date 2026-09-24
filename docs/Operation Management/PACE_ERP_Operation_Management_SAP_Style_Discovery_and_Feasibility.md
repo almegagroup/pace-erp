@@ -25252,3 +25252,148 @@ until the PR merges (Dev's own `sales_order` table has only 3 rows, all CMP003, 
 vendor codes mapped at all — nothing to backfill there). Also not done: live click-through in the
 deployed app (no dev login in this environment, consistent with every other feature this session).
 The SO Map / header-identity-edit path is now covered too — see the 2026-09-24 addendum above.
+
+---
+
+## Section 142
+
+### 142.1 — AC05 "MTS SKU Costing" — ✅ DESIGN LOCKED (2026-09-24), IMPLEMENTATION NOT STARTED
+
+**Business context:** §139/§140/§141 built AC06 (RM/PM rate master), AC11 (Company Vendor Code) and
+SO01's Vendor Code header field — but the actual **MTS SKU-level costing/Reco rate** consumer was
+never designed. MTO/HPS/MTEST already read directly from AC06 via `resolveAc06RatesAsOf()`; MTS is
+the one production type with no equivalent, because MTS's Verify deliberately skips
+`process_order_line_reco` (§108.2/§108.4), so it has no other place to derive a per-SKU Reco rate
+from. AC05 closes that gap — a dedicated, manually-maintained MTS SKU rate table keyed by
+(Vendor Code, SKU, Effective Date), with an automatic-verification column derived from AC06/AC04 so
+the manually-entered rate can be sanity-checked but never overridden by the calculation.
+
+**Access control:** identical to AC04/AC06 — company-wise data, full access for Accounts
+Department, L1/L2 Auditor, Director.
+
+**Routing (locked, cross-references §139's central resolver design):**
+- **MTO / HPS / MTEST** — rate comes directly from AC06 (`resolveAc06RatesAsOf()`); AC05 is not
+  involved at all for these three.
+- **MTS** — rate comes from AC05. AC05 does **not** duplicate AC06's date-resolution logic — it
+  calls `resolveAc06RatesAsOf()` internally wherever it needs an RM/PM rate, exactly like any other
+  AC06 consumer. `as_of_date` for MTS is locked to **SO date**.
+- Neither AC05 nor AC06/AC07's numbers ever touch real stock valuation. Real posted stock value
+  (RM/PM issue, SFG/FG receipt, all production types) always comes from `stock_snapshot`'s live WAC
+  — verified against the actual `post_stock_movement()`/Process-PO-Verify code path in this same
+  session. AC04/AC05/AC06/AC07 are a parallel **Costing/Reco reporting layer only** — the same role
+  MTO/HPS/MTEST's SO "Costing Rate Month" field already plays for `batch_costing_report.handlers.ts`.
+  AC05 is that same category, purpose-built as MTS's missing SKU-level mechanism.
+
+**"Create New" page (AC05's data-entry UI):**
+- Company auto-resolves from context (no company picker on this drawer — same convention as every
+  other company-scoped ACL data page).
+- A search bar spans all columns, plus an **Add Row** action; every row carries its own Edit/Remove.
+- `ErpDenseGrid` columns, left to right:
+  1. **Vendor Code** — defaults to the company's Primary; user may override via dropdown to any of
+     the company's other mapped vendor codes (AC11).
+  2. **SKU** — dropdown limited to MTS SKUs, shows SKU + Document Name together for identification.
+  3. **Document Name** — read-only, mirrors the SKU dropdown's own selection.
+  4. **Rate per Base UOM**
+  5. **Rate per Inner Pack** — only enterable when that SKU actually has an inner pack (system
+     auto-detects this from Pack BOM, same `is_primary_container` PM-line mechanism §83.15 already
+     uses); disabled/blank for SKUs with no inner pack, where the outer pack **is** the only pack.
+  6. **Rate per Outer UOM**
+  7. **RM Wastage %** — optional; carries forward from the latest prior row for that same SKU if one
+     exists, editable.
+  8. **Pack Wastage %** — optional, same carry-forward behaviour.
+  9. **Effective Date** — mandatory.
+- Columns 4–6 (Base/Inner/Outer rate) are **three fully independent manual entries** — no
+  auto-calculation or cross-derivation between them; the user types what each unit should cost.
+- No approval workflow on this page at all — Save commits the row directly, matching AC05/AC06's own
+  "Accounts owns this data" trust level.
+- No separate "SKU Wastage" mechanism/button — wastage is captured inline on this same row, so the
+  earlier-floated idea of a second dedicated button was dropped as redundant.
+
+**Main (list) page — verification columns, all uneditable:**
+Saved rows appear here, plus a parallel, purely-informational breakup so a reviewer can sanity-check
+whether the manually-typed rate looks right:
+- **AC04** supplies that MTS Prodshade's Conversion Cost breakup + Net, for the row's Effective Date.
+- **AC06** supplies raw **RMC** and **PMC** in separate columns, resolved via `resolveAc06RatesAsOf()`
+  at the row's own Effective Date. AC06's own RM/PM wastage or other columns (if any) are
+  **deliberately excluded** from this feed — only the raw rate crosses into AC05's calculation.
+- Formula: **(RMC × (1 + RM Wastage %)) + (PMC × (1 + Pack Wastage %)) + Conversion Cost = Per KG
+  cost.** Per KG then derives Per Inner Pack cost and Per Outer Unit cost (same pack-size factors the
+  manual-entry side uses).
+- These derived Per-UOM/Per-Inner/Per-Outer values render **next to** their manual-entry
+  counterparts, purely so a reviewer can visually compare "does the number I typed look right" —
+  never as an editable or authoritative value.
+- **Locked rule, non-negotiable:** SO always takes its rate from the **manually-entered** Per Outer
+  Unit rate. The calculated/verification value is never read by SO, however large the discrepancy.
+
+**AC05 row selection at SO time (locked 2026-09-24):** the same (Vendor Code, SKU) pair can carry
+more than one effective-dated AC05 row over time (a later rate revision adds a new row, it never
+edits the old one — same append-only convention as AC04/AC06). When an SO's MTS line picks a
+Vendor Code + SKU, the applicable AC05 row is resolved by **SO date** — the latest row whose own
+Effective Date is on or before the SO date. This is a distinct resolution step from AC05's internal
+AC06 call (which separately uses SO date as `as_of_date` for the RMC/PMC verification columns) —
+here the date is being applied against **AC05's own** effective-dated rows, keyed on
+(Vendor Code, SKU), to pick which manually-entered Per Outer Unit rate the SO actually uses.
+
+**RMC/PMC derivation — which Stroke's RM/PM composition is used, and when it's resolved (locked
+2026-09-24, this session):**
+- MTS's SO never references a Stroke directly (unlike a hypothetical MTO/HPS-style explicit pick),
+  so AC05 has to resolve one internally from (SKU, Vendor Code) alone: **SKU → Prodshade** (via
+  `shade_code` match — the same already-built, already-verified `resolveProdshade()` mechanism
+  `ac07_costing.handlers.ts` uses, not `prodshade_pack_config`, which turned out on closer schema
+  check to hold no direct SKU-identity column at all — confirmed against real CMP003 data while
+  writing the Codex brief for this) **→ Vendor Code → the one specific Stroke** that vendor code
+  currently maps to for that Prodshade (`vendor_code_stroke_override`: an actively-overridden Stroke for a
+  non-Primary code, or — when no override exists — the Prodshade's un-overridden Stroke for Primary).
+- **Live-verified against real Prod data in this session** (project `bsjpvkigpllichlknmah`, CMP003):
+  every Prodshade in Prod that currently has more than one `po_type='MTS'` APPROVED Stroke (3 real
+  cases found) resolves cleanly — in each case exactly one of the two Strokes carries an active
+  `vendor_code_stroke_override` row (all three, coincidentally, to the same non-primary code
+  `YAL09T`), and the other carries none (the implicit Primary). No case of two simultaneously
+  un-overridden ("both claiming Primary") or two overrides pointed at the same vendor code was found
+  — a genuine ambiguity was ruled out empirically, not assumed.
+- **The deeper question this raised** (business owner, same session): MTS FG stock is **blended**,
+  not batch/Packing-PO-tracked (§116/§108.2 lock — only PTEST is batch-blind for *consumption*, but
+  MTS FG itself carries no batch identity in `stock_snapshot` at all), so at SO/dispatch time the
+  system has no way to know which specific Stroke's batch is physically being shipped — and multiple
+  Strokes legitimately *can* coexist under one vendor code over time (a revision created while the
+  older Stroke's stock is still being sold). A schema-level uniqueness guard (my first proposal, a
+  trigger blocking a second un-overridden Stroke per Prodshade) was **rejected** as solving the wrong
+  problem — it would block a legitimate business situation just to make a resolution mechanism work.
+- **Locked resolution — freeze at rate-entry time, not at SO time:** whichever Stroke is the
+  (Prodshade, Vendor Code)'s **current** one *at the moment an AC05 row's rate is set/saved* is
+  resolved once and **frozen onto that row**. If the Prodshade's current Stroke later changes (a new
+  revision becomes current), already-saved AC05 rows are **not** retroactively re-resolved — they
+  keep referencing the Stroke that was current when they were created. A rate correction for the new
+  Stroke means a new AC05 row (new Effective Date), never an edit of the old one's Stroke reference.
+  Consequence: SO/dispatch time needs **no** Stroke resolution logic at all — it only reads AC05's
+  already-frozen RMC/PMC/rate values. This is also consistent with AC05's own append-only,
+  effective-dated design (same principle as AC06/AC04 — nothing is retroactively rewritten).
+
+**Automatic cascading row creation (triggered by an AC06 rate split, locked 2026-09-24):**
+When an AC06 rate for a (material, storage-location-group) splits into a new effective-dated row,
+AC05 auto-generates pending rows so no MTS SKU using that material silently keeps a stale rate:
+1. Find every `stroke_line` row whose `material_id` matches the split material **and** whose
+   `default_storage_location_id` falls inside that same `ac06_sloc_group`.
+2. Group those lines by their parent `stroke_master` (filtered to `po_type='MTS'`, `status='APPROVED'`,
+   same company).
+3. For each matching Stroke, take its `prodshade_material_id`'s own `shade_code` and find every FG
+   SKU sharing that `shade_code` (same `resolveProdshade()`-reverse lookup as above, not
+   `prodshade_pack_config`).
+4. For each (SKU × that specific Stroke's resolved vendor code — Primary or override, per the
+   freeze-at-creation rule above) combination, create one **pending** AC05 row: rate left blank,
+   Wastage % carried forward from the latest prior row for that SKU (if any), Effective Date = the
+   AC06 split's own effective date.
+5. Any SKU with an unrated pending row **hard-blocks** SO creation for that SKU. The AC05 "Create"
+   button shows a **red-dot** indicator on the list page whenever any pending row exists company-wide.
+This mechanism was walked through against real live CMP003 data during this session (a real
+Prodshade and its downstream SKUs/vendor codes) and confirmed correct by the business owner before
+being locked.
+
+**Deferred, explicitly not designed here:** AC10-style dispatch-wise RM/PM breakdown (the dynamic
+"Dispatched Qty × dosage%" side of a future MTS Quarterly Reco mechanism, §108.4) remains gated on
+the **Dispatch (L5) formal design session**, which has not happened (~51% designed per §9's Layer
+table). AC05 supplies only the static recipe+rate half of that future mechanism; it does not itself
+attempt any dispatch-wise breakdown.
+
+**Not yet done:** implementation (schema/backend/frontend) has not started — this section is a pure
+design lock. No migration, handler, or page exists for AC05 yet.
