@@ -25337,9 +25337,12 @@ here the date is being applied against **AC05's own** effective-dated rows, keye
 **RMC/PMC derivation — which Stroke's RM/PM composition is used, and when it's resolved (locked
 2026-09-24, this session):**
 - MTS's SO never references a Stroke directly (unlike a hypothetical MTO/HPS-style explicit pick),
-  so AC05 has to resolve one internally from (SKU, Vendor Code) alone: **SKU → Prodshade**
-  (`prodshade_pack_config`) **→ Vendor Code → the one specific Stroke** that vendor code currently
-  maps to for that Prodshade (`vendor_code_stroke_override`: an actively-overridden Stroke for a
+  so AC05 has to resolve one internally from (SKU, Vendor Code) alone: **SKU → Prodshade** (via
+  `shade_code` match — the same already-built, already-verified `resolveProdshade()` mechanism
+  `ac07_costing.handlers.ts` uses, not `prodshade_pack_config`, which turned out on closer schema
+  check to hold no direct SKU-identity column at all — confirmed against real CMP003 data while
+  writing the Codex brief for this) **→ Vendor Code → the one specific Stroke** that vendor code
+  currently maps to for that Prodshade (`vendor_code_stroke_override`: an actively-overridden Stroke for a
   non-Primary code, or — when no override exists — the Prodshade's un-overridden Stroke for Primary).
 - **Live-verified against real Prod data in this session** (project `bsjpvkigpllichlknmah`, CMP003):
   every Prodshade in Prod that currently has more than one `po_type='MTS'` APPROVED Stroke (3 real
@@ -25373,8 +25376,9 @@ AC05 auto-generates pending rows so no MTS SKU using that material silently keep
    `default_storage_location_id` falls inside that same `ac06_sloc_group`.
 2. Group those lines by their parent `stroke_master` (filtered to `po_type='MTS'`, `status='APPROVED'`,
    same company).
-3. For each matching Stroke, take its `prodshade_material_id` and, via `prodshade_pack_config`, find
-   every packed SKU built from that Prodshade.
+3. For each matching Stroke, take its `prodshade_material_id`'s own `shade_code` and find every FG
+   SKU sharing that `shade_code` (same `resolveProdshade()`-reverse lookup as above, not
+   `prodshade_pack_config`).
 4. For each (SKU × that specific Stroke's resolved vendor code — Primary or override, per the
    freeze-at-creation rule above) combination, create one **pending** AC05 row: rate left blank,
    Wastage % carried forward from the latest prior row for that SKU (if any), Effective Date = the
