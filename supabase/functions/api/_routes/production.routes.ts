@@ -34,6 +34,7 @@ import {
   unmapCompanyVendorCodeHandler,
   createVendorCodeOverrideHandler,
   deleteVendorCodeOverrideHandler,
+  listCompanyVendorCodesForSalesOrderHandler,
 } from "../_core/production/vendor_code.handlers.ts";
 import {
   listPackCodesHandler,
@@ -279,6 +280,10 @@ export async function dispatchProductionRoutes(
       return await createVendorCodeOverrideHandler(req, ctx);
     case "POST:/api/production/company-vendor-codes/override/delete":
       return await deleteVendorCodeOverrideHandler(req, ctx);
+    // Vendor Code (§141) -- SO01 read-only cross-module (same PROC_SO_CREATE
+    // exposure pattern as this file's AC06 approved-months route).
+    case "GET:/api/production/company-vendor-codes/for-so":
+      return await listCompanyVendorCodesForSalesOrderHandler(req, ctx);
 
     // Batch Series (SA config)
     case "GET:/api/production/batch-series":

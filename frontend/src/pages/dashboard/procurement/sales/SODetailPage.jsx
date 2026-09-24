@@ -23,7 +23,7 @@ import {
   updateSalesOrderUnified,
 } from "../procurementApi.js";
 import { listFgDepotCodes, listFgParentCompanies } from "../../om/omApi.js";
-import { listAc06ApprovedMonths } from "../../production/prodApi.js";
+import { listAc06ApprovedMonths, listCompanyVendorCodesForSalesOrder } from "../../production/prodApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
@@ -149,12 +149,13 @@ export default function SODetailPage() {
   const [identityEdit, setIdentityEdit] = useState({
     parent_company_id: "", vdc_id: "", depot_code_id: "", customer_id: "",
     ship_to_customer_address_id: "", bill_to_party: "", asian_billed_choice: "",
-    asian_billed_vdc_dc_id: "", no_inbound_sub_type: "DIRECT",
+    asian_billed_vdc_dc_id: "", no_inbound_sub_type: "DIRECT", vendor_code_id: "",
   });
   const [savingIdentity, setSavingIdentity] = useState(false);
   const [parentCompanies, setParentCompanies] = useState([]);
   const [depotCodes, setDepotCodes] = useState([]);
   const [ac06Months, setAc06Months] = useState([]);
+  const [vendorCodeOptions, setVendorCodeOptions] = useState([]);
   const customerQuery = useCustomerOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
@@ -296,13 +297,28 @@ export default function SODetailPage() {
       no_inbound_sub_type: detail.dispatch_type === "DEPENDENT_NO_INBOUND"
         ? (billToType === "DEPOT" ? "DEPOT" : "DIRECT")
         : "DIRECT",
+      vendor_code_id: detail.vendor_code_id || "",
     });
   }, [detail]);
+  // §141 — Vendor Code options for this SO's company, same fetch shape as
+  // SO01CreatePage.jsx (fetchProd unwraps straight to the bare array).
+  useEffect(() => {
+    if (!detail?.company_id) { setVendorCodeOptions([]); return; }
+    listCompanyVendorCodesForSalesOrder({ company_id: detail.company_id })
+      .then((result) => setVendorCodeOptions(Array.isArray(result) ? result : []))
+      .catch(() => setVendorCodeOptions([]));
+  }, [detail?.company_id]);
 
   const dispatchType = detail?.dispatch_type || "";
   const effectiveNoInboundType = dispatchType === "DEPENDENT_NO_INBOUND"
     ? (identityEdit.no_inbound_sub_type === "DIRECT" ? "DEPENDENT_DIRECT" : "DEPENDENT_DEPOT")
     : dispatchType;
+  // §141 — dispatch_type/material_types never change post-create, so this
+  // is fixed for the SO's whole lifetime; only WHICH code is correctable.
+  const soMaterialTypes = Array.isArray(detail?.material_types) ? detail.material_types : [];
+  const vendorCodeRequired = Boolean(dispatchType) && dispatchType !== "INDEPENDENT_PARTY"
+    && (soMaterialTypes.includes("FG") || soMaterialTypes.includes("SFG"));
+  const currentVendorCode = vendorCodeOptions.find((entry) => entry.vendor_code_id === detail?.vendor_code_id) || null;
 
   useEffect(() => {
     if (!(effectiveNoInboundType === "DEPENDENT_DIRECT" || effectiveNoInboundType === "DEPENDENT_DEPOT" || dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED")) return;
@@ -420,6 +436,7 @@ export default function SODetailPage() {
       }
     }
     if (dispatchType === "DEPENDENT_NO_INBOUND") payload.no_inbound_sub_type = identityEdit.no_inbound_sub_type;
+    if (vendorCodeRequired) payload.vendor_code_id = identityEdit.vendor_code_id;
     return payload;
   }
 
@@ -776,6 +793,11 @@ export default function SODetailPage() {
               <ErpFieldPreview label="Ship-To Type" value={detail.ship_to_type || "-"} />
               <ErpFieldPreview label="Ship-To GST Number" value={detail.ship_to_gst_number || "-"} />
               <ErpFieldPreview label="Ship-To Address" value={detail.ship_to_address || "-"} />
+              {vendorCodeRequired ? (
+                <ErpFieldPreview label="Vendor Code" value={currentVendorCode
+                  ? `${currentVendorCode.vendor_code}${currentVendorCode.description ? ` — ${currentVendorCode.description}` : ""}`
+                  : (detail.vendor_code_id ? detail.vendor_code_id : "-")} />
+              ) : null}
             </div>
 
             {identityEditable ? (
@@ -856,6 +878,30 @@ export default function SODetailPage() {
                       </ErpDenseFormRow>
                       {identityEdit.no_inbound_sub_type === "DIRECT" ? identityBillToPartyToggle() : null}
                     </div>
+                  </div>
+                ) : null}
+                {vendorCodeRequired ? (
+                  <div className="max-w-sm">
+                    <ErpDenseFormRow label="Vendor Code" required>
+                      {vendorCodeOptions.length === 0 ? (
+                        <div className="border border-rose-400 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                          This company has no Vendor Code configured. Ask Accounts to set one up (Company Vendor Code, AC11).
+                        </div>
+                      ) : vendorCodeOptions.length === 1 ? (
+                        <input readOnly value={`${vendorCodeOptions[0].vendor_code}${vendorCodeOptions[0].description ? ` — ${vendorCodeOptions[0].description}` : ""}`}
+                          className="h-9 w-full border border-slate-300 bg-slate-100 px-3 text-sm text-slate-700 outline-none" />
+                      ) : (
+                        <select value={identityEdit.vendor_code_id} onChange={(event) => updateIdentityEdit({ vendor_code_id: event.target.value })}
+                          className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+                          <option value="">Select Vendor Code</option>
+                          {vendorCodeOptions.map((option) => (
+                            <option key={option.vendor_code_id} value={option.vendor_code_id}>
+                              {option.vendor_code}{option.description ? ` — ${option.description}` : ""}{option.is_primary ? " (Primary)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </ErpDenseFormRow>
                   </div>
                 ) : null}
                 <div className="flex justify-end">

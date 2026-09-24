@@ -154,6 +154,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // SO01's FG picker is a create-form prerequisite, so it shares the same
   // create authority rather than requiring a separate Production permission.
   "GET:/api/procurement/sales-orders/fg-sku-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "WRITE" },
+  "GET:/api/procurement/sales-orders/sfg-material-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "WRITE" },
   "GET:/api/procurement/sales-orders/stroke-check-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
   "GET:/api/procurement/sales-orders/address-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
 
@@ -317,6 +318,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/company-vendor-codes/unmap": { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
   "POST:/api/production/company-vendor-codes/override": { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
   "POST:/api/production/company-vendor-codes/override/delete": { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "WRITE" },
+  "GET:/api/production/company-vendor-codes/for-so": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
   "POST:/api/production/ac06/rates":                 { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_RATE", action: "WRITE" },
   "POST:/api/production/ac06/rates/split":           { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_RATE", action: "WRITE" },
   "POST:/api/production/ac06/rates/split/delete":    { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_RATE", action: "WRITE" },

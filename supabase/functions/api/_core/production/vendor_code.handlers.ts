@@ -310,6 +310,76 @@ export async function deleteVendorCodeOverrideHandler(req: Request, ctx: ProdHan
 }
 
 // ---------------------------------------------------------------------------
+// SO01 (§141) -- read-only, cross-module. Sales users creating an SO are
+// never granted ACC_COMPANY_VENDOR_CODE (that's Accounts-only), so this does
+// NOT call requireVendorCodeAction -- access is gated at the route level to
+// PROC_SO_CREATE:WRITE instead, the same pattern this file's sibling
+// sales_order.handlers.ts already uses to expose AC06 approved months to
+// SO01 without granting Accounts' own ACL resource.
+// ---------------------------------------------------------------------------
+
+export async function listCompanyVendorCodesForSalesOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const companyId = await companyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? undefined);
+    if (!companyId) return vcError(req, ctx, "VENDOR_CODE_COMPANY_REQUIRED", 400, "company_id is required.");
+    const db = serviceRoleClient.schema("erp_production");
+    const { data: maps, error: mapsError } = await db.from("company_vendor_code_map")
+      .select("vendor_code_id, is_primary").eq("company_id", companyId).eq("active", true);
+    if (mapsError) throw new Error("VENDOR_CODE_LIST_FAILED");
+    const mappedRows = (maps ?? []) as Row[];
+    const codeIds = ids(mappedRows.map((row) => row.vendor_code_id));
+    const { data: codes, error: codesError } = codeIds.length
+      ? await db.from("vendor_code_master").select("id, vendor_code, description").in("id", codeIds)
+      : { data: [], error: null };
+    if (codesError) throw new Error("VENDOR_CODE_LIST_FAILED");
+    const codeById = new Map(((codes ?? []) as Row[]).map((row) => [toTrimmedString(row.id), row]));
+    const data = mappedRows.map((row) => {
+      const code = codeById.get(toTrimmedString(row.vendor_code_id));
+      return {
+        vendor_code_id: row.vendor_code_id,
+        vendor_code: code?.vendor_code ?? null,
+        description: code?.description ?? null,
+        is_primary: Boolean(row.is_primary),
+      };
+    }).sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || String(a.vendor_code ?? "").localeCompare(String(b.vendor_code ?? "")));
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "VENDOR_CODE_LIST_FAILED";
+    return vcError(req, ctx, code, 500, "Unable to load vendor codes for this company.");
+  }
+}
+
+// Non-primary vendor code -> the set of Prodshade material_ids eligible for
+// it (via its Stroke overrides). Empty set = no override exists yet for this
+// vendor code, so no FG/SFG item is eligible (caller must not fall back to
+// "show everything" -- that would silently mean the Primary's scope).
+export async function getEligibleProdshadeIdsForVendorCode(companyId: string, vendorCodeId: string): Promise<Set<string>> {
+  const db = serviceRoleClient.schema("erp_production");
+  const { data: map, error: mapError } = await db.from("company_vendor_code_map")
+    .select("id").eq("company_id", companyId).eq("vendor_code_id", vendorCodeId).eq("active", true).maybeSingle();
+  if (mapError) throw new Error("VENDOR_CODE_ELIGIBILITY_LOOKUP_FAILED");
+  if (!map) return new Set();
+  const { data: overrides, error: overridesError } = await db.from("vendor_code_stroke_override")
+    .select("stroke_master_id").eq("company_id", companyId).eq("active", true).eq("company_vendor_code_map_id", toTrimmedString(map.id));
+  if (overridesError) throw new Error("VENDOR_CODE_ELIGIBILITY_LOOKUP_FAILED");
+  const strokeIds = ids((overrides ?? []).map((row: Row) => row.stroke_master_id));
+  if (strokeIds.length === 0) return new Set();
+  const strokes = await fetchInChunks<Row>(strokeIds, (chunk) =>
+    db.from("stroke_master").select("prodshade_material_id").in("id", chunk));
+  return new Set(strokes.map((row) => toTrimmedString(row.prodshade_material_id)).filter(Boolean));
+}
+
+// Is the given vendor_code_id this company's own Primary? SO01 skips the
+// eligibility filter entirely when it is (Primary applies to everything that
+// has no override, same as the Accounts workspace's own default rule).
+export async function isPrimaryVendorCodeForCompany(companyId: string, vendorCodeId: string): Promise<boolean> {
+  const { data, error } = await serviceRoleClient.schema("erp_production").from("company_vendor_code_map")
+    .select("is_primary").eq("company_id", companyId).eq("vendor_code_id", vendorCodeId).eq("active", true).maybeSingle();
+  if (error) throw new Error("VENDOR_CODE_ELIGIBILITY_LOOKUP_FAILED");
+  return Boolean(data?.is_primary);
+}
+
+// ---------------------------------------------------------------------------
 // Shared resolver -- for AC05/dispatch (future consumers): which vendor code
 // applies to a given company+Stroke -- the Stroke's own override if one
 // exists, else the company's Primary vendor code.

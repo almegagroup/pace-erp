@@ -324,6 +324,7 @@ import {
   createSalesOrderUnifiedHandler,
   listSalesOrderAddressOptionsHandler,
   listSalesOrderFgSkuOptionsHandler,
+  listSalesOrderSfgMaterialOptionsHandler,
   listSalesOrderStrokeCheckOptionsHandler,
   createSOHandler,
   getSalesInvoiceHandler,
@@ -694,6 +695,8 @@ export async function dispatchProcurementRoutes(
       return await createSalesOrderUnifiedHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/fg-sku-options":
       return await listSalesOrderFgSkuOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-orders/sfg-material-options":
+      return await listSalesOrderSfgMaterialOptionsHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/stroke-check-options":
       return await listSalesOrderStrokeCheckOptionsHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/address-options":
