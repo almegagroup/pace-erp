@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import SalesOrderFgSkuPicker from "./SalesOrderFgSkuPicker.jsx";
+import SalesOrderSfgMaterialPicker from "./SalesOrderSfgMaterialPicker.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -27,7 +28,7 @@ import {
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
-import { listAc06ApprovedMonths } from "../../production/prodApi.js";
+import { listAc06ApprovedMonths, listCompanyVendorCodesForSalesOrder } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderStrokeCheckOptions } from "../procurementApi.js";
@@ -240,10 +241,26 @@ export default function SO01CreatePage() {
   const [materialTypes, setMaterialTypes] = useState([]);
   const [dispatchType, setDispatchType] = useState("");
   const [ibnRequiredManual, setIbnRequiredManual] = useState(false);
+  const [vendorCodeId, setVendorCodeId] = useState("");
+  const [vendorCodeOptions, setVendorCodeOptions] = useState([]);
 
   const ibnRequired = dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED"
     ? ibnRequiredManual
     : Boolean(IBN_REQUIRED_MAP[dispatchType]);
+  // §141 — every Dispatch Type except plain "Independent Party" resolves its
+  // Bill-To to an Asian Paints entity (Parent Company/VDC/Depot — verified
+  // against live prod data: fg_parent_company holds only Asian Paints state
+  // registrations, nothing else). Vendor Code is header-level (one SO never
+  // mixes two), so it belongs on Page 1 alongside the fields that decide it.
+  const isAsianBilledDispatch = Boolean(dispatchType) && dispatchType !== "INDEPENDENT_PARTY";
+  const vendorCodeRequired = isAsianBilledDispatch
+    && (materialTypes.includes("FG") || materialTypes.includes("SFG"));
+  const primaryVendorCode = vendorCodeOptions.find((entry) => entry.is_primary) || null;
+  useEffect(() => {
+    if (vendorCodeRequired && primaryVendorCode && !vendorCodeId) setVendorCodeId(primaryVendorCode.vendor_code_id);
+    if (!vendorCodeRequired && vendorCodeId) setVendorCodeId("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendorCodeRequired, primaryVendorCode]);
 
   // Page 2 — Bill-To/Ship-To resolution state (only the fields relevant to
   // the selected dispatch_type get sent; §133.8-B).
@@ -363,6 +380,16 @@ export default function SO01CreatePage() {
       .then((result) => setAc06Months(Array.isArray(result) ? result : []))
       .catch(() => setAc06Months([]));
   }, [companyId]);
+  // §141 — Vendor Code options for this company. fetchProd unwraps this
+  // handler's plain okResponse({ data: [...] }) (no pagination key) straight
+  // to the bare array — same shape listAc06ApprovedMonths above resolves to.
+  useEffect(() => {
+    if (!companyId) { setVendorCodeOptions([]); setVendorCodeId(""); return; }
+    listCompanyVendorCodesForSalesOrder({ company_id: companyId })
+      .then((result) => setVendorCodeOptions(Array.isArray(result) ? result : []))
+      .catch(() => setVendorCodeOptions([]));
+    setVendorCodeId("");
+  }, [companyId]);
   useEffect(() => {
     if (!parentCompanyId) { setDepotCodes([]); return; }
     // §133.20 — Asian-billed needs both VDC and DC under the parent (user
@@ -387,6 +414,11 @@ export default function SO01CreatePage() {
     if (!companyId) { setError("Select a company."); return; }
     if (materialTypes.length === 0) { setError("Select at least one Material Type."); return; }
     if (!dispatchType) { setError("Select a Dispatch Type."); return; }
+    if (vendorCodeRequired && vendorCodeOptions.length === 0) {
+      setError("This company has no Vendor Code configured — required for FG/SFG dispatch billed to Asian Paints.");
+      return;
+    }
+    if (vendorCodeRequired && !vendorCodeId) { setError("Select a Vendor Code."); return; }
     setError("");
     setLines(materialTypes.map((materialType) => makeLine(materialType)));
     setPage(2);
@@ -533,7 +565,9 @@ export default function SO01CreatePage() {
           </select>
         ) },
         { key: "material", label: "Item", width: "200px", render: (line) => (
-          <ErpComboboxField value={line.material_id} onChange={(value) => handleMaterialSelect(line.__key, value)} options={materialOptionsFor("SFG")} blankLabel="Select SFG" />
+          <SalesOrderSfgMaterialPicker key={`${companyId}|${vendorCodeId}`} companyId={companyId} vendorCodeId={vendorCodeId}
+            value={line.material_id} selectedMaterial={fgSkuMap.get(line.material_id)}
+            onChange={(value, material) => handleMaterialSelect(line.__key, value, material)} />
         ) },
         { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
         { key: "batch", label: "Batch No.", width: "110px", render: (line) => textInput(line.batch_number, (value) => updateLine(line.__key, { batch_number: value })) },
@@ -570,7 +604,8 @@ export default function SO01CreatePage() {
           {line.__manualSku ? (
             textInput(line.manual_sku_name, (value) => updateLine(line.__key, { manual_sku_name: value }), { placeholder: "Type SKU name" })
           ) : (
-            <SalesOrderFgSkuPicker key={`${companyId}|${line.fg_type}`} companyId={companyId} fgType={line.fg_type}
+            <SalesOrderFgSkuPicker key={`${companyId}|${line.fg_type}|${vendorCodeId}`} companyId={companyId} fgType={line.fg_type}
+                vendorCodeId={vendorCodeId}
                 value={line.material_id} selectedSku={fgSkuMap.get(line.material_id)}
                 onChange={(value, sku) => handleMaterialSelect(line.__key, value, sku)} />
           )}
@@ -740,6 +775,7 @@ export default function SO01CreatePage() {
         so_date: soDate,
         material_types: materialTypes,
         dispatch_type: dispatchType,
+        vendor_code_id: vendorCodeRequired ? vendorCodeId : null,
         customer_po_number: externalSoNumber.trim(),
         customer_po_date: externalSoDate || null,
         ibn_required: dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED" ? ibnRequiredManual : undefined,
@@ -851,6 +887,34 @@ export default function SO01CreatePage() {
               ))}
             </div>
           </div>
+          {/* §141 — Vendor Code: mandatory exactly when FG/SFG is checked AND
+              the Dispatch Type resolves its Bill-To to Asian Paints (i.e. any
+              Dispatch Type except plain Independent Party). One SO never
+              mixes two vendor codes, hence a single header field here. */}
+          {vendorCodeRequired && (
+            <div className="mt-4 max-w-sm">
+              <ErpDenseFormRow label="Vendor Code" required>
+                {vendorCodeOptions.length === 0 ? (
+                  <div className="border border-rose-400 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                    This company has no Vendor Code configured. Ask Accounts to set one up
+                    (Company Vendor Code, AC11) before creating this SO.
+                  </div>
+                ) : vendorCodeOptions.length === 1 ? (
+                  <input readOnly value={`${vendorCodeOptions[0].vendor_code}${vendorCodeOptions[0].description ? ` — ${vendorCodeOptions[0].description}` : ""}`}
+                    className="h-9 w-full border border-slate-300 bg-slate-100 px-3 text-sm text-slate-700 outline-none" />
+                ) : (
+                  <select value={vendorCodeId} onChange={(event) => setVendorCodeId(event.target.value)}
+                    className="h-9 w-full border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500">
+                    {vendorCodeOptions.map((option) => (
+                      <option key={option.vendor_code_id} value={option.vendor_code_id}>
+                        {option.vendor_code}{option.description ? ` — ${option.description}` : ""}{option.is_primary ? " (Primary)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </ErpDenseFormRow>
+            </div>
+          )}
         </ErpSectionCard>
       ) : (
         <div className="grid gap-4">

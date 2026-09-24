@@ -25065,15 +25065,52 @@ Primary"/"Remove", an "Add a vendor code" picker sourced live from the workspace
 code picker for the override target).
 
 **ACL provisioning (Dev, `ytapuwiqicmvpanmzelb`):** `erp_menu.menu_master`/`acl.menu_master` row
-(`ACC_COMPANY_VENDOR_CODE`, tx_code AC11) + `erp_menu.menu_tree` under `GRP_ACL_ACCOUNTS` +
-`CAP_PROC_ACCOUNTS` VIEW/WRITE via live `acl.capability_menu_actions`, then the full §8 4-step
-sequence: since all 4 active companies' `acl_versions` already had `source_captured_at` populated
-(a prior capture, so re-capturing the same version would have been a no-op per §8's documented
-correction), a **new** `acl_versions` row was created per company (version bumped, e.g. v40→v41),
-captured, snapshotted (`generate_acl_snapshot`), then `rebuild_acl_menu_snapshot` re-run for every
-user with an active work context in those 4 companies (22 snapshot rows confirmed for
-`ACC_COMPANY_VENDOR_CODE` afterward). **Prod still needs the same 4-step sequence** (pure data
-config, not a migration) before this page will appear for any prod ACL user.
+(`ACC_COMPANY_VENDOR_CODE`, tx_code AC11) + `erp_menu.menu_tree` under `GRP_ACL_ACCOUNTS`. **First
+attempt used `CAP_PROC_ACCOUNTS` (already-existing, shared with AC04) — corrected same day: that
+capability turned out far broader than intended (11 roles reachable, not just L1/L2_AUDITOR +
+DIRECTOR), so a dedicated `CAP_VENDOR_CODE_AUDITOR` capability was created instead**, granted via
+`role_capabilities` to L1_AUDITOR/L2_AUDITOR/DIRECTOR and via `work_context_capabilities` to the
+same 8 work_contexts `CAP_PROC_ACCOUNTS` used (2 per company × 4 companies), then mapped VIEW+WRITE
+via `capability_menu_actions`. Required 3 version-bump cycles to get right (first attempt: role
+grant alone with no matching work_context grant produced zero access for anyone — the engine needs
+**both** a `role_capabilities` row AND a `work_context_capabilities` row for the same capability
+code). **Confirmed the hard way, via reading `acl.generate_acl_snapshot()`'s own SQL: DIRECTOR does
+NOT auto-inherit AUDITOR-tier capabilities by rank** — DIRECTOR's family is MANAGER, and
+MANAGER-family rank-inheritance never crosses into AUDITOR-family; DIRECTOR had to be added to
+`role_capabilities` explicitly, same as L1/L2_AUDITOR. Followed the full §8 4-step sequence: since
+all 4 active companies' `acl_versions` already had `source_captured_at` populated (a prior capture,
+so re-capturing the same version would have been a no-op per §8's documented correction), a **new**
+`acl_versions` row was created per company (version bumped), captured, snapshotted
+(`generate_acl_snapshot`), then `rebuild_acl_menu_snapshot` re-run for every user with an active
+work context in those 4 companies — confirmed ONLY L1_AUDITOR/L2_AUDITOR/DIRECTOR get ALLOW
+(querying `precomputed_acl_view` unfiltered by `is_active` version briefly showed a stale
+L3_MANAGER row from a superseded version — a false alarm, not a real grant; always filter to
+`acl_versions.is_active = true` when verifying).
+
+**✅ ACL provisioning (Prod, `bsjpvkigpllichlknmah`) — DONE 2026-09-23.** Both pages live in Prod
+now, business owner confirmed the PR merged first. **OM11 "Vendor Code Master"** (SA universe,
+`erp_menu.menu_master` under `GRP_SA_OM`, display_order 110, next slot after OM09/OM10) — visible
+to both real Prod SA users (SA001, SA002) via `rebuild_sa_menu_snapshot`. **AC11 "Company Vendor
+Code"** (`erp_menu.menu_master`+`acl.menu_master`, under `GRP_ACL_ACCOUNTS` display_order 12, next
+slot after AC10) — access via two capabilities, mirroring the existing AC06 (SLoc Costing Group)
+precedent exactly rather than inventing a new pattern: `CAP_VENDOR_CODE_AUDITOR` (role_capabilities
+→ L1_AUDITOR/L2_AUDITOR/DIRECTOR; work_context_capabilities → the same Auditor-tier + Director-tier
+department work_contexts AC06's own `CAP_AC06_VIEW_AUDITOR`/`CAP_AC06_VIEW_DIRECTOR` already use,
+5 companies for Auditor tier — CMP003/005/006/010/011 — 4 for Director tier, CMP010 has no Prod
+Director-tier work context configured) and a separate `CAP_VENDOR_CODE_ACL_MASTER` (role_capabilities
+→ DIRECTOR; work_context_capabilities → P0076's own 4 dedicated maintenance work_contexts, mirroring
+`CAP_AC06_ACL_MASTER` exactly) — both mapped VIEW+WRITE via `capability_menu_actions` (per business
+owner's explicit "full access" instruction; AC06's own ACL_MASTER capability only carries VIEW,
+this one deliberately also carries WRITE). New `acl_versions` row created + captured + snapshotted
+for all 5 affected companies (CMP003/005/006/010/011), `rebuild_acl_menu_snapshot` re-run for every
+affected user. **Verified live in `erp_menu.menu_snapshot`:** P0010 (L2_AUDITOR) sees AC11 in
+CMP003/006/010; P0074/P0079 (DIRECTOR/L1_AUDITOR) see it in CMP003/006; P0076 (ACL-MASTER) sees it
+in CMP003/005/006/011 (not CMP010 — inherited gap, P0076 has no work_context assigned there at all,
+same pre-existing gap AC06 itself has, not introduced by this rollout); P0002 (a different DIRECTOR,
+on a work_context AC06 itself doesn't grant either) correctly does NOT see it — consistent with
+existing AC06 behavior, not a new omission. No unintended role got access. **Not yet done:** AC05
+itself, wiring `resolveVendorCodeForStroke()` into a real consumer, live click-through in the
+deployed app.
 
 **Verified:** migration applied to Dev, reconciled to local filename timestamp, `NOTIFY pgrst,
 'reload schema'` issued, `deno check`/`eslint` clean on every touched/new file (zero new errors
@@ -25084,5 +25121,134 @@ insert for the same company is rejected).
 
 **Not yet done:** AC05 itself — this feature exists to unblock it, per the business owner's own
 stated order (Vendor Code → AC05 → Dispatch); wiring `resolveVendorCodeForStroke()` into any real
-consumer; prod ACL provisioning (dev-only so far, same as every other ACL data change this session);
-live click-through in the deployed app.
+consumer; live click-through in the deployed app. Prod ACL provisioning is now done — see the
+2026-09-23 Prod paragraph above.
+
+## Section 141
+
+### 141.1 — SO01 Vendor Code header field — ✅ DESIGN LOCKED + IMPLEMENTATION COMPLETE (2026-09-24)
+
+**Business context:** §140's Company Vendor Code (AC11) mechanism was built but never consumed
+anywhere. This closes that gap on the demand side — SO01 (Sales Order create) now captures which
+Vendor Code a dispatch is billed under, the prerequisite AC05 (MTS SKU costing) will key off later.
+
+**Locked rule (business owner, 2026-09-24):**
+- Vendor Code is a **header field** — one SO never mixes two vendor codes (a single dispatch billed
+  under two different Asian Paints vendor identities makes no business sense) — so it lives on
+  `sales_order`, not the line, same as `company_id`/`dispatch_type`.
+- **Mandatory exactly when both hold:** (a) Material Type includes **FG or SFG**, **and** (b) the
+  Bill-To resolves to **Asian Paints**, not an independent customer. Initially scoped to the single
+  "Independent Party (Asian-billed)" dispatch type — corrected same session after the business owner
+  pushed back ("je je case e Bill to Asian paints hobe sei sei case e"). Verified against live Prod
+  data: `erp_master.fg_parent_company` holds **only** Asian Paints state-registration entities (16
+  rows, all "ASIAN PAINTS LTD/LIMITED — <state>"), so **every** `bill_to_type` value except
+  `CUSTOMER` (i.e. `PARENT_COMPANY`/`VDC`/`DEPOT`) is unconditionally Asian Paints — which is **4 of
+  the 5** Dispatch Types (everything except plain "Independent Party"), confirmed by tracing every
+  branch of `resolveBillToShipTo()`'s bill-to resolution (including every Independent-Party-Asian-
+  billed sub-choice VDC/DC/None, which all resolve to a non-CUSTOMER type by that dispatch type's own
+  definition).
+- **Page placement:** Page 1 (Criteria), not Page 2 — reasoned through explicitly at the business
+  owner's request ("jei page e bosale resolve ta prominent hobe seta tumi vebe bolo"). Asian-billed-
+  ness turned out to be fully decidable from Dispatch Type alone (no sub-choice on Page 2 changes
+  whether it's Asian-billed, only which Asian Paints entity), so Page 1 is not just more prominent —
+  it is the only page where the requirement is even knowable before the user starts entering items,
+  letting the FG/SFG item-line dropdowns be correctly filtered from the moment Page 2 opens instead
+  of failing validation after a customer/items are already filled in.
+- **Single vendor code mapped** → shown locked/read-only (no dropdown) — reuses the existing
+  single-company-locked UI convention (Design Authority Law 12), not a new pattern.
+- **Multiple mapped** → dropdown, defaults to the company's Primary, user may pick any non-primary.
+- **Zero mapped, but the FG/SFG+Asian-billed condition applies** → SO creation is blocked entirely,
+  both FE (Page 1 → Page 2 gate refuses to advance, red inline message naming AC11 as the fix) and
+  BE (`SO_VENDOR_CODE_REQUIRED`/`SO_VENDOR_CODE_INVALID`).
+- **Non-primary vendor code selected** → the FG SKU / SFG material dropdowns on Page 2 narrow to only
+  the items whose Prodshade is overridden onto that vendor code (via `vendor_code_stroke_override`).
+  Primary selected (the default, single-code-locked case included) → unfiltered, exactly today's
+  behaviour, since Primary implicitly covers everything with no override.
+
+**Schema (migration `20260924100000_so01_vendor_code_header.sql`):** `erp_procurement.sales_order`
+gets nullable `vendor_code_id uuid REFERENCES erp_production.vendor_code_master(id)` + a partial
+index. Deliberately nullable at the DB level — mandatory-ness is a business rule that depends on
+material_types + resolved bill_to_type, both only known at write time, so it is enforced in
+`createSalesOrderUnifiedHandler`, not a NOT NULL/CHECK constraint.
+
+**Backend:**
+- `vendor_code.handlers.ts` gains three exports for this: `listCompanyVendorCodesForSalesOrderHandler`
+  (company's mapped codes, `{vendor_code_id, vendor_code, description, is_primary}[]`, Primary
+  sorted first) — deliberately does **not** call `requireVendorCodeAction`/`ACC_COMPANY_VENDOR_CODE`
+  (Sales users creating an SO are never granted that Accounts-only resource); access is gated at the
+  route level to `PROC_SO_CREATE:WRITE` instead, mirroring the exact pattern this codebase already
+  uses to expose AC06's approved-months to SO01 (`GET /api/production/ac06/approved-months`, same
+  resource code) without granting Accounts' own ACL resource to Sales roles. Plus
+  `getEligibleProdshadeIdsForVendorCode(companyId, vendorCodeId)` (the Prodshade set a non-primary
+  code's Stroke overrides resolve to) and `isPrimaryVendorCodeForCompany(companyId, vendorCodeId)`
+  (skip the eligibility filter entirely when it's Primary).
+- `sales_order.handlers.ts`:
+  - `createSalesOrderUnifiedHandler` — computes `vendorCodeRequired` right after `resolveBillToShipTo()`
+    returns (`resolved.billToType !== "CUSTOMER"` is the exact Asian-Paints-or-not signal), validates
+    the posted `vendor_code_id` actually belongs to the company's active `company_vendor_code_map`
+    when required, stores it on the header. Deliberately does **not** re-derive/re-validate that each
+    line's chosen material's Prodshade actually matches the header vendor code's eligibility — that
+    consistency is enforced entirely by filtering the Page 2 dropdowns, same trust boundary this
+    file's own declared-Stroke-number red-dot check (§133.21) already documents as "informational,
+    no dispatch block" for a comparable case; hardening this further is a deliberate scope line, not
+    an oversight.
+  - `listSalesOrderFgSkuOptionsHandler` — new optional `vendor_code_id` query param; when it resolves
+    to a non-Primary code, the existing per-SKU derived `prodshade_material_id` (already computed for
+    §133.21) is checked against `getEligibleProdshadeIdsForVendorCode()`'s set; MTEST is always out of
+    scope (no Stroke/Prodshade concept). Primary or no `vendor_code_id` → unfiltered, unchanged.
+  - New `listSalesOrderSfgMaterialOptionsHandler` — a **dedicated** company-scoped, vendor-code-aware
+    SFG material list. Deliberately not a widening of the shared `useMaterialOptionsQuery` generic
+    materials list SO01's RM/PM/INT/SFG sections currently pull from client-side (that list has zero
+    company scoping today — widening it risks every other page it feeds). Simpler than the FG
+    handler: an SFG `material_id` **is** its own Prodshade reference directly
+    (`stroke_master.prodshade_material_id` points at that same `material_master` row), so no
+    pack_code/`prodshade_pack_config` derivation step is needed.
+
+**Frontend (`SO01CreatePage.jsx`):** Vendor Code state fetches via a `useEffect` keyed on `companyId`,
+mirroring the file's own existing AC06-approved-months fetch exactly (including the identical
+`fetchProd` bare-array unwrap — this handler's `okResponse({ data })` carries no `pagination` key, so
+`fetchProd` unwraps straight to the array, same shape `listAc06ApprovedMonths` already resolves to;
+checked directly against `fetchProd`'s actual unwrap logic before writing this, per bug pattern #15).
+`vendorCodeRequired` recomputes live from `materialTypes`/`dispatchType`; an effect auto-selects the
+Primary the moment options load, and clears the selection when the requirement stops applying.
+`goToPage2()` hard-blocks on both the zero-vendor-code and no-selection cases. New
+`SalesOrderSfgMaterialPicker.jsx` (mirrors `SalesOrderFgSkuPicker.jsx`) replaces the SFG line's old
+`materialOptionsFor("SFG")` client-side filter over the generic list; both this and the existing FG
+SKU picker now take a `vendorCodeId` prop threaded into their query key + API call.
+
+**Verified:** migration applied to Dev, reconciled to local filename timestamp, `NOTIFY pgrst,
+'reload schema'` issued, `migration-integrity-check` `in_sync: true`. `deno check` on every
+touched/new backend file — zero new errors against the established 108-error baseline (confirmed via
+git-stash before/after comparison). `eslint` clean on every touched/new frontend file. All 18
+`scripts/*.mjs` guards pass, including `jsx-no-undef-guard` (new component correctly imported),
+`route-acl-registry-guard` (0 missing registry matches), `frontend-payload-guard`, and
+`dependency-provisioning-check.mjs --strict-manifest` (SO01CreatePage.jsx already had manifest
+entries from earlier work, so new dependency calls into an already-covered page did not trip it).
+
+**Addendum, same session (2026-09-24) — SO Map correction window.** Business owner asked how the
+flagged "identity edit could desync vendor code" risk would be resolved. On closer reading of
+`updateSalesOrderUnifiedHandler`, that risk turned out not to exist: the handler's own comment
+confirms "Company/Dispatch Type/Material Types are never read from body here" — both are immutable
+post-creation, and since `vendorCodeRequired` depends on nothing else, it can never flip after
+creation. The real (much smaller) gap was pure UX: no way to *correct* a wrong Vendor Code selection
+before a line gets Mapped, even though Customer/Bill-To/Ship-To already have exactly that correction
+window. Closed it, following the exact same lock rule: `updateSalesOrderUnifiedHandler` gained an
+independent `vendor_code_id` block (deliberately not folded into `identityKeysPresent`, so correcting
+just the Vendor Code never forces resending the whole Bill-To/Ship-To payload) — locks the moment
+`hasAnyActiveMapping` is true, otherwise validates against `company_vendor_code_map` the same way
+`createSalesOrderUnifiedHandler` already does. `SODetailPage.jsx`'s existing identity-edit card
+(§136) gained a matching Vendor Code field (locked/dropdown/blocked, same three states as SO01's own
+Page 1) plus an always-visible read-only preview next to the existing Ship-To preview row, both
+gated on the SO's own fixed `dispatch_type`/`material_types` rather than any live re-computation.
+`deno check` and `eslint` clean, all guard scripts re-run and still pass.
+
+**Not yet done:** backfill — checked live Prod data first (per the business owner's own instruction,
+"akhono porjonto Non Primay te kono dispatch hoyni, tai Primary vendor code e fill kora jabe"):
+only CMP003 (81 SOs) and CMP006 (281 SOs) have any Sales Orders in Prod today, both already have a
+Primary vendor code mapped, and **zero** existing FG/SFG lines are `fg_type='MTS'` (all are
+MTO/HPS/MTEST) — so the backfill is a safe, unambiguous `UPDATE ... SET vendor_code_id = <company's
+Primary>` once this migration reaches Prod; not run yet since the schema change itself is Dev-only
+until the PR merges (Dev's own `sales_order` table has only 3 rows, all CMP003, and Dev has **zero**
+vendor codes mapped at all — nothing to backfill there). Also not done: live click-through in the
+deployed app (no dev login in this environment, consistent with every other feature this session).
+The SO Map / header-identity-edit path is now covered too — see the 2026-09-24 addendum above.

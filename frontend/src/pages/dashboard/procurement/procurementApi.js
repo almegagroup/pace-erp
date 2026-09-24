@@ -97,6 +97,12 @@ export function listSalesOrderFgSkuOptions(params) {
   return fetchProcurement("GET", "/api/procurement/sales-orders/fg-sku-options", undefined, params);
 }
 
+// §141 — company+vendor-code-aware SFG material list (mirrors the FG SKU
+// options endpoint above, but material_id IS its own Prodshade reference).
+export function listSalesOrderSfgMaterialOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-orders/sfg-material-options", undefined, params);
+}
+
 // §133.21 — SO01 MTO/HPS FG-line Stroke Number red-dot check reference set
 // (one fetch per company, checked client-side per line).
 export function listSalesOrderStrokeCheckOptions(params) {

@@ -68,6 +68,8 @@ export const mapCompanyVendorCode = (body) => fetchProd("POST", "/api/production
 export const setCompanyVendorCodePrimary = (body) => fetchProd("POST", "/api/production/company-vendor-codes/primary", body);
 export const unmapCompanyVendorCode = (body) => fetchProd("POST", "/api/production/company-vendor-codes/unmap", body);
 export const createVendorCodeOverride = (body) => fetchProd("POST", "/api/production/company-vendor-codes/override", body);
+// §141 — SO01 read-only cross-module (same PROC_SO_CREATE exposure pattern as AC06 approved-months below).
+export const listCompanyVendorCodesForSalesOrder = (p) => fetchProd("GET", "/api/production/company-vendor-codes/for-so", undefined, p);
 export const deleteVendorCodeOverride = (body) => fetchProd("POST", "/api/production/company-vendor-codes/override/delete", body);
 export const listBatchNumbers = (p) => fetchProd("GET", "/api/production/batch-numbers", undefined, p);
 export const releaseBatchNumber = (id, body) => fetchProd("POST", `/api/production/batch-numbers/${id}/release`, body);

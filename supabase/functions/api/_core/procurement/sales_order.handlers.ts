@@ -17,6 +17,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
+import { getEligibleProdshadeIdsForVendorCode, isPrimaryVendorCodeForCompany } from "../production/vendor_code.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -2622,6 +2623,10 @@ export async function listSalesOrderFgSkuOptionsHandler(
     const fgTypeFilter = toUpperTrimmedString(params.get("fg_type"));
     const search = toTrimmedString(params.get("q"));
     const cursor = params.get("cursor") || "own:0";
+    // §141 — non-primary Vendor Code narrows this dropdown to only the SKUs
+    // whose Prodshade is overridden to it. The company's own Primary is the
+    // default/no-filter case (same as no vendor_code_id at all).
+    const vendorCodeId = toTrimmedString(params.get("vendor_code_id"));
     if (!FG_TYPES.has(fgTypeFilter) || search.length > 100 || !/^(own|other):\d{1,9}$/.test(cursor)) {
       return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "Invalid FG type, search or cursor.");
     }
@@ -2659,9 +2664,10 @@ export async function listSalesOrderFgSkuOptionsHandler(
     const packCodes = [...new Set(skuRows.map((row) => toTrimmedString(row.pack_code)).filter(Boolean))];
     if (packCodes.length === 0) return respond([]);
 
-    // These three branches depend only on the bounded material page. Run them
+    // These branches depend only on the bounded material page (or, for the
+    // vendor-code eligibility set, on nothing SKU-related at all). Run them
     // together so a keystroke does not wait for independent network round trips.
-    const [packsResult, prodshadePages, conversions] = await Promise.all([
+    const [packsResult, prodshadePages, conversions, eligibleProdshadeIds] = await Promise.all([
       serviceRoleClient
         .schema("erp_production").from("pack_code_master")
         .select("id, pack_code, pack_type, outer_uom_code").in("pack_code", packCodes).eq("active", true),
@@ -2689,6 +2695,13 @@ export async function listSalesOrderFgSkuOptionsHandler(
         .in("material_id", skuRows.map((row) => toTrimmedString(row.id)))
         .eq("to_uom_code", "KG").eq("active", true).order("id").range(from, to),
       "SO_FG_CONVERSION_LOOKUP_FAILED"),
+      // §141 — null means "no filter": either no vendor_code_id was passed,
+      // or it resolved to the company's own Primary (which applies to every
+      // SKU that has no override, i.e. today's unfiltered behaviour).
+      vendorCodeId
+        ? isPrimaryVendorCodeForCompany(companyId, vendorCodeId).then((isPrimary) =>
+            isPrimary ? null : getEligibleProdshadeIdsForVendorCode(companyId, vendorCodeId))
+        : Promise.resolve(null),
     ]);
     const { data: packs, error: packsError } = packsResult;
     if (packsError) throw new Error("SO_FG_PACK_CODE_LOOKUP_FAILED");
@@ -2767,6 +2780,10 @@ export async function listSalesOrderFgSkuOptionsHandler(
       const requestedTypes = isMtest ? ["MTEST"] : [...FG_TYPES].filter((type) => type !== "MTEST");
       for (const fgType of requestedTypes.filter((type) => type === fgTypeFilter)) {
         if (!isMtest && !validStrokeKeys.has(`${prodshadeId}|${fgType}`)) continue;
+        // §141 — a non-primary Vendor Code only ever covers what's explicitly
+        // overridden to it; MTEST has no Stroke/Prodshade concept at all, so
+        // it is out of scope for vendor-code eligibility either way.
+        if (eligibleProdshadeIds && (isMtest || !eligibleProdshadeIds.has(prodshadeId))) continue;
         const packUomCode = fgType === "MTEST" ? "BBL" : toTrimmedString(pack.outer_uom_code);
         const candidates = conversionsBySku.get(toTrimmedString(sku.id)) ?? [];
         const conversion = candidates.find((row) => toUpperTrimmedString(row.from_uom_code) === toUpperTrimmedString(packUomCode))
@@ -2792,6 +2809,79 @@ export async function listSalesOrderFgSkuOptionsHandler(
   } catch (err) {
     const code = err instanceof Error ? err.message : "SO_FG_SKU_OPTIONS_FAILED";
     return salesErrorResponse(req, ctx, code, 500, "FG SKU options could not be resolved.");
+  }
+}
+
+// §141 (2026-09-24) — SFG's own dedicated, company-scoped, vendor-code-aware
+// material list. Deliberately NOT a reuse of the shared `useMaterialOptionsQuery`
+// generic materials list that SO01's RM/PM/INT/SFG sections currently share
+// client-side (that list has no company scoping or vendor-code eligibility
+// awareness at all, and widening it would risk every other page it feeds).
+// Unlike FG, an SFG material_id IS its own Prodshade reference directly
+// (stroke_master.prodshade_material_id points at this same material_master
+// row) -- no pack_code/prodshade_pack_config derivation step is needed here.
+const SO_SFG_MIN_SEARCH_LENGTH = 3;
+
+export async function listSalesOrderSfgMaterialOptionsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const companyId = await getCompanyScope(ctx, new URL(req.url).searchParams.get("company_id") ?? "");
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+
+    const params = new URL(req.url).searchParams;
+    const search = toTrimmedString(params.get("q"));
+    const cursor = params.get("cursor") || "own:0";
+    const vendorCodeId = toTrimmedString(params.get("vendor_code_id"));
+    if (search.length > 100 || !/^(own|other):\d{1,9}$/.test(cursor)) {
+      return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "Invalid search or cursor.");
+    }
+    if (search.length < SO_SFG_MIN_SEARCH_LENGTH) {
+      return okResponse({ data: [], next_cursor: null }, ctx.request_id, req);
+    }
+    const [phase, offsetText] = cursor.split(":");
+    const offset = Number(offsetText);
+    const pageSize = 50;
+
+    const eligibleProdshadeIds = vendorCodeId
+      ? await isPrimaryVendorCodeForCompany(companyId, vendorCodeId).then((isPrimary) =>
+          isPrimary ? null : getEligibleProdshadeIdsForVendorCode(companyId, vendorCodeId))
+      : null;
+    if (eligibleProdshadeIds && eligibleProdshadeIds.size === 0) {
+      return okResponse({ data: [], next_cursor: null }, ctx.request_id, req);
+    }
+
+    let query = serviceRoleClient.schema("erp_master").from("material_master")
+      .select("id, pace_code, external_code, material_name, document_name, hsn_code, base_uom_code, mappings:material_company_ext!inner(company_id), own:material_company_ext(company_id)")
+      .eq("material_type", "SFG").eq("status", "ACTIVE")
+      .eq("mappings.status", "ACTIVE")
+      .eq("own.status", "ACTIVE").eq("own.company_id", companyId);
+    query = phase === "own" ? query.eq("mappings.company_id", companyId) : query.is("own", null);
+    if (eligibleProdshadeIds) query = query.in("id", [...eligibleProdshadeIds]);
+    if (search) {
+      const pattern = fgSkuSearchPattern(search);
+      const like = JSON.stringify(`%${JSON.parse(pattern)}%`);
+      query = query.or(["pace_code", "external_code", "material_name", "document_name"]
+        .map((field) => `${field}.ilike.${like}`).join(","));
+    }
+    const { data: materials, error: materialsError } = await query
+      .order("pace_code").order("id").range(offset, offset + pageSize - 1);
+    if (materialsError) throw new Error("SO_SFG_LOOKUP_FAILED");
+    const rows = (materials ?? []) as JsonRecord[];
+    const nextCursor = rows.length === pageSize ? `${phase}:${offset + pageSize}`
+      : phase === "own" ? "other:0" : null;
+    const output: JsonRecord[] = rows.map((row) => ({
+      ...Object.fromEntries(Object.entries(row).filter(([key]) => !["mappings", "own"].includes(key))),
+      own_company_mapping: phase === "own",
+    }));
+    output.sort((left, right) => Number(right.own_company_mapping) - Number(left.own_company_mapping)
+      || toTrimmedString(left.pace_code).localeCompare(toTrimmedString(right.pace_code)));
+    return okResponse({ data: output, next_cursor: nextCursor }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "SO_SFG_OPTIONS_FAILED";
+    return salesErrorResponse(req, ctx, code, 500, "SFG options could not be resolved.");
   }
 }
 
@@ -2908,6 +2998,31 @@ export async function createSalesOrderUnifiedHandler(
       }
     }
 
+    // §141 — Vendor Code is mandatory exactly when this SO carries FG/SFG
+    // AND its resolved Bill-To is Asian Paints (bill_to_type != CUSTOMER --
+    // the only branch that is NOT Asian Paints is plain INDEPENDENT_PARTY).
+    // One SO never mixes two vendor codes, so this is a header field,
+    // validated once here rather than per line.
+    const vendorCodeRequired = (materialTypes.includes("FG") || materialTypes.includes("SFG"))
+      && resolved.billToType !== "CUSTOMER";
+    const vendorCodeIdInput = toTrimmedString(body.vendor_code_id);
+    let vendorCodeId: string | null = null;
+    if (vendorCodeRequired) {
+      if (!vendorCodeIdInput) {
+        return salesErrorResponse(req, ctx, "SO_VENDOR_CODE_REQUIRED", 400,
+          "Vendor Code is required for FG/SFG dispatch billed to Asian Paints.");
+      }
+      const { data: vendorCodeMap, error: vendorCodeMapError } = await serviceRoleClient
+        .schema("erp_production").from("company_vendor_code_map")
+        .select("id").eq("company_id", companyId).eq("vendor_code_id", vendorCodeIdInput).eq("active", true).maybeSingle();
+      if (vendorCodeMapError) throw new Error("SO_VENDOR_CODE_LOOKUP_FAILED");
+      if (!vendorCodeMap) {
+        return salesErrorResponse(req, ctx, "SO_VENDOR_CODE_INVALID", 400,
+          "Selected Vendor Code is not mapped to this company.");
+      }
+      vendorCodeId = vendorCodeIdInput;
+    }
+
     const ibnRequired = resolveIbnRequired(dispatchType, body.ibn_required);
     const dispatchCategory = deriveDispatchCategory(materialTypes);
     const freightTerm = toUpperTrimmedString(body.freight_term) || null;
@@ -2948,6 +3063,7 @@ export async function createSalesOrderUnifiedHandler(
         ibn_required: ibnRequired,
         dispatch_category: dispatchCategory,
         material_types: materialTypes,
+        vendor_code_id: vendorCodeId,
         freight_term: freightTerm,
         round_off_amount: roundOffAmount,
         payment_term_id: toTrimmedString(body.payment_term_id) || null,
@@ -3140,6 +3256,44 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
       headerUpdate.ship_to_state = resolved.shipTo?.ship_to_state ?? null;
       headerUpdate.delivery_address = resolved.shipTo?.delivery_address ?? null;
     }
+
+    // §141 — Vendor Code correction window. Same lock as the rest of the
+    // commercial-identity group above (locks the moment any line is
+    // Mapped), but handled independently of identityKeysPresent/
+    // resolveBillToShipTo() -- correcting just the Vendor Code should not
+    // require resending the whole Bill-To/Ship-To payload. dispatch_type
+    // and material_types are never editable on this SO (see the header-
+    // fields comment below), so whether a Vendor Code is required at all is
+    // fixed for this SO's entire lifetime; only WHICH code can be corrected.
+    if (body.vendor_code_id !== undefined) {
+      if (hasAnyActiveMapping) {
+        return salesErrorResponse(req, ctx, "SO_HEADER_IDENTITY_LOCKED", 409,
+          "Vendor Code is locked — at least one line is Mapped in SO Map. Unmap every line first.");
+      }
+      const materialTypesForVendorCode = Array.isArray(so.material_types) ? (so.material_types as string[]) : [];
+      const dispatchTypeForVendorCode = toUpperTrimmedString(so.dispatch_type);
+      const vendorCodeRequired = (materialTypesForVendorCode.includes("FG") || materialTypesForVendorCode.includes("SFG"))
+        && dispatchTypeForVendorCode !== "INDEPENDENT_PARTY";
+      const vendorCodeIdInput = toTrimmedString(body.vendor_code_id);
+      if (vendorCodeRequired) {
+        if (!vendorCodeIdInput) {
+          return salesErrorResponse(req, ctx, "SO_VENDOR_CODE_REQUIRED", 400,
+            "Vendor Code is required for FG/SFG dispatch billed to Asian Paints.");
+        }
+        const { data: vendorCodeMap, error: vendorCodeMapError } = await serviceRoleClient
+          .schema("erp_production").from("company_vendor_code_map")
+          .select("id").eq("company_id", soCompanyId).eq("vendor_code_id", vendorCodeIdInput).eq("active", true).maybeSingle();
+        if (vendorCodeMapError) throw new Error("SO_VENDOR_CODE_LOOKUP_FAILED");
+        if (!vendorCodeMap) {
+          return salesErrorResponse(req, ctx, "SO_VENDOR_CODE_INVALID", 400,
+            "Selected Vendor Code is not mapped to this company.");
+        }
+        headerUpdate.vendor_code_id = vendorCodeIdInput;
+      } else {
+        headerUpdate.vendor_code_id = null;
+      }
+    }
+
     // Line GST needs the EFFECTIVE Ship-To/Bill-To state -- the freshly
     // resolved one if identity was touched this same request, else the SO's
     // own already-stored value.
