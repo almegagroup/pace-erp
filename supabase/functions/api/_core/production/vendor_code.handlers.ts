@@ -393,11 +393,22 @@ export async function resolveStrokeForProdshadeAndVendorCode(
   if (mappingError) throw new Error("VENDOR_CODE_STROKE_RESOLVE_FAILED");
   if (!mapping) return null;
   const isPrimary = await isPrimaryVendorCodeForCompany(companyId, toTrimmedString(mapping.vendor_code_id));
-  const { data: strokes, error: strokesError } = await db.from("stroke_master")
+  const { data: rawStrokes, error: strokesError } = await db.from("stroke_master")
     .select("id, approved_at").eq("company_id", companyId).eq("prodshade_material_id", prodshadeMaterialId)
-    .eq("po_type", "MTS").eq("status", "APPROVED").order("approved_at", { ascending: false, nullsFirst: false });
+    .eq("status", "APPROVED").order("approved_at", { ascending: false, nullsFirst: false });
   if (strokesError) throw new Error("VENDOR_CODE_STROKE_RESOLVE_FAILED");
-  const candidates = (strokes ?? []) as Row[];
+  const rawCandidates = (rawStrokes ?? []) as Row[];
+  if (!rawCandidates.length) return null;
+  // MTS eligibility is decided by stroke_po_type_applicability (target_po_type
+  // 'MTS', is_active), not stroke_master.po_type -- a Stroke created under a
+  // different PO Type can still be shared to MTS (2026-08-31 Stroke Share
+  // redesign). Same source of truth sales_order.handlers.ts's
+  // listSalesOrderFgSkuOptionsHandler (§141) already uses for this question.
+  const rawStrokeIds = ids(rawCandidates.map((row) => row.id));
+  const applicableRows = await fetchInChunks<Row>(rawStrokeIds, (chunk) => db.from("stroke_po_type_applicability")
+    .select("stroke_master_id").eq("target_po_type", "MTS").eq("is_active", true).in("stroke_master_id", chunk));
+  const applicableIds = new Set(applicableRows.map((row) => toTrimmedString(row.stroke_master_id)));
+  const candidates = rawCandidates.filter((row) => applicableIds.has(toTrimmedString(row.id)));
   if (!candidates.length) return null;
   const strokeIds = ids(candidates.map((row) => row.id));
   const overrideRows = await fetchInChunks<Row>(strokeIds, (chunk) => db.from("vendor_code_stroke_override")
