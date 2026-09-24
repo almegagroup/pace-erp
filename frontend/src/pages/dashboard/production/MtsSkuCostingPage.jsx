@@ -28,7 +28,25 @@ const errorMessage = (error) => error?.backendMessage || error?.message || "Requ
 // SO01's own FG SKU picker (§141) already established.
 const skuLabel = (sku) => [sku.pace_code, sku.document_name || sku.material_name].filter(Boolean).join(" — ");
 
-function RateEntryRow({ index, value, vendorCodes, companyId, onChange, onRemove, onSaved }) {
+// Shared by both the per-row Save button and the modal-level "Save All" —
+// one entry, one insert attempt, returns whether it actually saved so the
+// caller can decide what to invalidate/report.
+async function saveEntry(companyId, entry) {
+  if (!entry.vendor_code_id || !entry.sku_material_id || !entry.effective_date) {
+    pushToast({ message: "Vendor Code, SKU, and Effective Date are required.", tone: "error" });
+    return false;
+  }
+  try {
+    await createAc05MtsSkuRate({ company_id: companyId, ...entry });
+    pushToast({ message: "MTS SKU rate saved." });
+    return true;
+  } catch (error) {
+    pushToast({ message: errorMessage(error), tone: "error" });
+    return false;
+  }
+}
+
+function RateEntryRow({ index, value, vendorCodes, companyId, saving, onChange, onRemove, onSave }) {
   const eligibleQuery = useQuery({
     queryKey: ["ac05-mts-sku-eligible", companyId, value.vendor_code_id],
     queryFn: () => listAc05MtsSkuEligibleSkus({ company_id: companyId, vendor_code_id: value.vendor_code_id }),
@@ -37,14 +55,6 @@ function RateEntryRow({ index, value, vendorCodes, companyId, onChange, onRemove
   });
   const eligibleSkus = eligibleQuery.data ?? [];
   const sku = eligibleSkus.find((item) => item.material_id === value.sku_material_id);
-  const [saving, setSaving] = useState(false);
-  async function save() {
-    if (!value.vendor_code_id || !value.sku_material_id || !value.effective_date) { pushToast({ message: "Vendor Code, SKU, and Effective Date are required.", tone: "error" }); return; }
-    setSaving(true);
-    try { await createAc05MtsSkuRate({ company_id: companyId, ...value }); pushToast({ message: "MTS SKU rate saved." }); onSaved(); }
-    catch (error) { pushToast({ message: errorMessage(error), tone: "error" }); }
-    finally { setSaving(false); }
-  }
   const field = (name, label, required = false, disabled = false) => (
     <label className="grid gap-1 text-xs font-medium text-slate-600">
       {label}{required ? <span className="text-rose-600"> *</span> : null}
@@ -90,7 +100,7 @@ function RateEntryRow({ index, value, vendorCodes, companyId, onChange, onRemove
         {field("pack_wastage_pct", "Pack Wastage %")}
       </div>
       <div className="flex gap-2">
-        <button type="button" disabled={saving} onClick={save} className="h-9 bg-sky-700 px-4 text-xs font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+        <button type="button" disabled={saving} onClick={() => onSave(index)} className="h-9 bg-sky-700 px-4 text-xs font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
         <button type="button" onClick={() => onRemove(index)} className="h-9 border border-rose-300 px-4 text-xs font-semibold text-rose-700">Remove</button>
       </div>
     </div>
@@ -146,6 +156,8 @@ export default function MtsSkuCostingPage() {
   const { runtimeContext } = useMenu(); const queryClient = useQueryClient();
   const [companyId, setCompanyId] = useState(""); const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const [createOpen, setCreateOpen] = useState(false); const [entryRows, setEntryRows] = useState([]); const [pendingRow, setPendingRow] = useState(null); const [search, setSearch] = useState("");
+  const [savingIndexes, setSavingIndexes] = useState(() => new Set());
+  const [savingAll, setSavingAll] = useState(false);
   const ratesQuery = useQuery({ queryKey: ["ac05-mts-sku-rates", effectiveCompanyId], queryFn: () => listAc05MtsSkuRates({ company_id: effectiveCompanyId }), enabled: Boolean(effectiveCompanyId), select: asRows });
   const vendorCodesQuery = useQuery({ queryKey: ["ac05-mts-sku-vendor-codes", effectiveCompanyId], queryFn: () => listAc05MtsSkuVendorCodes({ company_id: effectiveCompanyId }), enabled: Boolean(effectiveCompanyId && createOpen), select: asRows });
   const pendingQuery = useQuery({ queryKey: ["ac05-mts-sku-pending-count", effectiveCompanyId], queryFn: () => pendingAc05MtsSkuRateCount({ company_id: effectiveCompanyId }), enabled: Boolean(effectiveCompanyId), select: (value) => value?.pending_count ?? value?.data?.pending_count ?? 0 });
@@ -154,6 +166,28 @@ export default function MtsSkuCostingPage() {
   const primaryId = vendorCodes.find((code) => code.is_primary)?.vendor_code_id ?? "";
   function addEntry() { setEntryRows((rows) => [...rows, emptyEntry(primaryId)]); }
   function changeEntry(index, patch) { setEntryRows((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row)); }
+  async function saveOne(index) {
+    setSavingIndexes((current) => new Set(current).add(index));
+    try {
+      const ok = await saveEntry(effectiveCompanyId, entryRows[index]);
+      if (ok) void invalidate();
+    } finally {
+      setSavingIndexes((current) => { const next = new Set(current); next.delete(index); return next; });
+    }
+  }
+  async function saveAll() {
+    const pending = entryRows.map((row, index) => index).filter((index) => !savingIndexes.has(index));
+    if (!pending.length) return;
+    setSavingAll(true);
+    setSavingIndexes((current) => { const next = new Set(current); pending.forEach((index) => next.add(index)); return next; });
+    try {
+      const results = await Promise.all(pending.map((index) => saveEntry(effectiveCompanyId, entryRows[index])));
+      if (results.some(Boolean)) void invalidate();
+    } finally {
+      setSavingIndexes((current) => { const next = new Set(current); pending.forEach((index) => next.delete(index)); return next; });
+      setSavingAll(false);
+    }
+  }
   const rows = useMemo(() => (ratesQuery.data ?? []).filter((row) => JSON.stringify(row).toLowerCase().includes(search.trim().toLowerCase())), [ratesQuery.data, search]);
   const columns = [
     { key: "vendor_code", label: "Vendor Code", width: "110px" }, { key: "sku", label: "SKU", width: "260px", render: (row) => <span>{row.sku?.pace_code ?? "—"} — {row.sku?.document_name || row.sku?.material_name || "—"}</span> },
@@ -165,12 +199,15 @@ export default function MtsSkuCostingPage() {
   ];
   useErpScreenHotkeys({ refresh: { disabled: !effectiveCompanyId, perform: () => { void invalidate(); } }, save: { disabled: !createOpen, perform: () => { if (!entryRows.length) addEntry(); } } });
   return <ErpScreenScaffold title="MTS SKU Costing" subtitle="AC05 — effective-dated, Vendor-Code-keyed manual MTS SKU rates. Calculated values are verification only; SO always uses the Manual / Outer rate." actions={[{ label: pendingQuery.data > 0 ? "Create 🔴" : "Create", tone: "primary", onClick: () => { setCreateOpen(true); if (!entryRows.length) setEntryRows([emptyEntry(primaryId)]); }, disabled: !effectiveCompanyId }]}>
-    <ErpSectionCard><div className="mb-4 grid gap-3 md:grid-cols-[320px_minmax(0,1fr)]"><TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search all rate columns…" className="h-9 border border-slate-300 px-3 text-sm" /></div><ErpDenseGrid columns={columns} rows={rows} rowKey={(row) => row.id} maxHeight="640px" emptyMessage={ratesQuery.isLoading ? "Loading MTS SKU rates…" : "No MTS SKU rate rows for this company."} /></ErpSectionCard>
+    <ErpSectionCard><div className="mb-4 grid gap-3 md:grid-cols-[320px_minmax(0,1fr)]"><TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search all rate columns…" className="h-9 border border-slate-300 px-3 text-sm" /></div><ErpDenseGrid columns={columns} rows={rows} rowKey={(row) => row.id} maxHeight="640px" getRowProps={(row) => row.status === "PENDING" ? { className: "bg-rose-50" } : {}} emptyMessage={ratesQuery.isLoading ? "Loading MTS SKU rates…" : "No MTS SKU rate rows for this company."} /></ErpSectionCard>
     <ModalBase visible={createOpen} title="Create MTS SKU Rate" onEscape={() => setCreateOpen(false)} width="min(960px, calc(100vw - 32px))"
-      actions={<button type="button" onClick={() => setCreateOpen(false)} className="h-9 border border-slate-300 px-4 text-sm font-semibold text-slate-700">Close</button>}>
+      actions={<>
+        <button type="button" onClick={() => setCreateOpen(false)} className="h-9 border border-slate-300 px-4 text-sm font-semibold text-slate-700">Close</button>
+        <button type="button" disabled={!entryRows.length || savingAll} onClick={saveAll} className="h-9 bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-50">{savingAll ? "Saving All…" : "Save All"}</button>
+      </>}>
       <div className="grid gap-4">
-        <p className="text-xs text-slate-500">Enter Base, Inner, and Outer rates independently. The system never derives or replaces a manual rate.</p>
-        {entryRows.map((row, index) => <RateEntryRow key={index} index={index} value={row} vendorCodes={vendorCodes} companyId={effectiveCompanyId} onChange={changeEntry} onRemove={(removeIndex) => setEntryRows((rows) => rows.filter((_, index) => index !== removeIndex))} onSaved={() => { void invalidate(); }} />)}
+        <p className="text-xs text-slate-500">Enter Base, Inner, and Outer rates independently. The system never derives or replaces a manual rate. Edit multiple rows, then use Save All to submit every row in one go.</p>
+        {entryRows.map((row, index) => <RateEntryRow key={index} index={index} value={row} vendorCodes={vendorCodes} companyId={effectiveCompanyId} saving={savingIndexes.has(index)} onChange={changeEntry} onRemove={(removeIndex) => setEntryRows((rows) => rows.filter((_, index) => index !== removeIndex))} onSave={saveOne} />)}
         <button type="button" onClick={addEntry} className="w-fit border border-sky-300 px-3 py-2 text-xs font-semibold text-sky-800">Add Row</button>
       </div>
     </ModalBase>
