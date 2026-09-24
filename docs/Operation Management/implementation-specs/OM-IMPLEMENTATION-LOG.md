@@ -5950,3 +5950,13 @@ non-current-stroke MTS becomes eligible from `QA_APPROVED`.
 `git diff --check`, route/ACL registry (0 missing), company-scope (0), JSX undefined component
 (0), and stock-posting baseline (12/12) pass. Render Dev deployed commit `1ca52b81` with status
 `live`. A signed-in browser E2E was not available, so no user session was impersonated.
+
+## 2026-09-24 - Gate-27.29 AC05 MTS SKU Costing
+
+**Authority:** feasibility section 142 (read before the task brief). **Environment:** Dev `ytapuwiqicmvpanmzelb` only; no Prod or ACL/menu-registration-table changes.
+
+**Change 0:** retired the verified-empty superseded `mts_sku_monthly_rate` mechanism with a new DROP migration and removed its old handler, five routes, five route-ACL entries, frontend page, router route, and screen registration. The historical Gate-27.25 migration remains append-only and untouched.
+
+**Changes 1-5:** introduced `erp_production.ac05_mts_sku_rate`; vendor-code keyed, effective-dated manual AC05 rates; frozen reverse Stroke resolution; RATED immutability; pending cascade-row fill/delete; pending count; and the future SO as-of resolver. Verification costs are read-time-only in a separate `verification` object and never accepted as write input or used as the commercial rate. The AC06 split hook is explicitly best-effort and cannot fail or roll back its source split. The new frontend page is `/dashboard/production/ac05-mts-sku-costing`, with company scope, dense grid, muted calculated values, pending indicator, multi-row create drawer, and pending Fill Rate flow.
+
+**Verification:** applied Dev migration and reloaded PostgREST schema; migration ledger is in sync (`601`, MD5 `6cb16f7344abdbef3da4e11aabef29fb`). A reverted Dev fixture exercised un-overridden Primary and overridden non-Primary Stroke freezes, 422 no-match, real AC06 cascade with carried wastage, pending-to-RATED, immutable RATED 409, Fixed-BOM calculated values, variable-fill nulls, and between-dates SO resolution. Targeted Deno and frontend ESLint pass; all 18 repository guards pass including strict dependency provisioning and route/ACL 0-missing; the five retired routes resolve to pipeline-equivalent 404s. Dev Edge deployment could not complete because the existing monolithic `api` source exceeds Supabase's 5 MB deployment limit; no workaround was applied.

@@ -299,11 +299,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/companies":                   { skipAcl: true },
 
   // —— Production: Accounts rate masters ————————————————————————————————————————————
-  "GET:/api/production/mts-sku-rates":               { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
-  "POST:/api/production/mts-sku-rates/draft":        { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "WRITE" },
-  "GET:/api/production/mts-sku-rates/pending-drafts": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
-  "POST:/api/production/mts-sku-rates/approve":      { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "APPROVE" },
-  "GET:/api/production/mts-sku-rates/available-months": { skipAcl: false, resourceCode: "ACC_MTS_SKU_MONTHLY_RATE", action: "VIEW" },
+  "GET:/api/production/ac05-mts-sku-rates":          { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "VIEW" },
+  "POST:/api/production/ac05-mts-sku-rates":         { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "WRITE" },
+  "GET:/api/production/ac05-mts-sku-rates/vendor-codes": { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "VIEW" },
+  "GET:/api/production/ac05-mts-sku-rates/eligible-skus": { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "VIEW" },
+  "GET:/api/production/ac05-mts-sku-rates/pending-count": { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "VIEW" },
+  "GET:/api/production/ac05-mts-sku-rates/resolve":  { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "VIEW" },
   "GET:/api/production/ac06/workspace":              { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_GROUP", action: "VIEW" },
   "POST:/api/production/ac06/sloc-groups":           { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
   "POST:/api/production/ac06/costing-groups":        { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
@@ -1782,6 +1783,14 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     // resource that actually exists.
     pattern: /^\/api\/production\/packing-orders\/[^/]+\/correct$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROD_PO_FINAL", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/ac05-mts-sku-rates\/[^/]+\/rate$/,
+    methods: { POST: { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/production\/ac05-mts-sku-rates\/[^/]+\/delete$/,
+    methods: { POST: { skipAcl: false, resourceCode: "ACC_AC05_MTS_SKU_COSTING", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/production\/partial-reversals\/[^/]+$/,

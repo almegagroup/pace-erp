@@ -227,7 +227,7 @@ import PartialBatchReversalPage from "../pages/dashboard/production/PartialBatch
 import ConversionCostPage from "../pages/dashboard/production/ConversionCostPage.jsx";
 import CompanyVendorCodePage from "../pages/dashboard/production/CompanyVendorCodePage.jsx";
 import AdmixCostingPage from "../pages/dashboard/production/AdmixCostingPage.jsx";
-import MtsSkuMonthlyRatePage from "../pages/dashboard/production/MtsSkuMonthlyRatePage.jsx";
+import MtsSkuCostingPage from "../pages/dashboard/production/MtsSkuCostingPage.jsx";
 import SlocCostingGroupPage from "../pages/dashboard/production/SlocCostingGroupPage.jsx";
 import OldProcessPoPage from "../pages/dashboard/production/OldProcessPoPage.jsx";
 import OldPackingPoPage from "../pages/dashboard/production/OldPackingPoPage.jsx";
@@ -950,7 +950,7 @@ export default function AppRouter() {
                   <Route path="production/conversion-cost" element={<ConversionCostPage />} />
                   <Route path="production/company-vendor-code" element={<CompanyVendorCodePage />} />
                   <Route path="production/admix-costing" element={<AdmixCostingPage />} />
-                  <Route path="production/mts-sku-monthly-rate" element={<MtsSkuMonthlyRatePage />} />
+                  <Route path="production/ac05-mts-sku-costing" element={<MtsSkuCostingPage />} />
                   <Route path="production/sloc-costing-group" element={<SlocCostingGroupPage />} />
                   <Route path="production/sloc-costing-group/report" element={<SlocCostingGroupPage />} />
                   <Route path="production/old-process-po" element={<OldProcessPoPage />} />

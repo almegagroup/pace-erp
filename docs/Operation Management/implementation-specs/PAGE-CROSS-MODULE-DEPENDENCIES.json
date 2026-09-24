@@ -1156,39 +1156,83 @@
     ]
   },
   {
-    "page": "frontend/src/pages/dashboard/production/MtsSkuMonthlyRatePage.jsx",
+    "page": "frontend/src/pages/dashboard/production/MtsSkuCostingPage.jsx",
     "pageModule": "PROD",
     "foreign": [
       [
-        "ACC_MTS_SKU_MONTHLY_RATE:VIEW",
+        "ACC_AC05_MTS_SKU_COSTING:VIEW",
         {
-          "fn": "listPendingMtsSkuRateDrafts",
+          "fn": "listAc05MtsSkuRates",
           "method": "GET",
-          "path": "/api/production/mts-sku-rates/pending-drafts",
-          "resourceCode": "ACC_MTS_SKU_MONTHLY_RATE",
+          "path": "/api/production/ac05-mts-sku-rates",
+          "resourceCode": "ACC_AC05_MTS_SKU_COSTING",
           "action": "VIEW",
           "skipAcl": false
         }
       ],
       [
-        "ACC_MTS_SKU_MONTHLY_RATE:WRITE",
+        "ACC_AC05_MTS_SKU_COSTING:VIEW",
         {
-          "fn": "saveMtsSkuRateDraft",
+          "fn": "listAc05MtsSkuVendorCodes",
+          "method": "GET",
+          "path": "/api/production/ac05-mts-sku-rates/vendor-codes",
+          "resourceCode": "ACC_AC05_MTS_SKU_COSTING",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_AC05_MTS_SKU_COSTING:VIEW",
+        {
+          "fn": "listAc05MtsSkuEligibleSkus",
+          "method": "GET",
+          "path": "/api/production/ac05-mts-sku-rates/eligible-skus",
+          "resourceCode": "ACC_AC05_MTS_SKU_COSTING",
+          "action": "VIEW",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_AC05_MTS_SKU_COSTING:WRITE",
+        {
+          "fn": "createAc05MtsSkuRate",
           "method": "POST",
-          "path": "/api/production/mts-sku-rates/draft",
-          "resourceCode": "ACC_MTS_SKU_MONTHLY_RATE",
+          "path": "/api/production/ac05-mts-sku-rates",
+          "resourceCode": "ACC_AC05_MTS_SKU_COSTING",
           "action": "WRITE",
           "skipAcl": false
         }
       ],
       [
-        "ACC_MTS_SKU_MONTHLY_RATE:APPROVE",
+        "ACC_AC05_MTS_SKU_COSTING:WRITE",
         {
-          "fn": "approveMtsSkuRate",
+          "fn": "updateAc05MtsSkuPendingRate",
           "method": "POST",
-          "path": "/api/production/mts-sku-rates/approve",
-          "resourceCode": "ACC_MTS_SKU_MONTHLY_RATE",
-          "action": "APPROVE",
+          "path": "/api/production/ac05-mts-sku-rates/:id/rate",
+          "resourceCode": "ACC_AC05_MTS_SKU_COSTING",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_AC05_MTS_SKU_COSTING:WRITE",
+        {
+          "fn": "deleteAc05MtsSkuPendingRate",
+          "method": "POST",
+          "path": "/api/production/ac05-mts-sku-rates/:id/delete",
+          "resourceCode": "ACC_AC05_MTS_SKU_COSTING",
+          "action": "WRITE",
+          "skipAcl": false
+        }
+      ],
+      [
+        "ACC_AC05_MTS_SKU_COSTING:VIEW",
+        {
+          "fn": "pendingAc05MtsSkuRateCount",
+          "method": "GET",
+          "path": "/api/production/ac05-mts-sku-rates/pending-count",
+          "resourceCode": "ACC_AC05_MTS_SKU_COSTING",
+          "action": "VIEW",
           "skipAcl": false
         }
       ]

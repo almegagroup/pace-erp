@@ -5,6 +5,7 @@
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { cascadeAc05RowsFromAc06Split } from "./ac05_mts_sku_rate.handlers.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { errorResponse, okResponse } from "../response.ts";
@@ -509,6 +510,20 @@ export async function insertAc06RateSplitHandler(req: Request, ctx: ProdHandlerC
       created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
     }).select("*").single();
     if (insertError || !inserted) throw new Error("AC06_SPLIT_FAILED");
+    // AC06 is the source-of-truth transaction. AC05's downstream pending-rate
+    // bookkeeping is deliberately best-effort: a cascade failure must never
+    // undo or block an already-created AC06 rate split.
+    try {
+      await cascadeAc05RowsFromAc06Split(
+        companyId,
+        toTrimmedString(inserted.material_id),
+        toTrimmedString(inserted.source_sloc_group_id),
+        toTrimmedString(inserted.effective_date),
+        ctx.auth_user_id,
+      );
+    } catch (cascadeError) {
+      console.error("AC05_CASCADE_AFTER_AC06_SPLIT_FAILED", cascadeError);
+    }
     return okResponse({ data: inserted }, ctx.request_id, req);
   } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_SPLIT_FAILED", "Unable to add a rate-change row."); }
 }
