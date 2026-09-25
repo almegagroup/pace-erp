@@ -661,6 +661,17 @@ export async function createOldPackingPoHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
+    // §134.9 / SO05: a PR23 created for a previously unresolved Sales Return
+    // line makes that line resolvable immediately. The RPC includes the
+    // receipt-company join, preventing cross-company material/batch matches.
+    const { error: salesReturnBackfillErr } = await serviceRoleClient
+      .schema("erp_procurement")
+      .rpc("backfill_sales_return_packing_order", { p_packing_order_id: poId });
+    if (salesReturnBackfillErr) {
+      console.error("[opening_genealogy.createOldPackingPo] sales-return backfill failed:", JSON.stringify(salesReturnBackfillErr));
+      throw new Error("PROD_OLD_PACKING_PO_CREATE_FAILED");
+    }
+
     return createdOk({ id: poId, po_number: poNumber, batch_number: batchNumber, status: "FINAL" }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_OLD_PACKING_PO_CREATE_FAILED";

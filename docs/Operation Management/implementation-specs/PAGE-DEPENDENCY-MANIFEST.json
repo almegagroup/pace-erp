@@ -6140,6 +6140,20 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SO05ListPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "listSalesReturns",
+        "method": "GET",
+        "path": "/api/procurement/sales-returns",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/sto/StoCreateFormPage.jsx",
     "dependencyCount": 7,
     "deps": [

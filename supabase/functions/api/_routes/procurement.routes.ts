@@ -341,6 +341,16 @@ import {
   updateSalesOrderUnifiedHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
 import {
+  createSalesReturnReceiptHandler,
+  listPendingGenealogyEntriesHandler,
+  listPendingReturnInvoicesHandler,
+  listPendingStrokesHandler,
+  listRepackTargetSkuOptionsHandler,
+  listSalesReturnReceiptsHandler,
+  resolveBatchNumberOptionsHandler,
+  saveReturnInvoiceDetailHandler,
+} from "../_core/procurement/sales_return.handlers.ts";
+import {
   getSoMapStatusHandler,
   listCustomerAddressesForSoHandler,
   listFoOptionsForSoHandler,
@@ -691,6 +701,24 @@ export async function dispatchProcurementRoutes(
       return await createSOHandler(req, ctx);
     case "GET:/api/procurement/sales-orders":
       return await listSOsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns":
+      return await listSalesReturnReceiptsHandler(req, ctx);
+    case "POST:/api/procurement/sales-returns":
+      return await createSalesReturnReceiptHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-invoices":
+      return await listPendingReturnInvoicesHandler(req, ctx);
+    case "POST:/api/procurement/sales-returns/invoice-detail":
+      return await saveReturnInvoiceDetailHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/batch-options":
+      return await resolveBatchNumberOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/repack-sku-options":
+      return await listRepackTargetSkuOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-strokes":
+      return await listPendingStrokesHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-genealogy":
+    case "GET:/api/procurement/sales-returns/pending-process-entries":
+    case "GET:/api/procurement/sales-returns/pending-packing-entries":
+      return await listPendingGenealogyEntriesHandler(req, ctx);
     case "POST:/api/procurement/sales-orders-v2":
       return await createSalesOrderUnifiedHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/fg-sku-options":

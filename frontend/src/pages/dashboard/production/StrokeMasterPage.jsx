@@ -39,6 +39,7 @@ import {
 } from "./strokeShared.jsx";
 import { formatPreciseNumber, formatSum } from "./productionPrecision.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
+import SalesReturnPendingButton from "./SalesReturnPendingButton.jsx";
 
 const EMPTY_ARRAY = [];
 const COMMUNICATION_TYPE_OPTIONS = [
@@ -311,6 +312,7 @@ export default function StrokeMasterPage() {
       });
       const data = result?.data ?? result;
       await qc.invalidateQueries({ queryKey: ["prod-stroke-masters"] });
+      await qc.invalidateQueries({ queryKey: ["so05-pending-production", "STROKE"] });
       setShareOpen(false);
       if (data.created_draft) {
         toast("Target draft revision created. Update formulation, then save and approve it.");
@@ -461,6 +463,7 @@ export default function StrokeMasterPage() {
       toast("Stroke master created (DRAFT).");
       setDrawerOpen(false);
       qc.invalidateQueries({ queryKey: ["prod-stroke-masters"] });
+      qc.invalidateQueries({ queryKey: ["so05-pending-production", "STROKE"] });
     } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
     finally { setSaving(false); }
   }
@@ -499,6 +502,7 @@ export default function StrokeMasterPage() {
       });
       toast("Draft saved.");
       qc.invalidateQueries({ queryKey: ["prod-stroke-masters"] });
+      qc.invalidateQueries({ queryKey: ["so05-pending-production", "STROKE"] });
       openDetail(detail.id);
     } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
     finally { setSaving(false); }
@@ -543,6 +547,7 @@ export default function StrokeMasterPage() {
       toast("Stroke approved (ACTIVE).");
       setDrawerOpen(false);
       qc.invalidateQueries({ queryKey: ["prod-stroke-masters"] });
+      qc.invalidateQueries({ queryKey: ["so05-pending-production", "STROKE"] });
     } catch (err) {
       toast(friendlyErr(err.code) || err.message, "error");
     } finally {
@@ -557,6 +562,7 @@ export default function StrokeMasterPage() {
       toast(successMsg);
       setDrawerOpen(false);
       qc.invalidateQueries({ queryKey: ["prod-stroke-masters"] });
+      qc.invalidateQueries({ queryKey: ["so05-pending-production", "STROKE"] });
     } catch (err) { toast(friendlyErr(err.code) || err.message, "error"); }
     finally { setSaving(false); }
   }
@@ -732,6 +738,7 @@ export default function StrokeMasterPage() {
       subtitle="Define RM/INT dosage formulas per Prodshade (SFG/INT, PO Type-scoped)"
       actions={actions}
     >
+      <div className="flex justify-end"><SalesReturnPendingButton companyId={companyFilter || companies[0]?.id || ""} kind="STROKE" /></div>
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap">
           <div className="flex flex-col gap-1">
