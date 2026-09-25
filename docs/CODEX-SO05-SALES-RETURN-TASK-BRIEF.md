@@ -279,12 +279,24 @@ save, Invoice Posting save, Pending Strokes resolving as strokes get approved el
    way the rest of that page already is (no new hardcoded role list — pattern #1/#12 in CLAUDE.md's
    bug checklist).
 
-## Work Stream E — Document number range
+## Work Stream E — Document number range (✅ LOCKED — global, not company-scoped, 2026-09-25)
 
-`receipt_number` needs a real global range per §8's SAP-style design (10-digit, `SRxxxxxxxx` or
-similar — confirm exact prefix/band with the business owner or SA before hardcoding; do not reuse or
-overlap an existing type's band). Register it in `document_number_series` (dev via MCP, then a
-migration + matching MCP row in prod per §8's existing convention for this table).
+**`receipt_number` MUST use the global doc-number engine** —
+`erp_procurement.document_number_series` + `generate_doc_number()`, exactly like every row in §8's
+table (GE, GRN, SO, DC, PROC_PO, ...). **Do not** use
+`erp_procurement.company_doc_number_series`/`generate_company_doc_number()` (the per-company,
+FY-prefixed counter, format like `ASCPROC2627-0001`).
+
+This is an explicit repeat-mistake warning: §8 documents that Process PO/Packing PO were originally
+built against the company-scoped counter by mistake during Gate-27, and had to be migrated onto the
+global range afterward (§8's "PROC_PO/PACK_PO correction" note, migration + old rows deactivated).
+Sales Return must go global from day one — a 10-digit band, business owner confirmed, no
+per-company/per-FY prefix.
+
+Register a new band in `document_number_series` (dev via MCP first, then a migration + matching MCP
+row in prod, per §8's existing convention for this table). Confirm the exact prefix/leading-digit
+band with the business owner or SA before hardcoding — do not reuse or overlap an existing type's
+band (see §8's table for what is already taken).
 
 ---
 
