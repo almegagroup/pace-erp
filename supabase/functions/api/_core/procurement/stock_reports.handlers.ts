@@ -138,7 +138,10 @@ function parseIsoDate(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function validateRequiredDateRange(dateFrom: string, dateTo: string): "OK" | "MISSING" | "INVALID" | "TOO_WIDE" {
+function validateRequiredDateRange(
+  dateFrom: string,
+  dateTo: string,
+): "OK" | "MISSING" | "INVALID" | "TOO_WIDE" {
   if (!dateFrom || !dateTo) {
     return "MISSING";
   }
@@ -154,7 +157,9 @@ function validateRequiredDateRange(dateFrom: string, dateTo: string): "OK" | "MI
 function resolveMaterialLabel(material: JsonRecord | undefined): string {
   // "Material" is the material-master name/code. Document name is a separate
   // commercial description column and must never replace the material itself.
-  return toTrimmedString(material?.material_name) || toTrimmedString(material?.external_code) || toTrimmedString(material?.pace_code);
+  return toTrimmedString(material?.material_name) ||
+    toTrimmedString(material?.external_code) ||
+    toTrimmedString(material?.pace_code);
 }
 
 type SalesInvoicePackingDetail = {
@@ -166,40 +171,81 @@ type SalesInvoicePackingDetail = {
 // A sales invoice line retains its DC line, which retains the Packing PO and
 // batch. This lets the ledger report accurately display both for older P601
 // entries posted before the movement itself started carrying batch_number.
-async function buildSalesInvoicePackingMap(docs: JsonRecord[]): Promise<Map<string, SalesInvoicePackingDetail>> {
-  const invoiceIds = [...new Set(docs
-    .filter((doc) => toTrimmedString(doc.reference_document_type).toUpperCase() === "SALES_INVOICE")
-    .map((doc) => toTrimmedString(doc.reference_document_id))
-    .filter(Boolean))];
+async function buildSalesInvoicePackingMap(
+  docs: JsonRecord[],
+): Promise<Map<string, SalesInvoicePackingDetail>> {
+  const invoiceIds = [
+    ...new Set(
+      docs
+        .filter((doc) =>
+          toTrimmedString(doc.reference_document_type).toUpperCase() ===
+            "SALES_INVOICE"
+        )
+        .map((doc) => toTrimmedString(doc.reference_document_id))
+        .filter(Boolean),
+    ),
+  ];
   if (invoiceIds.length === 0) return new Map();
 
-  const invoiceLines = await fetchInChunks<JsonRecord>(invoiceIds, (chunk) => serviceRoleClient
-    .schema("erp_procurement").from("sales_invoice_line")
-    .select("invoice_id, line_number, dc_line_id").in("invoice_id", chunk));
-  const dcLineIds = [...new Set(invoiceLines.map((line) => toTrimmedString(line.dc_line_id)).filter(Boolean))];
+  const invoiceLines = await fetchInChunks<JsonRecord>(
+    invoiceIds,
+    (chunk) =>
+      serviceRoleClient
+        .schema("erp_procurement").from("sales_invoice_line")
+        .select("invoice_id, line_number, dc_line_id").in("invoice_id", chunk),
+  );
+  const dcLineIds = [
+    ...new Set(
+      invoiceLines.map((line) => toTrimmedString(line.dc_line_id)).filter(
+        Boolean,
+      ),
+    ),
+  ];
   if (dcLineIds.length === 0) return new Map();
 
-  const dcLines = await fetchInChunks<JsonRecord>(dcLineIds, (chunk) => serviceRoleClient
-    .schema("erp_procurement").from("delivery_challan_line")
-    .select("id, batch_number, packing_order_id").in("id", chunk));
-  const pkoIds = [...new Set(dcLines.map((line) => toTrimmedString(line.packing_order_id)).filter(Boolean))];
+  const dcLines = await fetchInChunks<JsonRecord>(
+    dcLineIds,
+    (chunk) =>
+      serviceRoleClient
+        .schema("erp_procurement").from("delivery_challan_line")
+        .select("id, batch_number, packing_order_id").in("id", chunk),
+  );
+  const pkoIds = [
+    ...new Set(
+      dcLines.map((line) => toTrimmedString(line.packing_order_id)).filter(
+        Boolean,
+      ),
+    ),
+  ];
   const packingOrders = pkoIds.length > 0
-    ? await fetchInChunks<JsonRecord>(pkoIds, (chunk) => serviceRoleClient
-      .schema("erp_production").from("packing_order")
-      .select("id, po_number, fill_qty_per_pack").in("id", chunk))
+    ? await fetchInChunks<JsonRecord>(pkoIds, (chunk) =>
+      serviceRoleClient
+        .schema("erp_production").from("packing_order")
+        .select("id, po_number, fill_qty_per_pack").in("id", chunk))
     : [];
-  const dcLineById = new Map(dcLines.map((line) => [toTrimmedString(line.id), line]));
-  const pkoById = new Map(packingOrders.map((row) => [toTrimmedString(row.id), row]));
+  const dcLineById = new Map(
+    dcLines.map((line) => [toTrimmedString(line.id), line]),
+  );
+  const pkoById = new Map(
+    packingOrders.map((row) => [toTrimmedString(row.id), row]),
+  );
   const details = new Map<string, SalesInvoicePackingDetail>();
   for (const line of invoiceLines) {
     const dcLine = dcLineById.get(toTrimmedString(line.dc_line_id));
     if (!dcLine) continue;
     const pko = pkoById.get(toTrimmedString(dcLine.packing_order_id));
-    details.set(`${toTrimmedString(line.invoice_id)}:${toTrimmedString(line.line_number)}`, {
-      batch_number: toTrimmedString(dcLine.batch_number) || null,
-      po_number: toTrimmedString(pko?.po_number) || null,
-      fill_qty_per_pack: pko ? Number(pko.fill_qty_per_pack ?? 0) || null : null,
-    });
+    details.set(
+      `${toTrimmedString(line.invoice_id)}:${
+        toTrimmedString(line.line_number)
+      }`,
+      {
+        batch_number: toTrimmedString(dcLine.batch_number) || null,
+        po_number: toTrimmedString(pko?.po_number) || null,
+        fill_qty_per_pack: pko
+          ? Number(pko.fill_qty_per_pack ?? 0) || null
+          : null,
+      },
+    );
   }
   return details;
 }
@@ -217,13 +263,17 @@ async function buildSalesInvoicePackingMap(docs: JsonRecord[]): Promise<Map<stri
 // Built once per report request from the already-fetched stock_document
 // rows; keyed by (opening_stock_document_id, material_id, batch_number)
 // since one Opening Stock document has many lines.
-async function buildOpeningStockLotMap(docs: JsonRecord[]): Promise<Map<string, string>> {
-  const openingDocIds = [...new Set(
-    docs
-      .filter((doc) => toTrimmedString(doc.reference_document_type) === "OS")
-      .map((doc) => toTrimmedString(doc.reference_document_id))
-      .filter(Boolean),
-  )];
+async function buildOpeningStockLotMap(
+  docs: JsonRecord[],
+): Promise<Map<string, string>> {
+  const openingDocIds = [
+    ...new Set(
+      docs
+        .filter((doc) => toTrimmedString(doc.reference_document_type) === "OS")
+        .map((doc) => toTrimmedString(doc.reference_document_id))
+        .filter(Boolean),
+    ),
+  ];
   if (openingDocIds.length === 0) return new Map();
 
   const { data: lines, error: linesError } = await serviceRoleClient
@@ -234,9 +284,13 @@ async function buildOpeningStockLotMap(docs: JsonRecord[]): Promise<Map<string, 
     .not("packing_order_id", "is", null);
   if (linesError || !lines) return new Map();
 
-  const packingOrderIds = [...new Set(
-    (lines as JsonRecord[]).map((line) => toTrimmedString(line.packing_order_id)).filter(Boolean),
-  )];
+  const packingOrderIds = [
+    ...new Set(
+      (lines as JsonRecord[]).map((line) =>
+        toTrimmedString(line.packing_order_id)
+      ).filter(Boolean),
+    ),
+  ];
   if (packingOrderIds.length === 0) return new Map();
 
   const { data: packingOrders } = await serviceRoleClient
@@ -245,15 +299,75 @@ async function buildOpeningStockLotMap(docs: JsonRecord[]): Promise<Map<string, 
     .select("id, po_number")
     .in("id", packingOrderIds);
   const poNumberById = new Map(
-    ((packingOrders ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.po_number)]),
+    ((packingOrders ?? []) as JsonRecord[]).map((
+      row,
+    ) => [toTrimmedString(row.id), toTrimmedString(row.po_number)]),
   );
 
   const lotMap = new Map<string, string>();
   for (const line of lines as JsonRecord[]) {
     const poNumber = poNumberById.get(toTrimmedString(line.packing_order_id));
     if (!poNumber) continue;
-    const key = `${toTrimmedString(line.document_id)}::${toTrimmedString(line.material_id)}::${toTrimmedString(line.batch_number)}`;
+    const key = `${toTrimmedString(line.document_id)}::${
+      toTrimmedString(line.material_id)
+    }::${toTrimmedString(line.batch_number)}`;
     lotMap.set(key, poNumber);
+  }
+  return lotMap;
+}
+
+// SO05 P651 rows reference the Sales Return item, whose stored
+// packing_order_id may be filled immediately or backfilled later by PR23.
+// Keeping this lookup live means IN02/IN03 update without touching the
+// append-only stock_document/stock_ledger rows.
+async function buildSalesReturnLotMap(
+  docs: JsonRecord[],
+): Promise<Map<string, string>> {
+  const itemIds = [
+    ...new Set(
+      docs
+        .filter((doc) =>
+          toTrimmedString(doc.reference_document_type) === "SALES_RETURN"
+        )
+        .map((doc) => toTrimmedString(doc.reference_document_id)).filter(
+          Boolean,
+        ),
+    ),
+  ];
+  if (itemIds.length === 0) return new Map();
+  const items = await fetchInChunks<JsonRecord>(
+    itemIds,
+    (chunk) =>
+      serviceRoleClient
+        .schema("erp_procurement").from("sales_return_item")
+        .select("id, packing_order_id").in("id", chunk).not(
+          "packing_order_id",
+          "is",
+          null,
+        ),
+  );
+  const packingOrderIds = [
+    ...new Set(
+      items.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean),
+    ),
+  ];
+  if (packingOrderIds.length === 0) return new Map();
+  const packingOrders = await fetchInChunks<JsonRecord>(
+    packingOrderIds,
+    (chunk) =>
+      serviceRoleClient
+        .schema("erp_production").from("packing_order").select("id, po_number")
+        .in("id", chunk),
+  );
+  const numberById = new Map(
+    packingOrders.map((
+      row,
+    ) => [toTrimmedString(row.id), toTrimmedString(row.po_number)]),
+  );
+  const lotMap = new Map<string, string>();
+  for (const row of items) {
+    const poNumber = numberById.get(toTrimmedString(row.packing_order_id));
+    if (poNumber) lotMap.set(toTrimmedString(row.id), poNumber);
   }
   return lotMap;
 }
@@ -292,6 +406,7 @@ function resolveLotRefStrict(
   materialId: string,
   batchNumber: string | null,
   openingLotMap: Map<string, string>,
+  salesReturnLotMap: Map<string, string>,
 ): string {
   if (!doc) return "";
   const lot = toTrimmedString(doc.source_lot_ref);
@@ -301,9 +416,17 @@ function resolveLotRefStrict(
     if (ref) return ref;
   }
   if (toTrimmedString(doc.reference_document_type) === "OS") {
-    const key = `${toTrimmedString(doc.reference_document_id)}::${materialId}::${toTrimmedString(batchNumber)}`;
+    const key = `${
+      toTrimmedString(doc.reference_document_id)
+    }::${materialId}::${toTrimmedString(batchNumber)}`;
     const openingPoNumber = openingLotMap.get(key);
     if (openingPoNumber) return openingPoNumber;
+  }
+  if (toTrimmedString(doc.reference_document_type) === "SALES_RETURN") {
+    const poNumber = salesReturnLotMap.get(
+      toTrimmedString(doc.reference_document_id),
+    );
+    if (poNumber) return poNumber;
   }
   return "";
 }
@@ -313,10 +436,17 @@ function resolveLotRef(
   materialId: string,
   batchNumber: string | null,
   openingLotMap: Map<string, string>,
+  salesReturnLotMap: Map<string, string>,
   batchPoMap?: Map<string, string>,
 ): string {
   if (!doc) return "";
-  const strict = resolveLotRefStrict(doc, materialId, batchNumber, openingLotMap);
+  const strict = resolveLotRefStrict(
+    doc,
+    materialId,
+    batchNumber,
+    openingLotMap,
+    salesReturnLotMap,
+  );
   if (strict) return strict;
   const trimmedBatch = toTrimmedString(batchNumber);
   if (batchPoMap && trimmedBatch) {
@@ -338,6 +468,7 @@ function buildBatchPoMap(
   ledgerRows: JsonRecord[],
   docMap: Map<string, JsonRecord>,
   openingLotMap: Map<string, string>,
+  salesReturnLotMap: Map<string, string>,
 ): Map<string, string> {
   const map = new Map<string, string>();
   for (const row of ledgerRows) {
@@ -346,22 +477,31 @@ function buildBatchPoMap(
     if (!materialId || !batchNumber) continue;
     const key = `${materialId}::${batchNumber}`;
     if (map.has(key)) continue;
-    const resolved = resolveLotRefStrict(docMap.get(toTrimmedString(row.stock_document_id)), materialId, batchNumber, openingLotMap);
+    const resolved = resolveLotRefStrict(
+      docMap.get(toTrimmedString(row.stock_document_id)),
+      materialId,
+      batchNumber,
+      openingLotMap,
+      salesReturnLotMap,
+    );
     if (resolved) map.set(key, resolved);
   }
   return map;
 }
 
-function resolveAltUomConversion(material: JsonRecord | undefined, conversions: JsonRecord[]): JsonRecord | null {
+function resolveAltUomConversion(
+  material: JsonRecord | undefined,
+  conversions: JsonRecord[],
+): JsonRecord | null {
   const baseUomCode = toTrimmedString(material?.base_uom_code);
   const purchaseUom = toTrimmedString(material?.purchase_uom_code);
   return conversions.find((conv) =>
-    !conv.variable_conversion
-    && toTrimmedString(conv.from_uom_code) === purchaseUom
-    && toTrimmedString(conv.to_uom_code) === baseUomCode
+    !conv.variable_conversion &&
+    toTrimmedString(conv.from_uom_code) === purchaseUom &&
+    toTrimmedString(conv.to_uom_code) === baseUomCode
   ) ?? conversions.find((conv) =>
-    !conv.variable_conversion
-    && toTrimmedString(conv.to_uom_code) === baseUomCode
+    !conv.variable_conversion &&
+    toTrimmedString(conv.to_uom_code) === baseUomCode
   ) ?? null;
 }
 
@@ -380,7 +520,17 @@ async function searchDistinctTextValues(params: {
   failureCode: string;
   failureMessage: string;
 }): Promise<Response> {
-  const { schema, table, column, q, companyScopeIds, req, ctx, failureCode, failureMessage } = params;
+  const {
+    schema,
+    table,
+    column,
+    q,
+    companyScopeIds,
+    req,
+    ctx,
+    failureCode,
+    failureMessage,
+  } = params;
   let query = serviceRoleClient
     .schema(schema)
     .from(table)
@@ -393,7 +543,9 @@ async function searchDistinctTextValues(params: {
     query = query.in("company_id", companyScopeIds);
   }
   if (q) {
-    query = (query as unknown as { ilike: (columnName: string, pattern: string) => typeof query })
+    query = (query as unknown as {
+      ilike: (columnName: string, pattern: string) => typeof query;
+    })
       .ilike(column, `%${q}%`);
   }
 
@@ -402,10 +554,19 @@ async function searchDistinctTextValues(params: {
     return reportErrorResponse(req, ctx, failureCode, 500, failureMessage);
   }
 
-  const values = [...new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row[column])).filter(Boolean))]
+  const values = [
+    ...new Set(
+      ((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row[column]))
+        .filter(Boolean),
+    ),
+  ]
     .slice(0, 50)
     .map((value) => ({ value, label: value }));
-  return okResponse({ data: values, total: values.length }, ctx.request_id, req);
+  return okResponse(
+    { data: values, total: values.length },
+    ctx.request_id,
+    req,
+  );
 }
 
 function parseMultiValueParams(
@@ -419,16 +580,23 @@ function parseMultiValueParams(
     singularKey ? url.searchParams.get(singularKey) ?? "" : "",
   ];
   const normalize = transform ?? ((value) => value);
-  return [...new Set(
-    collected
-      .flatMap((entry) => String(entry ?? "").split(","))
-      .map((entry) => normalize(toTrimmedString(entry)))
-      .filter(Boolean),
-  )];
+  return [
+    ...new Set(
+      collected
+        .flatMap((entry) => String(entry ?? "").split(","))
+        .map((entry) => normalize(toTrimmedString(entry)))
+        .filter(Boolean),
+    ),
+  ];
 }
 
-async function loadAllowedCompanyIds(ctx: StockReportHandlerContext): Promise<string[] | null> {
-  if (ctx.context.isAdmin === true || ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+async function loadAllowedCompanyIds(
+  ctx: StockReportHandlerContext,
+): Promise<string[] | null> {
+  if (
+    ctx.context.isAdmin === true || ctx.roleCode === "SA" ||
+    ctx.roleCode === "GA"
+  ) {
     return null;
   }
   const { data: userCompanies, error } = await serviceRoleClient
@@ -439,14 +607,26 @@ async function loadAllowedCompanyIds(ctx: StockReportHandlerContext): Promise<st
   if (error) {
     throw new Error("COMPANY_SCOPE_LOOKUP_FAILED");
   }
-  return [...new Set(((userCompanies ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? "")).filter(Boolean))];
+  return [
+    ...new Set(
+      ((userCompanies ?? []) as JsonRecord[]).map((row) =>
+        String(row.company_id ?? "")
+      ).filter(Boolean),
+    ),
+  ];
 }
 
 async function resolveCompanyScopeList(
   ctx: StockReportHandlerContext,
   requestedCompanyIds: string[],
 ): Promise<string[] | null> {
-  const normalizedRequested = [...new Set(requestedCompanyIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  const normalizedRequested = [
+    ...new Set(
+      requestedCompanyIds.map((value) => toTrimmedString(value)).filter(
+        Boolean,
+      ),
+    ),
+  ];
   const allowedCompanyIds = await loadAllowedCompanyIds(ctx);
   if (normalizedRequested.length === 0) {
     return allowedCompanyIds;
@@ -454,7 +634,9 @@ async function resolveCompanyScopeList(
   if (!allowedCompanyIds) {
     return normalizedRequested;
   }
-  const denied = normalizedRequested.find((companyId) => !allowedCompanyIds.includes(companyId));
+  const denied = normalizedRequested.find((companyId) =>
+    !allowedCompanyIds.includes(companyId)
+  );
   if (denied) {
     throw new Error("COMPANY_SCOPE_VIOLATION");
   }
@@ -474,7 +656,13 @@ async function resolveMandatorySingleCompanyId(
   ctx: StockReportHandlerContext,
   requestedCompanyIds: string[],
 ): Promise<string> {
-  const normalizedRequested = [...new Set(requestedCompanyIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  const normalizedRequested = [
+    ...new Set(
+      requestedCompanyIds.map((value) => toTrimmedString(value)).filter(
+        Boolean,
+      ),
+    ),
+  ];
   if (normalizedRequested.length !== 1) {
     throw new Error("COMPANY_ID_REQUIRED_SINGLE");
   }
@@ -522,7 +710,11 @@ function initializeCurrentStockDraftRow(params: {
   };
 }
 
-function appendStockTypeQuantity(row: CurrentStockDraftRow, stockTypeCode: string, quantity: number): void {
+function appendStockTypeQuantity(
+  row: CurrentStockDraftRow,
+  stockTypeCode: string,
+  quantity: number,
+): void {
   const normalized = normalizeStockTypeFilter(stockTypeCode);
   if (normalized === "UNRESTRICTED") {
     row.unrestricted_qty = normalizeNumber(row.unrestricted_qty + quantity);
@@ -544,7 +736,10 @@ function isZeroBalanceRow(row: CurrentStockDraftRow): boolean {
   );
 }
 
-function convertFgQtyToPrimary(quantityKg: number, fillQtyPerPack: number | null): number {
+function convertFgQtyToPrimary(
+  quantityKg: number,
+  fillQtyPerPack: number | null,
+): number {
   const fillQty = Number(fillQtyPerPack ?? 0);
   if (!Number.isFinite(fillQty) || fillQty <= 0) {
     return normalizeNumber(quantityKg);
@@ -568,7 +763,10 @@ async function resolveCompanyScope(
     await assertCompanyScope(ctx, companyId);
     return { companyId, allowedCompanyIds: null };
   }
-  if (ctx.context.isAdmin === true || ctx.roleCode === "SA" || ctx.roleCode === "GA") {
+  if (
+    ctx.context.isAdmin === true || ctx.roleCode === "SA" ||
+    ctx.roleCode === "GA"
+  ) {
     return { companyId, allowedCompanyIds: null };
   }
   const { data: userCompanies, error } = await serviceRoleClient
@@ -579,7 +777,9 @@ async function resolveCompanyScope(
   if (error) {
     throw new Error("COMPANY_SCOPE_LOOKUP_FAILED");
   }
-  const allowedCompanyIds = ((userCompanies ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? ""));
+  const allowedCompanyIds = ((userCompanies ?? []) as JsonRecord[]).map((row) =>
+    String(row.company_id ?? "")
+  );
   return { companyId, allowedCompanyIds };
 }
 
@@ -595,21 +795,60 @@ export async function getStockLedgerReportHandler(
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const dateRangeState = validateRequiredDateRange(dateFrom, dateTo);
     if (dateRangeState === "MISSING") {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_DATE_RANGE_REQUIRED",
+        400,
+        "date_from and date_to are required.",
+      );
     }
     if (dateRangeState === "INVALID") {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_DATE_RANGE_INVALID",
+        400,
+        "date_from/date_to are invalid.",
+      );
     }
     if (dateRangeState === "TOO_WIDE") {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_DATE_RANGE_TOO_WIDE",
+        400,
+        "Date range cannot exceed 365 days.",
+      );
     }
 
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
-    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
-    const batchNumbers = parseMultiValueParams(url, "batch_numbers", "batch_number");
-    const packingPoNumbers = parseMultiValueParams(url, "packing_po_numbers", "packing_po_number");
-    const movementTypeCodes = parseMultiValueParams(url, "movement_type_codes", "movement_type_code", (value) => value.toUpperCase());
+    const materialIds = parseMultiValueParams(
+      url,
+      "material_ids",
+      "material_id",
+    );
+    const storageLocationIds = parseMultiValueParams(
+      url,
+      "storage_location_ids",
+      "storage_location_id",
+    );
+    const batchNumbers = parseMultiValueParams(
+      url,
+      "batch_numbers",
+      "batch_number",
+    );
+    const packingPoNumbers = parseMultiValueParams(
+      url,
+      "packing_po_numbers",
+      "packing_po_number",
+    );
+    const movementTypeCodes = parseMultiValueParams(
+      url,
+      "movement_type_codes",
+      "movement_type_code",
+      (value) => value.toUpperCase(),
+    );
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     // Paged via fetchAllRows -- the §117 "endless fetch" design (a mandatory
@@ -625,13 +864,19 @@ export async function getStockLedgerReportHandler(
         let query = serviceRoleClient
           .schema("erp_inventory")
           .from("stock_ledger")
-          .select("id, ledger_seq, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at, created_by")
+          .select(
+            "id, ledger_seq, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at, created_by",
+          )
           .eq("company_id", companyId)
           .order("posting_date", { ascending: true })
           .order("ledger_seq", { ascending: true })
           .range(from, to);
-        query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("posting_date", dateFrom);
-        query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("posting_date", dateTo);
+        query = (query as unknown as {
+          gte: (column: string, value: string) => typeof query;
+        }).gte("posting_date", dateFrom);
+        query = (query as unknown as {
+          lte: (column: string, value: string) => typeof query;
+        }).lte("posting_date", dateTo);
         if (materialIds.length > 0) {
           query = query.in("material_id", materialIds);
         }
@@ -647,7 +892,13 @@ export async function getStockLedgerReportHandler(
         return query;
       });
     } catch {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_FETCH_FAILED",
+        500,
+        "Unable to fetch stock ledger report.",
+      );
     }
 
     const ledgerRows = ledgerData.map((row) => ({
@@ -671,10 +922,22 @@ export async function getStockLedgerReportHandler(
       created_by: toTrimmedString(row.created_by),
     } satisfies StockLedgerRow));
 
-    const stockDocumentIds = [...new Set(ledgerRows.map((row) => row.stock_document_id).filter(Boolean))];
-    const materialIdsForLookup = [...new Set(ledgerRows.map((row) => row.material_id).filter(Boolean))];
-    const slocIdsForLookup = [...new Set(ledgerRows.map((row) => row.storage_location_id).filter(Boolean))];
-    const companyIdsForLookup = [...new Set(ledgerRows.map((row) => row.company_id).filter(Boolean))];
+    const stockDocumentIds = [
+      ...new Set(
+        ledgerRows.map((row) => row.stock_document_id).filter(Boolean),
+      ),
+    ];
+    const materialIdsForLookup = [
+      ...new Set(ledgerRows.map((row) => row.material_id).filter(Boolean)),
+    ];
+    const slocIdsForLookup = [
+      ...new Set(
+        ledgerRows.map((row) => row.storage_location_id).filter(Boolean),
+      ),
+    ];
+    const companyIdsForLookup = [
+      ...new Set(ledgerRows.map((row) => row.company_id).filter(Boolean)),
+    ];
 
     // stockDocumentIds/materialIdsForLookup scale 1:1 with the row count -- a wide date range
     // with no movement-type filter can put hundreds of distinct ids in a single .in() call,
@@ -689,47 +952,83 @@ export async function getStockLedgerReportHandler(
     let companyRows: JsonRecord[];
     let conversionRows: JsonRecord[];
     try {
-      [stockDocRows, materialRows, slocRows, companyRows, conversionRows] = await Promise.all([
-        fetchInChunks<JsonRecord>(stockDocumentIds, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_inventory")
-            .from("stock_document")
-            .select("id, document_number, item_number, document_year, reference_document_type, reference_document_number, reference_document_id, reversal_document_id, source_lot_ref, posted_by")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_master")
-            .from("material_master")
-            .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, purchase_uom_code, pack_code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_inventory")
-            .from("storage_location_master")
-            .select("id, code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(companyIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_master")
-            .from("companies")
-            .select("id, company_code, company_name")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_master")
-            .from("material_uom_conversion")
-            .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion")
-            .in("material_id", idChunk)
-            .eq("active", true)),
-      ]);
+      [stockDocRows, materialRows, slocRows, companyRows, conversionRows] =
+        await Promise.all([
+          fetchInChunks<JsonRecord>(
+            stockDocumentIds,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_inventory")
+                .from("stock_document")
+                .select(
+                  "id, document_number, item_number, document_year, reference_document_type, reference_document_number, reference_document_id, reversal_document_id, source_lot_ref, posted_by",
+                )
+                .in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            materialIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_master")
+                .from("material_master")
+                .select(
+                  "id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, purchase_uom_code, pack_code",
+                )
+                .in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            slocIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_inventory")
+                .from("storage_location_master")
+                .select("id, code")
+                .in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            companyIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_master")
+                .from("companies")
+                .select("id, company_code, company_name")
+                .in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            materialIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_master")
+                .from("material_uom_conversion")
+                .select(
+                  "material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion",
+                )
+                .in("material_id", idChunk)
+                .eq("active", true),
+          ),
+        ]);
     } catch {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_FETCH_FAILED",
+        500,
+        "Unable to fetch stock ledger report.",
+      );
     }
 
-    const docMap = new Map(stockDocRows.map((row) => [toTrimmedString(row.id), row]));
-    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
-    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
-    const companyMap = new Map(companyRows.map((row) => [toTrimmedString(row.id), row]));
+    const docMap = new Map(
+      stockDocRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const materialMap = new Map(
+      materialRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const slocMap = new Map(
+      slocRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const companyMap = new Map(
+      companyRows.map((row) => [toTrimmedString(row.id), row]),
+    );
     const conversionsByMaterialId = new Map<string, JsonRecord[]>();
     for (const row of conversionRows) {
       const materialId = toTrimmedString(row.material_id);
@@ -740,10 +1039,18 @@ export async function getStockLedgerReportHandler(
       conversionsByMaterialId.get(materialId)?.push(row);
     }
     const openingLotMap = await buildOpeningStockLotMap(stockDocRows);
-    const salesInvoicePackingMap = await buildSalesInvoicePackingMap(stockDocRows);
+    const salesReturnLotMap = await buildSalesReturnLotMap(stockDocRows);
+    const salesInvoicePackingMap = await buildSalesInvoicePackingMap(
+      stockDocRows,
+    );
     // Found live 2026-09-03 -- see resolveLotRef's own comment (same fix as
     // getCurrentStockHandler/IN03 below).
-    const batchPoMap = buildBatchPoMap(ledgerRows, docMap, openingLotMap);
+    const batchPoMap = buildBatchPoMap(
+      ledgerRows,
+      docMap,
+      openingLotMap,
+      salesReturnLotMap,
+    );
 
     const userIds = new Set<string>();
     const fgPoNumbers = new Set<string>();
@@ -759,7 +1066,14 @@ export async function getStockLedgerReportHandler(
       }
       const material = materialMap.get(row.material_id);
       if (toTrimmedString(material?.material_type) === "FG") {
-        const poNumber = resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, batchPoMap);
+        const poNumber = resolveLotRef(
+          doc,
+          row.material_id,
+          row.batch_number,
+          openingLotMap,
+          salesReturnLotMap,
+          batchPoMap,
+        );
         if (poNumber) fgPoNumbers.add(poNumber);
       }
       const packCode = toTrimmedString(material?.pack_code);
@@ -771,23 +1085,45 @@ export async function getStockLedgerReportHandler(
     const [userDisplayMap, packingOrderResp, packCodeResp] = await Promise.all([
       resolveUserDisplayNames([...userIds]),
       fgPoNumbers.size > 0
-        ? serviceRoleClient.schema("erp_production").from("packing_order").select("po_number, fill_qty_per_pack").in("po_number", [...fgPoNumbers])
+        ? serviceRoleClient.schema("erp_production").from("packing_order")
+          .select("po_number, fill_qty_per_pack").in("po_number", [
+            ...fgPoNumbers,
+          ])
         : Promise.resolve({ data: [], error: null }),
       packCodes.size > 0
-        ? serviceRoleClient.schema("erp_production").from("pack_code_master").select("pack_code, outer_uom_code").in("pack_code", [...packCodes])
+        ? serviceRoleClient.schema("erp_production").from("pack_code_master")
+          .select("pack_code, outer_uom_code").in("pack_code", [...packCodes])
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (packingOrderResp.error || packCodeResp.error) {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_FETCH_FAILED",
+        500,
+        "Unable to fetch stock ledger report.",
+      );
     }
 
-    const packingOrderMap = new Map(((packingOrderResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.po_number), row]));
-    const packCodeMap = new Map(((packCodeResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.pack_code), toTrimmedString(row.outer_uom_code)]));
+    const packingOrderMap = new Map(
+      ((packingOrderResp.data ?? []) as JsonRecord[]).map((
+        row,
+      ) => [toTrimmedString(row.po_number), row]),
+    );
+    const packCodeMap = new Map(
+      ((packCodeResp.data ?? []) as JsonRecord[]).map((
+        row,
+      ) => [
+        toTrimmedString(row.pack_code),
+        toTrimmedString(row.outer_uom_code),
+      ]),
+    );
 
     const referenceIdsByType = new Map<string, Set<string>>();
     for (const row of ledgerRows) {
       const doc = docMap.get(row.stock_document_id);
-      const refType = toTrimmedString(doc?.reference_document_type).toUpperCase();
+      const refType = toTrimmedString(doc?.reference_document_type)
+        .toUpperCase();
       const refId = toTrimmedString(doc?.reference_document_id);
       if (!refType || !refId) continue;
       if (!referenceIdsByType.has(refType)) {
@@ -801,20 +1137,43 @@ export async function getStockLedgerReportHandler(
 
     if ((referenceIdsByType.get("GRN")?.size ?? 0) > 0) {
       vendorCustomerFetches.push((async () => {
-        const refIds = [...(referenceIdsByType.get("GRN") ?? new Set<string>())];
-        const grnResp = await serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("id, vendor_id").in("id", refIds);
-        if (grnResp.error) throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
-        const vendorIds = [...new Set(((grnResp.data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.vendor_id)).filter(Boolean))];
+        const refIds = [
+          ...(referenceIdsByType.get("GRN") ?? new Set<string>()),
+        ];
+        const grnResp = await serviceRoleClient.schema("erp_procurement").from(
+          "goods_receipt",
+        ).select("id, vendor_id").in("id", refIds);
+        if (grnResp.error) {
+          throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
+        }
+        const vendorIds = [
+          ...new Set(
+            ((grnResp.data ?? []) as JsonRecord[]).map((row) =>
+              toTrimmedString(row.vendor_id)
+            ).filter(Boolean),
+          ),
+        ];
         const vendorResp = vendorIds.length > 0
-          ? await serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name").in("id", vendorIds)
+          ? await serviceRoleClient.schema("erp_master").from("vendor_master")
+            .select("id, vendor_code, vendor_name").in("id", vendorIds)
           : { data: [], error: null };
-        if (vendorResp.error) throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
-        const vendorMap = new Map(((vendorResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+        if (vendorResp.error) {
+          throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
+        }
+        const vendorMap = new Map(
+          ((vendorResp.data ?? []) as JsonRecord[]).map((
+            row,
+          ) => [toTrimmedString(row.id), row]),
+        );
         for (const row of (grnResp.data ?? []) as JsonRecord[]) {
           const vendor = vendorMap.get(toTrimmedString(row.vendor_id));
           vendorCustomerLabelByRef.set(
             `GRN:${toTrimmedString(row.id)}`,
-            vendor ? `${toTrimmedString(vendor.vendor_code) || "—"} — ${toTrimmedString(vendor.vendor_name)}` : null,
+            vendor
+              ? `${toTrimmedString(vendor.vendor_code) || "—"} — ${
+                toTrimmedString(vendor.vendor_name)
+              }`
+              : null,
           );
         }
       })());
@@ -822,20 +1181,43 @@ export async function getStockLedgerReportHandler(
 
     if ((referenceIdsByType.get("RTV")?.size ?? 0) > 0) {
       vendorCustomerFetches.push((async () => {
-        const refIds = [...(referenceIdsByType.get("RTV") ?? new Set<string>())];
-        const rtvResp = await serviceRoleClient.schema("erp_procurement").from("return_to_vendor").select("id, vendor_id").in("id", refIds);
-        if (rtvResp.error) throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
-        const vendorIds = [...new Set(((rtvResp.data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.vendor_id)).filter(Boolean))];
+        const refIds = [
+          ...(referenceIdsByType.get("RTV") ?? new Set<string>()),
+        ];
+        const rtvResp = await serviceRoleClient.schema("erp_procurement").from(
+          "return_to_vendor",
+        ).select("id, vendor_id").in("id", refIds);
+        if (rtvResp.error) {
+          throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
+        }
+        const vendorIds = [
+          ...new Set(
+            ((rtvResp.data ?? []) as JsonRecord[]).map((row) =>
+              toTrimmedString(row.vendor_id)
+            ).filter(Boolean),
+          ),
+        ];
         const vendorResp = vendorIds.length > 0
-          ? await serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name").in("id", vendorIds)
+          ? await serviceRoleClient.schema("erp_master").from("vendor_master")
+            .select("id, vendor_code, vendor_name").in("id", vendorIds)
           : { data: [], error: null };
-        if (vendorResp.error) throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
-        const vendorMap = new Map(((vendorResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+        if (vendorResp.error) {
+          throw new Error("STOCK_LEDGER_VENDOR_RESOLVE_FAILED");
+        }
+        const vendorMap = new Map(
+          ((vendorResp.data ?? []) as JsonRecord[]).map((
+            row,
+          ) => [toTrimmedString(row.id), row]),
+        );
         for (const row of (rtvResp.data ?? []) as JsonRecord[]) {
           const vendor = vendorMap.get(toTrimmedString(row.vendor_id));
           vendorCustomerLabelByRef.set(
             `RTV:${toTrimmedString(row.id)}`,
-            vendor ? `${toTrimmedString(vendor.vendor_code) || "—"} — ${toTrimmedString(vendor.vendor_name)}` : null,
+            vendor
+              ? `${toTrimmedString(vendor.vendor_code) || "—"} — ${
+                toTrimmedString(vendor.vendor_name)
+              }`
+              : null,
           );
         }
       })());
@@ -843,22 +1225,42 @@ export async function getStockLedgerReportHandler(
 
     if ((referenceIdsByType.get("SALES_INVOICE")?.size ?? 0) > 0) {
       vendorCustomerFetches.push((async () => {
-        const refIds = [...(referenceIdsByType.get("SALES_INVOICE") ?? new Set<string>())];
-        const invoiceResp = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+        const refIds = [
+          ...(referenceIdsByType.get("SALES_INVOICE") ?? new Set<string>()),
+        ];
+        const invoiceResp = await serviceRoleClient.schema("erp_procurement")
+          .from("sales_invoice")
           .select("id, customer_id, bill_to_name").in("id", refIds);
-        if (invoiceResp.error) throw new Error("STOCK_LEDGER_CUSTOMER_RESOLVE_FAILED");
-        const customerIds = [...new Set(((invoiceResp.data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
+        if (invoiceResp.error) {
+          throw new Error("STOCK_LEDGER_CUSTOMER_RESOLVE_FAILED");
+        }
+        const customerIds = [
+          ...new Set(
+            ((invoiceResp.data ?? []) as JsonRecord[]).map((row) =>
+              toTrimmedString(row.customer_id)
+            ).filter(Boolean),
+          ),
+        ];
         const customerResp = customerIds.length > 0
-          ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
+          ? await serviceRoleClient.schema("erp_master").from("customer_master")
+            .select("id, customer_code, customer_name").in("id", customerIds)
           : { data: [], error: null };
-        if (customerResp.error) throw new Error("STOCK_LEDGER_CUSTOMER_RESOLVE_FAILED");
-        const customerMap = new Map(((customerResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+        if (customerResp.error) {
+          throw new Error("STOCK_LEDGER_CUSTOMER_RESOLVE_FAILED");
+        }
+        const customerMap = new Map(
+          ((customerResp.data ?? []) as JsonRecord[]).map((
+            row,
+          ) => [toTrimmedString(row.id), row]),
+        );
         for (const row of (invoiceResp.data ?? []) as JsonRecord[]) {
           const customer = customerMap.get(toTrimmedString(row.customer_id));
           vendorCustomerLabelByRef.set(
             `SALES_INVOICE:${toTrimmedString(row.id)}`,
             customer
-              ? `${toTrimmedString(customer.customer_code) || "—"} — ${toTrimmedString(customer.customer_name)}`
+              ? `${toTrimmedString(customer.customer_code) || "—"} — ${
+                toTrimmedString(customer.customer_name)
+              }`
               : toTrimmedString(row.bill_to_name) || null,
           );
         }
@@ -877,28 +1279,47 @@ export async function getStockLedgerReportHandler(
       const materialType = toTrimmedString(material?.material_type);
       const materialLabel = resolveMaterialLabel(material) || "—";
       const documentName = toTrimmedString(material?.document_name) || null;
-      const refType = toTrimmedString(doc?.reference_document_type).toUpperCase();
+      const refType = toTrimmedString(doc?.reference_document_type)
+        .toUpperCase();
       const refId = toTrimmedString(doc?.reference_document_id);
       const invoicePacking = refType === "SALES_INVOICE"
-        ? salesInvoicePackingMap.get(`${refId}:${toTrimmedString(doc?.item_number)}`)
+        ? salesInvoicePackingMap.get(
+          `${refId}:${toTrimmedString(doc?.item_number)}`,
+        )
         : null;
       // Signed: negative for OUT, positive for IN (posted_quantity/posted_value are GENERATED
       // columns on stock_ledger -- see feasibility doc Section 124). pack_quantity below is a
       // straight division of baseQuantity, so it inherits the correct sign too.
       const baseQuantity = normalizeNumber(row.posted_quantity);
-      const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
+      const conversion = resolveAltUomConversion(
+        material,
+        conversionsByMaterialId.get(row.material_id) ?? [],
+      );
       const altFactor = Number(conversion?.conversion_factor ?? 0);
       const fgPoNumber = materialType === "FG"
-        ? invoicePacking?.po_number || resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, batchPoMap)
+        ? invoicePacking?.po_number ||
+          resolveLotRef(
+            doc,
+            row.material_id,
+            row.batch_number,
+            openingLotMap,
+            salesReturnLotMap,
+            batchPoMap,
+          )
         : "";
       const fgPo = fgPoNumber ? packingOrderMap.get(fgPoNumber) : null;
-      const packUomCode = packCodeMap.get(toTrimmedString(material?.pack_code)) || null;
+      const packUomCode =
+        packCodeMap.get(toTrimmedString(material?.pack_code)) || null;
       let packQuantity: number | null = null;
       let resolvedPackUomCode: string | null = null;
 
       if (materialType === "FG") {
-        const fillQtyPerPack = Number(invoicePacking?.fill_qty_per_pack ?? fgPo?.fill_qty_per_pack ?? 0);
-        packQuantity = fillQtyPerPack > 0 ? normalizeNumber(baseQuantity / fillQtyPerPack) : null;
+        const fillQtyPerPack = Number(
+          invoicePacking?.fill_qty_per_pack ?? fgPo?.fill_qty_per_pack ?? 0,
+        );
+        packQuantity = fillQtyPerPack > 0
+          ? normalizeNumber(baseQuantity / fillQtyPerPack)
+          : null;
         resolvedPackUomCode = packUomCode;
       } else if (materialType !== "SFG" && conversion && altFactor > 0) {
         packQuantity = normalizeNumber(baseQuantity / altFactor);
@@ -908,11 +1329,15 @@ export async function getStockLedgerReportHandler(
       const postedBy = toTrimmedString(doc?.posted_by);
       const resolvedUserId = postedBy || row.created_by;
       const rawUserLabel = userDisplayMap.get(resolvedUserId) ?? "";
-      const userLabel = rawUserLabel && rawUserLabel !== resolvedUserId ? rawUserLabel : null;
+      const userLabel = rawUserLabel && rawUserLabel !== resolvedUserId
+        ? rawUserLabel
+        : null;
 
       return {
         id: row.id,
-        row_key: `${toTrimmedString(doc?.document_number)}__${toTrimmedString(doc?.item_number)}__${row.ledger_seq}`,
+        row_key: `${toTrimmedString(doc?.document_number)}__${
+          toTrimmedString(doc?.item_number)
+        }__${row.ledger_seq}`,
         material_document_number: toTrimmedString(doc?.document_number) || "—",
         material_document_item: toTrimmedString(doc?.item_number) || "—",
         material_document_year: toTrimmedString(doc?.document_year) || "—",
@@ -931,21 +1356,37 @@ export async function getStockLedgerReportHandler(
         pack_uom_code: resolvedPackUomCode,
         value: normalizeNumber(row.posted_value, 4),
         direction: row.direction || "—",
-        reference_document: toTrimmedString(doc?.reference_document_number) || "—",
+        reference_document: toTrimmedString(doc?.reference_document_number) ||
+          "—",
         packing_po_number: fgPoNumber || "—",
-        vendor_customer: vendorCustomerLabelByRef.get(`${refType}:${refId}`) || "—",
+        vendor_customer: vendorCustomerLabelByRef.get(`${refType}:${refId}`) ||
+          "—",
         user_display: userLabel || "—",
         entry_date_time: formatDateTimeDisplay(row.created_at) || "—",
       };
     });
     const filteredRows = packingPoNumbers.length > 0
-      ? rows.filter((row) => packingPoNumbers.includes(toTrimmedString(row.packing_po_number)))
+      ? rows.filter((row) =>
+        packingPoNumbers.includes(toTrimmedString(row.packing_po_number))
+      )
       : rows;
 
-    return okResponse({ data: filteredRows, total: filteredRows.length }, ctx.request_id, req);
+    return okResponse(
+      { data: filteredRows, total: filteredRows.length },
+      ctx.request_id,
+      req,
+    );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "STOCK_LEDGER_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch stock ledger report.");
+    const code = error instanceof Error
+      ? error.message
+      : "STOCK_LEDGER_FETCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      companyErrorStatus(code) ?? 500,
+      "Unable to fetch stock ledger report.",
+    );
   }
 }
 
@@ -970,19 +1411,49 @@ export async function getStockLedgerMachineWiseHandler(
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const dateRangeState = validateRequiredDateRange(dateFrom, dateTo);
     if (dateRangeState === "MISSING") {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_DATE_RANGE_REQUIRED",
+        400,
+        "date_from and date_to are required.",
+      );
     }
     if (dateRangeState === "INVALID") {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_DATE_RANGE_INVALID",
+        400,
+        "date_from/date_to are invalid.",
+      );
     }
     if (dateRangeState === "TOO_WIDE") {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_DATE_RANGE_TOO_WIDE",
+        400,
+        "Date range cannot exceed 365 days.",
+      );
     }
 
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
-    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
-    const batchNumbers = parseMultiValueParams(url, "batch_numbers", "batch_number");
+    const materialIds = parseMultiValueParams(
+      url,
+      "material_ids",
+      "material_id",
+    );
+    const storageLocationIds = parseMultiValueParams(
+      url,
+      "storage_location_ids",
+      "storage_location_id",
+    );
+    const batchNumbers = parseMultiValueParams(
+      url,
+      "batch_numbers",
+      "batch_number",
+    );
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     let logData: JsonRecord[];
@@ -991,41 +1462,81 @@ export async function getStockLedgerMachineWiseHandler(
         let query = serviceRoleClient
           .schema("erp_production")
           .from("machine_stock_log")
-          .select("id, company_id, storage_location_id, material_id, machine_id, batch_number, qty, direction, source_type, reference_document_type, reference_document_id, created_at, created_by")
+          .select(
+            "id, company_id, storage_location_id, material_id, machine_id, batch_number, qty, direction, source_type, reference_document_type, reference_document_id, created_at, created_by",
+          )
           .eq("company_id", companyId)
           .order("created_at", { ascending: true })
           .order("id", { ascending: true })
           .range(from, to);
-        query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("created_at", `${dateFrom}T00:00:00.000Z`);
-        query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("created_at", `${dateTo}T23:59:59.999Z`);
-        if (materialIds.length > 0) query = query.in("material_id", materialIds);
-        if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
-        if (batchNumbers.length > 0) query = query.in("batch_number", batchNumbers);
+        query = (query as unknown as {
+          gte: (column: string, value: string) => typeof query;
+        }).gte("created_at", `${dateFrom}T00:00:00.000Z`);
+        query = (query as unknown as {
+          lte: (column: string, value: string) => typeof query;
+        }).lte("created_at", `${dateTo}T23:59:59.999Z`);
+        if (materialIds.length > 0) {
+          query = query.in("material_id", materialIds);
+        }
+        if (storageLocationIds.length > 0) {
+          query = query.in("storage_location_id", storageLocationIds);
+        }
+        if (batchNumbers.length > 0) {
+          query = query.in("batch_number", batchNumbers);
+        }
         return query;
       });
     } catch {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_MACHINE_WISE_FETCH_FAILED", 500, "Unable to fetch machine-wise stock ledger.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_MACHINE_WISE_FETCH_FAILED",
+        500,
+        "Unable to fetch machine-wise stock ledger.",
+      );
     }
 
     if (logData.length === 0) {
       return okResponse({ data: [], total: 0 }, ctx.request_id, req);
     }
 
-    const materialIdsForLookup = [...new Set(logData.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
-    const slocIdsForLookup = [...new Set(logData.map((row) => toTrimmedString(row.storage_location_id)).filter(Boolean))];
-    const machineIdsForLookup = [...new Set(logData.map((row) => toTrimmedString(row.machine_id)).filter(Boolean))];
-    const userIds = [...new Set(logData.map((row) => toTrimmedString(row.created_by)).filter(Boolean))];
+    const materialIdsForLookup = [
+      ...new Set(
+        logData.map((row) => toTrimmedString(row.material_id)).filter(Boolean),
+      ),
+    ];
+    const slocIdsForLookup = [
+      ...new Set(
+        logData.map((row) => toTrimmedString(row.storage_location_id)).filter(
+          Boolean,
+        ),
+      ),
+    ];
+    const machineIdsForLookup = [
+      ...new Set(
+        logData.map((row) => toTrimmedString(row.machine_id)).filter(Boolean),
+      ),
+    ];
+    const userIds = [
+      ...new Set(
+        logData.map((row) => toTrimmedString(row.created_by)).filter(Boolean),
+      ),
+    ];
     // Only the CONSUMPTION writer (runMtsProcessOrderVerify) tags reference_document_type
     // "PROCESS_PO" -- TRANSFER/MANUAL_ALLOT tag "LTR"/"MANUAL_ALLOT" instead (location_transfer
     // handlers), which have no single friendly document-number lookup as clean as a PO
     // number, so only this one reference type is resolved to a display number; the others
     // still show their type badge, same "not applicable stays null" convention as PR24.
-    const processOrderIds = [...new Set(
-      logData
-        .filter((row) => toTrimmedString(row.reference_document_type) === "PROCESS_PO")
-        .map((row) => toTrimmedString(row.reference_document_id))
-        .filter(Boolean),
-    )];
+    const processOrderIds = [
+      ...new Set(
+        logData
+          .filter((row) =>
+            toTrimmedString(row.reference_document_type) === "PROCESS_PO"
+          )
+          .map((row) => toTrimmedString(row.reference_document_id))
+          .filter(Boolean),
+      ),
+    ];
 
     let materialRows: JsonRecord[];
     let slocRows: JsonRecord[];
@@ -1033,30 +1544,61 @@ export async function getStockLedgerMachineWiseHandler(
     let processOrderRows: JsonRecord[];
     let userDisplayMap: Map<string, string>;
     try {
-      [materialRows, slocRows, machineRows, processOrderRows, userDisplayMap] = await Promise.all([
-        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_inventory").from("storage_location_master")
-            .select("id, code").in("id", idChunk)),
-        fetchInChunks<JsonRecord>(machineIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_master").from("machine_master")
-            .select("id, machine_code, machine_name").in("id", idChunk)),
-        fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
-          serviceRoleClient.schema("erp_production").from("process_order")
-            .select("id, po_number").in("id", idChunk)),
-        resolveUserDisplayNames(userIds),
-      ]);
+      [materialRows, slocRows, machineRows, processOrderRows, userDisplayMap] =
+        await Promise.all([
+          fetchInChunks<JsonRecord>(
+            materialIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient.schema("erp_master").from("material_master")
+                .select(
+                  "id, pace_code, external_code, material_name, document_name, material_type, base_uom_code",
+                )
+                .in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            slocIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient.schema("erp_inventory").from(
+                "storage_location_master",
+              )
+                .select("id, code").in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            machineIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient.schema("erp_master").from("machine_master")
+                .select("id, machine_code, machine_name").in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            processOrderIds,
+            (idChunk) =>
+              serviceRoleClient.schema("erp_production").from("process_order")
+                .select("id, po_number").in("id", idChunk),
+          ),
+          resolveUserDisplayNames(userIds),
+        ]);
     } catch {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_MACHINE_WISE_ENRICH_FAILED", 500, "Unable to fetch machine-wise stock ledger.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_MACHINE_WISE_ENRICH_FAILED",
+        500,
+        "Unable to fetch machine-wise stock ledger.",
+      );
     }
 
-    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
-    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
-    const machineMap = new Map(machineRows.map((row) => [toTrimmedString(row.id), row]));
-    const processOrderMap = new Map(processOrderRows.map((row) => [toTrimmedString(row.id), row]));
+    const materialMap = new Map(
+      materialRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const slocMap = new Map(
+      slocRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const machineMap = new Map(
+      machineRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const processOrderMap = new Map(
+      processOrderRows.map((row) => [toTrimmedString(row.id), row]),
+    );
 
     const rows = logData.map((row) => {
       const material = materialMap.get(toTrimmedString(row.material_id));
@@ -1085,7 +1627,10 @@ export async function getStockLedgerMachineWiseHandler(
         machine_code: machine?.machine_code ?? null,
         machine_name: machine?.machine_name ?? null,
         machine_label: machine
-          ? [toTrimmedString(machine.machine_code), toTrimmedString(machine.machine_name)].filter(Boolean).join(" - ")
+          ? [
+            toTrimmedString(machine.machine_code),
+            toTrimmedString(machine.machine_name),
+          ].filter(Boolean).join(" - ")
           : "Unassigned",
         batch_number: row.batch_number ?? null,
         qty: Number(row.qty ?? 0),
@@ -1093,14 +1638,23 @@ export async function getStockLedgerMachineWiseHandler(
         source_type: row.source_type,
         reference_document_type: refType || null,
         reference_document_number: referenceDocumentNumber,
-        created_by_display: userDisplayMap.get(toTrimmedString(row.created_by)) || null,
+        created_by_display:
+          userDisplayMap.get(toTrimmedString(row.created_by)) || null,
       };
     });
 
     return okResponse({ data: rows, total: rows.length }, ctx.request_id, req);
   } catch (error) {
-    const code = error instanceof Error ? error.message : "STOCK_LEDGER_MACHINE_WISE_FAILED";
-    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch machine-wise stock ledger.");
+    const code = error instanceof Error
+      ? error.message
+      : "STOCK_LEDGER_MACHINE_WISE_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      companyErrorStatus(code) ?? 500,
+      "Unable to fetch machine-wise stock ledger.",
+    );
   }
 }
 
@@ -1113,11 +1667,23 @@ export async function getCurrentStockHandler(
 
     const url = new URL(req.url);
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
-    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids");
+    const materialIds = parseMultiValueParams(
+      url,
+      "material_ids",
+      "material_id",
+    );
+    const storageLocationIds = parseMultiValueParams(
+      url,
+      "storage_location_ids",
+    );
     const batchNumbers = parseMultiValueParams(url, "batch_numbers");
     const packingPoNumbers = parseMultiValueParams(url, "packing_po_numbers");
-    const materialTypes = parseMultiValueParams(url, "material_types", undefined, (value) => value.toUpperCase());
+    const materialTypes = parseMultiValueParams(
+      url,
+      "material_types",
+      undefined,
+      (value) => value.toUpperCase(),
+    );
     const stockTypes = parseMultiValueParams(
       url,
       "stock_types",
@@ -1127,17 +1693,24 @@ export async function getCurrentStockHandler(
     const showZero = parseBooleanFlag(url.searchParams.get("show_zero"));
 
     const requestedMaterialTypes = materialTypes.length
-      ? materialTypes.filter((value) => ["RM", "PM", "INT", "SFG", "FG"].includes(value))
+      ? materialTypes.filter((value) =>
+        ["RM", "PM", "INT", "SFG", "FG"].includes(value)
+      )
       : ["RM", "PM", "INT", "SFG", "FG"];
     const requestedStockTypes = stockTypes.length
-      ? stockTypes.filter((value) => ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED", "IN_TRANSIT"].includes(value))
+      ? stockTypes.filter((value) =>
+        ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED", "IN_TRANSIT"]
+          .includes(value)
+      )
       : ["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED", "IN_TRANSIT"];
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     let materialQuery = serviceRoleClient
       .schema("erp_master")
       .from("material_master")
-      .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, pack_code");
+      .select(
+        "id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, pack_code",
+      );
     if (requestedMaterialTypes.length > 0) {
       materialQuery = materialQuery.in("material_type", requestedMaterialTypes);
     }
@@ -1146,7 +1719,13 @@ export async function getCurrentStockHandler(
     }
     const { data: materialRows, error: materialError } = await materialQuery;
     if (materialError) {
-      return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "CURRENT_STOCK_FETCH_FAILED",
+        500,
+        "Unable to fetch current stock.",
+      );
     }
 
     const scopedMaterials = (materialRows ?? []) as JsonRecord[];
@@ -1188,7 +1767,10 @@ export async function getCurrentStockHandler(
       return draftRows.get(key)!;
     };
 
-    if (pathAMaterialIds.length > 0 && batchNumbers.length === 0 && packingPoNumbers.length === 0) {
+    if (
+      pathAMaterialIds.length > 0 && batchNumbers.length === 0 &&
+      packingPoNumbers.length === 0
+    ) {
       // Found live 2026-09-22 (CMP003, "All materials"/"RM+PM+INT+SFG+FG" checked, IN03) --
       // pathAMaterialIds is every RM/PM/INT material system-wide when no material_id filter is
       // given (materialQuery above has no company scope either), so this was a plain .in() with
@@ -1198,25 +1780,41 @@ export async function getCurrentStockHandler(
       // manifested as CURRENT_STOCK_FETCH_FAILED with nothing in postgres_logs to explain why.
       let typedSnapshotRows: JsonRecord[];
       try {
-        typedSnapshotRows = await fetchInChunks<JsonRecord>(pathAMaterialIds, (idChunk) => {
-          let snapshotQuery = serviceRoleClient
-            .schema("erp_inventory")
-            .from("stock_snapshot")
-            .select("company_id, material_id, storage_location_id, stock_type_code, quantity, base_uom_code")
-            .in("material_id", idChunk)
-            .in("stock_type_code", requestedStockTypes)
-            .eq("company_id", companyId);
-          if (storageLocationIds.length > 0) {
-            snapshotQuery = snapshotQuery.in("storage_location_id", storageLocationIds);
-          }
-          if (!showZero) {
-            snapshotQuery = (snapshotQuery as unknown as { gt: (column: string, value: number) => typeof snapshotQuery })
-              .gt("quantity", 0);
-          }
-          return snapshotQuery;
-        });
+        typedSnapshotRows = await fetchInChunks<JsonRecord>(
+          pathAMaterialIds,
+          (idChunk) => {
+            let snapshotQuery = serviceRoleClient
+              .schema("erp_inventory")
+              .from("stock_snapshot")
+              .select(
+                "company_id, material_id, storage_location_id, stock_type_code, quantity, base_uom_code",
+              )
+              .in("material_id", idChunk)
+              .in("stock_type_code", requestedStockTypes)
+              .eq("company_id", companyId);
+            if (storageLocationIds.length > 0) {
+              snapshotQuery = snapshotQuery.in(
+                "storage_location_id",
+                storageLocationIds,
+              );
+            }
+            if (!showZero) {
+              snapshotQuery = (snapshotQuery as unknown as {
+                gt: (column: string, value: number) => typeof snapshotQuery;
+              })
+                .gt("quantity", 0);
+            }
+            return snapshotQuery;
+          },
+        );
       } catch {
-        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "CURRENT_STOCK_FETCH_FAILED",
+          500,
+          "Unable to fetch current stock.",
+        );
       }
       for (const snapshot of typedSnapshotRows) {
         const materialId = toTrimmedString(snapshot.material_id);
@@ -1228,11 +1826,16 @@ export async function getCurrentStockHandler(
           storage_location_id: toTrimmedString(snapshot.storage_location_id),
           batch_number: null,
           packing_po_number: null,
-          base_uom_code: toTrimmedString(snapshot.base_uom_code) || material.base_uom_code || "",
+          base_uom_code: toTrimmedString(snapshot.base_uom_code) ||
+            material.base_uom_code || "",
           material_type: material.material_type,
           path_kind: "A",
         }));
-        appendStockTypeQuantity(row, toTrimmedString(snapshot.stock_type_code), Number(snapshot.quantity ?? 0));
+        appendStockTypeQuantity(
+          row,
+          toTrimmedString(snapshot.stock_type_code),
+          Number(snapshot.quantity ?? 0),
+        );
       }
     }
 
@@ -1247,85 +1850,146 @@ export async function getCurrentStockHandler(
       // the URL-length cliff, not something tied to CMP006 specifically.
       let typedLedgerRows: JsonRecord[];
       try {
-        typedLedgerRows = await fetchInChunks<JsonRecord>(ledgerMaterialIds, (idChunk) => {
-          let ledgerQuery = serviceRoleClient
-            .schema("erp_inventory")
-            .from("stock_ledger")
-            .select("company_id, material_id, storage_location_id, stock_type_code, batch_number, quantity, direction, stock_document_id")
-            .in("material_id", idChunk)
-            .in("stock_type_code", requestedStockTypes)
-            .eq("company_id", companyId);
-          if (storageLocationIds.length > 0) {
-            ledgerQuery = ledgerQuery.in("storage_location_id", storageLocationIds);
-          }
-          if (batchNumbers.length > 0) {
-            ledgerQuery = ledgerQuery.in("batch_number", batchNumbers);
-          }
-          return ledgerQuery;
-        });
+        typedLedgerRows = await fetchInChunks<JsonRecord>(
+          ledgerMaterialIds,
+          (idChunk) => {
+            let ledgerQuery = serviceRoleClient
+              .schema("erp_inventory")
+              .from("stock_ledger")
+              .select(
+                "company_id, material_id, storage_location_id, stock_type_code, batch_number, quantity, direction, stock_document_id",
+              )
+              .in("material_id", idChunk)
+              .in("stock_type_code", requestedStockTypes)
+              .eq("company_id", companyId);
+            if (storageLocationIds.length > 0) {
+              ledgerQuery = ledgerQuery.in(
+                "storage_location_id",
+                storageLocationIds,
+              );
+            }
+            if (batchNumbers.length > 0) {
+              ledgerQuery = ledgerQuery.in("batch_number", batchNumbers);
+            }
+            return ledgerQuery;
+          },
+        );
       } catch {
-        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "CURRENT_STOCK_FETCH_FAILED",
+          500,
+          "Unable to fetch current stock.",
+        );
       }
-      const docIds = [...new Set(typedLedgerRows.map((row) => toTrimmedString(row.stock_document_id)).filter(Boolean))];
+      const docIds = [
+        ...new Set(
+          typedLedgerRows.map((row) => toTrimmedString(row.stock_document_id))
+            .filter(Boolean),
+        ),
+      ];
       const { data: docRows, error: docError } = docIds.length
         ? await serviceRoleClient
-            .schema("erp_inventory")
-            .from("stock_document")
-            .select("id, document_number, source_lot_ref, reference_document_type, reference_document_number, reference_document_id")
-            .in("id", docIds)
+          .schema("erp_inventory")
+          .from("stock_document")
+          .select(
+            "id, document_number, source_lot_ref, reference_document_type, reference_document_number, reference_document_id",
+          )
+          .in("id", docIds)
         : { data: [], error: null };
       if (docError) {
-        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "CURRENT_STOCK_FETCH_FAILED",
+          500,
+          "Unable to fetch current stock.",
+        );
       }
-      const docMap = new Map(((docRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-      const openingLotMap = await buildOpeningStockLotMap((docRows ?? []) as JsonRecord[]);
+      const docMap = new Map(
+        ((docRows ?? []) as JsonRecord[]).map((
+          row,
+        ) => [toTrimmedString(row.id), row]),
+      );
+      const openingLotMap = await buildOpeningStockLotMap(
+        (docRows ?? []) as JsonRecord[],
+      );
+      const salesReturnLotMap = await buildSalesReturnLotMap(
+        (docRows ?? []) as JsonRecord[],
+      );
       // Found live 2026-09-03 -- see resolveLotRef's own comment. Without
       // this, any posting whose reference_document_type isn't PACK_PO/OS
       // (an IN13 Stock Status Change approval, in the case that surfaced
       // this) invents a phantom "Packing PO Number" bucket from its own
       // unrelated document_number instead of staying under the batch's real
       // Packing PO.
-      const batchPoMap = buildBatchPoMap(typedLedgerRows, docMap, openingLotMap);
-      const poNumbers = [...new Set(
-        typedLedgerRows
-          .map((row) => resolveLotRef(
-            docMap.get(toTrimmedString(row.stock_document_id)),
-            toTrimmedString(row.material_id),
-            toTrimmedString(row.batch_number) || null,
-            openingLotMap,
-            batchPoMap,
-          ))
-          .filter(Boolean),
-      )];
+      const batchPoMap = buildBatchPoMap(
+        typedLedgerRows,
+        docMap,
+        openingLotMap,
+        salesReturnLotMap,
+      );
+      const poNumbers = [
+        ...new Set(
+          typedLedgerRows
+            .map((row) =>
+              resolveLotRef(
+                docMap.get(toTrimmedString(row.stock_document_id)),
+                toTrimmedString(row.material_id),
+                toTrimmedString(row.batch_number) || null,
+                openingLotMap,
+                salesReturnLotMap,
+                batchPoMap,
+              )
+            )
+            .filter(Boolean),
+        ),
+      ];
       const { data: poRows, error: poError } = poNumbers.length
         ? await serviceRoleClient
-            .schema("erp_production")
-            .from("packing_order")
-            .select("po_number, source_po_type, num_packs, fill_qty_per_pack")
-            .in("po_number", poNumbers)
+          .schema("erp_production")
+          .from("packing_order")
+          .select("po_number, source_po_type, num_packs, fill_qty_per_pack")
+          .in("po_number", poNumbers)
         : { data: [], error: null };
       if (poError) {
-        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "CURRENT_STOCK_FETCH_FAILED",
+          500,
+          "Unable to fetch current stock.",
+        );
       }
-      const poMap = new Map(((poRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.po_number), row]));
+      const poMap = new Map(
+        ((poRows ?? []) as JsonRecord[]).map((
+          row,
+        ) => [toTrimmedString(row.po_number), row]),
+      );
 
       for (const ledger of typedLedgerRows) {
         const materialId = toTrimmedString(ledger.material_id);
         const material = materialMap.get(materialId);
         if (!material) continue;
-        const signedQty = toTrimmedString(ledger.direction).toUpperCase() === "IN"
-          ? Number(ledger.quantity ?? 0)
-          : -Number(ledger.quantity ?? 0);
+        const signedQty =
+          toTrimmedString(ledger.direction).toUpperCase() === "IN"
+            ? Number(ledger.quantity ?? 0)
+            : -Number(ledger.quantity ?? 0);
         const batchNumber = toTrimmedString(ledger.batch_number) || null;
         const resolvedPoNumber = resolveLotRef(
           docMap.get(toTrimmedString(ledger.stock_document_id)),
           materialId,
           batchNumber,
           openingLotMap,
+          salesReturnLotMap,
           batchPoMap,
         ) || null;
-        const packingOrder = resolvedPoNumber ? poMap.get(resolvedPoNumber) : undefined;
-        const sourcePoType = toTrimmedString(packingOrder?.source_po_type).toUpperCase();
+        const packingOrder = resolvedPoNumber
+          ? poMap.get(resolvedPoNumber)
+          : undefined;
+        const sourcePoType = toTrimmedString(packingOrder?.source_po_type)
+          .toUpperCase();
 
         if (material.material_type === "SFG") {
           if (packingPoNumbers.length > 0) continue;
@@ -1339,13 +2003,20 @@ export async function getCurrentStockHandler(
             material_type: material.material_type,
             path_kind: "B",
           }));
-          appendStockTypeQuantity(row, toTrimmedString(ledger.stock_type_code), signedQty);
+          appendStockTypeQuantity(
+            row,
+            toTrimmedString(ledger.stock_type_code),
+            signedQty,
+          );
           continue;
         }
 
         if (sourcePoType === "MTS") {
           if (batchNumbers.length > 0) continue;
-          if (packingPoNumbers.length > 0 && (!resolvedPoNumber || !packingPoNumbers.includes(resolvedPoNumber))) {
+          if (
+            packingPoNumbers.length > 0 &&
+            (!resolvedPoNumber || !packingPoNumbers.includes(resolvedPoNumber))
+          ) {
             continue;
           }
           const row = getOrCreateRow(initializeCurrentStockDraftRow({
@@ -1358,11 +2029,18 @@ export async function getCurrentStockHandler(
             material_type: material.material_type,
             path_kind: "A",
           }));
-          appendStockTypeQuantity(row, toTrimmedString(ledger.stock_type_code), signedQty);
+          appendStockTypeQuantity(
+            row,
+            toTrimmedString(ledger.stock_type_code),
+            signedQty,
+          );
           continue;
         }
 
-        if (packingPoNumbers.length > 0 && (!resolvedPoNumber || !packingPoNumbers.includes(resolvedPoNumber))) {
+        if (
+          packingPoNumbers.length > 0 &&
+          (!resolvedPoNumber || !packingPoNumbers.includes(resolvedPoNumber))
+        ) {
           continue;
         }
         const row = getOrCreateRow(initializeCurrentStockDraftRow({
@@ -1374,10 +2052,15 @@ export async function getCurrentStockHandler(
           base_uom_code: material.base_uom_code || "",
           material_type: material.material_type,
           path_kind: "C",
-          fill_qty_per_pack: Number(packingOrder?.fill_qty_per_pack ?? 0) || null,
+          fill_qty_per_pack: Number(packingOrder?.fill_qty_per_pack ?? 0) ||
+            null,
           num_packs: Number(packingOrder?.num_packs ?? 0) || null,
         }));
-        appendStockTypeQuantity(row, toTrimmedString(ledger.stock_type_code), signedQty);
+        appendStockTypeQuantity(
+          row,
+          toTrimmedString(ledger.stock_type_code),
+          signedQty,
+        );
       }
     }
 
@@ -1399,12 +2082,18 @@ export async function getCurrentStockHandler(
     // receipt) posted to for this company, or (b) if it's never been received
     // here before, whichever location currently holds the most Unrestricted
     // qty of that material, or (c) left blank if neither exists.
-    if (pathAMaterialIds.length > 0 && requestedStockTypes.includes("IN_TRANSIT")
-      && batchNumbers.length === 0 && packingPoNumbers.length === 0) {
+    if (
+      pathAMaterialIds.length > 0 &&
+      requestedStockTypes.includes("IN_TRANSIT") &&
+      batchNumbers.length === 0 && packingPoNumbers.length === 0
+    ) {
       const inTransitByMaterial = new Map<string, number>();
       const addInTransit = (materialId: string, qty: number) => {
         if (!materialId || !Number.isFinite(qty) || qty === 0) return;
-        inTransitByMaterial.set(materialId, normalizeNumber((inTransitByMaterial.get(materialId) ?? 0) + qty));
+        inTransitByMaterial.set(
+          materialId,
+          normalizeNumber((inTransitByMaterial.get(materialId) ?? 0) + qty),
+        );
       };
 
       // Found live 2026-09-01: a CSN's receiving company is NOT uniformly one
@@ -1420,43 +2109,73 @@ export async function getCurrentStockHandler(
       let ptoRows: JsonRecord[];
       try {
         [csnRows, ptoRows] = await Promise.all([
-          fetchInChunks<JsonRecord>(pathAMaterialIds, (idChunk) =>
-            serviceRoleClient
-              .schema("erp_procurement")
-              .from("consignment_note")
-              .select("material_id, dispatch_qty, company_id, consignee_company_id, sto_id")
-              .eq("status", "TRN")
-              .not("is_mother_csn", "is", true)
-              .in("material_id", idChunk)),
-          fetchInChunks<JsonRecord>(pathAMaterialIds, (idChunk) =>
-            serviceRoleClient
-              .schema("erp_procurement")
-              .from("plant_transfer_order")
-              .select("material_id, transfer_qty")
-              .eq("target_company_id", companyId)
-              .eq("status", "IN_TRANSIT")
-              .in("material_id", idChunk)),
+          fetchInChunks<JsonRecord>(
+            pathAMaterialIds,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_procurement")
+                .from("consignment_note")
+                .select(
+                  "material_id, dispatch_qty, company_id, consignee_company_id, sto_id",
+                )
+                .eq("status", "TRN")
+                .not("is_mother_csn", "is", true)
+                .in("material_id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            pathAMaterialIds,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_procurement")
+                .from("plant_transfer_order")
+                .select("material_id, transfer_qty")
+                .eq("target_company_id", companyId)
+                .eq("status", "IN_TRANSIT")
+                .in("material_id", idChunk),
+          ),
         ]);
       } catch {
-        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "CURRENT_STOCK_FETCH_FAILED",
+          500,
+          "Unable to fetch current stock.",
+        );
       }
 
-      const stoIds = [...new Set(csnRows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
+      const stoIds = [
+        ...new Set(
+          csnRows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean),
+        ),
+      ];
       const stoReceivingCompanyMap = new Map<string, string>();
       if (stoIds.length > 0) {
         let stoRows: JsonRecord[];
         try {
-          stoRows = await fetchInChunks<JsonRecord>(stoIds, (idChunk) =>
-            serviceRoleClient
-              .schema("erp_procurement")
-              .from("stock_transfer_order")
-              .select("id, receiving_company_id")
-              .in("id", idChunk));
+          stoRows = await fetchInChunks<JsonRecord>(
+            stoIds,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_procurement")
+                .from("stock_transfer_order")
+                .select("id, receiving_company_id")
+                .in("id", idChunk),
+          );
         } catch {
-          return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+          return reportErrorResponse(
+            req,
+            ctx,
+            "CURRENT_STOCK_FETCH_FAILED",
+            500,
+            "Unable to fetch current stock.",
+          );
         }
         for (const sto of stoRows) {
-          stoReceivingCompanyMap.set(toTrimmedString(sto.id), toTrimmedString(sto.receiving_company_id));
+          stoReceivingCompanyMap.set(
+            toTrimmedString(sto.id),
+            toTrimmedString(sto.receiving_company_id),
+          );
         }
       }
 
@@ -1464,30 +2183,50 @@ export async function getCurrentStockHandler(
         const stoId = toTrimmedString(csn.sto_id);
         const receivingCompanyId = stoId
           ? stoReceivingCompanyMap.get(stoId) || ""
-          : toTrimmedString(csn.consignee_company_id) || toTrimmedString(csn.company_id);
+          : toTrimmedString(csn.consignee_company_id) ||
+            toTrimmedString(csn.company_id);
         if (receivingCompanyId !== companyId) continue;
-        addInTransit(toTrimmedString(csn.material_id), Number(csn.dispatch_qty ?? 0));
+        addInTransit(
+          toTrimmedString(csn.material_id),
+          Number(csn.dispatch_qty ?? 0),
+        );
       }
-      for (const pto of ptoRows) addInTransit(toTrimmedString(pto.material_id), Number(pto.transfer_qty ?? 0));
+      for (const pto of ptoRows) {
+        addInTransit(
+          toTrimmedString(pto.material_id),
+          Number(pto.transfer_qty ?? 0),
+        );
+      }
 
-      const inTransitMaterialIds = [...inTransitByMaterial.keys()].filter((id) => Math.abs(inTransitByMaterial.get(id) ?? 0) > 0.000001);
+      const inTransitMaterialIds = [...inTransitByMaterial.keys()].filter((
+        id,
+      ) => Math.abs(inTransitByMaterial.get(id) ?? 0) > 0.000001);
       if (inTransitMaterialIds.length > 0) {
         const placementByMaterial = new Map<string, string>();
 
         let p101Rows: JsonRecord[];
         try {
-          p101Rows = await fetchInChunks<JsonRecord>(inTransitMaterialIds, (idChunk) =>
-            serviceRoleClient
-              .schema("erp_inventory")
-              .from("stock_ledger")
-              .select("material_id, storage_location_id, ledger_seq")
-              .eq("company_id", companyId)
-              .eq("movement_type_code", "P101")
-              .eq("direction", "IN")
-              .in("material_id", idChunk)
-              .order("ledger_seq", { ascending: false }));
+          p101Rows = await fetchInChunks<JsonRecord>(
+            inTransitMaterialIds,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_inventory")
+                .from("stock_ledger")
+                .select("material_id, storage_location_id, ledger_seq")
+                .eq("company_id", companyId)
+                .eq("movement_type_code", "P101")
+                .eq("direction", "IN")
+                .in("material_id", idChunk)
+                .order("ledger_seq", { ascending: false }),
+          );
         } catch {
-          return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+          return reportErrorResponse(
+            req,
+            ctx,
+            "CURRENT_STOCK_FETCH_FAILED",
+            500,
+            "Unable to fetch current stock.",
+          );
         }
         // Rows arrive most-recent-first per the ORDER BY above; keeping only the
         // first hit per material_id keeps the single most recent P101 location.
@@ -1498,22 +2237,33 @@ export async function getCurrentStockHandler(
           if (slocId) placementByMaterial.set(materialId, slocId);
         }
 
-        const unresolvedMaterialIds = inTransitMaterialIds.filter((id) => !placementByMaterial.has(id));
+        const unresolvedMaterialIds = inTransitMaterialIds.filter((id) =>
+          !placementByMaterial.has(id)
+        );
         if (unresolvedMaterialIds.length > 0) {
           let unrestrictedRows: JsonRecord[];
           try {
-            unrestrictedRows = await fetchInChunks<JsonRecord>(unresolvedMaterialIds, (idChunk) =>
-              serviceRoleClient
-                .schema("erp_inventory")
-                .from("stock_snapshot")
-                .select("material_id, storage_location_id, quantity")
-                .eq("company_id", companyId)
-                .eq("stock_type_code", "UNRESTRICTED")
-                .is("batch_id", null)
-                .in("material_id", idChunk)
-                .order("quantity", { ascending: false }));
+            unrestrictedRows = await fetchInChunks<JsonRecord>(
+              unresolvedMaterialIds,
+              (idChunk) =>
+                serviceRoleClient
+                  .schema("erp_inventory")
+                  .from("stock_snapshot")
+                  .select("material_id, storage_location_id, quantity")
+                  .eq("company_id", companyId)
+                  .eq("stock_type_code", "UNRESTRICTED")
+                  .is("batch_id", null)
+                  .in("material_id", idChunk)
+                  .order("quantity", { ascending: false }),
+            );
           } catch {
-            return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+            return reportErrorResponse(
+              req,
+              ctx,
+              "CURRENT_STOCK_FETCH_FAILED",
+              500,
+              "Unable to fetch current stock.",
+            );
           }
           for (const snap of unrestrictedRows) {
             const materialId = toTrimmedString(snap.material_id);
@@ -1536,7 +2286,11 @@ export async function getCurrentStockHandler(
             material_type: material.material_type,
             path_kind: "A",
           }));
-          appendStockTypeQuantity(row, "IN_TRANSIT", inTransitByMaterial.get(materialId) ?? 0);
+          appendStockTypeQuantity(
+            row,
+            "IN_TRANSIT",
+            inTransitByMaterial.get(materialId) ?? 0,
+          );
         }
       }
     }
@@ -1550,48 +2304,97 @@ export async function getCurrentStockHandler(
     // rows are empty: alert-review mode can add a zero-stock group member
     // solely to show its planning context.
     const companyIdsForLookup = [companyId];
-    const slocIdsForLookup = [...new Set(rows.map((row) => row.storage_location_id).filter(Boolean))];
+    const slocIdsForLookup = [
+      ...new Set(rows.map((row) => row.storage_location_id).filter(Boolean)),
+    ];
     const [companyResp, slocResp, packResp] = await Promise.all([
       companyIdsForLookup.length
-        ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", companyIdsForLookup)
+        ? serviceRoleClient.schema("erp_master").from("companies").select(
+          "id, company_code",
+        ).in("id", companyIdsForLookup)
         : Promise.resolve({ data: [], error: null }),
       slocIdsForLookup.length
-        ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code").in("id", slocIdsForLookup)
+        ? serviceRoleClient.schema("erp_inventory").from(
+          "storage_location_master",
+        ).select("id, code").in("id", slocIdsForLookup)
         : Promise.resolve({ data: [], error: null }),
       packCodes.size > 0
-        ? serviceRoleClient.schema("erp_production").from("pack_code_master").select("pack_code, outer_uom_code").in("pack_code", [...packCodes])
+        ? serviceRoleClient.schema("erp_production").from("pack_code_master")
+          .select("pack_code, outer_uom_code").in("pack_code", [...packCodes])
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (companyResp.error || slocResp.error || packResp.error) {
-      return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "CURRENT_STOCK_FETCH_FAILED",
+        500,
+        "Unable to fetch current stock.",
+      );
     }
-    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.company_code)]));
-    const slocMap = new Map(((slocResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.code)]));
-    const packCodeMap = new Map(((packResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.pack_code), toTrimmedString(row.outer_uom_code)]));
+    const companyMap = new Map(
+      ((companyResp.data ?? []) as JsonRecord[]).map((
+        row,
+      ) => [toTrimmedString(row.id), toTrimmedString(row.company_code)]),
+    );
+    const slocMap = new Map(
+      ((slocResp.data ?? []) as JsonRecord[]).map((
+        row,
+      ) => [toTrimmedString(row.id), toTrimmedString(row.code)]),
+    );
+    const packCodeMap = new Map(
+      ((packResp.data ?? []) as JsonRecord[]).map((
+        row,
+      ) => [
+        toTrimmedString(row.pack_code),
+        toTrimmedString(row.outer_uom_code),
+      ]),
+    );
 
     const pathAReservationMap = new Map<string, number>();
     const pathARows = rows.filter((row) => row.path_kind === "A");
     if (pathARows.length > 0) {
       // material_id list scales with distinct materials in the current-stock result set --
       // chunked for the same reason as the IN02/PR24 fix (see _shared/chunkedIn.ts).
-      const pathACompanyIds = [...new Set(pathARows.map((row) => row.company_id))];
-      const pathAMaterialIds = [...new Set(pathARows.map((row) => row.material_id))];
-      const pathASlocIds = [...new Set(pathARows.map((row) => row.storage_location_id).filter(Boolean))];
+      const pathACompanyIds = [
+        ...new Set(pathARows.map((row) => row.company_id)),
+      ];
+      const pathAMaterialIds = [
+        ...new Set(pathARows.map((row) => row.material_id)),
+      ];
+      const pathASlocIds = [
+        ...new Set(
+          pathARows.map((row) => row.storage_location_id).filter(Boolean),
+        ),
+      ];
       let reservationRows: JsonRecord[];
       try {
-        reservationRows = await fetchInChunks<JsonRecord>(pathAMaterialIds, (materialChunk) => {
-          let q = serviceRoleClient
-            .schema("erp_production")
-            .from("reservation_document")
-            .select("company_id, material_id, storage_location_id, balance_qty")
-            .eq("status", "OPEN")
-            .in("company_id", pathACompanyIds)
-            .in("material_id", materialChunk);
-          if (pathASlocIds.length > 0) q = q.in("storage_location_id", pathASlocIds);
-          return q;
-        });
+        reservationRows = await fetchInChunks<JsonRecord>(
+          pathAMaterialIds,
+          (materialChunk) => {
+            let q = serviceRoleClient
+              .schema("erp_production")
+              .from("reservation_document")
+              .select(
+                "company_id, material_id, storage_location_id, balance_qty",
+              )
+              .eq("status", "OPEN")
+              .in("company_id", pathACompanyIds)
+              .in("material_id", materialChunk);
+            if (pathASlocIds.length > 0) {
+              q = q.in("storage_location_id", pathASlocIds);
+            }
+            return q;
+          },
+        );
       } catch {
-        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "CURRENT_STOCK_FETCH_FAILED",
+          500,
+          "Unable to fetch current stock.",
+        );
       }
       for (const reservation of reservationRows) {
         const key = [
@@ -1599,7 +2402,13 @@ export async function getCurrentStockHandler(
           toTrimmedString(reservation.material_id),
           toTrimmedString(reservation.storage_location_id),
         ].join("__");
-        pathAReservationMap.set(key, normalizeNumber((pathAReservationMap.get(key) ?? 0) + Number(reservation.balance_qty ?? 0)));
+        pathAReservationMap.set(
+          key,
+          normalizeNumber(
+            (pathAReservationMap.get(key) ?? 0) +
+              Number(reservation.balance_qty ?? 0),
+          ),
+        );
       }
     }
 
@@ -1607,26 +2416,51 @@ export async function getCurrentStockHandler(
     const pathBCRows = rows.filter((row) => row.path_kind !== "A");
     if (pathBCRows.length > 0) {
       // Same chunking rationale as the Path A block above.
-      const pathBCCompanyIds = [...new Set(pathBCRows.map((row) => row.company_id))];
-      const pathBCMaterialIds = [...new Set(pathBCRows.map((row) => row.material_id))];
-      const pathBCSlocIds = [...new Set(pathBCRows.map((row) => row.storage_location_id).filter(Boolean))];
-      const pathBCBatches = [...new Set(pathBCRows.map((row) => row.batch_number).filter(Boolean))] as string[];
+      const pathBCCompanyIds = [
+        ...new Set(pathBCRows.map((row) => row.company_id)),
+      ];
+      const pathBCMaterialIds = [
+        ...new Set(pathBCRows.map((row) => row.material_id)),
+      ];
+      const pathBCSlocIds = [
+        ...new Set(
+          pathBCRows.map((row) => row.storage_location_id).filter(Boolean),
+        ),
+      ];
+      const pathBCBatches = [
+        ...new Set(pathBCRows.map((row) => row.batch_number).filter(Boolean)),
+      ] as string[];
       let reservationRows: JsonRecord[];
       try {
-        reservationRows = await fetchInChunks<JsonRecord>(pathBCMaterialIds, (materialChunk) => {
-          let q = serviceRoleClient
-            .schema("erp_production")
-            .from("reservation_document")
-            .select("company_id, material_id, storage_location_id, batch_number, balance_qty")
-            .eq("status", "OPEN")
-            .in("company_id", pathBCCompanyIds)
-            .in("material_id", materialChunk);
-          if (pathBCSlocIds.length > 0) q = q.in("storage_location_id", pathBCSlocIds);
-          if (pathBCBatches.length > 0) q = q.in("batch_number", pathBCBatches);
-          return q;
-        });
+        reservationRows = await fetchInChunks<JsonRecord>(
+          pathBCMaterialIds,
+          (materialChunk) => {
+            let q = serviceRoleClient
+              .schema("erp_production")
+              .from("reservation_document")
+              .select(
+                "company_id, material_id, storage_location_id, batch_number, balance_qty",
+              )
+              .eq("status", "OPEN")
+              .in("company_id", pathBCCompanyIds)
+              .in("material_id", materialChunk);
+            if (pathBCSlocIds.length > 0) {
+              q = q.in("storage_location_id", pathBCSlocIds);
+            }
+            if (pathBCBatches.length > 0) {
+              q = q.in("batch_number", pathBCBatches);
+            }
+            return q;
+          },
+        );
       } catch {
-        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "CURRENT_STOCK_FETCH_FAILED",
+          500,
+          "Unable to fetch current stock.",
+        );
       }
       for (const reservation of reservationRows) {
         const key = [
@@ -1635,7 +2469,13 @@ export async function getCurrentStockHandler(
           toTrimmedString(reservation.storage_location_id),
           toTrimmedString(reservation.batch_number),
         ].join("__");
-        pathBCReservationMap.set(key, normalizeNumber((pathBCReservationMap.get(key) ?? 0) + Number(reservation.balance_qty ?? 0)));
+        pathBCReservationMap.set(
+          key,
+          normalizeNumber(
+            (pathBCReservationMap.get(key) ?? 0) +
+              Number(reservation.balance_qty ?? 0),
+          ),
+        );
       }
     }
 
@@ -1647,14 +2487,20 @@ export async function getCurrentStockHandler(
     // the stock report. If PO11's read-only lookup is temporarily unavailable,
     // return the stock normally without alert dots and record the cause for
     // diagnosis.
-    let planningStatusByMaterialLocation = new Map<string, ProcurementPlanningStockCoverage>();
+    let planningStatusByMaterialLocation = new Map<
+      string,
+      ProcurementPlanningStockCoverage
+    >();
     try {
-      planningStatusByMaterialLocation = await getCurrentProcurementPlanningStatusByLocation(companyId);
+      planningStatusByMaterialLocation =
+        await getCurrentProcurementPlanningStatusByLocation(companyId);
     } catch (planningStatusError) {
       console.error("CURRENT_STOCK_PLANNING_STATUS_FAILED", {
         request_id: ctx.request_id,
         company_id: companyId,
-        error: planningStatusError instanceof Error ? planningStatusError.message : "UNKNOWN",
+        error: planningStatusError instanceof Error
+          ? planningStatusError.message
+          : "UNKNOWN",
       });
     }
 
@@ -1663,12 +2509,23 @@ export async function getCurrentStockHandler(
       const companyCode = companyMap.get(row.company_id) ?? "";
       const slocCode = slocMap.get(row.storage_location_id) ?? "";
       const documentName = toTrimmedString(material?.document_name);
-      const materialLabel = documentName || toTrimmedString(material?.material_name);
+      const materialLabel = documentName ||
+        toTrimmedString(material?.material_name);
       const reservedBaseQty = row.path_kind === "A"
-        ? pathAReservationMap.get([row.company_id, row.material_id, row.storage_location_id].join("__")) ?? 0
-        : pathBCReservationMap.get([row.company_id, row.material_id, row.storage_location_id, row.batch_number ?? ""].join("__")) ?? 0;
+        ? pathAReservationMap.get(
+          [row.company_id, row.material_id, row.storage_location_id].join("__"),
+        ) ?? 0
+        : pathBCReservationMap.get(
+          [
+            row.company_id,
+            row.material_id,
+            row.storage_location_id,
+            row.batch_number ?? "",
+          ].join("__"),
+        ) ?? 0;
       const uomCode = row.path_kind === "C"
-        ? packCodeMap.get(toTrimmedString(material?.pack_code)) || row.base_uom_code
+        ? packCodeMap.get(toTrimmedString(material?.pack_code)) ||
+          row.base_uom_code
         : row.base_uom_code;
       const unrestrictedQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.unrestricted_qty, row.fill_qty_per_pack)
@@ -1691,7 +2548,9 @@ export async function getCurrentStockHandler(
       const reservedQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(reservedBaseQty, row.fill_qty_per_pack)
         : normalizeNumber(reservedBaseQty);
-      const planningCoverage = planningStatusByMaterialLocation.get(`${row.material_id}::${row.storage_location_id}`);
+      const planningCoverage = planningStatusByMaterialLocation.get(
+        `${row.material_id}::${row.storage_location_id}`,
+      );
       const planning_status = planningCoverage?.status ?? "NORMAL";
 
       return {
@@ -1720,8 +2579,10 @@ export async function getCurrentStockHandler(
         blocked_qty: blockedQty,
         intransit_qty: intransitQty,
         planning_status,
-        planning_item_group_id: planningCoverage?.planning_item_group_id ?? null,
-        planning_item_group_name: planningCoverage?.planning_item_group_name ?? null,
+        planning_item_group_id: planningCoverage?.planning_item_group_id ??
+          null,
+        planning_item_group_name: planningCoverage?.planning_item_group_name ??
+          null,
         planning_context_only: false,
       };
     });
@@ -1753,22 +2614,30 @@ export async function getCurrentStockHandler(
         });
       }
     }
-    const missingContextMaterialIds = [...new Set(
-      [...firstCoverageByGroupMaterial.values()]
-        .map((member) => member.material_id)
-        .filter((materialId) => !materialMap.has(materialId)),
-    )];
-    const missingContextSlocIds = [...new Set(
-      [...firstCoverageByGroupMaterial.values()]
-        .map((member) => member.storage_location_id)
-        .filter((storageLocationId) => storageLocationId && !slocMap.has(storageLocationId)),
-    )];
+    const missingContextMaterialIds = [
+      ...new Set(
+        [...firstCoverageByGroupMaterial.values()]
+          .map((member) => member.material_id)
+          .filter((materialId) => !materialMap.has(materialId)),
+      ),
+    ];
+    const missingContextSlocIds = [
+      ...new Set(
+        [...firstCoverageByGroupMaterial.values()]
+          .map((member) => member.storage_location_id)
+          .filter((storageLocationId) =>
+            storageLocationId && !slocMap.has(storageLocationId)
+          ),
+      ),
+    ];
     const [contextMaterialResp, contextSlocResp] = await Promise.all([
       missingContextMaterialIds.length > 0
         ? serviceRoleClient
           .schema("erp_master")
           .from("material_master")
-          .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, pack_code")
+          .select(
+            "id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, pack_code",
+          )
           .in("id", missingContextMaterialIds)
         : Promise.resolve({ data: [], error: null }),
       missingContextSlocIds.length > 0
@@ -1780,9 +2649,17 @@ export async function getCurrentStockHandler(
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (contextMaterialResp.error || contextSlocResp.error) {
-      return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "CURRENT_STOCK_FETCH_FAILED",
+        500,
+        "Unable to fetch current stock.",
+      );
     }
-    for (const rawMaterial of (contextMaterialResp.data ?? []) as JsonRecord[]) {
+    for (
+      const rawMaterial of (contextMaterialResp.data ?? []) as JsonRecord[]
+    ) {
       const material = rawMaterial as unknown as CurrentStockMaterialRow;
       materialMap.set(material.id, material);
     }
@@ -1796,15 +2673,24 @@ export async function getCurrentStockHandler(
     );
     const companyCode = companyMap.get(companyId) ?? "";
     for (const [memberKey, member] of firstCoverageByGroupMaterial) {
-      if (!alertingGroupIds.has(member.coverage.planning_item_group_id || "") || representedGroupMaterials.has(memberKey)) {
+      if (
+        !alertingGroupIds.has(member.coverage.planning_item_group_id || "") ||
+        representedGroupMaterials.has(memberKey)
+      ) {
         continue;
       }
       const material = materialMap.get(member.material_id);
       if (!material) continue;
       const documentName = toTrimmedString(material.document_name);
-      const materialLabel = documentName || toTrimmedString(material.material_name);
+      const materialLabel = documentName ||
+        toTrimmedString(material.material_name);
       responseRows.push({
-        row_key: [companyCode, material.pace_code ?? member.material_id, member.storage_location_id, "PLANNING_GROUP_CONTEXT"].join("__"),
+        row_key: [
+          companyCode,
+          material.pace_code ?? member.material_id,
+          member.storage_location_id,
+          "PLANNING_GROUP_CONTEXT",
+        ].join("__"),
         material_id: member.material_id,
         company_code: companyCode,
         material_type: material.material_type,
@@ -1829,12 +2715,18 @@ export async function getCurrentStockHandler(
     }
 
     responseRows.sort((left, right) =>
-      String(left.company_code).localeCompare(String(right.company_code))
-      || String(left.material_type).localeCompare(String(right.material_type))
-      || String(left.material_label).localeCompare(String(right.material_label))
-      || String(left.storage_location_code).localeCompare(String(right.storage_location_code))
-      || String(left.batch_number ?? "").localeCompare(String(right.batch_number ?? ""))
-      || String(left.packing_po_number ?? "").localeCompare(String(right.packing_po_number ?? ""))
+      String(left.company_code).localeCompare(String(right.company_code)) ||
+      String(left.material_type).localeCompare(String(right.material_type)) ||
+      String(left.material_label).localeCompare(String(right.material_label)) ||
+      String(left.storage_location_code).localeCompare(
+        String(right.storage_location_code),
+      ) ||
+      String(left.batch_number ?? "").localeCompare(
+        String(right.batch_number ?? ""),
+      ) ||
+      String(left.packing_po_number ?? "").localeCompare(
+        String(right.packing_po_number ?? ""),
+      )
     );
 
     return okResponse(
@@ -1846,8 +2738,16 @@ export async function getCurrentStockHandler(
       req,
     );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "CURRENT_STOCK_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch current stock.");
+    const code = error instanceof Error
+      ? error.message
+      : "CURRENT_STOCK_FETCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      companyErrorStatus(code) ?? 500,
+      "Unable to fetch current stock.",
+    );
   }
 }
 
@@ -1872,8 +2772,15 @@ export async function getCurrentStockMachineWiseHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
-    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids");
+    const materialIds = parseMultiValueParams(
+      url,
+      "material_ids",
+      "material_id",
+    );
+    const storageLocationIds = parseMultiValueParams(
+      url,
+      "storage_location_ids",
+    );
     const batchNumbers = parseMultiValueParams(url, "batch_numbers");
     const showZero = parseBooleanFlag(url.searchParams.get("show_zero"));
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
@@ -1884,17 +2791,31 @@ export async function getCurrentStockMachineWiseHandler(
         let query = serviceRoleClient
           .schema("erp_production")
           .from("machine_stock_log")
-          .select("storage_location_id, material_id, machine_id, batch_number, qty, direction")
+          .select(
+            "storage_location_id, material_id, machine_id, batch_number, qty, direction",
+          )
           .eq("company_id", companyId)
           .order("id", { ascending: true })
           .range(from, to);
-        if (materialIds.length > 0) query = query.in("material_id", materialIds);
-        if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
-        if (batchNumbers.length > 0) query = query.in("batch_number", batchNumbers);
+        if (materialIds.length > 0) {
+          query = query.in("material_id", materialIds);
+        }
+        if (storageLocationIds.length > 0) {
+          query = query.in("storage_location_id", storageLocationIds);
+        }
+        if (batchNumbers.length > 0) {
+          query = query.in("batch_number", batchNumbers);
+        }
         return query;
       });
     } catch {
-      return reportErrorResponse(req, ctx, "CURRENT_STOCK_MACHINE_WISE_FETCH_FAILED", 500, "Unable to fetch machine-wise current stock.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "CURRENT_STOCK_MACHINE_WISE_FETCH_FAILED",
+        500,
+        "Unable to fetch machine-wise current stock.",
+      );
     }
 
     type BalanceAgg = {
@@ -1910,48 +2831,100 @@ export async function getCurrentStockMachineWiseHandler(
       const storageLocationId = toTrimmedString(row.storage_location_id);
       const machineId = toTrimmedString(row.machine_id) || null;
       const batchNumber = toTrimmedString(row.batch_number) || null;
-      const key = [materialId, storageLocationId, machineId ?? "", batchNumber ?? ""].join("__");
-      const sign = toTrimmedString(row.direction).toUpperCase() === "OUT" ? -1 : 1;
+      const key = [
+        materialId,
+        storageLocationId,
+        machineId ?? "",
+        batchNumber ?? "",
+      ].join("__");
+      const sign = toTrimmedString(row.direction).toUpperCase() === "OUT"
+        ? -1
+        : 1;
       const qty = Number(row.qty ?? 0) * sign;
       const existing = balances.get(key);
       if (existing) {
         existing.qty = Number((existing.qty + qty).toFixed(6));
       } else {
-        balances.set(key, { materialId, storageLocationId, machineId, batchNumber, qty: Number(qty.toFixed(6)) });
+        balances.set(key, {
+          materialId,
+          storageLocationId,
+          machineId,
+          batchNumber,
+          qty: Number(qty.toFixed(6)),
+        });
       }
     }
 
-    const balanceRows = [...balances.values()].filter((row) => showZero || Math.abs(row.qty) > 0.0000005);
+    const balanceRows = [...balances.values()].filter((row) =>
+      showZero || Math.abs(row.qty) > 0.0000005
+    );
     if (balanceRows.length === 0) {
       return okResponse({ data: [], total: 0 }, ctx.request_id, req);
     }
 
-    const materialIdsForLookup = [...new Set(balanceRows.map((row) => row.materialId).filter(Boolean))];
-    const slocIdsForLookup = [...new Set(balanceRows.map((row) => row.storageLocationId).filter(Boolean))];
-    const machineIdsForLookup = [...new Set(balanceRows.map((row) => row.machineId).filter((id): id is string => Boolean(id)))];
+    const materialIdsForLookup = [
+      ...new Set(balanceRows.map((row) => row.materialId).filter(Boolean)),
+    ];
+    const slocIdsForLookup = [
+      ...new Set(
+        balanceRows.map((row) => row.storageLocationId).filter(Boolean),
+      ),
+    ];
+    const machineIdsForLookup = [
+      ...new Set(
+        balanceRows.map((row) => row.machineId).filter((id): id is string =>
+          Boolean(id)
+        ),
+      ),
+    ];
 
     let materialRows: JsonRecord[];
     let slocRows: JsonRecord[];
     let machineRows: JsonRecord[];
     try {
       [materialRows, slocRows, machineRows] = await Promise.all([
-        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_inventory").from("storage_location_master")
-            .select("id, code").in("id", idChunk)),
-        fetchInChunks<JsonRecord>(machineIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_master").from("machine_master")
-            .select("id, machine_code, machine_name").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(
+          materialIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_master").from("material_master")
+              .select(
+                "id, pace_code, external_code, material_name, document_name, material_type, base_uom_code",
+              )
+              .in("id", idChunk),
+        ),
+        fetchInChunks<JsonRecord>(
+          slocIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_inventory").from(
+              "storage_location_master",
+            )
+              .select("id, code").in("id", idChunk),
+        ),
+        fetchInChunks<JsonRecord>(
+          machineIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_master").from("machine_master")
+              .select("id, machine_code, machine_name").in("id", idChunk),
+        ),
       ]);
     } catch {
-      return reportErrorResponse(req, ctx, "CURRENT_STOCK_MACHINE_WISE_ENRICH_FAILED", 500, "Unable to fetch machine-wise current stock.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "CURRENT_STOCK_MACHINE_WISE_ENRICH_FAILED",
+        500,
+        "Unable to fetch machine-wise current stock.",
+      );
     }
-    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
-    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
-    const machineMap = new Map(machineRows.map((row) => [toTrimmedString(row.id), row]));
+    const materialMap = new Map(
+      materialRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const slocMap = new Map(
+      slocRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const machineMap = new Map(
+      machineRows.map((row) => [toTrimmedString(row.id), row]),
+    );
 
     const rows = balanceRows.map((row) => {
       const material = materialMap.get(row.materialId);
@@ -1969,21 +2942,37 @@ export async function getCurrentStockMachineWiseHandler(
         machine_code: machine?.machine_code ?? null,
         machine_name: machine?.machine_name ?? null,
         machine_label: machine
-          ? [toTrimmedString(machine.machine_code), toTrimmedString(machine.machine_name)].filter(Boolean).join(" - ")
+          ? [
+            toTrimmedString(machine.machine_code),
+            toTrimmedString(machine.machine_name),
+          ].filter(Boolean).join(" - ")
           : "Unassigned",
         batch_number: row.batchNumber,
         unrestricted_qty: row.qty,
       };
     });
     rows.sort((a, b) =>
-      String(a.material_name ?? "").localeCompare(String(b.material_name ?? ""))
-      || String(a.storage_location_code ?? "").localeCompare(String(b.storage_location_code ?? ""))
-      || String(a.machine_label ?? "").localeCompare(String(b.machine_label ?? "")));
+      String(a.material_name ?? "").localeCompare(
+        String(b.material_name ?? ""),
+      ) ||
+      String(a.storage_location_code ?? "").localeCompare(
+        String(b.storage_location_code ?? ""),
+      ) ||
+      String(a.machine_label ?? "").localeCompare(String(b.machine_label ?? ""))
+    );
 
     return okResponse({ data: rows, total: rows.length }, ctx.request_id, req);
   } catch (error) {
-    const code = error instanceof Error ? error.message : "CURRENT_STOCK_MACHINE_WISE_FAILED";
-    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch machine-wise current stock.");
+    const code = error instanceof Error
+      ? error.message
+      : "CURRENT_STOCK_MACHINE_WISE_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      companyErrorStatus(code) ?? 500,
+      "Unable to fetch machine-wise current stock.",
+    );
   }
 }
 
@@ -1995,7 +2984,10 @@ export async function searchCurrentStockBatchNumbersHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const q = toTrimmedString(url.searchParams.get("q"));
-    const companyScopeIds = await resolveCompanyScopeList(ctx, parseMultiValueParams(url, "company_ids", "company_id"));
+    const companyScopeIds = await resolveCompanyScopeList(
+      ctx,
+      parseMultiValueParams(url, "company_ids", "company_id"),
+    );
 
     let query = serviceRoleClient
       .schema("erp_inventory")
@@ -2008,20 +3000,46 @@ export async function searchCurrentStockBatchNumbersHandler(
       query = query.in("company_id", companyScopeIds);
     }
     if (q) {
-      query = (query as unknown as { ilike: (column: string, value: string) => typeof query })
+      query = (query as unknown as {
+        ilike: (column: string, value: string) => typeof query;
+      })
         .ilike("batch_number", `${q}%`);
     }
     const { data, error } = await query;
     if (error) {
-      return reportErrorResponse(req, ctx, "CURRENT_STOCK_BATCH_SEARCH_FAILED", 500, "Unable to search batch numbers.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "CURRENT_STOCK_BATCH_SEARCH_FAILED",
+        500,
+        "Unable to search batch numbers.",
+      );
     }
-    const values = [...new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.batch_number)).filter(Boolean))]
+    const values = [
+      ...new Set(
+        ((data ?? []) as JsonRecord[]).map((row) =>
+          toTrimmedString(row.batch_number)
+        ).filter(Boolean),
+      ),
+    ]
       .slice(0, 50)
       .map((value) => ({ value, label: value }));
-    return okResponse({ data: values, total: values.length }, ctx.request_id, req);
+    return okResponse(
+      { data: values, total: values.length },
+      ctx.request_id,
+      req,
+    );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "CURRENT_STOCK_BATCH_SEARCH_FAILED";
-    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to search batch numbers.");
+    const code = error instanceof Error
+      ? error.message
+      : "CURRENT_STOCK_BATCH_SEARCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500,
+      "Unable to search batch numbers.",
+    );
   }
 }
 
@@ -2033,7 +3051,10 @@ export async function searchCurrentStockPackingPoNumbersHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const q = toTrimmedString(url.searchParams.get("q"));
-    const companyScopeIds = await resolveCompanyScopeList(ctx, parseMultiValueParams(url, "company_ids", "company_id"));
+    const companyScopeIds = await resolveCompanyScopeList(
+      ctx,
+      parseMultiValueParams(url, "company_ids", "company_id"),
+    );
 
     let query = serviceRoleClient
       .schema("erp_production")
@@ -2045,20 +3066,46 @@ export async function searchCurrentStockPackingPoNumbersHandler(
       query = query.in("company_id", companyScopeIds);
     }
     if (q) {
-      query = (query as unknown as { ilike: (column: string, value: string) => typeof query })
+      query = (query as unknown as {
+        ilike: (column: string, value: string) => typeof query;
+      })
         .ilike("po_number", `${q}%`);
     }
     const { data, error } = await query;
     if (error) {
-      return reportErrorResponse(req, ctx, "CURRENT_STOCK_PO_SEARCH_FAILED", 500, "Unable to search packing PO numbers.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "CURRENT_STOCK_PO_SEARCH_FAILED",
+        500,
+        "Unable to search packing PO numbers.",
+      );
     }
-    const values = [...new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.po_number)).filter(Boolean))]
+    const values = [
+      ...new Set(
+        ((data ?? []) as JsonRecord[]).map((row) =>
+          toTrimmedString(row.po_number)
+        ).filter(Boolean),
+      ),
+    ]
       .slice(0, 50)
       .map((value) => ({ value, label: value }));
-    return okResponse({ data: values, total: values.length }, ctx.request_id, req);
+    return okResponse(
+      { data: values, total: values.length },
+      ctx.request_id,
+      req,
+    );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "CURRENT_STOCK_PO_SEARCH_FAILED";
-    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to search packing PO numbers.");
+    const code = error instanceof Error
+      ? error.message
+      : "CURRENT_STOCK_PO_SEARCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500,
+      "Unable to search packing PO numbers.",
+    );
   }
 }
 
@@ -2070,7 +3117,10 @@ export async function searchStockLedgerBatchNumbersHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const q = toTrimmedString(url.searchParams.get("q"));
-    const companyScopeIds = await resolveCompanyScopeList(ctx, parseMultiValueParams(url, "company_ids", "company_id"));
+    const companyScopeIds = await resolveCompanyScopeList(
+      ctx,
+      parseMultiValueParams(url, "company_ids", "company_id"),
+    );
     return await searchDistinctTextValues({
       schema: "erp_inventory",
       table: "stock_ledger",
@@ -2083,8 +3133,16 @@ export async function searchStockLedgerBatchNumbersHandler(
       failureMessage: "Unable to search batch numbers.",
     });
   } catch (error) {
-    const code = error instanceof Error ? error.message : "STOCK_LEDGER_BATCH_SEARCH_FAILED";
-    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to search batch numbers.");
+    const code = error instanceof Error
+      ? error.message
+      : "STOCK_LEDGER_BATCH_SEARCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500,
+      "Unable to search batch numbers.",
+    );
   }
 }
 
@@ -2096,7 +3154,10 @@ export async function searchStockLedgerPackingPoNumbersHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const q = toTrimmedString(url.searchParams.get("q"));
-    const companyScopeIds = await resolveCompanyScopeList(ctx, parseMultiValueParams(url, "company_ids", "company_id"));
+    const companyScopeIds = await resolveCompanyScopeList(
+      ctx,
+      parseMultiValueParams(url, "company_ids", "company_id"),
+    );
     return await searchDistinctTextValues({
       schema: "erp_production",
       table: "packing_order",
@@ -2109,8 +3170,16 @@ export async function searchStockLedgerPackingPoNumbersHandler(
       failureMessage: "Unable to search packing PO numbers.",
     });
   } catch (error) {
-    const code = error instanceof Error ? error.message : "STOCK_LEDGER_PO_SEARCH_FAILED";
-    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to search packing PO numbers.");
+    const code = error instanceof Error
+      ? error.message
+      : "STOCK_LEDGER_PO_SEARCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500,
+      "Unable to search packing PO numbers.",
+    );
   }
 }
 
@@ -2127,7 +3196,13 @@ export async function listStockLedgerMovementTypesHandler(
       .eq("active", true)
       .order("code", { ascending: true });
     if (error) {
-      return reportErrorResponse(req, ctx, "STOCK_LEDGER_MOVEMENT_TYPES_FAILED", 500, "Unable to fetch movement types.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_LEDGER_MOVEMENT_TYPES_FAILED",
+        500,
+        "Unable to fetch movement types.",
+      );
     }
     const rows = ((data ?? []) as JsonRecord[]).map((row) => {
       const code = toTrimmedString(row.code).toUpperCase();
@@ -2136,7 +3211,13 @@ export async function listStockLedgerMovementTypesHandler(
     });
     return okResponse({ data: rows, total: rows.length }, ctx.request_id, req);
   } catch {
-    return reportErrorResponse(req, ctx, "STOCK_LEDGER_MOVEMENT_TYPES_FAILED", 500, "Unable to fetch movement types.");
+    return reportErrorResponse(
+      req,
+      ctx,
+      "STOCK_LEDGER_MOVEMENT_TYPES_FAILED",
+      500,
+      "Unable to fetch movement types.",
+    );
   }
 }
 
@@ -2215,8 +3296,8 @@ export async function getStockValuationHandler(
 
     result.sort(
       (left, right) =>
-        left.material_id.localeCompare(right.material_id)
-        || left.company_id.localeCompare(right.company_id),
+        left.material_id.localeCompare(right.material_id) ||
+        left.company_id.localeCompare(right.company_id),
     );
 
     const grandTotalValue = Math.round(
@@ -2233,8 +3314,16 @@ export async function getStockValuationHandler(
       req,
     );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "STOCK_VALUATION_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Unable to fetch stock valuation.");
+    const code = error instanceof Error
+      ? error.message
+      : "STOCK_VALUATION_FETCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500,
+      "Unable to fetch stock valuation.",
+    );
   }
 }
 
@@ -2281,41 +3370,95 @@ export async function listReservationsHandler(
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const dateRangeState = validateRequiredDateRange(dateFrom, dateTo);
     if (dateRangeState === "MISSING") {
-      return reportErrorResponse(req, ctx, "RESERVATION_LIST_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "RESERVATION_LIST_DATE_RANGE_REQUIRED",
+        400,
+        "date_from and date_to are required.",
+      );
     }
     if (dateRangeState === "INVALID") {
-      return reportErrorResponse(req, ctx, "RESERVATION_LIST_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "RESERVATION_LIST_DATE_RANGE_INVALID",
+        400,
+        "date_from/date_to are invalid.",
+      );
     }
     if (dateRangeState === "TOO_WIDE") {
-      return reportErrorResponse(req, ctx, "RESERVATION_LIST_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "RESERVATION_LIST_DATE_RANGE_TOO_WIDE",
+        400,
+        "Date range cannot exceed 365 days.",
+      );
     }
 
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
-    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
-    const batchNumbers = parseMultiValueParams(url, "batch_numbers", "batch_number");
-    const sourceTypes = parseMultiValueParams(url, "source_types", "source_type", (value) => value.toUpperCase());
-    const statuses = parseMultiValueParams(url, "statuses", "status", (value) => value.toUpperCase());
+    const materialIds = parseMultiValueParams(
+      url,
+      "material_ids",
+      "material_id",
+    );
+    const storageLocationIds = parseMultiValueParams(
+      url,
+      "storage_location_ids",
+      "storage_location_id",
+    );
+    const batchNumbers = parseMultiValueParams(
+      url,
+      "batch_numbers",
+      "batch_number",
+    );
+    const sourceTypes = parseMultiValueParams(
+      url,
+      "source_types",
+      "source_type",
+      (value) => value.toUpperCase(),
+    );
+    const statuses = parseMultiValueParams(
+      url,
+      "statuses",
+      "status",
+      (value) => value.toUpperCase(),
+    );
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     let query = serviceRoleClient
       .schema("erp_production")
       .from("reservation_document")
-      .select("id, reservation_number, source_type, source_id, company_id, material_id, storage_location_id, batch_number, required_qty, uom_code, required_by_date, issued_qty, balance_qty, status, created_by, created_at")
+      .select(
+        "id, reservation_number, source_type, source_id, company_id, material_id, storage_location_id, batch_number, required_qty, uom_code, required_by_date, issued_qty, balance_qty, status, created_by, created_at",
+      )
       .eq("company_id", companyId)
       .order("created_at", { ascending: false });
-    query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("created_at", dateFrom);
-    query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("created_at", `${dateTo}T23:59:59.999Z`);
+    query = (query as unknown as {
+      gte: (column: string, value: string) => typeof query;
+    }).gte("created_at", dateFrom);
+    query = (query as unknown as {
+      lte: (column: string, value: string) => typeof query;
+    }).lte("created_at", `${dateTo}T23:59:59.999Z`);
 
     if (materialIds.length > 0) query = query.in("material_id", materialIds);
-    if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
+    if (storageLocationIds.length > 0) {
+      query = query.in("storage_location_id", storageLocationIds);
+    }
     if (batchNumbers.length > 0) query = query.in("batch_number", batchNumbers);
     if (sourceTypes.length > 0) query = query.in("source_type", sourceTypes);
     if (statuses.length > 0) query = query.in("status", statuses);
 
     const { data, error } = await query;
     if (error) {
-      return reportErrorResponse(req, ctx, "RESERVATION_LIST_FETCH_FAILED", 500, "Unable to fetch reservation list.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "RESERVATION_LIST_FETCH_FAILED",
+        500,
+        "Unable to fetch reservation list.",
+      );
     }
 
     const reservationRows = ((data ?? []) as JsonRecord[]).map((row) => ({
@@ -2337,9 +3480,17 @@ export async function listReservationsHandler(
       created_at: toTrimmedString(row.created_at) || null,
     } satisfies ReservationRow));
 
-    const materialIdsForLookup = [...new Set(reservationRows.map((row) => row.material_id).filter(Boolean))];
-    const slocIdsForLookup = [...new Set(reservationRows.map((row) => row.storage_location_id).filter(Boolean))];
-    const userIdsForLookup = [...new Set(reservationRows.map((row) => row.created_by).filter(Boolean))];
+    const materialIdsForLookup = [
+      ...new Set(reservationRows.map((row) => row.material_id).filter(Boolean)),
+    ];
+    const slocIdsForLookup = [
+      ...new Set(
+        reservationRows.map((row) => row.storage_location_id).filter(Boolean),
+      ),
+    ];
+    const userIdsForLookup = [
+      ...new Set(reservationRows.map((row) => row.created_by).filter(Boolean)),
+    ];
 
     const sourceIdsByType = new Map<string, Set<string>>();
     for (const row of reservationRows) {
@@ -2355,34 +3506,54 @@ export async function listReservationsHandler(
     let companyRows: JsonRecord[];
     let userDisplayMap: Map<string, string>;
     try {
-      [materialRows, slocRows, companyRows, userDisplayMap] = await Promise.all([
-        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_master")
-            .from("material_master")
-            .select("id, material_name, document_name, external_code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_inventory")
-            .from("storage_location_master")
-            .select("id, code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>([companyId], (idChunk) =>
-          serviceRoleClient
-            .schema("erp_master")
-            .from("companies")
-            .select("id, company_code, company_name")
-            .in("id", idChunk)),
-        resolveUserDisplayNames(userIdsForLookup),
-      ]);
+      [materialRows, slocRows, companyRows, userDisplayMap] = await Promise.all(
+        [
+          fetchInChunks<JsonRecord>(
+            materialIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_master")
+                .from("material_master")
+                .select("id, material_name, document_name, external_code")
+                .in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>(
+            slocIdsForLookup,
+            (idChunk) =>
+              serviceRoleClient
+                .schema("erp_inventory")
+                .from("storage_location_master")
+                .select("id, code")
+                .in("id", idChunk),
+          ),
+          fetchInChunks<JsonRecord>([companyId], (idChunk) =>
+            serviceRoleClient
+              .schema("erp_master")
+              .from("companies")
+              .select("id, company_code, company_name")
+              .in("id", idChunk)),
+          resolveUserDisplayNames(userIdsForLookup),
+        ],
+      );
     } catch {
-      return reportErrorResponse(req, ctx, "RESERVATION_LIST_FETCH_FAILED", 500, "Unable to fetch reservation list.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "RESERVATION_LIST_FETCH_FAILED",
+        500,
+        "Unable to fetch reservation list.",
+      );
     }
 
-    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
-    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
-    const companyMap = new Map(companyRows.map((row) => [toTrimmedString(row.id), row]));
+    const materialMap = new Map(
+      materialRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const slocMap = new Map(
+      slocRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const companyMap = new Map(
+      companyRows.map((row) => [toTrimmedString(row.id), row]),
+    );
 
     // Each source_type points at a different table with its own business
     // number column — resolve each type's set of ids independently (they
@@ -2394,41 +3565,90 @@ export async function listReservationsHandler(
     const processPoIds = [...(sourceIdsByType.get("PROCESS_PO") ?? [])];
     if (processPoIds.length > 0) {
       sourceFetches.push((async () => {
-        const rows = await fetchInChunks<JsonRecord>(processPoIds, (idChunk) =>
-          serviceRoleClient.schema("erp_production").from("process_order").select("id, po_number").in("id", idChunk));
-        for (const row of rows) sourceDocMap.set(`PROCESS_PO:${toTrimmedString(row.id)}`, toTrimmedString(row.po_number));
+        const rows = await fetchInChunks<JsonRecord>(
+          processPoIds,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_production").from("process_order")
+              .select("id, po_number").in("id", idChunk),
+        );
+        for (const row of rows) {
+          sourceDocMap.set(
+            `PROCESS_PO:${toTrimmedString(row.id)}`,
+            toTrimmedString(row.po_number),
+          );
+        }
       })());
     }
     const packingPoIds = [...(sourceIdsByType.get("PACKING_PO") ?? [])];
     if (packingPoIds.length > 0) {
       sourceFetches.push((async () => {
-        const rows = await fetchInChunks<JsonRecord>(packingPoIds, (idChunk) =>
-          serviceRoleClient.schema("erp_production").from("packing_order").select("id, po_number").in("id", idChunk));
-        for (const row of rows) sourceDocMap.set(`PACKING_PO:${toTrimmedString(row.id)}`, toTrimmedString(row.po_number));
+        const rows = await fetchInChunks<JsonRecord>(
+          packingPoIds,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_production").from("packing_order")
+              .select("id, po_number").in("id", idChunk),
+        );
+        for (const row of rows) {
+          sourceDocMap.set(
+            `PACKING_PO:${toTrimmedString(row.id)}`,
+            toTrimmedString(row.po_number),
+          );
+        }
       })());
     }
     const salesOrderIds = [...(sourceIdsByType.get("SALES_ORDER") ?? [])];
     if (salesOrderIds.length > 0) {
       sourceFetches.push((async () => {
-        const rows = await fetchInChunks<JsonRecord>(salesOrderIds, (idChunk) =>
-          serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number").in("id", idChunk));
-        for (const row of rows) sourceDocMap.set(`SALES_ORDER:${toTrimmedString(row.id)}`, toTrimmedString(row.so_number));
+        const rows = await fetchInChunks<JsonRecord>(
+          salesOrderIds,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_procurement").from("sales_order")
+              .select("id, so_number").in("id", idChunk),
+        );
+        for (const row of rows) {
+          sourceDocMap.set(
+            `SALES_ORDER:${toTrimmedString(row.id)}`,
+            toTrimmedString(row.so_number),
+          );
+        }
       })());
     }
     const stoIds = [...(sourceIdsByType.get("STO") ?? [])];
     if (stoIds.length > 0) {
       sourceFetches.push((async () => {
-        const rows = await fetchInChunks<JsonRecord>(stoIds, (idChunk) =>
-          serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", idChunk));
-        for (const row of rows) sourceDocMap.set(`STO:${toTrimmedString(row.id)}`, toTrimmedString(row.sto_number));
+        const rows = await fetchInChunks<JsonRecord>(
+          stoIds,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_procurement").from(
+              "stock_transfer_order",
+            ).select("id, sto_number").in("id", idChunk),
+        );
+        for (const row of rows) {
+          sourceDocMap.set(
+            `STO:${toTrimmedString(row.id)}`,
+            toTrimmedString(row.sto_number),
+          );
+        }
       })());
     }
-    const locationTransferIds = [...(sourceIdsByType.get("LOCATION_TRANSFER") ?? [])];
+    const locationTransferIds = [
+      ...(sourceIdsByType.get("LOCATION_TRANSFER") ?? []),
+    ];
     if (locationTransferIds.length > 0) {
       sourceFetches.push((async () => {
-        const rows = await fetchInChunks<JsonRecord>(locationTransferIds, (idChunk) =>
-          serviceRoleClient.schema("erp_inventory").from("location_transfer_request").select("id, ltr_number").in("id", idChunk));
-        for (const row of rows) sourceDocMap.set(`LOCATION_TRANSFER:${toTrimmedString(row.id)}`, toTrimmedString(row.ltr_number));
+        const rows = await fetchInChunks<JsonRecord>(
+          locationTransferIds,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_inventory").from(
+              "location_transfer_request",
+            ).select("id, ltr_number").in("id", idChunk),
+        );
+        for (const row of rows) {
+          sourceDocMap.set(
+            `LOCATION_TRANSFER:${toTrimmedString(row.id)}`,
+            toTrimmedString(row.ltr_number),
+          );
+        }
       })());
     }
 
@@ -2436,7 +3656,13 @@ export async function listReservationsHandler(
       try {
         await Promise.all(sourceFetches);
       } catch {
-        return reportErrorResponse(req, ctx, "RESERVATION_LIST_FETCH_FAILED", 500, "Unable to fetch reservation list.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "RESERVATION_LIST_FETCH_FAILED",
+          500,
+          "Unable to fetch reservation list.",
+        );
       }
     }
 
@@ -2447,12 +3673,15 @@ export async function listReservationsHandler(
       const material = materialMap.get(row.material_id);
       const sloc = slocMap.get(row.storage_location_id);
       const materialLabel = resolveMaterialLabel(material) || "—";
-      const userLabel = userDisplayMap.get(row.created_by) || row.created_by || "—";
+      const userLabel = userDisplayMap.get(row.created_by) || row.created_by ||
+        "—";
       return {
         id: row.id,
         reservation_number: row.reservation_number || "—",
-        source_type: RESERVATION_SOURCE_TYPE_LABELS[row.source_type] || row.source_type || "—",
-        source_document: sourceDocMap.get(`${row.source_type}:${row.source_id}`) || "—",
+        source_type: RESERVATION_SOURCE_TYPE_LABELS[row.source_type] ||
+          row.source_type || "—",
+        source_document:
+          sourceDocMap.get(`${row.source_type}:${row.source_id}`) || "—",
         company: companyLabel,
         material: materialLabel,
         external_code: toTrimmedString(material?.external_code) || "—",
@@ -2471,8 +3700,16 @@ export async function listReservationsHandler(
 
     return okResponse({ data: rows, total: rows.length }, ctx.request_id, req);
   } catch (error) {
-    const code = error instanceof Error ? error.message : "RESERVATION_LIST_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch reservation list.");
+    const code = error instanceof Error
+      ? error.message
+      : "RESERVATION_LIST_FETCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      companyErrorStatus(code) ?? 500,
+      "Unable to fetch reservation list.",
+    );
   }
 }
 
@@ -2487,8 +3724,17 @@ export async function listReservationsHandler(
 // stock_history_bucket_map table (data, not a TS CASE ladder) so a new
 // movement code only ever needs one INSERT there, never a code change here.
 const STOCK_HISTORY_BUCKET_ORDER = [
-  "INWARD", "CONS", "SALE_DISPATCH", "PID", "QA", "REJECT",
-  "RETURN", "RTV", "SCRAP", "REPROCESS", "TRANSFER",
+  "INWARD",
+  "CONS",
+  "SALE_DISPATCH",
+  "PID",
+  "QA",
+  "REJECT",
+  "RETURN",
+  "RTV",
+  "SCRAP",
+  "REPROCESS",
+  "TRANSFER",
 ] as const;
 
 const STOCK_HISTORY_STOCK_TYPE_LABELS: Record<string, string> = {
@@ -2520,19 +3766,50 @@ export async function getStockHistoryHandler(
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const dateRangeState = validateRequiredDateRange(dateFrom, dateTo);
     if (dateRangeState === "MISSING") {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_DATE_RANGE_REQUIRED",
+        400,
+        "date_from and date_to are required.",
+      );
     }
     if (dateRangeState === "INVALID") {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_DATE_RANGE_INVALID",
+        400,
+        "date_from/date_to are invalid.",
+      );
     }
     if (dateRangeState === "TOO_WIDE") {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_DATE_RANGE_TOO_WIDE",
+        400,
+        "Date range cannot exceed 365 days.",
+      );
     }
 
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialTypes = parseMultiValueParams(url, "material_types", undefined, (value) => value.toUpperCase());
-    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
-    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
+    const materialTypes = parseMultiValueParams(
+      url,
+      "material_types",
+      undefined,
+      (value) => value.toUpperCase(),
+    );
+    const materialIds = parseMultiValueParams(
+      url,
+      "material_ids",
+      "material_id",
+    );
+    const storageLocationIds = parseMultiValueParams(
+      url,
+      "storage_location_ids",
+      "storage_location_id",
+    );
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     const { data, error } = await serviceRoleClient
@@ -2543,10 +3820,18 @@ export async function getStockHistoryHandler(
         p_to_date: dateTo,
         p_material_type_codes: materialTypes.length > 0 ? materialTypes : null,
         p_material_ids: materialIds.length > 0 ? materialIds : null,
-        p_storage_location_ids: storageLocationIds.length > 0 ? storageLocationIds : null,
+        p_storage_location_ids: storageLocationIds.length > 0
+          ? storageLocationIds
+          : null,
       });
     if (error) {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_FETCH_FAILED", 500, "Unable to fetch stock history.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_FETCH_FAILED",
+        500,
+        "Unable to fetch stock history.",
+      );
     }
 
     // §130.3 — any row where Opening, every bucket, and Closing are all zero
@@ -2555,36 +3840,54 @@ export async function getStockHistoryHandler(
     // range). Defensive, not load-bearing for the common case.
     const rpcRows = ((data ?? []) as StockHistoryRpcRow[]).filter((row) => {
       const buckets = row.buckets ?? {};
-      const bucketsAllZero = STOCK_HISTORY_BUCKET_ORDER.every((key) => Math.abs(Number(buckets[key] ?? 0)) < 0.000001);
-      return bucketsAllZero === false
-        || Math.abs(Number(row.opening ?? 0)) >= 0.000001
-        || Math.abs(Number(row.closing ?? 0)) >= 0.000001;
+      const bucketsAllZero = STOCK_HISTORY_BUCKET_ORDER.every((key) =>
+        Math.abs(Number(buckets[key] ?? 0)) < 0.000001
+      );
+      return bucketsAllZero === false ||
+        Math.abs(Number(row.opening ?? 0)) >= 0.000001 ||
+        Math.abs(Number(row.closing ?? 0)) >= 0.000001;
     });
 
     if (rpcRows.length === 0) {
-      return okResponse({ data: [], total: 0, visible_buckets: [] }, ctx.request_id, req);
+      return okResponse(
+        { data: [], total: 0, visible_buckets: [] },
+        ctx.request_id,
+        req,
+      );
     }
 
-    const materialIdsForLookup = [...new Set(rpcRows.map((row) => row.material_id).filter(Boolean))];
-    const slocIdsForLookup = [...new Set(rpcRows.map((row) => row.storage_location_id).filter(Boolean))];
+    const materialIdsForLookup = [
+      ...new Set(rpcRows.map((row) => row.material_id).filter(Boolean)),
+    ];
+    const slocIdsForLookup = [
+      ...new Set(rpcRows.map((row) => row.storage_location_id).filter(Boolean)),
+    ];
 
     let materialRows: JsonRecord[];
     let slocRows: JsonRecord[];
     let companyRows: JsonRecord[];
     try {
       [materialRows, slocRows, companyRows] = await Promise.all([
-        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_master")
-            .from("material_master")
-            .select("id, external_code, material_name, document_name, material_type, base_uom_code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
-          serviceRoleClient
-            .schema("erp_inventory")
-            .from("storage_location_master")
-            .select("id, code")
-            .in("id", idChunk)),
+        fetchInChunks<JsonRecord>(
+          materialIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient
+              .schema("erp_master")
+              .from("material_master")
+              .select(
+                "id, external_code, material_name, document_name, material_type, base_uom_code",
+              )
+              .in("id", idChunk),
+        ),
+        fetchInChunks<JsonRecord>(
+          slocIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient
+              .schema("erp_inventory")
+              .from("storage_location_master")
+              .select("id, code")
+              .in("id", idChunk),
+        ),
         fetchInChunks<JsonRecord>([companyId], (idChunk) =>
           serviceRoleClient
             .schema("erp_master")
@@ -2593,11 +3896,21 @@ export async function getStockHistoryHandler(
             .in("id", idChunk)),
       ]);
     } catch {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_FETCH_FAILED", 500, "Unable to fetch stock history.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_FETCH_FAILED",
+        500,
+        "Unable to fetch stock history.",
+      );
     }
 
-    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
-    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
+    const materialMap = new Map(
+      materialRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const slocMap = new Map(
+      slocRows.map((row) => [toTrimmedString(row.id), row]),
+    );
     const companyCode = toTrimmedString(companyRows[0]?.company_code) || "—";
 
     // §130.12 — a bucket column that is zero on EVERY returned row for this
@@ -2622,7 +3935,8 @@ export async function getStockHistoryHandler(
         buckets[bucketCode] = normalizeNumber(row.buckets?.[bucketCode] ?? 0);
       }
       return {
-        row_key: `${row.material_id}__${stockTypeCode}__${row.storage_location_id}`,
+        row_key:
+          `${row.material_id}__${stockTypeCode}__${row.storage_location_id}`,
         is_total: false,
         company: companyCode,
         material_id: row.material_id,
@@ -2630,16 +3944,17 @@ export async function getStockHistoryHandler(
         material: materialLabel,
         external_code: toTrimmedString(material?.external_code) || "—",
         base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
-        stock_status: STOCK_HISTORY_STOCK_TYPE_LABELS[stockTypeCode] || stockTypeCode || "—",
+        stock_status: STOCK_HISTORY_STOCK_TYPE_LABELS[stockTypeCode] ||
+          stockTypeCode || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
         opening: normalizeNumber(row.opening),
         buckets,
         closing: normalizeNumber(row.closing),
       };
     }).sort((left, right) =>
-      left.material.localeCompare(right.material)
-      || left.stock_status.localeCompare(right.stock_status)
-      || left.storage_location.localeCompare(right.storage_location)
+      left.material.localeCompare(right.material) ||
+      left.stock_status.localeCompare(right.stock_status) ||
+      left.storage_location.localeCompare(right.storage_location)
     );
 
     // §130.13 — one Total row per Material, summing every Stock Status x
@@ -2660,7 +3975,9 @@ export async function getStockHistoryHandler(
           stock_status: "Total",
           storage_location: "—",
           opening: 0,
-          buckets: Object.fromEntries(STOCK_HISTORY_BUCKET_ORDER.map((key) => [key, 0])),
+          buckets: Object.fromEntries(
+            STOCK_HISTORY_BUCKET_ORDER.map((key) => [key, 0]),
+          ),
           closing: 0,
         };
         totalsByMaterial.set(row.material_id, total);
@@ -2668,7 +3985,9 @@ export async function getStockHistoryHandler(
       total.opening = normalizeNumber(total.opening + row.opening);
       total.closing = normalizeNumber(total.closing + row.closing);
       for (const bucketCode of STOCK_HISTORY_BUCKET_ORDER) {
-        total.buckets[bucketCode] = normalizeNumber((total.buckets[bucketCode] ?? 0) + (row.buckets[bucketCode] ?? 0));
+        total.buckets[bucketCode] = normalizeNumber(
+          (total.buckets[bucketCode] ?? 0) + (row.buckets[bucketCode] ?? 0),
+        );
       }
     }
 
@@ -2701,14 +4020,24 @@ export async function getStockHistoryHandler(
       {
         data: responseRows,
         total: responseRows.length,
-        visible_buckets: STOCK_HISTORY_BUCKET_ORDER.filter((code) => visibleBuckets.has(code)),
+        visible_buckets: STOCK_HISTORY_BUCKET_ORDER.filter((code) =>
+          visibleBuckets.has(code)
+        ),
       },
       ctx.request_id,
       req,
     );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "STOCK_HISTORY_FETCH_FAILED";
-    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch stock history.");
+    const code = error instanceof Error
+      ? error.message
+      : "STOCK_HISTORY_FETCH_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      companyErrorStatus(code) ?? 500,
+      "Unable to fetch stock history.",
+    );
   }
 }
 
@@ -2727,7 +4056,12 @@ export async function getStockHistoryHandler(
 // CONSUMPTION/PID_ADJUSTMENT/MANUAL_ALLOT), not the fine movement-type
 // buckets the main report uses -- there is no movement_type_code on this
 // table, only source_type, so this is the report's own natural bucket set.
-const MACHINE_HISTORY_BUCKET_ORDER = ["TRANSFER", "CONSUMPTION", "PID_ADJUSTMENT", "MANUAL_ALLOT"] as const;
+const MACHINE_HISTORY_BUCKET_ORDER = [
+  "TRANSFER",
+  "CONSUMPTION",
+  "PID_ADJUSTMENT",
+  "MANUAL_ALLOT",
+] as const;
 
 export async function getStockHistoryMachineWiseHandler(
   req: Request,
@@ -2741,19 +4075,50 @@ export async function getStockHistoryMachineWiseHandler(
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
     const dateRangeState = validateRequiredDateRange(dateFrom, dateTo);
     if (dateRangeState === "MISSING") {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_DATE_RANGE_REQUIRED",
+        400,
+        "date_from and date_to are required.",
+      );
     }
     if (dateRangeState === "INVALID") {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_INVALID", 400, "date_from/date_to are invalid.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_DATE_RANGE_INVALID",
+        400,
+        "date_from/date_to are invalid.",
+      );
     }
     if (dateRangeState === "TOO_WIDE") {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_DATE_RANGE_TOO_WIDE", 400, "Date range cannot exceed 365 days.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_DATE_RANGE_TOO_WIDE",
+        400,
+        "Date range cannot exceed 365 days.",
+      );
     }
 
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialTypes = parseMultiValueParams(url, "material_types", undefined, (value) => value.toUpperCase());
-    const requestedMaterialIds = parseMultiValueParams(url, "material_ids", "material_id");
-    const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
+    const materialTypes = parseMultiValueParams(
+      url,
+      "material_types",
+      undefined,
+      (value) => value.toUpperCase(),
+    );
+    const requestedMaterialIds = parseMultiValueParams(
+      url,
+      "material_ids",
+      "material_id",
+    );
+    const storageLocationIds = parseMultiValueParams(
+      url,
+      "storage_location_ids",
+      "storage_location_id",
+    );
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
 
     // material_types has no column on machine_stock_log -- resolve it to a
@@ -2764,19 +4129,34 @@ export async function getStockHistoryMachineWiseHandler(
         .schema("erp_master").from("material_master")
         .select("id").in("material_type", materialTypes);
       if (typeErr) {
-        return reportErrorResponse(req, ctx, "STOCK_HISTORY_MACHINE_WISE_FETCH_FAILED", 500, "Unable to fetch machine-wise stock history.");
+        return reportErrorResponse(
+          req,
+          ctx,
+          "STOCK_HISTORY_MACHINE_WISE_FETCH_FAILED",
+          500,
+          "Unable to fetch machine-wise stock history.",
+        );
       }
-      const typeMaterialIds = new Set(((typeMaterials ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)));
+      const typeMaterialIds = new Set(
+        ((typeMaterials ?? []) as JsonRecord[]).map((row) =>
+          toTrimmedString(row.id)
+        ),
+      );
       materialIds = requestedMaterialIds.length > 0
         ? requestedMaterialIds.filter((id) => typeMaterialIds.has(id))
         : [...typeMaterialIds];
       if (materialIds.length === 0) {
-        return okResponse({ data: [], total: 0, visible_buckets: [] }, ctx.request_id, req);
+        return okResponse(
+          { data: [], total: 0, visible_buckets: [] },
+          ctx.request_id,
+          req,
+        );
       }
     }
 
     const periodStartMs = new Date(`${dateFrom}T00:00:00.000Z`).getTime();
-    const periodEndExclusiveMs = new Date(`${dateTo}T00:00:00.000Z`).getTime() + 86400000;
+    const periodEndExclusiveMs = new Date(`${dateTo}T00:00:00.000Z`).getTime() +
+      86400000;
 
     let logData: JsonRecord[];
     try {
@@ -2784,19 +4164,33 @@ export async function getStockHistoryMachineWiseHandler(
         let query = serviceRoleClient
           .schema("erp_production")
           .from("machine_stock_log")
-          .select("storage_location_id, material_id, machine_id, qty, direction, source_type, created_at")
+          .select(
+            "storage_location_id, material_id, machine_id, qty, direction, source_type, created_at",
+          )
           .eq("company_id", companyId)
           .order("id", { ascending: true })
           .range(from, to);
         // Only need rows up to the end of the period -- anything after
         // date_to affects neither Opening nor Closing for this report.
-        query = (query as unknown as { lt: (column: string, value: string) => typeof query }).lt("created_at", new Date(periodEndExclusiveMs).toISOString());
-        if (materialIds.length > 0) query = query.in("material_id", materialIds);
-        if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
+        query = (query as unknown as {
+          lt: (column: string, value: string) => typeof query;
+        }).lt("created_at", new Date(periodEndExclusiveMs).toISOString());
+        if (materialIds.length > 0) {
+          query = query.in("material_id", materialIds);
+        }
+        if (storageLocationIds.length > 0) {
+          query = query.in("storage_location_id", storageLocationIds);
+        }
         return query;
       });
     } catch {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_MACHINE_WISE_FETCH_FAILED", 500, "Unable to fetch machine-wise stock history.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_MACHINE_WISE_FETCH_FAILED",
+        500,
+        "Unable to fetch machine-wise stock history.",
+      );
     }
 
     type HistoryAgg = {
@@ -2808,13 +4202,23 @@ export async function getStockHistoryMachineWiseHandler(
       buckets: Record<string, number>;
     };
     const groups = new Map<string, HistoryAgg>();
-    const getOrCreateGroup = (materialId: string, storageLocationId: string, machineId: string | null) => {
+    const getOrCreateGroup = (
+      materialId: string,
+      storageLocationId: string,
+      machineId: string | null,
+    ) => {
       const key = `${materialId}__${storageLocationId}__${machineId ?? ""}`;
       let group = groups.get(key);
       if (!group) {
         group = {
-          materialId, storageLocationId, machineId, opening: 0, closing: 0,
-          buckets: Object.fromEntries(MACHINE_HISTORY_BUCKET_ORDER.map((code) => [code, 0])),
+          materialId,
+          storageLocationId,
+          machineId,
+          opening: 0,
+          closing: 0,
+          buckets: Object.fromEntries(
+            MACHINE_HISTORY_BUCKET_ORDER.map((code) => [code, 0]),
+          ),
         };
         groups.set(key, group);
       }
@@ -2826,7 +4230,9 @@ export async function getStockHistoryMachineWiseHandler(
       const storageLocationId = toTrimmedString(row.storage_location_id);
       const machineId = toTrimmedString(row.machine_id) || null;
       const group = getOrCreateGroup(materialId, storageLocationId, machineId);
-      const sign = toTrimmedString(row.direction).toUpperCase() === "OUT" ? -1 : 1;
+      const sign = toTrimmedString(row.direction).toUpperCase() === "OUT"
+        ? -1
+        : 1;
       const qty = Number(row.qty ?? 0) * sign;
       const createdAtMs = new Date(toTrimmedString(row.created_at)).getTime();
       if (createdAtMs < periodStartMs) {
@@ -2834,56 +4240,109 @@ export async function getStockHistoryMachineWiseHandler(
       } else {
         const bucketCode = toTrimmedString(row.source_type).toUpperCase();
         if (bucketCode in group.buckets) {
-          group.buckets[bucketCode] = Number((group.buckets[bucketCode] + qty).toFixed(6));
+          group.buckets[bucketCode] = Number(
+            (group.buckets[bucketCode] + qty).toFixed(6),
+          );
         }
       }
     }
 
     const groupRows = [...groups.values()]
       .map((group) => {
-        const bucketSum = MACHINE_HISTORY_BUCKET_ORDER.reduce((sum, code) => sum + (group.buckets[code] ?? 0), 0);
-        return { ...group, closing: Number((group.opening + bucketSum).toFixed(6)) };
+        const bucketSum = MACHINE_HISTORY_BUCKET_ORDER.reduce(
+          (sum, code) => sum + (group.buckets[code] ?? 0),
+          0,
+        );
+        return {
+          ...group,
+          closing: Number((group.opening + bucketSum).toFixed(6)),
+        };
       })
       .filter((group) => {
-        const bucketsAllZero = MACHINE_HISTORY_BUCKET_ORDER.every((code) => Math.abs(group.buckets[code] ?? 0) < 0.000001);
-        return bucketsAllZero === false || Math.abs(group.opening) >= 0.000001 || Math.abs(group.closing) >= 0.000001;
+        const bucketsAllZero = MACHINE_HISTORY_BUCKET_ORDER.every((code) =>
+          Math.abs(group.buckets[code] ?? 0) < 0.000001
+        );
+        return bucketsAllZero === false ||
+          Math.abs(group.opening) >= 0.000001 ||
+          Math.abs(group.closing) >= 0.000001;
       });
 
     if (groupRows.length === 0) {
-      return okResponse({ data: [], total: 0, visible_buckets: [] }, ctx.request_id, req);
+      return okResponse(
+        { data: [], total: 0, visible_buckets: [] },
+        ctx.request_id,
+        req,
+      );
     }
 
-    const materialIdsForLookup = [...new Set(groupRows.map((row) => row.materialId).filter(Boolean))];
-    const slocIdsForLookup = [...new Set(groupRows.map((row) => row.storageLocationId).filter(Boolean))];
-    const machineIdsForLookup = [...new Set(groupRows.map((row) => row.machineId).filter((id): id is string => Boolean(id)))];
+    const materialIdsForLookup = [
+      ...new Set(groupRows.map((row) => row.materialId).filter(Boolean)),
+    ];
+    const slocIdsForLookup = [
+      ...new Set(groupRows.map((row) => row.storageLocationId).filter(Boolean)),
+    ];
+    const machineIdsForLookup = [
+      ...new Set(
+        groupRows.map((row) => row.machineId).filter((id): id is string =>
+          Boolean(id)
+        ),
+      ),
+    ];
 
     let materialRows: JsonRecord[];
     let slocRows: JsonRecord[];
     let machineRows: JsonRecord[];
     try {
       [materialRows, slocRows, machineRows] = await Promise.all([
-        fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code")
-            .in("id", idChunk)),
-        fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_inventory").from("storage_location_master")
-            .select("id, code").in("id", idChunk)),
-        fetchInChunks<JsonRecord>(machineIdsForLookup, (idChunk) =>
-          serviceRoleClient.schema("erp_master").from("machine_master")
-            .select("id, machine_code, machine_name").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(
+          materialIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_master").from("material_master")
+              .select(
+                "id, pace_code, external_code, material_name, document_name, material_type, base_uom_code",
+              )
+              .in("id", idChunk),
+        ),
+        fetchInChunks<JsonRecord>(
+          slocIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_inventory").from(
+              "storage_location_master",
+            )
+              .select("id, code").in("id", idChunk),
+        ),
+        fetchInChunks<JsonRecord>(
+          machineIdsForLookup,
+          (idChunk) =>
+            serviceRoleClient.schema("erp_master").from("machine_master")
+              .select("id, machine_code, machine_name").in("id", idChunk),
+        ),
       ]);
     } catch {
-      return reportErrorResponse(req, ctx, "STOCK_HISTORY_MACHINE_WISE_ENRICH_FAILED", 500, "Unable to fetch machine-wise stock history.");
+      return reportErrorResponse(
+        req,
+        ctx,
+        "STOCK_HISTORY_MACHINE_WISE_ENRICH_FAILED",
+        500,
+        "Unable to fetch machine-wise stock history.",
+      );
     }
-    const materialMap = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
-    const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
-    const machineMap = new Map(machineRows.map((row) => [toTrimmedString(row.id), row]));
+    const materialMap = new Map(
+      materialRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const slocMap = new Map(
+      slocRows.map((row) => [toTrimmedString(row.id), row]),
+    );
+    const machineMap = new Map(
+      machineRows.map((row) => [toTrimmedString(row.id), row]),
+    );
 
     const visibleBuckets = new Set<string>();
     for (const row of groupRows) {
       for (const code of MACHINE_HISTORY_BUCKET_ORDER) {
-        if (Math.abs(row.buckets[code] ?? 0) >= 0.000001) visibleBuckets.add(code);
+        if (Math.abs(row.buckets[code] ?? 0) >= 0.000001) {
+          visibleBuckets.add(code);
+        }
       }
     }
 
@@ -2892,25 +4351,35 @@ export async function getStockHistoryMachineWiseHandler(
       const sloc = slocMap.get(row.storageLocationId);
       const machine = row.machineId ? machineMap.get(row.machineId) : null;
       return {
-        row_key: `${row.materialId}__${row.storageLocationId}__${row.machineId ?? "UNASSIGNED"}`,
+        row_key: `${row.materialId}__${row.storageLocationId}__${
+          row.machineId ?? "UNASSIGNED"
+        }`,
         is_total: false,
         material_id: row.materialId,
         material_type: toTrimmedString(material?.material_type) || "—",
-        material: [toTrimmedString(material?.pace_code), toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name)].filter(Boolean).join(" — ") || "—",
+        material: [
+          toTrimmedString(material?.pace_code),
+          toTrimmedString(material?.document_name) ||
+          toTrimmedString(material?.material_name),
+        ].filter(Boolean).join(" — ") || "—",
         external_code: toTrimmedString(material?.external_code) || "—",
         base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
         machine_label: machine
-          ? [toTrimmedString(machine.machine_code), toTrimmedString(machine.machine_name)].filter(Boolean).join(" - ")
+          ? [
+            toTrimmedString(machine.machine_code),
+            toTrimmedString(machine.machine_name),
+          ].filter(Boolean).join(" - ")
           : "Unassigned",
         opening: row.opening,
         buckets: row.buckets,
         closing: row.closing,
       };
     }).sort((left, right) =>
-      left.material.localeCompare(right.material)
-      || left.storage_location.localeCompare(right.storage_location)
-      || left.machine_label.localeCompare(right.machine_label));
+      left.material.localeCompare(right.material) ||
+      left.storage_location.localeCompare(right.storage_location) ||
+      left.machine_label.localeCompare(right.machine_label)
+    );
 
     // Total row per material, same convention as the main IN14 report.
     const totalsByMaterial = new Map<string, typeof detailRows[number]>();
@@ -2928,7 +4397,9 @@ export async function getStockHistoryMachineWiseHandler(
           storage_location: "—",
           machine_label: "Total",
           opening: 0,
-          buckets: Object.fromEntries(MACHINE_HISTORY_BUCKET_ORDER.map((code) => [code, 0])),
+          buckets: Object.fromEntries(
+            MACHINE_HISTORY_BUCKET_ORDER.map((code) => [code, 0]),
+          ),
           closing: 0,
         };
         totalsByMaterial.set(row.material_id, total);
@@ -2936,7 +4407,9 @@ export async function getStockHistoryMachineWiseHandler(
       total.opening = Number((total.opening + row.opening).toFixed(6));
       total.closing = Number((total.closing + row.closing).toFixed(6));
       for (const code of MACHINE_HISTORY_BUCKET_ORDER) {
-        total.buckets[code] = Number(((total.buckets[code] ?? 0) + (row.buckets[code] ?? 0)).toFixed(6));
+        total.buckets[code] = Number(
+          ((total.buckets[code] ?? 0) + (row.buckets[code] ?? 0)).toFixed(6),
+        );
       }
     }
 
@@ -2956,13 +4429,27 @@ export async function getStockHistoryMachineWiseHandler(
       if (total) responseRows.push(total);
     }
 
-    return okResponse({
-      data: responseRows,
-      total: responseRows.length,
-      visible_buckets: MACHINE_HISTORY_BUCKET_ORDER.filter((code) => visibleBuckets.has(code)),
-    }, ctx.request_id, req);
+    return okResponse(
+      {
+        data: responseRows,
+        total: responseRows.length,
+        visible_buckets: MACHINE_HISTORY_BUCKET_ORDER.filter((code) =>
+          visibleBuckets.has(code)
+        ),
+      },
+      ctx.request_id,
+      req,
+    );
   } catch (error) {
-    const code = error instanceof Error ? error.message : "STOCK_HISTORY_MACHINE_WISE_FAILED";
-    return reportErrorResponse(req, ctx, code, companyErrorStatus(code) ?? 500, "Unable to fetch machine-wise stock history.");
+    const code = error instanceof Error
+      ? error.message
+      : "STOCK_HISTORY_MACHINE_WISE_FAILED";
+    return reportErrorResponse(
+      req,
+      ctx,
+      code,
+      companyErrorStatus(code) ?? 500,
+      "Unable to fetch machine-wise stock history.",
+    );
   }
 }

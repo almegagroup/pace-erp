@@ -503,6 +503,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_SALES_RETURN_LIST: {
+    screen_code: "PROC_SALES_RETURN_LIST",
+    route: "/dashboard/procurement/sales/sales-return",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // SO01 Tab 2 — feasibility §133.9. Same PROC_SO_LIST resource, EDIT action.
   PROC_SO_MAP: {
     screen_code: "PROC_SO_MAP",

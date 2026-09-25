@@ -24,6 +24,7 @@ import {
 } from "./prodApi.js";
 import { listMaterials, listStorageLocations } from "../om/omApi.js";
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
+import SalesReturnPendingButton from "./SalesReturnPendingButton.jsx";
 
 const ERRORS = {
   PROD_OLD_PACKING_PO_INVALID: "Company, parent batch, SKU and Actual Qty are required.",
@@ -250,6 +251,7 @@ export default function OldPackingPoPage() {
       toast(`Old Packing PO ${res?.po_number ?? ""} created for batch ${res?.batch_number ?? ""} — no stock moved.`);
       setSkuMaterialId(""); setNumPacks(""); setFillQty(""); setActualQtyKg(""); setPmEdits({}); setManualPmLines([]);
       qc.invalidateQueries({ queryKey: ["old-process-po-batches"] });
+      qc.invalidateQueries({ queryKey: ["so05-pending-production", "PACKING"] });
     } catch (err) {
       toast(friendly(err.code, err.message), "error");
     } finally { setSaving(false); }
@@ -261,6 +263,7 @@ export default function OldPackingPoPage() {
       subtitle="PR23 — genealogy for a pre-go-live FG batch (§104.9). Links to its parent Old Process PO; FG, SFG, and PM lines all carry explicit storage locations for later reversal-safe traceability. Saves a FINAL paper order; posts NO stock movement."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
     >
+      <div className="flex justify-end"><SalesReturnPendingButton companyId={effectiveCompanyId} kind="PACKING" /></div>
       <ErpSectionCard title="Header">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="flex flex-col gap-1">

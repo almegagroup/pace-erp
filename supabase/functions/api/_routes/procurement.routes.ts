@@ -14,8 +14,8 @@ import {
   confirmDispatchQtyAdjustmentHandler,
   createSubCSNHandler,
   createTrackerLayoutHandler,
-  deleteTrackerLayoutHandler,
   deleteSubCSNHandler,
+  deleteTrackerLayoutHandler,
   getAllAlertCountsHandler,
   getCSNHandler,
   getLCAlertCountHandler,
@@ -92,18 +92,18 @@ import {
   getStockHistoryMachineWiseHandler,
   getStockLedgerMachineWiseHandler,
   getStockLedgerReportHandler,
+  getStockValuationHandler,
   listReservationsHandler,
   listStockLedgerMovementTypesHandler,
   searchCurrentStockBatchNumbersHandler,
   searchCurrentStockPackingPoNumbersHandler,
   searchStockLedgerBatchNumbersHandler,
   searchStockLedgerPackingPoNumbersHandler,
-  getStockValuationHandler,
 } from "../_core/procurement/stock_reports.handlers.ts";
 import { getDispatchReportHandler } from "../_core/procurement/dispatch_report.handlers.ts";
 import {
-  listManualCostingRowsHandler,
   getManualCostingRowHandler,
+  listManualCostingRowsHandler,
   saveManualCostingRatesHandler,
 } from "../_core/procurement/manual_costing_rate.handlers.ts";
 import { getBatchCostingReportHandler } from "../_core/procurement/batch_costing_report.handlers.ts";
@@ -223,20 +223,17 @@ import {
 } from "../_core/procurement/stock_status_change.handlers.ts";
 import {
   createCHAHandler,
-  deleteImportLeadTimeHandler,
-  deleteDomesticLeadTimeHandler,
-  updateImportLeadTimeHandler,
-  updateDomesticLeadTimeHandler,
-  deleteTransitTimeHandler,
-  listProcurementCompaniesHandler,
   createMaterialCategoryHandler,
   createPaymentTermsHandler,
   createPortHandler,
   createReferenceDateTypeHandler,
   createTransporterHandler,
   deleteCHAHandler,
+  deleteDomesticLeadTimeHandler,
+  deleteImportLeadTimeHandler,
   deletePaymentTermsHandler,
   deletePortHandler,
+  deleteTransitTimeHandler,
   deleteTransporterHandler,
   getChaContactsHandler,
   getChaEmailsHandler,
@@ -244,20 +241,21 @@ import {
   getPaymentTermsHandler,
   getTransporterContactsHandler,
   getTransporterEmailsHandler,
+  listChaCompanyMapsHandler,
   listCHAPortsHandler,
   listCHAsHandler,
-  listChaCompanyMapsHandler,
   listDomesticLeadTimesHandler,
   listImportLeadTimesHandler,
   listMaterialCategoriesHandler,
   listPaymentTermsHandler,
   listPortsHandler,
+  listProcurementCompaniesHandler,
   listReferenceDateTypesHandler,
   listTransitTimesHandler,
-  listTransportersHandler,
   listTransporterCompanyMapsHandler,
-  mapCHAToPortHandler,
+  listTransportersHandler,
   mapChaToCompanyHandler,
+  mapCHAToPortHandler,
   mapTransporterToCompanyHandler,
   toggleCHAHandler,
   togglePaymentTermsHandler,
@@ -265,13 +263,15 @@ import {
   toggleReferenceDateTypeHandler,
   unmapCHAPortHandler,
   updateCHAHandler,
+  updateDomesticLeadTimeHandler,
+  updateImportLeadTimeHandler,
   updatePaymentTermsHandler,
   updatePortHandler,
   updateTransporterHandler,
-  upsertDomesticLeadTimeHandler,
-  upsertImportLeadTimeHandler,
   upsertChaContactsHandler,
   upsertChaEmailsHandler,
+  upsertDomesticLeadTimeHandler,
+  upsertImportLeadTimeHandler,
   upsertTransitTimeHandler,
   upsertTransporterContactsHandler,
   upsertTransporterEmailsHandler,
@@ -286,14 +286,14 @@ import {
   confirmPOOrderGroupHandler,
   createPOHandler,
   deletePOHandler,
+  getPoFilterOptionsHandler,
   getPOHandler,
   getPOOrderGroupHandler,
-  getPoFilterOptionsHandler,
-  knockOffPOLineHandler,
   knockOffPOHandler,
+  knockOffPOLineHandler,
   listMaterialUomConversionsForProcurementHandler,
-  listPOsHandler,
   listPOOrderGroupsHandler,
+  listPOsHandler,
   rejectPOHandler,
   rejectPOOrderGroupHandler,
   updatePOHandler,
@@ -319,27 +319,37 @@ import {
   settleDebitNoteHandler,
 } from "../_core/procurement/rtv.handlers.ts";
 import {
+  cancelSalesOrderUnifiedHandler,
   cancelSOHandler,
+  closeSalesOrderUnifiedHandler,
   createSalesInvoiceHandler,
   createSalesOrderUnifiedHandler,
-  listSalesOrderAddressOptionsHandler,
-  listSalesOrderFgSkuOptionsHandler,
-  listSalesOrderSfgMaterialOptionsHandler,
-  listSalesOrderStrokeCheckOptionsHandler,
   createSOHandler,
   getSalesInvoiceHandler,
   getSOHandler,
   issueSOStockHandler,
   knockOffSOLineHandler,
   listSalesInvoicesHandler,
+  listSalesOrderAddressOptionsHandler,
+  listSalesOrderFgSkuOptionsHandler,
+  listSalesOrderSfgMaterialOptionsHandler,
+  listSalesOrderStrokeCheckOptionsHandler,
   listSOsHandler,
   postSalesInvoiceHandler,
+  updateSalesOrderUnifiedHandler,
   updateSOHandler,
   updateSOLinesHandler,
-  cancelSalesOrderUnifiedHandler,
-  closeSalesOrderUnifiedHandler,
-  updateSalesOrderUnifiedHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
+import {
+  createSalesReturnReceiptHandler,
+  listPendingGenealogyEntriesHandler,
+  listPendingReturnInvoicesHandler,
+  listPendingStrokesHandler,
+  listRepackTargetSkuOptionsHandler,
+  listSalesReturnReceiptsHandler,
+  resolveBatchNumberOptionsHandler,
+  saveReturnInvoiceDetailHandler,
+} from "../_core/procurement/sales_return.handlers.ts";
 import {
   getSoMapStatusHandler,
   listCustomerAddressesForSoHandler,
@@ -381,18 +391,18 @@ import {
   listAdditionalCostCategoriesHandler,
 } from "../_core/procurement/additional_cost_category.handlers.ts";
 import {
-  approveSTOHandler,
-  approveSTOAmendmentHandler,
-  cancelSTOHandler,
   amendSTOHandler,
+  approveSTOAmendmentHandler,
+  approveSTOHandler,
+  cancelSTOHandler,
   closeSTOHandler,
   confirmSTOHandler,
   confirmSTOReceiptHandler,
   createSTOHandler,
   dispatchSTOHandler,
-  knockOffSTOLineHandler,
-  getSTOHandler,
   getLastStoPaymentTermHandler,
+  getSTOHandler,
+  knockOffSTOLineHandler,
   listSTOsHandler,
   rejectSTOHandler,
   transformSubCSNToSTOHandler,
@@ -691,6 +701,26 @@ export async function dispatchProcurementRoutes(
       return await createSOHandler(req, ctx);
     case "GET:/api/procurement/sales-orders":
       return await listSOsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns":
+      return await listSalesReturnReceiptsHandler(req, ctx);
+    case "POST:/api/procurement/sales-returns":
+      return await createSalesReturnReceiptHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-invoices":
+      return await listPendingReturnInvoicesHandler(req, ctx);
+    case "POST:/api/procurement/sales-returns/invoice-detail":
+      return await saveReturnInvoiceDetailHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/batch-options":
+      return await resolveBatchNumberOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/repack-sku-options":
+      return await listRepackTargetSkuOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-strokes":
+      return await listPendingStrokesHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-genealogy":
+      return await listPendingGenealogyEntriesHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-process-entries":
+      return await listPendingGenealogyEntriesHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-packing-entries":
+      return await listPendingGenealogyEntriesHandler(req, ctx);
     case "POST:/api/procurement/sales-orders-v2":
       return await createSalesOrderUnifiedHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/fg-sku-options":
@@ -785,19 +815,31 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/po-order-groups\/[^/]+\/confirm$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await confirmPOOrderGroupHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/po-order-groups\/[^/]+\/approve$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await approvePOOrderGroupHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/po-order-groups\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/po-order-groups\/[^/]+\/reject$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await rejectPOOrderGroupHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/po-order-groups\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/po-order-groups\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getPOOrderGroupHandler(req, ctx);
   }
 
@@ -810,39 +852,66 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/csns\/[^/]+\/sub-csns$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/csns\/[^/]+\/sub-csns$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await createSubCSNHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/csns\/[^/]+\/sub-csns\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/csns\/[^/]+\/sub-csns\/[^/]+$/.test(pathname) &&
+    req.method === "DELETE"
+  ) {
     return await deleteSubCSNHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/csns\/[^/]+\/history$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/csns\/[^/]+\/history$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await listCsnFieldHistoryHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/csns\/[^/]+\/transform-to-sto$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/csns\/[^/]+\/transform-to-sto$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await transformSubCSNToSTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/preview$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/preview$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await previewDispatchQtyAdjustmentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await confirmDispatchQtyAdjustmentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/tracker\/[^/]+\/inline$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/tracker\/[^/]+\/inline$/.test(pathname) &&
+    req.method === "PUT"
+  ) {
     return await inlineUpdateCSNHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/tracker\/layouts\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/tracker\/layouts\/[^/]+$/.test(pathname) &&
+    req.method === "DELETE"
+  ) {
     return await deleteTrackerLayoutHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await setDefaultReportLayoutHandler(req, ctx);
   }
 
@@ -896,26 +965,44 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/transporters\/[^/]+$/.test(pathname)) {
     if (req.method === "PUT") return await updateTransporterHandler(req, ctx);
-    if (req.method === "DELETE") return await deleteTransporterHandler(req, ctx);
+    if (req.method === "DELETE") {
+      return await deleteTransporterHandler(req, ctx);
+    }
   }
 
-  if (/^\/api\/procurement\/number-series\/global\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+  if (
+    /^\/api\/procurement\/number-series\/global\/[^/]+$/.test(pathname) &&
+    req.method === "PATCH"
+  ) {
     return await updateGlobalStartingHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+  if (
+    /^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) &&
+    req.method === "PATCH"
+  ) {
     return await updateCompanySeriesHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/number-series\/company\/[^/]+$/.test(pathname) &&
+    req.method === "DELETE"
+  ) {
     return await deleteCompanySeriesHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/number-series\/counters\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/number-series\/counters\/[^/]+$/.test(pathname) &&
+    req.method === "DELETE"
+  ) {
     return await deleteCompanyCounterHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/number-series\/company\/[^/]+\/[^/]+\/counters$/.test(pathname)) {
+  if (
+    /^\/api\/procurement\/number-series\/company\/[^/]+\/[^/]+\/counters$/.test(
+      pathname,
+    )
+  ) {
     if (req.method === "GET") {
       return await listCompanyCountersHandler(req, ctx);
     }
@@ -924,19 +1011,30 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/opening-stock\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/opening-stock\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getOpeningStockDocumentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/opening-stock\/[^/]+\/lines$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await addOpeningStockLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines\/batch$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/opening-stock\/[^/]+\/lines\/batch$/.test(pathname) &&
+    req.method === "PUT"
+  ) {
     return await batchUpdateOpeningStockLinesHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/opening-stock\/[^/]+\/lines\/[^/]+$/.test(pathname)) {
+  if (
+    /^\/api\/procurement\/opening-stock\/[^/]+\/lines\/[^/]+$/.test(pathname)
+  ) {
     if (req.method === "PUT") {
       return await updateOpeningStockLineHandler(req, ctx);
     }
@@ -945,68 +1043,119 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/opening-stock\/[^/]+\/submit$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/opening-stock\/[^/]+\/submit$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await submitOpeningStockDocumentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/opening-stock\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/opening-stock\/[^/]+\/approve$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await approveOpeningStockDocumentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/opening-stock\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/opening-stock\/[^/]+\/post$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await postOpeningStockDocumentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getPIDHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/count-workspace$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/count-workspace$/.test(
+      pathname,
+    ) && req.method === "GET"
+  ) {
     return await getPIDCountWorkspaceHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/recount-workspace$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/recount-workspace$/.test(
+      pathname,
+    ) && req.method === "GET"
+  ) {
     return await getPIDRecountWorkspaceHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/items$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await addPIItemHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+$/.test(
+      pathname,
+    ) && req.method === "DELETE"
+  ) {
     return await removePIItemHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/count$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/count$/.test(
+      pathname,
+    ) && req.method === "PUT"
+  ) {
     return await enterCountHandler(req, ctx);
   }
 
   // MI05 (IN09) — Change Count, §MI04-MI05-split-2026-08-14. Distinct route from MI04's /count.
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/change-count$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/change-count$/
+      .test(pathname) && req.method === "PUT"
+  ) {
     return await changeCountHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/recount$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/items\/[^/]+\/recount$/
+      .test(pathname) && req.method === "POST"
+  ) {
     return await requestRecountHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/submit$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/submit$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await submitPIDForApprovalHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/reopen$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/reopen$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await reopenPIDHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/cancel$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await cancelPIDHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/physical-inventory\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/physical-inventory\/[^/]+\/post$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await postDifferencesHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/location-transfer-requests\/[^/]+$/.test(pathname)) {
+  if (
+    /^\/api\/procurement\/location-transfer-requests\/[^/]+$/.test(pathname)
+  ) {
     if (req.method === "GET") {
       return await getLocationTransferRequestHandler(req, ctx);
     }
@@ -1015,39 +1164,70 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/location-transfer-requests\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/location-transfer-requests\/[^/]+\/cancel$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await cancelLocationTransferRequestHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/location-transfer-postings\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/location-transfer-postings\/[^/]+\/reverse$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await reverseLocationTransferPostingHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/approve$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await approveStockStatusChangePostingHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stock-status-change\/postings\/[^/]+\/reverse$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await reverseStockStatusChangePostingHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/port-transit\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/port-transit\/[^/]+$/.test(pathname) &&
+    req.method === "DELETE"
+  ) {
     return await deleteTransitTimeHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) &&
+    req.method === "DELETE"
+  ) {
     return await deleteImportLeadTimeHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+  if (
+    /^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) &&
+    req.method === "PATCH"
+  ) {
     return await updateImportLeadTimeHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) &&
+    req.method === "DELETE"
+  ) {
     return await deleteDomesticLeadTimeHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+  if (
+    /^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) &&
+    req.method === "PATCH"
+  ) {
     return await updateDomesticLeadTimeHandler(req, ctx);
   }
 
@@ -1075,7 +1255,10 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/gate-entries\/[^/]+\/prune$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/gate-entries\/[^/]+\/prune$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await pruneGateEntryHandler(req, ctx);
   }
 
@@ -1088,7 +1271,10 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/gate-exits\/inbound\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/gate-exits\/inbound\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getGateExitInboundHandler(req, ctx);
   }
 
@@ -1101,79 +1287,137 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/grns\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/grns\/[^/]+\/post$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await postGRNHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/grns\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/grns\/[^/]+\/reverse$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await reverseGRNHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/invoice-verifications\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/invoice-verifications\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getIVHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/invoice-verifications\/[^/]+\/lines$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/invoice-verifications\/[^/]+\/lines$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await addIVLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/invoice-verifications\/[^/]+\/lines\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+  if (
+    /^\/api\/procurement\/invoice-verifications\/[^/]+\/lines\/[^/]+$/.test(
+      pathname,
+    ) && req.method === "DELETE"
+  ) {
     return await removeIVLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/invoice-verifications\/[^/]+\/run-match$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/invoice-verifications\/[^/]+\/run-match$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await runMatchHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/invoice-verifications\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/invoice-verifications\/[^/]+\/post$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await postIVHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ac01\/grns\/[^/]+\/save$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/ac01\/grns\/[^/]+\/save$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await saveAC01GRNCostHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ac01\/grns\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/ac01\/grns\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getAC01GRNHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/landed-costs\/by-grn\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/landed-costs\/by-grn\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getLandedCostForGRNHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ptos\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/ptos\/[^/]+$/.test(pathname) && req.method === "GET"
+  ) {
     return await getPTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ptos\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/ptos\/[^/]+\/approve$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await approvePTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ptos\/[^/]+\/one-step$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/ptos\/[^/]+\/one-step$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await oneStepTransferHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ptos\/[^/]+\/issue$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/ptos\/[^/]+\/issue$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await issueTransferHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ptos\/[^/]+\/receive$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/ptos\/[^/]+\/receive$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await receiveTransferHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/ptos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/ptos\/[^/]+\/cancel$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await cancelPTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/landed-costs\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/landed-costs\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getLandedCostHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/landed-costs\/[^/]+\/lines$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/landed-costs\/[^/]+\/lines$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await addLCLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/landed-costs\/[^/]+\/lines\/[^/]+$/.test(pathname)) {
+  if (
+    /^\/api\/procurement\/landed-costs\/[^/]+\/lines\/[^/]+$/.test(pathname)
+  ) {
     if (req.method === "PUT") {
       return await updateLCLineHandler(req, ctx);
     }
@@ -1182,39 +1426,65 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/landed-costs\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/landed-costs\/[^/]+\/post$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await postLandedCostHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/rtvs\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/rtvs\/[^/]+$/.test(pathname) && req.method === "GET"
+  ) {
     return await getRTVHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/rtvs\/[^/]+\/lines$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/rtvs\/[^/]+\/lines$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await addRTVLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/rtvs\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/rtvs\/[^/]+\/post$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await postRTVHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/debit-notes\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/debit-notes\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getDebitNoteHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/debit-notes\/[^/]+\/mark-sent$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/debit-notes\/[^/]+\/mark-sent$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await markDebitNoteSentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/debit-notes\/[^/]+\/acknowledge$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/debit-notes\/[^/]+\/acknowledge$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await acknowledgeDebitNoteHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/debit-notes\/[^/]+\/settle$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/debit-notes\/[^/]+\/settle$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await settleDebitNoteHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/exchange-refs\/[^/]+\/link-grn$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/exchange-refs\/[^/]+\/link-grn$/.test(pathname) &&
+    req.method === "PUT"
+  ) {
     return await linkReplacementGRNHandler(req, ctx);
   }
 
@@ -1227,98 +1497,176 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/delivery-orders-v2\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getDeliveryOrderUnifiedHandler(req, ctx);
   }
-  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/delivery-orders-v2\/[^/]+$/.test(pathname) &&
+    req.method === "PUT"
+  ) {
     return await updateDeliveryOrderUnifiedHandler(req, ctx);
   }
 
   // §133.13 -- IBN-driven multi-invoice preview + post, per DO.
-  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/invoice-groups$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/invoice-groups$/.test(
+      pathname,
+    ) && req.method === "GET"
+  ) {
     return await previewInvoiceGroupsHandler(req, ctx);
   }
-  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await postPgiInvoiceGroupsHandler(req, ctx);
   }
-  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/cancel-invoice-groups$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/cancel-invoice-groups$/
+      .test(pathname) && req.method === "POST"
+  ) {
     return await cancelPgiInvoiceGroupsHandler(req, ctx);
   }
-  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/amend-dispatch-details$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/amend-dispatch-details$/
+      .test(pathname) && req.method === "POST"
+  ) {
     return await amendDispatchDetailsHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/delivery-orders\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getDeliveryOrderHandler(req, ctx);
   }
 
   // AC08 -- Manual Costing Rate Entry detail + save, per SO line.
-  if (/^\/api\/procurement\/manual-costing-rows\/[^/]+\/rates$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/manual-costing-rows\/[^/]+\/rates$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await saveManualCostingRatesHandler(req, ctx);
   }
-  if (/^\/api\/procurement\/manual-costing-rows\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/manual-costing-rows\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getManualCostingRowHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/delivery-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/delivery-orders\/[^/]+\/cancel$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await cancelDeliveryOrderHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-orders\/[^/]+\/lines$/.test(pathname) && req.method === "PATCH") {
+  if (
+    /^\/api\/procurement\/sales-orders\/[^/]+\/lines$/.test(pathname) &&
+    req.method === "PATCH"
+  ) {
     return await updateSOLinesHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-orders\/[^/]+\/cancel$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await cancelSOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-orders\/[^/]+\/issue$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-orders\/[^/]+\/issue$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await issueSOStockHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-orders\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-orders\/[^/]+\/lines\/[^/]+\/knock-off$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await knockOffSOLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-invoices\/[^/]+$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/sales-invoices\/[^/]+$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getSalesInvoiceHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-orders-v2\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-orders-v2\/[^/]+\/cancel$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await cancelSalesOrderUnifiedHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-orders-v2\/[^/]+\/close$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-orders-v2\/[^/]+\/close$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await closeSalesOrderUnifiedHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-orders-v2\/[^/]+$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/sales-orders-v2\/[^/]+$/.test(pathname) &&
+    req.method === "PUT"
+  ) {
     return await updateSalesOrderUnifiedHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/so-map\/[^/]+\/status$/.test(pathname) && req.method === "GET") {
+  if (
+    /^\/api\/procurement\/so-map\/[^/]+\/status$/.test(pathname) &&
+    req.method === "GET"
+  ) {
     return await getSoMapStatusHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/so-map\/[^/]+\/unmap$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/so-map\/[^/]+\/unmap$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await unmapSoAllocationHandler(req, ctx);
   }
-  if (/^\/api\/procurement\/so-map\/groups\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/so-map\/groups\/[^/]+\/release$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await releaseSoMapGroupHandler(req, ctx);
   }
-  if (/^\/api\/procurement\/so-map\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/so-map\/[^/]+\/release$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await releaseLegacySoMapMappingHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-invoices\/[^/]+\/post$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-invoices\/[^/]+\/post$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await postSalesInvoiceHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-invoices\/pgi$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-invoices\/pgi$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await createPgiInvoiceHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await reverseSalesInvoiceHandler(req, ctx);
   }
 
@@ -1331,47 +1679,82 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/cancel$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await cancelSTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await knockOffSTOLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/confirm$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await confirmSTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/approve$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await approveSTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/reject$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await rejectSTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/amend$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/amend$/.test(pathname) &&
+    req.method === "PUT"
+  ) {
     return await amendSTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/approve-amendment$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/approve-amendment$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await approveSTOAmendmentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/dispatch$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/dispatch$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await dispatchSTOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/gate-exits\/outbound\/[^/]+\/weight$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/gate-exits\/outbound\/[^/]+\/weight$/.test(
+      pathname,
+    ) && req.method === "PUT"
+  ) {
     return await updateGateExitOutboundWeightHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/confirm-receipt$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/confirm-receipt$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await confirmSTOReceiptHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/stos\/[^/]+\/close$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/stos\/[^/]+\/close$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await closeSTOHandler(req, ctx);
   }
 
@@ -1381,11 +1764,18 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/qa-documents\/[^/]+\/test-lines$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/qa-documents\/[^/]+\/test-lines$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await addTestLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/qa-documents\/[^/]+\/test-lines\/[^/]+$/.test(pathname)) {
+  if (
+    /^\/api\/procurement\/qa-documents\/[^/]+\/test-lines\/[^/]+$/.test(
+      pathname,
+    )
+  ) {
     if (req.method === "PUT") {
       return await updateTestLineHandler(req, ctx);
     }
@@ -1394,7 +1784,10 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/qa-documents\/[^/]+\/decision$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/qa-documents\/[^/]+\/decision$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await submitUsageDecisionHandler(req, ctx);
   }
 
@@ -1407,35 +1800,60 @@ export async function dispatchProcurementRoutes(
     }
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/confirm$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/confirm$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await confirmPOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/approve$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await approvePOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/reject$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/reject$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await rejectPOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/amend$/.test(pathname) && req.method === "PUT") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/amend$/.test(pathname) &&
+    req.method === "PUT"
+  ) {
     return await amendPOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/approve-amendment$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/approve-amendment$/.test(
+      pathname,
+    ) && req.method === "POST"
+  ) {
     return await approveAmendmentHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/cancel$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await cancelPOHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/lines\/[^/]+\/knock-off$/
+      .test(pathname) && req.method === "POST"
+  ) {
     return await knockOffPOLineHandler(req, ctx);
   }
 
-  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
+  if (
+    /^\/api\/procurement\/purchase-orders\/[^/]+\/knock-off$/.test(pathname) &&
+    req.method === "POST"
+  ) {
     return await knockOffPOHandler(req, ctx);
   }
 
