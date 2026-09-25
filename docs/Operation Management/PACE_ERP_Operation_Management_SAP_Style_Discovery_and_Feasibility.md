@@ -23323,6 +23323,17 @@ Checked directly against prod (`bsjpvkigpllichlknmah`) before writing the Codex 
 - **`erp_menu.menu_master`'s SO05 row** exists but is misnamed ("FG Return") — rename plan in
   §134.2.
 
+**Document numbering — ✅ LOCKED (2026-09-25): global, not company-scoped.** Business owner
+confirmed `receipt_number` must use the global doc-number engine
+(`erp_procurement.document_number_series` + `generate_doc_number()`, the same mechanism every row
+in §8's range table uses), **not** `erp_procurement.company_doc_number_series`/
+`generate_company_doc_number()` (the per-company, FY-prefixed counter). This is a deliberate
+repeat-mistake guard — §8 already documents that Process PO/Packing PO were originally built
+against the company-scoped counter by mistake during Gate-27 and had to be migrated onto the
+global range afterward. Register a new band in `document_number_series` (see the Codex brief's
+Work Stream E) — confirm the exact prefix/leading-digit band before hardcoding, do not overlap an
+existing type's band from §8's table.
+
 ### 134.13 — Still open, explicitly deferred (do not implement)
 
 1. **To-Pay Freight resolution mechanism** (§134.5, Invoice-level) — named, never resolved.
