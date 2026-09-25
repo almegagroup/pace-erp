@@ -22937,17 +22937,42 @@ the new stroke-check endpoint).
 
 ---
 
-## 134 — Sales Return (customer return of dispatched FG) — DESIGN IN PROGRESS (started 2026-09-06)
+## 134 — Sales Return (SO05, customer return of dispatched FG) — ✅ CORE DESIGN LOCKED (2026-09-06 → 2026-09-25), IMPLEMENTATION NOT STARTED
 
 **Unblocks §83.6's "Customer Return + Pack-Type-Change Reversal — BLOCKED on Dispatch design"
 (2026-07-12 lock).** That note paused Return Receipt design until Dispatch (L5) had its own formal
 session — §113/§133 (SO01-03, DO, PGI/Invoice, dispatch_reco) now cover that ground, so this
 session resumes the two mandatory items §83.6 left open: Return Receipt + QA Usage Decision, and
-Pack-Type-Change Reversal. Read §83.6 first — it already locked the reusable `P651`-`P658`
-movement-type family (Customer Return Receipt → Blocked, then Blocked→Unrestricted /
-Blocked→QA / Blocked-confirm, each with its own reversal) and the still-open pack-type-change
-question (does a returned SKU always dissolve to RM/PM like PR19, or can it stop at SFG and feed a
-new pack-type Packing PO directly) — neither is re-litigated here, both carry forward as-is.
+Pack-Type-Change Reversal. §83.6 already locked the reusable `P651`-`P658` movement-type family
+(Customer Return Receipt → Blocked, then Blocked→Unrestricted / Blocked→QA / Blocked-confirm, each
+with its own reversal) — **verified live against prod `erp_inventory.movement_type_master`
+2026-09-25, all 8 rows exist exactly as designed:**
+
+| code | name | direction | source→target | reference_document_required |
+|---|---|---|---|---|
+| P651 | Customer Return Receipt | IN | —→BLOCKED | true (`DISPATCH_INSTRUCTION`) |
+| P652 | P651 Reversal | OUT | BLOCKED→— | true |
+| P653 | Return → Unrestricted | TRANSFER | BLOCKED→UNRESTRICTED | false |
+| P654 | P653 Reversal | TRANSFER | UNRESTRICTED→BLOCKED | false |
+| P655 | Return → QA | TRANSFER | BLOCKED→QUALITY_INSPECTION | false |
+| P656 | P655 Reversal | TRANSFER | QUALITY_INSPECTION→BLOCKED | false |
+| P657 | Return → Blocked (Confirm) | TRANSFER | BLOCKED→BLOCKED | false |
+| P658 | P657 Reversal | TRANSFER | BLOCKED→BLOCKED | false |
+
+**⚠️ Build-time check, not yet resolved:** P651's `reference_document_required=true` currently
+names `reference_document_type='DISPATCH_INSTRUCTION'` — but §134.1 item 2 below requires Return
+Receipt to work with **zero** system reference (pre-PACE dispatch). At implementation time, verify
+whether `post_document()`/`post_stock_movement()` treats `reference_document_type` as an enforced
+FK-style check or as descriptive metadata only — if enforced, the new Return Receipt document
+itself (not the original dispatch) should be passed as the reference, or the movement-type row's
+`reference_document_required` may need loosening. Do not assume either way without checking the
+posting engine code first.
+
+The former open items — Pack-Type-Change resolution (does a returned SKU always dissolve to RM/PM
+like PR19, or can it stop at SFG and feed a new pack-type Packing PO directly) — are now **locked**
+(§134.6 below, the "Repacked?" mechanism). PR19's SFG-only vs RM/PM-full dissolve granularity is
+confirmed to already exist in PR19 itself; no new design needed there, only wiring at
+implementation time (§134.12).
 
 ### 134.1 — Business curve (business owner, 2026-09-06) — five real-world complications that break
 the naive "just enter the Invoice Number and everything auto-fills" assumption
@@ -22979,7 +23004,7 @@ present it pre-fills but never locks Ship-To/address/SKU/rate; when absent (pre-
 untracked), every field is manual entry with no system cross-check; and (b) its own independent
 value/rate capture, separate from whatever the linked dispatch's own rate was, to cover point 3.
 
-### 134.2 — Page identity (LOCKED — 2026-09-06)
+### 134.2 — Page identity (LOCKED — 2026-09-06, re-verified against prod 2026-09-25)
 
 Verified live against `erp_menu.menu_master`/`menu_tree` (not assumed): a **"Returns & Claims"**
 sidebar group (`GRP_ACL_RETURNS`) already exists, currently holding three Procurement-module pages
@@ -22997,7 +23022,41 @@ RTV's vendor-facing return) — so:
   References, where a business user would naturally look for any return/claim page regardless of
   which module owns it underneath.
 
-### 134.3 — Page 1: Sending Location Resolution (✅ LOCKED — 2026-09-06)
+**⚠️ Rename required — confirmed live in prod (2026-09-25):** `erp_menu.menu_master` already has
+a `tx_code='SO05'` row, but it was created with the wrong name during an earlier session (before
+this design was worked out in detail):
+
+```
+id=7fb7ad07-f048-4833-b999-834a8bf360de, menu_code=PROC_FG_RETURN_LIST,
+resource_code=PROC_FG_RETURN_LIST, title="FG Return",
+route_path=/dashboard/procurement/sales/fg-return, tx_code=SO05
+```
+
+Since **no frontend page or backend handler exists for this route/resource yet** (confirmed —
+nothing in `frontend/src` or `supabase/functions` references `fg-return`/`FG_RETURN`), nothing
+depends on the old naming. **Recommendation for the Codex build:** rename cleanly rather than
+patch around the mistake — `menu_code`/`resource_code` → `PROC_SALES_RETURN_LIST`, `title` →
+"Sales Return", `route_path` → `/dashboard/procurement/sales/sales-return`. This must be done via
+MCP data update in both `erp_menu.menu_master` and the matching `acl.menu_master` row (§8's rule:
+`acl.menu_master.menu_code` MUST = `erp_menu.menu_master.resource_code`), followed by the §8
+4-step ACL-provisioning sequence (capture_acl_version_source → generate_acl_snapshot →
+rebuild_acl_menu_snapshot) since this is a genuinely new page being wired in, not a rename of a
+live one. Do this in dev first, then repeat in prod before/alongside the code deploy — pure data
+config, not a migration.
+
+### 134.3 — Structure Overview: 2 Stages, Return Receipt Page 1 (✅ LOCKED — 2026-09-06, restructured 2026-09-25)
+
+**Two distinct stages/roles, not one flat page:**
+1. **Return Receipt** (Stores/Logistics) — records the physical arrival, posts stock to Blocked.
+2. **Invoice Posting** (Accounts, separate tab/queue, later in time) — the commercial/paperwork
+   layer, ends in a payable booking (§134.9).
+
+**Return Receipt is 2 pages, not 3** — the original 2026-09-06 draft (below) planned Sending
+Location and Transporter as separate pages; business owner later merged them into one page
+(§134.4), so the numbering here is: **Page 1 = Sending Location + Transporter (merged)**,
+**Page 2 = Invoice (nested) + Item entry** (§134.5).
+
+### 134.3-A — Sending Location Resolution (✅ LOCKED — 2026-09-06)
 
 **Why Page 1 resolves address first, not the Invoice — and why it never references any specific
 Invoice at all (revised mid-discussion, superseding an initial Invoice-first draft).** §134.1
@@ -23033,9 +23092,10 @@ must already exist in MM04 (Customer Master) beforehand — this page has no inl
 shortcut. If the returning party/address isn't in MM04 yet, that has to be created there first, as
 its own separate step.
 
-### 134.4 — Page 2: Transporter Details (✅ LOCKED — 2026-09-06)
+### 134.3-B — Transporter Details, same Page 1 (✅ LOCKED — 2026-09-06)
 
-**Page 2 resolves the Transporter/vehicle header, reusing DO (SO03) Create's existing
+**Merged into Page 1 with 134.3-A** (not a separate page — resolves the Transporter/vehicle
+header, reusing DO (SO03) Create's existing
 resolve-or-create mechanism as-is** — same TransporterPicker search-by-name/code, auto-fill if
 found, or an inline "Add to Transporter Master →" jump if not found, no new mechanism invented
 for this page.
@@ -23074,42 +23134,215 @@ must start from this now-fixed version (ideally extract a shared `TransporterPic
 used by DO/GRN/SO05 alike, rather than copy-pasting the picker a fourth time) — do not resurrect
 the pre-fix mouse-only/state-losing behavior.
 
-### 134.5 — Page 3: Invoice Details (🔶 field list building up, 2026-09-06 — NOT fully locked yet)
+### 134.5 — Page 2: Invoice (nested) → Item structure (✅ CORE LOCKED — 2026-09-06 → 2026-09-25)
 
-**Page 3 holds the Invoice details of the return that came in.** Field list disclosed so far, in
-this order (business owner, 2026-09-06 — more still to come, explicitly flagged incomplete below):
+**Supersedes the earlier "Page 3: Invoice Details" draft** — Invoice detail and Item entry are not
+separate pages, they are one page with Invoice as a nested/repeatable group over Item rows.
 
-1. **Invoice Number** — the Sender's own (original dispatch) invoice number.
-2. **Invoice Date**.
-3. **Additional Fields** — an extensible mechanism: if there are extra fields needed beyond the
-   fixed set on this page, a **category** can be created for them, and those categories are
-   **reusable** (across returns, not a one-off per document). No existing PACE mechanism matches
-   this yet (checked — no `additional_field`/`field_category`/`custom_field` table or pattern
-   anywhere in the codebase) — this will be a **new** category-based extensible-field mechanism,
-   design still to come.
-4. **Payment Terms**.
-5. **Freight** — a **FOR / To Pay** choice (mirrors the Freight Term concept already used on
-   PGI/Invoice per §113.15). **FOR** = settled, nothing further to resolve. **To Pay** = needs its
-   own resolution mechanism, **not yet explained** — business owner: "seta niche resolve hobe
-   bolchi" (I'll explain how that gets resolved, separately).
-6. **Values** — deferred entirely: "segulo kal bolbo" (I'll cover that next time).
+**Invoice-level (repeatable — one Return Receipt can carry multiple Invoices):**
+- Each Invoice has a **tick (ON/OFF)**:
+  - **ON** — full Invoice detail captured now: Invoice Number, Invoice Date, Amount,
+    GST Inclusive/Exclusive + %, State (auto-resolved same as SO01/PGI — company state vs the
+    Sending Party's state, mirrors `deriveSalesInvoiceGstType()`), Freight (**FOR** / **To Pay**
+    — mirrors the Freight Term concept already on PGI/Invoice, §113.15).
+  - **OFF** — only **Invoice Number** (mandatory always) + **Reference Document Number** captured
+    now; the rest is deferred to the Accounts-stage Invoice Posting queue (§134.8).
+- **Invoice Number is mandatory in both cases** — never optional, even for a pre-PACE/untracked
+  return (§134.1 item 2), since it is the sender's own paper reference, not a PACE system link.
+- Multiple Items can sit under one Invoice; the same material can repeat if its batch differs.
+- **Still explicitly deferred, not designed** (business owner: "seta niche resolve hobe bolchi" /
+  "segulo kal bolbo" — both never followed up before this design session closed): the **To-Pay
+  Freight resolution mechanism**, the exact **Values** fields beyond Amount, and the **Additional
+  Fields** category-based extensible-field mechanism (point 3 of the original draft — no
+  `additional_field`/`field_category`/`custom_field` table or pattern exists anywhere in the
+  codebase today; this would be genuinely new). **Do not build these three — ship Page 2 without
+  them and revisit in a follow-up session**, same as §134.9's Return Payable.
 
-**Still explicitly incomplete — do not implement or lock:** the To-Pay Freight resolution
-mechanism (point 5) and the Values fields (point 6) are named but not yet designed. This section
-graduates to "✅ LOCKED" only once both are filled in and business owner confirms the full page.
-This also still needs to absorb the company-scoped found/wrong-company/not-found Invoice
-validation logic originally sketched for the abandoned Invoice-first Page 1 draft (§134.3).
+**Item-level (LOCKED, full flow — reuses SO01's Item-entry mechanism as the base, verified against
+`SO01CreatePage.jsx`/`prepareUnifiedSoLine()`/`erp_procurement.sales_order_line` prod schema,
+2026-09-25):**
 
-### 134.6 — Still open, to be locked next
+1. **fg_type** select (MTO / HPS / MTEST / MTS) → reveals **SKU**.
+2. SKU select → reveals **Stroke Number** field (user types it — informational/declared, not a
+   picker) with the **same red-dot mechanism as SO01** (`declared_stroke_number` — confirmed this
+   exact column already exists on `sales_order_line` in prod; the new Sales Return item table
+   needs the equivalent column).
+3. **Batch Number** — manually typed, then system-searched:
+   - SKU → derive **Prodshade** (`shade_code`+`pack_code` → `prodshade_pack_config` →
+     `material_id`, the same mechanism Pack BOM/Plan Feed already use).
+   - Typeahead search against **`erp_production.process_order`**: `company_id` = current,
+     `material_id` = derived Prodshade, `po_type` = fg_type, `batch_number ILIKE` typed text.
+   - **One query catches both real production batches and PR22-genealogy batches** — PR22 writes
+     a genuine row into this same `process_order` table (no stock posting, just genealogy), so no
+     separate lookup is needed for pre-PACE batches once PR22 has been entered for them.
+   - Found → pick from list. **Not found → manual value stays, non-blocking** (this is Return
+     receipt time, not salvage time — salvage is where the genealogy is actually needed, §134.12).
+   - Same red-dot pattern as Stroke Number: green = resolves, red = "genealogy not in system yet,
+     reconcile via PR22 before salvage" — never blocks Save.
+4. **Num Packs × Per Pack Qty** → **Quantity** derives (mirrors SO01's `pack_qty × per_pack_qty =
+   base_qty`).
+5. **Batch Number mandatory/optional matrix (✅ LOCKED, final):**
 
-Page 3's own detailed spec (deferred per §134.5 above) — how (and how many) Invoices get linked to
-one Return Receipt now that address and Invoice are fully decoupled (§134.3); where/how IBN fits
-into the flow (confirmed NOT on Page 1, still unplaced); value/rate capture per §134.1 item 3;
-line-level SKU/Batch/Qty detail per items 4-5; how the P651-P658 movement family maps onto
-whichever page actually posts; and the pack-type-change resolution from §83.6 item 2. None of this
-is decided yet. Do not implement anything from this section until it carries a "✅ LOCKED" tag with
-a page-by-page spec,
-matching how every other SO0x page in §133 was locked before Codex/Claude touched code.
+   | Type | Batch Number |
+   |---|---|
+   | MTO / HPS / MTEST / **SFG** | **Mandatory** |
+   | MTS | Optional |
+   | RM / PM / INT | Optional |
+
+   **Expiry Date** — optional/not-mandatory for every type.
+
+**Red-dot mechanism — where it is actually used (✅ LOCKED — this is the answer to "how do we use
+the red dot", resolved through the Pending Strokes / Pending Entries button design, §134.10-134.11
+below, not a separate report column):**
+- Confirmed **3 places** carry the same "declared vs resolved/actual" red-dot family:
+  1. **SO01 (Sales Order Create)** — does declared stroke resolve to an APPROVED Stroke Master row?
+  2. **SO04 (Dispatch Report)** — declared vs *actual* stroke mismatch, report-level visibility
+     (`invalidStroke`/`mismatchStroke` per §135.6-J/K).
+  3. **SO05 (Sales Return, new)** — both Stroke Number and Batch Number get the same dot.
+- **Open, not decided:** whether SO05's own Return List/Total Table also gets a SO04-style
+  "genealogy missing" status column for at-a-glance triage. Flagged during design, never answered
+  — leave it out of the first build; add later if the business owner asks for it.
+
+### 134.6 — Repack / Pack-Type-Change mechanism (✅ LOCKED — 2026-09-06)
+
+**Resolves §83.6 item 2's long-open pack-type-change question** — a physically dispatched Tanker
+(pack_code `000`) can come back and get unloaded into Barrels/IBCs (a *different* pack_code, hence
+a *different* SKU/material_id per §83.15's shade_code+pack_code SKU convention).
+
+Triggered when the returned SKU's own `pack_code = 000` (or any non-fixed-fill type where physical
+repack is plausible):
+
+1. System asks **"Repacked?"** Yes/No.
+2. **Yes** → a **child/linked sub-row** appears under the Item line (not an independent new line —
+   traceability to the original 000-SKU line is preserved). One Item can have **multiple** repack
+   sub-rows (e.g. one batch split across several container types).
+3. **Target SKU is manually selected** (never auto-defaulted to a fixed pack_code like 599) — the
+   system offers a dropdown of that same Prodshade's **other** pack_code SKUs (Prodshade→SKU
+   direction, the reverse of Pack BOM/Plan Feed's usual SKU→Prodshade derivation). If that target
+   SKU doesn't exist in Material Master, fall back to `manual_sku_name` free text (same pattern as
+   SO01).
+4. **Fixed BOM SKU** (`bom_required=Yes` pack type) → **Per Pack Qty auto-fills** from that SKU's
+   own Pack BOM conversion factor (read-only) — user enters only Num Packs.
+   **Non-Fixed SKU** (599/000/001) → Per Pack Qty stays manual entry (as in Packing PO).
+5. **Reconciliation is mandatory** — the sum of all repack sub-row quantities must exactly equal
+   the original Item's returned quantity. Short of match → user adds another sub-row (another SKU,
+   same Prodshade) until it reconciles. This mirrors §83.14's "balance barrel" pattern, applied to
+   returns instead of production.
+
+**Posting (✅ LOCKED — directly determines what P651 actually posts):**
+- **Not repacked:** the returned SKU itself posts straight to **Blocked** (P651).
+- **Repacked:** the original (000/Tanker) SKU **never touches stock** — only the repack sub-rows'
+  **target SKU(s)** post to Blocked (P651), each at its own reconciled quantity. The original
+  tanker-form quantity is purely a UI/reconciliation figure, never itself a stock movement.
+
+### 134.7 — Invoice Posting (Accounts Tab, Part B) (✅ LOCKED — 2026-09-06)
+
+- Queue shows every Invoice line whose tick was **OFF** at Return Receipt time (only Invoice
+  Number + Reference Document Number captured so far).
+- A **"Show all invoices"** toggle — default shows only pending (tick-OFF, unfilled) rows; toggled
+  on shows completed ones too.
+- **Column-wise search bar** across the queue (same pattern as Plan Feed's Total Table).
+- Opening a row reveals the same tick-ON field set locked in §134.5 (Invoice Date, Amount, GST,
+  Freight, State) — Accounts fills it manually and Saves.
+- **Save books a payable** — the Sending Party (VDC/Parent Company/Customer/whoever resolved on
+  Page 1) is recorded as someone **PACE owes**, not someone who owes PACE (this is a "buy-back" of
+  returned material, the reverse of a normal sale). Document shape: §134.9 below.
+
+### 134.8 — Pending Strokes button (Stroke Master) (✅ LOCKED — 2026-09-06)
+
+- New button on the **Stroke Master** page: **"Pending Strokes"**.
+- Click → `ErpDenseGrid` list of every **declared** stroke that does not resolve to an APPROVED
+  `stroke_master` row — sourced from **both SO01 and SO05's** `declared_stroke_number` data,
+  **deduplicated by `{Prodshade, PO Type, Stroke Number}`** (the same stroke pending in both
+  places shows once, not twice).
+- Columns: Prodshade, Description, Stroke Number.
+- User goes to Stroke Master, enters + approves the stroke → the list shrinks (single source of
+  truth is Stroke Master itself — approving there resolves the red dot in **both** SO01 and SO05
+  automatically, no separate "clear" action).
+- **No pending strokes → button inactive/disabled.**
+
+### 134.9 — Pending Entries button (PR22/PR23) (✅ LOCKED — 2026-09-06)
+
+- Same pattern, on **PR22 (Old Process PO)** and **PR23 (Old Packing PO)**: a **"Pending Entries"**
+  button.
+- Click → list of Sales Return Item lines whose typed **Batch Number** didn't resolve against
+  `process_order` (§134.5 step 3's red dot). Columns: Prodshade, Description, Stroke, **Quantity**
+  (base-UOM total, summed across every unresolved Sales Return line sharing that batch/Prodshade).
+- User enters the genealogy via PR22 (and PR23 too, for FG) → the list shrinks. Empty → button
+  inactive.
+- **Link mechanism — no explicit "link" step needed, by design.** The only join key is
+  `batch_number` (plain text) + material's Prodshade + company — never a stored FK. A Sales Return
+  Item line typed with an unresolved batch has no FK set (no `process_order_id` on the line, just
+  the text `batch_number`). Once PR22 (or PR23) is entered with that exact `batch_number` against
+  that Prodshade, **every future lookup resolves automatically** — because both the salvage/dissolve
+  action (§134.12) and Sales Return's own red-dot check run a **live query** by `batch_number`, not
+  a stored pointer. No backfill/relink job is ever needed.
+
+### 134.10 — Return Payable document (🔶 DEFERRED — shape known, fields not designed)
+
+Business owner (2026-09-25): **"Return payable document design pore banabo"** — deferred to a
+later session, do not build in the first SO05 pass.
+
+**What is known (DB-verified in prod, 2026-09-25):** there is **no running ledger/payable-balance
+table anywhere in the system**. The only comparable mechanism is `erp_procurement.debit_note`
+(vendor-facing, RTV-linked) — a plain **document** with a status lifecycle
+(`sent_at → acknowledged_at → settled_at`, no running balance column), reconciled outside PACE (in
+Tally). **Return Payable must follow this exact same shape** — a new document, not a balance
+table — when it eventually gets designed. Do not invent a ledger/balance mechanism for it.
+
+### 134.11 — PR19 dissolve reuse for salvage (✅ LOCKED — 2026-09-25, no new design needed)
+
+Business owner: **"PR19 to already ache banano, kaj to korche"** — PR19 (Partial Batch Reversal)
+already implements the RM/PM-vs-SFG-only dissolve granularity this needed (it separately handles
+Process PO-level (RM/INT) and Packing PO-level (SFG/PM) reversal). **No new design or schema
+change required.** The only remaining work is **wiring**, at implementation time: invoking PR19
+from Sales Return's own salvage-decision flow once a repacked/blocked return item is ready to be
+dissolved — that wiring is an implementation task, not a design gap.
+
+### 134.12 — DB verification notes (prod, 2026-09-25)
+
+Checked directly against prod (`bsjpvkigpllichlknmah`) before writing the Codex brief:
+- **No `sales_return*` tables exist yet** — this is a from-scratch build. New tables needed:
+  header (Return Receipt: Return Type + resolved Sending Location snapshot + Transporter fields),
+  nested Invoice (tick ON/OFF + fields), Item (material/fg_type/stroke/batch/qty/repack-parent
+  link), and a Repack sub-row table (child of Item). See the Codex task brief for the proposed
+  column lists, built directly off `sales_order_line`'s already-verified prod columns (reuse the
+  same field names/types where the concept is identical — `declared_stroke_number`, `batch_number`,
+  `pack_qty`/`per_pack_qty`/`base_qty`, `fg_type`, `manual_sku_name`, GST fields — so the Item
+  red-dot/repack logic can share code with SO01 where possible).
+- **PR22/PR23 write directly into `erp_production.process_order`/`packing_order`** — confirmed,
+  no separate `opening_genealogy`/`old_process_po` table exists; §104.9's synthetic-order design is
+  literally rows in the same production tables. This is why §134.9's batch-lookup query above
+  targets `process_order` directly.
+- **`sales_order_line.declared_stroke_number`** exists in prod exactly as described (text,
+  nullable) — the new Sales Return Item table should carry the identical column so the same
+  red-dot component/query pattern can be reused verbatim.
+- **P651-P658** all verified live and exactly match §83.6's design (table in §134 intro above) —
+  only the `reference_document_type='DISPATCH_INSTRUCTION'` requirement on P651 needs a
+  build-time check (flagged in §134 intro).
+- **`erp_menu.menu_master`'s SO05 row** exists but is misnamed ("FG Return") — rename plan in
+  §134.2.
+
+### 134.13 — Still open, explicitly deferred (do not implement)
+
+1. **To-Pay Freight resolution mechanism** (§134.5, Invoice-level) — named, never resolved.
+2. **Invoice "Values" fields beyond Amount** (§134.5) — named, never resolved.
+3. **Additional Fields category-based extensible-field mechanism** (§134.5) — genuinely new
+   mechanism, no existing pattern in the codebase, not designed at all.
+4. **Return Payable document's exact field set + ACL + tx_code** (§134.10) — deferred by business
+   owner to a later session.
+5. **SO05 Total Table "genealogy missing" status column** (§134.5) — proposed, never answered
+   either way; leave out of the first build.
+6. How (and how many) Invoices get linked to one Return Receipt beyond "multiple, each with its
+   own tick" — no further detail beyond what §134.5 already locks.
+7. Where/how IBN (Inbound Number) fits into this flow — confirmed **not** on Page 1 (unlike SO01,
+   this page has no relationship with IBN at all per §134.3-A), otherwise unplaced; likely simply
+   not applicable to Sales Return and can stay that way unless a real need surfaces.
+
+Everything else in §134.1-§134.12 is locked and buildable. Do not re-litigate any of the above
+without a fresh business-owner session — the Codex brief for the first SO05 pass explicitly
+excludes items 1-3 and 5, and stops short of item 4 (Return Payable), per §134.10/134.13's own
+scope note.
 
 ## 135 — RECO DATA Report (Accounts) — ✅ DESIGN LOCKED 2026-09-08, IMPLEMENTATION IN PROGRESS
 
