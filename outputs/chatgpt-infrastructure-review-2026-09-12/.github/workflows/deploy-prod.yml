@@ -1,0 +1,34 @@
+name: Deploy Supabase (DB)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          # Root-cause fix: newer CLI builds choke on this project's mixed
+          # legacy + new API-key payload during `supabase link`, while 2.75.0
+          # has been verified against the live prod project and links cleanly.
+          version: 2.75.0
+
+      - name: Link Supabase project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase link --project-ref bsjpvkigpllichlknmah
+
+      - name: Apply DB migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase db push --linked --include-all

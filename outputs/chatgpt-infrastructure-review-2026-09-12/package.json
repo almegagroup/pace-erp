@@ -1,0 +1,28 @@
+{
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.0",
+    "fastify": "^5.8.2",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "dependency-cruiser": "^17.3.10"
+  },
+  "name": "pace-erp",
+  "version": "1.0.0",
+  "description": "This frontend must not hardcode any backend URLs.\r All network targets must be read from `VITE_API_BASE`.\r ### Deploy Neutrality\r This frontend is deploy-neutral and must not assume browser-only behavior.\r ### Domain Boundary\r This frontend does not control or inspect auth cookies or domains.\r All auth/session/domain decisions are handled by the backend.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "context:refresh": "powershell -ExecutionPolicy Bypass -Command \"Get-Content -Raw .\\repo-context\\scripts\\generate-context.cjs | node -\"",
+    "context:deps": "powershell -ExecutionPolicy Bypass -File repo-context/scripts/export-dep-map.ps1",
+    "context:all": "powershell -ExecutionPolicy Bypass -File repo-context/scripts/refresh-context.ps1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

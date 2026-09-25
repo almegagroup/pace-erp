@@ -7,6 +7,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -209,12 +210,22 @@ async function validateStorageLocation(
   companyId: string,
   locationId: string,
 ): Promise<void> {
-  const { data, error } = await serviceRoleClient.schema("erp_inventory").from(
-    "storage_location_master",
-  )
-    .select("id").eq("id", locationId).eq("company_id", companyId)
-    .maybeSingle();
-  if (error || !data) throw new Error("SRET_STORAGE_LOCATION_INVALID");
+  const { data: mapping, error: mappingError } = await serviceRoleClient.schema(
+    "erp_inventory",
+  ).from(
+    "storage_location_plant_map",
+  ).select("storage_location_id").eq("storage_location_id", locationId)
+    .eq("company_id", companyId).eq("active", true).maybeSingle();
+  if (mappingError || !mapping) {
+    throw new Error("SRET_STORAGE_LOCATION_INVALID");
+  }
+  const { data: location, error: locationError } = await serviceRoleClient
+    .schema("erp_inventory").from(
+      "storage_location_master",
+    ).select("id").eq("id", locationId).eq("active", true).maybeSingle();
+  if (locationError || !location) {
+    throw new Error("SRET_STORAGE_LOCATION_INVALID");
+  }
 }
 
 // FG material_id is the sellable SKU; process_order.material_id is its
@@ -259,6 +270,95 @@ async function deriveProdshadeMaterialId(materialId: string): Promise<string> {
       skuCode
   );
   return text(match?.id) || materialId;
+}
+
+async function deriveProdshadeMap(materialIds: string[]): Promise<{
+  prodshadeByMaterial: Map<string, string>;
+  materialById: Map<string, JsonRecord>;
+}> {
+  const ids = [...new Set(materialIds.map(text).filter(Boolean))];
+  if (!ids.length) {
+    return { prodshadeByMaterial: new Map(), materialById: new Map() };
+  }
+  const materials = await fetchInChunks<JsonRecord>(
+    ids,
+    (chunk) =>
+      serviceRoleClient.schema("erp_master").from("material_master")
+        .select(
+          "id, material_type, pace_code, external_code, material_name, pack_code",
+        ).in("id", chunk),
+  );
+  const materialById = new Map(materials.map((row) => [text(row.id), row]));
+  const prodshadeByMaterial = new Map<string, string>();
+  for (const material of materials) {
+    if (upper(material.material_type) !== "FG") {
+      prodshadeByMaterial.set(text(material.id), text(material.id));
+    }
+  }
+  const packCodes = [
+    ...new Set(
+      materials.filter((row) => upper(row.material_type) === "FG").map((row) =>
+        text(row.pack_code)
+      ).filter(Boolean),
+    ),
+  ];
+  if (!packCodes.length) return { prodshadeByMaterial, materialById };
+  const packRows = await fetchInChunks<JsonRecord>(
+    packCodes,
+    (chunk) =>
+      serviceRoleClient.schema("erp_production").from("pack_code_master")
+        .select("id, pack_code").in("pack_code", chunk).eq("active", true),
+  );
+  const packCodeById = new Map(
+    packRows.map((row) => [text(row.id), upper(row.pack_code)]),
+  );
+  const configs = await fetchInChunks<JsonRecord>(
+    [...packCodeById.keys()],
+    (chunk) =>
+      serviceRoleClient.schema("erp_production").from("prodshade_pack_config")
+        .select("material_id, pack_code_id").in("pack_code_id", chunk).eq(
+          "active",
+          true,
+        ),
+  );
+  const prodshadeIds = [
+    ...new Set(configs.map((row) => text(row.material_id)).filter(Boolean)),
+  ];
+  const prodshades = prodshadeIds.length
+    ? await fetchInChunks<JsonRecord>(
+      prodshadeIds,
+      (chunk) =>
+        serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id, pace_code, external_code, material_name").in(
+            "id",
+            chunk,
+          ),
+    )
+    : [];
+  for (const row of prodshades) materialById.set(text(row.id), row);
+  const prodshadeById = new Map(prodshades.map((row) => [text(row.id), row]));
+  const prodshadeBySkuCode = new Map<string, string>();
+  for (const config of configs) {
+    const prodshade = prodshadeById.get(text(config.material_id));
+    const packCode = packCodeById.get(text(config.pack_code_id));
+    const prodshadeCode = upper(
+      prodshade?.external_code || prodshade?.material_name,
+    );
+    if (prodshadeCode && packCode) {
+      prodshadeBySkuCode.set(
+        `${prodshadeCode}${packCode}`,
+        text(config.material_id),
+      );
+    }
+  }
+  for (const material of materials) {
+    if (upper(material.material_type) !== "FG") continue;
+    const prodshadeId = prodshadeBySkuCode.get(
+      upper(material.external_code || material.material_name),
+    );
+    if (prodshadeId) prodshadeByMaterial.set(text(material.id), prodshadeId);
+  }
+  return { prodshadeByMaterial, materialById };
 }
 
 async function resolveBatchAndPacking(
@@ -326,14 +426,20 @@ async function currentBlockedRate(
   const { data, error } = await serviceRoleClient.schema("erp_inventory").from(
     "stock_snapshot",
   )
-    .select("valuation_rate").eq("company_id", companyId).eq(
+    .select("stock_type_code, valuation_rate").eq("company_id", companyId).eq(
       "storage_location_id",
       locationId,
     )
-    .eq("material_id", materialId).eq("stock_type_code", "BLOCKED")
-    .maybeSingle();
+    .eq("material_id", materialId).in("stock_type_code", [
+      "BLOCKED",
+      "UNRESTRICTED",
+    ]);
   if (error) throw new Error("SRET_VALUATION_LOOKUP_FAILED");
-  return Number((data as JsonRecord | null)?.valuation_rate ?? 0);
+  const snapshots = (data ?? []) as JsonRecord[];
+  const preferred =
+    snapshots.find((row) => upper(row.stock_type_code) === "BLOCKED") ??
+      snapshots.find((row) => upper(row.stock_type_code) === "UNRESTRICTED");
+  return Number(preferred?.valuation_rate ?? 0);
 }
 
 export async function listSalesReturnReceiptsHandler(
@@ -707,13 +813,17 @@ export async function listRepackTargetSkuOptionsHandler(
 ): Promise<Response> {
   const params = new URL(req.url).searchParams;
   const companyId = text(params.get("company_id"));
-  const prodshadeId = text(params.get("prodshade_material_id"));
+  const sourceMaterialId = text(params.get("source_material_id"));
+  let prodshadeId = text(params.get("prodshade_material_id"));
   const excludeMaterialId = text(params.get("exclude_material_id"));
-  if (!companyId || !prodshadeId) {
+  if (!companyId || (!prodshadeId && !sourceMaterialId)) {
     return fail(req, ctx, "SRET_REPACK_OPTIONS_INVALID");
   }
   try {
     await requireCompany(ctx, companyId);
+    if (!prodshadeId) {
+      prodshadeId = await deriveProdshadeMaterialId(sourceMaterialId);
+    }
     const { data: configs, error: configError } = await serviceRoleClient
       .schema("erp_production").from("prodshade_pack_config")
       .select(
@@ -862,7 +972,26 @@ async function salesReturnPendingItems(
     )
     .eq("invoice.receipt.company_id", companyId);
   if (error) throw new Error("SRET_PENDING_ENTRIES_FAILED");
-  return (data ?? []) as JsonRecord[];
+  const rows = (data ?? []) as JsonRecord[];
+  const { prodshadeByMaterial, materialById } = await deriveProdshadeMap(
+    rows.map((row) => text(row.material_id)),
+  );
+  return rows.map((row) => {
+    const materialId = text(row.material_id);
+    const prodshadeId = prodshadeByMaterial.get(materialId) || materialId;
+    const material = materialById.get(materialId);
+    const prodshade = materialById.get(prodshadeId);
+    return {
+      ...row,
+      prodshade_material_id: prodshadeId || null,
+      material_code: text(material?.pace_code || material?.external_code) ||
+        null,
+      material_name: text(material?.material_name) || null,
+      prodshade_code: text(prodshade?.pace_code || prodshade?.external_code) ||
+        null,
+      prodshade_name: text(prodshade?.material_name) || null,
+    };
+  });
 }
 
 export async function listPendingStrokesHandler(
@@ -893,6 +1022,10 @@ export async function listPendingStrokesHandler(
     if (ordersResult.error || strokesResult.error) {
       throw new Error("SRET_PENDING_STROKES_FAILED");
     }
+    const orderRows = (ordersResult.data ?? []) as JsonRecord[];
+    const orderProdshades = await deriveProdshadeMap(
+      orderRows.map((row) => text(row.material_id)),
+    );
     const approved = new Set(
       ((strokesResult.data ?? []) as JsonRecord[]).map((row) =>
         `${text(row.prodshade_material_id)}|${upper(row.po_type)}|${
@@ -902,17 +1035,28 @@ export async function listPendingStrokesHandler(
     );
     const candidates = [
       ...returns.map((row) => ({
-        material_id: row.material_id,
+        material_id: row.prodshade_material_id,
+        material_code: row.prodshade_code,
+        material_name: row.prodshade_name,
         po_type: row.fg_type,
         stroke_number: row.declared_stroke_number,
         source: "SO05",
       })),
-      ...((ordersResult.data ?? []) as JsonRecord[]).map((row) => ({
-        material_id: row.material_id,
-        po_type: row.fg_type,
-        stroke_number: row.declared_stroke_number,
-        source: "SO01",
-      })),
+      ...orderRows.map((row) => {
+        const sourceMaterialId = text(row.material_id);
+        const prodshadeId =
+          orderProdshades.prodshadeByMaterial.get(sourceMaterialId) ||
+          sourceMaterialId;
+        const prodshade = orderProdshades.materialById.get(prodshadeId);
+        return {
+          material_id: prodshadeId,
+          material_code: prodshade?.pace_code || prodshade?.external_code,
+          material_name: prodshade?.material_name,
+          po_type: row.fg_type,
+          stroke_number: row.declared_stroke_number,
+          source: "SO01",
+        };
+      }),
     ].filter((row) =>
       text(row.material_id) && text(row.po_type) && text(row.stroke_number)
     );
@@ -958,7 +1102,10 @@ export async function listPendingGenealogyEntriesHandler(
       );
     const grouped = new Map<string, JsonRecord>();
     for (const row of filtered) {
-      const key = `${text(row.material_id)}|${upper(row.fg_type)}|${
+      const groupingMaterialId = kind === "PROCESS"
+        ? text(row.prodshade_material_id)
+        : text(row.material_id);
+      const key = `${groupingMaterialId}|${upper(row.fg_type)}|${
         upper(row.declared_stroke_number)
       }|${text(row.batch_number)}`;
       const existing = grouped.get(key);
@@ -966,7 +1113,14 @@ export async function listPendingGenealogyEntriesHandler(
         existing.quantity = Number(existing.quantity) +
           Number(row.quantity ?? 0);
       } else {grouped.set(key, {
-          material_id: row.material_id,
+          material_id: groupingMaterialId,
+          material_code: kind === "PROCESS"
+            ? row.prodshade_code
+            : row.material_code,
+          material_name: kind === "PROCESS"
+            ? row.prodshade_name
+            : row.material_name,
+          sku_material_id: kind === "PACKING" ? row.material_id : null,
           manual_sku_name: row.manual_sku_name,
           po_type: row.fg_type,
           stroke_number: row.declared_stroke_number,

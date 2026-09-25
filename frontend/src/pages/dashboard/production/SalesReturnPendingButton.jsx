@@ -16,8 +16,8 @@ export default function SalesReturnPendingButton({ companyId, kind }) {
   });
   const data = query.data ?? [];
   const columns = isStroke
-    ? [{ key: "source", label: "Source" }, { key: "po_type", label: "PO Type" }, { key: "stroke_number", label: "Stroke" }, { key: "material_id", label: "Prodshade / Material" }]
-    : [{ key: "source", label: "Source" }, { key: "po_type", label: "PO Type" }, { key: "stroke_number", label: "Stroke" }, { key: "batch_number", label: "Batch" }, { key: "material_id", label: kind === "PACKING" ? "SKU" : "Prodshade" }, { key: "quantity", label: "Quantity", align: "right" }, { key: "uom_code", label: "UOM" }];
+    ? [{ key: "source", label: "Source" }, { key: "po_type", label: "PO Type" }, { key: "stroke_number", label: "Stroke" }, { key: "material_code", label: "Prodshade" }, { key: "material_name", label: "Description" }]
+    : [{ key: "source", label: "Source" }, { key: "po_type", label: "PO Type" }, { key: "stroke_number", label: "Stroke" }, { key: "batch_number", label: "Batch" }, { key: "material_code", label: kind === "PACKING" ? "SKU" : "Prodshade" }, { key: "material_name", label: "Description" }, { key: "quantity", label: "Quantity", align: "right" }, { key: "uom_code", label: "UOM" }];
   const label = isStroke ? "Pending Strokes" : "Pending Entries";
   return <>
     <button type="button" disabled={!companyId || query.isLoading || data.length === 0} onClick={() => setOpen(true)} className="border border-slate-400 bg-white text-slate-800 hover:bg-slate-50 disabled:opacity-50 px-3 py-1.5 text-sm">{label}{data.length ? ` (${data.length})` : ""}</button>
