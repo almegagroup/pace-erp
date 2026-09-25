@@ -288,18 +288,21 @@ export default function SO05CreatePage() {
       if (result?.requires_packing_order_selection) {
         setForm((current) => ({
           ...current,
-          invoices: current.invoices.map((invoice) => {
-            const ambiguity = result.ambiguous_items?.find((row) =>
-              row.invoice_number === invoice.invoice_number
-            );
-            if (!ambiguity) return invoice;
+          invoices: current.invoices.map((invoice, invoiceIndex) => {
+            const ambiguities = result.ambiguous_items?.filter((row) =>
+              row.invoice_index === invoiceIndex
+            ) ?? [];
+            if (ambiguities.length === 0) return invoice;
             return {
               ...invoice,
-              items: invoice.items.map((item, index) =>
-                index + 1 === ambiguity.line_number
+              items: invoice.items.map((item, index) => {
+                const ambiguity = ambiguities.find((row) =>
+                  row.line_number === index + 1
+                );
+                return ambiguity
                   ? { ...item, packing_choices: ambiguity.choices }
-                  : item
-              ),
+                  : item;
+              }),
             };
           }),
         }));

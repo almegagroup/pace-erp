@@ -494,7 +494,8 @@ export async function createSalesReturnReceiptHandler(
       }
     > = [];
     const ambiguous: JsonRecord[] = [];
-    for (const invoice of invoices) {
+    for (let invoiceIndex = 0; invoiceIndex < invoices.length; invoiceIndex += 1) {
+      const invoice = invoices[invoiceIndex];
       if (!text(invoice.invoice_number)) {
         throw new Error("SRET_INVOICE_NUMBER_REQUIRED");
       }
@@ -532,6 +533,7 @@ export async function createSalesReturnReceiptHandler(
         const resolved = await resolveBatchAndPacking(companyId, item);
         if (resolved.choices.length > 0) {
           ambiguous.push({
+            invoice_index: invoiceIndex,
             invoice_number: text(invoice.invoice_number),
             line_number: index + 1,
             choices: resolved.choices,
