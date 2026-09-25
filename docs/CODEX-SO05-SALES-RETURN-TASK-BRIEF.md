@@ -61,6 +61,11 @@
      `settled_at`, no running balance) — reference for when Return Payable eventually gets built
      (§134.10), **not building it now**, just keep the shape in mind for any placeholder status you
      do add to the new Invoice table.
+   - `stock_reports.handlers.ts`'s `buildOpeningStockLotMap()`/`resolveLotRefStrict()`/
+     `resolveLotRef()` (~line 160-350) — the existing, proven "Packing PO Number" resolution chain
+     IN02/IN03 already share. Work Stream F extends this with a `SALES_RETURN` case rather than
+     inventing a new mechanism; read it in full before touching it, and `grep -n "resolveLotRef("`
+     in that file to find every call site you need to update.
 
 ## Hard scope boundary — read this twice
 
@@ -73,8 +78,9 @@
 - Invoice Posting **queue UI** (Accounts tab, §134.7) — list tick-OFF invoices, let Accounts fill
   the deferred fields and Save them onto the Invoice row.
 - Pending Strokes button on Stroke Master (§134.8).
-- Pending Entries button on PR22 and PR23 (§134.9).
+- Pending Entries button on PR22 and PR23 (§134.9), including PR23's `packing_order_id` backfill.
 - SO05 menu rename + ACL wiring (§134.2), dev and prod.
+- IN02/IN03 Packing PO Number resolution for `SALES_RETURN`-tagged postings (Work Stream F).
 
 **Explicitly OUT of scope — do not build, even partially (per §134.13):**
 - Return Payable document (any ledger/payable table, any "book the payable" logic on Invoice-Posting
@@ -165,7 +171,8 @@ red-dot component and any shared validation logic can be reused with minimal ada
 | manual_sku_name | text nullable | fallback when SKU not in Material Master |
 | declared_stroke_number | text nullable | **same column name/semantics as `sales_order_line.declared_stroke_number`**, red-dot source |
 | batch_number | text nullable | typed/looked-up per §134.5 step 3 |
-| batch_resolved | boolean not null default false | server-computed at save time (does this batch_number resolve against `process_order` for this Prodshade+company+po_type?) — drives the item's own red dot on reload, and is what §134.9's Pending Entries query filters on |
+| batch_resolved | boolean not null default false | server-computed at save time (does this batch_number resolve against `process_order` for this Prodshade+company+po_type?) — drives the item's own red dot on reload, and is what PR22's Pending Entries query (§134.9) filters on |
+| packing_order_id | uuid nullable fk → `erp_production.packing_order` | **FG lines under MTO/HPS/MTEST only** (§134.5 point 6) — auto-derived at save time from `(company_id, material_id, batch_number)` against `packing_order`; NULL if unresolved (non-blocking) or ambiguous-and-not-yet-picked. This is a **stored FK, not just a text match** — IN02/IN03's `resolveLotRefStrict()` joins through it (§134.5 point 6's "how this shows up in IN02/IN03" note), and PR23's Pending-Entries save step explicitly backfills it (§134.9's PR23 half) |
 | expiry_date | date nullable | |
 | num_packs | numeric nullable | |
 | per_pack_qty | numeric nullable | |
@@ -223,7 +230,16 @@ check first, follow existing convention, don't invent a new folder layout).
   `post_document()` inside one transaction per receipt (§8D pattern — see
   `complete_pgi_invoice_action` migration as the template for a multi-line, one-transaction posting
   function). Idempotency guard: skip any item/repack-line that already has `stock_ledger_id` set
-  (§8D §3's pattern), in case of retry.
+  (§8D §3's pattern), in case of retry. **Every P651 posting must tag
+  `reference_document_type='SALES_RETURN'`, `reference_document_id=<sales_return_item.id>` (or the
+  repack sub-row's id, if repacked), `reference_document_number=<receipt_number>`** on the resulting
+  `stock_document` row (§106 Phase-2 pattern, §134.5 point 6) — this is what Work Stream F below
+  needs to resolve Packing PO Number correctly in IN02/IN03.
+- **Before posting, attempt to auto-resolve `packing_order_id`** for every FG item under
+  MTO/HPS/MTEST (§134.5 point 6): query `erp_production.packing_order` on
+  `(company_id, material_id, batch_number)`. Zero matches → leave NULL, don't block. One match →
+  set it. Multiple matches → surface the choices to the frontend for the user to pick one before
+  Save completes (this is a real UI step, not silently picking the first match).
 - `resolveBatchNumberOptionsHandler` (typeahead) — `company_id` + derived Prodshade + `po_type` +
   `batch_number ILIKE` against `erp_production.process_order`, per §134.5 step 3.
 - `listRepackTargetSkuOptionsHandler` — Prodshade → other-pack-code SKUs (the reverse lookup called
@@ -235,10 +251,20 @@ check first, follow existing convention, don't invent a new folder layout).
   from `sales_order_line` (SO01) and `sales_return_item` (SO05), left-join `stroke_master` on
   `{prodshade_material_id, po_type, stroke_number}`, filter to unresolved, dedupe. Batch this query
   (§8B), do not loop per declared stroke.
-- `listPendingGenealogyEntriesHandler` (PR22/PR23's new button, §134.9) — `sales_return_item` rows
-  with `batch_resolved=false`, grouped by `{prodshade, description, stroke}`, `SUM(quantity)` in
-  base UOM. Reused by both PR22 and PR23 (same query, PR22 shows it for SFG-type items, PR23 for
-  FG-type — filter by `line_material_type` at the call site, not two separate queries).
+- `listPendingGenealogyEntriesHandler` (PR22/PR23's new button, §134.9) — **two distinct queries,
+  not one shared one** (they filter/group differently, per §134.9's PR22 vs PR23 halves):
+  - PR22 half: `sales_return_item` rows with `batch_resolved=false`, grouped by
+    `{prodshade, description, stroke}`, `SUM(quantity)` in base UOM.
+  - PR23 half: `sales_return_item` rows with `line_material_type='FG'` AND `fg_type IN
+    ('MTO','HPS','MTEST')` AND `packing_order_id IS NULL`, grouped by
+    `{prodshade, description, stroke, material_id/SKU}` (material-specific, per §134.9) — **not**
+    just `batch_resolved`, since a line can have a resolved batch but still an unresolved Packing PO.
+- **PR23's own create/save handler must backfill `packing_order_id`** (§134.9's PR23 half,
+  §134.5 point 6): after inserting the new `packing_order` row, `UPDATE sales_return_item SET
+  packing_order_id = <new row's id> WHERE material_id = <new row's material_id> AND batch_number =
+  <new row's batch_number> AND packing_order_id IS NULL`. This is the **one** place in this whole
+  feature where an explicit write-after-the-fact on `sales_return_item` is required — do not skip
+  it, IN02/IN03's Packing PO column depends on it (Work Stream F).
 
 ## Work Stream C — Frontend
 
@@ -297,6 +323,51 @@ Register a new band in `document_number_series` (dev via MCP first, then a migra
 row in prod, per §8's existing convention for this table). Confirm the exact prefix/leading-digit
 band with the business owner or SA before hardcoding — do not reuse or overlap an existing type's
 band (see §8's table for what is already taken).
+
+## Work Stream F — IN02/IN03: Packing PO Number resolution for Sales Return rows (✅ LOCKED — 2026-09-25)
+
+**In scope for this pass** (small, well-defined, and without it the Packing PO reference the rest
+of this brief builds is invisible in the two reports that matter most — do not defer this to a
+follow-up task).
+
+`supabase/functions/api/_core/procurement/stock_reports.handlers.ts` already has a proven,
+shared-by-IN02-and-IN03 mechanism for exactly this class of problem — read
+`buildOpeningStockLotMap()` (~line 220) and `resolveLotRefStrict()`/`resolveLotRef()` (~line 290)
+in full before touching either. Do not invent a parallel mechanism.
+
+1. Add `buildSalesReturnLotMap(docs: JsonRecord[]): Promise<Map<string, string>>`, mirroring
+   `buildOpeningStockLotMap()`'s shape exactly:
+   - Filter `docs` to `reference_document_type === 'SALES_RETURN'`, collect
+     `reference_document_id` values (these are `sales_return_item.id`s, per Work Stream B's posting
+     tag — **note this is simpler than `buildOpeningStockLotMap()`**, which has to key by
+     `document_id::material::batch` because Opening Stock's `reference_document_id` points at the
+     document *header* with many lines; Sales Return's `reference_document_id` points straight at
+     the *line*, so the map only needs to be keyed by `reference_document_id` itself).
+   - Fetch those `sales_return_item` rows, `.not("packing_order_id", "is", null)`.
+   - Resolve `packing_order_id → packing_order.po_number` (chunk both `.in()` calls, §8E).
+   - Return `Map<sales_return_item.id, po_number>`.
+2. In `resolveLotRefStrict()`, add a new branch alongside the existing `PACK_PO`/`OS` cases:
+   ```ts
+   if (toTrimmedString(doc.reference_document_type) === "SALES_RETURN") {
+     const poNumber = salesReturnLotMap.get(toTrimmedString(doc.reference_document_id));
+     if (poNumber) return poNumber;
+   }
+   ```
+   Thread a new `salesReturnLotMap` parameter through `resolveLotRefStrict()` and `resolveLotRef()`
+   the same way `openingLotMap` is already threaded — every call site of `resolveLotRef()` (there
+   are several across IN02/IN03/`fgStockBreakdownHandler` per the grep in "Read first") needs the
+   new map built and passed alongside the existing `openingLotMap`/`batchPoMap` args. Find every
+   call site with `grep -n "resolveLotRef(" stock_reports.handlers.ts` — do not miss one.
+3. **Do not** add a `SALES_RETURN` case to the `source_lot_ref`-producing trigger
+   (`derive_source_lot_ref()`, migration `20260719210000`) — that trigger is deliberately scoped to
+   real production postings (`reference_document_type='PACK_PO'` + P101 + IN) per its own existing
+   design; Sales Return's resolution path is the `reference_document_type` branch in
+   `resolveLotRefStrict()`, a separate and simpler mechanism, not an extension of the trigger.
+4. Verify: create a test Sales Return receipt in dev with an unresolved Packing PO (a batch/SKU with
+   no existing `packing_order` row), confirm IN02/IN03 show the fallback (inherited from
+   `batchPoMap` if another row resolves it, else the receipt's own `receipt_number`) — then create a
+   matching PR23 entry, confirm the backfill (Work Stream B) ran, and confirm the **same** IN02/IN03
+   query now shows the real Packing PO number **without re-posting anything**.
 
 ---
 
