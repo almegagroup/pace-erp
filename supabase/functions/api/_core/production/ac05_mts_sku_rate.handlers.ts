@@ -11,7 +11,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { errorResponse, okResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { parseBody, toTrimmedString } from "./production.shared.ts";
-import { materialMap, packCodeRow, resolvePmComposition, resolveProdshade } from "./ac07_costing.handlers.ts";
+import { materialMap, packCodeRow, resolvePmComposition } from "./ac07_costing.handlers.ts";
 import {
   getEligibleProdshadeIdsForVendorCode,
   isPrimaryVendorCodeForCompany,
@@ -77,7 +77,7 @@ async function mappedVendorCode(companyId: string, vendorCodeId: string): Promis
 
 async function getSku(companyId: string, skuMaterialId: string): Promise<Row | null> {
   const { data: sku, error: skuError } = await serviceRoleClient.schema("erp_master").from("material_master")
-    .select("id, pace_code, material_name, document_name, material_type, status, shade_code, pack_code, base_uom_code, material_category")
+    .select("id, pace_code, material_name, external_code, document_name, material_type, status, shade_code, pack_code, base_uom_code, material_category")
     .eq("id", skuMaterialId).maybeSingle();
   if (skuError) throw new Error("AC05_SKU_LOOKUP_FAILED");
   if (!sku || toTrimmedString(sku.material_type).toUpperCase() !== "FG" || toTrimmedString(sku.status).toUpperCase() !== "ACTIVE") return null;
@@ -90,6 +90,107 @@ async function getSku(companyId: string, skuMaterialId: string): Promise<Row | n
 async function hasInnerPack(skuMaterialId: string, sku: Row): Promise<boolean> {
   const composition = await resolvePmComposition(skuMaterialId, sku);
   return composition.lines.some((line) => Boolean(line.is_primary_container));
+}
+
+// SKU <-> Prodshade identity is external_code based: a SKU's own
+// external_code (or material_name when external_code is unset) is always
+// "<Prodshade's external_code><Pack Code>" (e.g. "56750000" + "120" =
+// "56750000120"), the exact convention sales_order.handlers.ts's
+// listSalesOrderFgSkuOptionsHandler (§141) already relies on. shade_code is
+// NOT usable for this -- verified live against Prod (2026-09-24): the IWC
+// Prodshade "56750000" (SFG-00063) carries the generic placeholder
+// shade_code '0000', which 18 unrelated FG SKUs and 9 unrelated SFG
+// materials also carry, so a shade_code-only match (this file's first cut,
+// and ac07_costing.handlers.ts's own resolveProdshade()) silently pulls in
+// every one of them. Do not go back to shade_code matching here.
+async function deriveProdshadeForSku(sku: Row): Promise<Row | null> {
+  const key = toTrimmedString(sku.external_code) || toTrimmedString(sku.material_name);
+  const pack = toTrimmedString(sku.pack_code);
+  if (!key || !pack || !key.endsWith(pack)) return null;
+  const prefix = key.slice(0, key.length - pack.length);
+  if (!prefix) return null;
+  const db = serviceRoleClient.schema("erp_master");
+  const [byExternalCode, byName] = await Promise.all([
+    db.from("material_master").select("id, pace_code, material_name, external_code")
+      .in("material_type", ["SFG", "INT"]).eq("external_code", prefix).maybeSingle(),
+    db.from("material_master").select("id, pace_code, material_name, external_code")
+      .in("material_type", ["SFG", "INT"]).eq("material_name", prefix).maybeSingle(),
+  ]);
+  if (byExternalCode.error) throw new Error("AC05_PRODSHADE_LOOKUP_FAILED");
+  if (byExternalCode.data) return byExternalCode.data as Row;
+  if (byName.error) throw new Error("AC05_PRODSHADE_LOOKUP_FAILED");
+  return (byName.data as Row) ?? null;
+}
+
+// The reverse of deriveProdshadeForSku, batched: given Prodshade material_ids
+// and this company's real prodshade_pack_config rows, construct each expected
+// SKU code (Prodshade code + Pack Code) and look up the matching,
+// company-mapped, ACTIVE FG SKU. Returns a Map keyed by prodshade_material_id.
+async function findSkusForProdshades(prodshadeIds: string[], companyId: string): Promise<Map<string, Row[]>> {
+  const result = new Map<string, Row[]>();
+  if (!prodshadeIds.length) return result;
+  const db = serviceRoleClient.schema("erp_production");
+  const configRows = await fetchInChunks<Row>(prodshadeIds, (chunk) => db.from("prodshade_pack_config")
+    .select("material_id, pack_code_id").eq("active", true).in("material_id", chunk));
+  if (!configRows.length) return result;
+  const packCodeIds = ids(configRows.map((row) => row.pack_code_id));
+  const packCodeRows = await fetchInChunks<Row>(packCodeIds, (chunk) => db.from("pack_code_master").select("id, pack_code").in("id", chunk));
+  const packCodeById = new Map(packCodeRows.map((row) => [toTrimmedString(row.id), toTrimmedString(row.pack_code)]));
+  const prodshades = await materialMap(prodshadeIds);
+  const codeToProdshadeId = new Map<string, string>();
+  for (const config of configRows) {
+    const prodshadeId = toTrimmedString(config.material_id);
+    const prodshade = prodshades.get(prodshadeId);
+    const prodshadeCode = toTrimmedString(prodshade?.external_code) || toTrimmedString(prodshade?.material_name);
+    const packCode = packCodeById.get(toTrimmedString(config.pack_code_id));
+    if (!prodshadeCode || !packCode) continue;
+    codeToProdshadeId.set(`${prodshadeCode}${packCode}`, prodshadeId);
+  }
+  const codes = [...codeToProdshadeId.keys()];
+  if (!codes.length) return result;
+  const skuSelect = "id, pace_code, material_name, external_code, document_name, base_uom_code, pack_code, material_category";
+  const [extensions, byExternalCode, byName] = await Promise.all([
+    serviceRoleClient.schema("erp_master").from("material_company_ext").select("material_id").eq("company_id", companyId).eq("status", "ACTIVE"),
+    fetchInChunks<Row>(codes, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
+      .select(skuSelect).eq("material_type", "FG").eq("status", "ACTIVE").in("external_code", chunk)),
+    fetchInChunks<Row>(codes, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
+      .select(skuSelect).eq("material_type", "FG").eq("status", "ACTIVE").in("material_name", chunk)),
+  ]);
+  if (extensions.error) throw new Error("AC05_SKU_LOOKUP_FAILED");
+  const activeIds = new Set(ids(((extensions.data ?? []) as Row[]).map((row) => row.material_id)));
+  const skuByCode = new Map<string, Row>();
+  for (const row of [...byExternalCode, ...byName]) {
+    if (!activeIds.has(toTrimmedString(row.id))) continue;
+    const code = toTrimmedString(row.external_code) || toTrimmedString(row.material_name);
+    if (code) skuByCode.set(code, row);
+  }
+  for (const [code, prodshadeId] of codeToProdshadeId) {
+    const sku = skuByCode.get(code);
+    if (!sku) continue;
+    result.set(prodshadeId, [...(result.get(prodshadeId) ?? []), sku]);
+  }
+  return result;
+}
+
+// A Stroke's MTS eligibility is decided by stroke_po_type_applicability
+// (target_po_type='MTS', is_active) -- never stroke_master.po_type directly.
+// The 2026-08-31 Stroke Share redesign lets one APPROVED Stroke serve
+// multiple PO Types; stroke_master.po_type only ever reflects its own
+// original type. Same source of truth sales_order.handlers.ts's
+// listSalesOrderFgSkuOptionsHandler (§141) already established for the
+// identical question -- do not reintroduce a raw po_type='MTS' filter.
+async function mtsEligibleStrokesForCompany(companyId: string): Promise<Row[]> {
+  const db = serviceRoleClient.schema("erp_production");
+  const { data: strokes, error: strokeError } = await db.from("stroke_master")
+    .select("id, prodshade_material_id").eq("company_id", companyId).eq("status", "APPROVED");
+  if (strokeError) throw new Error("AC05_STROKE_LOOKUP_FAILED");
+  const rows = (strokes ?? []) as Row[];
+  if (!rows.length) return [];
+  const strokeIds = ids(rows.map((row) => row.id));
+  const applicable = await fetchInChunks<Row>(strokeIds, (chunk) => db.from("stroke_po_type_applicability")
+    .select("stroke_master_id").eq("target_po_type", "MTS").eq("is_active", true).in("stroke_master_id", chunk));
+  const applicableIds = new Set(applicable.map((row) => toTrimmedString(row.stroke_master_id)));
+  return rows.filter((row) => applicableIds.has(toTrimmedString(row.id)));
 }
 
 function validateRateFields(input: Row, innerRequired: boolean): { values: Row } | { code: string; message: string } {
@@ -115,7 +216,7 @@ async function verificationForRate(row: Row, sku: Row, companyId: string): Promi
     serviceRoleClient.schema("erp_production").from("stroke_line").select("material_id, dosage_pct, line_material_type")
       .eq("stroke_master_id", strokeId).in("line_material_type", ["RM", "INT"]),
     resolvePmComposition(toTrimmedString(sku.id), sku),
-    resolveProdshade(sku),
+    deriveProdshadeForSku(sku),
     packCodeRow(toTrimmedString(sku.pack_code)),
   ]);
   if (strokeLinesResult.error) throw new Error("AC05_VERIFICATION_STROKE_LOOKUP_FAILED");
@@ -215,22 +316,25 @@ export async function listAc05EligibleSkusHandler(req: Request, ctx: ProdHandler
     if (!companyId || !vendorCodeId) return ac05Error(req, ctx, "AC05_ELIGIBLE_SKU_INVALID", 400, "company_id and vendor_code_id are required.");
     const access = await requireAc05Action(req, ctx, companyId, "VIEW"); if (access) return access;
     const mapping = await mappedVendorCode(companyId, vendorCodeId); if (!mapping) return ac05Error(req, ctx, "AC05_VENDOR_CODE_INVALID", 422, "Vendor Code is not active for this company.");
-    const db = serviceRoleClient.schema("erp_production");
-    const [{ data: mtsStrokes, error: strokeError }, { data: extensions, error: extensionError }, primary] = await Promise.all([
-      db.from("stroke_master").select("prodshade_material_id").eq("company_id", companyId).eq("po_type", "MTS").eq("status", "APPROVED"),
-      serviceRoleClient.schema("erp_master").from("material_company_ext").select("material_id").eq("company_id", companyId).eq("status", "ACTIVE"),
+    const [mtsStrokes, primary] = await Promise.all([
+      mtsEligibleStrokesForCompany(companyId),
       isPrimaryVendorCodeForCompany(companyId, vendorCodeId),
     ]);
-    if (strokeError || extensionError) throw new Error("AC05_ELIGIBLE_SKU_FAILED");
-    const prodshadeIds = ids((mtsStrokes ?? []).map((stroke: Row) => stroke.prodshade_material_id));
-    const prodshadeRows = await materialMap(prodshadeIds);
-    const eligibleProdshadeIds = primary ? new Set(prodshadeIds) : await getEligibleProdshadeIdsForVendorCode(companyId, vendorCodeId);
-    const eligibleShades = ids([...eligibleProdshadeIds].map((id) => prodshadeRows.get(id)?.shade_code));
-    const fgRows = eligibleShades.length ? await fetchInChunks<Row>(eligibleShades, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
-      .select("id, pace_code, material_name, document_name, material_type, status, shade_code, pack_code, base_uom_code, material_category").eq("material_type", "FG").eq("status", "ACTIVE").in("shade_code", chunk)) : [];
-    const activeIds = new Set(ids((extensions ?? []).map((extension: Row) => extension.material_id)));
-    const activeFgs = fgRows.filter((sku) => activeIds.has(toTrimmedString(sku.id)));
-    const data = await Promise.all(activeFgs.map(async (sku) => ({ material_id: sku.id, pace_code: sku.pace_code, material_name: sku.material_name, document_name: sku.document_name, has_inner_pack: await hasInnerPack(toTrimmedString(sku.id), sku) })));
+    const allProdshadeIds = ids(mtsStrokes.map((stroke) => stroke.prodshade_material_id));
+    const eligibleProdshadeIds = primary ? new Set(allProdshadeIds) : await getEligibleProdshadeIdsForVendorCode(companyId, vendorCodeId);
+    const targetProdshadeIds = allProdshadeIds.filter((id) => eligibleProdshadeIds.has(id));
+    const skusByProdshade = await findSkusForProdshades(targetProdshadeIds, companyId);
+    const seen = new Set<string>();
+    const skus: Row[] = [];
+    for (const rows of skusByProdshade.values()) for (const sku of rows) {
+      const id = toTrimmedString(sku.id);
+      if (!seen.has(id)) { seen.add(id); skus.push(sku); }
+    }
+    const data = await Promise.all(skus.map(async (sku) => ({
+      material_id: sku.id, pace_code: sku.pace_code, material_name: sku.material_name, document_name: sku.document_name,
+      has_inner_pack: await hasInnerPack(toTrimmedString(sku.id), sku),
+    })));
+    data.sort((a, b) => toTrimmedString(a.pace_code).localeCompare(toTrimmedString(b.pace_code)));
     return okResponse({ data }, ctx.request_id, req);
   } catch (error) { return ac05Error(req, ctx, error instanceof Error ? error.message : "AC05_ELIGIBLE_SKU_FAILED", 500, "Unable to load eligible MTS SKUs."); }
 }
@@ -243,7 +347,7 @@ export async function createAc05RateRowHandler(req: Request, ctx: ProdHandlerCon
     const [mapping, sku] = await Promise.all([mappedVendorCode(companyId, vendorCodeId), getSku(companyId, skuId)]);
     if (!mapping) return ac05Error(req, ctx, "AC05_VENDOR_CODE_INVALID", 422, "Vendor Code is not active for this company.");
     if (!sku) return ac05Error(req, ctx, "AC05_SKU_INVALID", 422, "SKU is not an active company-mapped FG SKU.");
-    const [prodshade, inner] = await Promise.all([resolveProdshade(sku), hasInnerPack(skuId, sku)]);
+    const [prodshade, inner] = await Promise.all([deriveProdshadeForSku(sku), hasInnerPack(skuId, sku)]);
     if (!prodshade) return ac05Error(req, ctx, "AC05_PRODSHADE_NOT_FOUND", 422, "No Prodshade could be resolved for this SKU.");
     const stroke = await resolveStrokeForProdshadeAndVendorCode(companyId, toTrimmedString(prodshade.id), toTrimmedString(mapping.id));
     if (!stroke) return ac05Error(req, ctx, "AC05_STROKE_NOT_FOUND", 422, "No approved MTS Stroke found for this Prodshade + Vendor Code combination.");
@@ -315,19 +419,24 @@ export async function cascadeAc05RowsFromAc06Split(companyId: string, materialId
   const slocIds = ids((members ?? []).map((member: Row) => member.storage_location_id)); if (!slocIds.length) return;
   const lines = await fetchInChunks<Row>(slocIds, (chunk) => db.from("stroke_line").select("stroke_master_id").eq("material_id", materialId).in("default_storage_location_id", chunk));
   const strokeIds = ids(lines.map((line) => line.stroke_master_id)); if (!strokeIds.length) return;
-  const strokes = await fetchInChunks<Row>(strokeIds, (chunk) => db.from("stroke_master").select("id, prodshade_material_id").eq("company_id", companyId).eq("po_type", "MTS").eq("status", "APPROVED").in("id", chunk));
+  const [strokesResult, applicableRows] = await Promise.all([
+    fetchInChunks<Row>(strokeIds, (chunk) => db.from("stroke_master").select("id, prodshade_material_id").eq("company_id", companyId).eq("status", "APPROVED").in("id", chunk)),
+    // MTS eligibility via stroke_po_type_applicability, not stroke_master.po_type
+    // -- see mtsEligibleStrokesForCompany's own comment for why.
+    fetchInChunks<Row>(strokeIds, (chunk) => db.from("stroke_po_type_applicability").select("stroke_master_id").eq("target_po_type", "MTS").eq("is_active", true).in("stroke_master_id", chunk)),
+  ]);
+  const applicableIds = new Set(applicableRows.map((row) => toTrimmedString(row.stroke_master_id)));
+  const strokes = strokesResult.filter((stroke) => applicableIds.has(toTrimmedString(stroke.id)));
   if (!strokes.length) return;
-  const prodshades = await materialMap(ids(strokes.map((stroke) => stroke.prodshade_material_id)));
-  const shadeCodes = ids(strokes.map((stroke) => prodshades.get(toTrimmedString(stroke.prodshade_material_id))?.shade_code));
-  const skus = shadeCodes.length ? await fetchInChunks<Row>(shadeCodes, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, shade_code").eq("material_type", "FG").in("shade_code", chunk)) : [];
+  const skusByProdshade = await findSkusForProdshades(ids(strokes.map((stroke) => stroke.prodshade_material_id)), companyId);
   const strokeVendorPairs = await Promise.all(strokes.map(async (stroke) => ({ stroke, vendor: await resolveVendorCodeForStroke(companyId, toTrimmedString(stroke.id)) })));
   const vendorIds = ids(strokeVendorPairs.map(({ vendor }) => vendor?.vendor_code_id));
   const maps = vendorIds.length ? await fetchInChunks<Row>(vendorIds, (chunk) => db.from("company_vendor_code_map").select("id, vendor_code_id").eq("company_id", companyId).eq("active", true).in("vendor_code_id", chunk)) : [];
   const mapByVendorId = new Map(maps.map((map) => [toTrimmedString(map.vendor_code_id), map]));
-  const skuByShade = new Map<string, Row[]>(); for (const sku of skus) skuByShade.set(toTrimmedString(sku.shade_code), [...(skuByShade.get(toTrimmedString(sku.shade_code)) ?? []), sku]);
   const candidates = strokeVendorPairs.flatMap(({ stroke, vendor }) => {
-    const shade = toTrimmedString(prodshades.get(toTrimmedString(stroke.prodshade_material_id))?.shade_code); const mapping = vendor ? mapByVendorId.get(vendor.vendor_code_id) : null;
-    return mapping ? (skuByShade.get(shade) ?? []).map((sku) => ({ stroke, mapping, sku })) : [];
+    const mapping = vendor ? mapByVendorId.get(vendor.vendor_code_id) : null;
+    const skus = skusByProdshade.get(toTrimmedString(stroke.prodshade_material_id)) ?? [];
+    return mapping ? skus.map((sku) => ({ stroke, mapping, sku })) : [];
   });
   if (!candidates.length) return;
   const { data: allCompanyRows, error: priorError } = await db.from("ac05_mts_sku_rate").select("company_vendor_code_map_id, sku_material_id, rm_wastage_pct, pack_wastage_pct, effective_date").eq("company_id", companyId).order("effective_date", { ascending: false });
