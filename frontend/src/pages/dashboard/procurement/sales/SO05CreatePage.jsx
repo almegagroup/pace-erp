@@ -1,4 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold, {
@@ -10,6 +17,7 @@ import {
   buildTransactionCompanyList,
   resolveDefaultTransactionCompanyId,
 } from "../../../../components/inputs/transactionCompanyRuntime.js";
+import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import {
   createSalesReturn,
@@ -25,6 +33,188 @@ import {
   listMaterials,
   listStorageLocations,
 } from "../../om/omApi.js";
+
+// Transporter search + keyboard nav — copied from DO01CreatePage.jsx's
+// TransporterPicker (§137, 2026-09-06 keyboard-nav fix), same local-copy
+// convention as that file already uses (kept per-page, not extracted to a
+// shared component, since each page's props are tightly coupled to its own
+// state shape). "Add to Transporter Master" opens in a NEW TAB here rather
+// than DO01/GRN's screen-stack context-stash trick — this page isn't
+// registered in OPERATION_SCREENS as its own stack entry (it's a plain
+// react-router route), so getActiveScreenContext()/updateActiveScreenContext()
+// would not reliably target it. A new tab achieves the same goal (never lose
+// the in-progress Sales Return form) without depending on that mechanism.
+function TransporterPicker({
+  transporterId,
+  transporterName,
+  onSelect,
+  onClear,
+  companyId,
+  canManageTransporters,
+}) {
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [panelRect, setPanelRect] = useState(null);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const wrapperRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  useEffect(() => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(
+      () => setDebouncedSearch(search.trim()),
+      300,
+    );
+    return () => clearTimeout(debounceRef.current);
+  }, [search]);
+
+  const open = debouncedSearch.length >= 2;
+  const transporterQuery = useQuery({
+    queryKey: [
+      "procurement",
+      "transporters",
+      "so05-search",
+      debouncedSearch,
+      companyId,
+    ],
+    queryFn: () =>
+      listTransporters({ search: debouncedSearch, company_id: companyId, limit: 20 }),
+    enabled: open,
+  });
+  const results = Array.isArray(transporterQuery.data)
+    ? transporterQuery.data
+    : (transporterQuery.data?.data ?? transporterQuery.data?.items ?? []);
+  const safeHighlightIndex =
+    highlightIndex >= 0 && highlightIndex < results.length
+      ? highlightIndex
+      : -1;
+
+  function handleSearchInputChange(event) {
+    setSearch(event.target.value);
+    setHighlightIndex(-1);
+  }
+
+  function handleSearchKeyDown(event) {
+    if (!open || results.length === 0) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightIndex((current) => (current + 1) % results.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightIndex((current) => (current - 1 + results.length) % results.length);
+    } else if (event.key === "Enter") {
+      const pick = results[safeHighlightIndex] ?? (results.length === 1 ? results[0] : null);
+      if (pick) {
+        event.preventDefault();
+        onSelect(pick);
+        setSearch("");
+      }
+    } else if (event.key === "Escape") {
+      setSearch("");
+    }
+  }
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    function updateRect() {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setPanelRect({ top: rect.bottom, left: rect.left, width: rect.width });
+    }
+    updateRect();
+    window.addEventListener("scroll", updateRect, true);
+    window.addEventListener("resize", updateRect);
+    return () => {
+      window.removeEventListener("scroll", updateRect, true);
+      window.removeEventListener("resize", updateRect);
+    };
+  }, [open]);
+
+  if (transporterId && transporterName) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="flex h-8 flex-1 items-center border border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-900">
+          {transporterName}
+        </span>
+        <button
+          type="button"
+          onClick={onClear}
+          className="h-8 border border-slate-300 bg-white px-2 text-[11px] font-semibold text-slate-600"
+        >
+          Clear
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <input
+        type="text"
+        placeholder="Type 2+ characters to search transporter master…"
+        value={search}
+        onChange={handleSearchInputChange}
+        onKeyDown={handleSearchKeyDown}
+        className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+      />
+      {open && panelRect &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: panelRect.top,
+              left: panelRect.left,
+              width: panelRect.width,
+              zIndex: 1000200,
+            }}
+            className="max-h-52 overflow-y-auto border border-slate-400 bg-white shadow-md"
+          >
+            {transporterQuery.isLoading && (
+              <div className="px-3 py-2 text-xs text-slate-400">Searching…</div>
+            )}
+            {!transporterQuery.isLoading && results.length === 0 && (
+              <div className="px-3 py-2 text-xs text-slate-500">
+                No match found.
+                {canManageTransporters ? (
+                  <a
+                    href="/dashboard/procurement/masters/transporters"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-2 text-sky-600 underline"
+                  >
+                    Add to Transporter Master →
+                  </a>
+                ) : (
+                  <span className="ml-2 text-slate-400">(Contact manager to add)</span>
+                )}
+              </div>
+            )}
+            {results.map((t, index) => (
+              <button
+                key={t.id}
+                type="button"
+                onMouseEnter={() => setHighlightIndex(index)}
+                onClick={() => {
+                  onSelect(t);
+                  setSearch("");
+                }}
+                className={`block w-full border-b border-slate-100 px-3 py-2 text-left text-xs last:border-0 hover:bg-sky-50 ${
+                  index === safeHighlightIndex ? "bg-sky-100" : ""
+                }`}
+              >
+                <span className="font-mono text-[10px] text-slate-500">
+                  {t.transporter_code}
+                </span>{" "}
+                {t.transporter_name}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
 
 const TYPES = [
   ["DEPENDENT_DIRECT", "Dependent — Direct"],
@@ -160,7 +350,11 @@ function RepackTargetSelect({ companyId, sourceMaterialId, value, onChange }) {
 export default function SO05CreatePage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const { runtimeContext } = useMenu();
+  const { runtimeContext, allowedRoutes } = useMenu();
+  const canManageTransporters = isRouteAllowed(
+    allowedRoutes ?? new Set(),
+    "/dashboard/procurement/masters/transporters",
+  );
   const companies = useMemo(() => buildTransactionCompanyList(runtimeContext), [
     runtimeContext,
   ]);
@@ -235,6 +429,8 @@ export default function SO05CreatePage() {
     enabled: !!form.sending_customer_id,
     select: rows,
   });
+  // Used only to resolve the already-picked transporter's display name —
+  // TransporterPicker below does its own live search for the picker UI.
   const transportersQ = useQuery({
     queryKey: ["so05-transporters", companyId],
     queryFn: () =>
@@ -242,6 +438,15 @@ export default function SO05CreatePage() {
     enabled: !!companyId,
     select: rows,
   });
+  const transporterName = useMemo(() => {
+    const match = (transportersQ.data ?? []).find((row) =>
+      row.id === form.transporter_id
+    );
+    return match
+      ? `${match.transporter_code ?? ""} — ${match.transporter_name ?? ""}`
+        .replace(/^— /, "").replace(/ —$/, "")
+      : "";
+  }, [transportersQ.data, form.transporter_id]);
   const locations = locationsQ.data ?? [];
   const materials = materialsQ.data ?? [];
 
@@ -518,17 +723,20 @@ export default function SO05CreatePage() {
             </label>
           )}
           <label className="text-xs text-slate-600">
-            Transporter<select
-              className={input}
-              value={form.transporter_id}
-              onChange={(e) =>
-                setForm({ ...form, transporter_id: e.target.value })}
-            >
-              <option value="">Select / use free text</option>
-              {(transportersQ.data ?? []).map((row) => (
-                <option key={row.id} value={row.id}>{optionLabel(row)}</option>
-              ))}
-            </select>
+            Transporter
+            <TransporterPicker
+              transporterId={form.transporter_id}
+              transporterName={transporterName}
+              companyId={companyId}
+              canManageTransporters={canManageTransporters}
+              onSelect={(t) =>
+                setForm({
+                  ...form,
+                  transporter_id: t.id,
+                  transporter_name_freetext: "",
+                })}
+              onClear={() => setForm({ ...form, transporter_id: "" })}
+            />
           </label>
           <label className="text-xs text-slate-600">
             Transporter Free Text<input
