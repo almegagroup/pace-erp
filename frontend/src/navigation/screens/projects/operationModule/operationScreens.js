@@ -511,6 +511,28 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // SO05's Create and Invoice Posting sub-pages -- same shape as PROC_DO_EDIT
+  // above. SO05ListPage's buttons only called plain navigate() with no
+  // matching screen code, so the active screen stayed PROC_SALES_RETURN_LIST
+  // while the URL moved to /create or /invoices, and NavigationStackBridge
+  // snapped the URL straight back -- a flicker back to this same list page,
+  // no console error. Found live 2026-09-25, business owner.
+  PROC_SALES_RETURN_CREATE: {
+    screen_code: "PROC_SALES_RETURN_CREATE",
+    route: "/dashboard/procurement/sales/sales-return/create",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_SALES_RETURN_INVOICE_POSTING: {
+    screen_code: "PROC_SALES_RETURN_INVOICE_POSTING",
+    route: "/dashboard/procurement/sales/sales-return/invoices",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // SO01 Tab 2 — feasibility §133.9. Same PROC_SO_LIST resource, EDIT action.
   PROC_SO_MAP: {
     screen_code: "PROC_SO_MAP",

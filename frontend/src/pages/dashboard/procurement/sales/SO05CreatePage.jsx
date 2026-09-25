@@ -7,7 +7,6 @@ import React, {
 } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -18,6 +17,7 @@ import {
   resolveDefaultTransactionCompanyId,
 } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
+import { popScreen } from "../../../../navigation/screenStackEngine.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import {
   createSalesReturn,
@@ -348,7 +348,6 @@ function RepackTargetSelect({ companyId, sourceMaterialId, value, onChange }) {
 }
 
 export default function SO05CreatePage() {
-  const navigate = useNavigate();
   const qc = useQueryClient();
   const { runtimeContext, allowedRoutes } = useMenu();
   const canManageTransporters = isRouteAllowed(
@@ -526,7 +525,7 @@ export default function SO05CreatePage() {
           result?.receipt_number ?? ""
         } posted to Blocked stock.`,
       });
-      navigate("/dashboard/procurement/sales/sales-return");
+      popScreen();
     },
     onError: (error) =>
       pushToast({
@@ -552,7 +551,7 @@ export default function SO05CreatePage() {
       actions={[{
         label: "Back to list",
         tone: "neutral",
-        onClick: () => navigate("/dashboard/procurement/sales/sales-return"),
+        onClick: () => popScreen(),
       }]}
     >
       <ErpSectionCard title="Page 1 · Sending location and transporter">

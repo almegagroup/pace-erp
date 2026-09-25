@@ -6154,6 +6154,114 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SO05CreatePage.jsx",
+    "dependencyCount": 10,
+    "deps": [
+      {
+        "fn": "createSalesReturn",
+        "method": "POST",
+        "path": "/api/procurement/sales-returns",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listSalesReturnBatchOptions",
+        "method": "GET",
+        "path": "/api/procurement/sales-returns/batch-options",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listSalesReturnRepackSkuOptions",
+        "method": "GET",
+        "path": "/api/procurement/sales-returns/repack-sku-options",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listTransporters",
+        "method": "GET",
+        "path": "/api/procurement/transporters",
+        "resourceCode": "PROC_TRANSPORTER_MASTER",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCustomerAddresses",
+        "method": "GET",
+        "path": "/api/om/customer-addresses?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCustomers",
+        "method": "GET",
+        "path": "/api/om/customers?${params.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgDepotCodes",
+        "method": "GET",
+        "path": "/api/om/fg-depot-codes?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgParentCompanies",
+        "method": "GET",
+        "path": "/api/om/fg-parent-companies?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials?${params.toString()}",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStorageLocations",
+        "method": "GET",
+        "path": "/api/om/storage-locations?${query.toString()}",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SO05InvoicePostingPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "listPendingSalesReturnInvoices",
+        "method": "GET",
+        "path": "/api/procurement/sales-returns/pending-invoices",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "saveSalesReturnInvoiceDetail",
+        "method": "POST",
+        "path": "/api/procurement/sales-returns/invoice-detail",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/sto/StoCreateFormPage.jsx",
     "dependencyCount": 7,
     "deps": [
