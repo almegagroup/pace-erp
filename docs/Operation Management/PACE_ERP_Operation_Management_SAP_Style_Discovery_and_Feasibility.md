@@ -23191,6 +23191,62 @@ separate pages, they are one page with Invoice as a nested/repeatable group over
 
    **Expiry Date** — optional/not-mandatory for every type.
 
+6. **Packing PO Number — a second, real gap caught 2026-09-25, now ✅ LOCKED.** Batch Number alone
+   is not enough for a **FG** line under **MTO/HPS/MTEST** specifically — cross-verified against
+   §116 (IN03 design): "FG under MTO/HPS/MTEST is batch **and** Packing-PO-level" (unlike MTS-typed
+   FG, which stays blended/no Packing-PO grain, and unlike SFG, which has no packing step yet).
+   §83.14's "balance barrel" rule means one batch can have **multiple** Packing POs (different fill
+   sizes) — Batch Number alone can't disambiguate which one a specific returned unit came from, and
+   that specific Packing PO's genealogy (its PM lines, fill_qty_per_pack) is exactly what a later
+   PR19 salvage/dissolve needs.
+
+   **Packing PO Number is NOT a user-typed field** — a customer's returned goods have a batch number
+   stamped on them, never a Packing PO number, and PR23 always mints a **new synthetic** `po_number`
+   (`generateGlobalDocNumber("PACK_PO")`) unrelated to whatever the original real PO number might
+   have been — so there is nothing a user could meaningfully type here even if asked to. Instead:
+   - **Auto-derived** from the same inputs already captured — `company_id` + this line's `material_id`
+     (the FG SKU itself) + this line's resolved/typed `batch_number` — queried against
+     `erp_production.packing_order`.
+   - **Zero matches** (most common for a pre-PACE/untracked return) → stays unresolved
+     (`packing_order_id = NULL`), **non-blocking**, same red-dot pattern as Batch Number ("Packing PO
+     genealogy not in system yet, reconcile via PR23 before salvage").
+   - **One match** → auto-resolves silently.
+   - **Multiple matches** (the balance-barrel case — several Packing POs share this exact
+     material+batch) → small dropdown, user picks the correct one.
+   - **Mandatory as a *concept* (the resolution attempt always runs, MTO/HPS/MTEST FG lines always
+     carry this field), but never mandatory as a *typed value*** — this is the same
+     mandatory-field-vs-resolved-value distinction Batch Number already established; "mandatory"
+     here means the field is always present and attempted, not that it must match a real row before
+     Save/Post can proceed.
+
+   **✅ LOCKED (2026-09-25) — how this shows up in IN02/IN03 without ever touching `stock_ledger`,
+   reusing an already-built, already-proven mechanism (not a new invention):** verified live against
+   `stock_reports.handlers.ts` — IN02/IN03 share one `resolveLotRefStrict()`/`resolveLotRef()`
+   fallback chain for "Packing PO Number": `stock_document.source_lot_ref` (trigger-derived, PACK_PO
+   postings only) → `reference_document_type='PACK_PO'` → `reference_document_type='OS'` (Opening
+   Stock, resolved via a dedicated `buildOpeningStockLotMap()` that reads `opening_stock_line
+   .packing_order_id`) → inherit from another row of the same material+batch already resolved
+   elsewhere in the result set (`batchPoMap`, added 2026-09-03) → last resort, the posting's own
+   `document_number`. The code's own comment confirms this last-resort fallback is an **accepted,
+   documented gap for any reference type the function doesn't yet specifically know about** — not a
+   new bug this design introduces.
+   - P651's posting call tags `stock_document.reference_document_type='SALES_RETURN'`,
+     `reference_document_id=sales_return_item.id`, `reference_document_number=receipt_number` (same
+     §106 Phase-2 reference-tagging pattern every other module already uses).
+   - A new `buildSalesReturnLotMap()` (mirrors `buildOpeningStockLotMap()` exactly) resolves
+     `reference_document_id → sales_return_item.packing_order_id → packing_order.po_number`, and a
+     new case is added to `resolveLotRefStrict()` for `reference_document_type='SALES_RETURN'`.
+   - **When PR23 later resolves a previously-NULL `sales_return_item.packing_order_id`, that is a
+     plain UPDATE on our own new table only** — `stock_ledger`/`stock_document` are never touched,
+     §8's append-only rule stays fully intact. The very next IN02/IN03 render re-runs the same live
+     resolver and picks up the now-resolved PO number automatically — no batch job, no backfill
+     script, no manual re-posting.
+   - Before PR23 resolves it, IN02/IN03 will show whatever `resolveLotRef()`'s existing fallback
+     chain lands on for this row (real PO if `batchPoMap` inherits it from another row in the same
+     result set, otherwise the Return Receipt's own `receipt_number` as a placeholder) — this is
+     the system's already-existing, already-documented behavior for any unresolved reference type,
+     not a new gap.
+
 **Red-dot mechanism — where it is actually used (✅ LOCKED — this is the answer to "how do we use
 the red dot", resolved through the Pending Strokes / Pending Entries button design, §134.10-134.11
 below, not a separate report column):**
@@ -23198,7 +23254,8 @@ below, not a separate report column):**
   1. **SO01 (Sales Order Create)** — does declared stroke resolve to an APPROVED Stroke Master row?
   2. **SO04 (Dispatch Report)** — declared vs *actual* stroke mismatch, report-level visibility
      (`invalidStroke`/`mismatchStroke` per §135.6-J/K).
-  3. **SO05 (Sales Return, new)** — both Stroke Number and Batch Number get the same dot.
+  3. **SO05 (Sales Return, new)** — Stroke Number, Batch Number, **and (MTO/HPS/MTEST FG only)
+     Packing PO Number** all get the same dot pattern.
 - **Open, not decided:** whether SO05's own Return List/Total Table also gets a SO04-style
   "genealogy missing" status column for at-a-glance triage. Flagged during design, never answered
   — leave it out of the first build; add later if the business owner asks for it.
@@ -23261,22 +23318,46 @@ repack is plausible):
   automatically, no separate "clear" action).
 - **No pending strokes → button inactive/disabled.**
 
-### 134.9 — Pending Entries button (PR22/PR23) (✅ LOCKED — 2026-09-06)
+### 134.9 — Pending Entries button (PR22/PR23) (✅ LOCKED — 2026-09-06, PR23 half refined 2026-09-25)
 
 - Same pattern, on **PR22 (Old Process PO)** and **PR23 (Old Packing PO)**: a **"Pending Entries"**
   button.
+- User enters the genealogy via PR22 (and PR23 too, for FG) → the corresponding list shrinks. Empty
+  → that button goes inactive.
+
+**PR22's half — Batch/SFG-level, pure live-query, no backfill ever needed:**
 - Click → list of Sales Return Item lines whose typed **Batch Number** didn't resolve against
   `process_order` (§134.5 step 3's red dot). Columns: Prodshade, Description, Stroke, **Quantity**
   (base-UOM total, summed across every unresolved Sales Return line sharing that batch/Prodshade).
-- User enters the genealogy via PR22 (and PR23 too, for FG) → the list shrinks. Empty → button
-  inactive.
-- **Link mechanism — no explicit "link" step needed, by design.** The only join key is
-  `batch_number` (plain text) + material's Prodshade + company — never a stored FK. A Sales Return
-  Item line typed with an unresolved batch has no FK set (no `process_order_id` on the line, just
-  the text `batch_number`). Once PR22 (or PR23) is entered with that exact `batch_number` against
-  that Prodshade, **every future lookup resolves automatically** — because both the salvage/dissolve
-  action (§134.12) and Sales Return's own red-dot check run a **live query** by `batch_number`, not
-  a stored pointer. No backfill/relink job is ever needed.
+- **No explicit "link" step needed, by design.** The only join key is `batch_number` (plain text) +
+  material's Prodshade + company — never a stored FK. A Sales Return Item line typed with an
+  unresolved batch has no FK set (no `process_order_id` on the line, just the text `batch_number`).
+  Once PR22 is entered with that exact `batch_number` against that Prodshade, **every future
+  lookup resolves automatically** — both the salvage/dissolve action (§134.11) and Sales Return's
+  own red-dot check run a **live query** by `batch_number`, not a stored pointer. No backfill/relink
+  job is ever needed for this half.
+
+**PR23's half — Packing-PO/FG-level, needs one real backfill step (✅ LOCKED 2026-09-25, differs
+from PR22's half on purpose):** unlike Batch Number, the Packing PO reference is not resolved by a
+pure text-match at query time everywhere it's needed — §134.5 point 6 locked a **stored**
+`sales_return_item.packing_order_id` specifically so IN02/IN03's `resolveLotRefStrict()` can join
+through `stock_document.reference_document_id → sales_return_item.id → packing_order_id` (that
+resolver reads a stored FK, not a live text match, mirroring exactly how `buildOpeningStockLotMap()`
+already reads `opening_stock_line.packing_order_id`). So:
+- Click on PR23's button → list of Sales Return Item lines (FG, MTO/HPS/MTEST only) whose
+  `packing_order_id` is still NULL. Columns: Prodshade, Description, Stroke, **SKU** (unlike PR22's
+  list, this one is material-specific, not just Prodshade-specific — a Packing PO is always tied to
+  one exact SKU), Quantity.
+- **When a matching PR23 row is saved, the handler must explicitly UPDATE every Sales Return Item
+  row whose `(material_id, batch_number)` now matches the new `packing_order` row's
+  `(material_id, batch_number)`, setting `packing_order_id`.** This is a plain UPDATE on our own new
+  `sales_return_item` table only — `stock_ledger`/`stock_document` are never touched, so §8's
+  append-only rule stays fully intact (§134.5 point 6 covers this in detail). This one backfill
+  step is the only place in the whole Sales Return design where an explicit write-after-the-fact is
+  needed — everywhere else (Batch/Stroke dots) is pure live-query.
+- Structural sequencing is free: PR23's own dropdown of parent batches is sourced from PR22 rows, so
+  a PR23 entry is physically impossible before the matching PR22 exists — no separate validation
+  needed to enforce "PR22 before PR23", it falls out of PR23's own form design.
 
 ### 134.10 — Return Payable document (🔶 DEFERRED — shape known, fields not designed)
 
