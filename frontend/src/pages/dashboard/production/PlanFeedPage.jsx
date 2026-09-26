@@ -89,6 +89,17 @@ function normalizeFoCustomerType(value) {
   return String(value || "").toUpperCase() === "ZTEST" ? "MTEST" : String(value || "");
 }
 
+// business owner, 2026-09-26: Total Table's "PO Type" column -- the backend
+// already returns fo_customer_type per row (planFeedSummaryHandler derives
+// it from the party's own customer_master.fo_customer_type), it just never
+// had a column here. Reuses the same MTO_HPS/MTEST/MTS labels the Create
+// tab's own "PO Type (for Party filter)" dropdown shows, so the same raw
+// value always reads the same way everywhere on this page.
+function foCustomerTypeLabel(value) {
+  const normalized = normalizeFoCustomerType(value).toUpperCase();
+  return FO_CUSTOMER_TYPES.find((entry) => entry.value === normalized)?.label || normalized || "--";
+}
+
 const ERRORS = {
   PROD_PLAN_FEED_INVALID: "Company, FO number, party, SKU, ordered qty, and order date are required.",
   PROD_PLAN_FEED_FO_EXISTS: "FO number already exists for this company.",
@@ -825,6 +836,7 @@ export default function PlanFeedPage() {
     { key: "order_serial_number", label: "Order Serial No.", width: "140px", render: (r) => <span className="font-mono">{r.order_serial_number || "--"}</span> },
     { key: "fo_number", label: "FO #", width: "140px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
     { key: "original_fo_number", label: "Original FO #", width: "140px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
+    { key: "fo_customer_type", label: "PO Type", width: "100px", copyValue: (r) => foCustomerTypeLabel(r.fo_customer_type), render: (r) => foCustomerTypeLabel(r.fo_customer_type) },
     { key: "party_name", label: "Party", width: "200px" },
     { key: "party_town", label: "Town", width: "120px" },
     { key: "sku", label: "SKU", width: "135px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
