@@ -914,6 +914,12 @@ export function listPendingSalesReturnGenealogy(params) {
   const suffix = params?.kind === "PROCESS" ? "pending-process-entries" : "pending-packing-entries";
   return fetchProcurement("GET", `/api/procurement/sales-returns/${suffix}`, undefined, params);
 }
+export function listSalesReturnStrokeCheckOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/stroke-check-options", undefined, params);
+}
+export function resolveSalesReturnProdshade(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/prodshade", undefined, params);
+}
 
 export function getSalesOrder(id) {
   return fetchProcurement("GET", `/api/procurement/sales-orders/${encodeURIComponent(id)}`);
