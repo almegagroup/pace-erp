@@ -11,6 +11,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
@@ -30,7 +31,9 @@ import {
   createSalesReturn,
   listSalesReturnBatchOptions,
   listSalesReturnRepackSkuOptions,
+  listSalesReturnStrokeCheckOptions,
   listTransporters,
+  resolveSalesReturnProdshade,
 } from "../procurementApi.js";
 import {
   listCustomerAddresses,
@@ -335,6 +338,73 @@ function BatchNumberField({ companyId, item, onChange }) {
   );
 }
 
+// business owner, 2026-09-26: same green/red Stroke Number dot SO01 already
+// has (§133.21, SO01CreatePage.jsx's strokeCheckStatus) -- resolves to an
+// approved stroke_master row for this item's own Prodshade, or not. A
+// non-FG material (RM/PM/INT/SFG) IS its own Prodshade (matches
+// deriveProdshadeMaterialId()'s own rule on the backend), so only an FG
+// line needs the extra prodshade lookup round trip.
+function StrokeNumberField({ companyId, item, onChange }) {
+  const applicable = ["FG", "SFG"].includes(item.line_material_type) &&
+    !!item.fg_type;
+  const strokeCheckQ = useQuery({
+    queryKey: ["so05-stroke-check-options", companyId],
+    queryFn: () => listSalesReturnStrokeCheckOptions({ company_id: companyId }),
+    enabled: !!companyId && applicable,
+    staleTime: 60_000,
+    select: rows,
+  });
+  const isFg = item.line_material_type === "FG";
+  const prodshadeQ = useQuery({
+    queryKey: ["so05-prodshade", item.material_id],
+    queryFn: () => resolveSalesReturnProdshade({ material_id: item.material_id }),
+    enabled: applicable && isFg && !!item.material_id,
+    staleTime: 60_000,
+  });
+  if (!applicable) {
+    return (
+      <input
+        className={input}
+        value={item.declared_stroke_number}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
+  const prodshadeId = isFg
+    ? prodshadeQ.data?.prodshade_material_id
+    : item.material_id;
+  const validKeys = new Set(
+    (strokeCheckQ.data ?? []).map((row) =>
+      `${row.prodshade_material_id}|${row.po_type}|${row.stroke_number}`
+    ),
+  );
+  const status = item.material_id && item.declared_stroke_number?.trim() &&
+      prodshadeId
+    ? validKeys.has(
+      `${prodshadeId}|${item.fg_type}|${item.declared_stroke_number.trim()}`,
+    )
+    : null;
+  return (
+    <div className="flex items-center gap-1.5">
+      {status !== null && (
+        <span
+          title={status
+            ? "Resolves to an approved Stroke Master row"
+            : "Not found in Stroke Master for this item's Prodshade — reconcile later"}
+          className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+            status ? "bg-emerald-500" : "bg-rose-500"
+          }`}
+        />
+      )}
+      <input
+        className={input}
+        value={item.declared_stroke_number}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
+  );
+}
+
 function RepackTargetSelect({ companyId, sourceMaterialId, value, onChange }) {
   const optionsQ = useQuery({
     queryKey: ["so05-repack-targets", companyId, sourceMaterialId],
@@ -614,6 +684,210 @@ export default function SO05CreatePage() {
         label: [row.site_name, row.address_line, row.town].filter(Boolean)
           .join(" — "),
       })), [dependentAddressesQ.data, form.sending_customer_id]);
+
+  // business owner, 2026-09-26: this table must be an ErpDenseGrid, like
+  // every other editable line-item grid in the app (POCreatePage.jsx's
+  // lineColumns, SO01CreatePage.jsx's line columns) -- not a hand-rolled
+  // <table>. Each column's render(item) receives the row directly, since
+  // rows={invoice.items} passes items straight through.
+  function itemColumns(invoice) {
+    return [
+      {
+        key: "line_material_type",
+        label: "Type",
+        width: "90px",
+        render: (item) => (
+          <ErpComboboxField
+            inputClassName="rounded px-1.5 py-1"
+            hideBlank
+            value={item.line_material_type}
+            options={MATERIAL_TYPES.map((value) => ({ value, label: value }))}
+            onChange={(value) =>
+              patchItem(invoice.__key, item.__key, {
+                line_material_type: value,
+              })}
+          />
+        ),
+      },
+      {
+        key: "fg_type",
+        label: "FG Type",
+        width: "90px",
+        render: (item) => (
+          <ErpComboboxField
+            inputClassName="rounded px-1.5 py-1"
+            disabled={!["FG", "SFG"].includes(item.line_material_type)}
+            hideBlank
+            value={item.fg_type}
+            options={FG_TYPES.map((value) => ({ value, label: value }))}
+            onChange={(value) =>
+              patchItem(invoice.__key, item.__key, { fg_type: value })}
+          />
+        ),
+      },
+      {
+        key: "material_id",
+        label: "Material",
+        width: "240px",
+        render: (item) => (
+          <ErpComboboxField
+            inputClassName="rounded px-1.5 py-1"
+            placeholder="Select material"
+            value={item.material_id}
+            options={toComboOptions(
+              materials.filter((row) =>
+                String(row.material_type).toUpperCase() ===
+                  item.line_material_type
+              ),
+              materialOptionLabel,
+            )}
+            onChange={(value) =>
+              patchItem(invoice.__key, item.__key, { material_id: value })}
+          />
+        ),
+      },
+      {
+        key: "declared_stroke_number",
+        label: "Stroke",
+        width: "150px",
+        render: (item) => (
+          <StrokeNumberField
+            companyId={companyId}
+            item={item}
+            onChange={(value) =>
+              patchItem(invoice.__key, item.__key, {
+                declared_stroke_number: value,
+              })}
+          />
+        ),
+      },
+      {
+        key: "batch_number",
+        label: "Batch",
+        width: "150px",
+        render: (item) => (
+          <BatchNumberField
+            companyId={companyId}
+            item={item}
+            onChange={(value) =>
+              patchItem(invoice.__key, item.__key, { batch_number: value })}
+          />
+        ),
+      },
+      {
+        key: "num_packs",
+        label: "Packs",
+        width: "90px",
+        render: (item) => (
+          <input
+            type="number"
+            className={input}
+            value={item.num_packs}
+            onChange={(e) =>
+              patchItem(invoice.__key, item.__key, {
+                num_packs: e.target.value,
+                quantity: Number(e.target.value) *
+                    Number(item.per_pack_qty || 0) || item.quantity,
+              })}
+          />
+        ),
+      },
+      {
+        key: "per_pack_qty",
+        label: "Per Pack",
+        width: "90px",
+        render: (item) => (
+          <input
+            type="number"
+            className={input}
+            value={item.per_pack_qty}
+            onChange={(e) =>
+              patchItem(invoice.__key, item.__key, {
+                per_pack_qty: e.target.value,
+                quantity: Number(item.num_packs || 0) *
+                    Number(e.target.value) || item.quantity,
+              })}
+          />
+        ),
+      },
+      {
+        key: "quantity",
+        label: "Qty",
+        width: "100px",
+        render: (item) => {
+          const derivedQty = Number(item.num_packs) > 0 &&
+              Number(item.per_pack_qty) > 0
+            ? String(Number(item.num_packs) * Number(item.per_pack_qty))
+            : item.quantity;
+          return (
+            <input
+              type="number"
+              className={input}
+              value={derivedQty}
+              onChange={(e) =>
+                patchItem(invoice.__key, item.__key, {
+                  quantity: e.target.value,
+                })}
+            />
+          );
+        },
+      },
+      {
+        key: "storage_location_id",
+        label: "Storage Location",
+        width: "220px",
+        render: (item) => (
+          <ErpComboboxField
+            inputClassName="rounded px-1.5 py-1"
+            placeholder="Select receiving location"
+            value={item.storage_location_id}
+            options={toComboOptions(locations)}
+            onChange={(value) =>
+              patchItem(invoice.__key, item.__key, {
+                storage_location_id: value,
+              })}
+          />
+        ),
+      },
+      {
+        key: "is_repacked",
+        label: "Repack",
+        width: "70px",
+        align: "center",
+        render: (item) => (
+          <input
+            type="checkbox"
+            checked={item.is_repacked}
+            onChange={(e) =>
+              patchItem(invoice.__key, item.__key, {
+                is_repacked: e.target.checked,
+                repack_lines: e.target.checked && !item.repack_lines.length
+                  ? [emptyRepack()]
+                  : item.repack_lines,
+              })}
+          />
+        ),
+      },
+      {
+        key: "actions",
+        label: "",
+        width: "50px",
+        render: (item) => (
+          <button
+            className="text-rose-600"
+            onClick={() =>
+              patchInvoice(invoice.__key, {
+                items: invoice.items.filter((row) =>
+                  row.__key !== item.__key
+                ),
+              })}
+          >
+            ×
+          </button>
+        ),
+      },
+    ];
+  }
 
   return (
     <ErpScreenScaffold
@@ -981,335 +1255,175 @@ export default function SO05CreatePage() {
                     </label>
                   )}
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-slate-50">
-                      <th>Type</th>
-                      <th>FG Type</th>
-                      <th>Material</th>
-                      <th>Stroke</th>
-                      <th>Batch</th>
-                      <th>Packs</th>
-                      <th>Per Pack</th>
-                      <th>Qty</th>
-                      <th>Storage Location</th>
-                      <th>Repack</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoice.items.map((item) => {
-                      const derivedQty = Number(item.num_packs) > 0 &&
-                          Number(item.per_pack_qty) > 0
-                        ? String(
-                          Number(item.num_packs) * Number(item.per_pack_qty),
-                        )
-                        : item.quantity;
-                      return (
-                        <React.Fragment key={item.__key}>
-                          <tr className="border-b align-top">
-                            <td>
-                              <ErpComboboxField
-                                inputClassName="rounded px-1.5 py-1"
-                                hideBlank
-                                value={item.line_material_type}
-                                options={MATERIAL_TYPES.map((value) => ({
-                                  value,
-                                  label: value,
-                                }))}
-                                onChange={(value) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    line_material_type: value,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <ErpComboboxField
-                                inputClassName="rounded px-1.5 py-1"
-                                disabled={!["FG", "SFG"].includes(
-                                  item.line_material_type,
+              <ErpDenseGrid
+                columns={itemColumns(invoice)}
+                rows={invoice.items}
+                rowKey={(item) => item.__key}
+                maxHeight="none"
+                emptyMessage="No material rows yet — click Add material row."
+              />
+              {invoice.items.filter((item) =>
+                item.packing_choices?.length > 0 || item.is_repacked
+              ).map((item) => {
+                const derivedQty = Number(item.num_packs) > 0 &&
+                    Number(item.per_pack_qty) > 0
+                  ? String(
+                    Number(item.num_packs) * Number(item.per_pack_qty),
+                  )
+                  : item.quantity;
+                return (
+                  <div key={item.__key} className="space-y-2">
+                    {item.packing_choices?.length > 0 && (
+                      <div className="border border-amber-300 bg-amber-50 p-2 text-xs">
+                        <label>
+                          <strong>{materialOptionLabel(
+                            materials.find((row) =>
+                              row.id === item.material_id
+                            ) ?? {},
+                          ) || "This item"}</strong> — Select Packing PO:{" "}
+                          <ErpComboboxField
+                            className="inline-block w-64"
+                            inputClassName="rounded px-2 py-1"
+                            placeholder="Choose matching PO"
+                            value={item.packing_order_id}
+                            options={item.packing_choices.map((row) => ({
+                              value: row.id,
+                              label: row.po_number,
+                            }))}
+                            onChange={(value) =>
+                              patchItem(invoice.__key, item.__key, {
+                                packing_order_id: value,
+                              })}
+                          />
+                        </label>
+                      </div>
+                    )}
+                    {item.is_repacked && (
+                      <div className="border border-indigo-300 bg-indigo-50 p-2 text-xs space-y-2">
+                        <div className="flex justify-between">
+                          <strong>
+                            {materialOptionLabel(
+                              materials.find((row) =>
+                                row.id === item.material_id
+                              ) ?? {},
+                            ) || "This item"} — Repack targets, total must
+                            equal {derivedQty || 0}
+                          </strong>
+                          <button
+                            className="text-indigo-700"
+                            onClick={() =>
+                              patchItem(invoice.__key, item.__key, {
+                                repack_lines: [
+                                  ...item.repack_lines,
+                                  emptyRepack(),
+                                ],
+                              })}
+                          >
+                            Add target
+                          </button>
+                        </div>
+                        {item.repack_lines.map((line) => (
+                          <div
+                            key={line.__key}
+                            className="grid md:grid-cols-5 gap-2"
+                          >
+                            <RepackTargetSelect
+                              companyId={companyId}
+                              sourceMaterialId={item.material_id}
+                              value={line.target_material_id}
+                              onChange={(value, selected) => {
+                                const fixedBom = selected
+                                  ?.pack_config?.pack_code
+                                  ?.bom_required === true;
+                                const perPackQty = fixedBom
+                                  ? selected.pack_config?.fill_qty ??
+                                    ""
+                                  : "";
+                                patchRepack(
+                                  invoice.__key,
+                                  item.__key,
+                                  line.__key,
+                                  {
+                                    target_material_id: value,
+                                    per_pack_qty: perPackQty,
+                                    per_pack_readonly: fixedBom,
+                                    quantity: fixedBom
+                                      ? Number(line.num_packs || 0) *
+                                        Number(perPackQty || 0)
+                                      : line.quantity,
+                                  },
+                                );
+                              }}
+                            />
+                            <input
+                              type="number"
+                              className={input}
+                              placeholder="Packs"
+                              value={line.num_packs}
+                              onChange={(e) =>
+                                patchRepack(
+                                  invoice.__key,
+                                  item.__key,
+                                  line.__key,
+                                  { num_packs: e.target.value },
                                 )}
-                                hideBlank
-                                value={item.fg_type}
-                                options={FG_TYPES.map((value) => ({
-                                  value,
-                                  label: value,
-                                }))}
-                                onChange={(value) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    fg_type: value,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <ErpComboboxField
-                                inputClassName="rounded px-1.5 py-1"
-                                placeholder="Select material"
-                                value={item.material_id}
-                                options={toComboOptions(
-                                  materials.filter((row) =>
-                                    String(row.material_type).toUpperCase() ===
-                                      item.line_material_type
-                                  ),
-                                  materialOptionLabel,
-                                )}
-                                onChange={(value) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    material_id: value,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className={input}
-                                value={item.declared_stroke_number}
-                                onChange={(e) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    declared_stroke_number: e.target.value,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <BatchNumberField
-                                companyId={companyId}
-                                item={item}
-                                onChange={(value) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    batch_number: value,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                type="number"
-                                className={input}
-                                value={item.num_packs}
-                                onChange={(e) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    num_packs: e.target.value,
-                                    quantity: Number(e.target.value) *
-                                        Number(item.per_pack_qty || 0) ||
-                                      item.quantity,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                type="number"
-                                className={input}
-                                value={item.per_pack_qty}
-                                onChange={(e) =>
-                                  patchItem(invoice.__key, item.__key, {
+                            />
+                            <input
+                              type="number"
+                              className={input}
+                              placeholder="Per pack"
+                              value={line.per_pack_qty}
+                              readOnly={line.per_pack_readonly}
+                              title={line.per_pack_readonly
+                                ? "Fixed by the selected pack BOM"
+                                : undefined}
+                              onChange={(e) =>
+                                patchRepack(
+                                  invoice.__key,
+                                  item.__key,
+                                  line.__key,
+                                  {
                                     per_pack_qty: e.target.value,
-                                    quantity: Number(item.num_packs || 0) *
-                                        Number(e.target.value) || item.quantity,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                type="number"
-                                className={input}
-                                value={derivedQty}
-                                onChange={(e) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    quantity: e.target.value,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <ErpComboboxField
-                                inputClassName="rounded px-1.5 py-1"
-                                placeholder="Select receiving location"
-                                value={item.storage_location_id}
-                                options={toComboOptions(locations)}
-                                onChange={(value) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    storage_location_id: value,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={item.is_repacked}
-                                onChange={(e) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    is_repacked: e.target.checked,
-                                    repack_lines: e.target.checked &&
-                                        !item.repack_lines.length
-                                      ? [emptyRepack()]
-                                      : item.repack_lines,
-                                  })}
-                              />
-                            </td>
-                            <td>
-                              <button
-                                className="text-rose-600"
-                                onClick={() =>
-                                  patchInvoice(invoice.__key, {
-                                    items: invoice.items.filter((row) =>
-                                      row.__key !== item.__key
-                                    ),
-                                  })}
-                              >
-                                ×
-                              </button>
-                            </td>
-                          </tr>
-                          {item.packing_choices?.length > 0 && (
-                            <tr>
-                              <td colSpan="11" className="bg-amber-50 p-2">
-                                <label>
-                                  Select Packing PO:{" "}
-                                  <ErpComboboxField
-                                    className="inline-block w-64"
-                                    inputClassName="rounded px-2 py-1"
-                                    placeholder="Choose matching PO"
-                                    value={item.packing_order_id}
-                                    options={item.packing_choices.map((row) => ({
-                                      value: row.id,
-                                      label: row.po_number,
-                                    }))}
-                                    onChange={(value) =>
-                                      patchItem(invoice.__key, item.__key, {
-                                        packing_order_id: value,
-                                      })}
-                                  />
-                                </label>
-                              </td>
-                            </tr>
-                          )}
-                          {item.is_repacked && (
-                            <tr>
-                              <td colSpan="11" className="bg-indigo-50 p-2">
-                                <div className="space-y-2">
-                                  <div className="flex justify-between">
-                                    <strong>
-                                      Repack targets — total must equal{" "}
-                                      {derivedQty || 0}
-                                    </strong>
-                                    <button
-                                      className="text-indigo-700"
-                                      onClick={() =>
-                                        patchItem(invoice.__key, item.__key, {
-                                          repack_lines: [
-                                            ...item.repack_lines,
-                                            emptyRepack(),
-                                          ],
-                                        })}
-                                    >
-                                      Add target
-                                    </button>
-                                  </div>
-                                  {item.repack_lines.map((line) => (
-                                    <div
-                                      key={line.__key}
-                                      className="grid md:grid-cols-5 gap-2"
-                                    >
-                                      <RepackTargetSelect
-                                        companyId={companyId}
-                                        sourceMaterialId={item.material_id}
-                                        value={line.target_material_id}
-                                        onChange={(value, selected) => {
-                                          const fixedBom = selected
-                                            ?.pack_config?.pack_code
-                                            ?.bom_required === true;
-                                          const perPackQty = fixedBom
-                                            ? selected.pack_config?.fill_qty ??
-                                              ""
-                                            : "";
-                                          patchRepack(
-                                            invoice.__key,
-                                            item.__key,
-                                            line.__key,
-                                            {
-                                              target_material_id: value,
-                                              per_pack_qty: perPackQty,
-                                              per_pack_readonly: fixedBom,
-                                              quantity: fixedBom
-                                                ? Number(line.num_packs || 0) *
-                                                  Number(perPackQty || 0)
-                                                : line.quantity,
-                                            },
-                                          );
-                                        }}
-                                      />
-                                      <input
-                                        type="number"
-                                        className={input}
-                                        placeholder="Packs"
-                                        value={line.num_packs}
-                                        onChange={(e) =>
-                                          patchRepack(
-                                            invoice.__key,
-                                            item.__key,
-                                            line.__key,
-                                            { num_packs: e.target.value },
-                                          )}
-                                      />
-                                      <input
-                                        type="number"
-                                        className={input}
-                                        placeholder="Per pack"
-                                        value={line.per_pack_qty}
-                                        readOnly={line.per_pack_readonly}
-                                        title={line.per_pack_readonly
-                                          ? "Fixed by the selected pack BOM"
-                                          : undefined}
-                                        onChange={(e) =>
-                                          patchRepack(
-                                            invoice.__key,
-                                            item.__key,
-                                            line.__key,
-                                            {
-                                              per_pack_qty: e.target.value,
-                                              quantity:
-                                                Number(line.num_packs || 0) *
-                                                  Number(e.target.value) ||
-                                                line.quantity,
-                                            },
-                                          )}
-                                      />
-                                      <input
-                                        type="number"
-                                        className={input}
-                                        placeholder="Quantity"
-                                        value={line.quantity}
-                                        onChange={(e) =>
-                                          patchRepack(
-                                            invoice.__key,
-                                            item.__key,
-                                            line.__key,
-                                            { quantity: e.target.value },
-                                          )}
-                                      />
-                                      <ErpComboboxField
-                                        inputClassName="rounded px-1.5 py-1"
-                                        placeholder="Receiving location"
-                                        value={line.storage_location_id}
-                                        options={toComboOptions(locations)}
-                                        onChange={(value) =>
-                                          patchRepack(
-                                            invoice.__key,
-                                            item.__key,
-                                            line.__key,
-                                            { storage_location_id: value },
-                                          )}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                                    quantity:
+                                      Number(line.num_packs || 0) *
+                                        Number(e.target.value) ||
+                                      line.quantity,
+                                  },
+                                )}
+                            />
+                            <input
+                              type="number"
+                              className={input}
+                              placeholder="Quantity"
+                              value={line.quantity}
+                              onChange={(e) =>
+                                patchRepack(
+                                  invoice.__key,
+                                  item.__key,
+                                  line.__key,
+                                  { quantity: e.target.value },
+                                )}
+                            />
+                            <ErpComboboxField
+                              inputClassName="rounded px-1.5 py-1"
+                              placeholder="Receiving location"
+                              value={line.storage_location_id}
+                              options={toComboOptions(locations)}
+                              onChange={(value) =>
+                                patchRepack(
+                                  invoice.__key,
+                                  item.__key,
+                                  line.__key,
+                                  { storage_location_id: value },
+                                )}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               <button
                 className="border rounded px-2 py-1 text-xs"
                 onClick={() =>

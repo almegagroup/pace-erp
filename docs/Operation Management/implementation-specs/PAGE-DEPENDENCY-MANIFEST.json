@@ -6155,7 +6155,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/SO05CreatePage.jsx",
-    "dependencyCount": 11,
+    "dependencyCount": 13,
     "deps": [
       {
         "fn": "createSalesReturn",
@@ -6177,6 +6177,22 @@
         "fn": "listSalesReturnRepackSkuOptions",
         "method": "GET",
         "path": "/api/procurement/sales-returns/repack-sku-options",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listSalesReturnStrokeCheckOptions",
+        "method": "GET",
+        "path": "/api/procurement/sales-returns/stroke-check-options",
+        "resourceCode": "PROC_SALES_RETURN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "resolveSalesReturnProdshade",
+        "method": "GET",
+        "path": "/api/procurement/sales-returns/prodshade",
         "resourceCode": "PROC_SALES_RETURN_LIST",
         "action": "VIEW",
         "skipAcl": false

@@ -753,6 +753,82 @@ export async function listSalesReturnReceiptsHandler(
   }
 }
 
+// business owner, 2026-09-26: SO05's item row needs the same green/red
+// Stroke Number dot SO01 already has (§133.21) -- resolves to an approved
+// stroke_master row for this item's own Prodshade, or not. Same mechanism
+// as listSalesOrderStrokeCheckOptionsHandler in sales_order.handlers.ts,
+// but that one only checks MTO/HPS (SO01's own scope) -- SO05 covers all
+// four FG_TYPES (MTEST/MTS included), so this is its own copy rather than
+// widening SO01's endpoint for an unrelated page.
+export async function listSalesReturnStrokeCheckOptionsHandler(
+  req: Request,
+  ctx: Ctx,
+): Promise<Response> {
+  const companyId = text(new URL(req.url).searchParams.get("company_id"));
+  if (!companyId) return fail(req, ctx, "SRET_COMPANY_REQUIRED");
+  try {
+    await requireCompany(ctx, companyId);
+    const { data: strokes, error: strokesError } = await serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("id, prodshade_material_id, stroke_number")
+      .eq("company_id", companyId).eq("status", "APPROVED");
+    if (strokesError) throw new Error("SRET_STROKE_CHECK_OPTIONS_FAILED");
+    const strokeById = new Map(
+      ((strokes ?? []) as JsonRecord[]).map((row) => [text(row.id), row]),
+    );
+    const strokeIds = [...strokeById.keys()];
+    const { data: applicabilities, error: applicabilityError } =
+      strokeIds.length > 0
+        ? await serviceRoleClient
+          .schema("erp_production").from("stroke_po_type_applicability")
+          .select("stroke_master_id, target_po_type").eq("is_active", true)
+          .in("stroke_master_id", strokeIds).in("target_po_type", [
+            ...FG_TYPES,
+          ])
+        : { data: [] as JsonRecord[], error: null };
+    if (applicabilityError) throw new Error("SRET_STROKE_CHECK_OPTIONS_FAILED");
+    const output = ((applicabilities ?? []) as JsonRecord[]).map((row) => {
+      const stroke = strokeById.get(text(row.stroke_master_id));
+      return {
+        prodshade_material_id: stroke?.prodshade_material_id ?? null,
+        po_type: row.target_po_type,
+        stroke_number: stroke?.stroke_number ?? null,
+      };
+    });
+    return okResponse({ data: output }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error
+      ? error.message
+      : "SRET_STROKE_CHECK_OPTIONS_FAILED";
+    return fail(req, ctx, code, code === "SRET_SCOPE_VIOLATION" ? 403 : 500);
+  }
+}
+
+// Thin wrapper over the existing deriveProdshadeMaterialId() (already used
+// by the batch/packing-order resolution logic in this same file) so the
+// frontend's per-row Stroke dot can resolve one FG SKU's own Prodshade
+// without needing to reimplement that external-code/pack-config matching.
+export async function resolveSalesReturnProdshadeHandler(
+  req: Request,
+  ctx: Ctx,
+): Promise<Response> {
+  const materialId = text(new URL(req.url).searchParams.get("material_id"));
+  if (!materialId) return fail(req, ctx, "SRET_MATERIAL_REQUIRED");
+  try {
+    const prodshadeMaterialId = await deriveProdshadeMaterialId(materialId);
+    return okResponse(
+      { data: { material_id: materialId, prodshade_material_id: prodshadeMaterialId } },
+      ctx.request_id,
+      req,
+    );
+  } catch (error) {
+    const code = error instanceof Error
+      ? error.message
+      : "SRET_PRODSHADE_LOOKUP_FAILED";
+    return fail(req, ctx, code, 500);
+  }
+}
+
 export async function createSalesReturnReceiptHandler(
   req: Request,
   ctx: Ctx,

@@ -347,7 +347,9 @@ import {
   listPendingStrokesHandler,
   listRepackTargetSkuOptionsHandler,
   listSalesReturnReceiptsHandler,
+  listSalesReturnStrokeCheckOptionsHandler,
   resolveBatchNumberOptionsHandler,
+  resolveSalesReturnProdshadeHandler,
   saveReturnInvoiceDetailHandler,
 } from "../_core/procurement/sales_return.handlers.ts";
 import {
@@ -713,6 +715,10 @@ export async function dispatchProcurementRoutes(
       return await resolveBatchNumberOptionsHandler(req, ctx);
     case "GET:/api/procurement/sales-returns/repack-sku-options":
       return await listRepackTargetSkuOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/stroke-check-options":
+      return await listSalesReturnStrokeCheckOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/prodshade":
+      return await resolveSalesReturnProdshadeHandler(req, ctx);
     case "GET:/api/procurement/sales-returns/pending-strokes":
       return await listPendingStrokesHandler(req, ctx);
     case "GET:/api/procurement/sales-returns/pending-genealogy":
