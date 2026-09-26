@@ -113,6 +113,16 @@ export default function StrokeMasterPage() {
 
   const firstInputRef = useRef(null);
 
+  // business owner, 2026-09-26: found live -- this was declared much lower
+  // in the file (right before companyOptions) but strokesQ below reads it
+  // immediately, so every render threw "Cannot access 'effectiveCompanyFilter'
+  // before initialization" (a const's temporal dead zone) and blanked the
+  // whole page. Moved above every hook that reads it.
+  const effectiveCompanyFilter = companyFilter || resolveDefaultTransactionCompanyId(runtimeContext);
+  useEffect(() => {
+    if (!companyFilter && effectiveCompanyFilter) setCompanyFilter(effectiveCompanyFilter);
+  }, [companyFilter, effectiveCompanyFilter]);
+
   const strokesQ = useQuery({
     queryKey: ["prod-stroke-masters", effectiveCompanyFilter, statusFilter],
     queryFn: () => listStrokeMasters({ company_id: effectiveCompanyFilter || undefined, status: statusFilter || undefined }),
@@ -148,15 +158,6 @@ export default function StrokeMasterPage() {
   });
 
   const companies = buildTransactionCompanyList(runtimeContext);
-  // business owner, 2026-09-26: this page's Company filter/create/share
-  // dropdowns stayed interactive even for a single-company user -- every
-  // other transaction page in the app auto-resolves and locks to that
-  // one company instead (TransactionCompanySelector; §11 canonical company
-  // rule). Mirrors SO05ListPage.jsx's own effectiveCompanyId pattern.
-  const effectiveCompanyFilter = companyFilter || resolveDefaultTransactionCompanyId(runtimeContext);
-  useEffect(() => {
-    if (!companyFilter && effectiveCompanyFilter) setCompanyFilter(effectiveCompanyFilter);
-  }, [companyFilter, effectiveCompanyFilter]);
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
   // Storage locations and Material Groups are both scoped to whichever
   // company is in play: the create form's company while creating, or the
