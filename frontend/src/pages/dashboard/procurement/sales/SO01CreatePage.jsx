@@ -309,18 +309,29 @@ export default function SO01CreatePage() {
   const strokeCheckQuery = useQuery({
     queryKey: ["so01-stroke-check-options", companyId],
     queryFn: () => listSalesOrderStrokeCheckOptions({ company_id: companyId }),
-    enabled: Boolean(companyId && materialTypes.includes("FG")),
+    enabled: Boolean(companyId && (materialTypes.includes("FG") || materialTypes.includes("SFG"))),
     staleTime: 60_000,
   });
   const validStrokeKeys = useMemo(() => new Set(
     (strokeCheckQuery.data ?? []).map((entry) => `${entry.prodshade_material_id}|${entry.po_type}|${entry.stroke_number}`),
   ), [strokeCheckQuery.data]);
   // true = resolved (green), false = red dot, null = not applicable (not an
-  // MTO/HPS FG line, or no item selected yet).
+  // MTO/HPS FG/SFG line, or no item selected yet).
+  // business owner, 2026-09-26: Stroke Number is now MANDATORY for FG and
+  // SFG lines under MTO/HPS (see the missingStrokeLine check in
+  // handleSubmit below) -- this function's own dot-check logic is
+  // unchanged, only which line_material_types it applies to widened to
+  // include SFG (SFG never had a Stroke Number column/field at all before
+  // this). FG's material_id is a dispatch SKU that resolves to a separate
+  // Prodshade via fgSkuMap; SFG's material_id already IS the Prodshade
+  // (per listSalesOrderSfgMaterialOptions's own comment), so no fgSkuMap
+  // lookup is needed for SFG.
   function strokeCheckStatus(line) {
-    if (line.line_material_type !== "FG" || !["MTO", "HPS"].includes(line.fg_type)) return null;
+    if (!["FG", "SFG"].includes(line.line_material_type) || !["MTO", "HPS"].includes(line.fg_type)) return null;
     if (!line.material_id || !line.declared_stroke_number?.trim()) return false;
-    const prodshadeId = fgSkuMap.get(line.material_id)?.prodshade_material_id;
+    const prodshadeId = line.line_material_type === "SFG"
+      ? line.material_id
+      : fgSkuMap.get(line.material_id)?.prodshade_material_id;
     if (!prodshadeId) return false;
     return validStrokeKeys.has(`${prodshadeId}|${line.fg_type}|${line.declared_stroke_number.trim()}`);
   }
@@ -410,15 +421,25 @@ export default function SO01CreatePage() {
     setMaterialTypes((current) => (current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]));
   }
 
-  function goToPage2() {
-    if (!companyId) { setError("Select a company."); return; }
-    if (materialTypes.length === 0) { setError("Select at least one Material Type."); return; }
-    if (!dispatchType) { setError("Select a Dispatch Type."); return; }
+  // business owner, 2026-09-26: pulled out of goToPage2 so the "Next"
+  // button's disabled state and the on-click check share one source of
+  // truth instead of drifting apart. Returns "" when everything required
+  // is present, else the message goToPage2 used to setError() with.
+  function computePage1ValidationMessage() {
+    if (!companyId) return "Select a company.";
+    if (materialTypes.length === 0) return "Select at least one Material Type.";
+    if (!dispatchType) return "Select a Dispatch Type.";
     if (vendorCodeRequired && vendorCodeOptions.length === 0) {
-      setError("This company has no Vendor Code configured — required for FG/SFG dispatch billed to Asian Paints.");
-      return;
+      return "This company has no Vendor Code configured — required for FG/SFG dispatch billed to Asian Paints.";
     }
-    if (vendorCodeRequired && !vendorCodeId) { setError("Select a Vendor Code."); return; }
+    if (vendorCodeRequired && !vendorCodeId) return "Select a Vendor Code.";
+    return "";
+  }
+  const page1ValidationMessage = computePage1ValidationMessage();
+
+  function goToPage2() {
+    const message = computePage1ValidationMessage();
+    if (message) { setError(message); return; }
     setError("");
     setLines(materialTypes.map((materialType) => makeLine(materialType)));
     setPage(2);
@@ -569,6 +590,24 @@ export default function SO01CreatePage() {
             value={line.material_id} selectedMaterial={fgSkuMap.get(line.material_id)}
             onChange={(value, material) => handleMaterialSelect(line.__key, value, material)} />
         ) },
+        // business owner, 2026-09-26: SFG never had a Stroke Number field at
+        // all before this -- mirrors FG's own §133.21 column below, but
+        // SFG's material_id is already the Prodshade itself (no fgSkuMap
+        // lookup needed, see strokeCheckStatus above). Mandatory for
+        // MTO/HPS, same as FG -- see missingStrokeLine in handleSubmit.
+        { key: "declared_stroke", label: "Stroke Number", width: "150px", render: (line) => {
+          if (!["MTO", "HPS"].includes(line.fg_type)) return <span className="text-xs text-slate-400">—</span>;
+          const status = strokeCheckStatus(line);
+          return (
+            <div className="flex items-center gap-1.5">
+              <span
+                title={status ? "Resolves to an approved Stroke Master row" : "Not found in Stroke Master for this Item's Prodshade — reconcile later"}
+                className={`inline-block h-2 w-2 shrink-0 rounded-full ${status ? "bg-emerald-500" : "bg-rose-500"}`}
+              />
+              {textInput(line.declared_stroke_number, (value) => updateLine(line.__key, { declared_stroke_number: value }), { placeholder: "Stroke No." })}
+            </div>
+          );
+        } },
         { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
         { key: "batch", label: "Batch No.", width: "110px", render: (line) => textInput(line.batch_number, (value) => updateLine(line.__key, { batch_number: value })) },
         { key: "costing_month", label: "Costing Rate Month", width: "150px", render: (line) => costingMonthCell(line, line.__key) },
@@ -625,14 +664,17 @@ export default function SO01CreatePage() {
       // §133.21 (2026-09-01) — MTO/HPS only. What Asian Paints itself
       // declared as the Stroke for this Item — independent of whatever the
       // real production batch later carries (FO->Batch->Process PO already
-      // gives that, separately, once production exists). Manual, purely
-      // informational (never blocks Create SO or dispatch) — Asian
-      // sometimes references an Item+Stroke combination PACE hasn't created
-      // yet; the dot flags that for later Reco reconciliation rather than
-      // hiding it. Red = Prodshade (derived from this SKU) + this exact
-      // Stroke Number don't resolve to a real APPROVED stroke_master row —
-      // always red for a manual/not-yet-real SKU, since no Prodshade can be
-      // derived at all. Green = resolved.
+      // gives that, separately, once production exists).
+      // business owner, 2026-09-26: the field itself is now MANDATORY for
+      // MTO/HPS -- corrects this comment's earlier "never blocks Create SO"
+      // (see missingStrokeLine in handleSubmit). The RED/GREEN dot stays
+      // purely informational as originally designed: Asian sometimes
+      // references an Item+Stroke combination PACE hasn't created yet, so a
+      // red dot does NOT block save -- only a genuinely BLANK field does.
+      // Red = Prodshade (derived from this SKU) + this exact Stroke Number
+      // don't resolve to a real APPROVED stroke_master row — always red for
+      // a manual/not-yet-real SKU, since no Prodshade can be derived at
+      // all. Green = resolved.
       { key: "declared_stroke", label: "Stroke Number", width: "150px", render: (line) => {
         if (!["MTO", "HPS"].includes(line.fg_type)) return <span className="text-xs text-slate-400">—</span>;
         const status = strokeCheckStatus(line);
@@ -739,33 +781,84 @@ export default function SO01CreatePage() {
     return payload;
   }
 
-  async function handleSubmit() {
-    if (lines.length === 0) { setError("At least one item line is required."); return; }
-    if (!externalSoNumber.trim()) { setError("External SO Number is required."); return; }
+  // business owner, 2026-09-26: every one of these used to only run inside
+  // handleSubmit on click (setError + return per check) -- the "Create SO"
+  // button stayed clickable even with required fields blank, so the user
+  // only found out after clicking. Pulled into its own function, still
+  // called from handleSubmit for the actual submit-time guard, but now ALSO
+  // drives the button's disabled state directly (see page2ValidationMessage
+  // below) so the button itself goes disabled the moment something
+  // required is blank, not just on click.
+  function computePage2ValidationMessage() {
+    if (lines.length === 0) return "At least one item line is required.";
+    if (!externalSoNumber.trim()) return "External SO Number is required.";
     if (!isManualDocumentDateWithinWindow(soDate) || (externalSoDate && !isManualDocumentDateWithinWindow(externalSoDate))) {
-      setError(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
-      return;
+      return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
+    }
+    // business owner, 2026-09-26: these Bill-To/Ship-To fields were all
+    // marked `required` (red asterisk) in the JSX below but nothing ever
+    // enforced it -- a blank Customer/VDC/Parent Company only ever
+    // surfaced as whatever generic error buildBillToShipToPayload()'s
+    // resulting incomplete payload happened to trigger server-side, if it
+    // was caught at all. Mirrors the exact same dispatchType/
+    // effectiveNoInboundType/noInboundSubType/asianBilledChoice branches
+    // the JSX below renders -- keep both in sync if a branch changes.
+    if (effectiveNoInboundType === "DEPENDENT_DIRECT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
+      if (!parentCompanyId) return "Parent Company is required.";
+      if (!vdcId) return "VDC is required.";
+      if (!billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+    } else if (effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
+      if (!parentCompanyId) return "Parent Company is required.";
+      if (!depotCodeId) return "Depot Code is required.";
+    } else if (dispatchType === "INDEPENDENT_PARTY") {
+      if (!customerId) return "Customer is required.";
+      if (!shipToCustomerAddressId) return "Bill-To / Ship-To Address is required.";
+    } else if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+      if (!customerId) return "Customer is required.";
+      if (!shipToCustomerAddressId) return "Ship-To Address is required.";
+      if (!parentCompanyId) return "Asian Parent Company is required.";
+      if (!asianBilledChoice) return "Choose Bill-To — VDC, DC, or none (Parent Company).";
+      if ((asianBilledChoice === "VDC" || asianBilledChoice === "DC") && !asianBilledVdcDcId) {
+        return `${asianBilledChoice === "DC" ? "DC" : "VDC"} is required.`;
+      }
+      if (asianBilledChoice === "VDC" && !billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+    } else if (dispatchType === "DEPENDENT_NO_INBOUND") {
+      if (!parentCompanyId) return "Parent Company is required.";
+      if (noInboundSubType === "DIRECT") {
+        if (!vdcId) return "VDC is required.";
+        if (!billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+      } else if (!depotCodeId) return "Depot Code is required.";
     }
     // §133.9-G — a manual-SKU FG line has no material_id by design; it must
     // carry a manual_sku_name instead. Every other line always needs a real item.
     if (lines.some((line) => !line.material_id && !(line.__manualSku && line.manual_sku_name.trim()))) {
-      setError("Every line needs an item selected (or a manual SKU name entered).");
-      return;
+      return "Every line needs an item selected (or a manual SKU name entered).";
     }
     const missingHsnLine = lines.find((line) => {
       if (!line.material_id) return false;
       const material = fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id);
       return !String(material?.hsn_code || "").trim() && !line.hsn_code.trim();
     });
-    if (missingHsnLine) {
-      setError("HSN Code is required for an item that has no HSN in Material Master.");
-      return;
-    }
+    if (missingHsnLine) return "HSN Code is required for an item that has no HSN in Material Master.";
     const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
     if (missingMonthLine) {
-      setError(`Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`);
-      return;
+      return `Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`;
     }
+    // business owner, 2026-09-26: Stroke Number can no longer be left blank
+    // for an FG/SFG line under MTO/HPS -- it used to be purely informational
+    // (the red/green dot), which let a line save with no stroke declared at
+    // all. Only blank blocks; a red dot (Asian referencing a stroke PACE
+    // hasn't created yet) still saves fine, same as before.
+    const missingStrokeLine = lines.find((line) => ["FG", "SFG"].includes(line.line_material_type) && ["MTO", "HPS"].includes(line.fg_type) && !line.declared_stroke_number?.trim());
+    if (missingStrokeLine) {
+      return `Stroke Number is required for ${missingStrokeLine.line_material_type} ${missingStrokeLine.fg_type}. Enter the Stroke Number Asian Paints declared for this Item.`;
+    }
+    return "";
+  }
+
+  async function handleSubmit() {
+    const message = computePage2ValidationMessage();
+    if (message) { setError(message); return; }
     setSaving(true);
     setError("");
     setNotice("");
@@ -830,7 +923,14 @@ export default function SO01CreatePage() {
   const asianBilledVdcDcOptions = depotCodes
     .filter((entry) => entry.dispatch_type === (asianBilledChoice === "DC" ? "DEPOT" : "DIRECT"))
     .map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
-  const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
+  // business owner, 2026-09-26: both buttons used to stay enabled no matter
+  // what was filled in -- clicking was the only way to find out a required
+  // field was missing. Now the button itself disables the moment something
+  // required is blank, and the notice banner names exactly what's missing,
+  // computed from the exact same functions handleSubmit/goToPage2 use so
+  // the button's disabled state can never drift out of sync with what
+  // clicking it would actually do.
+  const page2ValidationMessage = page === 2 ? computePage2ValidationMessage() : "";
 
   return (
     <ErpScreenScaffold
@@ -839,12 +939,13 @@ export default function SO01CreatePage() {
       actions={[
         { key: "back", label: page === 1 ? "Back" : "Previous", tone: "neutral", onClick: () => (page === 1 ? popScreen() : setPage(1)) },
         page === 2
-          ? { key: "save", label: saving ? "Saving..." : "Create SO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || missingFgCostingRateMonth }
-          : { key: "next", label: "Next", tone: "primary", onClick: goToPage2 },
+          ? { key: "save", label: saving ? "Saving..." : "Create SO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || Boolean(page2ValidationMessage) }
+          : { key: "next", label: "Next", tone: "primary", onClick: goToPage2, disabled: Boolean(page1ValidationMessage) },
       ]}
       notices={[
         ...(error ? [{ key: "so01-error", tone: "error", message: error }] : []),
-        ...(missingFgCostingRateMonth ? [{ key: "so01-fg-month-required", tone: "warning", message: "Create SO is unavailable: select Costing Rate Month for every FG MTO/HPS/MTEST line." }] : []),
+        ...(page === 1 && page1ValidationMessage ? [{ key: "so01-page1-required", tone: "warning", message: `Next is unavailable: ${page1ValidationMessage}` }] : []),
+        ...(page === 2 && page2ValidationMessage ? [{ key: "so01-page2-required", tone: "warning", message: `Create SO is unavailable: ${page2ValidationMessage}` }] : []),
         ...(notice ? [{ key: "so01-notice", tone: "success", message: notice }] : []),
       ]}
     >

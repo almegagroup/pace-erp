@@ -15,7 +15,7 @@
  *    stroke_line row.
  */
 
-import React, { useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
@@ -31,7 +31,9 @@ import {
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { listMaterials, listUoms, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember, listStorageLocations } from "../om/omApi.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import ErpCompanySelector from "../../../components/inputs/ErpCompanySelector.jsx";
 import {
   MATERIAL_TYPE_OPTIONS, PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, EMPTY_LINE,
   friendlyStrokeErr, dosageSumOf, renderDrawerActions, Field,
@@ -112,8 +114,8 @@ export default function StrokeMasterPage() {
   const firstInputRef = useRef(null);
 
   const strokesQ = useQuery({
-    queryKey: ["prod-stroke-masters", companyFilter, statusFilter],
-    queryFn: () => listStrokeMasters({ company_id: companyFilter || undefined, status: statusFilter || undefined }),
+    queryKey: ["prod-stroke-masters", effectiveCompanyFilter, statusFilter],
+    queryFn: () => listStrokeMasters({ company_id: effectiveCompanyFilter || undefined, status: statusFilter || undefined }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
   const createCompanyStrokesQ = useQuery({
@@ -146,6 +148,15 @@ export default function StrokeMasterPage() {
   });
 
   const companies = buildTransactionCompanyList(runtimeContext);
+  // business owner, 2026-09-26: this page's Company filter/create/share
+  // dropdowns stayed interactive even for a single-company user -- every
+  // other transaction page in the app auto-resolves and locks to that
+  // one company instead (TransactionCompanySelector; §11 canonical company
+  // rule). Mirrors SO05ListPage.jsx's own effectiveCompanyId pattern.
+  const effectiveCompanyFilter = companyFilter || resolveDefaultTransactionCompanyId(runtimeContext);
+  useEffect(() => {
+    if (!companyFilter && effectiveCompanyFilter) setCompanyFilter(effectiveCompanyFilter);
+  }, [companyFilter, effectiveCompanyFilter]);
   const uomsQ = useQuery({ queryKey: ["om-uoms"], queryFn: () => listUoms({ is_active: true, limit: 500 }), select: (d) => d?.data ?? [] });
   // Storage locations and Material Groups are both scoped to whichever
   // company is in play: the create form's company while creating, or the
@@ -268,7 +279,7 @@ export default function StrokeMasterPage() {
     setDrawerMode("create");
     setAttemptedSave(false);
     setForm({
-      company_id: "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
+      company_id: effectiveCompanyFilter || "", material_type: "SFG", po_type: "", prodshade_mode: "existing",
       prodshade_material_id: "", prod_code: "", shade_code: "",
       stroke_number: "", description: "", base_uom_code: "", conversion_uom_code: "", conversion_factor: "",
       default_storage_location_id: "",
@@ -280,7 +291,7 @@ export default function StrokeMasterPage() {
 
   function openShare() {
     setShareForm({
-      company_id: companyFilter || "", from_po_type: "", to_po_type: "", prodshade_material_id: "", stroke_master_id: "", consider_formulation_changes: false,
+      company_id: effectiveCompanyFilter || "", from_po_type: "", to_po_type: "", prodshade_material_id: "", stroke_master_id: "", consider_formulation_changes: false,
     });
     setShareOpen(true);
   }
@@ -738,12 +749,11 @@ export default function StrokeMasterPage() {
       subtitle="Define RM/INT dosage formulas per Prodshade (SFG/INT, PO Type-scoped)"
       actions={actions}
     >
-      <div className="flex justify-end"><SalesReturnPendingButton companyId={companyFilter || companies[0]?.id || ""} kind="STROKE" /></div>
+      <div className="flex justify-end"><SalesReturnPendingButton companyId={effectiveCompanyFilter || companies[0]?.id || ""} kind="STROKE" /></div>
       <ErpSectionCard title="Filters">
         <div className="flex gap-3 flex-wrap">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Company</label>
-            <ErpComboboxField className="w-64" value={companyFilter} onChange={setCompanyFilter} options={companyOptions} />
+          <div className="w-64">
+            <TransactionCompanySelector runtimeContext={runtimeContext} value={effectiveCompanyFilter} onChange={setCompanyFilter} />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-slate-500">Status</label>
@@ -820,9 +830,7 @@ export default function StrokeMasterPage() {
       >
         <form onSubmit={handleCreate} className="flex flex-col gap-4 p-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Company" required>
-              <ErpComboboxField value={form.company_id} onChange={(v) => setForm((f) => ({ ...f, company_id: v }))} options={companyOptions} />
-            </Field>
+            <TransactionCompanySelector runtimeContext={runtimeContext} value={form.company_id} onChange={(v) => setForm((f) => ({ ...f, company_id: v }))} label="Company" hint="" />
             <Field label="Material Type" required hint={MATERIAL_TYPE_OPTIONS.find((o) => o.value === form.material_type)?.desc}>
               <ErpComboboxField
                 value={form.material_type}
@@ -1135,9 +1143,7 @@ export default function StrokeMasterPage() {
         <div className="p-5 space-y-4">
           <p className="text-sm text-slate-600">Share an approved SFG stroke from one PO type to another. INT is intentionally excluded.</p>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Company" required>
-              <ErpComboboxField value={shareForm.company_id} onChange={(value) => updateShare("company_id", value)} options={companyOptions} placeholder="-- Select company --" />
-            </Field>
+            <TransactionCompanySelector runtimeContext={runtimeContext} value={shareForm.company_id} onChange={(value) => updateShare("company_id", value)} label="Company" hint="" />
             <Field label="From PO Type" required>
               <ErpComboboxField value={shareForm.from_po_type} onChange={(value) => updateShare("from_po_type", value)} options={SHAREABLE_PO_TYPE_OPTIONS} placeholder="-- Select source type --" />
             </Field>
@@ -1190,9 +1196,21 @@ export default function StrokeMasterPage() {
             Changes are staged here; nothing is saved until you click Save Changes, so you can edit several rows (across any search) and commit them together.
           </p>
           <div className="flex gap-3 flex-wrap items-end">
-            <div className="flex flex-col gap-1 w-64">
-              <label className="text-xs text-slate-500">Company</label>
-              <ErpComboboxField value={currentStrokeCompanyId} onChange={changeCurrentStrokeCompany} options={currentStrokeCompanyOptions} hideBlank />
+            <div className="w-64">
+              {/* business owner, 2026-09-26: this is a company subset (only
+                  companies with an MTS Prodshade), not the user's full
+                  runtime company list, so TransactionCompanySelector itself
+                  doesn't fit -- ErpCompanySelector directly with the same
+                  "lock when there's only one real choice" rule instead. */}
+              <ErpCompanySelector
+                companies={currentStrokeCompanyOptions.map((option) => {
+                  const [company_code, company_name] = option.label.split(" — ");
+                  return { id: option.value, company_code, company_name };
+                })}
+                value={currentStrokeCompanyId}
+                onChange={changeCurrentStrokeCompany}
+                readOnly={currentStrokeCompanyOptions.length <= 1}
+              />
             </div>
             <div className="min-w-[280px] flex-1">
               <label className="text-xs text-slate-500 block mb-1">Search (all columns)</label>

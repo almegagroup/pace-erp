@@ -59,7 +59,14 @@ export default function SO05InvoicePostingPage() {
         <QuickFilterInput value={search} onChange={setSearch} placeholder="Search any column…" />
         <label className="text-sm flex items-center gap-2"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show all invoices</label>
       </div>
-      <ErpDenseGrid columns={columns} rows={filtered} rowKey={(row) => row.id} emptyMessage={query.isLoading ? "Loading invoices…" : "No matching invoices."} />
+      {/* maxHeight="none": this queue is a handful of rows with a form
+          rendered right below it, not a big scrolling report -- ErpDenseGrid's
+          default calc(100vh-200px) fixed height reserves almost the whole
+          viewport regardless of row count, pushing the "Invoice details"
+          panel below the fold once a row is opened. Found live 2026-09-26
+          (business owner): clicking "Open" looked like it did nothing --
+          it actually rendered, just off-screen past a wall of empty space. */}
+      <ErpDenseGrid columns={columns} rows={filtered} rowKey={(row) => row.id} emptyMessage={query.isLoading ? "Loading invoices…" : "No matching invoices."} maxHeight="none" />
     </ErpSectionCard>
     {edit && <ErpSectionCard title="Invoice details">
       <div className="grid md:grid-cols-4 gap-3">

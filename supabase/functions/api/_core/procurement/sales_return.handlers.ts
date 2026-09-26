@@ -408,6 +408,60 @@ async function deriveProdshadeMap(materialIds: string[]): Promise<{
   return { prodshadeByMaterial, materialById };
 }
 
+// business owner, 2026-09-26, found via live Prod check (CMP003): PR23
+// (Old Packing PO) has always had backfill_sales_return_packing_order() to
+// clear a pending sales_return_item once the matching genealogy record
+// exists -- PR22 (Old Process PO) never got the equivalent. Confirmed live:
+// two CMP003 items posted via SO05, both PR22'd (process_order rows
+// 9300000503/9300000504, status VERIFIED, correct batch numbers) AND
+// PR23'd (packing_order rows correctly linked via packing_order_id) --
+// PR23's own pending count cleared correctly, but batch_resolved stayed
+// false forever on both sales_return_item rows because nothing ever set it.
+// Unlike the PACKING backfill (a straight SQL join, since packing_order and
+// sales_return_item both key on the exact FG SKU material_id),
+// process_order.material_id is the PRODSHADE, while sales_return_item's own
+// material_id is the FG SKU for an FG line -- the derivation only exists in
+// TypeScript (deriveProdshadeMap, right above), so this backfill has to run
+// here rather than as a plpgsql function like PR23's.
+export async function backfillSalesReturnBatchResolved(
+  companyId: string,
+  prodshadeMaterialId: string,
+  batchNumber: string,
+): Promise<number> {
+  const normalizedBatch = text(batchNumber);
+  const normalizedProdshade = text(prodshadeMaterialId);
+  if (!companyId || !normalizedProdshade || !normalizedBatch) return 0;
+  const { data: candidates, error } = await serviceRoleClient
+    .schema("erp_procurement").from("sales_return_item")
+    .select(
+      "id, material_id, invoice:sales_return_invoice!inner(receipt:sales_return_receipt!inner(company_id))",
+    )
+    .eq("batch_resolved", false)
+    .eq("batch_number", normalizedBatch)
+    .eq("invoice.receipt.company_id", companyId);
+  if (error) throw new Error("SRET_BATCH_RESOLVE_BACKFILL_FAILED");
+  const rows = (candidates ?? []) as JsonRecord[];
+  if (rows.length === 0) return 0;
+  const { prodshadeByMaterial } = await deriveProdshadeMap(
+    rows.map((row) => text(row.material_id)),
+  );
+  const matchingIds = rows
+    .filter((row) => {
+      const materialId = text(row.material_id);
+      const resolvedProdshade = prodshadeByMaterial.get(materialId) ||
+        materialId;
+      return resolvedProdshade === normalizedProdshade;
+    })
+    .map((row) => text(row.id));
+  if (matchingIds.length === 0) return 0;
+  const { error: updateError } = await serviceRoleClient
+    .schema("erp_procurement").from("sales_return_item")
+    .update({ batch_resolved: true })
+    .in("id", matchingIds);
+  if (updateError) throw new Error("SRET_BATCH_RESOLVE_BACKFILL_FAILED");
+  return matchingIds.length;
+}
+
 async function resolveBatchAndPacking(
   companyId: string,
   item: JsonRecord,
@@ -547,7 +601,7 @@ export async function listSalesReturnReceiptsHandler(
             "sales_return_item",
           )
             .select(
-              "id, invoice_id, line_number, line_material_type, material_id, manual_sku_name, quantity, uom_code, num_packs",
+              "id, invoice_id, line_number, line_material_type, material_id, manual_sku_name, quantity, uom_code, num_packs, batch_number, expiry_date",
             )
             .in("invoice_id", chunk),
       )
@@ -719,6 +773,8 @@ export async function listSalesReturnReceiptsHandler(
             quantity: item.quantity,
             uom_code: item.uom_code,
             num_packs: item.num_packs,
+            batch_number: item.batch_number ?? null,
+            expiry_date: item.expiry_date ?? null,
             invoice_number: invoice.invoice_number,
             invoice_date: invoice.invoice_date,
             sending_parent_company_name: parent?.company_name ?? null,
