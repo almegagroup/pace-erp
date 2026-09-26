@@ -42,6 +42,7 @@ import {
   bulkMapVendorsHandler,
   bulkUnmapVendorsHandler,
   changeVendorStatusHandler,
+  checkVendorDuplicateHandler,
   createVendorHandler,
   deleteVendorsHandler,
   getVendorBanksHandler,
@@ -204,6 +205,8 @@ export async function dispatchOmRoutes(
 
     case "POST:/api/om/vendor":
       return await createVendorHandler(req, ctx);
+    case "GET:/api/om/vendor/duplicate-check":
+      return await checkVendorDuplicateHandler(req, ctx);
     case "GET:/api/om/vendors":
       return await listVendorsHandler(req, ctx);
     case "GET:/api/om/vendor":
