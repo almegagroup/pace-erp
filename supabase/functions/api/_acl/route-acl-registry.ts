@@ -148,6 +148,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/sales-returns/pending-invoices": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
   "POST:/api/procurement/sales-returns/invoice-detail": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "EDIT" },
   "GET:/api/procurement/sales-returns/batch-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/packing-order-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
   "GET:/api/procurement/sales-returns/repack-sku-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
   "GET:/api/procurement/sales-returns/stroke-check-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
   "GET:/api/procurement/sales-returns/prodshade": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },

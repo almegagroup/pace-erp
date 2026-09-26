@@ -485,6 +485,7 @@ async function resolveBatchAndPacking(
   {
     batchResolved: boolean;
     packingOrderId: string | null;
+    matchedPoNumber: string | null;
     choices: JsonRecord[];
   }
 > {
@@ -495,7 +496,12 @@ async function resolveBatchAndPacking(
     !materialId || !batchNumber ||
     !["FG", "SFG"].includes(params.lineMaterialType)
   ) {
-    return { batchResolved: false, packingOrderId: null, choices: [] };
+    return {
+      batchResolved: false,
+      packingOrderId: null,
+      matchedPoNumber: null,
+      choices: [],
+    };
   }
   const processMaterialId = await deriveProdshadeMaterialId(materialId);
   const { data: processes, error: processError } = await serviceRoleClient
@@ -510,6 +516,7 @@ async function resolveBatchAndPacking(
     return {
       batchResolved: Boolean(processes?.length),
       packingOrderId: null,
+      matchedPoNumber: null,
       choices: [],
     };
   }
@@ -528,9 +535,15 @@ async function resolveBatchAndPacking(
   if (selected && !rows.some((row) => text(row.id) === selected)) {
     throw new Error("SRET_PACKING_ORDER_INVALID");
   }
+  const resolvedId = selected ||
+    (rows.length === 1 ? text(rows[0].id) : null);
   return {
     batchResolved: Boolean(processes?.length),
-    packingOrderId: selected || (rows.length === 1 ? text(rows[0].id) : null),
+    packingOrderId: resolvedId,
+    matchedPoNumber: resolvedId
+      ? text(rows.find((row) => text(row.id) === resolvedId)?.po_number) ||
+        null
+      : null,
     choices: rows.length > 1 && !selected ? rows : [],
   };
 }
@@ -1283,6 +1296,56 @@ export async function resolveBatchNumberOptionsHandler(
   }
 }
 
+// business owner, 2026-09-26: live "point 1" resolve for the SO05 UI's
+// always-visible Packing PO field, called as the user types/changes a
+// Batch Number (on the item itself, or on a repack line against its own
+// target material). Reuses the exact same resolveBatchAndPacking() the
+// actual save runs, so what the user previews here can never disagree with
+// what gets posted. MTS is a no-op by construction -- resolveBatchAndPacking
+// already returns no packing_order_id/choices for fg_type=MTS (it's
+// intentionally batch-blind/blended stock, feasibility Section 108), so the
+// frontend never needs a special case here; it only needs to not render the
+// field for MTS in the first place.
+export async function resolveSalesReturnPackingOrderOptionsHandler(
+  req: Request,
+  ctx: Ctx,
+): Promise<Response> {
+  const params = new URL(req.url).searchParams;
+  const companyId = text(params.get("company_id"));
+  const materialId = text(params.get("material_id"));
+  const batchNumber = text(params.get("batch_number"));
+  const lineMaterialType = upper(params.get("line_material_type")) || "FG";
+  const fgType = upper(params.get("fg_type"));
+  if (!companyId || !materialId || !batchNumber) {
+    return fail(req, ctx, "SRET_PACKING_OPTIONS_INVALID");
+  }
+  try {
+    await requireCompany(ctx, companyId);
+    const resolved = await resolveBatchAndPacking(companyId, {
+      materialId,
+      batchNumber,
+      fgType,
+      lineMaterialType,
+    });
+    return okResponse(
+      {
+        packing_order_id: resolved.packingOrderId,
+        matched_po_number: resolved.matchedPoNumber,
+        choices: resolved.choices,
+      },
+      ctx.request_id,
+      req,
+    );
+  } catch (error) {
+    return fail(
+      req,
+      ctx,
+      error instanceof Error ? error.message : "SRET_PACKING_OPTIONS_FAILED",
+      500,
+    );
+  }
+}
+
 export async function listRepackTargetSkuOptionsHandler(
   req: Request,
   ctx: Ctx,
@@ -1644,8 +1707,22 @@ export async function listPendingGenealogyEntriesHandler(
     // backfillSalesReturnBatchResolved). PACKING/PR23 now reads
     // packingCandidates instead, which already substitutes each repacked
     // item for its own repack line(s) -- see salesReturnPendingItems above.
+    //
+    // business owner, 2026-09-26: MTS (IWC/Powder) is intentionally
+    // batch-blind/blended stock (feasibility Section 108) -- it never needs
+    // Process PO (PR22) or Packing PO (PR23) genealogy, even if a batch
+    // number happens to be entered on the return. Excluded outright here,
+    // not just left to batch_resolved/packing_order_id, so a typo'd or
+    // otherwise-unmatched MTS batch number can never queue a PR22/PR23 the
+    // batch will never actually need. PACKING/PR23 already excludes MTS via
+    // BATCH_REQUIRED (MTO/HPS/MTEST only) -- this only had to be added to
+    // PROCESS/PR22, which previously ignored fg_type entirely.
+    const isMts = (row: JsonRecord) =>
+      upper(row.line_material_type) === "FG" && upper(row.fg_type) === "MTS";
     const filtered = kind === "PROCESS"
-      ? pending.items.filter((row) => !row.batch_resolved && text(row.batch_number))
+      ? pending.items.filter((row) =>
+        !isMts(row) && !row.batch_resolved && text(row.batch_number)
+      )
       : pending.packingCandidates.filter((row) =>
         upper(row.line_material_type) === "FG" &&
         BATCH_REQUIRED.has(upper(row.fg_type)) && !text(row.packing_order_id)

@@ -349,6 +349,7 @@ import {
   listSalesReturnReceiptsHandler,
   listSalesReturnStrokeCheckOptionsHandler,
   resolveBatchNumberOptionsHandler,
+  resolveSalesReturnPackingOrderOptionsHandler,
   resolveSalesReturnProdshadeHandler,
   saveReturnInvoiceDetailHandler,
 } from "../_core/procurement/sales_return.handlers.ts";
@@ -713,6 +714,8 @@ export async function dispatchProcurementRoutes(
       return await saveReturnInvoiceDetailHandler(req, ctx);
     case "GET:/api/procurement/sales-returns/batch-options":
       return await resolveBatchNumberOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/packing-order-options":
+      return await resolveSalesReturnPackingOrderOptionsHandler(req, ctx);
     case "GET:/api/procurement/sales-returns/repack-sku-options":
       return await listRepackTargetSkuOptionsHandler(req, ctx);
     case "GET:/api/procurement/sales-returns/stroke-check-options":

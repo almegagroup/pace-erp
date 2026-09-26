@@ -33,6 +33,7 @@ import {
   listSalesReturnRepackSkuOptions,
   listSalesReturnStrokeCheckOptions,
   listTransporters,
+  resolveSalesReturnPackingOrderOptions,
   resolveSalesReturnProdshade,
 } from "../procurementApi.js";
 import {
@@ -236,6 +237,12 @@ const TYPES = [
 ];
 const MATERIAL_TYPES = ["RM", "PM", "INT", "SFG", "FG"];
 const FG_TYPES = ["MTO", "HPS", "MTEST", "MTS"];
+// business owner, 2026-09-26: MTS (IWC/Powder) is intentionally
+// batch-blind/blended stock -- it never needs Process PO (PR22) or Packing
+// PO (PR23) genealogy, even when a batch number is entered on the return.
+// Mirrors the backend's own BATCH_REQUIRED set (sales_return.handlers.ts) --
+// keep the two in sync if this ever changes.
+const PACKING_ORDER_REQUIRED_FG_TYPES = ["MTO", "HPS", "MTEST"];
 const today = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 const id = () => `${Date.now()}-${Math.random()}`;
@@ -337,6 +344,92 @@ function BatchNumberField({ companyId, item, onChange }) {
         ))}
       </datalist>
     </>
+  );
+}
+
+// business owner, 2026-09-26: "point 1" of the repack/PR19 design fix —
+// lives right next to Batch Number, resolves live as soon as
+// material+batch are both filled. Unique match -> shows it (read-only
+// preview only; the actual value the backend uses is re-derived server-side
+// at save time by the identical resolveBatchAndPacking(), so nothing here
+// needs to be written into form state for that case to save correctly).
+// Multiple matches -> a real dropdown, wired straight to onChange, so the
+// user resolves it here instead of via the old save-fails-then-retry flow.
+// No match -> stays blank, save proceeds with a blank Packing PO (expected
+// for a repack target -- PR23 backfills it later). MTS never shows this
+// field at all -- it's intentionally batch-blind/blended stock, see
+// PACKING_ORDER_REQUIRED_FG_TYPES above.
+function PackingOrderField({
+  companyId,
+  materialId,
+  batchNumber,
+  fgType,
+  lineMaterialType,
+  value,
+  onChange,
+}) {
+  const applicable = lineMaterialType === "SFG" ||
+    (lineMaterialType === "FG" &&
+      PACKING_ORDER_REQUIRED_FG_TYPES.includes(fgType));
+  const resolveQ = useQuery({
+    queryKey: [
+      "so05-packing-order-options",
+      companyId,
+      materialId,
+      batchNumber,
+      fgType,
+      lineMaterialType,
+    ],
+    queryFn: () =>
+      resolveSalesReturnPackingOrderOptions({
+        company_id: companyId,
+        material_id: materialId,
+        batch_number: batchNumber,
+        fg_type: fgType,
+        line_material_type: lineMaterialType,
+      }),
+    enabled: applicable && !!companyId && !!materialId && !!batchNumber,
+    select: (result) => result?.data ?? result,
+  });
+  if (!applicable) {
+    return (
+      <span
+        className="text-xs text-slate-400"
+        title="MTS is batch-blind blended stock — no Packing PO genealogy needed"
+      >
+        —
+      </span>
+    );
+  }
+  if (!batchNumber) {
+    return <span className="text-xs text-slate-400">—</span>;
+  }
+  const resolved = resolveQ.data;
+  const choices = resolved?.choices ?? [];
+  if (choices.length > 1) {
+    return (
+      <ErpComboboxField
+        inputClassName="rounded px-1.5 py-1"
+        placeholder="Multiple matches — select one"
+        value={value}
+        options={choices.map((row) => ({
+          value: row.id,
+          label: row.po_number,
+        }))}
+        onChange={onChange}
+      />
+    );
+  }
+  return (
+    <input
+      className={input}
+      readOnly
+      title={resolved?.matched_po_number
+        ? "Auto-resolved from PACE"
+        : "No Packing PO exists yet for this batch+SKU — save blank, resolve later via PR23"}
+      placeholder={resolveQ.isFetching ? "Checking…" : "No match — save blank"}
+      value={resolved?.matched_po_number || ""}
+    />
   );
 }
 
@@ -772,7 +865,18 @@ export default function SO05CreatePage() {
               materialOptionLabel,
             )}
             onChange={(value) =>
-              patchItem(invoice.__key, item.__key, { material_id: value })}
+              // business owner, 2026-09-26: changing the material invalidates
+              // whatever Batch Number/Packing PO was resolved for the old
+              // material -- clear both so a stale packing_order_id can never
+              // survive into a save against the new material (would fail
+              // SRET_PACKING_ORDER_INVALID even when the new combo has a
+              // clean single match, since the backend re-validates any
+              // selectedPackingOrderId against the CURRENT material+batch).
+              patchItem(invoice.__key, item.__key, {
+                material_id: value,
+                batch_number: "",
+                packing_order_id: "",
+              })}
           />
         ),
       },
@@ -800,7 +904,30 @@ export default function SO05CreatePage() {
             companyId={companyId}
             item={item}
             onChange={(value) =>
-              patchItem(invoice.__key, item.__key, { batch_number: value })}
+              // business owner, 2026-09-26: a new batch invalidates whatever
+              // Packing PO was resolved/picked for the old one -- see the
+              // same note on material_id's onChange above.
+              patchItem(invoice.__key, item.__key, {
+                batch_number: value,
+                packing_order_id: "",
+              })}
+          />
+        ),
+      },
+      {
+        key: "packing_order_id",
+        label: "Packing PO",
+        width: "160px",
+        render: (item) => (
+          <PackingOrderField
+            companyId={companyId}
+            materialId={item.material_id}
+            batchNumber={item.batch_number}
+            fgType={item.fg_type}
+            lineMaterialType={item.line_material_type}
+            value={item.packing_order_id}
+            onChange={(value) =>
+              patchItem(invoice.__key, item.__key, { packing_order_id: value })}
           />
         ),
       },
@@ -1354,7 +1481,7 @@ export default function SO05CreatePage() {
                         </div>
                         {item.repack_lines.map((line) => (
                           <div key={line.__key} className="space-y-1">
-                            <div className="grid md:grid-cols-5 gap-2">
+                            <div className="grid md:grid-cols-6 gap-2">
                             <RepackTargetSelect
                               companyId={companyId}
                               sourceMaterialId={item.material_id}
@@ -1379,9 +1506,31 @@ export default function SO05CreatePage() {
                                       ? Number(line.num_packs || 0) *
                                         Number(perPackQty || 0)
                                       : line.quantity,
+                                    // business owner, 2026-09-26: a new
+                                    // repack target invalidates whatever
+                                    // Packing PO was resolved for the old
+                                    // one -- same reasoning as the item's
+                                    // own material_id/batch_number clears
+                                    // above.
+                                    packing_order_id: "",
                                   },
                                 );
                               }}
+                            />
+                            <PackingOrderField
+                              companyId={companyId}
+                              materialId={line.target_material_id}
+                              batchNumber={item.batch_number}
+                              fgType={item.fg_type}
+                              lineMaterialType="FG"
+                              value={line.packing_order_id}
+                              onChange={(value) =>
+                                patchRepack(
+                                  invoice.__key,
+                                  item.__key,
+                                  line.__key,
+                                  { packing_order_id: value },
+                                )}
                             />
                             <input
                               type="number"

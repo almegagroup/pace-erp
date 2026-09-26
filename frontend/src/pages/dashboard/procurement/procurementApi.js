@@ -904,6 +904,9 @@ export function saveSalesReturnInvoiceDetail(data) {
 export function listSalesReturnBatchOptions(params) {
   return fetchProcurement("GET", "/api/procurement/sales-returns/batch-options", undefined, params);
 }
+export function resolveSalesReturnPackingOrderOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/packing-order-options", undefined, params);
+}
 export function listSalesReturnRepackSkuOptions(params) {
   return fetchProcurement("GET", "/api/procurement/sales-returns/repack-sku-options", undefined, params);
 }
