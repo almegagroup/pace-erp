@@ -7,7 +7,6 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
@@ -21,6 +20,8 @@ import DrawerBase from "../../../components/layer/DrawerBase.jsx";
 import CustomerCreateForm from "../om/customer/CustomerCreateForm.jsx";
 import CustomerEditForm from "../om/customer/CustomerEditForm.jsx";
 import PlanFeedCustomerPicker from "./PlanFeedCustomerPicker.jsx";
+import PlanFeedPrioritizeSection from "./PlanFeedPrioritizePage.jsx";
+import PlanFeedCategoryReportSection from "./PlanFeedCategoryReportPage.jsx";
 import {
   listPlanFeed, getPlanFeed, createPlanFeed, updatePlanFeed, updateMtestPlanFeed,
   cancelPlanFeed, reactivatePlanFeed, getPlanFeedSummary, upsertFoAllocation,
@@ -38,6 +39,8 @@ const TABS = [
   { key: "create", label: "Create FO" },
   { key: "edit",   label: "Edit FO" },
   { key: "total",  label: "Total Table" },
+  { key: "prioritize", label: "Prioritize" },
+  { key: "report", label: "Report" },
 ];
 
 // business owner, 2026-09-26: Total Table date-range search -- every date
@@ -296,7 +299,6 @@ function emptyFo() {
 
 export default function PlanFeedPage() {
   const qc = useQueryClient();
-  const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [tab, setTab] = useState("create");
   const [companyId, setCompanyId] = useState("");
@@ -359,6 +361,13 @@ export default function PlanFeedPage() {
 
   const selectedParty = selectedFormParty?.id === form.party_id ? selectedFormParty : null;
   const isMtestCreate = poTypeFilter === "MTEST";
+  // Site Contact Person/Number must reflect the ACTUALLY SELECTED party's own
+  // fo_customer_type, not the "PO Type (for Party filter)" dropdown above --
+  // that filter only narrows the party picker and can be left blank even
+  // when the chosen party genuinely is MTEST (found live 2026-09-26,
+  // business owner: fields never appeared because isMtestCreate was wrongly
+  // reused here from the filter-dropdown flag).
+  const isMtestCreateParty = normalizeFoCustomerType(selectedParty?.fo_customer_type) === "MTEST";
 
   // A party can have multiple addresses/sites. The address is a Ship-To
   // reference for the FO creator and the final Direct-dispatch Ship-To.
@@ -527,8 +536,8 @@ export default function PlanFeedPage() {
         order_date: form.order_date,
         scheduled_delivery_date: form.scheduled_delivery_date,
         ordered_stroke_number: form.ordered_stroke_number || undefined,
-        site_contact_person: isMtestCreate ? (form.site_contact_person || undefined) : undefined,
-        site_contact_number: isMtestCreate ? (form.site_contact_number || undefined) : undefined,
+        site_contact_person: isMtestCreateParty ? (form.site_contact_person || undefined) : undefined,
+        site_contact_number: isMtestCreateParty ? (form.site_contact_number || undefined) : undefined,
       });
       toast("FO created successfully.");
       setForm(emptyFo());
@@ -986,7 +995,7 @@ export default function PlanFeedPage() {
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
-      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }, { key: "plan-feed-total-prioritize", label: "Prioritize", onClick: () => navigate("/dashboard/production/plan-feed/prioritize") }, { key: "plan-feed-total-report", label: "Report", onClick: () => navigate("/dashboard/production/plan-feed/report") }] : []}
+      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
@@ -1250,7 +1259,7 @@ export default function PlanFeedPage() {
               )}
             </div>
 
-            {isMtestCreate ? (
+            {isMtestCreateParty ? (
               <>
                 <div className="flex flex-col gap-1">
                   <label className="text-xs text-slate-600 font-medium">Site Contact Person</label>
@@ -1861,6 +1870,8 @@ export default function PlanFeedPage() {
           )}
         </ErpSectionCard>
       )}
+      {tab === "prioritize" && <PlanFeedPrioritizeSection />}
+      {tab === "report" && <PlanFeedCategoryReportSection />}
     </ErpScreenScaffold>
   );
 }

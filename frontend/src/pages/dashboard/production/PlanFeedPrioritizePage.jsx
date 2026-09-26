@@ -9,6 +9,13 @@
  *          page's list (its last-saved Priority Date/Number stay visible as
  *          history on the Total Table, only the priority row-coloring stops
  *          applying there).
+ * Rendered as a tab on PlanFeedPage.jsx, NOT a separate route -- a route-only
+ * companion here hits this app's screen-stack sync (NavigationStackBridge/
+ * ProtectedBranchShell), which corrects the URL back to Plan Feed's own
+ * registered route right after navigate(), bouncing the user back (same bug
+ * class PO11/AC06's "Execute Full Report" hit first -- see
+ * SlocCostingGroupPage.jsx's own comment on this). Same-page tab state is the
+ * only mechanism proven to survive that sync in this codebase.
  */
 
 import { useMemo, useState } from "react";
@@ -16,7 +23,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
-import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { pushToast } from "../../../store/uiToast.js";
 import { listPlanFeedPrioritize, savePlanFeedPriority } from "./prodApi.js";
@@ -31,7 +38,7 @@ function addDaysIso(iso, days) {
 }
 const errorMessage = (error) => error?.backendMessage || error?.message || "Request failed.";
 
-export default function PlanFeedPrioritizePage() {
+export default function PlanFeedPrioritizeSection() {
   const { runtimeContext } = useMenu();
   const queryClient = useQueryClient();
   const [companyId, setCompanyId] = useState("");
@@ -176,7 +183,7 @@ export default function PlanFeedPrioritizePage() {
   const dirtyCount = Object.keys(edits).length;
 
   return (
-    <ErpScreenScaffold title="Prioritize FOs" subtitle="Set dispatch Priority Date / Priority Number on FOs not yet fully mapped to production">
+    <>
       <ErpSectionCard title="Filters">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" hint="" />
@@ -206,7 +213,7 @@ export default function PlanFeedPrioritizePage() {
             cellNavigate
             fitColumnWidths
             stickyFirstColumn
-            maxHeight="calc(100vh - 380px)"
+            maxHeight="calc(100vh - 420px)"
             emptyMessage="No eligible FOs — everything is either fully mapped or MTS/MTEST."
           />
         )}
@@ -216,6 +223,6 @@ export default function PlanFeedPrioritizePage() {
           <button type="button" disabled={saving || dirtyCount === 0} onClick={handleSave} className="h-9 bg-sky-700 px-4 text-sm font-semibold text-white disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
         </div>
       </ErpSectionCard>
-    </ErpScreenScaffold>
+    </>
   );
 }

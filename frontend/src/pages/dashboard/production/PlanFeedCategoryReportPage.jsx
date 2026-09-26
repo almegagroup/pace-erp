@@ -8,6 +8,9 @@
  *          material_category, rolled up into a Category Group (letter
  *          prefix for MTO/MTEST -- PC/PX/S; as-is for HPS, whose Prodshades
  *          are individually named, not a numbered grade series).
+ * Rendered as a tab on PlanFeedPage.jsx, NOT a separate route -- see
+ * PlanFeedPrioritizePage.jsx's own header comment for why (screen-stack sync
+ * bounce-back on route-only companions with no registered screen code).
  */
 
 import { useMemo, useState } from "react";
@@ -15,7 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
-import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
+import { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { pushToast } from "../../../store/uiToast.js";
 import { getPlanFeedCategoryReport } from "./prodApi.js";
@@ -49,7 +52,7 @@ function reportRowFillArgb(row) {
   return null;
 }
 
-export default function PlanFeedCategoryReportPage() {
+export default function PlanFeedCategoryReportSection() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
@@ -102,11 +105,7 @@ export default function PlanFeedCategoryReportPage() {
   }
 
   return (
-    <ErpScreenScaffold
-      title="Plan Feed Report"
-      subtitle="PO Type x Category -- Order / Production / Dispatch Qty, live (read-only)"
-      actions={[{ key: "plan-feed-report-export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExportExcel(), disabled: exporting || rows.length === 0 }]}
-    >
+    <>
       <ErpSectionCard title="Filters">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" hint="" />
@@ -135,7 +134,10 @@ export default function PlanFeedCategoryReportPage() {
           Order Qty is by each FO's own Order Date, Production Qty by the Process PO's Verify date (SFG level), Dispatch Qty by the posted Invoice's Tally Invoice Date -- each independent, not traced against one another.
         </p>
       </ErpSectionCard>
-      <ErpSectionCard title={`Report (${rows.length} row${rows.length === 1 ? "" : "s"})`}>
+      <ErpSectionCard
+        title={`Report (${rows.length} row${rows.length === 1 ? "" : "s"})`}
+        actions={[{ key: "plan-feed-report-export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExportExcel(), disabled: exporting || rows.length === 0 }]}
+      >
         {!effectiveCompanyId ? (
           <p className="text-sm text-slate-400 py-4 text-center">Select a company to view the report.</p>
         ) : reportQ.isFetching ? (
@@ -149,11 +151,11 @@ export default function PlanFeedCategoryReportPage() {
             cellNavigate
             fitColumnWidths
             stickyFirstColumn
-            maxHeight="calc(100vh - 340px)"
+            maxHeight="calc(100vh - 380px)"
             emptyMessage="No data for this company and date range."
           />
         )}
       </ErpSectionCard>
-    </ErpScreenScaffold>
+    </>
   );
 }
