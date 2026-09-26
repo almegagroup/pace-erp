@@ -824,6 +824,23 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
       }
       updates.formula_confirmation_date = formulaConfirmationDate || null;
     }
+    // Per-dispatch Transporter/LR Number/LR Date -- one entry auto-appends per
+    // PGI'd DO (see delivery_order.handlers.ts's createPgiInvoiceHandler), the
+    // user can freely add/edit/remove here afterwards. This column is never
+    // read back into erp_procurement.delivery_challan, so editing it can
+    // never affect the real DO/Invoice -- full-array replace on every save,
+    // same convention as Vendor Master's contacts/emails/banks lists.
+    if (body.dispatch_lr_entries !== undefined) {
+      const rawEntries = Array.isArray(body.dispatch_lr_entries) ? body.dispatch_lr_entries : [];
+      updates.dispatch_lr_entries = rawEntries
+        .map((entry: JsonRecord) => ({
+          transporter_name: toTrimmedString(entry?.transporter_name) || null,
+          lr_number: toTrimmedString(entry?.lr_number) || null,
+          lr_date: toTrimmedString(entry?.lr_date) || null,
+          source_dc_id: toTrimmedString(entry?.source_dc_id) || null,
+        }))
+        .filter((entry: JsonRecord) => entry.transporter_name || entry.lr_number || entry.lr_date);
+    }
     // Revision session -- see the function comment above for why a rename is safe.
     // original_fo_number is deliberately never touched here.
     if (body.fo_number !== undefined) {
@@ -1521,7 +1538,8 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       .select(`
         id, company_id, fo_number, original_fo_number, order_serial_number, party_id, party_name, sku, description, material_id,
         ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
-        ordered_stroke_number, order_confirmation_date, formula_confirmation_date
+        ordered_stroke_number, order_confirmation_date, formula_confirmation_date, dispatch_lr_entries,
+        priority_date, priority_number
       `)
       .neq("status", "CANCELLED");
     if (companyId) foQuery = foQuery.eq("company_id", companyId);
@@ -1849,6 +1867,9 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         delivery_orders: Array.from((deliveryOrdersByFo.get(foId) ?? new Map<string, { dc_number: string; dc_date: string }>()).values())
           .sort((a, b) => b.dc_date.localeCompare(a.dc_date)),
         pending_dispatch_kg: Math.max(0, orderedKg - dispatchedKg),
+        dispatch_lr_entries: Array.isArray(fo.dispatch_lr_entries) ? fo.dispatch_lr_entries : [],
+        priority_date: fo.priority_date ?? null,
+        priority_number: fo.priority_number ?? null,
       };
     });
 
@@ -1873,5 +1894,254 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_SUMMARY_FAILED";
     return foErr(req, ctx, code, 500, "Plan feed summary failed");
+  }
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysIso(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// GET /api/production/plan-feed/prioritize?company_id=
+// Lists MTO/HPS FOs (MTEST/MTS excluded) that are not yet FULLY_MAPPED --
+// the working set the business owner sets dispatch Priority Date/Number
+// against. A FULLY_MAPPED FO drops off this list (its priority values stay
+// visible as history on the Total Table, but this page no longer edits them).
+export async function planFeedPrioritizeListHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_COMPANY_REQUIRED", 400, "company_id is required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
+    const { data: fos, error: foFetchErr } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select(`
+        id, company_id, fo_number, order_serial_number, party_id, party_name, customer_address_id, sku, description,
+        ordered_qty_kg, pack_qty, scheduled_delivery_date, status, priority_date, priority_number
+      `)
+      .eq("company_id", companyId)
+      .neq("status", "CANCELLED");
+    if (foFetchErr) throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+    if (!fos || fos.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const partyIds = [...new Set((fos as JsonRecord[]).map((fo) => toTrimmedString(fo.party_id)).filter(Boolean))];
+    const customerMap = await getCustomerMapByIds(partyIds);
+
+    const addressIds = [...new Set((fos as JsonRecord[]).map((fo) => toTrimmedString(fo.customer_address_id)).filter(Boolean))];
+    const addressMap = new Map<string, JsonRecord>();
+    if (addressIds.length > 0) {
+      const addressRows = await fetchInChunks<JsonRecord>(addressIds, (chunk) => serviceRoleClient
+        .schema("erp_master").from("customer_address")
+        .select("id, site_name, town").in("id", chunk));
+      for (const row of addressRows) addressMap.set(String(row.id), row);
+    }
+
+    const foIds = (fos as JsonRecord[]).map((fo) => String(fo.id));
+    const allocs = await fetchInChunks<JsonRecord>(foIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("plan_feed_packing_order_allocation")
+      .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("plan_feed_id", chunk));
+    const allocByFo: Record<string, JsonRecord[]> = {};
+    for (const a of allocs) {
+      const foId = String(a.plan_feed_id);
+      if (!allocByFo[foId]) allocByFo[foId] = [];
+      allocByFo[foId].push(a);
+    }
+
+    // Production Date = the date the mapped batch(es) actually got produced --
+    // for FG (SKU), that is when the Packing PO carrying that batch went
+    // FINAL (packing_order.finalized_at), never a Process PO's own Verify
+    // date (that is the SFG's production date, one level upstream of the FG
+    // this FO is ordering).
+    const poIds = [...new Set(allocs.map((a) => toTrimmedString(a.packing_order_id)).filter(Boolean))];
+    const finalizedAtByPoId = new Map<string, string>();
+    if (poIds.length > 0) {
+      const packingOrders = await fetchInChunks<JsonRecord>(poIds, (chunk) => serviceRoleClient
+        .schema("erp_production").from("packing_order")
+        .select("id, finalized_at").in("id", chunk));
+      for (const po of packingOrders) {
+        const finalizedAt = toTrimmedString(po.finalized_at);
+        if (finalizedAt) finalizedAtByPoId.set(String(po.id), finalizedAt.slice(0, 10));
+      }
+    }
+
+    const rows = (fos as JsonRecord[])
+      .map((fo) => {
+        const party = customerMap.get(toTrimmedString(fo.party_id));
+        const poType = toUpperTrimmedString(party?.fo_customer_type);
+        const address = addressMap.get(toTrimmedString(fo.customer_address_id));
+        const foAllocs = allocByFo[String(fo.id)] ?? [];
+        const orderedKg = Number(fo.ordered_qty_kg) || 0;
+        const allocatedKg = foAllocs.reduce((s, a) => s + (Number(a.allocated_qty_kg) || 0), 0);
+        const productionDates = [...new Set(
+          foAllocs
+            .map((a) => finalizedAtByPoId.get(toTrimmedString(a.packing_order_id)) ?? "")
+            .filter(Boolean),
+        )].sort();
+        return {
+          id: String(fo.id),
+          company_id: fo.company_id,
+          order_serial_number: fo.order_serial_number,
+          fo_number: fo.fo_number,
+          site_name: toTrimmedString(address?.site_name) || null,
+          town: toTrimmedString(address?.town) || toTrimmedString(party?.town) || null,
+          sku: fo.sku,
+          description: fo.description,
+          ordered_qty_kg: orderedKg,
+          pack_qty: fo.pack_qty,
+          scheduled_delivery_date: fo.scheduled_delivery_date,
+          production_dates: productionDates,
+          priority_date: fo.priority_date ?? null,
+          priority_number: fo.priority_number ?? null,
+          poType,
+          _allocatedKg: allocatedKg,
+          _orderedKg: orderedKg,
+        };
+      })
+      // Only MTO/HPS (customer_master.fo_customer_type = "MTO_HPS") -- MTS and MTEST excluded.
+      .filter((row) => row.poType === "MTO_HPS")
+      .filter((row) => computeProductionStatus(row._orderedKg, row._allocatedKg) !== "FULLY_MAPPED")
+      .map(({ poType: _poType, _allocatedKg, _orderedKg, ...rest }) => rest);
+
+    rows.sort((a, b) => {
+      const aNum = typeof a.priority_number === "number" ? a.priority_number : Number.MAX_SAFE_INTEGER;
+      const bNum = typeof b.priority_number === "number" ? b.priority_number : Number.MAX_SAFE_INTEGER;
+      if (aNum !== bNum) return aNum - bNum;
+      const aDate = a.scheduled_delivery_date ? String(a.scheduled_delivery_date) : "9999-12-31";
+      const bDate = b.scheduled_delivery_date ? String(b.scheduled_delivery_date) : "9999-12-31";
+      return aDate.localeCompare(bDate);
+    });
+
+    return okResponse({ data: rows, priority_window: { min: addDaysIso(todayIsoDate(), -5), max: addDaysIso(todayIsoDate(), 5) } }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_PRIORITIZE_FAILED";
+    return foErr(req, ctx, code, 500, "Plan feed prioritize list failed");
+  }
+}
+
+// POST /api/production/plan-feed/prioritize
+// Body: { company_id, entries: [{ id, priority_date, priority_number }] }
+// Saves Priority Date/Number for a batch of FOs in one call. Both fields
+// must be set together (or both cleared together) per row; the pair must be
+// unique per company (enforced here for a friendly message, and by the DB's
+// own partial unique index as the real guarantee); priority_date must fall
+// within [today-5, today+5].
+export async function updatePlanFeedPriorityHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_COMPANY_REQUIRED", 400, "company_id is required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PLAN_FEED", "EDIT"))) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ACCESS_DENIED", 403, "You do not have Plan Feed edit access for this company.");
+    }
+
+    const rawEntries = Array.isArray(body.entries) ? (body.entries as JsonRecord[]) : [];
+    if (rawEntries.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const minDate = addDaysIso(todayIsoDate(), -5);
+    const maxDate = addDaysIso(todayIsoDate(), 5);
+
+    type Entry = { id: string; priority_date: string | null; priority_number: number | null };
+    const entries: Entry[] = [];
+    for (const raw of rawEntries) {
+      const id = toTrimmedString(raw.id);
+      if (!id) return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_ID_REQUIRED", 400, "Each entry needs an FO id");
+      const priorityDate = toTrimmedString(raw.priority_date) || null;
+      const priorityNumberRaw = raw.priority_number;
+      const priorityNumber = priorityNumberRaw === null || priorityNumberRaw === undefined || priorityNumberRaw === ""
+        ? null
+        : Number(priorityNumberRaw);
+      if ((priorityDate && priorityNumber === null) || (!priorityDate && priorityNumber !== null)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_INCOMPLETE", 400, "Priority Date and Priority Number must be set together (or both cleared).");
+      }
+      if (priorityDate && (priorityDate < minDate || priorityDate > maxDate)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_DATE_OUT_OF_RANGE", 400, `Priority Date must be between ${minDate} and ${maxDate}.`);
+      }
+      if (priorityNumber !== null && (!Number.isInteger(priorityNumber) || priorityNumber <= 0)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_NUMBER_INVALID", 400, "Priority Number must be a positive whole number.");
+      }
+      entries.push({ id, priority_date: priorityDate, priority_number: priorityNumber });
+    }
+
+    // In-batch collision check -- friendlier than waiting for the DB's unique index to reject it.
+    const seenPairs = new Map<string, string>();
+    for (const entry of entries) {
+      if (!entry.priority_date || entry.priority_number === null) continue;
+      const key = `${entry.priority_date}|${entry.priority_number}`;
+      if (seenPairs.has(key) && seenPairs.get(key) !== entry.id) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_DUPLICATE", 409, `Priority Number ${entry.priority_number} is already used for ${entry.priority_date} in this batch.`);
+      }
+      seenPairs.set(key, entry.id);
+    }
+
+    const entryIds = entries.map((e) => e.id);
+    const { data: existingFos, error: existingFoErr } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, company_id, ordered_qty_kg")
+      .in("id", entryIds);
+    if (existingFoErr) throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+    const foById = new Map(((existingFos ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    for (const entry of entries) {
+      const fo = foById.get(entry.id);
+      if (!fo || toTrimmedString(fo.company_id) !== companyId) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, `FO ${entry.id} not found in this company.`);
+      }
+    }
+
+    // Cross-check against the DB for a pair already claimed by a DIFFERENT FO
+    // not in this same save batch (e.g. someone else prioritized that date/
+    // number in between page-load and Save).
+    const datedEntries = entries.filter((e) => e.priority_date && e.priority_number !== null);
+    if (datedEntries.length > 0) {
+      const { data: conflicting, error: conflictErr } = await serviceRoleClient
+        .schema("erp_production").from("plan_feed")
+        .select("id, priority_date, priority_number")
+        .eq("company_id", companyId)
+        .in("priority_date", [...new Set(datedEntries.map((e) => e.priority_date as string))]);
+      if (conflictErr) throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+      for (const row of (conflicting ?? []) as JsonRecord[]) {
+        const rowId = String(row.id);
+        const match = datedEntries.find((e) => e.priority_date === row.priority_date && e.priority_number === row.priority_number);
+        if (match && match.id !== rowId) {
+          return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_DUPLICATE", 409, `Priority Number ${row.priority_number} is already used for ${row.priority_date} by another FO.`);
+        }
+      }
+    }
+
+    await Promise.all(entries.map(async (entry) => {
+      const { error } = await serviceRoleClient
+        .schema("erp_production").from("plan_feed")
+        .update({ priority_date: entry.priority_date, priority_number: entry.priority_number })
+        .eq("id", entry.id);
+      if (error) {
+        const message = String((error as { message?: string })?.message ?? "");
+        if (message.includes("ux_plan_feed_priority_date_number")) {
+          throw new Error("PROD_PLAN_FEED_PRIORITIZE_DUPLICATE");
+        }
+        throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+      }
+    }));
+
+    return okResponse({ data: entries }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_PRIORITIZE_FAILED";
+    const status = code === "PROD_PLAN_FEED_PRIORITIZE_DUPLICATE" ? 409 : 500;
+    return foErr(req, ctx, code, status, "Plan feed prioritize save failed");
   }
 }

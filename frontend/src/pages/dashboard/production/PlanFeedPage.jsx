@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
@@ -197,6 +198,19 @@ function dispatchStatusTone(status) {
     default: return "bg-slate-100 text-slate-600";
   }
 }
+// Prioritize (business owner ask) -- rows with a Priority Number get a
+// tiered background, strongest for #1 (most urgent) fading out by #4+.
+// Stops applying once the FO is FULLY_MAPPED (the priority values stay
+// visible as history on the row, only this coloring switches off).
+function priorityRowClassName(row) {
+  if (row.production_status === "FULLY_MAPPED") return "";
+  const num = row.priority_number;
+  if (num === null || num === undefined || num === "") return "";
+  if (num === 1) return "bg-rose-100";
+  if (num === 2) return "bg-orange-100";
+  if (num === 3) return "bg-amber-100";
+  return "bg-yellow-50";
+}
 
 function localIsoDate() {
   const now = new Date();
@@ -208,6 +222,14 @@ function summaryListText(values) {
 }
 function summaryDateLines(values) {
   return (values ?? []).filter(Boolean).map((value) => <div key={value}>{value}</div>);
+}
+// Dispatch LR entries can pile up (one per dispatch) -- 3 per line, wrapped,
+// keeps the column readable without growing too wide.
+function summaryGroupedLines(values, groupSize = 3) {
+  const list = (values ?? []).filter(Boolean);
+  const lines = [];
+  for (let i = 0; i < list.length; i += groupSize) lines.push(list.slice(i, i + groupSize).join(", "));
+  return lines.map((line, index) => <div key={index}>{line}</div>);
 }
 function gridCellValue(row, column) {
   return String(typeof column.copyValue === "function" ? column.copyValue(row) : row?.[column.key] ?? "");
@@ -222,6 +244,7 @@ function emptyFo() {
 
 export default function PlanFeedPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [tab, setTab] = useState("create");
   const [companyId, setCompanyId] = useState("");
@@ -570,6 +593,7 @@ export default function PlanFeedPage() {
         order_serial_number: row.order_serial_number ?? "",
         order_confirmation_date: row.order_confirmation_date ?? "",
         formula_confirmation_date: row.formula_confirmation_date ?? "",
+        dispatch_lr_entries: Array.isArray(row.dispatch_lr_entries) ? row.dispatch_lr_entries : [],
       });
       setReviseFoNumber(false);
       setRevisedFoNumberDraft(row.fo_number ?? "");
@@ -615,6 +639,16 @@ export default function PlanFeedPage() {
         order_serial_number: editDraft.order_serial_number?.trim() || null,
         order_confirmation_date: editDraft.order_confirmation_date || null,
         formula_confirmation_date: editDraft.formula_confirmation_date || null,
+        // One-way copy off the DO at PGI time (see updatePlanFeed's own
+        // comment) -- freely editable here, never read back into the DO/Invoice.
+        dispatch_lr_entries: (editDraft.dispatch_lr_entries ?? [])
+          .map((entry) => ({
+            transporter_name: entry.transporter_name?.trim() || null,
+            lr_number: entry.lr_number?.trim() || null,
+            lr_date: entry.lr_date || null,
+            source_dc_id: entry.source_dc_id || null,
+          }))
+          .filter((entry) => entry.transporter_name || entry.lr_number || entry.lr_date),
       };
       if (reviseFoNumber) {
         payload.fo_number = revisedFoNumberDraft.trim();
@@ -633,6 +667,16 @@ export default function PlanFeedPage() {
       qc.invalidateQueries({ queryKey: ["prod-plan-feed-summary"] });
     } catch (err) { toast(friendlyErr(err.message), "error"); }
     finally { setSaving(false); }
+  }
+
+  function addLrEntry() {
+    setEditDraft((d) => ({ ...d, dispatch_lr_entries: [...(d.dispatch_lr_entries ?? []), { transporter_name: "", lr_number: "", lr_date: "" }] }));
+  }
+  function updateLrEntry(index, patch) {
+    setEditDraft((d) => ({ ...d, dispatch_lr_entries: (d.dispatch_lr_entries ?? []).map((entry, i) => i === index ? { ...entry, ...patch } : entry) }));
+  }
+  function removeLrEntry(index) {
+    setEditDraft((d) => ({ ...d, dispatch_lr_entries: (d.dispatch_lr_entries ?? []).filter((_, i) => i !== index) }));
   }
 
   async function handleCancel() {
@@ -773,38 +817,52 @@ export default function PlanFeedPage() {
   const [totalFiltersOpen, setTotalFiltersOpen] = useState(false);
   const [exportingTotal, setExportingTotal] = useState(false);
   const totalColumns = useMemo(() => [
-    { key: "order_serial_number", label: "Order Serial No.", width: "140px", render: (r) => <span className="font-mono">{r.order_serial_number || "--"}</span> },
-    { key: "fo_number", label: "FO #", width: "140px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
-    { key: "original_fo_number", label: "Original FO #", width: "140px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
-    { key: "party_name", label: "Party", width: "200px" },
-    { key: "party_town", label: "Town", width: "120px" },
-    { key: "sku", label: "SKU", width: "135px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
+    // "Prioritize" (business owner ask) -- read-only here, editable only via
+    // the dedicated Prioritize page. Values stay visible even after an FO
+    // becomes FULLY_MAPPED (history) -- only the row's priority background
+    // color (see priorityRowClassName below) stops applying at that point.
+    { key: "priority_date", label: "Priority Date", width: "100px", render: (r) => r.priority_date || "--" },
+    { key: "priority_number", label: "Priority #", width: "80px", align: "right", copyValue: (r) => r.priority_number ?? "--", excelValue: (r) => (r.priority_number ?? "") === "" ? "" : Number(r.priority_number), render: (r) => <span className="font-mono">{r.priority_number ?? "--"}</span> },
+    { key: "order_serial_number", label: "Order Serial No.", width: "100px", render: (r) => <span className="font-mono">{r.order_serial_number || "--"}</span> },
+    { key: "fo_number", label: "FO #", width: "100px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
+    { key: "order_date", label: "Order Date", width: "95px" },
+    { key: "original_fo_number", label: "Original FO #", width: "110px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
+    { key: "party_name", label: "Party", width: "180px" },
+    { key: "party_town", label: "Town", width: "100px" },
+    { key: "sku", label: "SKU", width: "110px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
     // Business owner ask (2026-09-05) -- the material's own Document Name
     // (already saved as plan_feed.description at Create time, auto-filled
     // from Material Master's Document Name/material_name), just never
     // surfaced as its own column in this Total Table before.
-    { key: "description", label: "Product Name", width: "180px", render: (r) => r.description || "--" },
+    { key: "description", label: "Product Name", width: "170px", render: (r) => r.description || "--" },
     // Business owner ask (2026-09-05) -- po_type-aware now (matches Process PO
     // Create's own stroke_po_type_applicability gate): a stroke that exists
     // under a DIFFERENT PO Type says exactly which one(s) and that it needs
     // sharing, instead of the old blanket "Not in Stroke Master".
-    { key: "ordered_stroke_number", label: "Ordered Stroke", width: "170px", render: (r) => <span className="font-mono">{r.ordered_stroke_number || "--"}{r.ordered_stroke_missing && r.ordered_stroke_note ? ` (${r.ordered_stroke_note})` : ""}</span> },
-    { key: "ordered_qty_kg", label: "Ordered KG", width: "110px", align: "right", copyValue: (r) => fmt(r.ordered_qty_kg), excelValue: (r) => Number(r.ordered_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.ordered_qty_kg)}</span> },
-    { key: "pack_qty", label: "Pack Qty", width: "90px", align: "right", copyValue: (r) => r.pack_qty ?? "--", excelValue: (r) => (r.pack_qty ?? "" ) === "" ? "" : Number(r.pack_qty), render: (r) => <span className="font-mono">{r.pack_qty ?? "--"}</span> },
-    { key: "allocated_qty_kg", label: "Mapped KG", width: "110px", align: "right", copyValue: (r) => fmt(r.allocated_qty_kg), excelValue: (r) => Number(r.allocated_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.allocated_qty_kg)}</span> },
-    { key: "mapped_batches", label: "Mapped Batch No(s)", width: "220px", copyValue: (r) => summaryListText(r.mapped_batch_numbers), render: (r) => <span className="font-mono">{summaryListText(r.mapped_batch_numbers) || "--"}</span> },
-    { key: "production_status", label: "Production", width: "140px", copyValue: (r) => r.production_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(r.production_status)}`}>{r.production_status?.replaceAll("_", " ")}</span> },
-    { key: "dispatched_qty_kg", label: "Dispatched KG", width: "120px", align: "right", copyValue: (r) => fmt(r.dispatched_qty_kg), excelValue: (r) => Number(r.dispatched_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-emerald-700">{fmt(r.dispatched_qty_kg)}</span> },
-    { key: "dispatch_status", label: "Dispatch", width: "150px", copyValue: (r) => r.dispatch_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${dispatchStatusTone(r.dispatch_status)}`}>{r.dispatch_status?.replaceAll("_", " ")}</span> },
-    { key: "delivery_orders", label: "DO Number", width: "145px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)), render: (r) => <span className="font-mono">{summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)) || "--"}</span> },
-    { key: "delivery_order_dates", label: "DO Date", width: "115px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)), render: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)) || "--" },
-    { key: "tally_invoice_numbers", label: "Tally Invoice No.", width: "160px", copyValue: (r) => summaryListText(r.tally_invoice_numbers), render: (r) => <span className="font-mono">{summaryListText(r.tally_invoice_numbers) || "--"}</span> },
-    { key: "dispatch_dates", label: "Dispatch Date", width: "120px", copyValue: (r) => summaryListText(r.dispatch_dates), render: (r) => r.dispatch_dates?.length ? <span className="font-mono leading-5">{summaryDateLines(r.dispatch_dates)}</span> : "--" },
-    { key: "pending_dispatch_kg", label: "Pending KG", width: "110px", align: "right", copyValue: (r) => fmt(r.pending_dispatch_kg), excelValue: (r) => Number(r.pending_dispatch_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-amber-700">{fmt(r.pending_dispatch_kg)}</span> },
-    { key: "order_date", label: "Order Date", width: "110px" },
-    { key: "scheduled_delivery_date", label: "Del. Date", width: "110px" },
-    { key: "order_confirmation_date", label: "Order Confirmation Date", width: "150px", render: (r) => r.order_confirmation_date || "--" },
-    { key: "formula_confirmation_date", label: "Formula Confirmation Date", width: "160px", render: (r) => r.formula_confirmation_date || "--" },
+    { key: "ordered_stroke_number", label: "Ordered Stroke", width: "140px", render: (r) => <span className="font-mono">{r.ordered_stroke_number || "--"}{r.ordered_stroke_missing && r.ordered_stroke_note ? ` (${r.ordered_stroke_note})` : ""}</span> },
+    { key: "ordered_qty_kg", label: "Ordered KG", width: "95px", align: "right", copyValue: (r) => fmt(r.ordered_qty_kg), excelValue: (r) => Number(r.ordered_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.ordered_qty_kg)}</span> },
+    { key: "pack_qty", label: "Pack Qty", width: "75px", align: "right", copyValue: (r) => r.pack_qty ?? "--", excelValue: (r) => (r.pack_qty ?? "" ) === "" ? "" : Number(r.pack_qty), render: (r) => <span className="font-mono">{r.pack_qty ?? "--"}</span> },
+    { key: "allocated_qty_kg", label: "Mapped KG", width: "95px", align: "right", copyValue: (r) => fmt(r.allocated_qty_kg), excelValue: (r) => Number(r.allocated_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.allocated_qty_kg)}</span> },
+    { key: "mapped_batches", label: "Mapped Batch No(s)", width: "190px", copyValue: (r) => summaryListText(r.mapped_batch_numbers), render: (r) => <span className="font-mono">{summaryListText(r.mapped_batch_numbers) || "--"}</span> },
+    { key: "production_status", label: "Production", width: "120px", copyValue: (r) => r.production_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(r.production_status)}`}>{r.production_status?.replaceAll("_", " ")}</span> },
+    { key: "dispatched_qty_kg", label: "Dispatched KG", width: "100px", align: "right", copyValue: (r) => fmt(r.dispatched_qty_kg), excelValue: (r) => Number(r.dispatched_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-emerald-700">{fmt(r.dispatched_qty_kg)}</span> },
+    { key: "dispatch_status", label: "Dispatch", width: "130px", copyValue: (r) => r.dispatch_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${dispatchStatusTone(r.dispatch_status)}`}>{r.dispatch_status?.replaceAll("_", " ")}</span> },
+    { key: "delivery_orders", label: "DO Number", width: "120px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)), render: (r) => <span className="font-mono">{summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_number)) || "--"}</span> },
+    { key: "delivery_order_dates", label: "DO Date", width: "100px", copyValue: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)), render: (r) => summaryListText((r.delivery_orders ?? []).map((entry) => entry.dc_date)) || "--" },
+    { key: "tally_invoice_numbers", label: "Tally Invoice No.", width: "130px", copyValue: (r) => summaryListText(r.tally_invoice_numbers), render: (r) => <span className="font-mono">{summaryListText(r.tally_invoice_numbers) || "--"}</span> },
+    { key: "dispatch_dates", label: "Dispatch Date", width: "110px", copyValue: (r) => summaryListText(r.dispatch_dates), render: (r) => r.dispatch_dates?.length ? <span className="font-mono leading-5">{summaryDateLines(r.dispatch_dates)}</span> : "--" },
+    { key: "pending_dispatch_kg", label: "Pending KG", width: "95px", align: "right", copyValue: (r) => fmt(r.pending_dispatch_kg), excelValue: (r) => Number(r.pending_dispatch_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-amber-700">{fmt(r.pending_dispatch_kg)}</span> },
+    // §142-ish ask -- per-dispatch Transporter/LR Number/LR Date, one-way
+    // copied off the DO at PGI time, freely editable in Edit FO afterwards
+    // (see plan_feed.handlers.ts's updatePlanFeed comment). Small text, 3
+    // entries per line, wrapped -- same convention as Dispatch Date's own
+    // multi-line rendering just below.
+    { key: "dispatch_lr_transporter", label: "Transporter", width: "130px", copyValue: (r) => summaryListText((r.dispatch_lr_entries ?? []).map((entry) => entry.transporter_name)), render: (r) => (r.dispatch_lr_entries ?? []).length ? <span className="text-[11px] leading-5">{summaryGroupedLines(r.dispatch_lr_entries.map((entry) => entry.transporter_name))}</span> : "--" },
+    { key: "dispatch_lr_number", label: "LR Number", width: "130px", copyValue: (r) => summaryListText((r.dispatch_lr_entries ?? []).map((entry) => entry.lr_number)), render: (r) => (r.dispatch_lr_entries ?? []).length ? <span className="font-mono text-[11px] leading-5">{summaryGroupedLines(r.dispatch_lr_entries.map((entry) => entry.lr_number))}</span> : "--" },
+    { key: "dispatch_lr_date", label: "LR Date", width: "130px", copyValue: (r) => summaryListText((r.dispatch_lr_entries ?? []).map((entry) => entry.lr_date)), render: (r) => (r.dispatch_lr_entries ?? []).length ? <span className="text-[11px] leading-5">{summaryGroupedLines(r.dispatch_lr_entries.map((entry) => entry.lr_date))}</span> : "--" },
+    { key: "scheduled_delivery_date", label: "Del. Date", width: "95px" },
+    { key: "order_confirmation_date", label: "Order Confirmation Date", width: "120px", render: (r) => r.order_confirmation_date || "--" },
+    { key: "formula_confirmation_date", label: "Formula Confirmation Date", width: "130px", render: (r) => r.formula_confirmation_date || "--" },
   ], []);
   const totalSuggestions = useMemo(() => [...new Set(summary.flatMap((row) => totalColumns.map((column) => gridCellValue(row, column)).filter(Boolean)))].sort((a, b) => a.localeCompare(b)).slice(0, 300), [summary, totalColumns]);
   const totalSuggestionsByColumn = useMemo(() => Object.fromEntries(totalColumns.map((column) => [column.key, [...new Set(summary.map((row) => gridCellValue(row, column)).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 150)])), [summary, totalColumns]);
@@ -843,7 +901,7 @@ export default function PlanFeedPage() {
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
-      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }] : []}
+      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }, { key: "plan-feed-total-prioritize", label: "Prioritize", onClick: () => navigate("/dashboard/production/plan-feed/prioritize") }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
@@ -1409,6 +1467,29 @@ export default function PlanFeedPage() {
                     </div>
                   </div>
                   </fieldset>
+                  <div className="col-span-2 flex flex-col gap-2 border-t border-slate-200 pt-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-slate-600">Dispatch Details (Transporter / LR Number / LR Date)</label>
+                      <button type="button" onClick={addLrEntry} disabled={editData.status === "CANCELLED"} className="text-xs font-semibold text-sky-700 hover:text-sky-900 disabled:opacity-50">+ Add</button>
+                    </div>
+                    {/* One entry auto-appears here per PGI'd dispatch (copied once from that
+                        DO's own Transporter/LR Number/LR Date); freely editable afterwards --
+                        this never writes back to the DO or its Invoice. */}
+                    {(editDraft.dispatch_lr_entries ?? []).length === 0 ? (
+                      <p className="text-xs text-slate-400">No dispatch entries yet — these auto-fill when a dispatch is invoiced (PGI), or add one manually.</p>
+                    ) : (
+                      <div className="flex flex-col gap-1.5">
+                        {(editDraft.dispatch_lr_entries ?? []).map((entry, index) => (
+                          <div key={index} className="grid grid-cols-[1fr_1fr_150px_28px] gap-2 items-center">
+                            <input className="border border-slate-300 rounded px-2 py-1 text-xs" placeholder="Transporter Name" value={entry.transporter_name ?? ""} onChange={(e) => updateLrEntry(index, { transporter_name: e.target.value })} disabled={editData.status === "CANCELLED"} />
+                            <input className="border border-slate-300 rounded px-2 py-1 text-xs font-mono" placeholder="LR Number" value={entry.lr_number ?? ""} onChange={(e) => updateLrEntry(index, { lr_number: e.target.value })} disabled={editData.status === "CANCELLED"} />
+                            <input type="date" className="border border-slate-300 rounded px-2 py-1 text-xs" value={entry.lr_date ?? ""} onChange={(e) => updateLrEntry(index, { lr_date: e.target.value })} disabled={editData.status === "CANCELLED"} />
+                            <button type="button" onClick={() => removeLrEntry(index)} disabled={editData.status === "CANCELLED"} className="text-rose-500 hover:text-rose-700 text-sm disabled:opacity-50" title="Remove">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <div className="col-span-2 flex gap-3 pt-2">
                     {editData.status !== "CANCELLED" ? (
                       <>
@@ -1637,7 +1718,7 @@ export default function PlanFeedPage() {
           ) : (
             <>
               <p className="mb-2 text-xs text-slate-500">Arrow keys move cell-to-cell. Shift+Click, click-drag, or Shift+Arrow selects a range; Ctrl+C copies it like Excel.</p>
-              <ErpDenseGrid columns={totalColumns} rows={filteredSummary} rowKey={(row) => row.id ?? row.fo_number} virtualize rangeSelect stickyFirstColumn maxHeight="calc(100vh - 290px)" emptyMessage="No FOs matched the selected filters." />
+              <ErpDenseGrid columns={totalColumns} rows={filteredSummary} rowKey={(row) => row.id ?? row.fo_number} getRowProps={(row) => ({ className: priorityRowClassName(row) })} virtualize rangeSelect stickyFirstColumn fitColumnWidths maxHeight="calc(100vh - 290px)" emptyMessage="No FOs matched the selected filters." />
             </>
           )}
         </ErpSectionCard>

@@ -139,6 +139,8 @@ import {
   addMtestPlanFeedItemHandler,
   updateMtestPlanFeedItemHandler,
   deleteMtestPlanFeedItemHandler,
+  planFeedPrioritizeListHandler,
+  updatePlanFeedPriorityHandler,
 } from "../_core/production/plan_feed.handlers.ts";
 import {
   listProcessOrdersHandler,
@@ -415,6 +417,10 @@ export async function dispatchProductionRoutes(
       return await listMtestSkusHandler(req, ctx);
     case "GET:/api/production/plan-feed/mtest-capability":
       return await getMtestPlanFeedCapabilityHandler(req, ctx);
+    case "GET:/api/production/plan-feed/prioritize":
+      return await planFeedPrioritizeListHandler(req, ctx);
+    case "POST:/api/production/plan-feed/prioritize":
+      return await updatePlanFeedPriorityHandler(req, ctx);
 
     // PR24 Order Information System
     case "GET:/api/production/order-information-system":
