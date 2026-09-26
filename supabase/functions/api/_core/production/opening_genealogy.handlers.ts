@@ -22,6 +22,7 @@ import {
   toUpperTrimmedString,
 } from "./production.shared.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
+import { backfillSalesReturnBatchResolved } from "../procurement/sales_return.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -388,6 +389,15 @@ export async function createOldProcessPoHandler(req: Request, ctx: ProdHandlerCo
         throw new Error("PROD_OLD_PROCESS_PO_CREATE_FAILED");
       }
     }
+
+    // business owner, 2026-09-26, found via live Prod check (CMP003): PR23
+    // has always backfilled its matching Sales Return line (see the RPC
+    // call in createOldPackingPoHandler below) -- PR22 never did the
+    // equivalent, so a SO05 item's "batch resolved" pending flag stayed
+    // stuck forever even after its Old Process PO was created and VERIFIED.
+    // materialId here is already the prodshade (accepts material_id or
+    // prodshade_material_id from the request body, see above).
+    await backfillSalesReturnBatchResolved(companyId, materialId, batchNumber);
 
     return createdOk({ id: poId, po_number: poNumber, batch_number: batchNumber, status: "VERIFIED" }, ctx.request_id, req);
   } catch (err) {
