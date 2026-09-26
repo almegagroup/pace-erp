@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
@@ -17,7 +18,13 @@ import {
   resolveDefaultTransactionCompanyId,
 } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { isRouteAllowed } from "../../../../router/routeIndex.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import {
+  getActiveScreenContext,
+  openScreen,
+  popScreen,
+  updateActiveScreenContext,
+} from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import {
   createSalesReturn,
@@ -27,6 +34,7 @@ import {
 } from "../procurementApi.js";
 import {
   listCustomerAddresses,
+  listCustomerAddressesByDepot,
   listCustomers,
   listFgDepotCodes,
   listFgParentCompanies,
@@ -38,12 +46,12 @@ import {
 // TransporterPicker (§137, 2026-09-06 keyboard-nav fix), same local-copy
 // convention as that file already uses (kept per-page, not extracted to a
 // shared component, since each page's props are tightly coupled to its own
-// state shape). "Add to Transporter Master" opens in a NEW TAB here rather
-// than DO01/GRN's screen-stack context-stash trick — this page isn't
-// registered in OPERATION_SCREENS as its own stack entry (it's a plain
-// react-router route), so getActiveScreenContext()/updateActiveScreenContext()
-// would not reliably target it. A new tab achieves the same goal (never lose
-// the in-progress Sales Return form) without depending on that mechanism.
+// state shape). "Add to Transporter Master" pushes via the screen-stack
+// context-stash pattern (onAddNew, wired below to
+// handleAddTransporterToMaster) -- opening it in a new browser tab/window
+// was tried first but this app's session enforces single-window ownership
+// (Secure Window Guard), so a second tab can never load the workspace at
+// all. Found live 2026-09-26, business owner.
 function TransporterPicker({
   transporterId,
   transporterName,
@@ -51,6 +59,7 @@ function TransporterPicker({
   onClear,
   companyId,
   canManageTransporters,
+  onAddNew,
 }) {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -177,14 +186,13 @@ function TransporterPicker({
               <div className="px-3 py-2 text-xs text-slate-500">
                 No match found.
                 {canManageTransporters ? (
-                  <a
-                    href="/dashboard/procurement/masters/transporters"
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={onAddNew}
                     className="ml-2 text-sky-600 underline"
                   >
                     Add to Transporter Master →
-                  </a>
+                  </button>
                 ) : (
                   <span className="ml-2 text-slate-400">(Contact manager to add)</span>
                 )}
@@ -275,6 +283,18 @@ const optionLabel = (row) =>
     row.material_name || row.company_name || row.description ||
     row.customer_name || row.transporter_name,
   ].filter(Boolean).join(" — ");
+// Item Name + Document Name — business owner, 2026-09-26: never lead with
+// pace_code for a material row, it's often blank/meaningless (e.g. an FG
+// SKU's vendor-invoice barcode landed in material_name instead of a
+// readable name, while document_name -- material_master's own "vendor
+// invoice name" column, added alongside pace_code going nullable in the
+// 2026-06-18 redesign -- is the one that reads sensibly). Only for
+// materials; optionLabel above still serves companies/customers/
+// transporters, which have no pace_code at all.
+const materialOptionLabel = (row) =>
+  [row.material_name, row.document_name].filter(Boolean).join(" — ");
+const toComboOptions = (list, label = optionLabel) =>
+  list.map((row) => ({ value: row.id, label: label(row) }));
 const rows = (value) => Array.isArray(value) ? value : value?.data ?? [];
 
 function BatchNumberField({ companyId, item, onChange }) {
@@ -327,23 +347,20 @@ function RepackTargetSelect({ companyId, sourceMaterialId, value, onChange }) {
     enabled: !!companyId && !!sourceMaterialId,
     select: rows,
   });
+  const options = toComboOptions(optionsQ.data ?? [], materialOptionLabel);
   return (
-    <select
-      className={input}
+    <ErpComboboxField
+      className="text-xs"
+      inputClassName="h-8"
+      placeholder="Target SKU"
       value={value}
-      onChange={(event) => {
-        const nextValue = event.target.value;
+      options={options}
+      onChange={(nextValue) =>
         onChange(
           nextValue,
           (optionsQ.data ?? []).find((row) => row.id === nextValue) ?? null,
-        );
-      }}
-    >
-      <option value="">Target SKU</option>
-      {(optionsQ.data ?? []).map((row) => (
-        <option key={row.id} value={row.id}>{optionLabel(row)}</option>
-      ))}
-    </select>
+        )}
+    />
   );
 }
 
@@ -354,10 +371,18 @@ export default function SO05CreatePage() {
     allowedRoutes ?? new Set(),
     "/dashboard/procurement/masters/transporters",
   );
+  const canManageCustomers = isRouteAllowed(
+    allowedRoutes ?? new Set(),
+    "/dashboard/om/customers",
+  );
   const companies = useMemo(() => buildTransactionCompanyList(runtimeContext), [
     runtimeContext,
   ]);
-  const [form, setForm] = useState({
+  // Restored after a round trip to "Add to Transporter Master" (stashed by
+  // handleAddTransporterToMaster below) -- see PROC_DO_EDIT's own comment on
+  // this pattern for why a bare openScreen() would otherwise wipe the form.
+  const _savedForm = getActiveScreenContext()?.so05FormValues?.form ?? null;
+  const [form, setForm] = useState(_savedForm ?? {
     company_id: "",
     receipt_date: today(),
     return_type: "DEPENDENT_DIRECT",
@@ -448,6 +473,16 @@ export default function SO05CreatePage() {
   }, [transportersQ.data, form.transporter_id]);
   const locations = locationsQ.data ?? [];
   const materials = materialsQ.data ?? [];
+
+  function handleAddTransporterToMaster() {
+    updateActiveScreenContext({ so05FormValues: { form } });
+    openScreen(OPERATION_SCREENS.PROC_TRANSPORTER_MASTER.screen_code);
+  }
+
+  function handleAddCustomerToMaster() {
+    updateActiveScreenContext({ so05FormValues: { form } });
+    openScreen(OPERATION_SCREENS.OM_CUSTOMER_LIST.screen_code);
+  }
 
   const patchInvoice = (key, patch) =>
     setForm((current) => ({
@@ -542,6 +577,43 @@ export default function SO05CreatePage() {
     String(row.dispatch_type).toUpperCase() ===
       (form.return_type === "DEPENDENT_DIRECT" ? "DIRECT" : "DEPOT")
   );
+  const isDepotChoice = form.return_type === "DEPENDENT_DEPOT" ||
+    form.asian_side_choice === "DC";
+  const selectedDepotOrVdcId = isDepotChoice
+    ? form.sending_depot_id
+    : form.sending_vdc_id;
+  // business owner, 2026-09-26: once a VDC/Depot is picked, the Customer and
+  // Customer Address fields must come from THAT location's own mapped
+  // addresses (erp_master.customer_address.depot_code_id), not the
+  // company-wide customer list the Independent flow uses -- a Dependent
+  // return only ever comes from a customer already sitting under that VDC.
+  const dependentAddressesQ = useQuery({
+    queryKey: ["so05-dependent-addresses", selectedDepotOrVdcId],
+    queryFn: () => listCustomerAddressesByDepot(selectedDepotOrVdcId),
+    enabled: !!selectedDepotOrVdcId,
+    select: rows,
+  });
+  const dependentCustomerOptions = useMemo(() => {
+    const seen = new Map();
+    for (const row of dependentAddressesQ.data ?? []) {
+      if (!row.customer_id || seen.has(row.customer_id)) continue;
+      seen.set(row.customer_id, {
+        value: row.customer_id,
+        label: [row.customer_code, row.customer_name].filter(Boolean).join(
+          " — ",
+        ),
+      });
+    }
+    return [...seen.values()];
+  }, [dependentAddressesQ.data]);
+  const dependentAddressOptions = useMemo(() =>
+    (dependentAddressesQ.data ?? [])
+      .filter((row) => row.customer_id === form.sending_customer_id)
+      .map((row) => ({
+        value: row.id,
+        label: [row.site_name, row.address_line, row.town].filter(Boolean)
+          .join(" — "),
+      })), [dependentAddressesQ.data, form.sending_customer_id]);
 
   return (
     <ErpScreenScaffold
@@ -573,13 +645,16 @@ export default function SO05CreatePage() {
             />
           </label>
           <label className="text-xs text-slate-600">
-            Return Type<select
-              className={input}
+            Return Type
+            <ErpComboboxField
+              inputClassName="rounded px-2 py-1.5 text-sm"
+              hideBlank
               value={form.return_type}
-              onChange={(event) =>
+              options={TYPES.map(([value, label]) => ({ value, label }))}
+              onChange={(value) =>
                 setForm((current) => ({
                   ...current,
-                  return_type: event.target.value,
+                  return_type: value,
                   sending_parent_company_id: "",
                   sending_vdc_id: "",
                   sending_depot_id: "",
@@ -587,139 +662,166 @@ export default function SO05CreatePage() {
                   sending_customer_address_id: "",
                   sending_company_id: "",
                 }))}
-            >
-              {TYPES.map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
-              ))}
-            </select>
+            />
           </label>
           {form.return_type === "STO" && (
             <label className="text-xs text-slate-600">
-              Sending Company<select
-                className={input}
+              Sending Company
+              <ErpComboboxField
+                inputClassName="rounded px-2 py-1.5 text-sm"
+                placeholder="Select company"
                 value={form.sending_company_id}
-                onChange={(e) =>
-                  setForm({ ...form, sending_company_id: e.target.value })}
-              >
-                <option value="">Select company</option>
-                {companies.filter((row) => row.id !== companyId).map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {optionLabel(row)}
-                  </option>
-                ))}
-              </select>
+                options={toComboOptions(
+                  companies.filter((row) => row.id !== companyId),
+                )}
+                onChange={(value) =>
+                  setForm({ ...form, sending_company_id: value })}
+              />
             </label>
           )}
           {(dependent || asian) && (
             <label className="text-xs text-slate-600">
-              Parent Company<select
-                className={input}
+              Parent Company
+              <ErpComboboxField
+                inputClassName="rounded px-2 py-1.5 text-sm"
+                placeholder="Select parent"
                 value={form.sending_parent_company_id}
-                onChange={(e) =>
+                options={(parentsQ.data ?? []).map((row) => ({
+                  value: row.id,
+                  label: row.company_name,
+                }))}
+                onChange={(value) =>
                   setForm({
                     ...form,
-                    sending_parent_company_id: e.target.value,
+                    sending_parent_company_id: value,
                     sending_vdc_id: "",
                     sending_depot_id: "",
+                    sending_customer_id: "",
+                    sending_customer_address_id: "",
                   })}
-              >
-                <option value="">Select parent</option>
-                {(parentsQ.data ?? []).map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.company_name}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
           )}
           {independent && (
             <>
               <label className="text-xs text-slate-600">
-                Customer<select
-                  className={input}
+                Customer
+                <ErpComboboxField
+                  inputClassName="rounded px-2 py-1.5 text-sm"
+                  placeholder="Select customer"
                   value={form.sending_customer_id}
-                  onChange={(e) =>
+                  options={toComboOptions(customersQ.data ?? [])}
+                  onChange={(value) =>
                     setForm({
                       ...form,
-                      sending_customer_id: e.target.value,
+                      sending_customer_id: value,
                       sending_customer_address_id: "",
                     })}
-                >
-                  <option value="">Select customer</option>
-                  {(customersQ.data ?? []).map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {optionLabel(row)}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label className="text-xs text-slate-600">
-                Customer Address<select
-                  className={input}
+                Customer Address
+                <ErpComboboxField
+                  inputClassName="rounded px-2 py-1.5 text-sm"
+                  placeholder="Select address"
+                  disabled={!form.sending_customer_id}
                   value={form.sending_customer_address_id}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      sending_customer_address_id: e.target.value,
-                    })}
-                >
-                  <option value="">Select address</option>
-                  {(addressesQ.data ?? []).map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {[row.site_name, row.address_line, row.town].filter(
-                        Boolean,
-                      ).join(" — ")}
-                    </option>
-                  ))}
-                </select>
+                  options={(addressesQ.data ?? []).map((row) => ({
+                    value: row.id,
+                    label: [row.site_name, row.address_line, row.town].filter(
+                      Boolean,
+                    ).join(" — "),
+                  }))}
+                  onChange={(value) =>
+                    setForm({ ...form, sending_customer_address_id: value })}
+                />
               </label>
             </>
           )}
           {asian && (
             <label className="text-xs text-slate-600">
-              Asian-side Location<select
-                className={input}
+              Asian-side Location
+              <ErpComboboxField
+                inputClassName="rounded px-2 py-1.5 text-sm"
+                hideBlank
                 value={form.asian_side_choice}
-                onChange={(e) =>
-                  setForm({ ...form, asian_side_choice: e.target.value })}
-              >
-                <option value="NONE">Parent Company</option>
-                <option value="VDC">VDC</option>
-                <option value="DC">Depot</option>
-              </select>
+                options={[
+                  { value: "NONE", label: "Parent Company" },
+                  { value: "VDC", label: "VDC" },
+                  { value: "DC", label: "Depot" },
+                ]}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    asian_side_choice: value,
+                    sending_vdc_id: "",
+                    sending_depot_id: "",
+                    sending_customer_id: "",
+                    sending_customer_address_id: "",
+                  })}
+              />
             </label>
           )}
           {(dependent || (asian && form.asian_side_choice !== "NONE")) && (
             <label className="text-xs text-slate-600">
-              {form.return_type === "DEPENDENT_DEPOT" ||
-                  form.asian_side_choice === "DC"
-                ? "Depot"
-                : "VDC"}
-              <select
-                className={input}
-                value={form.return_type === "DEPENDENT_DEPOT" ||
-                    form.asian_side_choice === "DC"
-                  ? form.sending_depot_id
-                  : form.sending_vdc_id}
-                onChange={(e) =>
+              {isDepotChoice ? "Depot" : "VDC"}
+              <ErpComboboxField
+                inputClassName="rounded px-2 py-1.5 text-sm"
+                placeholder="Select location"
+                value={selectedDepotOrVdcId}
+                options={toComboOptions(depotRows)}
+                onChange={(value) =>
                   setForm({
                     ...form,
-                    [
-                      form.return_type === "DEPENDENT_DEPOT" ||
-                        form.asian_side_choice === "DC"
-                        ? "sending_depot_id"
-                        : "sending_vdc_id"
-                    ]: e.target.value,
+                    [isDepotChoice ? "sending_depot_id" : "sending_vdc_id"]:
+                      value,
+                    sending_customer_id: "",
+                    sending_customer_address_id: "",
                   })}
-              >
-                <option value="">Select location</option>
-                {depotRows.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {optionLabel(row)}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
+          )}
+          {(dependent || (asian && form.asian_side_choice !== "NONE")) &&
+            selectedDepotOrVdcId && (
+            <>
+              <label className="text-xs text-slate-600">
+                Customer (under this {isDepotChoice ? "Depot" : "VDC"})
+                <ErpComboboxField
+                  inputClassName="rounded px-2 py-1.5 text-sm"
+                  placeholder="Select customer"
+                  value={form.sending_customer_id}
+                  options={dependentCustomerOptions}
+                  emptyStateLabel="No customer mapped to this location yet."
+                  onChange={(value) =>
+                    setForm({
+                      ...form,
+                      sending_customer_id: value,
+                      sending_customer_address_id: "",
+                    })}
+                />
+                {canManageCustomers && (
+                  <button
+                    type="button"
+                    onClick={handleAddCustomerToMaster}
+                    className="mt-1 block text-[11px] text-sky-600 underline"
+                  >
+                    Not listed? Add in Customer Master →
+                  </button>
+                )}
+              </label>
+              <label className="text-xs text-slate-600">
+                Customer Address
+                <ErpComboboxField
+                  inputClassName="rounded px-2 py-1.5 text-sm"
+                  placeholder="Select address"
+                  disabled={!form.sending_customer_id}
+                  value={form.sending_customer_address_id}
+                  options={dependentAddressOptions}
+                  onChange={(value) =>
+                    setForm({ ...form, sending_customer_address_id: value })}
+                />
+              </label>
+            </>
           )}
           <label className="text-xs text-slate-600">
             Transporter
@@ -728,6 +830,7 @@ export default function SO05CreatePage() {
               transporterName={transporterName}
               companyId={companyId}
               canManageTransporters={canManageTransporters}
+              onAddNew={handleAddTransporterToMaster}
               onSelect={(t) =>
                 setForm({
                   ...form,
@@ -848,17 +951,20 @@ export default function SO05CreatePage() {
                         />
                       </label>
                       <label className="text-xs">
-                        Freight<select
-                          className={input}
+                        Freight
+                        <ErpComboboxField
+                          inputClassName="rounded px-2 py-1.5 text-sm"
+                          hideBlank
                           value={invoice.freight_term}
-                          onChange={(e) =>
+                          options={[
+                            { value: "FOR", label: "FOR" },
+                            { value: "TO_PAY", label: "TO_PAY" },
+                          ]}
+                          onChange={(value) =>
                             patchInvoice(invoice.__key, {
-                              freight_term: e.target.value,
+                              freight_term: value,
                             })}
-                        >
-                          <option>FOR</option>
-                          <option>TO_PAY</option>
-                        </select>
+                        />
                       </label>
                     </>
                   )
@@ -880,8 +986,8 @@ export default function SO05CreatePage() {
                   <thead>
                     <tr className="bg-slate-50">
                       <th>Type</th>
-                      <th>Material</th>
                       <th>FG Type</th>
+                      <th>Material</th>
                       <th>Stroke</th>
                       <th>Batch</th>
                       <th>Packs</th>
@@ -904,55 +1010,55 @@ export default function SO05CreatePage() {
                         <React.Fragment key={item.__key}>
                           <tr className="border-b align-top">
                             <td>
-                              <select
-                                className={input}
+                              <ErpComboboxField
+                                inputClassName="rounded px-1.5 py-1"
+                                hideBlank
                                 value={item.line_material_type}
-                                onChange={(e) =>
+                                options={MATERIAL_TYPES.map((value) => ({
+                                  value,
+                                  label: value,
+                                }))}
+                                onChange={(value) =>
                                   patchItem(invoice.__key, item.__key, {
-                                    line_material_type: e.target.value,
+                                    line_material_type: value,
                                   })}
-                              >
-                                {MATERIAL_TYPES.map((value) => (
-                                  <option key={value}>{value}</option>
-                                ))}
-                              </select>
+                              />
                             </td>
                             <td>
-                              <select
-                                className={input}
-                                value={item.material_id}
-                                onChange={(e) =>
-                                  patchItem(invoice.__key, item.__key, {
-                                    material_id: e.target.value,
-                                  })}
-                              >
-                                <option value="">Select material</option>
-                                {materials.filter((row) =>
-                                  String(row.material_type).toUpperCase() ===
-                                    item.line_material_type
-                                ).map((row) => (
-                                  <option key={row.id} value={row.id}>
-                                    {optionLabel(row)}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                            <td>
-                              <select
-                                className={input}
+                              <ErpComboboxField
+                                inputClassName="rounded px-1.5 py-1"
                                 disabled={!["FG", "SFG"].includes(
                                   item.line_material_type,
                                 )}
+                                hideBlank
                                 value={item.fg_type}
-                                onChange={(e) =>
+                                options={FG_TYPES.map((value) => ({
+                                  value,
+                                  label: value,
+                                }))}
+                                onChange={(value) =>
                                   patchItem(invoice.__key, item.__key, {
-                                    fg_type: e.target.value,
+                                    fg_type: value,
                                   })}
-                              >
-                                {FG_TYPES.map((value) => (
-                                  <option key={value}>{value}</option>
-                                ))}
-                              </select>
+                              />
+                            </td>
+                            <td>
+                              <ErpComboboxField
+                                inputClassName="rounded px-1.5 py-1"
+                                placeholder="Select material"
+                                value={item.material_id}
+                                options={toComboOptions(
+                                  materials.filter((row) =>
+                                    String(row.material_type).toUpperCase() ===
+                                      item.line_material_type
+                                  ),
+                                  materialOptionLabel,
+                                )}
+                                onChange={(value) =>
+                                  patchItem(invoice.__key, item.__key, {
+                                    material_id: value,
+                                  })}
+                              />
                             </td>
                             <td>
                               <input
@@ -1013,23 +1119,16 @@ export default function SO05CreatePage() {
                               />
                             </td>
                             <td>
-                              <select
-                                className={input}
+                              <ErpComboboxField
+                                inputClassName="rounded px-1.5 py-1"
+                                placeholder="Select receiving location"
                                 value={item.storage_location_id}
-                                onChange={(e) =>
+                                options={toComboOptions(locations)}
+                                onChange={(value) =>
                                   patchItem(invoice.__key, item.__key, {
-                                    storage_location_id: e.target.value,
+                                    storage_location_id: value,
                                   })}
-                              >
-                                <option value="">
-                                  Select receiving location
-                                </option>
-                                {locations.map((row) => (
-                                  <option key={row.id} value={row.id}>
-                                    {optionLabel(row)}
-                                  </option>
-                                ))}
-                              </select>
+                              />
                             </td>
                             <td>
                               <input
@@ -1064,21 +1163,20 @@ export default function SO05CreatePage() {
                               <td colSpan="11" className="bg-amber-50 p-2">
                                 <label>
                                   Select Packing PO:{" "}
-                                  <select
-                                    className={input}
+                                  <ErpComboboxField
+                                    className="inline-block w-64"
+                                    inputClassName="rounded px-2 py-1"
+                                    placeholder="Choose matching PO"
                                     value={item.packing_order_id}
-                                    onChange={(e) =>
+                                    options={item.packing_choices.map((row) => ({
+                                      value: row.id,
+                                      label: row.po_number,
+                                    }))}
+                                    onChange={(value) =>
                                       patchItem(invoice.__key, item.__key, {
-                                        packing_order_id: e.target.value,
+                                        packing_order_id: value,
                                       })}
-                                  >
-                                    <option value="">Choose matching PO</option>
-                                    {item.packing_choices.map((row) => (
-                                      <option key={row.id} value={row.id}>
-                                        {row.po_number}
-                                      </option>
-                                    ))}
-                                  </select>
+                                  />
                                 </label>
                               </td>
                             </tr>
@@ -1187,29 +1285,19 @@ export default function SO05CreatePage() {
                                             { quantity: e.target.value },
                                           )}
                                       />
-                                      <select
-                                        className={input}
+                                      <ErpComboboxField
+                                        inputClassName="rounded px-1.5 py-1"
+                                        placeholder="Receiving location"
                                         value={line.storage_location_id}
-                                        onChange={(e) =>
+                                        options={toComboOptions(locations)}
+                                        onChange={(value) =>
                                           patchRepack(
                                             invoice.__key,
                                             item.__key,
                                             line.__key,
-                                            {
-                                              storage_location_id:
-                                                e.target.value,
-                                            },
+                                            { storage_location_id: value },
                                           )}
-                                      >
-                                        <option value="">
-                                          Receiving location
-                                        </option>
-                                        {locations.map((row) => (
-                                          <option key={row.id} value={row.id}>
-                                            {optionLabel(row)}
-                                          </option>
-                                        ))}
-                                      </select>
+                                      />
                                     </div>
                                   ))}
                                 </div>

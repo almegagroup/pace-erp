@@ -195,7 +195,7 @@ async function resolveSenderSnapshot(
   ) {
     throw new Error("SRET_DEPENDENT_LOCATION_INVALID");
   }
-  return {
+  const snapshot: JsonRecord = {
     sending_parent_company_id: parentId,
     sending_vdc_id: returnType === "DEPENDENT_DIRECT" ? depotId : null,
     sending_depot_id: returnType === "DEPENDENT_DEPOT" ? depotId : null,
@@ -204,6 +204,53 @@ async function resolveSenderSnapshot(
     sending_state: text(depot.state) || null,
     sending_gst_number: text(depot.gst_number) || null,
   };
+
+  // business owner, 2026-09-26: the SO05 UI now lets the user pick which
+  // specific customer (and site address) under this VDC/Depot the return is
+  // actually coming from -- both optional (a Dependent return's sender-of-
+  // record was, and remains, the VDC/Depot itself). When given, record the
+  // customer/address as the actual sending site (more specific than the
+  // depot's own generic description/address) and reject an address that
+  // doesn't belong to the selected VDC/Depot, mirroring the existing
+  // depot-scope check so_map.handlers.ts already does for the same table.
+  const customerId = text(payload.sending_customer_id);
+  const addressId = text(payload.sending_customer_address_id);
+  if (customerId || addressId) {
+    if (!customerId || !addressId) {
+      throw new Error("SRET_CUSTOMER_ADDRESS_REQUIRED");
+    }
+    const [
+      { data: address, error: addressError },
+      { data: customer, error: customerError },
+    ] = await Promise.all([
+      serviceRoleClient.schema("erp_master").from("customer_address")
+        .select("id, customer_id, depot_code_id, site_name, address_line, town, state, pin_code, status")
+        .eq("id", addressId).eq("status", "ACTIVE").maybeSingle(),
+      serviceRoleClient.schema("erp_master").from("customer_master")
+        .select("id, customer_name, gst_number").eq("id", customerId)
+        .maybeSingle(),
+    ]);
+    if (
+      addressError || customerError || !address || !customer ||
+      text(address.customer_id) !== customerId ||
+      text(address.depot_code_id) !== depotId
+    ) {
+      throw new Error("SRET_CUSTOMER_ADDRESS_NOT_FOUND");
+    }
+    Object.assign(snapshot, {
+      sending_customer_id: customerId,
+      sending_customer_address_id: addressId,
+      sending_name: text(customer.customer_name) || text(address.site_name) ||
+        snapshot.sending_name,
+      sending_address:
+        [text(address.address_line), text(address.town), text(address.pin_code)]
+          .filter(Boolean).join(", ") || snapshot.sending_address,
+      sending_state: text(address.state) || snapshot.sending_state,
+      sending_gst_number: text(customer.gst_number) || snapshot.sending_gst_number,
+    });
+  }
+
+  return snapshot;
 }
 
 async function validateStorageLocation(
@@ -442,6 +489,19 @@ async function currentBlockedRate(
   return Number(preferred?.valuation_rate ?? 0);
 }
 
+const RETURN_TYPE_LABELS: Record<string, string> = {
+  DEPENDENT_DIRECT: "Dependent — Direct",
+  DEPENDENT_DEPOT: "Dependent — Depot",
+  INDEPENDENT_PARTY: "Independent Party",
+  INDEPENDENT_PARTY_ASIAN_BILLED: "Independent Party — Asian Billed",
+  STO: "STO",
+};
+
+// business owner, 2026-09-26: SO05's list must show one row per ITEM (not
+// one row per receipt) -- company code, item type/name/document name, qty,
+// packs, invoice number/date, and every sending-location field, so a return
+// receipt with several invoices/items is fully visible without opening it.
+// §8A -- every FK bulk-resolved here, never a raw id in the response.
 export async function listSalesReturnReceiptsHandler(
   req: Request,
   ctx: Ctx,
@@ -450,15 +510,243 @@ export async function listSalesReturnReceiptsHandler(
   if (!companyId) return fail(req, ctx, "SRET_COMPANY_REQUIRED");
   try {
     await requireCompany(ctx, companyId);
-    const { data, error } = await serviceRoleClient.schema("erp_procurement")
-      .from("sales_return_receipt")
+
+    const { data: receipts, error: receiptsError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_return_receipt")
       .select(
-        "id, receipt_number, receipt_date, status, return_type, sending_name, sending_address, sending_state, sending_gst_number, vehicle_number, lr_number, created_at",
+        "id, receipt_number, receipt_date, status, return_type, " +
+          "sending_parent_company_id, sending_vdc_id, sending_depot_id, " +
+          "sending_customer_id, sending_customer_address_id, sending_company_id, " +
+          "sending_name, sending_address, sending_state, sending_gst_number, " +
+          "vehicle_number, lr_number, created_at",
       )
       .eq("company_id", companyId).order("receipt_date", { ascending: false })
       .order("created_at", { ascending: false });
-    if (error) throw new Error("SRET_LIST_FAILED");
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    if (receiptsError) throw new Error("SRET_LIST_FAILED");
+    const receiptRows = (receipts ?? []) as JsonRecord[];
+    if (receiptRows.length === 0) {
+      return okResponse({ data: [] }, ctx.request_id, req);
+    }
+    const receiptIds = receiptRows.map((r) => text(r.id));
+
+    const invoiceRows = await fetchInChunks<JsonRecord>(
+      receiptIds,
+      (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from(
+          "sales_return_invoice",
+        )
+          .select("id, receipt_id, invoice_number, invoice_date")
+          .in("receipt_id", chunk),
+    );
+    const invoiceIds = invoiceRows.map((r) => text(r.id));
+    const itemRows = invoiceIds.length
+      ? await fetchInChunks<JsonRecord>(
+        invoiceIds,
+        (chunk) =>
+          serviceRoleClient.schema("erp_procurement").from(
+            "sales_return_item",
+          )
+            .select(
+              "id, invoice_id, line_number, line_material_type, material_id, manual_sku_name, quantity, uom_code, num_packs",
+            )
+            .in("invoice_id", chunk),
+      )
+      : [];
+
+    // §8B -- every lookup below is independent of the others, resolved in
+    // one parallel round.
+    const materialIds = [
+      ...new Set(itemRows.map((r) => text(r.material_id)).filter(Boolean)),
+    ];
+    const parentIds = [
+      ...new Set(
+        receiptRows.map((r) => text(r.sending_parent_company_id)).filter(
+          Boolean,
+        ),
+      ),
+    ];
+    const depotIds = [
+      ...new Set(
+        receiptRows.flatMap((r) => [
+          text(r.sending_vdc_id),
+          text(r.sending_depot_id),
+        ]).filter(Boolean),
+      ),
+    ];
+    const customerIds = [
+      ...new Set(
+        receiptRows.map((r) => text(r.sending_customer_id)).filter(Boolean),
+      ),
+    ];
+    const addressIds = [
+      ...new Set(
+        receiptRows.map((r) => text(r.sending_customer_address_id)).filter(
+          Boolean,
+        ),
+      ),
+    ];
+    const sendingCompanyIds = [
+      ...new Set(
+        receiptRows.map((r) => text(r.sending_company_id)).filter(Boolean),
+      ),
+    ];
+
+    const [
+      materials,
+      parents,
+      depots,
+      customers,
+      addresses,
+      sendingCompanies,
+      ownCompany,
+    ] = await Promise.all([
+      materialIds.length
+        ? fetchInChunks<JsonRecord>(
+          materialIds,
+          (chunk) =>
+            serviceRoleClient.schema("erp_master").from("material_master")
+              .select("id, material_name, document_name").in("id", chunk),
+        )
+        : Promise.resolve([] as JsonRecord[]),
+      parentIds.length
+        ? fetchInChunks<JsonRecord>(
+          parentIds,
+          (chunk) =>
+            serviceRoleClient.schema("erp_master").from("fg_parent_company")
+              .select("id, company_name").in("id", chunk),
+        )
+        : Promise.resolve([] as JsonRecord[]),
+      depotIds.length
+        ? fetchInChunks<JsonRecord>(
+          depotIds,
+          (chunk) =>
+            serviceRoleClient.schema("erp_master").from("fg_depot_code")
+              .select("id, code, description").in("id", chunk),
+        )
+        : Promise.resolve([] as JsonRecord[]),
+      customerIds.length
+        ? fetchInChunks<JsonRecord>(
+          customerIds,
+          (chunk) =>
+            serviceRoleClient.schema("erp_master").from("customer_master")
+              .select("id, customer_code, customer_name").in("id", chunk),
+        )
+        : Promise.resolve([] as JsonRecord[]),
+      addressIds.length
+        ? fetchInChunks<JsonRecord>(
+          addressIds,
+          (chunk) =>
+            serviceRoleClient.schema("erp_master").from("customer_address")
+              .select("id, site_name, address_line, town").in("id", chunk),
+        )
+        : Promise.resolve([] as JsonRecord[]),
+      sendingCompanyIds.length
+        ? fetchInChunks<JsonRecord>(
+          sendingCompanyIds,
+          (chunk) =>
+            serviceRoleClient.schema("erp_master").from("companies")
+              .select("id, company_code, company_name").in("id", chunk),
+        )
+        : Promise.resolve([] as JsonRecord[]),
+      serviceRoleClient.schema("erp_master").from("companies")
+        .select("id, company_code").eq("id", companyId).maybeSingle(),
+    ]);
+
+    const materialMap = new Map(materials.map((m) => [text(m.id), m]));
+    const parentMap = new Map(parents.map((p) => [text(p.id), p]));
+    const depotMap = new Map(depots.map((d) => [text(d.id), d]));
+    const customerMap = new Map(customers.map((c) => [text(c.id), c]));
+    const addressMap = new Map(addresses.map((a) => [text(a.id), a]));
+    const sendingCompanyMap = new Map(
+      sendingCompanies.map((c) => [text(c.id), c]),
+    );
+    const invoicesByReceipt = new Map<string, JsonRecord[]>();
+    for (const invoice of invoiceRows) {
+      const key = text(invoice.receipt_id);
+      const list = invoicesByReceipt.get(key) ?? [];
+      list.push(invoice);
+      invoicesByReceipt.set(key, list);
+    }
+    const itemsByInvoice = new Map<string, JsonRecord[]>();
+    for (const item of itemRows) {
+      const key = text(item.invoice_id);
+      const list = itemsByInvoice.get(key) ?? [];
+      list.push(item);
+      itemsByInvoice.set(key, list);
+    }
+
+    const addressLabel = (row: JsonRecord | undefined) =>
+      row
+        ? [row.site_name, row.address_line, row.town].filter(Boolean).join(
+          ", ",
+        ) || null
+        : null;
+
+    const rows: JsonRecord[] = [];
+    for (const receipt of receiptRows) {
+      const receiptId = text(receipt.id);
+      const parent = parentMap.get(text(receipt.sending_parent_company_id));
+      const vdc = depotMap.get(text(receipt.sending_vdc_id));
+      const depot = depotMap.get(text(receipt.sending_depot_id));
+      const customer = customerMap.get(text(receipt.sending_customer_id));
+      const address = addressMap.get(
+        text(receipt.sending_customer_address_id),
+      );
+      const sendingCompany = sendingCompanyMap.get(
+        text(receipt.sending_company_id),
+      );
+      const receiptInvoices = invoicesByReceipt.get(receiptId) ?? [];
+      for (const invoice of receiptInvoices) {
+        const invoiceId = text(invoice.id);
+        const invoiceItems = itemsByInvoice.get(invoiceId) ?? [];
+        for (const item of invoiceItems) {
+          const material = materialMap.get(text(item.material_id));
+          rows.push({
+            item_id: item.id,
+            receipt_id: receiptId,
+            receipt_number: receipt.receipt_number,
+            receipt_date: receipt.receipt_date,
+            status: receipt.status,
+            return_type: receipt.return_type,
+            return_type_label: RETURN_TYPE_LABELS[text(receipt.return_type)] ??
+              receipt.return_type,
+            company_code: (ownCompany.data as JsonRecord | null)
+              ?.company_code ?? null,
+            line_material_type: item.line_material_type,
+            material_name: material?.material_name ??
+              (text(item.manual_sku_name) || null),
+            document_name: material?.document_name ?? null,
+            quantity: item.quantity,
+            uom_code: item.uom_code,
+            num_packs: item.num_packs,
+            invoice_number: invoice.invoice_number,
+            invoice_date: invoice.invoice_date,
+            sending_parent_company_name: parent?.company_name ?? null,
+            sending_vdc_code: vdc?.code ?? null,
+            sending_vdc_name: vdc?.description ?? null,
+            sending_depot_code: depot?.code ?? null,
+            sending_depot_name: depot?.description ?? null,
+            sending_customer_name: customer
+              ? [customer.customer_code, customer.customer_name].filter(
+                Boolean,
+              ).join(" — ")
+              : null,
+            sending_customer_address: addressLabel(address),
+            sending_company_name: sendingCompany
+              ? [sendingCompany.company_code, sendingCompany.company_name]
+                .filter(Boolean).join(" — ")
+              : null,
+            sending_name: receipt.sending_name,
+            sending_address: receipt.sending_address,
+            sending_state: receipt.sending_state,
+            sending_gst_number: receipt.sending_gst_number,
+            vehicle_number: receipt.vehicle_number,
+            lr_number: receipt.lr_number,
+          });
+        }
+      }
+    }
+    return okResponse({ data: rows }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SRET_LIST_FAILED";
     return fail(req, ctx, code, code === "SRET_SCOPE_VIOLATION" ? 403 : 500);

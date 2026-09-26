@@ -78,7 +78,11 @@ async function getAddressById(id: string): Promise<JsonRecord | null> {
 }
 
 // §8A — bulk-resolve VDC + Parent Company in one batch, never per-row.
-async function enrichAddressRows(rows: JsonRecord[]): Promise<JsonRecord[]> {
+// includeCustomer: also bulk-resolve customer_name/customer_code -- only the
+// depot_code_id-scoped lookup (SO05's VDC->Customer/Address picker) needs
+// this; the customer_id-scoped lookup already knows which single customer
+// it's for, so skip the extra round trip there.
+async function enrichAddressRows(rows: JsonRecord[], includeCustomer = false): Promise<JsonRecord[]> {
   if (rows.length === 0) return rows;
   const depotCodeIds = [...new Set(rows.map((r) => r.depot_code_id as string).filter(Boolean))];
   const { data: depotCodes, error: depotError } = depotCodeIds.length
@@ -95,15 +99,40 @@ async function enrichAddressRows(rows: JsonRecord[]): Promise<JsonRecord[]> {
     depotMap.set(d.id as string, d);
   }
 
+  const customerMap = new Map<string, JsonRecord>();
+  if (includeCustomer) {
+    const customerIds = [...new Set(rows.map((r) => r.customer_id as string).filter(Boolean))];
+    const { data: customers, error: customerError } = customerIds.length
+      ? await serviceRoleClient
+          .schema("erp_master")
+          .from("customer_master")
+          .select("id, customer_code, customer_name")
+          .in("id", customerIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (customerError) throw new Error("OM_ADDRESS_CUSTOMER_LOOKUP_FAILED");
+    for (const c of (customers ?? []) as JsonRecord[]) {
+      customerMap.set(c.id as string, c);
+    }
+  }
+
   return rows.map((row) => {
     const depot = row.depot_code_id ? depotMap.get(row.depot_code_id as string) : null;
     const parentCompany = depot?.parent_company as JsonRecord | null | undefined;
+    const customer = includeCustomer && row.customer_id
+      ? customerMap.get(row.customer_id as string)
+      : null;
     return {
       ...row,
       depot_code: depot?.code ?? null,
       depot_dispatch_type: depot?.dispatch_type ?? null,
       parent_company_id: parentCompany?.id ?? null,
       parent_company_name: parentCompany?.company_name ?? null,
+      ...(includeCustomer
+        ? {
+          customer_code: customer?.customer_code ?? null,
+          customer_name: customer?.customer_name ?? null,
+        }
+        : {}),
     };
   });
 }
@@ -113,23 +142,47 @@ export async function listCustomerAddressesHandler(
   ctx: OmHandlerContext,
 ): Promise<Response> {
   try {
-    const customerId = toTrimmedString(new URL(req.url).searchParams.get("customer_id"));
-    if (!customerId) {
-      return addressErrorResponse(req, ctx, "OM_ADDRESS_CUSTOMER_ID_REQUIRED", 400, "customer_id is required");
+    const params = new URL(req.url).searchParams;
+    const customerId = toTrimmedString(params.get("customer_id"));
+    const depotCodeId = toTrimmedString(params.get("depot_code_id"));
+
+    if (customerId) {
+      await assertCustomerCompanyScope(ctx, customerId, "OM_CUSTOMER_LIST", "VIEW");
+
+      const { data, error } = await serviceRoleClient
+        .schema("erp_master")
+        .from("customer_address")
+        .select("*")
+        .eq("customer_id", customerId)
+        .eq("status", "ACTIVE")
+        .order("created_at", { ascending: true });
+      if (error) throw new Error("OM_ADDRESS_LIST_FAILED");
+
+      const enriched = await enrichAddressRows((data ?? []) as JsonRecord[]);
+      return okResponse({ data: enriched }, ctx.request_id, req);
     }
-    await assertCustomerCompanyScope(ctx, customerId, "OM_CUSTOMER_LIST", "VIEW");
 
-    const { data, error } = await serviceRoleClient
-      .schema("erp_master")
-      .from("customer_address")
-      .select("*")
-      .eq("customer_id", customerId)
-      .eq("status", "ACTIVE")
-      .order("created_at", { ascending: true });
-    if (error) throw new Error("OM_ADDRESS_LIST_FAILED");
+    // SO05's "customer under this VDC" picker (business owner, 2026-09-26):
+    // Parent Company / VDC (fg_parent_company / fg_depot_code) is Asian
+    // Paints's own PAN-India reference structure, not scoped to any one of
+    // PACE's operating companies -- the same reason listFgParentCompanies/
+    // listFgDepotCodes never take a company_id either. So a depot_code_id
+    // lookup needs no extra company-scope check beyond that existing pattern.
+    if (depotCodeId) {
+      const { data, error } = await serviceRoleClient
+        .schema("erp_master")
+        .from("customer_address")
+        .select("*")
+        .eq("depot_code_id", depotCodeId)
+        .eq("status", "ACTIVE")
+        .order("created_at", { ascending: true });
+      if (error) throw new Error("OM_ADDRESS_LIST_FAILED");
 
-    const enriched = await enrichAddressRows((data ?? []) as JsonRecord[]);
-    return okResponse({ data: enriched }, ctx.request_id, req);
+      const enriched = await enrichAddressRows((data ?? []) as JsonRecord[], true);
+      return okResponse({ data: enriched }, ctx.request_id, req);
+    }
+
+    return addressErrorResponse(req, ctx, "OM_ADDRESS_CUSTOMER_ID_REQUIRED", 400, "customer_id or depot_code_id is required");
   } catch (err) {
     const code = (err as Error).message || "OM_ADDRESS_LIST_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;

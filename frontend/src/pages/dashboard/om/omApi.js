@@ -721,6 +721,15 @@ export async function listCustomerAddresses(customerId) {
   return fetchJson(`/api/om/customer-addresses?${query.toString()}`, {}, "OM_ADDRESS_LIST_FAILED");
 }
 
+// SO05's "customer under this VDC" picker (business owner, 2026-09-26) --
+// same endpoint, filtered by depot_code_id instead of customer_id. Rows come
+// back enriched with customer_name/customer_code so the caller can build a
+// Customer combobox from them without a separate customer fetch.
+export async function listCustomerAddressesByDepot(depotCodeId) {
+  const query = buildParams({ depot_code_id: depotCodeId });
+  return fetchJson(`/api/om/customer-addresses?${query.toString()}`, {}, "OM_ADDRESS_LIST_FAILED");
+}
+
 export async function createCustomerAddress(payload) {
   return fetchJson(
     "/api/om/customer-address",
