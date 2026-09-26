@@ -40,6 +40,46 @@ const TABS = [
   { key: "total",  label: "Total Table" },
 ];
 
+// business owner, 2026-09-26: Total Table date-range search -- every date
+// column the table itself shows, so the dropdown never drifts from the grid
+// (add a date column to totalColumns above, add it here too). DO Date and
+// Dispatch Date are multi-value per row (a FO can have several Delivery
+// Orders/dispatches), so their extractor returns every date in that row's
+// list -- the row matches the range if ANY of them falls inside it.
+const DATE_RANGE_COLUMNS = [
+  { key: "order_date", label: "Order Date" },
+  { key: "scheduled_delivery_date", label: "Del. Date" },
+  { key: "order_confirmation_date", label: "Order Confirmation Date" },
+  { key: "formula_confirmation_date", label: "Formula Confirmation Date" },
+  { key: "delivery_order_dates", label: "DO Date" },
+  { key: "dispatch_dates", label: "Dispatch Date" },
+];
+
+function extractRowDatesForColumn(row, columnKey) {
+  switch (columnKey) {
+    case "order_date":
+    case "scheduled_delivery_date":
+    case "order_confirmation_date":
+    case "formula_confirmation_date":
+      return row[columnKey] ? [row[columnKey]] : [];
+    case "delivery_order_dates":
+      return (row.delivery_orders ?? []).map((entry) => entry.dc_date).filter(Boolean);
+    case "dispatch_dates":
+      return (row.dispatch_dates ?? []).filter(Boolean);
+    default:
+      return [];
+  }
+}
+
+function rowMatchesDateFilter(row, filter) {
+  if (!filter?.column) return true;
+  const dates = extractRowDatesForColumn(row, filter.column);
+  if (dates.length === 0) return false;
+  return dates.some((date) =>
+    (!filter.from || date >= filter.from) && (!filter.to || date <= filter.to)
+  );
+}
+
 const FO_CUSTOMER_TYPES = [
   { value: "MTO_HPS", label: "MTO / HPS" },
   { value: "MTEST", label: "MTEST" },
@@ -48,6 +88,17 @@ const FO_CUSTOMER_TYPES = [
 
 function normalizeFoCustomerType(value) {
   return String(value || "").toUpperCase() === "ZTEST" ? "MTEST" : String(value || "");
+}
+
+// business owner, 2026-09-26: Total Table's "PO Type" column -- the backend
+// already returns fo_customer_type per row (planFeedSummaryHandler derives
+// it from the party's own customer_master.fo_customer_type), it just never
+// had a column here. Reuses the same MTO_HPS/MTEST/MTS labels the Create
+// tab's own "PO Type (for Party filter)" dropdown shows, so the same raw
+// value always reads the same way everywhere on this page.
+function foCustomerTypeLabel(value) {
+  const normalized = normalizeFoCustomerType(value).toUpperCase();
+  return FO_CUSTOMER_TYPES.find((entry) => entry.value === normalized)?.label || normalized || "--";
 }
 
 const ERRORS = {
@@ -825,6 +876,15 @@ export default function PlanFeedPage() {
   const [totalColumnFilters, setTotalColumnFilters] = useState({});
   const [totalFiltersOpen, setTotalFiltersOpen] = useState(false);
   const [exportingTotal, setExportingTotal] = useState(false);
+  // Date-range search: the two date inputs + column dropdown are draft state
+  // (typing/picking doesn't filter anything by itself); appliedDateFilter is
+  // only set when the user clicks Search, and is what filteredSummary/Excel
+  // export actually read -- matches the business owner's own "date range
+  // dilo, header select korlo, tarpor search marle" sequence.
+  const [dateRangeFrom, setDateRangeFrom] = useState("");
+  const [dateRangeTo, setDateRangeTo] = useState("");
+  const [dateRangeColumn, setDateRangeColumn] = useState("");
+  const [appliedDateFilter, setAppliedDateFilter] = useState(null);
   const totalColumns = useMemo(() => [
     // "Prioritize" (business owner ask) -- read-only here, editable only via
     // the dedicated Prioritize page. Values stay visible even after an FO
@@ -836,6 +896,9 @@ export default function PlanFeedPage() {
     { key: "fo_number", label: "FO #", width: "100px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
     { key: "order_date", label: "Order Date", width: "95px" },
     { key: "original_fo_number", label: "Original FO #", width: "110px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
+    // business owner, 2026-09-26 (main) -- the backend already returns
+    // fo_customer_type per row, it just never had a column here.
+    { key: "fo_customer_type", label: "PO Type", width: "100px", copyValue: (r) => foCustomerTypeLabel(r.fo_customer_type), render: (r) => foCustomerTypeLabel(r.fo_customer_type) },
     { key: "party_name", label: "Party", width: "180px" },
     { key: "party_town", label: "Town", width: "100px" },
     { key: "sku", label: "SKU", width: "110px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
@@ -887,9 +950,19 @@ export default function PlanFeedPage() {
         const column = totalColumns.find((entry) => entry.key === key);
         return column ? gridCellValue(row, column).toLowerCase().includes(value.trim().toLowerCase()) : true;
       });
-      return globalMatch && columnMatch;
+      return globalMatch && columnMatch && rowMatchesDateFilter(row, appliedDateFilter);
     });
-  }, [summary, totalSearch, totalColumnFilters, totalColumns]);
+  }, [summary, totalSearch, totalColumnFilters, totalColumns, appliedDateFilter]);
+  function handleDateRangeSearch() {
+    if (!dateRangeColumn || (!dateRangeFrom && !dateRangeTo)) return;
+    setAppliedDateFilter({ column: dateRangeColumn, from: dateRangeFrom, to: dateRangeTo });
+  }
+  function handleDateRangeClear() {
+    setDateRangeFrom("");
+    setDateRangeTo("");
+    setDateRangeColumn("");
+    setAppliedDateFilter(null);
+  }
   async function handleExportTotalExcel() {
     setExportingTotal(true);
     try {
@@ -1730,9 +1803,37 @@ export default function PlanFeedPage() {
               Search Any Column
               <input value={totalSearch} onChange={(event) => setTotalSearch(event.target.value)} list="plan-feed-total-search-suggestions" placeholder="FO, party, SKU, batch, status, invoice..." className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
             </label>
-            <button type="button" onClick={() => { setTotalSearch(""); setTotalColumnFilters({}); }} disabled={!totalSearch && Object.values(totalColumnFilters).every((value) => !value)} className="h-8 border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Clear Filters</button>
+            <button type="button" onClick={() => { setTotalSearch(""); setTotalColumnFilters({}); handleDateRangeClear(); }} disabled={!totalSearch && Object.values(totalColumnFilters).every((value) => !value) && !appliedDateFilter} className="h-8 border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Clear Filters</button>
             <span className="pb-1 text-xs text-slate-500">{filteredSummary.length.toLocaleString()} of {summary.length.toLocaleString()} FOs</span>
             <datalist id="plan-feed-total-search-suggestions">{totalSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
+          </div>
+          <div className="mb-3 flex flex-wrap items-end gap-3 border-b border-slate-200 pb-3">
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              From
+              <input type="date" value={dateRangeFrom} onChange={(event) => setDateRangeFrom(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              To
+              <input type="date" value={dateRangeTo} onChange={(event) => setDateRangeTo(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+            </label>
+            <label className="grid min-w-[220px] gap-1 text-xs font-medium text-slate-600">
+              Date Column
+              <ErpComboboxField
+                value={dateRangeColumn}
+                onChange={setDateRangeColumn}
+                options={DATE_RANGE_COLUMNS.map((column) => ({ value: column.key, label: column.label }))}
+                placeholder="-- select date column --"
+              />
+            </label>
+            <button type="button" onClick={handleDateRangeSearch} disabled={!dateRangeColumn || (!dateRangeFrom && !dateRangeTo)} className="h-8 border border-sky-600 bg-sky-600 px-3 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50 disabled:border-slate-300 disabled:bg-slate-300">Search</button>
+            {appliedDateFilter ? (
+              <button type="button" onClick={handleDateRangeClear} className="h-8 border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50">Clear Date Filter</button>
+            ) : null}
+            {appliedDateFilter ? (
+              <span className="pb-1 text-xs text-slate-500">
+                Showing {DATE_RANGE_COLUMNS.find((column) => column.key === appliedDateFilter.column)?.label} {appliedDateFilter.from || "…"} to {appliedDateFilter.to || "…"}
+              </span>
+            ) : null}
           </div>
           {totalFiltersOpen ? (
             <div className="mb-3 grid gap-2 border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4">

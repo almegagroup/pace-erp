@@ -143,6 +143,19 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // ── Procurement: Sales ───────────────────────────────────────────────────
   "GET:/api/procurement/sales-orders":                { skipAcl: false, resourceCode: "PROC_SO_LIST",   action: "VIEW"  },
   "POST:/api/procurement/sales-orders":               { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
+  "GET:/api/procurement/sales-returns":               { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "POST:/api/procurement/sales-returns":              { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "WRITE" },
+  "GET:/api/procurement/sales-returns/pending-invoices": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "POST:/api/procurement/sales-returns/invoice-detail": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "EDIT" },
+  "GET:/api/procurement/sales-returns/batch-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/packing-order-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/repack-sku-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/stroke-check-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/prodshade": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-strokes": { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-genealogy": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-process-entries": { skipAcl: false, resourceCode: "PROD_OLD_PROCESS_PO", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-packing-entries": { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "VIEW" },
 
   // ── SO01 unified RM/PM/INT/SFG/FG redesign (feasibility §133.7-§133.11) ──
   // SO01/SO02/SO03 are the SAME existing tx_codes/resources (PROC_SO_CREATE,

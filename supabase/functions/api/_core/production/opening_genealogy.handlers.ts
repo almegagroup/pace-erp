@@ -22,6 +22,7 @@ import {
   toUpperTrimmedString,
 } from "./production.shared.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
+import { backfillSalesReturnBatchResolved } from "../procurement/sales_return.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -389,6 +390,15 @@ export async function createOldProcessPoHandler(req: Request, ctx: ProdHandlerCo
       }
     }
 
+    // business owner, 2026-09-26, found via live Prod check (CMP003): PR23
+    // has always backfilled its matching Sales Return line (see the RPC
+    // call in createOldPackingPoHandler below) -- PR22 never did the
+    // equivalent, so a SO05 item's "batch resolved" pending flag stayed
+    // stuck forever even after its Old Process PO was created and VERIFIED.
+    // materialId here is already the prodshade (accepts material_id or
+    // prodshade_material_id from the request body, see above).
+    await backfillSalesReturnBatchResolved(companyId, materialId, batchNumber);
+
     return createdOk({ id: poId, po_number: poNumber, batch_number: batchNumber, status: "VERIFIED" }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_OLD_PROCESS_PO_CREATE_FAILED";
@@ -659,6 +669,17 @@ export async function createOldPackingPoHandler(req: Request, ctx: ProdHandlerCo
         console.error("[opening_genealogy.createOldPackingPo] reco insert failed:", JSON.stringify(recoErr));
         throw new Error("PROD_OLD_PACKING_PO_CREATE_FAILED");
       }
+    }
+
+    // §134.9 / SO05: a PR23 created for a previously unresolved Sales Return
+    // line makes that line resolvable immediately. The RPC includes the
+    // receipt-company join, preventing cross-company material/batch matches.
+    const { error: salesReturnBackfillErr } = await serviceRoleClient
+      .schema("erp_procurement")
+      .rpc("backfill_sales_return_packing_order", { p_packing_order_id: poId });
+    if (salesReturnBackfillErr) {
+      console.error("[opening_genealogy.createOldPackingPo] sales-return backfill failed:", JSON.stringify(salesReturnBackfillErr));
+      throw new Error("PROD_OLD_PACKING_PO_CREATE_FAILED");
     }
 
     return createdOk({ id: poId, po_number: poNumber, batch_number: batchNumber, status: "FINAL" }, ctx.request_id, req);

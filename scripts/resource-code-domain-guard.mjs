@@ -53,6 +53,15 @@ const BASELINE = new Map([
   // to SO01's Costing Rate Month field. It deliberately uses SO Create authority:
   // an SO creator may choose a verified month but cannot view AC06 rates or rows.
   ["PROC_SO_CREATE", "approved AC06 month-label lookup is a read-only SO01 create-form dependency; it exposes no AC06 rates or material data — see inline comment at the route"],
+  // SO05 Sales Return's "Pending Strokes"/"Pending Entries" buttons (feasibility
+  // §134.8/§134.9) are deliberately hosted on the Stroke Master/PR22/PR23 pages
+  // and gated on THOSE pages' own resource — not a new SO05 resource — since the
+  // buttons are a feature of those pages (surfacing what's pending there), even
+  // though the handler code lives in sales_return.handlers.ts under a
+  // /api/procurement/sales-returns/* route for code-organization reasons.
+  ["PROD_STROKE_MASTER", "SO05's Pending Strokes button lives on the Stroke Master page and deliberately reuses its resource, not a new SO05 one — §134.8"],
+  ["PROD_OLD_PROCESS_PO", "SO05's PR22 Pending Entries button lives on the Old Process PO page and deliberately reuses its resource, not a new SO05 one — §134.9"],
+  ["PROD_OLD_PACKING_PO", "SO05's PR23 Pending Entries button lives on the Old Packing PO page and deliberately reuses its resource, not a new SO05 one — §134.9"],
 ]);
 
 const src = readFileSync(REGISTRY_FILE, "utf8");

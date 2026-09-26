@@ -889,6 +889,41 @@ export function listSalesOrders(params) {
   return fetchProcurement("GET", "/api/procurement/sales-orders", undefined, params);
 }
 
+export function listSalesReturns(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns", undefined, params);
+}
+export function createSalesReturn(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-returns", data);
+}
+export function listPendingSalesReturnInvoices(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/pending-invoices", undefined, params);
+}
+export function saveSalesReturnInvoiceDetail(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-returns/invoice-detail", data);
+}
+export function listSalesReturnBatchOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/batch-options", undefined, params);
+}
+export function resolveSalesReturnPackingOrderOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/packing-order-options", undefined, params);
+}
+export function listSalesReturnRepackSkuOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/repack-sku-options", undefined, params);
+}
+export function listPendingSalesReturnStrokes(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/pending-strokes", undefined, params);
+}
+export function listPendingSalesReturnGenealogy(params) {
+  const suffix = params?.kind === "PROCESS" ? "pending-process-entries" : "pending-packing-entries";
+  return fetchProcurement("GET", `/api/procurement/sales-returns/${suffix}`, undefined, params);
+}
+export function listSalesReturnStrokeCheckOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/stroke-check-options", undefined, params);
+}
+export function resolveSalesReturnProdshade(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/prodshade", undefined, params);
+}
+
 export function getSalesOrder(id) {
   return fetchProcurement("GET", `/api/procurement/sales-orders/${encodeURIComponent(id)}`);
 }

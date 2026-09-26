@@ -176,6 +176,9 @@ import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
 // on disk as the pre-redesign reference until the old backend path is fully retired.
 import SO01Page from "../pages/dashboard/procurement/sales/SO01Page.jsx";
 import SODetailPage from "../pages/dashboard/procurement/sales/SODetailPage.jsx";
+import SO05ListPage from "../pages/dashboard/procurement/sales/SO05ListPage.jsx";
+import SO05CreatePage from "../pages/dashboard/procurement/sales/SO05CreatePage.jsx";
+import SO05InvoicePostingPage from "../pages/dashboard/procurement/sales/SO05InvoicePostingPage.jsx";
 import DOListPage from "../pages/dashboard/procurement/sales/DOListPage.jsx";
 // DOCreatePage.jsx (§113, single source per DO) superseded by DO01CreatePage
 // below (§133.12 multi-source redesign) — kept on disk as the pre-redesign
@@ -819,6 +822,18 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-orders/:id"
                     element={<SODetailPage />}
+                  />
+                  <Route
+                    path="procurement/sales/sales-return"
+                    element={<SO05ListPage />}
+                  />
+                  <Route
+                    path="procurement/sales/sales-return/create"
+                    element={<SO05CreatePage />}
+                  />
+                  <Route
+                    path="procurement/sales/sales-return/invoices"
+                    element={<SO05InvoicePostingPage />}
                   />
                   <Route
                     path="procurement/delivery-orders"

@@ -22,6 +22,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/t
 import { useMenu } from "../../../context/useMenu.js";
 import { listStrokeMasters, getStrokeMaster, createOldProcessPo } from "./prodApi.js";
 import { listMachines, listMaterials, listStorageLocations } from "../om/omApi.js";
+import SalesReturnPendingButton from "./SalesReturnPendingButton.jsx";
 
 const PO_TYPES = ["MTO", "HPS"];
 const APPROVED_OPTIONS = ["YES", "NO", "PARTIAL"];
@@ -276,6 +277,7 @@ export default function OldProcessPoPage() {
       toast(`Old Process PO ${res?.po_number ?? ""} created for batch ${batchNumber.trim()} — no stock moved.`);
       setBatchNumber(""); setOutputQty(""); setLineEdits({}); setManualLines([]);
       qc.invalidateQueries({ queryKey: ["old-process-po-batches"] });
+      qc.invalidateQueries({ queryKey: ["so05-pending-production", "PROCESS"] });
     } catch (err) {
       toast(friendly(err.code, err.message), "error");
     } finally { setSaving(false); }
@@ -287,6 +289,7 @@ export default function OldProcessPoPage() {
       subtitle="PR22 — genealogy for a pre-go-live MTO/HPS batch (§104.9). RM/INT auto-derived from the Stroke, editable, and expandable with manual extra lines. Saves a VERIFIED paper order; posts NO stock movement. Create this record before loading the related Opening Stock (IN05)."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
     >
+      <div className="flex justify-end"><SalesReturnPendingButton companyId={effectiveCompanyId} kind="PROCESS" /></div>
       <ErpSectionCard title="Header">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="flex flex-col gap-1">
