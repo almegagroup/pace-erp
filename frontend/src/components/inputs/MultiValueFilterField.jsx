@@ -57,7 +57,19 @@ export default function MultiValueFilterField({
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
+  // business owner, 2026-09-26: this drawer used to clear the search text
+  // the moment an item was added (addEntries below), which also wiped out
+  // the filter itself -- since searchResults is keyed off inputValue, that
+  // silently reverted the list back to its unfiltered/default state. A
+  // user searching "DYN" to multi-select several DYN materials had to
+  // retype "DYN" from scratch after every single pick. Fixed by leaving
+  // inputValue alone on add -- the filtered list now stays put across
+  // picks, and only clears when the user themselves edits/clears the box
+  // (matching how ErpComboboxField's own highlightIndex keyboard-nav
+  // pattern works, mirrored below for Arrow/Enter support here too).
+  const [highlightIndex, setHighlightIndex] = useState(0);
   const inputRef = useRef(null);
+  const listRef = useRef(null);
 
   useEffect(() => {
     if (open) {
@@ -100,13 +112,43 @@ export default function MultiValueFilterField({
     [draftValues],
   );
 
+  // Keep highlightIndex in bounds when the filtered list changes (mirrors
+  // ErpComboboxField's own pattern).
+  useEffect(() => {
+    setHighlightIndex((prev) => Math.min(prev, Math.max(searchResults.length - 1, 0)));
+  }, [searchResults.length]);
+
+  // Scroll the keyboard-highlighted row into view.
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    const items = listRef.current.querySelectorAll("[data-multi-filter-item]");
+    items[highlightIndex]?.scrollIntoView({ block: "nearest" });
+  }, [highlightIndex, open]);
+
   function addEntries(entries) {
     const next = new Map(selectedMap);
     entries.map(normalizeOption).filter(Boolean).forEach((entry) => {
       next.set(entry.value, entry);
     });
     setDraftValues([...next.values()]);
-    setInputValue("");
+    // inputValue is deliberately left as-is -- see the comment on its
+    // declaration above.
+  }
+
+  function handleInputKeyDown(event) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightIndex((prev) => Math.min(prev + 1, searchResults.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightIndex((prev) => Math.max(prev - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const entry = searchResults[highlightIndex];
+      if (entry && !selectedMap.has(entry.value)) {
+        addEntries([entry]);
+      }
+    }
   }
 
   function handlePaste(event) {
@@ -175,9 +217,10 @@ export default function MultiValueFilterField({
             <input
               ref={inputRef}
               value={inputValue}
-              onChange={(event) => setInputValue(event.target.value)}
+              onChange={(event) => { setInputValue(event.target.value); setHighlightIndex(0); }}
+              onKeyDown={handleInputKeyDown}
               onPaste={handlePaste}
-              placeholder="Type to search, or paste newline/comma/tab-separated values"
+              placeholder="Type to search, or paste newline/comma/tab-separated values — Up/Down to browse, Enter to add"
               className="min-h-10 border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-500"
             />
             {searchError ? (
@@ -220,7 +263,7 @@ export default function MultiValueFilterField({
             <div className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
               Search Results
             </div>
-            <div className="max-h-72 overflow-auto border border-slate-200 bg-white">
+            <div ref={listRef} className="max-h-72 overflow-auto border border-slate-200 bg-white">
               {loading ? (
                 <div className="px-3 py-4 text-sm text-slate-500">Searching…</div>
               ) : searchResults.length === 0 ? (
@@ -228,15 +271,18 @@ export default function MultiValueFilterField({
                   {loadError ? "Unable to load options — see error above." : "No matching values."}
                 </div>
               ) : (
-                searchResults.map((entry) => {
+                searchResults.map((entry, index) => {
                   const selected = selectedMap.has(entry.value);
+                  const highlighted = index === highlightIndex;
                   return (
                     <button
                       key={entry.value}
                       type="button"
+                      data-multi-filter-item
                       onClick={() => addEntries([entry])}
+                      onMouseEnter={() => setHighlightIndex(index)}
                       disabled={selected}
-                      className="flex w-full items-center justify-between border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-900 last:border-b-0 disabled:bg-slate-50 disabled:text-slate-400"
+                      className={`flex w-full items-center justify-between border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-900 last:border-b-0 disabled:bg-slate-50 disabled:text-slate-400 ${highlighted && !selected ? "bg-sky-50" : ""}`}
                     >
                       <span>{entry.label}</span>
                       <span className="text-xs uppercase tracking-[0.08em] text-slate-500">

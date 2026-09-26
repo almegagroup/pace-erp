@@ -151,7 +151,7 @@ const MACHINE_WISE_COLUMNS = [
     key: "material",
     label: "Material",
     width: "260px",
-    render: (row) => [row.pace_code, row.document_name || row.material_name].filter(Boolean).join(" — ") || "—",
+    render: (row) => [row.material_name, row.document_name].filter(Boolean).join(" — ") || "—",
   },
   { key: "external_code", label: "External Code", width: "150px", render: (row) => row.external_code || "—" },
   { key: "storage_location_code", label: "SLoc", width: "90px", render: (row) => row.storage_location_code || "—" },
@@ -295,7 +295,10 @@ export default function StockLedgerReportPage() {
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
       value: material.id,
-      label: `${material.pace_code ?? "—"} — ${material.document_name || material.material_name || "—"}`,
+      // business owner, 2026-09-26: pace_code must never appear in a
+      // material label -- Item Name / Document Name / External Code only,
+      // same rule already applied elsewhere this session (SO05).
+      label: [material.material_name, material.document_name, material.external_code].filter(Boolean).join(" — ") || "—",
     })),
     [materialsQuery.materials],
   );

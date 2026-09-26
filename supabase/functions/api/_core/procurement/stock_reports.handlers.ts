@@ -2954,7 +2954,10 @@ export async function getStockHistoryMachineWiseHandler(
         is_total: false,
         material_id: row.materialId,
         material_type: toTrimmedString(material?.material_type) || "—",
-        material: [toTrimmedString(material?.pace_code), toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name)].filter(Boolean).join(" — ") || "—",
+        // business owner, 2026-09-26: pace_code must never appear in a
+        // material label -- Item Name / Document Name only (external_code
+        // is already its own separate field on this row, below).
+        material: [toTrimmedString(material?.material_name), toTrimmedString(material?.document_name)].filter(Boolean).join(" — ") || "—",
         external_code: toTrimmedString(material?.external_code) || "—",
         base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
