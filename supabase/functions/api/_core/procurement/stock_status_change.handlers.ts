@@ -122,6 +122,7 @@ async function getStockTypeBalances(params: {
   storageLocationId: string;
   materialId: string;
   batchNumber?: string | null;
+  materialType: string;
 }): Promise<Record<string, { quantity: number; valuationRate: number }>> {
   // Paged via fetchAllRows -- batchNumber is optional here (material-wide
   // sum when absent), and either shape can exceed PostgREST's 1000-row
@@ -129,6 +130,28 @@ async function getStockTypeBalances(params: {
   // is also what makes "last posted rate wins" below actually mean
   // chronologically last, across every page.
   const batchNumber = toTrimmedString(params.batchNumber);
+  // business owner, 2026-09-26, found live via a real posting (CMP003,
+  // 2026-09-24, 7 RM lines): a blank Batch on this page used to mean
+  // ".is('batch_number', null)" for EVERY material type -- correct for
+  // SFG/FG (genuinely batch-split stock, per §116), but wrong for RM/PM/INT
+  // (per §116 these are "blended", never split into per-batch stock pools
+  // at all) -- yet RM/PM/INT *consumption* rows routinely carry a
+  // batch_number anyway, tagging WHICH production batch the RM was issued
+  // to for genealogy (see §83.15.1/§104.9), not because the RM itself has
+  // multiple lots. Filtering those OUT rows out inflated "available" by the
+  // full amount ever issued to production -- for HIMFLOWCRETE HRSR this
+  // page showed 10533.88 kg Unrestricted when the true book balance
+  // (matching the IN02-style Stock History report) was only 2192.82 kg, an
+  // 8341 kg overstatement. The 2026-09-24 posting happened to still be
+  // within the true balance for all 7 lines (luck, not correctness) -- a
+  // slightly larger request on HIMFLOWCRETE HRSR (only 122.82 kg of real
+  // headroom) would have posted the material well past negative real
+  // stock, since postStockStatusChangeHandler re-checks via this exact
+  // same function server-side. Fix: RM/PM/INT never filter by batch_number
+  // at all when none is entered (sum every row, batch-tagged or not) --
+  // only SFG/FG keep the old "no batch entered = NULL-batch rows only"
+  // behavior, matching how those types are genuinely batch-split.
+  const isBatchTrackedType = params.materialType === "SFG" || params.materialType === "FG";
   let rows: JsonRecord[];
   try {
     rows = await fetchAllRows<JsonRecord>((from, to) => {
@@ -141,7 +164,11 @@ async function getStockTypeBalances(params: {
         .eq("material_id", params.materialId)
         .order("ledger_seq", { ascending: true })
         .range(from, to);
-      query = batchNumber ? query.eq("batch_number", batchNumber) : query.is("batch_number", null);
+      if (batchNumber) {
+        query = query.eq("batch_number", batchNumber);
+      } else if (isBatchTrackedType) {
+        query = query.is("batch_number", null);
+      }
       return query;
     });
   } catch {
@@ -215,7 +242,13 @@ export async function getStockStatusChangeBalanceHandler(req: Request, ctx: SscH
     }
     await assertScopedCompanyAccess(ctx, companyId, "VIEW");
 
-    const balances = await getStockTypeBalances({ companyId, storageLocationId, materialId, batchNumber });
+    const { data: material, error: materialError } = await serviceRoleClient
+      .schema("erp_master").from("material_master")
+      .select("material_type").eq("id", materialId).maybeSingle();
+    if (materialError) throw new Error("SSC_MATERIAL_LOOKUP_FAILED");
+    const materialType = toUpperTrimmedString((material as JsonRecord | null)?.material_type);
+
+    const balances = await getStockTypeBalances({ companyId, storageLocationId, materialId, batchNumber, materialType });
     return okResponse({ data: balances }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SSC_BALANCE_FETCH_FAILED";
@@ -343,7 +376,7 @@ export async function postStockStatusChangeHandler(req: Request, ctx: SscHandler
       }
 
       const balances = await getStockTypeBalances({
-        companyId, storageLocationId: line.storageLocationId, materialId: line.materialId, batchNumber: line.batchNumber,
+        companyId, storageLocationId: line.storageLocationId, materialId: line.materialId, batchNumber: line.batchNumber, materialType,
       });
       const sourceBalance = balances[line.fromStockType];
       if (sourceBalance.quantity + EPSILON < baseQuantity) {
@@ -485,7 +518,7 @@ export async function approveStockStatusChangePostingHandler(req: Request, ctx: 
 
     const materialId = toTrimmedString(row.material_id);
     const { data: material, error: materialError } = await serviceRoleClient
-      .schema("erp_master").from("material_master").select("base_uom_code").eq("id", materialId).single();
+      .schema("erp_master").from("material_master").select("base_uom_code, material_type").eq("id", materialId).single();
     if (materialError || !material) return sscError(req, ctx, "SSC_APPROVE_MATERIAL_NOT_FOUND", 400, "Material not found.");
 
     const matDoc = await generateMaterialDocNumber(companyId);
@@ -495,6 +528,7 @@ export async function approveStockStatusChangePostingHandler(req: Request, ctx: 
     const balances = await getStockTypeBalances({
       companyId, storageLocationId: toTrimmedString(row.storage_location_id), materialId,
       batchNumber: toTrimmedString(row.batch_number) || null,
+      materialType: toUpperTrimmedString((material as JsonRecord).material_type),
     });
     const sourceStockType = toUpperTrimmedString(row.from_stock_type);
     const unitValue = balances[sourceStockType]?.valuationRate ?? 0;
