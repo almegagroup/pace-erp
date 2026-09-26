@@ -6155,7 +6155,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/SO05CreatePage.jsx",
-    "dependencyCount": 10,
+    "dependencyCount": 11,
     "deps": [
       {
         "fn": "createSalesReturn",
@@ -6191,6 +6191,14 @@
       },
       {
         "fn": "listCustomerAddresses",
+        "method": "GET",
+        "path": "/api/om/customer-addresses?${query.toString()}",
+        "resourceCode": "OM_CUSTOMER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCustomerAddressesByDepot",
         "method": "GET",
         "path": "/api/om/customer-addresses?${query.toString()}",
         "resourceCode": "OM_CUSTOMER_LIST",

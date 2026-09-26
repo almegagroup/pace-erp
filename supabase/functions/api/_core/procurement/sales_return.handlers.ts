@@ -195,7 +195,7 @@ async function resolveSenderSnapshot(
   ) {
     throw new Error("SRET_DEPENDENT_LOCATION_INVALID");
   }
-  return {
+  const snapshot: JsonRecord = {
     sending_parent_company_id: parentId,
     sending_vdc_id: returnType === "DEPENDENT_DIRECT" ? depotId : null,
     sending_depot_id: returnType === "DEPENDENT_DEPOT" ? depotId : null,
@@ -204,6 +204,53 @@ async function resolveSenderSnapshot(
     sending_state: text(depot.state) || null,
     sending_gst_number: text(depot.gst_number) || null,
   };
+
+  // business owner, 2026-09-26: the SO05 UI now lets the user pick which
+  // specific customer (and site address) under this VDC/Depot the return is
+  // actually coming from -- both optional (a Dependent return's sender-of-
+  // record was, and remains, the VDC/Depot itself). When given, record the
+  // customer/address as the actual sending site (more specific than the
+  // depot's own generic description/address) and reject an address that
+  // doesn't belong to the selected VDC/Depot, mirroring the existing
+  // depot-scope check so_map.handlers.ts already does for the same table.
+  const customerId = text(payload.sending_customer_id);
+  const addressId = text(payload.sending_customer_address_id);
+  if (customerId || addressId) {
+    if (!customerId || !addressId) {
+      throw new Error("SRET_CUSTOMER_ADDRESS_REQUIRED");
+    }
+    const [
+      { data: address, error: addressError },
+      { data: customer, error: customerError },
+    ] = await Promise.all([
+      serviceRoleClient.schema("erp_master").from("customer_address")
+        .select("id, customer_id, depot_code_id, site_name, address_line, town, state, pin_code, status")
+        .eq("id", addressId).eq("status", "ACTIVE").maybeSingle(),
+      serviceRoleClient.schema("erp_master").from("customer_master")
+        .select("id, customer_name, gst_number").eq("id", customerId)
+        .maybeSingle(),
+    ]);
+    if (
+      addressError || customerError || !address || !customer ||
+      text(address.customer_id) !== customerId ||
+      text(address.depot_code_id) !== depotId
+    ) {
+      throw new Error("SRET_CUSTOMER_ADDRESS_NOT_FOUND");
+    }
+    Object.assign(snapshot, {
+      sending_customer_id: customerId,
+      sending_customer_address_id: addressId,
+      sending_name: text(customer.customer_name) || text(address.site_name) ||
+        snapshot.sending_name,
+      sending_address:
+        [text(address.address_line), text(address.town), text(address.pin_code)]
+          .filter(Boolean).join(", ") || snapshot.sending_address,
+      sending_state: text(address.state) || snapshot.sending_state,
+      sending_gst_number: text(customer.gst_number) || snapshot.sending_gst_number,
+    });
+  }
+
+  return snapshot;
 }
 
 async function validateStorageLocation(
