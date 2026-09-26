@@ -261,6 +261,16 @@ export async function createVendor(payload) {
 }
 
 /**
+ * GST Number present -> exact match only (real duplicate). No GST Number ->
+ * name-similarity only (possible duplicate, never a hard block by itself).
+ * @param {{ gst_number?: string, vendor_name?: string, vendor_type?: string, exclude_id?: string }} params
+ */
+export async function checkVendorDuplicate({ gst_number, vendor_name, vendor_type, exclude_id } = {}) {
+  const params = buildParams({ gst_number, vendor_name, vendor_type, exclude_id });
+  return fetchJson(`/api/om/vendor/duplicate-check?${params.toString()}`, {}, "OM_VENDOR_DUPLICATE_CHECK_FAILED");
+}
+
+/**
  * @param {Record<string, unknown>} [params]
  */
 export async function listVendors({

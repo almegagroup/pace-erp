@@ -28,6 +28,7 @@ export type DbQueryBuilder = PromiseLike<{ data: any; error: any; count?: number
   is: (...args: unknown[]) => DbQueryBuilder;
   not: (...args: unknown[]) => DbQueryBuilder;
   or: (...args: unknown[]) => DbQueryBuilder;
+  ilike: (...args: unknown[]) => DbQueryBuilder;
   order: (...args: unknown[]) => DbQueryBuilder;
   limit: (...args: unknown[]) => DbQueryBuilder;
   range: (...args: unknown[]) => DbQueryBuilder;

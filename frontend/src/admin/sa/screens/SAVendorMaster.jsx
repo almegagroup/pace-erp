@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import DrawerBase from "../../../components/layer/DrawerBase.jsx";
+import ModalBase from "../../../components/layer/ModalBase.jsx";
 import {
   listVendors,
   createVendor,
@@ -20,6 +21,7 @@ import {
   changeVendorStatus,
   deleteVendors,
   getVendor,
+  checkVendorDuplicate,
   upsertVendorContacts,
   upsertVendorEmails,
   upsertVendorBanks,
@@ -124,9 +126,38 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
   const [error, setError]       = useState("");
   const [gstLooking, setGstLooking] = useState(false);
   const [gstNotice, setGstNotice]   = useState("");
+  // GST Number identifies one real legal entity -- an exact match is a hard
+  // block (Save stays disabled). No GST Number has no such reliable key, so a
+  // similar-name match is only a soft warning, checked fresh at Save time.
+  const [gstDuplicate, setGstDuplicate] = useState(null);
+  const [similarMatches, setSimilarMatches] = useState([]);
+  const [showSimilarWarning, setShowSimilarWarning] = useState(false);
+  const [checkingDuplicate, setCheckingDuplicate] = useState(false);
 
 
   const patch = (key, val) => setFields((p) => ({ ...p, [key]: val }));
+
+  // Live GST-duplicate check -- Create only, Domestic only (Import vendors
+  // have no GST field). Debounced so it doesn't fire on every keystroke.
+  useEffect(() => {
+    if (!isCreate || vendorType !== "DOMESTIC") { setGstDuplicate(null); return; }
+    const gst = fields.gst_number.trim();
+    if (!gst) { setGstDuplicate(null); return; }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await checkVendorDuplicate({ gst_number: gst });
+        if (cancelled) return;
+        const matches = result?.data?.matches ?? [];
+        setGstDuplicate(matches[0] ?? null);
+      } catch {
+        // A failed live check must never silently block Save -- createVendor's
+        // own server-side check is the real gate either way.
+        if (!cancelled) setGstDuplicate(null);
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [fields.gst_number, isCreate, vendorType]);
 
   /* GST lookup */
   async function handleGstLookup() {
@@ -159,8 +190,38 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
   const patchBank = (key, f, v) => setBanks((p) => p.map((b) => (b._key ?? b.id) === key ? { ...b, [f]: v } : b));
   const removeBank = (key) => setBanks((p) => p.filter((b) => (b._key ?? b.id) !== key));
 
+  // The Create button itself is disabled while this is true (see footerNode)
+  // -- an exact GST match is a real duplicate, never just a warning.
+  const gstBlocked = isCreate && vendorType === "DOMESTIC" && Boolean(fields.gst_number.trim()) && Boolean(gstDuplicate);
+
   async function handleSave() {
     if (!fields.vendor_name.trim()) { setError("Vendor name is required."); return; }
+    if (gstBlocked) { setError(`A vendor with this GST number already exists: ${gstDuplicate.vendor_code} — ${gstDuplicate.vendor_name}`); return; }
+    // No GST Number entered -- there's no reliable key to prove this is (or
+    // isn't) the same vendor, so check for a similar existing name right
+    // before saving and let the user decide, rather than silently creating
+    // a duplicate they didn't know already existed.
+    if (isCreate && !fields.gst_number.trim()) {
+      setCheckingDuplicate(true); setError("");
+      try {
+        const result = await checkVendorDuplicate({ vendor_name: fields.vendor_name.trim(), vendor_type: vendorType });
+        const matches = result?.data?.matches ?? [];
+        if (matches.length > 0) {
+          setSimilarMatches(matches);
+          setShowSimilarWarning(true);
+          setCheckingDuplicate(false);
+          return;
+        }
+      } catch {
+        // A failed check must never block a legitimate save.
+      }
+      setCheckingDuplicate(false);
+    }
+    await performSave();
+  }
+
+  async function performSave() {
+    setShowSimilarWarning(false);
     setSaving(true); setError("");
     try {
       let vendorId = initialVendor?.id;
@@ -200,13 +261,19 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
   const footerNode = (
     <>
       <button onClick={onClose} className="h-8 border border-slate-300 px-4 text-sm text-slate-700 hover:bg-slate-50">Cancel</button>
-      <button onClick={handleSave} disabled={saving} className="h-8 border border-sky-600 bg-sky-600 px-5 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
-        {saving ? "Saving…" : (isCreate ? "Create Vendor" : "Save Changes")}
+      <button
+        onClick={handleSave}
+        disabled={saving || checkingDuplicate || gstBlocked}
+        title={gstBlocked ? "A vendor with this GST number already exists -- cannot create." : undefined}
+        className="h-8 border border-sky-600 bg-sky-600 px-5 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {saving ? "Saving…" : checkingDuplicate ? "Checking…" : (isCreate ? "Create Vendor" : "Save Changes")}
       </button>
     </>
   );
 
   return (
+    <>
     <DrawerBase
       visible
       title={null}
@@ -251,6 +318,11 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
                     </button>
                   </div>
                   {gstNotice && <div className="mt-1 text-xs text-emerald-600">{gstNotice}</div>}
+                  {isCreate && gstDuplicate && (
+                    <div className="mt-1 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                      A vendor with this GST number already exists: <span className="font-semibold">{gstDuplicate.vendor_code} — {gstDuplicate.vendor_name}</span>. Cannot create a duplicate.
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div><div className={lbl}>BIN Number</div><input value={fields.bin_number} onChange={(e) => patch("bin_number", e.target.value)} className={inp} /></div>
@@ -453,6 +525,40 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
           </Section>
       </div>
     </DrawerBase>
+
+    <ModalBase
+      visible={showSimilarWarning}
+      title="Similar Vendor Name Found"
+      onEscape={() => setShowSimilarWarning(false)}
+      width="min(640px, calc(100vw - 32px))"
+      actions={<>
+        <button onClick={() => setShowSimilarWarning(false)} className="h-9 border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
+        <button onClick={performSave} disabled={saving} className="h-9 border border-amber-600 bg-amber-600 px-5 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50">
+          {saving ? "Saving…" : "Save Anyway — Create New Vendor"}
+        </button>
+      </>}
+    >
+      <div className="grid gap-3">
+        <p className="text-sm text-slate-600">
+          No GST Number was entered, so there is no reliable way to confirm this is a different vendor.
+          The following existing vendor(s) have a similar name — please check before creating a new one.
+        </p>
+        {similarMatches.map((match) => (
+          <div key={match.id} className="rounded border border-amber-200 bg-amber-50 p-3">
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-xs text-slate-500">{match.vendor_code}</span>
+              <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_BADGE[match.status] ?? "bg-slate-100 text-slate-600"}`}>{match.status}</span>
+            </div>
+            <div className="text-sm font-semibold text-slate-800">{match.vendor_name}</div>
+            <div className="text-xs text-slate-500">{match.vendor_type}{match.gst_number ? ` · GST: ${match.gst_number}` : ""}</div>
+            <div className="mt-0.5 text-xs text-slate-500">
+              {[match.reg_address_line1, match.reg_address_city, match.reg_address_state, match.reg_address_pin].filter(Boolean).join(", ") || "No address on file"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </ModalBase>
+    </>
   );
 }
 

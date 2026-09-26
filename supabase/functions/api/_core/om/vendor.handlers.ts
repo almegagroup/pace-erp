@@ -79,6 +79,20 @@ async function getVendorById(id: string): Promise<Record<string, unknown> | null
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+// A GST Number identifies one real legal entity -- an exact (case-insensitive)
+// match is never a coincidence, so this is the hard-block check shared by the
+// live duplicate-check endpoint (frontend disables Save on it) AND
+// createVendorHandler itself (never trust the client-side disable alone).
+async function findVendorsByGstNumber(gstNumber: string): Promise<JsonRecord[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("vendor_master")
+    .select("id, vendor_code, vendor_name, vendor_type, gst_number, status, reg_address_line1, reg_address_city, reg_address_state, reg_address_pin")
+    .ilike("gst_number", gstNumber);
+  if (error) throw new Error("OM_VENDOR_DUPLICATE_CHECK_FAILED");
+  return (data ?? []) as JsonRecord[];
+}
+
 /* ── Create ─────────────────────────────────────────────────────────────── */
 
 export async function createVendorHandler(
@@ -112,6 +126,22 @@ export async function createVendorHandler(
       }
     }
 
+    // GST-bearing vendor -- hard block on an exact match. The frontend
+    // disables Save once its own live check finds one, but that is UX only;
+    // the real gate is here, since vendor_master has no unique constraint on
+    // gst_number and a direct API call must not be able to slip past the UI.
+    const gstNumberRaw = toTrimmedString(body.gst_number).toUpperCase();
+    if (gstNumberRaw) {
+      const existingByGst = await findVendorsByGstNumber(gstNumberRaw);
+      if (existingByGst.length > 0) {
+        const match = existingByGst[0];
+        return vendorErrorResponse(
+          req, ctx, "OM_VENDOR_GST_DUPLICATE", 409,
+          `A vendor with this GST number already exists: ${match.vendor_code} — ${match.vendor_name}`,
+        );
+      }
+    }
+
     const { data: vendorCode, error: codeError } = await serviceRoleClient.rpc("generate_vendor_code");
     if (codeError || !vendorCode) {
       console.error("[vendor.create] generate_vendor_code RPC failed:", JSON.stringify(codeError));
@@ -128,7 +158,7 @@ export async function createVendorHandler(
         bin_number: toTrimmedString(body.bin_number) || null,
         tin_number: toTrimmedString(body.tin_number) || null,
         trade_license: toTrimmedString(body.trade_license) || null,
-        gst_number: toTrimmedString(body.gst_number) || null,
+        gst_number: gstNumberRaw || null,
         gst_category: toTrimmedString(body.gst_category) || null,
         iec_code: toTrimmedString(body.iec_code) || null,
         import_license: toTrimmedString(body.import_license) || null,
@@ -163,6 +193,63 @@ export async function createVendorHandler(
     console.error("[vendor.create] caught error:", code, (err as Error).stack ?? "");
     const status = code === "OM_ADMIN_REQUIRED" ? 403 : code.includes("INVALID") ? 400 : 500;
     return vendorErrorResponse(req, ctx, code, status, "Vendor create failed");
+  }
+}
+
+/* ── Duplicate check (pre-Create, both GST-exact and name-similarity) ────── */
+
+// Called live from the Create form: GST Number present -> exact match only
+// (a real duplicate, hard-blocked); no GST Number -> name-similarity only
+// (a possible duplicate, soft warning -- a genuinely different vendor can
+// legitimately have a similar name, so this never blocks by itself).
+export async function checkVendorDuplicateHandler(
+  req: Request,
+  ctx: OmHandlerContext,
+): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const gstNumber = toTrimmedString(url.searchParams.get("gst_number")).toUpperCase();
+    const vendorName = toTrimmedString(url.searchParams.get("vendor_name"));
+    const vendorType = toTrimmedString(url.searchParams.get("vendor_type")).toUpperCase();
+    const excludeId = toTrimmedString(url.searchParams.get("exclude_id"));
+
+    if (gstNumber) {
+      const matches = (await findVendorsByGstNumber(gstNumber))
+        .filter((row) => !excludeId || toTrimmedString(row.id) !== excludeId);
+      return okResponse(
+        { data: { match_type: matches.length ? "GST" : "NONE", matches } },
+        ctx.request_id, req,
+      );
+    }
+
+    if (!vendorName) {
+      return okResponse({ data: { match_type: "NONE", matches: [] } }, ctx.request_id, req);
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .rpc("find_similar_vendor_names", {
+        p_name: vendorName,
+        p_vendor_type: ALLOWED_VENDOR_TYPES.has(vendorType) ? vendorType : null,
+        p_threshold: 0.35,
+        p_limit: 5,
+      });
+    if (error) throw new Error("OM_VENDOR_DUPLICATE_CHECK_FAILED");
+    const matches = ((data ?? []) as JsonRecord[])
+      .filter((row) => !excludeId || toTrimmedString(row.id) !== excludeId)
+      .map((row) => ({
+        id: row.id, vendor_code: row.vendor_code, vendor_name: row.vendor_name,
+        vendor_type: row.vendor_type, gst_number: row.gst_number, status: row.status,
+        reg_address_line1: row.reg_address_line1, reg_address_city: row.reg_address_city,
+        reg_address_state: row.reg_address_state, reg_address_pin: row.reg_address_pin,
+      }));
+    return okResponse(
+      { data: { match_type: matches.length ? "NAME_SIMILAR" : "NONE", matches } },
+      ctx.request_id, req,
+    );
+  } catch (err) {
+    const code = (err as Error).message || "OM_VENDOR_DUPLICATE_CHECK_FAILED";
+    return vendorErrorResponse(req, ctx, code, 500, "Vendor duplicate check failed");
   }
 }
 
