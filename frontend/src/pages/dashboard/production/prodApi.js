@@ -183,6 +183,7 @@ export const listMtestSkusForPacking = (p) => fetchProd("GET", "/api/production/
 export const getMtestPlanFeedCapability = (companyId) => fetchProd("GET", "/api/production/plan-feed/mtest-capability", undefined, { company_id: companyId });
 export const listPlanFeedPrioritize = (p) => fetchProd("GET", "/api/production/plan-feed/prioritize", undefined, p);
 export const savePlanFeedPriority = (body) => fetchProd("POST", "/api/production/plan-feed/prioritize", body);
+export const getPlanFeedCategoryReport = (p) => fetchProd("GET", "/api/production/plan-feed/category-report", undefined, p);
 
 // ── Process Orders ────────────────────────────────────────────────────────────
 export const listProcessOrders = (p) => fetchProd("GET", "/api/production/process-orders", undefined, p);

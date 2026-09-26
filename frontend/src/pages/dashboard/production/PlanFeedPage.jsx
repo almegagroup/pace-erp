@@ -239,6 +239,7 @@ function emptyFo() {
   return {
     fo_number: "", order_serial_number: "", party_id: "", party_name: "", material_id: "", sku: "", description: "",
     ordered_qty_kg: "", pack_qty: "", order_date: localIsoDate(), scheduled_delivery_date: "", ordered_stroke_number: "",
+    site_contact_person: "", site_contact_number: "",
   };
 }
 
@@ -475,6 +476,8 @@ export default function PlanFeedPage() {
         order_date: form.order_date,
         scheduled_delivery_date: form.scheduled_delivery_date,
         ordered_stroke_number: form.ordered_stroke_number || undefined,
+        site_contact_person: isMtestCreate ? (form.site_contact_person || undefined) : undefined,
+        site_contact_number: isMtestCreate ? (form.site_contact_number || undefined) : undefined,
       });
       toast("FO created successfully.");
       setForm(emptyFo());
@@ -594,6 +597,8 @@ export default function PlanFeedPage() {
         order_confirmation_date: row.order_confirmation_date ?? "",
         formula_confirmation_date: row.formula_confirmation_date ?? "",
         dispatch_lr_entries: Array.isArray(row.dispatch_lr_entries) ? row.dispatch_lr_entries : [],
+        site_contact_person: row.site_contact_person ?? "",
+        site_contact_number: row.site_contact_number ?? "",
       });
       setReviseFoNumber(false);
       setRevisedFoNumberDraft(row.fo_number ?? "");
@@ -650,6 +655,10 @@ export default function PlanFeedPage() {
           }))
           .filter((entry) => entry.transporter_name || entry.lr_number || entry.lr_date),
       };
+      if (isMtestEdit) {
+        payload.site_contact_person = editDraft.site_contact_person?.trim() || null;
+        payload.site_contact_number = editDraft.site_contact_number?.trim() || null;
+      }
       if (reviseFoNumber) {
         payload.fo_number = revisedFoNumberDraft.trim();
       }
@@ -863,6 +872,9 @@ export default function PlanFeedPage() {
     { key: "scheduled_delivery_date", label: "Del. Date", width: "95px" },
     { key: "order_confirmation_date", label: "Order Confirmation Date", width: "120px", render: (r) => r.order_confirmation_date || "--" },
     { key: "formula_confirmation_date", label: "Formula Confirmation Date", width: "130px", render: (r) => r.formula_confirmation_date || "--" },
+    // MTEST-only, manually entered at Create/Edit FO -- always at the very end.
+    { key: "site_contact_person", label: "Site Contact Person", width: "140px", render: (r) => r.site_contact_person || "--" },
+    { key: "site_contact_number", label: "Contact Person Number", width: "140px", render: (r) => <span className="font-mono">{r.site_contact_number || "--"}</span> },
   ], []);
   const totalSuggestions = useMemo(() => [...new Set(summary.flatMap((row) => totalColumns.map((column) => gridCellValue(row, column)).filter(Boolean)))].sort((a, b) => a.localeCompare(b)).slice(0, 300), [summary, totalColumns]);
   const totalSuggestionsByColumn = useMemo(() => Object.fromEntries(totalColumns.map((column) => [column.key, [...new Set(summary.map((row) => gridCellValue(row, column)).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 150)])), [summary, totalColumns]);
@@ -901,7 +913,7 @@ export default function PlanFeedPage() {
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
-      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }, { key: "plan-feed-total-prioritize", label: "Prioritize", onClick: () => navigate("/dashboard/production/plan-feed/prioritize") }] : []}
+      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }, { key: "plan-feed-total-prioritize", label: "Prioritize", onClick: () => navigate("/dashboard/production/plan-feed/prioritize") }, { key: "plan-feed-total-report", label: "Report", onClick: () => navigate("/dashboard/production/plan-feed/report") }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
@@ -1164,6 +1176,19 @@ export default function PlanFeedPage() {
                   : <span className="text-[11px] text-amber-700">Stroke does not exist yet — will need to be created in Stroke Master.</span>
               )}
             </div>
+
+            {isMtestCreate ? (
+              <>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-slate-600 font-medium">Site Contact Person</label>
+                  <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={form.site_contact_person} onChange={e => setForm(f => ({ ...f, site_contact_person: e.target.value }))} placeholder="Name" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-slate-600 font-medium">Contact Person Number</label>
+                  <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={form.site_contact_number} onChange={e => setForm(f => ({ ...f, site_contact_number: e.target.value }))} placeholder="Phone number" />
+                </div>
+              </>
+            ) : null}
 
             <div className="col-span-2 flex gap-3 pt-2">
               <button type="submit" disabled={saving} className="px-5 py-2 bg-sky-600 text-white text-sm font-medium rounded hover:bg-sky-700 disabled:opacity-50">
@@ -1466,6 +1491,18 @@ export default function PlanFeedPage() {
                       )}
                     </div>
                   </div>
+                  {isMtestEdit ? (
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-slate-600 font-medium">Site Contact Person</label>
+                        <input className="border border-slate-300 rounded px-2 py-1.5 text-sm" value={editDraft.site_contact_person ?? ""} onChange={(e) => setEditDraft(d => ({ ...d, site_contact_person: e.target.value }))} disabled={editData.status === "CANCELLED"} placeholder="Name" />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-slate-600 font-medium">Contact Person Number</label>
+                        <input className="border border-slate-300 rounded px-2 py-1.5 text-sm font-mono" value={editDraft.site_contact_number ?? ""} onChange={(e) => setEditDraft(d => ({ ...d, site_contact_number: e.target.value }))} disabled={editData.status === "CANCELLED"} placeholder="Phone number" />
+                      </div>
+                    </>
+                  ) : null}
                   </fieldset>
                   <div className="col-span-2 flex flex-col gap-2 border-t border-slate-200 pt-3">
                     <div className="flex items-center justify-between">

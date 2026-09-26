@@ -589,6 +589,10 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     const orderDate = toTrimmedString(body.order_date);
     const scheduledDeliveryDate = toTrimmedString(body.scheduled_delivery_date) || null;
     const orderedStrokeNumber = toTrimmedString(body.ordered_stroke_number) || null;
+    // MTEST-only fields (frontend gates visibility to MTEST FOs) -- manually
+    // typed by the user, no validation beyond trimming.
+    const siteContactPerson = toTrimmedString(body.site_contact_person) || null;
+    const siteContactNumber = toTrimmedString(body.site_contact_number) || null;
 
     if (!companyId || !foNumber || !partyId || !partyName || (!sku && !materialId) || !description
       || !orderedQtyKg || !packQty || !orderDate || !scheduledDeliveryDate) {
@@ -630,6 +634,8 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
         order_date: orderDate,
         scheduled_delivery_date: scheduledDeliveryDate,
         ordered_stroke_number: orderedStrokeNumber,
+        site_contact_person: siteContactPerson,
+        site_contact_number: siteContactNumber,
         status: "ACTIVE",
         created_by: ctx.auth_user_id,
         last_updated_at: new Date().toISOString(),
@@ -809,6 +815,14 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     }
     if (body.order_serial_number !== undefined) {
       updates.order_serial_number = toTrimmedString(body.order_serial_number) || null;
+    }
+    // MTEST-only fields (frontend gates visibility to MTEST FOs) -- manually
+    // typed by the user, no validation beyond trimming.
+    if (body.site_contact_person !== undefined) {
+      updates.site_contact_person = toTrimmedString(body.site_contact_person) || null;
+    }
+    if (body.site_contact_number !== undefined) {
+      updates.site_contact_number = toTrimmedString(body.site_contact_number) || null;
     }
     if (body.order_confirmation_date !== undefined) {
       const orderConfirmationDate = toTrimmedString(body.order_confirmation_date);
@@ -1539,7 +1553,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         id, company_id, fo_number, original_fo_number, order_serial_number, party_id, party_name, sku, description, material_id,
         ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
         ordered_stroke_number, order_confirmation_date, formula_confirmation_date, dispatch_lr_entries,
-        priority_date, priority_number
+        priority_date, priority_number, site_contact_person, site_contact_number
       `)
       .neq("status", "CANCELLED");
     if (companyId) foQuery = foQuery.eq("company_id", companyId);
@@ -1870,6 +1884,8 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         dispatch_lr_entries: Array.isArray(fo.dispatch_lr_entries) ? fo.dispatch_lr_entries : [],
         priority_date: fo.priority_date ?? null,
         priority_number: fo.priority_number ?? null,
+        site_contact_person: fo.site_contact_person ?? null,
+        site_contact_number: fo.site_contact_number ?? null,
       };
     });
 
@@ -2143,5 +2159,265 @@ export async function updatePlanFeedPriorityHandler(req: Request, ctx: ProdHandl
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_PRIORITIZE_FAILED";
     const status = code === "PROD_PLAN_FEED_PRIORITIZE_DUPLICATE" ? 409 : 500;
     return foErr(req, ctx, code, status, "Plan feed prioritize save failed");
+  }
+}
+
+// ── "Report" (Plan Feed Total Table's Report button) ────────────────────────
+// PO Type (MTO/HPS/MTEST) x Category, each measured independently against
+// its own date column -- Order Qty by order_date, Production Qty by the
+// Process PO's own verified_at (SFG level, per business owner), Dispatch
+// Qty by the posted Sales Invoice's tally_invoice_date. Not a "for orders
+// placed in this window, how much of it got produced/dispatched" trace --
+// three independent totals over the same calendar window.
+
+// HPS Prodshades are individually-named products (not a numbered grade
+// series like Admix's PC100/PC200/...), so for HPS the Category IS the
+// Category Group as-is -- no letter-prefix stripping.
+const HPS_CATEGORIES = new Set(["90 SA", "AF 100"]);
+
+// MTO/MTEST categories are a numbered grade series (PC100, PC 250, PC300...)
+// -- the Category Group is the letter-prefix (PC/PX/S), stripping the grade
+// number so PC100/PC200/PC300 all roll into one "PC" total line.
+function normalizeCategoryGroup(rawCategory: string, poType: string): string {
+  const trimmed = rawCategory.trim();
+  if (poType === "HPS") return trimmed;
+  const match = trimmed.match(/^[A-Za-z]+/);
+  return match ? match[0].toUpperCase() : trimmed;
+}
+
+function resolveReportPoType(fo_customer_type: string, category: string | null): string | null {
+  const type = toUpperTrimmedString(fo_customer_type);
+  if (type === "MTEST" || type === "ZTEST") return "MTEST";
+  if (type === "MTO_HPS") return category && HPS_CATEGORIES.has(category) ? "HPS" : "MTO";
+  return null; // MTS (or unresolved) -- out of this report's scope
+}
+
+// Bulk version of resolveProdshadeForSku -- given a set of FG SKU material
+// ids, resolve each one's underlying Prodshade's own material_category
+// (§83.15's shade_code+pack_code match via prodshade_pack_config, same
+// mechanism, batched instead of per-SKU).
+async function resolveProdshadeCategoryMap(fgMaterialIds: string[]): Promise<Map<string, string | null>> {
+  const ids = [...new Set(fgMaterialIds.filter(Boolean))];
+  const result = new Map<string, string | null>();
+  if (ids.length === 0) return result;
+
+  const fgRows = await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient
+    .schema("erp_master").from("material_master")
+    .select("id, shade_code, pack_code").in("id", chunk));
+
+  const { data: configRows, error: configErr } = await serviceRoleClient
+    .schema("erp_production").from("prodshade_pack_config")
+    .select("material_id, pack_code_id").eq("active", true);
+  if (configErr) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+
+  const packCodeIds = [...new Set(((configRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.pack_code_id)).filter(Boolean))];
+  const packCodeById = new Map<string, string>();
+  if (packCodeIds.length > 0) {
+    const packRows = await fetchInChunks<JsonRecord>(packCodeIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("pack_code_master")
+      .select("id, pack_code").in("id", chunk));
+    for (const row of packRows) packCodeById.set(String(row.id), toTrimmedString(row.pack_code));
+  }
+
+  const prodshadeIds = [...new Set(((configRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.material_id)).filter(Boolean))];
+  const prodshadeMap = new Map<string, JsonRecord>();
+  if (prodshadeIds.length > 0) {
+    const prodRows = await fetchInChunks<JsonRecord>(prodshadeIds, (chunk) => serviceRoleClient
+      .schema("erp_master").from("material_master")
+      .select("id, shade_code, material_category").eq("material_type", "SFG").in("id", chunk));
+    for (const row of prodRows) prodshadeMap.set(String(row.id), row);
+  }
+
+  const categoryByKey = new Map<string, string>();
+  for (const cfg of (configRows ?? []) as JsonRecord[]) {
+    const prod = prodshadeMap.get(toTrimmedString(cfg.material_id));
+    const packCode = packCodeById.get(toTrimmedString(cfg.pack_code_id));
+    if (!prod || !packCode) continue;
+    const shadeCode = toTrimmedString(prod.shade_code);
+    const category = toTrimmedString(prod.material_category);
+    if (shadeCode && category) categoryByKey.set(`${shadeCode}|${packCode}`, category);
+  }
+
+  for (const fg of fgRows) {
+    const shadeCode = toTrimmedString(fg.shade_code);
+    const packCode = toTrimmedString(fg.pack_code);
+    const category = shadeCode && packCode ? categoryByKey.get(`${shadeCode}|${packCode}`) ?? null : null;
+    result.set(String(fg.id), category);
+  }
+  return result;
+}
+
+// GET /api/production/plan-feed/category-report?company_id=&date_from=&date_to=
+export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from") ?? "");
+    const dateTo = toTrimmedString(url.searchParams.get("date_to") ?? "");
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_CATEGORY_REPORT_COMPANY_REQUIRED", 400, "company_id is required");
+    if (!dateFrom || !dateTo) return foErr(req, ctx, "PROD_PLAN_FEED_CATEGORY_REPORT_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const dateToExclusiveEnd = addDaysIso(dateTo, 1);
+
+    type Metric = { order_qty: number; production_qty: number; dispatch_qty: number };
+    const metricsByKey = new Map<string, Metric>();
+    function bump(poType: string, leafCategory: string, field: keyof Metric, qty: number) {
+      const key = `${poType}|${leafCategory}`;
+      const entry = metricsByKey.get(key) ?? { order_qty: 0, production_qty: 0, dispatch_qty: 0 };
+      entry[field] += qty;
+      metricsByKey.set(key, entry);
+    }
+
+    // ---- Order Qty (order_date within range) ----
+    const { data: foRows, error: foErrQuery } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, party_id, material_id, ordered_qty_kg")
+      .eq("company_id", companyId)
+      .neq("status", "CANCELLED")
+      .gte("order_date", dateFrom)
+      .lte("order_date", dateTo);
+    if (foErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+
+    // ---- Production Qty (Process PO verified_at within range, SFG-level) ----
+    const { data: poRows, error: poErrQuery } = await serviceRoleClient
+      .schema("erp_production").from("process_order")
+      .select("id, po_type, stroke_master_id, actual_qty")
+      .eq("company_id", companyId)
+      .in("po_type", ["MTO", "HPS", "MTEST"])
+      .eq("status", "VERIFIED")
+      .gte("verified_at", dateFrom)
+      .lt("verified_at", dateToExclusiveEnd);
+    if (poErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+
+    const strokeIds = [...new Set(((poRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.stroke_master_id)).filter(Boolean))];
+    const strokeRows = strokeIds.length > 0 ? await fetchInChunks<JsonRecord>(strokeIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("id, prodshade_material_id").in("id", chunk)) : [];
+    const prodshadeIdByStrokeId = new Map(strokeRows.map((r) => [String(r.id), toTrimmedString(r.prodshade_material_id)]));
+    const prodshadeIdsForProduction = [...new Set(strokeRows.map((r) => toTrimmedString(r.prodshade_material_id)).filter(Boolean))];
+    const prodshadeCategoryById = new Map<string, string>();
+    if (prodshadeIdsForProduction.length > 0) {
+      const rows = await fetchInChunks<JsonRecord>(prodshadeIdsForProduction, (chunk) => serviceRoleClient
+        .schema("erp_master").from("material_master")
+        .select("id, material_category").in("id", chunk));
+      for (const row of rows) prodshadeCategoryById.set(String(row.id), toTrimmedString(row.material_category));
+    }
+
+    // ---- Dispatch Qty (posted Sales Invoice's tally_invoice_date within range) ----
+    const { data: invRows, error: invErrQuery } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice")
+      .select("id, fo_id")
+      .eq("company_id", companyId)
+      .eq("status", "POSTED")
+      .not("fo_id", "is", null)
+      .gte("tally_invoice_date", dateFrom)
+      .lte("tally_invoice_date", dateTo);
+    if (invErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+
+    const invoiceIds = ((invRows ?? []) as JsonRecord[]).map((r) => String(r.id));
+    const foIdByInvoiceId = new Map(((invRows ?? []) as JsonRecord[]).map((r) => [String(r.id), toTrimmedString(r.fo_id)]));
+    const invoiceLineRows = invoiceIds.length > 0 ? await fetchInChunks<JsonRecord>(invoiceIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice_line")
+      .select("invoice_id, material_id, quantity").in("invoice_id", chunk)) : [];
+
+    const dispatchFoIds = [...new Set(((invRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.fo_id)).filter(Boolean))];
+    const dispatchFoRows = dispatchFoIds.length > 0 ? await fetchInChunks<JsonRecord>(dispatchFoIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, party_id").in("id", chunk)) : [];
+    const partyIdByFoId = new Map(dispatchFoRows.map((r) => [String(r.id), toTrimmedString(r.party_id)]));
+
+    // ---- Resolve customer types + prodshade categories (shared by Order + Dispatch) ----
+    const allPartyIds = [...new Set([
+      ...((foRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.party_id)),
+      ...dispatchFoRows.map((r) => toTrimmedString(r.party_id)),
+    ].filter(Boolean))];
+    const customerMap = await getCustomerMapByIds(allPartyIds);
+
+    const allFgMaterialIds = [...new Set([
+      ...((foRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.material_id)),
+      ...invoiceLineRows.map((r) => toTrimmedString(r.material_id)),
+    ].filter(Boolean))];
+    const categoryByFgMaterialId = await resolveProdshadeCategoryMap(allFgMaterialIds);
+
+    // Order Qty
+    for (const fo of (foRows ?? []) as JsonRecord[]) {
+      const party = customerMap.get(toTrimmedString(fo.party_id));
+      const category = categoryByFgMaterialId.get(toTrimmedString(fo.material_id)) ?? null;
+      const poType = resolveReportPoType(toTrimmedString(party?.fo_customer_type), category);
+      if (!poType || !category) continue;
+      bump(poType, category, "order_qty", Number(fo.ordered_qty_kg) || 0);
+    }
+
+    // Production Qty
+    for (const po of (poRows ?? []) as JsonRecord[]) {
+      const prodshadeId = prodshadeIdByStrokeId.get(toTrimmedString(po.stroke_master_id));
+      const category = prodshadeId ? (prodshadeCategoryById.get(prodshadeId) ?? null) : null;
+      const poType = toUpperTrimmedString(po.po_type);
+      if (!category) continue;
+      bump(poType, category, "production_qty", Number(po.actual_qty) || 0);
+    }
+
+    // Dispatch Qty
+    for (const line of invoiceLineRows) {
+      const foId = foIdByInvoiceId.get(toTrimmedString(line.invoice_id));
+      const partyId = foId ? partyIdByFoId.get(foId) : undefined;
+      const party = partyId ? customerMap.get(partyId) : undefined;
+      const category = categoryByFgMaterialId.get(toTrimmedString(line.material_id)) ?? null;
+      const poType = resolveReportPoType(toTrimmedString(party?.fo_customer_type), category);
+      if (!poType || !category) continue;
+      bump(poType, category, "dispatch_qty", Number(line.quantity) || 0);
+    }
+
+    // ---- Build PO Type -> Category Group -> leaf Category rows, with a Group
+    // Total row (always, even for a single-member group) and a PO Type Total row.
+    const PO_TYPE_ORDER = ["MTO", "HPS", "MTEST"];
+    type LeafRow = { po_type: string; leaf_category: string; group: string } & Metric;
+    const leafRows: LeafRow[] = [];
+    for (const [key, metric] of metricsByKey) {
+      const [poType, leafCategory] = key.split("|");
+      leafRows.push({ po_type: poType, leaf_category: leafCategory, group: normalizeCategoryGroup(leafCategory, poType), ...metric });
+    }
+
+    const outputRows: JsonRecord[] = [];
+    for (const poType of PO_TYPE_ORDER) {
+      const poTypeLeaves = leafRows.filter((r) => r.po_type === poType);
+      if (poTypeLeaves.length === 0) continue;
+      const groups = [...new Set(poTypeLeaves.map((r) => r.group))].sort((a, b) => a.localeCompare(b));
+      const poTypeTotal: Metric = { order_qty: 0, production_qty: 0, dispatch_qty: 0 };
+      for (const group of groups) {
+        const groupLeaves = poTypeLeaves.filter((r) => r.group === group).sort((a, b) => a.leaf_category.localeCompare(b.leaf_category));
+        const groupTotal: Metric = { order_qty: 0, production_qty: 0, dispatch_qty: 0 };
+        for (const leaf of groupLeaves) {
+          outputRows.push({
+            row_type: "LEAF", po_type: poType, category: leaf.leaf_category,
+            order_qty: leaf.order_qty, production_qty: leaf.production_qty, dispatch_qty: leaf.dispatch_qty,
+          });
+          groupTotal.order_qty += leaf.order_qty;
+          groupTotal.production_qty += leaf.production_qty;
+          groupTotal.dispatch_qty += leaf.dispatch_qty;
+        }
+        outputRows.push({
+          row_type: "GROUP_TOTAL", po_type: poType, category: `${group} Total`,
+          order_qty: groupTotal.order_qty, production_qty: groupTotal.production_qty, dispatch_qty: groupTotal.dispatch_qty,
+        });
+        poTypeTotal.order_qty += groupTotal.order_qty;
+        poTypeTotal.production_qty += groupTotal.production_qty;
+        poTypeTotal.dispatch_qty += groupTotal.dispatch_qty;
+      }
+      outputRows.push({
+        row_type: "PO_TYPE_TOTAL", po_type: poType, category: `${poType} TOTAL`,
+        order_qty: poTypeTotal.order_qty, production_qty: poTypeTotal.production_qty, dispatch_qty: poTypeTotal.dispatch_qty,
+      });
+    }
+
+    return okResponse({ data: outputRows }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_CATEGORY_REPORT_FAILED";
+    return foErr(req, ctx, code, 500, "Plan feed category report failed");
   }
 }

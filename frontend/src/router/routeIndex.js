@@ -162,6 +162,7 @@ export function buildRouteIndex(menuSnapshot) {
     // page (not a modal) -- same companion-route shape as the pairs above,
     // no new tx_code/menu row needed since it's reached only via Plan Feed.
     ["/dashboard/production/plan-feed", "/dashboard/production/plan-feed/prioritize"],
+    ["/dashboard/production/plan-feed", "/dashboard/production/plan-feed/report"],
 
     // ── SA ────────────────────────────────────────────────────────────────────
     ["/sa/users",              "/sa/users/report"],
