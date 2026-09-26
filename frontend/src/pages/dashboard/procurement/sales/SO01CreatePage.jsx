@@ -421,15 +421,25 @@ export default function SO01CreatePage() {
     setMaterialTypes((current) => (current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]));
   }
 
-  function goToPage2() {
-    if (!companyId) { setError("Select a company."); return; }
-    if (materialTypes.length === 0) { setError("Select at least one Material Type."); return; }
-    if (!dispatchType) { setError("Select a Dispatch Type."); return; }
+  // business owner, 2026-09-26: pulled out of goToPage2 so the "Next"
+  // button's disabled state and the on-click check share one source of
+  // truth instead of drifting apart. Returns "" when everything required
+  // is present, else the message goToPage2 used to setError() with.
+  function computePage1ValidationMessage() {
+    if (!companyId) return "Select a company.";
+    if (materialTypes.length === 0) return "Select at least one Material Type.";
+    if (!dispatchType) return "Select a Dispatch Type.";
     if (vendorCodeRequired && vendorCodeOptions.length === 0) {
-      setError("This company has no Vendor Code configured — required for FG/SFG dispatch billed to Asian Paints.");
-      return;
+      return "This company has no Vendor Code configured — required for FG/SFG dispatch billed to Asian Paints.";
     }
-    if (vendorCodeRequired && !vendorCodeId) { setError("Select a Vendor Code."); return; }
+    if (vendorCodeRequired && !vendorCodeId) return "Select a Vendor Code.";
+    return "";
+  }
+  const page1ValidationMessage = computePage1ValidationMessage();
+
+  function goToPage2() {
+    const message = computePage1ValidationMessage();
+    if (message) { setError(message); return; }
     setError("");
     setLines(materialTypes.map((materialType) => makeLine(materialType)));
     setPage(2);
@@ -771,32 +781,34 @@ export default function SO01CreatePage() {
     return payload;
   }
 
-  async function handleSubmit() {
-    if (lines.length === 0) { setError("At least one item line is required."); return; }
-    if (!externalSoNumber.trim()) { setError("External SO Number is required."); return; }
+  // business owner, 2026-09-26: every one of these used to only run inside
+  // handleSubmit on click (setError + return per check) -- the "Create SO"
+  // button stayed clickable even with required fields blank, so the user
+  // only found out after clicking. Pulled into its own function, still
+  // called from handleSubmit for the actual submit-time guard, but now ALSO
+  // drives the button's disabled state directly (see missingRequiredField
+  // below) so the button itself goes disabled the moment a line is
+  // incomplete, not just on click.
+  function computePage2ValidationMessage() {
+    if (lines.length === 0) return "At least one item line is required.";
+    if (!externalSoNumber.trim()) return "External SO Number is required.";
     if (!isManualDocumentDateWithinWindow(soDate) || (externalSoDate && !isManualDocumentDateWithinWindow(externalSoDate))) {
-      setError(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
-      return;
+      return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
     }
     // §133.9-G — a manual-SKU FG line has no material_id by design; it must
     // carry a manual_sku_name instead. Every other line always needs a real item.
     if (lines.some((line) => !line.material_id && !(line.__manualSku && line.manual_sku_name.trim()))) {
-      setError("Every line needs an item selected (or a manual SKU name entered).");
-      return;
+      return "Every line needs an item selected (or a manual SKU name entered).";
     }
     const missingHsnLine = lines.find((line) => {
       if (!line.material_id) return false;
       const material = fgSkuMap.get(line.material_id) ?? materialMap.get(line.material_id);
       return !String(material?.hsn_code || "").trim() && !line.hsn_code.trim();
     });
-    if (missingHsnLine) {
-      setError("HSN Code is required for an item that has no HSN in Material Master.");
-      return;
-    }
+    if (missingHsnLine) return "HSN Code is required for an item that has no HSN in Material Master.";
     const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
     if (missingMonthLine) {
-      setError(`Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`);
-      return;
+      return `Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`;
     }
     // business owner, 2026-09-26: Stroke Number can no longer be left blank
     // for an FG/SFG line under MTO/HPS -- it used to be purely informational
@@ -805,9 +817,14 @@ export default function SO01CreatePage() {
     // hasn't created yet) still saves fine, same as before.
     const missingStrokeLine = lines.find((line) => ["FG", "SFG"].includes(line.line_material_type) && ["MTO", "HPS"].includes(line.fg_type) && !line.declared_stroke_number?.trim());
     if (missingStrokeLine) {
-      setError(`Stroke Number is required for ${missingStrokeLine.line_material_type} ${missingStrokeLine.fg_type}. Enter the Stroke Number Asian Paints declared for this Item.`);
-      return;
+      return `Stroke Number is required for ${missingStrokeLine.line_material_type} ${missingStrokeLine.fg_type}. Enter the Stroke Number Asian Paints declared for this Item.`;
     }
+    return "";
+  }
+
+  async function handleSubmit() {
+    const message = computePage2ValidationMessage();
+    if (message) { setError(message); return; }
     setSaving(true);
     setError("");
     setNotice("");
@@ -872,7 +889,14 @@ export default function SO01CreatePage() {
   const asianBilledVdcDcOptions = depotCodes
     .filter((entry) => entry.dispatch_type === (asianBilledChoice === "DC" ? "DEPOT" : "DIRECT"))
     .map((entry) => ({ value: entry.id, label: `${entry.code || ""} — ${entry.description || ""}`.trim() }));
-  const missingFgCostingRateMonth = lines.some((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
+  // business owner, 2026-09-26: both buttons used to stay enabled no matter
+  // what was filled in -- clicking was the only way to find out a required
+  // field was missing. Now the button itself disables the moment something
+  // required is blank, and the notice banner names exactly what's missing,
+  // computed from the exact same functions handleSubmit/goToPage2 use so
+  // the button's disabled state can never drift out of sync with what
+  // clicking it would actually do.
+  const page2ValidationMessage = page === 2 ? computePage2ValidationMessage() : "";
 
   return (
     <ErpScreenScaffold
@@ -881,12 +905,13 @@ export default function SO01CreatePage() {
       actions={[
         { key: "back", label: page === 1 ? "Back" : "Previous", tone: "neutral", onClick: () => (page === 1 ? popScreen() : setPage(1)) },
         page === 2
-          ? { key: "save", label: saving ? "Saving..." : "Create SO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || missingFgCostingRateMonth }
-          : { key: "next", label: "Next", tone: "primary", onClick: goToPage2 },
+          ? { key: "save", label: saving ? "Saving..." : "Create SO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || Boolean(page2ValidationMessage) }
+          : { key: "next", label: "Next", tone: "primary", onClick: goToPage2, disabled: Boolean(page1ValidationMessage) },
       ]}
       notices={[
         ...(error ? [{ key: "so01-error", tone: "error", message: error }] : []),
-        ...(missingFgCostingRateMonth ? [{ key: "so01-fg-month-required", tone: "warning", message: "Create SO is unavailable: select Costing Rate Month for every FG MTO/HPS/MTEST line." }] : []),
+        ...(page === 1 && page1ValidationMessage ? [{ key: "so01-page1-required", tone: "warning", message: `Next is unavailable: ${page1ValidationMessage}` }] : []),
+        ...(page === 2 && page2ValidationMessage ? [{ key: "so01-page2-required", tone: "warning", message: `Create SO is unavailable: ${page2ValidationMessage}` }] : []),
         ...(notice ? [{ key: "so01-notice", tone: "success", message: notice }] : []),
       ]}
     >
