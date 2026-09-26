@@ -247,6 +247,8 @@ const emptyRepack = () => ({
   quantity: "",
   uom_code: "KG",
   storage_location_id: "",
+  packing_order_id: "",
+  packing_choices: [],
 });
 const emptyItem = () => ({
   __key: id(),
@@ -605,12 +607,40 @@ export default function SO05CreatePage() {
             return {
               ...invoice,
               items: invoice.items.map((item, index) => {
-                const ambiguity = ambiguities.find((row) =>
-                  row.line_number === index + 1
+                const itemAmbiguity = ambiguities.find((row) =>
+                  row.line_number === index + 1 &&
+                  row.repack_index === undefined
                 );
-                return ambiguity
-                  ? { ...item, packing_choices: ambiguity.choices }
-                  : item;
+                const repackAmbiguities = ambiguities.filter((row) =>
+                  row.line_number === index + 1 &&
+                  row.repack_index !== undefined
+                );
+                if (!itemAmbiguity && repackAmbiguities.length === 0) {
+                  return item;
+                }
+                return {
+                  ...item,
+                  ...(itemAmbiguity
+                    ? { packing_choices: itemAmbiguity.choices }
+                    : {}),
+                  ...(repackAmbiguities.length > 0
+                    ? {
+                      repack_lines: item.repack_lines.map(
+                        (line, repackIndex) => {
+                          const repackAmbiguity = repackAmbiguities.find(
+                            (row) => row.repack_index === repackIndex,
+                          );
+                          return repackAmbiguity
+                            ? {
+                              ...line,
+                              packing_choices: repackAmbiguity.choices,
+                            }
+                            : line;
+                        },
+                      ),
+                    }
+                    : {}),
+                };
               }),
             };
           }),
@@ -1323,10 +1353,8 @@ export default function SO05CreatePage() {
                           </button>
                         </div>
                         {item.repack_lines.map((line) => (
-                          <div
-                            key={line.__key}
-                            className="grid md:grid-cols-5 gap-2"
-                          >
+                          <div key={line.__key} className="space-y-1">
+                            <div className="grid md:grid-cols-5 gap-2">
                             <RepackTargetSelect
                               companyId={companyId}
                               sourceMaterialId={item.material_id}
@@ -1417,6 +1445,32 @@ export default function SO05CreatePage() {
                                   { storage_location_id: value },
                                 )}
                             />
+                          </div>
+                          {line.packing_choices?.length > 0 && (
+                            <div className="border border-amber-300 bg-amber-50 p-2">
+                              <label>
+                                Repack target has multiple matching Packing
+                                POs — select one:{" "}
+                                <ErpComboboxField
+                                  className="inline-block w-64"
+                                  inputClassName="rounded px-2 py-1"
+                                  placeholder="Choose matching PO"
+                                  value={line.packing_order_id}
+                                  options={line.packing_choices.map((row) => ({
+                                    value: row.id,
+                                    label: row.po_number,
+                                  }))}
+                                  onChange={(value) =>
+                                    patchRepack(
+                                      invoice.__key,
+                                      item.__key,
+                                      line.__key,
+                                      { packing_order_id: value },
+                                    )}
+                                />
+                              </label>
+                            </div>
+                          )}
                           </div>
                         ))}
                       </div>

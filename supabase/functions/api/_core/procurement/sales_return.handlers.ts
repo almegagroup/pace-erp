@@ -462,9 +462,25 @@ export async function backfillSalesReturnBatchResolved(
   return matchingIds.length;
 }
 
+// business owner, 2026-09-26: generalized from taking a bare sales_return_item
+// so it can also resolve a repack line's own Packing PO -- a repack line
+// converts the returned qty into a DIFFERENT SKU (pack-code change, e.g.
+// 000 -> 599) than what was actually invoiced/dispatched, and that new
+// SKU+batch combination was never itself packed by any real Packing PO --
+// only the item's OWN (pre-repack) SKU+batch has one. Each repack target
+// needs its OWN resolution against its OWN material_id (still the same
+// batch_number, since repack never changes which batch it is), and its OWN
+// packing_order_id -- resolving it against the item's material_id would
+// silently look up the wrong SKU.
 async function resolveBatchAndPacking(
   companyId: string,
-  item: JsonRecord,
+  params: {
+    materialId: string;
+    batchNumber: string;
+    fgType: string;
+    lineMaterialType: string;
+    selectedPackingOrderId?: string;
+  },
 ): Promise<
   {
     batchResolved: boolean;
@@ -472,12 +488,12 @@ async function resolveBatchAndPacking(
     choices: JsonRecord[];
   }
 > {
-  const materialId = text(item.material_id);
-  const batchNumber = text(item.batch_number);
-  const fgType = upper(item.fg_type);
+  const materialId = params.materialId;
+  const batchNumber = params.batchNumber;
+  const fgType = params.fgType;
   if (
     !materialId || !batchNumber ||
-    !["FG", "SFG"].includes(upper(item.line_material_type))
+    !["FG", "SFG"].includes(params.lineMaterialType)
   ) {
     return { batchResolved: false, packingOrderId: null, choices: [] };
   }
@@ -490,7 +506,7 @@ async function resolveBatchAndPacking(
     )
     .eq("batch_number", batchNumber).eq("po_type", fgType).limit(1);
   if (processError) throw new Error("SRET_BATCH_LOOKUP_FAILED");
-  if (upper(item.line_material_type) !== "FG" || !BATCH_REQUIRED.has(fgType)) {
+  if (params.lineMaterialType !== "FG" || !BATCH_REQUIRED.has(fgType)) {
     return {
       batchResolved: Boolean(processes?.length),
       packingOrderId: null,
@@ -508,7 +524,7 @@ async function resolveBatchAndPacking(
     .neq("status", "CANCELLED").order("created_at", { ascending: false });
   if (packingError) throw new Error("SRET_PACKING_ORDER_LOOKUP_FAILED");
   const rows = (packing ?? []) as JsonRecord[];
-  const selected = text(item.packing_order_id);
+  const selected = text(params.selectedPackingOrderId);
   if (selected && !rows.some((row) => text(row.id) === selected)) {
     throw new Error("SRET_PACKING_ORDER_INVALID");
   }
@@ -950,7 +966,13 @@ export async function createSalesReturnReceiptHandler(
         ) throw new Error("SRET_BATCH_REQUIRED");
         if (!materialId) throw new Error("SRET_MANUAL_SKU_CANNOT_POST");
         await validateStorageLocation(companyId, locationId);
-        const resolved = await resolveBatchAndPacking(companyId, item);
+        const resolved = await resolveBatchAndPacking(companyId, {
+          materialId,
+          batchNumber: text(item.batch_number),
+          fgType: fgType ?? "",
+          lineMaterialType: materialType,
+          selectedPackingOrderId: text(item.packing_order_id),
+        });
         if (resolved.choices.length > 0) {
           ambiguous.push({
             invoice_index: invoiceIndex,
@@ -979,6 +1001,37 @@ export async function createSalesReturnReceiptHandler(
           }
           if (Math.abs(repackTotal - quantity) > 0.000001) {
             throw new Error("SRET_REPACK_QUANTITY_MISMATCH");
+          }
+          // business owner, 2026-09-26: repack converts the returned qty
+          // into a DIFFERENT SKU than what was actually dispatched (e.g.
+          // pack-code 000 -> 599) -- that SKU+batch combination was never
+          // itself packed by any real Packing PO, so this almost always
+          // resolves to nothing yet (packingOrderId stays null, expected --
+          // see the new PACKING-pending check in salesReturnPendingItems,
+          // which now checks repack lines instead of the item once
+          // is_repacked is true). Still run the same resolution PACE
+          // already does for the item itself, in case a PR23 "Old Packing
+          // PO" for this exact repack target + batch was already created by
+          // an earlier return of the same batch.
+          for (let repackIndex = 0; repackIndex < repackRows.length; repackIndex += 1) {
+            const repack = repackRows[repackIndex];
+            const repackResolved = await resolveBatchAndPacking(companyId, {
+              materialId: text(repack.target_material_id),
+              batchNumber: text(item.batch_number),
+              fgType: fgType ?? "",
+              lineMaterialType: "FG",
+              selectedPackingOrderId: text(repack.packing_order_id),
+            });
+            repack.packing_order_id = repackResolved.packingOrderId;
+            if (repackResolved.choices.length > 0) {
+              ambiguous.push({
+                invoice_index: invoiceIndex,
+                invoice_number: text(invoice.invoice_number),
+                line_number: index + 1,
+                repack_index: repackIndex,
+                choices: repackResolved.choices,
+              });
+            }
           }
         }
         preparedItems.push({
@@ -1091,6 +1144,7 @@ export async function createSalesReturnReceiptHandler(
             quantity: positive(row.quantity),
             uom_code: text(row.uom_code) || "KG",
             storage_location_id: text(row.storage_location_id),
+            packing_order_id: text(row.packing_order_id) || null,
             created_by: ctx.auth_user_id,
           }));
           const { data: savedRepack, error: repackError } =
@@ -1395,19 +1449,19 @@ export async function saveReturnInvoiceDetailHandler(
 
 async function salesReturnPendingItems(
   companyId: string,
-): Promise<JsonRecord[]> {
+): Promise<{ items: JsonRecord[]; packingCandidates: JsonRecord[] }> {
   const { data, error } = await serviceRoleClient.schema("erp_procurement")
     .from("sales_return_item")
     .select(
-      "id, line_material_type, fg_type, material_id, manual_sku_name, declared_stroke_number, batch_number, batch_resolved, packing_order_id, quantity, uom_code, invoice:sales_return_invoice!inner(receipt:sales_return_receipt!inner(company_id, receipt_number))",
+      "id, line_material_type, fg_type, material_id, manual_sku_name, declared_stroke_number, batch_number, batch_resolved, packing_order_id, quantity, uom_code, is_repacked, invoice:sales_return_invoice!inner(receipt:sales_return_receipt!inner(company_id, receipt_number))",
     )
     .eq("invoice.receipt.company_id", companyId);
   if (error) throw new Error("SRET_PENDING_ENTRIES_FAILED");
-  const rows = (data ?? []) as JsonRecord[];
+  const rawRows = (data ?? []) as JsonRecord[];
   const { prodshadeByMaterial, materialById } = await deriveProdshadeMap(
-    rows.map((row) => text(row.material_id)),
+    rawRows.map((row) => text(row.material_id)),
   );
-  return rows.map((row) => {
+  const items = rawRows.map((row) => {
     const materialId = text(row.material_id);
     const prodshadeId = prodshadeByMaterial.get(materialId) || materialId;
     const material = materialById.get(materialId);
@@ -1423,6 +1477,66 @@ async function salesReturnPendingItems(
       prodshade_name: text(prodshade?.material_name) || null,
     };
   });
+
+  // business owner, 2026-09-26: PR23/PACKING pending is about "which SKU+batch
+  // in Blocked stock still needs a Packing PO" -- for a repacked item, the
+  // item's OWN material was fully converted away (repack is all-or-nothing,
+  // see the SRET_REPACK_QUANTITY_MISMATCH check at create time), so nothing
+  // of that original SKU physically remains; each repack line's OWN target
+  // material is what's actually sitting in Blocked now, and each needs its
+  // own Packing PO genealogy (see the migration adding
+  // sales_return_repack_line.packing_order_id). A non-repacked item is its
+  // own sole packing candidate, unchanged from before.
+  const repackedItemIds = items
+    .filter((row) => Boolean(row.is_repacked))
+    .map((row) => text(row.id));
+  let repackRows: JsonRecord[] = [];
+  if (repackedItemIds.length > 0) {
+    try {
+      repackRows = await fetchInChunks<JsonRecord>(
+        repackedItemIds,
+        (idChunk) =>
+          serviceRoleClient.schema("erp_procurement").from(
+            "sales_return_repack_line",
+          )
+            .select(
+              "id, item_id, target_material_id, quantity, packing_order_id",
+            )
+            .in("item_id", idChunk),
+      );
+    } catch {
+      throw new Error("SRET_PENDING_ENTRIES_FAILED");
+    }
+  }
+  const repackTargetIds = [
+    ...new Set(repackRows.map((row) => text(row.target_material_id))),
+  ];
+  const repackTargetMaterialById = await (async () => {
+    if (repackTargetIds.length === 0) return new Map<string, JsonRecord>();
+    const { materialById: byId } = await deriveProdshadeMap(repackTargetIds);
+    return byId;
+  })();
+  const itemById = new Map(items.map((row) => [text(row.id), row]));
+  const packingCandidates = items
+    .filter((row) => !row.is_repacked)
+    .concat(
+      repackRows.map((repack) => {
+        const parent = itemById.get(text(repack.item_id)) ?? {};
+        const targetMaterialId = text(repack.target_material_id);
+        const targetMaterial = repackTargetMaterialById.get(targetMaterialId);
+        return {
+          ...parent,
+          material_id: targetMaterialId,
+          material_code:
+            text(targetMaterial?.pace_code || targetMaterial?.external_code) ||
+            null,
+          material_name: text(targetMaterial?.material_name) || null,
+          quantity: repack.quantity,
+          packing_order_id: repack.packing_order_id,
+        };
+      }),
+    );
+  return { items, packingCandidates };
 }
 
 export async function listPendingStrokesHandler(
@@ -1465,7 +1579,7 @@ export async function listPendingStrokesHandler(
       ),
     );
     const candidates = [
-      ...returns.map((row) => ({
+      ...returns.items.map((row) => ({
         material_id: row.prodshade_material_id,
         material_code: row.prodshade_code,
         material_name: row.prodshade_name,
@@ -1524,10 +1638,15 @@ export async function listPendingGenealogyEntriesHandler(
   }
   try {
     await requireCompany(ctx, companyId);
-    const rows = await salesReturnPendingItems(companyId);
+    const pending = await salesReturnPendingItems(companyId);
+    // business owner, 2026-09-26: PROCESS/PR22 stays item-level (batch
+    // genealogy is prodshade-wide, repack-agnostic -- see
+    // backfillSalesReturnBatchResolved). PACKING/PR23 now reads
+    // packingCandidates instead, which already substitutes each repacked
+    // item for its own repack line(s) -- see salesReturnPendingItems above.
     const filtered = kind === "PROCESS"
-      ? rows.filter((row) => !row.batch_resolved && text(row.batch_number))
-      : rows.filter((row) =>
+      ? pending.items.filter((row) => !row.batch_resolved && text(row.batch_number))
+      : pending.packingCandidates.filter((row) =>
         upper(row.line_material_type) === "FG" &&
         BATCH_REQUIRED.has(upper(row.fg_type)) && !text(row.packing_order_id)
       );
