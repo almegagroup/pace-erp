@@ -601,7 +601,7 @@ export async function listSalesReturnReceiptsHandler(
             "sales_return_item",
           )
             .select(
-              "id, invoice_id, line_number, line_material_type, material_id, manual_sku_name, quantity, uom_code, num_packs",
+              "id, invoice_id, line_number, line_material_type, material_id, manual_sku_name, quantity, uom_code, num_packs, batch_number, expiry_date",
             )
             .in("invoice_id", chunk),
       )
@@ -773,6 +773,8 @@ export async function listSalesReturnReceiptsHandler(
             quantity: item.quantity,
             uom_code: item.uom_code,
             num_packs: item.num_packs,
+            batch_number: item.batch_number ?? null,
+            expiry_date: item.expiry_date ?? null,
             invoice_number: invoice.invoice_number,
             invoice_date: invoice.invoice_date,
             sending_parent_company_name: parent?.company_name ?? null,

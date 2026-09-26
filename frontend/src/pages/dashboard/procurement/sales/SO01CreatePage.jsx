@@ -309,18 +309,29 @@ export default function SO01CreatePage() {
   const strokeCheckQuery = useQuery({
     queryKey: ["so01-stroke-check-options", companyId],
     queryFn: () => listSalesOrderStrokeCheckOptions({ company_id: companyId }),
-    enabled: Boolean(companyId && materialTypes.includes("FG")),
+    enabled: Boolean(companyId && (materialTypes.includes("FG") || materialTypes.includes("SFG"))),
     staleTime: 60_000,
   });
   const validStrokeKeys = useMemo(() => new Set(
     (strokeCheckQuery.data ?? []).map((entry) => `${entry.prodshade_material_id}|${entry.po_type}|${entry.stroke_number}`),
   ), [strokeCheckQuery.data]);
   // true = resolved (green), false = red dot, null = not applicable (not an
-  // MTO/HPS FG line, or no item selected yet).
+  // MTO/HPS FG/SFG line, or no item selected yet).
+  // business owner, 2026-09-26: Stroke Number is now MANDATORY for FG and
+  // SFG lines under MTO/HPS (see the missingStrokeLine check in
+  // handleSubmit below) -- this function's own dot-check logic is
+  // unchanged, only which line_material_types it applies to widened to
+  // include SFG (SFG never had a Stroke Number column/field at all before
+  // this). FG's material_id is a dispatch SKU that resolves to a separate
+  // Prodshade via fgSkuMap; SFG's material_id already IS the Prodshade
+  // (per listSalesOrderSfgMaterialOptions's own comment), so no fgSkuMap
+  // lookup is needed for SFG.
   function strokeCheckStatus(line) {
-    if (line.line_material_type !== "FG" || !["MTO", "HPS"].includes(line.fg_type)) return null;
+    if (!["FG", "SFG"].includes(line.line_material_type) || !["MTO", "HPS"].includes(line.fg_type)) return null;
     if (!line.material_id || !line.declared_stroke_number?.trim()) return false;
-    const prodshadeId = fgSkuMap.get(line.material_id)?.prodshade_material_id;
+    const prodshadeId = line.line_material_type === "SFG"
+      ? line.material_id
+      : fgSkuMap.get(line.material_id)?.prodshade_material_id;
     if (!prodshadeId) return false;
     return validStrokeKeys.has(`${prodshadeId}|${line.fg_type}|${line.declared_stroke_number.trim()}`);
   }
@@ -569,6 +580,24 @@ export default function SO01CreatePage() {
             value={line.material_id} selectedMaterial={fgSkuMap.get(line.material_id)}
             onChange={(value, material) => handleMaterialSelect(line.__key, value, material)} />
         ) },
+        // business owner, 2026-09-26: SFG never had a Stroke Number field at
+        // all before this -- mirrors FG's own §133.21 column below, but
+        // SFG's material_id is already the Prodshade itself (no fgSkuMap
+        // lookup needed, see strokeCheckStatus above). Mandatory for
+        // MTO/HPS, same as FG -- see missingStrokeLine in handleSubmit.
+        { key: "declared_stroke", label: "Stroke Number", width: "150px", render: (line) => {
+          if (!["MTO", "HPS"].includes(line.fg_type)) return <span className="text-xs text-slate-400">—</span>;
+          const status = strokeCheckStatus(line);
+          return (
+            <div className="flex items-center gap-1.5">
+              <span
+                title={status ? "Resolves to an approved Stroke Master row" : "Not found in Stroke Master for this Item's Prodshade — reconcile later"}
+                className={`inline-block h-2 w-2 shrink-0 rounded-full ${status ? "bg-emerald-500" : "bg-rose-500"}`}
+              />
+              {textInput(line.declared_stroke_number, (value) => updateLine(line.__key, { declared_stroke_number: value }), { placeholder: "Stroke No." })}
+            </div>
+          );
+        } },
         { key: "hsn", label: "HSN Code", width: "100px", render: hsnInputForLine },
         { key: "batch", label: "Batch No.", width: "110px", render: (line) => textInput(line.batch_number, (value) => updateLine(line.__key, { batch_number: value })) },
         { key: "costing_month", label: "Costing Rate Month", width: "150px", render: (line) => costingMonthCell(line, line.__key) },
@@ -625,14 +654,17 @@ export default function SO01CreatePage() {
       // §133.21 (2026-09-01) — MTO/HPS only. What Asian Paints itself
       // declared as the Stroke for this Item — independent of whatever the
       // real production batch later carries (FO->Batch->Process PO already
-      // gives that, separately, once production exists). Manual, purely
-      // informational (never blocks Create SO or dispatch) — Asian
-      // sometimes references an Item+Stroke combination PACE hasn't created
-      // yet; the dot flags that for later Reco reconciliation rather than
-      // hiding it. Red = Prodshade (derived from this SKU) + this exact
-      // Stroke Number don't resolve to a real APPROVED stroke_master row —
-      // always red for a manual/not-yet-real SKU, since no Prodshade can be
-      // derived at all. Green = resolved.
+      // gives that, separately, once production exists).
+      // business owner, 2026-09-26: the field itself is now MANDATORY for
+      // MTO/HPS -- corrects this comment's earlier "never blocks Create SO"
+      // (see missingStrokeLine in handleSubmit). The RED/GREEN dot stays
+      // purely informational as originally designed: Asian sometimes
+      // references an Item+Stroke combination PACE hasn't created yet, so a
+      // red dot does NOT block save -- only a genuinely BLANK field does.
+      // Red = Prodshade (derived from this SKU) + this exact Stroke Number
+      // don't resolve to a real APPROVED stroke_master row — always red for
+      // a manual/not-yet-real SKU, since no Prodshade can be derived at
+      // all. Green = resolved.
       { key: "declared_stroke", label: "Stroke Number", width: "150px", render: (line) => {
         if (!["MTO", "HPS"].includes(line.fg_type)) return <span className="text-xs text-slate-400">—</span>;
         const status = strokeCheckStatus(line);
@@ -764,6 +796,16 @@ export default function SO01CreatePage() {
     const missingMonthLine = lines.find((line) => line.line_material_type === "FG" && ["MTO", "HPS", "MTEST"].includes(line.fg_type) && !line.costing_rate_month);
     if (missingMonthLine) {
       setError(`Costing Rate Month is required for FG ${missingMonthLine.fg_type}. Select a month before creating the SO.`);
+      return;
+    }
+    // business owner, 2026-09-26: Stroke Number can no longer be left blank
+    // for an FG/SFG line under MTO/HPS -- it used to be purely informational
+    // (the red/green dot), which let a line save with no stroke declared at
+    // all. Only blank blocks; a red dot (Asian referencing a stroke PACE
+    // hasn't created yet) still saves fine, same as before.
+    const missingStrokeLine = lines.find((line) => ["FG", "SFG"].includes(line.line_material_type) && ["MTO", "HPS"].includes(line.fg_type) && !line.declared_stroke_number?.trim());
+    if (missingStrokeLine) {
+      setError(`Stroke Number is required for ${missingStrokeLine.line_material_type} ${missingStrokeLine.fg_type}. Enter the Stroke Number Asian Paints declared for this Item.`);
       return;
     }
     setSaving(true);

@@ -38,6 +38,8 @@ export default function SO05ListPage() {
     col("line_material_type", "Item Type"),
     col("material_name", "Item Name"),
     col("document_name", "Document Name"),
+    col("batch_number", "Batch Number"),
+    col("expiry_date", "Expiry"),
     {
       key: "quantity",
       label: "Qty (Base UOM)",
