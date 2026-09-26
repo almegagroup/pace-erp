@@ -178,6 +178,20 @@ export default function PlanFeedPrioritizeSection() {
         />
       ),
     },
+    {
+      key: "clear_priority", label: "", width: "70px",
+      render: (r) => (
+        (r.priority_date || r.priority_number) ? (
+          <button
+            type="button"
+            onClick={() => updateEdit(r.id, { priority_date: null, priority_number: null })}
+            className="h-8 w-full border border-slate-300 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50"
+          >
+            Clear
+          </button>
+        ) : null
+      ),
+    },
   ];
 
   const dirtyCount = Object.keys(edits).length;
