@@ -540,16 +540,25 @@ export default function OrderInformationSystemPage() {
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-500">Company</label>
-                <select
-                  className="rounded border border-slate-300 px-2 py-1 text-sm"
-                  value={filters.companyIds[0] ?? ""}
-                  onChange={(e) => updateFilter("companyIds", e.target.value ? [e.target.value] : [])}
-                >
-                  <option value="">All my companies ({companies.length})</option>
-                  {companies.map((c) => (
-                    <option key={c.id ?? c.company_id} value={c.id ?? c.company_id}>{c.company_code} — {c.company_name}</option>
-                  ))}
-                </select>
+                {companies.length <= 1 ? (
+                  // business owner, 2026-09-26: same fix as Stroke Master/Batch
+                  // Variance Report -- a single-company user has no real choice
+                  // here, so no interactive dropdown for a non-choice.
+                  <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-sm text-slate-700">
+                    {companies[0] ? `${companies[0].company_code} — ${companies[0].company_name}` : "—"}
+                  </div>
+                ) : (
+                  <select
+                    className="rounded border border-slate-300 px-2 py-1 text-sm"
+                    value={filters.companyIds[0] ?? ""}
+                    onChange={(e) => updateFilter("companyIds", e.target.value ? [e.target.value] : [])}
+                  >
+                    <option value="">All my companies ({companies.length})</option>
+                    {companies.map((c) => (
+                      <option key={c.id ?? c.company_id} value={c.id ?? c.company_id}>{c.company_code} — {c.company_name}</option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-500">Order Type</label>
