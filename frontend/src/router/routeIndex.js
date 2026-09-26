@@ -166,6 +166,11 @@ export function buildRouteIndex(menuSnapshot) {
     // entirely, so every click bounced straight to the dashboard (found live
     // 2026-08-25, business owner).
     ["/dashboard/production/sloc-costing-group", "/dashboard/production/sloc-costing-group/report"],
+    // "Prioritize" button on Plan Feed's Total Table opens this as a full
+    // page (not a modal) -- same companion-route shape as the pairs above,
+    // no new tx_code/menu row needed since it's reached only via Plan Feed.
+    ["/dashboard/production/plan-feed", "/dashboard/production/plan-feed/prioritize"],
+    ["/dashboard/production/plan-feed", "/dashboard/production/plan-feed/report"],
 
     // ── SA ────────────────────────────────────────────────────────────────────
     ["/sa/users",              "/sa/users/report"],

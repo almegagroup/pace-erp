@@ -206,6 +206,8 @@ import OpeningStockApprovalPage from "../pages/dashboard/procurement/opening-sto
 
 // Gate-27: L3 Production pages
 import PlanFeedPage from "../pages/dashboard/production/PlanFeedPage.jsx";
+import PlanFeedPrioritizePage from "../pages/dashboard/production/PlanFeedPrioritizePage.jsx";
+import PlanFeedCategoryReportPage from "../pages/dashboard/production/PlanFeedCategoryReportPage.jsx";
 import StrokeMasterPage from "../pages/dashboard/production/StrokeMasterPage.jsx";
 import StrokeApprovalPage from "../pages/dashboard/production/StrokeApprovalPage.jsx";
 import ChangeBomItemPage from "../pages/dashboard/production/ChangeBomItemPage.jsx";
@@ -938,6 +940,8 @@ export default function AppRouter() {
 
                   {/* ── Gate-27: L3 Production (PR00–PR17) ──────────── */}
                   <Route path="production/plan-feed" element={<PlanFeedPage />} />
+                  <Route path="production/plan-feed/prioritize" element={<PlanFeedPrioritizePage />} />
+                  <Route path="production/plan-feed/report" element={<PlanFeedCategoryReportPage />} />
                   <Route path="production/stroke-master" element={<StrokeMasterPage />} />
                   <Route path="production/stroke-approval" element={<StrokeApprovalPage />} />
                   <Route path="production/change-bom-item" element={<ChangeBomItemPage />} />

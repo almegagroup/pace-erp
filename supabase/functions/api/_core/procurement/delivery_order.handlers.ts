@@ -1519,6 +1519,45 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
       });
     if (postDocumentError) return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, postDocumentError.message || "Unable to post PGI and invoice.");
 
+    // Best-effort: copy this DO's own Transporter/LR Number/LR Date onto its
+    // Plan Feed (FO), one entry per PGI'd dispatch -- see plan_feed.handlers.ts's
+    // updatePlanFeed for the "one-way copy, never read back into the DO"
+    // rule. Deliberately outside the post_document transaction above (the
+    // invoice/stock posting is the business-critical part; a failure here
+    // just means the user adds the entry manually in Edit FO, per the
+    // business owner's own explicit acceptance of that fallback) and STO has
+    // no FO to attach to, so this only runs for SALES-type DOs.
+    if (isSalesOrder && (toTrimmedString(dc.transporter_id) || toTrimmedString(dc.lr_number) || toTrimmedString(dc.lr_date))) {
+      try {
+        const allocationIds = [...new Set(lines.map((line) => toTrimmedString(line.so_map_allocation_id)).filter(Boolean))];
+        if (allocationIds.length > 0) {
+          const { data: allocRows } = await serviceRoleClient
+            .schema("erp_procurement").from("sales_order_map_allocation")
+            .select("id, fo_id").in("id", allocationIds);
+          const foIds = [...new Set(((allocRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
+          if (foIds.length > 0) {
+            let transporterName: string | null = null;
+            if (dc.transporter_id) {
+              const { data: transporter } = await serviceRoleClient
+                .schema("erp_master").from("transporter_master")
+                .select("transporter_name").eq("id", dc.transporter_id).maybeSingle();
+              transporterName = toTrimmedString(transporter?.transporter_name) || null;
+            }
+            const entry = {
+              transporter_name: transporterName,
+              lr_number: toTrimmedString(dc.lr_number) || null,
+              lr_date: toTrimmedString(dc.lr_date) || null,
+              source_dc_id: dcId,
+            };
+            await Promise.all(foIds.map((foId) => serviceRoleClient
+              .schema("erp_production").rpc("append_plan_feed_dispatch_lr_entry", { p_fo_id: foId, p_entry: entry })));
+          }
+        }
+      } catch (lrError) {
+        console.error("[delivery_order.createPgiInvoice] dispatch LR auto-append failed (non-fatal):", lrError);
+      }
+    }
+
     return okResponse(await hydrateSalesInvoiceForDo(invoiceId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "PGI_INVOICE_CREATE_FAILED";
