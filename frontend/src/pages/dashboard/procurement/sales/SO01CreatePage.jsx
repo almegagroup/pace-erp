@@ -786,14 +786,48 @@ export default function SO01CreatePage() {
   // button stayed clickable even with required fields blank, so the user
   // only found out after clicking. Pulled into its own function, still
   // called from handleSubmit for the actual submit-time guard, but now ALSO
-  // drives the button's disabled state directly (see missingRequiredField
-  // below) so the button itself goes disabled the moment a line is
-  // incomplete, not just on click.
+  // drives the button's disabled state directly (see page2ValidationMessage
+  // below) so the button itself goes disabled the moment something
+  // required is blank, not just on click.
   function computePage2ValidationMessage() {
     if (lines.length === 0) return "At least one item line is required.";
     if (!externalSoNumber.trim()) return "External SO Number is required.";
     if (!isManualDocumentDateWithinWindow(soDate) || (externalSoDate && !isManualDocumentDateWithinWindow(externalSoDate))) {
       return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
+    }
+    // business owner, 2026-09-26: these Bill-To/Ship-To fields were all
+    // marked `required` (red asterisk) in the JSX below but nothing ever
+    // enforced it -- a blank Customer/VDC/Parent Company only ever
+    // surfaced as whatever generic error buildBillToShipToPayload()'s
+    // resulting incomplete payload happened to trigger server-side, if it
+    // was caught at all. Mirrors the exact same dispatchType/
+    // effectiveNoInboundType/noInboundSubType/asianBilledChoice branches
+    // the JSX below renders -- keep both in sync if a branch changes.
+    if (effectiveNoInboundType === "DEPENDENT_DIRECT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
+      if (!parentCompanyId) return "Parent Company is required.";
+      if (!vdcId) return "VDC is required.";
+      if (!billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+    } else if (effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
+      if (!parentCompanyId) return "Parent Company is required.";
+      if (!depotCodeId) return "Depot Code is required.";
+    } else if (dispatchType === "INDEPENDENT_PARTY") {
+      if (!customerId) return "Customer is required.";
+      if (!shipToCustomerAddressId) return "Bill-To / Ship-To Address is required.";
+    } else if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+      if (!customerId) return "Customer is required.";
+      if (!shipToCustomerAddressId) return "Ship-To Address is required.";
+      if (!parentCompanyId) return "Asian Parent Company is required.";
+      if (!asianBilledChoice) return "Choose Bill-To — VDC, DC, or none (Parent Company).";
+      if ((asianBilledChoice === "VDC" || asianBilledChoice === "DC") && !asianBilledVdcDcId) {
+        return `${asianBilledChoice === "DC" ? "DC" : "VDC"} is required.`;
+      }
+      if (asianBilledChoice === "VDC" && !billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+    } else if (dispatchType === "DEPENDENT_NO_INBOUND") {
+      if (!parentCompanyId) return "Parent Company is required.";
+      if (noInboundSubType === "DIRECT") {
+        if (!vdcId) return "VDC is required.";
+        if (!billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+      } else if (!depotCodeId) return "Depot Code is required.";
     }
     // §133.9-G — a manual-SKU FG line has no material_id by design; it must
     // carry a manual_sku_name instead. Every other line always needs a real item.
