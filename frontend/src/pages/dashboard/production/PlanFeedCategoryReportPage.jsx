@@ -2,12 +2,18 @@
  * File-ID: 27.5-REPORT
  * File-Path: frontend/src/pages/dashboard/production/PlanFeedCategoryReportPage.jsx
  * Purpose: Plan Feed "Report" -- read-only, always-live PO Type x Category
- *          summary (Order/Production/Dispatch Qty), each measured
- *          independently against its own date column within the selected
- *          range. PO Type: MTO/HPS/MTEST. Category: Prodshade's own
- *          material_category, rolled up into a Category Group (letter
- *          prefix for MTO/MTEST -- PC/PX/S; as-is for HPS, whose Prodshades
- *          are individually named, not a numbered grade series).
+ *          summary. Date Range = the Order Date window, which picks an FO
+ *          cohort. Against that SAME cohort (regardless of when
+ *          production/dispatch actually happened): Order Qty, Production
+ *          Qty (vs Order), Dispatch Qty (vs Order). Two more columns are
+ *          independent of the cohort -- Actual Production / Actual Dispatch
+ *          are activity that happened WITHIN the date range by its own date
+ *          (Process PO Verify / posted Sales Invoice Tally date), regardless
+ *          of which order it relates to. PO Type: MTO/HPS/MTEST. Category:
+ *          Prodshade's own material_category, rolled up into a Category
+ *          Group (letter prefix for MTO/MTEST -- PC/PX/S; as-is for HPS,
+ *          whose Prodshades are individually named, not a numbered grade
+ *          series).
  * Rendered as a tab on PlanFeedPage.jsx, NOT a separate route -- see
  * PlanFeedPrioritizePage.jsx's own header comment for why (screen-stack sync
  * bounce-back on route-only companions with no registered screen code).
@@ -77,11 +83,13 @@ export default function PlanFeedCategoryReportSection() {
   }, [reportQ.data, search]);
 
   const columns = [
-    { key: "po_type", label: "PO Type", width: "90px" },
-    { key: "category", label: "Category", width: "160px" },
-    { key: "order_qty", label: "Order Qty", width: "120px", align: "right", copyValue: (r) => fmt(r.order_qty), excelValue: (r) => Number(r.order_qty ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.order_qty)}</span> },
-    { key: "production_qty", label: "Production Qty", width: "120px", align: "right", copyValue: (r) => fmt(r.production_qty), excelValue: (r) => Number(r.production_qty ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.production_qty)}</span> },
-    { key: "dispatch_qty", label: "Dispatch Qty", width: "120px", align: "right", copyValue: (r) => fmt(r.dispatch_qty), excelValue: (r) => Number(r.dispatch_qty ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.dispatch_qty)}</span> },
+    { key: "po_type", label: "PO Type", width: "75px" },
+    { key: "category", label: "Category", width: "110px" },
+    { key: "order_qty", label: "Order Qty", width: "105px", align: "right", copyValue: (r) => fmt(r.order_qty), excelValue: (r) => Number(r.order_qty ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.order_qty)}</span> },
+    { key: "production_qty_vs_order", label: "Production Qty (vs Order)", width: "150px", align: "right", copyValue: (r) => fmt(r.production_qty_vs_order), excelValue: (r) => Number(r.production_qty_vs_order ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.production_qty_vs_order)}</span> },
+    { key: "dispatch_qty_vs_order", label: "Dispatch Qty (vs Order)", width: "140px", align: "right", copyValue: (r) => fmt(r.dispatch_qty_vs_order), excelValue: (r) => Number(r.dispatch_qty_vs_order ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.dispatch_qty_vs_order)}</span> },
+    { key: "actual_production_qty", label: "Actual Production", width: "125px", align: "right", copyValue: (r) => fmt(r.actual_production_qty), excelValue: (r) => Number(r.actual_production_qty ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.actual_production_qty)}</span> },
+    { key: "actual_dispatch_qty", label: "Actual Dispatch", width: "120px", align: "right", copyValue: (r) => fmt(r.actual_dispatch_qty), excelValue: (r) => Number(r.actual_dispatch_qty ?? 0), numFmt: "#,##0.00", render: (r) => <span className="font-mono">{fmt(r.actual_dispatch_qty)}</span> },
   ];
 
   async function handleExportExcel() {
@@ -131,7 +139,7 @@ export default function PlanFeedCategoryReportSection() {
           </label>
         </div>
         <p className="mt-2 text-[11px] text-slate-400">
-          Order Qty is by each FO's own Order Date, Production Qty by the Process PO's Verify date (SFG level), Dispatch Qty by the posted Invoice's Tally Invoice Date -- each independent, not traced against one another.
+          Date Range = Order Date, picking an FO cohort. Order Qty, Production Qty (vs Order) and Dispatch Qty (vs Order) are all measured against that SAME cohort, regardless of when production/dispatch actually happened. Actual Production and Actual Dispatch are independent -- activity that happened within the date range by its own date (Process PO Verify date / posted Invoice's Tally Invoice Date), regardless of which order it relates to.
         </p>
       </ErpSectionCard>
       <ErpSectionCard

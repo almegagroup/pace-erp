@@ -2163,12 +2163,14 @@ export async function updatePlanFeedPriorityHandler(req: Request, ctx: ProdHandl
 }
 
 // ── "Report" (Plan Feed Total Table's Report button) ────────────────────────
-// PO Type (MTO/HPS/MTEST) x Category, each measured independently against
-// its own date column -- Order Qty by order_date, Production Qty by the
-// Process PO's own verified_at (SFG level, per business owner), Dispatch
-// Qty by the posted Sales Invoice's tally_invoice_date. Not a "for orders
-// placed in this window, how much of it got produced/dispatched" trace --
-// three independent totals over the same calendar window.
+// PO Type (MTO/HPS/MTEST) x Category. Date Range is the Order Date window --
+// it picks the FO cohort. Against that SAME cohort (regardless of when
+// production/dispatch actually happened): Order Qty (ordered_qty_kg),
+// Production Qty (allocated/mapped qty against those orders), Dispatch Qty
+// (invoiced qty against those orders). Two more columns are independent of
+// the cohort -- Actual Production and Actual Dispatch are activity that
+// happened WITHIN the date range by its own date (Process PO's verified_at /
+// posted Sales Invoice's tally_invoice_date), regardless of which order.
 
 // HPS Prodshades are individually-named products (not a numbered grade
 // series like Admix's PC100/PC200/...), so for HPS the Category IS the
@@ -2264,16 +2266,28 @@ export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandl
     }
     const dateToExclusiveEnd = addDaysIso(dateTo, 1);
 
-    type Metric = { order_qty: number; production_qty: number; dispatch_qty: number };
+    type Metric = {
+      order_qty: number;
+      production_qty_vs_order: number;
+      dispatch_qty_vs_order: number;
+      actual_production_qty: number;
+      actual_dispatch_qty: number;
+    };
+    const EMPTY_METRIC: Metric = {
+      order_qty: 0, production_qty_vs_order: 0, dispatch_qty_vs_order: 0,
+      actual_production_qty: 0, actual_dispatch_qty: 0,
+    };
     const metricsByKey = new Map<string, Metric>();
     function bump(poType: string, leafCategory: string, field: keyof Metric, qty: number) {
       const key = `${poType}|${leafCategory}`;
-      const entry = metricsByKey.get(key) ?? { order_qty: 0, production_qty: 0, dispatch_qty: 0 };
+      const entry = metricsByKey.get(key) ?? { ...EMPTY_METRIC };
       entry[field] += qty;
       metricsByKey.set(key, entry);
     }
 
-    // ---- Order Qty (order_date within range) ----
+    // ---- FO cohort (order_date within range) -- everything in the first 3
+    // metrics is measured against THIS SAME set of orders, regardless of when
+    // production/dispatch for them actually happened.
     const { data: foRows, error: foErrQuery } = await serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select("id, party_id, material_id, ordered_qty_kg")
@@ -2282,8 +2296,42 @@ export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandl
       .gte("order_date", dateFrom)
       .lte("order_date", dateTo);
     if (foErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+    const foCohort = (foRows ?? []) as JsonRecord[];
+    const foCohortIds = foCohort.map((r) => String(r.id));
 
-    // ---- Production Qty (Process PO verified_at within range, SFG-level) ----
+    // ---- Production Qty vs Order (allocated/mapped qty against the cohort's own FOs) ----
+    const allocRows = foCohortIds.length > 0 ? await fetchInChunks<JsonRecord>(foCohortIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("plan_feed_packing_order_allocation")
+      .select("plan_feed_id, allocated_qty_kg").in("plan_feed_id", chunk)) : [];
+    const allocatedQtyByFoId = new Map<string, number>();
+    for (const row of allocRows) {
+      const foId = toTrimmedString(row.plan_feed_id);
+      allocatedQtyByFoId.set(foId, (allocatedQtyByFoId.get(foId) ?? 0) + (Number(row.allocated_qty_kg) || 0));
+    }
+
+    // ---- Dispatch Qty vs Order (invoiced qty against the cohort's own FOs, any
+    // invoice date -- POSTED only, not filtered by invoice date at all) ----
+    const { data: cohortInvRows, error: cohortInvErrQuery } = foCohortIds.length > 0 ? await serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice")
+      .select("id, fo_id")
+      .eq("status", "POSTED")
+      .in("fo_id", foCohortIds) : { data: [], error: null };
+    if (cohortInvErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+    const cohortInvoiceRows = (cohortInvRows ?? []) as JsonRecord[];
+    const cohortInvoiceIds = cohortInvoiceRows.map((r) => String(r.id));
+    const foIdByCohortInvoiceId = new Map(cohortInvoiceRows.map((r) => [String(r.id), toTrimmedString(r.fo_id)]));
+    const cohortInvoiceLineRows = cohortInvoiceIds.length > 0 ? await fetchInChunks<JsonRecord>(cohortInvoiceIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice_line")
+      .select("invoice_id, quantity").in("invoice_id", chunk)) : [];
+    const dispatchedQtyByFoId = new Map<string, number>();
+    for (const line of cohortInvoiceLineRows) {
+      const foId = foIdByCohortInvoiceId.get(toTrimmedString(line.invoice_id));
+      if (!foId) continue;
+      dispatchedQtyByFoId.set(foId, (dispatchedQtyByFoId.get(foId) ?? 0) + (Number(line.quantity) || 0));
+    }
+
+    // ---- Actual Production (Process PO verified_at within range, SFG-level --
+    // independent of the cohort, activity by its OWN date) ----
     const { data: poRows, error: poErrQuery } = await serviceRoleClient
       .schema("erp_production").from("process_order")
       .select("id, po_type, stroke_master_id, actual_qty")
@@ -2308,7 +2356,8 @@ export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandl
       for (const row of rows) prodshadeCategoryById.set(String(row.id), toTrimmedString(row.material_category));
     }
 
-    // ---- Dispatch Qty (posted Sales Invoice's tally_invoice_date within range) ----
+    // ---- Actual Dispatch (posted Sales Invoice's tally_invoice_date within
+    // range -- independent of the cohort, activity by its OWN date) ----
     const { data: invRows, error: invErrQuery } = await serviceRoleClient
       .schema("erp_procurement").from("sales_invoice")
       .select("id, fo_id")
@@ -2325,44 +2374,49 @@ export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandl
       .schema("erp_procurement").from("sales_invoice_line")
       .select("invoice_id, material_id, quantity").in("invoice_id", chunk)) : [];
 
-    const dispatchFoIds = [...new Set(((invRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.fo_id)).filter(Boolean))];
-    const dispatchFoRows = dispatchFoIds.length > 0 ? await fetchInChunks<JsonRecord>(dispatchFoIds, (chunk) => serviceRoleClient
+    const actualDispatchFoIds = [...new Set(((invRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.fo_id)).filter(Boolean))];
+    const actualDispatchFoRows = actualDispatchFoIds.length > 0 ? await fetchInChunks<JsonRecord>(actualDispatchFoIds, (chunk) => serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select("id, party_id").in("id", chunk)) : [];
-    const partyIdByFoId = new Map(dispatchFoRows.map((r) => [String(r.id), toTrimmedString(r.party_id)]));
+    const partyIdByFoId = new Map(actualDispatchFoRows.map((r) => [String(r.id), toTrimmedString(r.party_id)]));
 
-    // ---- Resolve customer types + prodshade categories (shared by Order + Dispatch) ----
+    // ---- Resolve customer types + prodshade categories (shared by every metric) ----
     const allPartyIds = [...new Set([
-      ...((foRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.party_id)),
-      ...dispatchFoRows.map((r) => toTrimmedString(r.party_id)),
+      ...foCohort.map((r) => toTrimmedString(r.party_id)),
+      ...actualDispatchFoRows.map((r) => toTrimmedString(r.party_id)),
     ].filter(Boolean))];
     const customerMap = await getCustomerMapByIds(allPartyIds);
 
     const allFgMaterialIds = [...new Set([
-      ...((foRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.material_id)),
+      ...foCohort.map((r) => toTrimmedString(r.material_id)),
       ...invoiceLineRows.map((r) => toTrimmedString(r.material_id)),
     ].filter(Boolean))];
     const categoryByFgMaterialId = await resolveProdshadeCategoryMap(allFgMaterialIds);
 
-    // Order Qty
-    for (const fo of (foRows ?? []) as JsonRecord[]) {
+    // Order Qty + Production Qty vs Order + Dispatch Qty vs Order -- all three
+    // keyed off the SAME cohort FO, so the (poType, category) resolved for a
+    // given FO is reused for all three of its metrics.
+    for (const fo of foCohort) {
+      const foId = String(fo.id);
       const party = customerMap.get(toTrimmedString(fo.party_id));
       const category = categoryByFgMaterialId.get(toTrimmedString(fo.material_id)) ?? null;
       const poType = resolveReportPoType(toTrimmedString(party?.fo_customer_type), category);
       if (!poType || !category) continue;
       bump(poType, category, "order_qty", Number(fo.ordered_qty_kg) || 0);
+      bump(poType, category, "production_qty_vs_order", allocatedQtyByFoId.get(foId) ?? 0);
+      bump(poType, category, "dispatch_qty_vs_order", dispatchedQtyByFoId.get(foId) ?? 0);
     }
 
-    // Production Qty
+    // Actual Production (independent of cohort)
     for (const po of (poRows ?? []) as JsonRecord[]) {
       const prodshadeId = prodshadeIdByStrokeId.get(toTrimmedString(po.stroke_master_id));
       const category = prodshadeId ? (prodshadeCategoryById.get(prodshadeId) ?? null) : null;
       const poType = toUpperTrimmedString(po.po_type);
       if (!category) continue;
-      bump(poType, category, "production_qty", Number(po.actual_qty) || 0);
+      bump(poType, category, "actual_production_qty", Number(po.actual_qty) || 0);
     }
 
-    // Dispatch Qty
+    // Actual Dispatch (independent of cohort)
     for (const line of invoiceLineRows) {
       const foId = foIdByInvoiceId.get(toTrimmedString(line.invoice_id));
       const partyId = foId ? partyIdByFoId.get(foId) : undefined;
@@ -2370,7 +2424,7 @@ export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandl
       const category = categoryByFgMaterialId.get(toTrimmedString(line.material_id)) ?? null;
       const poType = resolveReportPoType(toTrimmedString(party?.fo_customer_type), category);
       if (!poType || !category) continue;
-      bump(poType, category, "dispatch_qty", Number(line.quantity) || 0);
+      bump(poType, category, "actual_dispatch_qty", Number(line.quantity) || 0);
     }
 
     // ---- Build PO Type -> Category Group -> leaf Category rows, with a Group
@@ -2383,35 +2437,45 @@ export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandl
       leafRows.push({ po_type: poType, leaf_category: leafCategory, group: normalizeCategoryGroup(leafCategory, poType), ...metric });
     }
 
+    function addMetric(target: Metric, source: Metric) {
+      target.order_qty += source.order_qty;
+      target.production_qty_vs_order += source.production_qty_vs_order;
+      target.dispatch_qty_vs_order += source.dispatch_qty_vs_order;
+      target.actual_production_qty += source.actual_production_qty;
+      target.actual_dispatch_qty += source.actual_dispatch_qty;
+    }
+
     const outputRows: JsonRecord[] = [];
     for (const poType of PO_TYPE_ORDER) {
       const poTypeLeaves = leafRows.filter((r) => r.po_type === poType);
       if (poTypeLeaves.length === 0) continue;
       const groups = [...new Set(poTypeLeaves.map((r) => r.group))].sort((a, b) => a.localeCompare(b));
-      const poTypeTotal: Metric = { order_qty: 0, production_qty: 0, dispatch_qty: 0 };
+      const poTypeTotal: Metric = { ...EMPTY_METRIC };
       for (const group of groups) {
         const groupLeaves = poTypeLeaves.filter((r) => r.group === group).sort((a, b) => a.leaf_category.localeCompare(b.leaf_category));
-        const groupTotal: Metric = { order_qty: 0, production_qty: 0, dispatch_qty: 0 };
+        const groupTotal: Metric = { ...EMPTY_METRIC };
         for (const leaf of groupLeaves) {
           outputRows.push({
             row_type: "LEAF", po_type: poType, category: leaf.leaf_category,
-            order_qty: leaf.order_qty, production_qty: leaf.production_qty, dispatch_qty: leaf.dispatch_qty,
+            order_qty: leaf.order_qty, production_qty_vs_order: leaf.production_qty_vs_order,
+            dispatch_qty_vs_order: leaf.dispatch_qty_vs_order,
+            actual_production_qty: leaf.actual_production_qty, actual_dispatch_qty: leaf.actual_dispatch_qty,
           });
-          groupTotal.order_qty += leaf.order_qty;
-          groupTotal.production_qty += leaf.production_qty;
-          groupTotal.dispatch_qty += leaf.dispatch_qty;
+          addMetric(groupTotal, leaf);
         }
         outputRows.push({
           row_type: "GROUP_TOTAL", po_type: poType, category: `${group} Total`,
-          order_qty: groupTotal.order_qty, production_qty: groupTotal.production_qty, dispatch_qty: groupTotal.dispatch_qty,
+          order_qty: groupTotal.order_qty, production_qty_vs_order: groupTotal.production_qty_vs_order,
+          dispatch_qty_vs_order: groupTotal.dispatch_qty_vs_order,
+          actual_production_qty: groupTotal.actual_production_qty, actual_dispatch_qty: groupTotal.actual_dispatch_qty,
         });
-        poTypeTotal.order_qty += groupTotal.order_qty;
-        poTypeTotal.production_qty += groupTotal.production_qty;
-        poTypeTotal.dispatch_qty += groupTotal.dispatch_qty;
+        addMetric(poTypeTotal, groupTotal);
       }
       outputRows.push({
         row_type: "PO_TYPE_TOTAL", po_type: poType, category: `${poType} TOTAL`,
-        order_qty: poTypeTotal.order_qty, production_qty: poTypeTotal.production_qty, dispatch_qty: poTypeTotal.dispatch_qty,
+        order_qty: poTypeTotal.order_qty, production_qty_vs_order: poTypeTotal.production_qty_vs_order,
+        dispatch_qty_vs_order: poTypeTotal.dispatch_qty_vs_order,
+        actual_production_qty: poTypeTotal.actual_production_qty, actual_dispatch_qty: poTypeTotal.actual_dispatch_qty,
       });
     }
 
