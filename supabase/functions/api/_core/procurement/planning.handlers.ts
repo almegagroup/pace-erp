@@ -1222,14 +1222,16 @@ async function loadWorkspaceRows(
     const trnStockQty = normalizeQty(trnMap.get(materialId) ?? 0);
     const geStockQty = normalizeQty(geMap.get(materialId) ?? 0);
     const qaStockQty = normalizeQty(qaMap.get(scopeKey) ?? 0);
-    // Procurement status must be driven only by inventory that can be used
-    // today: Unrestricted less open reservations (the same Net Available
-    // figure shown by IN03). QA stock has not passed inspection; TRN and an
-    // unposted Gate Entry have not become on-hand stock. Keep those values as
-    // separate informational columns, but never let them hide a shortage.
-    // `total_stock_qty` remains the response field for compatibility, and is
-    // now the planning-usable quantity rather than a physical-position total.
-    const totalStockQty = availableStockQty;
+    // business owner, 2026-09-26: reverted 2026-09-13's "usable stock only"
+    // change (commit a01af0e) -- that narrowed this to availableStockQty
+    // alone, undocumented anywhere in the OM implementation log or session
+    // handoff briefs, and it silently drifted from the original locked PO11
+    // design brief (CODEX-PO11-PROCUREMENT-PLANNING-WORKSPACE-TASK-BRIEF.md,
+    // "Total Stock = Available + TRN + GE + In QA"). Restored on business
+    // owner's explicit confirmation.
+    const totalStockQty = normalizeQty(
+      availableStockQty + trnStockQty + geStockQty + qaStockQty,
+    );
     const statusTone = getProcurementPlanningStatusTone(
       totalStockQty,
       effectiveSafetyStockQty,
