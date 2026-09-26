@@ -1219,6 +1219,14 @@ export async function saveReturnInvoiceDetailHandler(
   if (!invoiceId || !text(payload.invoice_date)) {
     return fail(req, ctx, "SRET_INVOICE_DETAIL_INVALID");
   }
+  // business owner, 2026-09-26: Accounts must be able to correct a mistyped
+  // invoice number from this page too. invoice_number has no other copy
+  // anywhere in the schema (not on sales_return_item, not on any posting/
+  // stock row) -- every screen that shows it (SO05 list, this queue) reads
+  // it live via a join, so updating this one column is the whole fix, no
+  // cascade needed. Optional here (only set when the caller sends a
+  // non-blank value) so a plain detail-only save keeps working unchanged.
+  const nextInvoiceNumber = text(payload.invoice_number);
   const { data: invoice, error: lookupError } = await serviceRoleClient.schema(
     "erp_procurement",
   ).from("sales_return_invoice")
@@ -1239,6 +1247,7 @@ export async function saveReturnInvoiceDetailHandler(
   const { data, error } = await serviceRoleClient.schema("erp_procurement")
     .from("sales_return_invoice").update({
       tick_on: true,
+      ...(nextInvoiceNumber ? { invoice_number: nextInvoiceNumber } : {}),
       invoice_date: text(payload.invoice_date),
       amount: positive(payload.amount),
       gst_treatment: upper(payload.gst_treatment) || null,
@@ -1247,7 +1256,7 @@ export async function saveReturnInvoiceDetailHandler(
       state: text(payload.state) || null,
       freight_term: upper(payload.freight_term) || null,
       detail_status: "DETAIL_CAPTURED",
-    }).eq("id", invoiceId).select("id, detail_status").single();
+    }).eq("id", invoiceId).select("id, invoice_number, detail_status").single();
   if (error) return fail(req, ctx, "SRET_INVOICE_SAVE_FAILED", 500);
   return okResponse({ data }, ctx.request_id, req);
 }
