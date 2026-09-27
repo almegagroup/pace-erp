@@ -373,6 +373,15 @@ export function knockOffPO(id, data) {
   return fetchProcurement("POST", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/knock-off`, data);
 }
 
+// CRCP (Cross Company) — PROCUREMENT-DESIGN-DOC.md §3.7 Point 3.2.2/3.2.9.
+export function setPoCrcp(id, data) {
+  return fetchProcurement("PATCH", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/crcp`, data);
+}
+
+export function setStoCrcp(id, data) {
+  return fetchProcurement("PATCH", `/api/procurement/stos/${encodeURIComponent(id)}/crcp`, data);
+}
+
 export function listCSNs(params) {
   return fetchProcurement("GET", "/api/procurement/csns", undefined, params);
 }

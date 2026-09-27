@@ -19,12 +19,15 @@ import {
   amendPurchaseOrder,
   cancelPurchaseOrder,
   confirmPurchaseOrder,
+  getPoFilterOptions,
   getPurchaseOrder,
   knockOffPOLine,
   knockOffPO,
+  setPoCrcp,
   updatePurchaseOrder,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import CrcpEditModal from "../CrcpEditModal.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -154,6 +157,9 @@ export default function PODetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [crcpModalOpen, setCrcpModalOpen] = useState(false);
+  const [crcpSaving, setCrcpSaving] = useState(false);
+  const [crcpError, setCrcpError] = useState("");
   const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const poDetailQuery = useQuery({
@@ -163,6 +169,32 @@ export default function PODetailPage() {
   });
   const po = poDetailQuery.data?.data ?? poDetailQuery.data ?? null;
   const companyId = po?.company_id || resolvedCompanyId || "";
+  // CRCP (Cross Company) — §3.7 Point 3.2.2. Full active-company list (not
+  // scoped to this user's own companies — CRCP shares with sister companies
+  // the current user may not personally operate as), fetched only once the
+  // modal is actually opened.
+  const crcpCompaniesQuery = useQuery({
+    queryKey: ["procurement", "po-filter-options", "crcp-companies"],
+    enabled: crcpModalOpen,
+    queryFn: () => getPoFilterOptions({}),
+  });
+  const crcpCompanies = Array.isArray(crcpCompaniesQuery.data?.companies) ? crcpCompaniesQuery.data.companies : [];
+  const canEditCrcp = po ? !["CANCELLED", "CLOSED"].includes(String(po.status || "").toUpperCase()) : false;
+
+  async function handleSaveCrcp(payload) {
+    setCrcpSaving(true);
+    setCrcpError("");
+    try {
+      await setPoCrcp(id, payload);
+      setCrcpModalOpen(false);
+      await poDetailQuery.refetch();
+    } catch (saveError) {
+      setCrcpError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_CRCP_UPDATE_FAILED");
+    } finally {
+      setCrcpSaving(false);
+    }
+  }
+
   const csnQuery = useQuery({
     queryKey: ["procurement", "po-csns", { companyId, id }],
     enabled: Boolean(id && companyId),
@@ -521,6 +553,7 @@ export default function PODetailPage() {
   );
 
   return (
+    <>
     <ErpScreenScaffold
       eyebrow="Procurement"
       title="Purchase Order Detail"
@@ -564,6 +597,12 @@ export default function PODetailPage() {
               { key: "cancel", label: "Cancel PO", tone: "danger", onClick: () => void handleCancelPo(), disabled: saving },
               { key: "knockoff", label: "Knock-Off PO", tone: "neutral", onClick: () => void handleKnockOffPo(), disabled: saving },
             ]
+          : []),
+        // CRCP (Cross Company) — §3.7 Point 3.2.9: editable at any status
+        // except CANCELLED/CLOSED, a lightweight action independent of the
+        // amend flow above.
+        ...(canEditCrcp
+          ? [{ key: "crcp", label: po?.crcp_enabled ? "CRCP (On)" : "CRCP", tone: "neutral", onClick: () => setCrcpModalOpen(true) }]
           : []),
       ]}
     >
@@ -1130,5 +1169,20 @@ export default function PODetailPage() {
         </div>
       ) : null}
     </ErpScreenScaffold>
+
+      {crcpModalOpen ? (
+        <CrcpEditModal
+          visible={crcpModalOpen}
+          onClose={() => setCrcpModalOpen(false)}
+          ownCompanyId={po?.company_id}
+          companies={crcpCompanies}
+          initialEnabled={po?.crcp_enabled}
+          initialCompanyIds={po?.crcp_company_ids}
+          saving={crcpSaving}
+          error={crcpError}
+          onSave={handleSaveCrcp}
+        />
+      ) : null}
+    </>
   );
 }

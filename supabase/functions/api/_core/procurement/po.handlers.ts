@@ -1704,7 +1704,7 @@ export async function getPoFilterOptionsHandler(
     const materialEmpty = materialIds !== null && materialIds.length === 0;
 
     let companyQuery = serviceRoleClient.schema("erp_master").from("companies")
-      .select("id, company_code, company_name")
+      .select("id, company_code, company_name, state_name")
       .eq("company_kind", "BUSINESS")
       .eq("status", "ACTIVE")
       .order("company_name", { ascending: true });
@@ -1814,9 +1814,10 @@ export async function listPOsHandler(
 
     const enrichedList = await enrichPoReferenceDisplays({ pos: (data as PurchaseOrderRow[] | null) ?? [] });
     const posWithItems = await attachPoItemsSummary(enrichedList.pos ?? []);
+    const posWithCrcp = await attachPoCrcpCompanyCodes(posWithItems);
 
     return okResponse({
-      data: await enrichProcurementUserDisplays(posWithItems),
+      data: await enrichProcurementUserDisplays(posWithCrcp),
       total: count ?? 0,
       pagination: listPagination(page, limit, count ?? 0),
     }, ctx.request_id, req);
@@ -1824,6 +1825,35 @@ export async function listPOsHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_LIST_FAILED";
     return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Purchase order list failed");
   }
+}
+
+// CRCP (Cross Company) — PROCUREMENT-DESIGN-DOC.md §3.7 Point 3.2.2. Bulk-
+// resolves each PO's shared-company codes for the two new List page columns
+// (CRCP flag + shared company codes); pos with crcp_enabled=false get an
+// empty array without a wasted lookup.
+async function attachPoCrcpCompanyCodes<T extends { id: unknown; crcp_enabled?: unknown }>(pos: T[]): Promise<T[]> {
+  const crcpPoIds = uniqueTrimmedStrings(pos.filter((po) => po.crcp_enabled === true).map((po) => po.id));
+  if (crcpPoIds.length === 0) {
+    return pos.map((po) => ({ ...po, crcp_company_codes: [] }));
+  }
+  const { data: rows } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order_crcp_company")
+    .select("po_id, company_id")
+    .in("po_id", crcpPoIds);
+  const companyIds = uniqueTrimmedStrings((rows ?? []).map((row) => (row as JsonRecord).company_id));
+  const { data: companies } = companyIds.length > 0
+    ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", companyIds)
+    : { data: [] as JsonRecord[] };
+  const codeByCompanyId = new Map((companies ?? []).map((row) => [String((row as JsonRecord).id), String((row as JsonRecord).company_code ?? "")]));
+  const codesByPoId = new Map<string, string[]>();
+  for (const row of rows ?? []) {
+    const poId = String((row as JsonRecord).po_id);
+    const code = codeByCompanyId.get(String((row as JsonRecord).company_id)) || "";
+    if (!code) continue;
+    codesByPoId.set(poId, [...(codesByPoId.get(poId) ?? []), code]);
+  }
+  return pos.map((po) => ({ ...po, crcp_company_codes: codesByPoId.get(String(po.id)) ?? [] }));
 }
 
 export async function getPOHandler(
@@ -1873,6 +1903,16 @@ export async function getPOHandler(
       ? await canActAsProcurementHead(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by))
       : false;
 
+    // CRCP (Cross Company) — §3.7 Point 3.2.2. Raw company_ids for the Detail
+    // page's edit multi-select (resolved to Code/State/Name client-side from
+    // the same company-options list the page already loads).
+    const { data: crcpRows } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order_crcp_company")
+      .select("company_id")
+      .eq("po_id", poId);
+    const crcpCompanyIds = uniqueTrimmedStrings((crcpRows ?? []).map((row) => (row as JsonRecord).company_id));
+
     return okResponse({
       data: await enrichProcurementUserDisplays({
         ...(enrichedDetail.po ?? po),
@@ -1880,6 +1920,7 @@ export async function getPOHandler(
         approval_log: approvalLogResult.data ?? [],
         amendment_log: amendmentLogResult.data ?? [],
         can_edit_pending_approval: canEditPendingApproval,
+        crcp_company_ids: crcpCompanyIds,
       }),
     }, ctx.request_id, req);
   } catch (err) {
@@ -3045,6 +3086,90 @@ export async function knockOffPOHandler(
     const code = (err as Error).message || "PROCUREMENT_PO_KNOCK_OFF_FAILED";
     const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order knock-off failed");
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// CRCP (Cross Company) — Phase A, PROCUREMENT-DESIGN-DOC.md §3.7 Points
+// 3.2.1/3.2.2/3.2.9. A lightweight, non-amendment action: editable at any PO
+// status except CANCELLED/CLOSED, by anyone holding ordinary PROC_PO_CREATE
+// access (route-registry gates the exact action, no separate CRCP role).
+// The allow-list holds only ADDITIONAL companies -- the PO's own company is
+// always implicitly allowed and is never itself a row, so there is nothing
+// to "protect from removal" here.
+// ───────────────────────────────────────────────────────────────────────
+
+export async function setPoCrcpHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+
+    const poId = getPoIdFromPath(req);
+    const body = await parseBody(req);
+    const crcpEnabled = body.crcp_enabled === true;
+    const rawCompanyIds = Array.isArray(body.company_ids) ? body.company_ids : [];
+    const companyIds = uniqueTrimmedStrings(rawCompanyIds.map((entry) => toTrimmedString(entry)));
+
+    const po = await getPOById(poId);
+    if (!po) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
+    }
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(po.company_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
+    const status = toUpperTrimmedString(po.status);
+    if (status === "CANCELLED" || status === "CLOSED") {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_CRCP_STATUS_LOCKED", 400, "CRCP cannot be changed on a Cancelled or Closed PO.");
+    }
+
+    const ownCompanyId = toTrimmedString(po.company_id);
+    const shareCompanyIds = companyIds.filter((id) => id !== ownCompanyId);
+
+    const { error: headerError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order")
+      .update({ crcp_enabled: crcpEnabled, last_updated_at: new Date().toISOString() })
+      .eq("id", poId);
+    if (headerError) {
+      throw new Error("PROCUREMENT_PO_CRCP_UPDATE_FAILED");
+    }
+
+    const { error: deleteError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order_crcp_company")
+      .delete()
+      .eq("po_id", poId);
+    if (deleteError) {
+      throw new Error("PROCUREMENT_PO_CRCP_UPDATE_FAILED");
+    }
+
+    if (crcpEnabled && shareCompanyIds.length > 0) {
+      const { error: insertError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order_crcp_company")
+        .insert(shareCompanyIds.map((companyId) => ({
+          po_id: poId,
+          company_id: companyId,
+          created_by: ctx.auth_user_id,
+        })));
+      if (insertError) {
+        throw new Error("PROCUREMENT_PO_CRCP_UPDATE_FAILED");
+      }
+    }
+
+    return okResponse({
+      data: { id: poId, crcp_enabled: crcpEnabled, crcp_company_ids: crcpEnabled ? shareCompanyIds : [] },
+    }, ctx.request_id, req);
+  } catch (err) {
+    console.error("PO_SET_CRCP_HANDLER_ERROR", err);
+    const code = (err as Error).message || "PROCUREMENT_PO_CRCP_UPDATE_FAILED";
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code === "PROCUREMENT_PO_CRCP_STATUS_LOCKED" ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Purchase order CRCP update failed");
   }
 }
 

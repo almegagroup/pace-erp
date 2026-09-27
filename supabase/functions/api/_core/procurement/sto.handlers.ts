@@ -465,6 +465,15 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
   if (dcResp.error) throw new Error("STO_DC_FETCH_FAILED");
   if (gateExitResp.error) throw new Error("STO_GXO_FETCH_FAILED");
 
+  // CRCP (Cross Company) — §3.7 Point 3.2.2. Raw company_ids for the Detail
+  // page's header-level edit multi-select.
+  const { data: crcpRows } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order_crcp_company")
+    .select("company_id")
+    .eq("sto_id", stoId);
+  const crcpCompanyIds = [...new Set((crcpRows ?? []).map((row: JsonRecord) => toTrimmedString(row.company_id)).filter(Boolean))];
+
   return await enrichProcurementUserDisplays({
     ...sto,
     lines,
@@ -472,6 +481,7 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
     gate_exit_outbound: gateExitResp.data ?? [],
     approval_log: approvalLog,
     amendment_log: amendmentLog,
+    crcp_company_ids: crcpCompanyIds,
   });
 }
 
@@ -1196,6 +1206,25 @@ export async function listSTOsHandler(
       : { data: [] as JsonRecord[] };
     const companyMap = new Map(((companies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
+    // CRCP (Cross Company) — §3.7 Point 3.2.2. Bulk-resolve shared-company
+    // codes for the two new List page columns; header-level on STO.
+    const crcpStoIds = [...new Set(items.filter((row) => (row as JsonRecord).crcp_enabled === true).map((row) => toTrimmedString(row.id)))];
+    const { data: crcpRows } = crcpStoIds.length > 0
+      ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_crcp_company").select("sto_id, company_id").in("sto_id", crcpStoIds)
+      : { data: [] as JsonRecord[] };
+    const crcpCompanyIds = [...new Set((crcpRows ?? []).map((row: JsonRecord) => toTrimmedString(row.company_id)))];
+    const { data: crcpCompanies } = crcpCompanyIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", crcpCompanyIds)
+      : { data: [] as JsonRecord[] };
+    const crcpCodeByCompanyId = new Map(((crcpCompanies ?? []) as JsonRecord[]).map((row) => [String(row.id), String(row.company_code ?? "")]));
+    const crcpCodesByStoId = new Map<string, string[]>();
+    for (const row of crcpRows ?? []) {
+      const stoId = toTrimmedString((row as JsonRecord).sto_id);
+      const code = crcpCodeByCompanyId.get(toTrimmedString((row as JsonRecord).company_id)) || "";
+      if (!code) continue;
+      crcpCodesByStoId.set(stoId, [...(crcpCodesByStoId.get(stoId) ?? []), code]);
+    }
+
     const enrichedItems = items.map((row) => {
       const sending = companyMap.get(toTrimmedString(row.sending_company_id));
       const receiving = companyMap.get(toTrimmedString(row.receiving_company_id));
@@ -1203,6 +1232,7 @@ export async function listSTOsHandler(
         ...row,
         sending_company_display: sending ? String(sending.company_name ?? sending.company_code ?? "") : null,
         receiving_company_display: receiving ? String(receiving.company_name ?? receiving.company_code ?? "") : null,
+        crcp_company_codes: crcpCodesByStoId.get(toTrimmedString(row.id)) ?? [],
       };
     });
 
@@ -1398,6 +1428,73 @@ export async function cancelSTOHandler(
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_CANCEL_FAILED";
     const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// CRCP (Cross Company) — Phase A, PROCUREMENT-DESIGN-DOC.md §3.7 Points
+// 3.2.1/3.2.2/3.2.9. Header-level (unlike PO's per-row flag) since one STO
+// can carry multiple lines. Lightweight, non-amendment action; editable at
+// any status except CANCELLED/CLOSED, by anyone holding ordinary
+// PROC_STO_CREATE access. The allow-list holds only ADDITIONAL companies —
+// the STO's own receiving_company_id is always implicitly allowed.
+// ───────────────────────────────────────────────────────────────────────
+
+export async function setStoCrcpHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    const body = await parseBody(req);
+    const crcpEnabled = body.crcp_enabled === true;
+    const rawCompanyIds = Array.isArray(body.company_ids) ? body.company_ids : [];
+    const companyIds = [...new Set(rawCompanyIds.map((entry) => toTrimmedString(entry)).filter(Boolean))];
+
+    const sto = await fetchSto(stoId);
+    await assertStoVisibleToContext(ctx, sto);
+
+    if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(sto.status))) {
+      return stoErrorResponse(req, ctx, "STO_CRCP_STATUS_LOCKED", 400, "CRCP cannot be changed on a Cancelled or Closed STO.");
+    }
+
+    const ownCompanyId = toTrimmedString(sto.receiving_company_id);
+    const shareCompanyIds = companyIds.filter((id) => id !== ownCompanyId);
+
+    const { error: headerError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .update({ crcp_enabled: crcpEnabled, last_updated_at: new Date().toISOString() })
+      .eq("id", stoId);
+    if (headerError) throw new Error("STO_CRCP_UPDATE_FAILED");
+
+    const { error: deleteError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order_crcp_company")
+      .delete()
+      .eq("sto_id", stoId);
+    if (deleteError) throw new Error("STO_CRCP_UPDATE_FAILED");
+
+    if (crcpEnabled && shareCompanyIds.length > 0) {
+      const { error: insertError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("stock_transfer_order_crcp_company")
+        .insert(shareCompanyIds.map((companyId) => ({
+          sto_id: stoId,
+          company_id: companyId,
+          created_by: ctx.auth_user_id,
+        })));
+      if (insertError) throw new Error("STO_CRCP_UPDATE_FAILED");
+    }
+
+    return okResponse({
+      data: { id: stoId, crcp_enabled: crcpEnabled, crcp_company_ids: crcpEnabled ? shareCompanyIds : [] },
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_CRCP_UPDATE_FAILED";
+    const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : code === "STO_CRCP_STATUS_LOCKED" ? 400 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
   }
 }

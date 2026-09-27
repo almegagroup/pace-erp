@@ -291,6 +291,7 @@ import {
   getPoFilterOptionsHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
+  setPoCrcpHandler,
   listMaterialUomConversionsForProcurementHandler,
   listPOsHandler,
   listPOOrderGroupsHandler,
@@ -397,6 +398,7 @@ import {
   approveSTOHandler,
   approveSTOAmendmentHandler,
   cancelSTOHandler,
+  setStoCrcpHandler,
   amendSTOHandler,
   closeSTOHandler,
   confirmSTOHandler,
@@ -1372,6 +1374,10 @@ export async function dispatchProcurementRoutes(
     return await cancelSTOHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/stos\/[^/]+\/crcp$/.test(pathname) && req.method === "PATCH") {
+    return await setStoCrcpHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
     return await knockOffSTOLineHandler(req, ctx);
   }
@@ -1474,6 +1480,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
     return await knockOffPOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/crcp$/.test(pathname) && req.method === "PATCH") {
+    return await setPoCrcpHandler(req, ctx);
   }
 
   return null;

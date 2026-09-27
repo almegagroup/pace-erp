@@ -158,6 +158,29 @@ async function fetchPoLineBundle(
   return { poLine, po };
 }
 
+// CRCP (Cross Company) — PROCUREMENT-DESIGN-DOC.md §3.7 Point 3.2.1/3.2.2.
+// Returns true only when crcpEnabled is set AND companyId appears in that
+// document's own allow-list junction table -- the document's own company is
+// checked by the caller separately (never stored in this table).
+async function isCrcpSharedCompany(
+  table: "purchase_order_crcp_company" | "stock_transfer_order_crcp_company",
+  idColumn: "po_id" | "sto_id",
+  documentId: string,
+  companyId: string,
+  crcpEnabled: boolean,
+): Promise<boolean> {
+  if (!crcpEnabled || !companyId) return false;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from(table)
+    .select("id")
+    .eq(idColumn, documentId)
+    .eq("company_id", companyId)
+    .maybeSingle();
+  if (error) return false;
+  return Boolean(data);
+}
+
 async function fetchActiveCsnForGateEntry(csnId: string): Promise<CsnRow> {
   const { data: csn, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -407,7 +430,12 @@ export async function createGateEntryHandler(
           return procurementErrorResponse(req, ctx, "GE_CSN_PO_LINE_MISMATCH", 400, `Line ${index + 1} selected CSN does not belong to the referenced PO line.`);
         }
         if (String(po.company_id) !== companyId) {
-          return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `PO line on line ${index + 1} is outside company scope.`);
+          const crcpAllowed = await isCrcpSharedCompany(
+            "purchase_order_crcp_company", "po_id", String(po.id), companyId, Boolean((po as JsonRecord).crcp_enabled),
+          );
+          if (!crcpAllowed) {
+            return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `PO line on line ${index + 1} is outside company scope.`);
+          }
         }
         const deliveryType = toUpperTrimmedString(po.delivery_type);
         if (BULK_DELIVERY_TYPES.has(deliveryType) && parseNullableNumber(line.gross_weight) === null) {
@@ -457,14 +485,19 @@ export async function createGateEntryHandler(
         const { data: sto, error: stoError } = await serviceRoleClient
           .schema("erp_procurement")
           .from("stock_transfer_order")
-          .select("id, receiving_company_id, status")
+          .select("id, receiving_company_id, status, crcp_enabled")
           .eq("id", resolvedStoId)
           .maybeSingle();
         if (stoError || !sto) {
           return procurementErrorResponse(req, ctx, "GE_STO_NOT_FOUND", 404, `Line ${index + 1}'s STO was not found.`);
         }
         if (String(sto.receiving_company_id) !== companyId) {
-          return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `STO on line ${index + 1} is outside company scope.`);
+          const stoCrcpAllowed = await isCrcpSharedCompany(
+            "stock_transfer_order_crcp_company", "sto_id", String(sto.id), companyId, Boolean((sto as JsonRecord).crcp_enabled),
+          );
+          if (!stoCrcpAllowed) {
+            return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `STO on line ${index + 1} is outside company scope.`);
+          }
         }
         if (!["CREATED", "DISPATCHED"].includes(toUpperTrimmedString(sto.status))) {
           return procurementErrorResponse(req, ctx, "GE_STO_NOT_OPEN", 400, `Line ${index + 1}'s STO is not open for receiving.`);
@@ -859,13 +892,26 @@ export async function listOpenPOsForGEHandler(
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
 
-    const { data: pos, error: posError } = await serviceRoleClient
+    // CRCP (Cross Company) — a PO's own company always sees it; additionally
+    // surface POs where this company was CRCP-shared (§3.7 Point 3.2.1),
+    // so a shared company's gate staff can find it too.
+    const { data: crcpRows } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order_crcp_company")
+      .select("po_id")
+      .eq("company_id", companyId);
+    const crcpPoIds = [...new Set((crcpRows ?? []).map((row) => String((row as JsonRecord).po_id)))];
+
+    let poQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("purchase_order")
-      .select("id, po_number, delivery_type, vendor_id, status, company_id")
-      .eq("company_id", companyId)
+      .select("id, po_number, delivery_type, vendor_id, status, company_id, crcp_enabled")
       .in("status", ["CONFIRMED", "PARTIALLY_RECEIVED"])
       .order("created_at", { ascending: false });
+    poQuery = crcpPoIds.length > 0
+      ? poQuery.or(`company_id.eq.${companyId},id.in.(${crcpPoIds.join(",")})`)
+      : poQuery.eq("company_id", companyId);
+    const { data: pos, error: posError } = await poQuery;
 
     if (posError) {
       return procurementErrorResponse(req, ctx, "PO_OPEN_LIST_FAILED", 500, "Unable to list open POs.");
@@ -930,13 +976,24 @@ export async function listOpenSTOsForGEHandler(
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
 
-    const { data: stos, error: stosError } = await serviceRoleClient
+    // CRCP (Cross Company) — same pattern as listOpenPOsForGEHandler above.
+    const { data: stoCrcpRows } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order_crcp_company")
+      .select("sto_id")
+      .eq("company_id", companyId);
+    const crcpStoIds = [...new Set((stoCrcpRows ?? []).map((row) => String((row as JsonRecord).sto_id)))];
+
+    let stoQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
-      .select("id, sto_number, sto_type, sending_company_id, receiving_company_id, status")
-      .eq("receiving_company_id", companyId)
+      .select("id, sto_number, sto_type, sending_company_id, receiving_company_id, status, crcp_enabled")
       .in("status", ["CREATED", "DISPATCHED"])
       .order("created_at", { ascending: false });
+    stoQuery = crcpStoIds.length > 0
+      ? stoQuery.or(`receiving_company_id.eq.${companyId},id.in.(${crcpStoIds.join(",")})`)
+      : stoQuery.eq("receiving_company_id", companyId);
+    const { data: stos, error: stosError } = await stoQuery;
 
     if (stosError) {
       return procurementErrorResponse(req, ctx, "STO_OPEN_LIST_FAILED", 500, "Unable to list open STOs.");

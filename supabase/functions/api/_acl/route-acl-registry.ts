@@ -817,6 +817,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/lines\/[^/]+\/knock-off$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
   },
+  {
+    // CRCP (Cross Company) — PROCUREMENT-DESIGN-DOC.md §3.7 Point 3.2.9:
+    // editable by anyone holding ordinary PROC_PO_CREATE:EDIT access, no
+    // separate CRCP role, as a lightweight action independent of amend.
+    pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/crcp$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
+  },
 
   // ── PO Order Group (internal batch-approval wrapper, 87.12A) ──────────────
   {
@@ -1177,6 +1184,11 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
+  },
+  {
+    // CRCP (Cross Company) — same pattern as PO's own crcp route above.
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/crcp$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/stos\/[^/]+\/close$/,

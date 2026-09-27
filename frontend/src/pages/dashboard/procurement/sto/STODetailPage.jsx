@@ -27,14 +27,17 @@ import {
   closeSTO,
   confirmSTO,
   confirmSTOReceipt,
+  getPoFilterOptions,
   getSTO,
   knockOffSTOLine,
   listCSNs,
   rejectSTO,
+  setStoCrcp,
   updateSTO,
   updateGateExitWeight,
 } from "../procurementApi.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import CrcpEditModal from "../CrcpEditModal.jsx";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 const FREIGHT_TERM_OPTIONS = [
@@ -128,6 +131,9 @@ export default function STODetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [crcpModalOpen, setCrcpModalOpen] = useState(false);
+  const [crcpSaving, setCrcpSaving] = useState(false);
+  const [crcpError, setCrcpError] = useState("");
 
   const detailQuery = useQuery({
     queryKey: ["procurement", "sto-detail", id],
@@ -137,6 +143,28 @@ export default function STODetailPage() {
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const detail = detailQuery.data ?? null;
+  // CRCP (Cross Company) — §3.7 Point 3.2.2, header-level on STO.
+  const crcpCompaniesQuery = useQuery({
+    queryKey: ["procurement", "po-filter-options", "crcp-companies"],
+    enabled: crcpModalOpen,
+    queryFn: () => getPoFilterOptions({}),
+  });
+  const crcpCompanies = Array.isArray(crcpCompaniesQuery.data?.companies) ? crcpCompaniesQuery.data.companies : [];
+  const canEditCrcp = detail ? !["CANCELLED", "CLOSED"].includes(String(detail.status || "").toUpperCase()) : false;
+
+  async function handleSaveCrcp(payload) {
+    setCrcpSaving(true);
+    setCrcpError("");
+    try {
+      await setStoCrcp(id, payload);
+      setCrcpModalOpen(false);
+      await detailQuery.refetch();
+    } catch (saveError) {
+      setCrcpError(saveError instanceof Error ? saveError.message : "STO_CRCP_UPDATE_FAILED");
+    } finally {
+      setCrcpSaving(false);
+    }
+  }
   // INTER_PLANT STOs get their own CSN(s) at create time (unlike PO, which
   // only creates CSN at CONFIRMED) -- needed here to warn before knocking
   // off a line whose CSN is already TRN/GED (§113.10 line-knock-off pattern,
@@ -516,6 +544,7 @@ export default function STODetailPage() {
   }, [latestDc, latestGateExit]);
 
   return (
+    <>
     <ErpScreenScaffold
       eyebrow="Procurement"
       title="Stock Transfer Detail"
@@ -535,6 +564,11 @@ export default function STODetailPage() {
         ...(canConfirmReceipt ? [{ key: "confirm-receipt", label: saving ? "Confirming..." : "Confirm Receipt", tone: "primary", onClick: () => void handleConfirmReceipt(), disabled: saving }] : []),
         ...(canClose ? [{ key: "close", label: saving ? "Closing..." : "Close STO", tone: "neutral", onClick: () => void handleClose(), disabled: saving }] : []),
         ...(canCancel ? [{ key: "cancel", label: "Cancel", tone: "danger", onClick: () => void handleCancel(), disabled: saving }] : []),
+        // CRCP (Cross Company) — §3.7 Point 3.2.9: editable at any status
+        // except CANCELLED/CLOSED, header-level (unlike PO's per-row flag).
+        ...(canEditCrcp
+          ? [{ key: "crcp", label: detail?.crcp_enabled ? "CRCP (On)" : "CRCP", tone: "neutral", onClick: () => setCrcpModalOpen(true) }]
+          : []),
       ]}
     >
       {loading || !detail ? (
@@ -1117,5 +1151,20 @@ export default function STODetailPage() {
         </div>
       ) : null}
     </ErpScreenScaffold>
+
+      {crcpModalOpen ? (
+        <CrcpEditModal
+          visible={crcpModalOpen}
+          onClose={() => setCrcpModalOpen(false)}
+          ownCompanyId={detail?.receiving_company_id}
+          companies={crcpCompanies}
+          initialEnabled={detail?.crcp_enabled}
+          initialCompanyIds={detail?.crcp_company_ids}
+          saving={crcpSaving}
+          error={crcpError}
+          onSave={handleSaveCrcp}
+        />
+      ) : null}
+    </>
   );
 }
