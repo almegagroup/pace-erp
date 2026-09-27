@@ -230,6 +230,28 @@ body[data-workspace-mode="protected"] *::-webkit-scrollbar-thumb {
 animation: loader 1.8s linear forwards;
 }
 
+/* ============================================================
+   NUMBER INPUT SPIN BUTTONS — removed globally, PACE-wide
+   ============================================================
+   Business owner, 2026-09-27: found live (Process PO Final, RM
+   formulation grid, Actual Qty field) -- a native number-input's
+   clickable up/down spinner let a user accidentally bump a
+   quantity with a stray click, silently changing a value (e.g. a
+   formulation Actual Qty) they never meant to touch. Removed from
+   every manual-entry numeric field across the whole app, not just
+   Production -- typing and keyboard ArrowUp/ArrowDown stepping
+   still work exactly as before; only the clickable on-screen
+   arrows are gone, since those are the accidental-click risk. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
 @media print {
   body * {
     visibility: hidden !important;
