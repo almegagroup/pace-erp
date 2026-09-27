@@ -1683,7 +1683,13 @@ export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: 
           ?? toTrimmedString(strokeLine.default_storage_location_id)
           ?? null;
         if (!storageLocationId) continue;
-        const qty = (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty;
+        // business owner, 2026-09-27: found live (CMP003, stroke #2 formulation) --
+        // dosage_pct is a float (e.g. 73.3), and dosage%/100 is rarely an exact
+        // binary fraction, so raw (dosage/100)*batchQty leaves ~1e-6..1e-10 of
+        // IEEE754 noise per line. Round at the point of computation everywhere
+        // this formula appears (matches the correct pattern already used at
+        // buildProcessOrderLineReco's own standardQty, further down this file).
+        const qty = Number(((Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty).toFixed(6));
         const key = buildAvailabilityKey(effectiveMaterialId, storageLocationId);
         const current = needed.get(key);
         needed.set(key, {
@@ -2307,7 +2313,9 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
             ?? toTrimmedString(strokeLine.default_storage_location_id)
             ?? null;
           if (!storageLocationId) continue;
-          const qty = (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty;
+          // business owner, 2026-09-27: same dosage-rounding fix as the
+          // availabilityPreview copy of this formula above -- see that comment.
+          const qty = Number(((Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty).toFixed(6));
           const key = buildAvailabilityKey(effectiveMaterialId, storageLocationId);
           const current = needed.get(key);
           needed.set(key, {
@@ -2456,7 +2464,15 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
             process_order_id: poId,
             material_id: strokeLine.material_id,
             actual_material_id: actualMaterialId,
-            planned_qty: (Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty,
+            // business owner, 2026-09-27: found live (CMP003 stroke #2, PO
+            // 9300000512) -- this is the actual write path for a formulation
+            // line's "Standard" qty, so leaving it unrounded is what let the
+            // floating-point noise into the database in the first place (every
+            // downstream Final/Verify display, and the PR10 edit recompute
+            // below, just faithfully reproduced whatever landed here). Same
+            // dosage-rounding fix as the two read-only stock-check copies of
+            // this formula above.
+            planned_qty: Number(((Number(strokeLine.dosage_pct ?? 0) / 100) * plannedQty).toFixed(6)),
             actual_qty: null,
             uom_code: "KG",
             issue_sloc_id: override?.storageLocationId
@@ -3881,8 +3897,12 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
       const nextStorageLocationId = Object.prototype.hasOwnProperty.call(bodyLine ?? {}, "storage_location_id")
         ? (toTrimmedString(bodyLine?.storage_location_id) || null)
         : (toTrimmedString(line.issue_sloc_id) || null);
+      // business owner, 2026-09-27: same dosage-rounding fix as
+      // createProcessOrderHandler's line prepopulation -- see that comment.
+      // PR10 batch-qty edit is the OTHER write path for planned_qty, so it
+      // needs the identical guard, not just the one at Create.
       const recalculatedPlannedQty = Number(line.dosage_pct ?? 0) > 0
-        ? ((Number(line.dosage_pct ?? 0) / 100) * targetPlannedQty)
+        ? Number(((Number(line.dosage_pct ?? 0) / 100) * targetPlannedQty).toFixed(6))
         : Number(line.planned_qty ?? 0);
 
       finalLineStates.push({
@@ -3922,7 +3942,12 @@ export async function editProcessOrderHandler(req: Request, ctx: ProdHandlerCont
     };
     if (machineId !== undefined) poPatch.machine_id = machineId;
     if (nextPlannedQty !== null && !qtysEffectivelyMatch(Number(po.planned_qty ?? 0), nextPlannedQty)) {
-      poPatch.planned_qty = nextPlannedQty;
+      // business owner, 2026-09-27: defensive rounding on the batch-qty
+      // header itself -- if the caller ever sends an already-imprecise value
+      // (e.g. a frontend field derived by summing individual RM lines rather
+      // than the operator's own typed number), this stops it from becoming
+      // the new source of truth that every line then multiplies against.
+      poPatch.planned_qty = Number(nextPlannedQty.toFixed(6));
     }
 
     const shouldUpdatePo = Object.keys(poPatch).length > 2 || machineId !== undefined;
