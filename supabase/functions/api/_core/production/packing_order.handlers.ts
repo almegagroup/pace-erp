@@ -2980,6 +2980,19 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       if (isNewLine && !isIncrease) throw new Error("PROD_PACK_CORRECTION_INVALID");
       if (isNewLine && !effectiveMaterialId) throw new Error("PROD_PACK_CORRECTION_MATERIAL_REQUIRED");
 
+      // business owner, 2026-09-27: found live (CMP006, Process PO sibling of this same
+      // bug, PO 9300000414) -- must compute BEFORE the packing_order_line write below,
+      // not only inside the pmRecoRows block after it. The line write used to touch
+      // actual_qty only; ap_approved_qty/variance_qty/approved_status on
+      // packing_order_line were never updated by a correction at all, so the LIVE line
+      // (and every later Final-page display reading it) kept showing whatever stale
+      // value predated the very first correction, while packing_order_line_reco (a
+      // separate, correctly-maintained history) quietly had the right numbers all along.
+      const tracksPmApproval = lineType === "PM" && String(poData.po_type ?? "") !== "PMTS";
+      const pmFields = tracksPmApproval
+        ? computePmApprovalFields(0, delta, toTrimmedString(correction.approved_status) || null, parsePositiveNumber(correction.ap_approved_qty))
+        : null;
+
       const slocId = isNewLine
         ? (toTrimmedString(correction.storage_location_id) || defaultPmSlocId)
         : ((line?.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string | null);
@@ -3039,6 +3052,9 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
             qty_per_pack: Number(poData.num_packs) > 0 ? delta / Number(poData.num_packs) : delta,
             total_qty: delta,
             actual_qty: delta,
+            ap_approved_qty: pmFields?.apApproved ?? null,
+            approved_status: pmFields?.approved ?? null,
+            variance_qty: pmFields?.variance ?? null,
             issue_sloc_id: slocId,
             uom_code: baseUom,
             movement_type_code: "P261",
@@ -3058,16 +3074,19 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         // ORIGINAL Final-time posting, which any future correction's rate/reversal
         // lookup still needs) — only actual_qty (+ any material swap) advances.
         linePatch.actual_qty = Number(line.actual_qty ?? line.total_qty ?? 0) + delta;
+        if (pmFields) {
+          linePatch.ap_approved_qty = Number(line.ap_approved_qty ?? line.actual_qty ?? line.total_qty ?? 0) + pmFields.apApproved;
+          linePatch.variance_qty = Number(line.variance_qty ?? 0) + pmFields.variance;
+          linePatch.approved_status = pmFields.approved;
+        }
         await serviceRoleClient.schema("erp_production").from("packing_order_line")
           .update(linePatch).eq("id", line.id as string);
       }
       postings.push({ line_id: line?.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id });
 
       // §108.2 item 6 — same PMTS reco skip as Final, applied to COR6 correction rows too.
-      if (lineType === "PM" && String(poData.po_type ?? "") !== "PMTS") {
-        const approvedInput = toTrimmedString(correction.approved_status) || null;
-        const apApprovedInput = parsePositiveNumber(correction.ap_approved_qty);
-        const fields = computePmApprovalFields(0, delta, approvedInput, apApprovedInput);
+      if (tracksPmApproval && pmFields) {
+        const fields = pmFields;
         pmRecoRows.push({
           company_id: poData.company_id,
           po_number: poData.po_number,

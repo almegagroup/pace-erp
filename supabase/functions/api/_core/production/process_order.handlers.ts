@@ -5490,6 +5490,28 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
         referenceDocumentId: String(po.id),
       });
 
+      // business owner, 2026-09-27: found live (CMP006, PO 9300000414) -- this delta's
+      // approval must be computed BEFORE the process_order_line write below, not only
+      // inside the reco-row block after it. The line write used to touch actual_qty
+      // only; ap_approved_qty/variance_qty/approved_status on process_order_line were
+      // never updated by a correction at all, so the LIVE line (and every later Final/
+      // Verify-page display reading it) kept showing whatever stale value predated the
+      // very first correction -- while process_order_line_reco (a separate, correctly-
+      // maintained append-only history) quietly had the right numbers all along. A
+      // correction delta has no Std of its own (it IS the deviation) -- approval is
+      // always mandatory here, never auto-YES (same rule correctPackingOrderHandler
+      // already uses for its PM correction deltas).
+      let approved: string | null = null;
+      let apApprovedDelta = 0;
+      let varianceDelta = 0;
+      if (!skipReco) {
+        const approvedInput = toTrimmedString(correction.approved_status) || null;
+        const apApprovedInput = parsePositiveNumber(correction.ap_approved_qty);
+        approved = (approvedInput === "NO" || approvedInput === "PARTIAL") ? approvedInput : "YES";
+        apApprovedDelta = approved === "NO" ? 0 : approved === "PARTIAL" ? (apApprovedInput ?? 0) : delta;
+        varianceDelta = delta - apApprovedDelta;
+      }
+
       if (existingLine) {
         // Deliberately does NOT touch stock_ledger_id here (matches
         // correctPackingOrderHandler) — that column identifies the line's ORIGINAL
@@ -5497,8 +5519,15 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
         // (ledgerRefByLedgerId, built above) still needs to resolve back to. This
         // correction's own posting is tracked only via the `postings` response array.
         const newActual = Number(existingLine.actual_qty ?? existingLine.planned_qty ?? 0) + delta;
+        const lineUpdate: Record<string, unknown> = { actual_qty: newActual };
+        if (!skipReco) {
+          lineUpdate.ap_approved_qty =
+            Number(existingLine.ap_approved_qty ?? existingLine.actual_qty ?? existingLine.planned_qty ?? 0) + apApprovedDelta;
+          lineUpdate.variance_qty = Number(existingLine.variance_qty ?? 0) + varianceDelta;
+          lineUpdate.approved_status = approved;
+        }
         await serviceRoleClient.schema("erp_production").from("process_order_line")
-          .update({ actual_qty: newActual }).eq("id", lineId as string);
+          .update(lineUpdate).eq("id", lineId as string);
       } else {
         // A brand-new line has no prior posting, so its own first correction posting
         // IS its "original" — store it, exactly like a normal Verify-created line would.
@@ -5509,6 +5538,9 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
             material_id: materialId,
             planned_qty: 0,
             actual_qty: delta,
+            ap_approved_qty: skipReco ? null : apApprovedDelta,
+            approved_status: skipReco ? null : approved,
+            variance_qty: skipReco ? null : varianceDelta,
             uom_code: baseUom,
             issue_sloc_id: slocId,
             is_rm: true,
@@ -5527,14 +5559,6 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
       postings.push({ line_id: existingLine.id, movement: movementType, direction: isIncrease ? "OUT" : "IN", ...posting });
 
       if (!skipReco) {
-        const approvedInput = toTrimmedString(correction.approved_status) || null;
-        const apApprovedInput = parsePositiveNumber(correction.ap_approved_qty);
-        // A correction delta has no Std of its own (it IS the deviation) — approval is
-        // always mandatory here, never auto-YES (same rule correctPackingOrderHandler
-        // already uses for its PM correction deltas).
-        const approved = (approvedInput === "NO" || approvedInput === "PARTIAL") ? approvedInput : "YES";
-        const apApproved = approved === "NO" ? 0 : approved === "PARTIAL" ? (apApprovedInput ?? 0) : delta;
-        const variance = delta - apApproved;
         const mat = materialMap.get(materialId) ?? {};
         recoRows.push({
           company_id: po.company_id,
@@ -5551,8 +5575,8 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
           standard_qty: 0,
           actual_qty: delta,
           approved_status: approved,
-          ap_approved_qty: apApproved,
-          variance_qty: variance,
+          ap_approved_qty: apApprovedDelta,
+          variance_qty: varianceDelta,
           is_formulation_line: false,
           is_voided: false,
           source_txn_type: "COR6_CORRECTION",
