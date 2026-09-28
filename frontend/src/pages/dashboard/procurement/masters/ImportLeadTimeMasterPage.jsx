@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   deleteImportLeadTime,
@@ -303,10 +304,14 @@ export default function ImportLeadTimeMasterPage() {
             <div className="grid gap-3">
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 Vendor <span className="text-rose-500">*</span>
-                <select value={importForm.vendor_id} onChange={(e) => setImportForm((f) => ({ ...f, vendor_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
-                  <option value="">— Select Vendor —</option>
-                  {importVendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
-                </select>
+                <ErpComboboxField
+                  value={importForm.vendor_id}
+                  onChange={(value) => setImportForm((f) => ({ ...f, vendor_id: value }))}
+                  options={importVendors.map((v) => ({ value: v.id, label: `${v.vendor_code} — ${v.vendor_name}` }))}
+                  placeholder="Type to search vendor…"
+                  blankLabel="— Select Vendor —"
+                  inputClassName="h-8 border border-slate-300 bg-white px-2 text-sm"
+                />
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 Port of Discharge <span className="text-rose-500">*</span>
@@ -400,10 +405,14 @@ export default function ImportLeadTimeMasterPage() {
             <div className="grid gap-3">
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 Vendor <span className="text-rose-500">*</span>
-                <select value={domesticForm.vendor_id} onChange={(e) => setDomesticForm((f) => ({ ...f, vendor_id: e.target.value }))} className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500">
-                  <option value="">— Select Vendor —</option>
-                  {domesticVendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_code} — {v.vendor_name}</option>)}
-                </select>
+                <ErpComboboxField
+                  value={domesticForm.vendor_id}
+                  onChange={(value) => setDomesticForm((f) => ({ ...f, vendor_id: value }))}
+                  options={domesticVendors.map((v) => ({ value: v.id, label: `${v.vendor_code} — ${v.vendor_name}` }))}
+                  placeholder="Type to search vendor…"
+                  blankLabel="— Select Vendor —"
+                  inputClassName="h-8 border border-slate-300 bg-white px-2 text-sm"
+                />
               </label>
               <label className="grid gap-1 text-xs font-semibold text-slate-700">
                 Company <span className="text-rose-500">*</span>
