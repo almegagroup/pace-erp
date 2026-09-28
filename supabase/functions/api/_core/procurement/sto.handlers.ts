@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
@@ -465,6 +466,15 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
   if (dcResp.error) throw new Error("STO_DC_FETCH_FAILED");
   if (gateExitResp.error) throw new Error("STO_GXO_FETCH_FAILED");
 
+  // CRCP (Cross Company) — §3.7 Point 3.2.2. Raw company_ids for the Detail
+  // page's header-level edit multi-select.
+  const { data: crcpRows } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order_crcp_company")
+    .select("company_id")
+    .eq("sto_id", stoId);
+  const crcpCompanyIds = [...new Set((crcpRows ?? []).map((row: JsonRecord) => toTrimmedString(row.company_id)).filter(Boolean))];
+
   return await enrichProcurementUserDisplays({
     ...sto,
     lines,
@@ -472,6 +482,7 @@ async function hydrateSto(stoId: string, ctx?: ProcurementHandlerContext): Promi
     gate_exit_outbound: gateExitResp.data ?? [],
     approval_log: approvalLog,
     amendment_log: amendmentLog,
+    crcp_company_ids: crcpCompanyIds,
   });
 }
 
@@ -1196,6 +1207,25 @@ export async function listSTOsHandler(
       : { data: [] as JsonRecord[] };
     const companyMap = new Map(((companies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
+    // CRCP (Cross Company) — §3.7 Point 3.2.2. Bulk-resolve shared-company
+    // codes for the two new List page columns; header-level on STO.
+    const crcpStoIds = [...new Set(items.filter((row) => (row as JsonRecord).crcp_enabled === true).map((row) => toTrimmedString(row.id)))];
+    const { data: crcpRows } = crcpStoIds.length > 0
+      ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_crcp_company").select("sto_id, company_id").in("sto_id", crcpStoIds)
+      : { data: [] as JsonRecord[] };
+    const crcpCompanyIds = [...new Set((crcpRows ?? []).map((row: JsonRecord) => toTrimmedString(row.company_id)))];
+    const { data: crcpCompanies } = crcpCompanyIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", crcpCompanyIds)
+      : { data: [] as JsonRecord[] };
+    const crcpCodeByCompanyId = new Map(((crcpCompanies ?? []) as JsonRecord[]).map((row) => [String(row.id), String(row.company_code ?? "")]));
+    const crcpCodesByStoId = new Map<string, string[]>();
+    for (const row of crcpRows ?? []) {
+      const stoId = toTrimmedString((row as JsonRecord).sto_id);
+      const code = crcpCodeByCompanyId.get(toTrimmedString((row as JsonRecord).company_id)) || "";
+      if (!code) continue;
+      crcpCodesByStoId.set(stoId, [...(crcpCodesByStoId.get(stoId) ?? []), code]);
+    }
+
     const enrichedItems = items.map((row) => {
       const sending = companyMap.get(toTrimmedString(row.sending_company_id));
       const receiving = companyMap.get(toTrimmedString(row.receiving_company_id));
@@ -1203,6 +1233,7 @@ export async function listSTOsHandler(
         ...row,
         sending_company_display: sending ? String(sending.company_name ?? sending.company_code ?? "") : null,
         receiving_company_display: receiving ? String(receiving.company_name ?? receiving.company_code ?? "") : null,
+        crcp_company_codes: crcpCodesByStoId.get(toTrimmedString(row.id)) ?? [],
       };
     });
 
@@ -1398,6 +1429,140 @@ export async function cancelSTOHandler(
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_CANCEL_FAILED";
     const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// CRCP (Cross Company) — Phase A, PROCUREMENT-DESIGN-DOC.md §3.7 Points
+// 3.2.1/3.2.2/3.2.9. Header-level (unlike PO's per-row flag) since one STO
+// can carry multiple lines. Lightweight, non-amendment action; editable at
+// any status except CANCELLED/CLOSED, by anyone holding ordinary
+// PROC_STO_CREATE access. The allow-list holds only ADDITIONAL companies —
+// the STO's own receiving_company_id is always implicitly allowed.
+// ───────────────────────────────────────────────────────────────────────
+
+// CRCP write ACL — same root-cause shape as po.handlers.ts's
+// canMaintainPoCrcp (see its comment), found the same day while running
+// company-scope-write-acl-guard.mjs for Phase B: assertStoVisibleToContext
+// only proves company MEMBERSHIP on either the sending or receiving company,
+// not that the caller's ACL grant at that company is actually EDIT on
+// PROC_STO_CREATE. The guard's static regex didn't flag this one (it scans
+// for getCompanyScope-shaped resolution, not assertStoVisibleToContext), but
+// the underlying gap is identical, so it's fixed alongside the PO one rather
+// than left for the guard to eventually learn to recognize.
+async function canMaintainStoCrcp(ctx: ProcurementHandlerContext, companyId: string): Promise<boolean> {
+  if (ctx.context.isAdmin) return true;
+  if (!companyId) return false;
+
+  let workContextIds: string[];
+  if (companyId === ctx.context.companyId) {
+    workContextIds =
+      ctx.context.workContextIds && ctx.context.workContextIds.length > 0
+        ? ctx.context.workContextIds
+        : ctx.context.workContextId
+          ? [ctx.context.workContextId]
+          : [];
+  } else {
+    const { data: workContextRows, error: workContextError } = await serviceRoleClient
+      .schema("erp_acl")
+      .from("user_work_contexts")
+      .select("work_context:work_context_id!inner(work_context_id, is_active)")
+      .eq("auth_user_id", ctx.auth_user_id)
+      .eq("company_id", companyId);
+    if (workContextError) return false;
+    workContextIds = ((workContextRows ?? []) as Array<{ work_context: unknown }>)
+      .map((row) => {
+        const wc = Array.isArray(row.work_context) ? row.work_context[0] : row.work_context;
+        return wc && typeof wc === "object" ? (wc as { work_context_id: string; is_active: boolean }) : null;
+      })
+      .filter((wc): wc is { work_context_id: string; is_active: boolean } => Boolean(wc && wc.is_active === true))
+      .map((wc) => wc.work_context_id);
+  }
+  if (workContextIds.length === 0) return false;
+
+  const { data: versionRow, error: versionError } = await serviceRoleClient
+    .schema("acl")
+    .from("acl_versions")
+    .select("acl_version_id")
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .single();
+  if (versionError || !versionRow?.acl_version_id) return false;
+
+  const { data, error } = await readAclSnapshotDecisionAny({
+    db: serviceRoleClient,
+    aclVersionId: versionRow.acl_version_id as string,
+    authUserId: ctx.auth_user_id,
+    companyId,
+    workContextIds,
+    resourceCode: "PROC_STO_CREATE",
+    actionCode: "EDIT",
+  });
+  if (error || !data) return false;
+  return data.decision === "ALLOW";
+}
+
+export async function setStoCrcpHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    const body = await parseBody(req);
+    const crcpEnabled = body.crcp_enabled === true;
+    const rawCompanyIds = Array.isArray(body.company_ids) ? body.company_ids : [];
+    const companyIds = [...new Set(rawCompanyIds.map((entry) => toTrimmedString(entry)).filter(Boolean))];
+
+    const sto = await fetchSto(stoId);
+    await assertStoVisibleToContext(ctx, sto);
+    const canEditCrcp =
+      (await canMaintainStoCrcp(ctx, toTrimmedString(sto.sending_company_id)))
+      || (await canMaintainStoCrcp(ctx, toTrimmedString(sto.receiving_company_id)));
+    if (!canEditCrcp) {
+      return stoErrorResponse(req, ctx, "STO_CRCP_FORBIDDEN", 403, "You do not have edit access to this stock transfer order's company.");
+    }
+
+    if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(sto.status))) {
+      return stoErrorResponse(req, ctx, "STO_CRCP_STATUS_LOCKED", 400, "CRCP cannot be changed on a Cancelled or Closed STO.");
+    }
+
+    const ownCompanyId = toTrimmedString(sto.receiving_company_id);
+    const shareCompanyIds = companyIds.filter((id) => id !== ownCompanyId);
+
+    const { error: headerError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .update({ crcp_enabled: crcpEnabled, last_updated_at: new Date().toISOString() })
+      .eq("id", stoId);
+    if (headerError) throw new Error("STO_CRCP_UPDATE_FAILED");
+
+    const { error: deleteError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order_crcp_company")
+      .delete()
+      .eq("sto_id", stoId);
+    if (deleteError) throw new Error("STO_CRCP_UPDATE_FAILED");
+
+    if (crcpEnabled && shareCompanyIds.length > 0) {
+      const { error: insertError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("stock_transfer_order_crcp_company")
+        .insert(shareCompanyIds.map((companyId) => ({
+          sto_id: stoId,
+          company_id: companyId,
+          created_by: ctx.auth_user_id,
+        })));
+      if (insertError) throw new Error("STO_CRCP_UPDATE_FAILED");
+    }
+
+    return okResponse({
+      data: { id: stoId, crcp_enabled: crcpEnabled, crcp_company_ids: crcpEnabled ? shareCompanyIds : [] },
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_CRCP_UPDATE_FAILED";
+    const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : code === "STO_CRCP_STATUS_LOCKED" ? 400 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
   }
 }

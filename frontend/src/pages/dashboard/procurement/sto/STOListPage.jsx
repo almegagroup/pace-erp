@@ -177,6 +177,24 @@ export default function STOListPage() {
                   render: (row) => <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.status)}`}>{row.status}</span>,
                 },
                 { key: "dispatch_qty", label: "Total Qty", width: "100px", render: (row) => row.total_qty || row.dispatch_qty || "—" },
+                {
+                  key: "crcp_enabled",
+                  label: "CRCP",
+                  width: "70px",
+                  render: (row) => (row.crcp_enabled ? "Yes" : "—"),
+                },
+                {
+                  key: "crcp_company_codes",
+                  label: "Shared With",
+                  width: "140px",
+                  render: (row) => (
+                    <span className="block max-w-[140px] truncate" title={(row.crcp_company_codes || []).join(", ")}>
+                      {row.crcp_enabled && Array.isArray(row.crcp_company_codes) && row.crcp_company_codes.length > 0
+                        ? row.crcp_company_codes.join(", ")
+                        : "—"}
+                    </span>
+                  ),
+                },
                 { key: "created_at", label: "Created", width: "140px" },
               ]}
               rows={rows}

@@ -245,6 +245,24 @@ export default function POListPage() {
                 },
                 { key: "total_value", label: "Total Value", width: "120px" },
                 {
+                  key: "crcp_enabled",
+                  label: "CRCP",
+                  width: "70px",
+                  render: (row) => (row.crcp_enabled ? "Yes" : "—"),
+                },
+                {
+                  key: "crcp_company_codes",
+                  label: "Shared With",
+                  width: "140px",
+                  render: (row) => (
+                    <span className="block max-w-[140px] truncate" title={(row.crcp_company_codes || []).join(", ")}>
+                      {row.crcp_enabled && Array.isArray(row.crcp_company_codes) && row.crcp_company_codes.length > 0
+                        ? row.crcp_company_codes.join(", ")
+                        : "—"}
+                    </span>
+                  ),
+                },
+                {
                   key: "created_by_display",
                   label: "Created By",
                   width: "160px",
