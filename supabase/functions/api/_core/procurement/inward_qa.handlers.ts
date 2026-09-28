@@ -593,6 +593,7 @@ export async function addTestLineHandler(
     const testMethodId = toTrimmedString(body.test_method_id) || null;
     const lsl = body.lsl !== undefined && body.lsl !== null && body.lsl !== "" ? Number(body.lsl) : null;
     const usl = body.usl !== undefined && body.usl !== null && body.usl !== "" ? Number(body.usl) : null;
+    const isSkipped = body.is_skipped === true;
 
     if (!["VISUAL", "MCT", "LAB", "OTHER"].includes(testType) || !testParameter) {
       throw new ApiError(400, "test_type and test_parameter are required");
@@ -629,6 +630,7 @@ export async function addTestLineHandler(
         test_method_id: testMethodId,
         lsl,
         usl,
+        is_skipped: isSkipped,
         tested_by: ctx.auth_user_id,
         test_date: todayIsoDate(),
       })
@@ -723,6 +725,10 @@ export async function updateTestLineHandler(
 
     if (body.remarks !== undefined) {
       patch.remarks = toTrimmedString(body.remarks) || null;
+    }
+
+    if (body.is_skipped !== undefined) {
+      patch.is_skipped = body.is_skipped === true;
     }
 
     const { data, error } = await serviceRoleClient
