@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
@@ -3099,6 +3100,67 @@ export async function knockOffPOHandler(
 // to "protect from removal" here.
 // ───────────────────────────────────────────────────────────────────────
 
+// CRCP write ACL — setPoCrcpHandler resolves companyId from the PO's own row
+// (not necessarily ctx.context.companyId, for a multi-company user acting on
+// a PO whose company differs from their session's active company).
+// assertCompanyScope alone only proves company MEMBERSHIP
+// (erp_map.user_companies), not that the caller's ACL grant at THAT company
+// is actually EDIT on PROC_PO_CREATE — same root-cause shape already fixed
+// in planning.handlers.ts's canMaintainPlanning/requirePlanningEditAccess
+// (found live 2026-08-11), caught here by company-scope-write-acl-guard.mjs
+// on 2026-09-28 during Phase B's full-guard verification pass.
+async function canMaintainPoCrcp(ctx: ProcurementHandlerContext, companyId: string): Promise<boolean> {
+  if (ctx.context.isAdmin) return true;
+  if (!companyId) return false;
+
+  let workContextIds: string[];
+  if (companyId === ctx.context.companyId) {
+    workContextIds =
+      ctx.context.workContextIds && ctx.context.workContextIds.length > 0
+        ? ctx.context.workContextIds
+        : ctx.context.workContextId
+          ? [ctx.context.workContextId]
+          : [];
+  } else {
+    const { data: workContextRows, error: workContextError } = await serviceRoleClient
+      .schema("erp_acl")
+      .from("user_work_contexts")
+      .select("work_context:work_context_id!inner(work_context_id, is_active)")
+      .eq("auth_user_id", ctx.auth_user_id)
+      .eq("company_id", companyId);
+    if (workContextError) return false;
+    workContextIds = ((workContextRows ?? []) as Array<{ work_context: unknown }>)
+      .map((row) => {
+        const wc = Array.isArray(row.work_context) ? row.work_context[0] : row.work_context;
+        return wc && typeof wc === "object" ? (wc as { work_context_id: string; is_active: boolean }) : null;
+      })
+      .filter((wc): wc is { work_context_id: string; is_active: boolean } => Boolean(wc && wc.is_active === true))
+      .map((wc) => wc.work_context_id);
+  }
+  if (workContextIds.length === 0) return false;
+
+  const { data: versionRow, error: versionError } = await serviceRoleClient
+    .schema("acl")
+    .from("acl_versions")
+    .select("acl_version_id")
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .single();
+  if (versionError || !versionRow?.acl_version_id) return false;
+
+  const { data, error } = await readAclSnapshotDecisionAny({
+    db: serviceRoleClient,
+    aclVersionId: versionRow.acl_version_id as string,
+    authUserId: ctx.auth_user_id,
+    companyId,
+    workContextIds,
+    resourceCode: "PROC_PO_CREATE",
+    actionCode: "EDIT",
+  });
+  if (error || !data) return false;
+  return data.decision === "ALLOW";
+}
+
 export async function setPoCrcpHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -3120,6 +3182,10 @@ export async function setPoCrcpHandler(
       await assertCompanyScope(ctx, toTrimmedString(po.company_id));
     } catch {
       return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const canEditCrcp = await canMaintainPoCrcp(ctx, toTrimmedString(po.company_id));
+    if (!canEditCrcp) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_CRCP_FORBIDDEN", 403, "You do not have edit access to this purchase order's company.");
     }
 
     const status = toUpperTrimmedString(po.status);

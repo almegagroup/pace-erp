@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 
@@ -1441,6 +1442,67 @@ export async function cancelSTOHandler(
 // the STO's own receiving_company_id is always implicitly allowed.
 // ───────────────────────────────────────────────────────────────────────
 
+// CRCP write ACL — same root-cause shape as po.handlers.ts's
+// canMaintainPoCrcp (see its comment), found the same day while running
+// company-scope-write-acl-guard.mjs for Phase B: assertStoVisibleToContext
+// only proves company MEMBERSHIP on either the sending or receiving company,
+// not that the caller's ACL grant at that company is actually EDIT on
+// PROC_STO_CREATE. The guard's static regex didn't flag this one (it scans
+// for getCompanyScope-shaped resolution, not assertStoVisibleToContext), but
+// the underlying gap is identical, so it's fixed alongside the PO one rather
+// than left for the guard to eventually learn to recognize.
+async function canMaintainStoCrcp(ctx: ProcurementHandlerContext, companyId: string): Promise<boolean> {
+  if (ctx.context.isAdmin) return true;
+  if (!companyId) return false;
+
+  let workContextIds: string[];
+  if (companyId === ctx.context.companyId) {
+    workContextIds =
+      ctx.context.workContextIds && ctx.context.workContextIds.length > 0
+        ? ctx.context.workContextIds
+        : ctx.context.workContextId
+          ? [ctx.context.workContextId]
+          : [];
+  } else {
+    const { data: workContextRows, error: workContextError } = await serviceRoleClient
+      .schema("erp_acl")
+      .from("user_work_contexts")
+      .select("work_context:work_context_id!inner(work_context_id, is_active)")
+      .eq("auth_user_id", ctx.auth_user_id)
+      .eq("company_id", companyId);
+    if (workContextError) return false;
+    workContextIds = ((workContextRows ?? []) as Array<{ work_context: unknown }>)
+      .map((row) => {
+        const wc = Array.isArray(row.work_context) ? row.work_context[0] : row.work_context;
+        return wc && typeof wc === "object" ? (wc as { work_context_id: string; is_active: boolean }) : null;
+      })
+      .filter((wc): wc is { work_context_id: string; is_active: boolean } => Boolean(wc && wc.is_active === true))
+      .map((wc) => wc.work_context_id);
+  }
+  if (workContextIds.length === 0) return false;
+
+  const { data: versionRow, error: versionError } = await serviceRoleClient
+    .schema("acl")
+    .from("acl_versions")
+    .select("acl_version_id")
+    .eq("company_id", companyId)
+    .eq("is_active", true)
+    .single();
+  if (versionError || !versionRow?.acl_version_id) return false;
+
+  const { data, error } = await readAclSnapshotDecisionAny({
+    db: serviceRoleClient,
+    aclVersionId: versionRow.acl_version_id as string,
+    authUserId: ctx.auth_user_id,
+    companyId,
+    workContextIds,
+    resourceCode: "PROC_STO_CREATE",
+    actionCode: "EDIT",
+  });
+  if (error || !data) return false;
+  return data.decision === "ALLOW";
+}
+
 export async function setStoCrcpHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1455,6 +1517,12 @@ export async function setStoCrcpHandler(
 
     const sto = await fetchSto(stoId);
     await assertStoVisibleToContext(ctx, sto);
+    const canEditCrcp =
+      (await canMaintainStoCrcp(ctx, toTrimmedString(sto.sending_company_id)))
+      || (await canMaintainStoCrcp(ctx, toTrimmedString(sto.receiving_company_id)));
+    if (!canEditCrcp) {
+      return stoErrorResponse(req, ctx, "STO_CRCP_FORBIDDEN", 403, "You do not have edit access to this stock transfer order's company.");
+    }
 
     if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(sto.status))) {
       return stoErrorResponse(req, ctx, "STO_CRCP_STATUS_LOCKED", 400, "CRCP cannot be changed on a Cancelled or Closed STO.");

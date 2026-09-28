@@ -14,7 +14,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { isSameOrHigher } from "../../_shared/role_ladder.ts";
-import { enrichTrackerRows } from "./csn.handlers.ts";
+import { enrichTrackerRows, generateProcurementDocNumber, getCsnById } from "./csn.handlers.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -179,6 +179,98 @@ async function isCrcpSharedCompany(
     .maybeSingle();
   if (error) return false;
   return Boolean(data);
+}
+
+// CRCP (Cross Company) — PROCUREMENT-DESIGN-DOC.md §3.7 Points 3.2.3/3.2.4/3.2.5.
+// Called only when a CRCP-shared company (not the document's own company) is
+// the one actually raising this GE, and a CSN is linked. Decides full vs.
+// partial purely from the CSN's own remaining dispatch_qty at this instant —
+// no pre-known ratio, just a direct readout of this actual GE.
+// Full: the whole remainder goes to this company — tag consignee_company_id
+// on the SAME CSN, no new row.
+// Partial: clone into a Sub-CSN carrying exactly this GE's qty as its own
+// dispatch_qty (same clone shape as csn.handlers.ts's manual
+// createSubCSNHandler, auto-triggered here instead of the "+" button).
+// sto_line_id is always nulled on the clone (consignment_note_sto_line_unique
+// allows only one CSN per STO line — the mother keeps that ownership);
+// sto_id is deliberately left as-is (unlike createSubCSNHandler's classic
+// PO-origin clone) so an STO-origin split stays traceable to the same STO
+// instead of showing as a "detached" Sub-CSN.
+async function resolveCrossCompanyCsnLink(
+  csnId: string,
+  geQty: number,
+  companyId: string,
+  actorId: string,
+): Promise<string> {
+  const mother = await getCsnById(csnId);
+  if (!mother) {
+    throw new Error("CSN_NOT_FOUND");
+  }
+
+  const remainingQty = Number(mother.dispatch_qty ?? 0);
+  if (!(remainingQty > 0) || geQty >= remainingQty) {
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .update({
+        consignee_company_id: companyId,
+        last_updated_by: actorId,
+        last_updated_at: new Date().toISOString(),
+      })
+      .eq("id", csnId);
+    if (error) {
+      throw new Error("CRCP_CSN_UPDATE_FAILED");
+    }
+    return csnId;
+  }
+
+  const csnNumber = await generateProcurementDocNumber("CSN");
+  const insertPayload: JsonRecord = {
+    ...mother,
+    id: undefined,
+    csn_number: csnNumber,
+    mother_csn_id: mother.id,
+    is_mother_csn: false,
+    consignee_company_id: companyId,
+    dispatch_qty: geQty,
+    total_received_qty: 0,
+    sto_line_id: null,
+    gate_entry_id: null,
+    gate_entry_date: null,
+    grn_id: null,
+    grn_date: null,
+    received_qty: null,
+    created_at: undefined,
+    created_by: actorId,
+    last_updated_at: null,
+    last_updated_by: null,
+  };
+
+  const { data: subCsn, error: subCsnError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .insert(insertPayload)
+    .select("id")
+    .single();
+  if (subCsnError || !subCsn) {
+    throw new Error("CRCP_SUB_CSN_CREATE_FAILED");
+  }
+
+  const { error: motherUpdateError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .update({
+      dispatch_qty: remainingQty - geQty,
+      is_mother_csn: true,
+      last_updated_by: actorId,
+      last_updated_at: new Date().toISOString(),
+    })
+    .eq("id", csnId);
+  if (motherUpdateError) {
+    throw new Error("CRCP_MOTHER_CSN_UPDATE_FAILED");
+  }
+
+  return String(subCsn.id);
 }
 
 async function fetchActiveCsnForGateEntry(csnId: string): Promise<CsnRow> {
@@ -410,6 +502,8 @@ export async function createGateEntryHandler(
         return procurementErrorResponse(req, ctx, "GE_LINE_REF_MISSING", 400, `Line ${index + 1} must reference a PO line or STO line.`);
       }
 
+      let resolvedCsnId = toTrimmedString(line.csn_id) || null;
+
       let poId: string | null = null;
       if (poLineId) {
         const hasCsnReference = Boolean(csnId);
@@ -435,6 +529,17 @@ export async function createGateEntryHandler(
           );
           if (!crcpAllowed) {
             return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `PO line on line ${index + 1} is outside company scope.`);
+          }
+          // §3.7 Points 3.2.3/3.2.4/3.2.5 — a CRCP-shared company actually
+          // raising this GE: resolve full-vs-partial against the CSN's own
+          // remaining dispatch_qty now, at GE time (not GRN).
+          if (activeCsn) {
+            try {
+              resolvedCsnId = await resolveCrossCompanyCsnLink(String(activeCsn.id), geQty, companyId, gateStaffId);
+            } catch (error) {
+              const code = error instanceof Error ? error.message : "CRCP_CSN_RESOLVE_FAILED";
+              return procurementErrorResponse(req, ctx, code, 500, `Line ${index + 1} could not resolve the CRCP consignment note.`);
+            }
           }
         }
         const deliveryType = toUpperTrimmedString(po.delivery_type);
@@ -498,6 +603,14 @@ export async function createGateEntryHandler(
           if (!stoCrcpAllowed) {
             return procurementErrorResponse(req, ctx, "GE_COMPANY_SCOPE", 403, `STO on line ${index + 1} is outside company scope.`);
           }
+          if (activeStoCsn) {
+            try {
+              resolvedCsnId = await resolveCrossCompanyCsnLink(String(activeStoCsn.id), geQty, companyId, gateStaffId);
+            } catch (error) {
+              const code = error instanceof Error ? error.message : "CRCP_CSN_RESOLVE_FAILED";
+              return procurementErrorResponse(req, ctx, code, 500, `Line ${index + 1} could not resolve the CRCP consignment note.`);
+            }
+          }
         }
         if (!["CREATED", "DISPATCHED"].includes(toUpperTrimmedString(sto.status))) {
           return procurementErrorResponse(req, ctx, "GE_STO_NOT_OPEN", 400, `Line ${index + 1}'s STO is not open for receiving.`);
@@ -514,7 +627,7 @@ export async function createGateEntryHandler(
         po_line_id: poLineId || null,
         sto_id: stoId || null,
         sto_line_id: stoLineId || null,
-        csn_id: toTrimmedString(line.csn_id) || null,
+        csn_id: resolvedCsnId,
         material_id: materialId,
         ge_qty: geQty,
         uom_code: uomCode,
@@ -858,7 +971,18 @@ export async function listOpenCSNsForGEHandler(
     const url = new URL(req.url);
     const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
 
-    const { data, error } = await serviceRoleClient
+    // CRCP (Cross Company) — §3.7 Point 3.2.3 drawer-visibility fix. A CSN's
+    // own company_id is always the issuing/mother company; a CRCP-shared
+    // company also needs to see it here, same pattern as
+    // listOpenPOsForGEHandler/listOpenSTOsForGEHandler above.
+    const [{ data: crcpPoRows }, { data: crcpStoRows }] = await Promise.all([
+      serviceRoleClient.schema("erp_procurement").from("purchase_order_crcp_company").select("po_id").eq("company_id", companyId),
+      serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_crcp_company").select("sto_id").eq("company_id", companyId),
+    ]);
+    const crcpPoIds = [...new Set((crcpPoRows ?? []).map((row: JsonRecord) => String(row.po_id)))];
+    const crcpStoIds = [...new Set((crcpStoRows ?? []).map((row: JsonRecord) => String(row.sto_id)))];
+
+    let csnQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("consignment_note")
       .select(
@@ -866,9 +990,17 @@ export async function listOpenCSNsForGEHandler(
         "material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, " +
         "invoice_number, boe_number, bl_date, lr_date, lr_number, delivery_type"
       )
-      .eq("company_id", companyId)
       .in("status", OPEN_CSN_STATUSES)
       .order("created_at", { ascending: false });
+    if (crcpPoIds.length > 0 || crcpStoIds.length > 0) {
+      const orClauses = [`company_id.eq.${companyId}`];
+      if (crcpPoIds.length > 0) orClauses.push(`po_id.in.(${crcpPoIds.join(",")})`);
+      if (crcpStoIds.length > 0) orClauses.push(`sto_id.in.(${crcpStoIds.join(",")})`);
+      csnQuery = csnQuery.or(orClauses.join(","));
+    } else {
+      csnQuery = csnQuery.eq("company_id", companyId);
+    }
+    const { data, error } = await csnQuery;
 
     if (error) {
       return procurementErrorResponse(req, ctx, "CSN_OPEN_LIST_FAILED", 500, "Unable to list open CSNs.");
@@ -1005,7 +1137,7 @@ export async function listOpenSTOsForGEHandler(
       const { data: lineData, error: lineError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("stock_transfer_order_line")
-        .select("id, sto_id, material_id, uom_code, line_status")
+        .select("id, sto_id, material_id, uom_code, quantity, line_status")
         .in("sto_id", stoIds)
         .eq("line_status", "OPEN");
 
@@ -1025,17 +1157,89 @@ export async function listOpenSTOsForGEHandler(
       for (const m of mats ?? []) lineMatMap.set(String(m.id), String(m.material_name ?? ""));
     }
 
+    // §3.7 STO GE-Creation Drawer design — each STO line's CSN (linked via
+    // sto_line_id, one per line, auto-created at STO approval time) already
+    // carries the sending company's dispatch_qty and — once the sending side
+    // posts its PGI+Invoice (§113.15/116) — invoice/LR/BOE details. This is
+    // the "Expected qty" and the Invoice/LR prefill for the drawer table,
+    // reusing the exact same CSN fields the PO/CSN drawer already reads.
+    const lineIds = lines.map((l) => String(l.id));
+    const csnByStoLineId = new Map<string, JsonRecord>();
+    let motherCsnMap = new Map<string, JsonRecord>();
+    if (lineIds.length > 0) {
+      const { data: csnRows } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("consignment_note")
+        .select("id, csn_number, sto_line_id, dispatch_qty, invoice_number, invoice_date, lr_number, lr_date, boe_number, mother_csn_id, status")
+        .in("sto_line_id", lineIds);
+      for (const row of (csnRows ?? []) as JsonRecord[]) {
+        csnByStoLineId.set(String(row.sto_line_id), row);
+      }
+
+      // Distribution STO header traceability (drawer header) — Mother PO
+      // Number/Invoice/BOE, resolved via each line's CSN -> its mother_csn_id
+      // -> the Mother CSN's own po_id/invoice_number/boe_number.
+      const motherCsnIds = [...new Set(
+        Array.from(csnByStoLineId.values()).map((row) => toTrimmedString(row.mother_csn_id)).filter(Boolean),
+      )];
+      if (motherCsnIds.length > 0) {
+        const { data: motherRows } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("consignment_note")
+          .select("id, po_id, invoice_number, boe_number")
+          .in("id", motherCsnIds);
+        const motherPoIds = [...new Set((motherRows ?? []).map((row: JsonRecord) => toTrimmedString(row.po_id)).filter(Boolean))];
+        const motherPoNumberMap = new Map<string, string>();
+        if (motherPoIds.length > 0) {
+          const { data: motherPos } = await serviceRoleClient
+            .schema("erp_procurement")
+            .from("purchase_order")
+            .select("id, po_number")
+            .in("id", motherPoIds);
+          for (const po of motherPos ?? []) motherPoNumberMap.set(String(po.id), String(po.po_number ?? ""));
+        }
+        motherCsnMap = new Map(
+          (motherRows ?? []).map((row: JsonRecord) => [
+            String(row.id),
+            {
+              mother_po_number: motherPoNumberMap.get(toTrimmedString((row as JsonRecord).po_id)) ?? null,
+              mother_invoice_number: (row as JsonRecord).invoice_number ?? null,
+              mother_boe_number: (row as JsonRecord).boe_number ?? null,
+            },
+          ]),
+        );
+      }
+    }
+
     const linesMap = new Map<string, JsonRecord[]>();
     for (const line of lines) {
       const stoId = String(line.sto_id);
       if (!linesMap.has(stoId)) linesMap.set(stoId, []);
-      linesMap.get(stoId)!.push({ ...line, material_name: lineMatMap.get(String(line.material_id)) ?? null });
+      const csn = csnByStoLineId.get(String(line.id)) ?? null;
+      linesMap.get(stoId)!.push({
+        ...line,
+        material_name: lineMatMap.get(String(line.material_id)) ?? null,
+        expected_qty: csn ? Number(csn.dispatch_qty ?? 0) : Number(line.quantity ?? 0),
+        csn_id: csn?.id ?? null,
+        csn_number: csn?.csn_number ?? null,
+        invoice_number: csn?.invoice_number ?? null,
+        lr_date: csn?.lr_date ?? null,
+        boe_number: csn?.boe_number ?? null,
+        mother_csn_id: csn?.mother_csn_id ?? null,
+      });
     }
 
-    const result = (stos ?? []).map((sto) => ({
-      ...sto,
-      lines: linesMap.get(String(sto.id)) ?? [],
-    }));
+    const result = (stos ?? []).map((sto: JsonRecord) => {
+      const stoLines = linesMap.get(String(sto.id)) ?? [];
+      const distributionMother = toUpperTrimmedString(sto.sto_type) === "CONSIGNMENT_DISTRIBUTION"
+        ? (stoLines.map((l) => motherCsnMap.get(toTrimmedString((l as JsonRecord).mother_csn_id))).find(Boolean) ?? null)
+        : null;
+      return {
+        ...sto,
+        lines: stoLines,
+        mother: distributionMother,
+      };
+    });
 
     return okResponse({ items: result }, ctx.request_id, req);
   } catch (error) {

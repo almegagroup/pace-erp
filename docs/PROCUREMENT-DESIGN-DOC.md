@@ -615,8 +615,33 @@ BOTH tracks, build last of the three:*
   filter, and the automatic-split mechanism (Points 3.2.4-3.2.5) — not piecemeal.
 - Gap: no mechanism for the **pre-receipt** CRCP case (truck never touches the issuing
   company at all); CSN drawer itself is invisible cross-company on top of that.
-- Final Design: ⏳ NOT YET LOCKED — scope confirmed to include the drawer-visibility fix
-  alongside the original ownership/ automatic-split design.
+- Final Design: ✅ **LOCKED 2026-09-28 (code-verified, no blockers found).** Scope: **Standard
+  and Tanker only** — Bulk has no CSN at all (Point 3.3), so nothing to change there; business
+  owner explicitly ruled out over-designing this. **Full unload is trivial and needs no new
+  mechanism**, only Partial needed real design (see below). Explicitly **not** the
+  Mother/Sub-CSN→STO transform (`sto_id`, `CONSIGNMENT_DISTRIBUTION`) — that stays a separate,
+  untouched post-receipt redistribution flow; this point never sets `sto_id`.
+  **Verified the foundation already exists, ~90% reusable, no new schema needed:**
+  `consignee_company_id` (added `20260625100000_csn_consignee_company.sql`) already means
+  exactly "which company this [sub-]CSN is destined for, distinct from the mother CSN's own
+  `company_id`" — this **is** the "Unloaded At" field business owner asked for, just under an
+  existing name; `enrichTrackerRows` (`csn.handlers.ts:961+`) already bulk-resolves and
+  displays it in CSN Tracker; `mother_csn_id`/`is_mother_csn` hierarchy and the "Sub CSNs —
+  Linked splits and allocated quantities" UI section (`CSNTrackerPage.jsx`) already exist.
+  **Full unload (any company, including cross-company via CRCP):** set that CSN's own
+  `consignee_company_id` directly to the actual GE company — no new record.
+  **Partial unload (split across companies, same physical consignment):** reuses
+  `createSubCSNHandler`'s exact clone logic (`csn.handlers.ts:1514`), but **auto-triggered from
+  `createGateEntryHandler`** (see Point 3.2.4) instead of the manual "+" button — new Sub-CSN
+  gets `consignee_company_id` = that GE's company, `dispatch_qty` = that GE's actual qty (not
+  `0`/manual); the GE line's own `csn_id` points to this new Sub-CSN, not the mother.
+  **Drawer-visibility fix (folded in per the 2026-09-27 scope note above):**
+  `listOpenCSNsForGEHandler`'s `company_id`-only filter needs to also match a CRCP-shared
+  company against the CSN's underlying PO's allow-list, mirroring Point 3.2.1's GE-creation fix.
+  **Pool-balance integrity — verified, not a new concern:** however many CSN/Sub-CSN rows
+  exist is purely a tracking/display layer; `purchase_order_line.open_qty` decrements via GRN
+  keyed to `po_line_id` (Point 3.2.1), with zero dependency on `csn_id` — confirmed in Phase A,
+  unaffected by any of this.
 
 **Point 3.2.4 — Manual vs. automatic Sub-CSN**
 - Business: the actual unload company/qty is only known in real time at the gate, not
@@ -624,7 +649,15 @@ BOTH tracks, build last of the three:*
 - System: `createSubCSNHandler` (`csn.handlers.ts:1514-1584`) is entirely manual — procurement
   types in `consignee_company_id` and qty by hand, ahead of dispatch.
 - Gap: needs to become automatic, triggered reactively at GE/GRN time.
-- Final Design: ⏳ NOT YET LOCKED
+- Final Design: ✅ **LOCKED 2026-09-28 (code-verified, no blockers found).** Trigger point is
+  **Gate Entry, not GRN** (business owner, 2026-09-28) — GE is the actual physical-unload
+  moment; no need to wait for GRN/QA to complete. The auto-Sub-CSN-creation logic (Point
+  3.2.3) runs inside `createGateEntryHandler`, at exactly the point Phase A's CRCP
+  company-scope check already sits (`gate_entry.handlers.ts` PO/STO branches, ~lines 429-439 /
+  485-504) — the moment a CRCP-shared company is confirmed allowed, this logic decides
+  full-vs-partial (Point 3.2.5) and either updates the CSN in place or spawns the Sub-CSN, all
+  within the same GE-creation call. The manual "+ Create Sub CSN" button in CSN Tracker stays
+  for its original (non-CRCP) use case, untouched.
 
 **Point 3.2.5 — Full vs. partial unload qty-split**
 - Business: full unload at the sister company, or a partial split across two companies, both
@@ -632,7 +665,167 @@ BOTH tracks, build last of the three:*
 - System: no split-ratio derivation mechanism exists.
 - Gap: full-unload needs a simple CSN reassignment path; partial-unload needs real-time
   split-ratio calculation feeding `dispatch_qty`/`total_received_qty`.
-- Final Design: ⏳ NOT YET LOCKED
+- Final Design: ✅ **LOCKED 2026-09-28 (code-verified, no blockers found).** No "ratio
+  derivation" needed at all — there is no pre-known ratio to calculate. Each actual GE **is**
+  the real, actual split, as it happens: **full** = the GE's qty equals the CSN's entire
+  remaining `dispatch_qty` → update that CSN's `consignee_company_id` in place, no split.
+  **Partial** = the GE's qty is less than the remaining `dispatch_qty` → auto-create a Sub-CSN
+  (Point 3.2.3/3.2.4) carrying exactly that GE's qty as its own `dispatch_qty`; the mother
+  CSN's own remaining `dispatch_qty` reduces by the same amount. Multiple partial GEs against
+  the same mother simply keep producing sibling Sub-CSNs, each exactly matching its own GE —
+  the split is a direct readout of actual transactions, never a calculation.
+
+**STO GE-Creation Drawer — Design (LOCKED 2026-09-28, business owner + code-verified).**
+Bundled into Phase B (see Recommended Build Sequence above) — a dedicated GE-creation flow for
+STO doesn't exist in the frontend today; this covers both the plain/Normal case and the CRCP
+case with the same mechanism.
+- **Trigger:** on the main GE creation page's existing `"PO / STO *"` cell (already a combined
+  field today, per `GateEntryCreatePage.jsx`), entering an STO number causes the system to
+  sense it's an STO (not a PO) and open a large center drawer — needed because one STO can
+  carry many line items, unlike one PO line.
+- **Drawer header (all read-only, informational):** STO Number, and — **only when the STO's
+  type is `CONSIGNMENT_DISTRIBUTION`** — **Mother PO Number**, **Mother Invoice Number**,
+  **Mother BOE Number**. Verified the full chain already exists in schema, no new column
+  needed: STO → (reverse lookup) the Sub-CSN whose `consignment_note.sto_id` equals this STO's
+  id (set at "Sub-CSN transforms to STO" time) → that Sub-CSN's own `mother_csn_id` → the
+  Mother CSN, which already carries `po_id` (→ join `purchase_order.po_number`),
+  `invoice_number`, `boe_number`. Blank/hidden for `INTER_PLANT` STOs (no such chain exists for
+  that type).
+- **Drawer table (ErpDenseGrid), one row per STO line, mirrors the existing PO-flow shape
+  exactly, plus one addition:** STO Number, CSN, Material, UOM, Expected qty, **GE quantity**
+  (defaults to Expected qty — editable only when there's a real mismatch, matching the
+  "everything comes prefilled, edit only what needs editing" principle set for this whole
+  drawer), Invoice No, LR/BL date, row-delete action — **same columns as today's PO/CSN drawer
+  (`GateEntryCreatePage.jsx`'s existing table)** — plus a new **select/deselect checkbox** per
+  row (default checked) so the gate user can uncheck line items that did not actually arrive
+  on this particular vehicle.
+  **Invoice No / LR/BL date prefill — verified, needs no new mechanism or data entry:** for a
+  Distribution STO, `complete_pgi_invoice_action_with_sto_commercials`
+  (`20260912172116_sto_invoice_commercial_resolution.sql`, §113.15/116) already writes
+  `invoice_number`, `invoice_date`, `lr_number`, `lr_date`, `vehicle_number`, `transporter_id`
+  onto that STO line's own linked CSN the moment the **sending** company posts its PGI+Invoice
+  — i.e. this data is already sitting on the CSN well before the truck ever reaches the gate.
+  These are the exact same CSN fields the PO-flow's "Invoice / BOE no" and "LR / BL date"
+  columns already read — the STO drawer reuses them unchanged, no new field or data-capture
+  step anywhere.
+- **Save behavior:** only the checked (selected) rows get pushed into the main GE page's line
+  table, prefilled; the gate user edits only whatever genuinely needs changing (typically just
+  GE quantity on a mismatch), then the main GE save proceeds as normal.
+- **Multi-document append:** entering a second STO (or a PO) on the same main GE page reopens
+  the appropriate drawer for that document; on save, its rows are **appended after** whatever
+  rows the previous document(s) already contributed — never replacing them. One vehicle
+  carrying a mix of PO and STO items across multiple documents is fully supported this way,
+  matching how PO-line addition already works today.
+- **Bulk's version of this mechanism is explicitly deferred** — business owner will describe
+  Bulk-specific behavior when that phase is reached; nothing here should be assumed to extend
+  to Bulk without that separate discussion.
+
+**Phase B — Implementation Log (2026-09-28)**
+
+> Covers Points 3.2.3/3.2.4/3.2.5 (CSN full/partial cross-company split) and the STO
+> GE-Creation Drawer design above. **No migration** — every field reused already existed
+> (`consignee_company_id`, `mother_csn_id`, `dispatch_qty`, `sto_line_id`, the CSN↔STO-line
+> unique index). Not yet committed/pushed, not yet applied to Prod (N/A — no schema change),
+> not yet click-tested live.
+
+- **Backend — Gate Entry (`supabase/functions/api/_core/procurement/gate_entry.handlers.ts`):**
+  - New `resolveCrossCompanyCsnLink(csnId, geQty, companyId, actorId)` — the actual
+    full-vs-partial decision engine. Reads the CSN's own remaining `dispatch_qty`; if the GE
+    qty consumes it entirely, tags `consignee_company_id` on the same row; otherwise clones a
+    Sub-CSN (same shape as `csn.handlers.ts`'s manual `createSubCSNHandler`) carrying exactly
+    the GE's qty as its own `dispatch_qty`, and reduces the mother's `dispatch_qty` by that
+    amount. Deliberately does **not** null `sto_id` on the clone (unlike the classic
+    PO-origin Sub-CSN path) so an STO-origin split stays traceable to the same STO instead of
+    displaying as a "detached" Sub-CSN in CSN Tracker (`enrichTrackerRows`'s
+    `isDetachedSubCsn` reads exactly this field) — but **does** null `sto_line_id`, since
+    `consignment_note_sto_line_unique` allows only one CSN per STO line and the mother keeps
+    that ownership.
+  - Wired into both branches of `createGateEntryHandler`, right where Phase A's
+    `isCrcpSharedCompany` check already sits: once a CRCP-shared company is confirmed allowed
+    (PO or STO), and a CSN is linked, `resolveCrossCompanyCsnLink` runs and its result becomes
+    the `csn_id` actually written onto the new `gate_entry_line` row — not necessarily the
+    `csn_id` the client originally sent, since a partial split may redirect it to a freshly
+    created Sub-CSN.
+  - `listOpenCSNsForGEHandler` (Point 3.2.3's drawer-visibility fix): widened from
+    `.eq("company_id", companyId)` to also match any CSN whose `po_id`/`sto_id` is in that
+    company's CRCP allow-list — same `.or()` pattern Phase A already used for
+    `listOpenPOsForGEHandler`/`listOpenSTOsForGEHandler`.
+  - `listOpenSTOsForGEHandler` extended for the drawer: each STO line now carries
+    `expected_qty` (from its linked CSN's `dispatch_qty`, synced automatically from the
+    sending side's actual dispatch — falls back to the line's own `quantity` only if no CSN
+    is found), `csn_id`, `csn_number`, `invoice_number`, `lr_date`, `boe_number`,
+    `mother_csn_id`. Each STO header additionally carries a `mother` object (Mother PO
+    Number/Invoice/BOE, resolved via the line CSN's `mother_csn_id` chain) whenever
+    `sto_type === 'CONSIGNMENT_DISTRIBUTION'`.
+  - Exported `getCsnById`/`generateProcurementDocNumber` from `csn.handlers.ts` (were
+    file-local) so `gate_entry.handlers.ts` could reuse them instead of duplicating the
+    lookup/numbering logic.
+- **Backend — CRCP write-ACL gap found and fixed (same session, via
+  `company-scope-write-acl-guard.mjs`):** running the **full** guard suite for the first time
+  against Phase A's own code (not just the 4 guards originally run for Phase A) surfaced a
+  real, pre-existing gap in `po.handlers.ts`'s `setPoCrcpHandler` — it resolves `company_id`
+  from the PO's own row (not the session's active company) and only called
+  `assertCompanyScope` (membership only), never verifying the caller's ACL grant at that
+  specific company is actually `EDIT` on `PROC_PO_CREATE`. Same root-cause shape already
+  documented and fixed once before in `planning.handlers.ts` (`canMaintainPlanning`/
+  `requirePlanningEditAccess`, found live 2026-08-11). Fixed by adding the analogous
+  `canMaintainPoCrcp()` (reads `precomputed_acl_view` via `readAclSnapshotDecisionAny` for
+  `PROC_PO_CREATE:EDIT` at the PO's own company) and calling it right after the existing
+  `assertCompanyScope` check. **The guard's regex didn't catch the STO twin of this bug**
+  (`sto.handlers.ts`'s `setStoCrcpHandler` uses `assertStoVisibleToContext`, a differently
+  named wrapper with the identical membership-only gap) — found by inspection, not the guard,
+  and fixed the same way (`canMaintainStoCrcp()`, checked against both `sending_company_id`
+  and `receiving_company_id`, allowed if either grants `PROC_STO_CREATE:EDIT`, mirroring
+  `assertStoVisibleToContext`'s own either-side fallback shape). Re-ran the guard after both
+  fixes: `0 without a secondary EDIT-level ACL check` (was 1).
+- **Frontend (`GateEntryCreatePage.jsx`):** new `stoDrawer` state, `openStoDrawer`/
+  `closeStoDrawer`/`updateStoDrawerRow`/`confirmStoDrawer`. Selecting an STO in the existing
+  `"PO / STO *"` cell now opens this new center `DrawerBase` (`side="center"`, ~920px) instead
+  of the old small CSN-picker drawer — header shows Mother PO/Invoice/BOE when the STO is
+  `CONSIGNMENT_DISTRIBUTION`; an `ErpDenseGrid` table lists every open STO line with a
+  select-checkbox (default checked), Expected qty (read-only), GE quantity (**defaults to
+  Expected qty, editable** — resolved per business owner's "everything prefilled, edit only
+  what needs editing" principle), Invoice No and LR/BL Date (both prefilled from the line's
+  CSN, editable). Confirming pushes only the checked rows into the main `lines` table — each
+  constructed with a `csn` object shaped exactly like the existing PO/CSN-drawer flow expects
+  (`material_id`, `material_name`, `po_uom_code`, `dispatch_qty`, `invoice_number`,
+  `boe_number`, `lr_date`, `csn_type: "DOMESTIC"`) so the existing row-rendering and
+  save-payload code needed **zero changes** to handle these rows correctly — replaces the
+  triggering placeholder row and appends the rest at the end of `lines`, so a second
+  STO/PO entered afterward lands after these, matching the "everything sits below, one after
+  another" requirement. Bulk's own version of this drawer is out of scope here, per the
+  locked design note above.
+- **Verification performed:**
+  - `deno check` on all 4 touched backend files, git-stash before/after, location-diffed (not
+    raw count, which is non-deterministic per Phase A's own established finding) — **zero new
+    errors** on both the gate-entry/CSN pair and the PO/STO pair.
+  - `npx eslint` on `GateEntryCreatePage.jsx` — 0 errors, both before and after the
+    `material_id` fix below.
+  - **Real bug caught and fixed before this was considered done:** the first draft of
+    `confirmStoDrawer`'s `csn` object omitted `material_id` — harmless for on-screen display
+    (which only needed `material_name`) but would have made `handleSave`'s payload-building
+    resolve `material_id: ""` for every STO-drawer-added line, since it reads
+    `l.csn?.material_id`, not `l.stoLine?.material_id`. Caught by tracing the exact save-path
+    field resolution before declaring the drawer complete, not by a test run.
+  - **Full guard suite run per explicit instruction (covering Phase A too, not just Phase
+    B):** all 13 runnable local guards green
+    (`hardcoded-role-check-guard`, `jsx-no-undef-guard`, `wrong-company-source-guard`,
+    `route-acl-registry-guard`, `company-scope-guard`, `company-scope-write-acl-guard`,
+    `resource-code-domain-guard`, `frontend-payload-guard`, `stock-posting-guard`,
+    `migration-column-scan`, `migration-order-scan`, `approver-chain-guard`,
+    `sto-migration-cli-compat-test`) — one real failure found and fixed (the CRCP write-ACL
+    gap above), all green on re-run.
+  - **`dependency-provisioning-check.mjs` (SU24):** generated report (304 dependency triples,
+    whole-app scope) checked for any CRCP-related entry — **zero matches**, confirming Phase A/B
+    introduced no new page-to-dependency gap (expected: no new frontend page, no new resource
+    code). Did **not** execute the report's broader suggested SQL — that covers ~300 unrelated
+    pre-existing triples across the whole app, out of this change's scope, and applying it
+    blindly would alter live ACL dependency data for many unrelated features.
+  - `acl-master-drift-check.mjs`/`acl-version-capture-drift-check.mjs`/
+    `approver-map-integrity-check.mjs`/`migration-integrity-check.mjs` — all whole-DB audits;
+    confirmed not applicable to this change (no ACL/capability/menu data touched, no migration
+    added — migration count still 609, matching Phase A's last verified state).
+  - **Not performed:** live UI click-through (no dev login in this environment).
 
 **Point 3.2.6 — PO12 (PTO) role**
 - Business: the cross-company GE/GRN movement needs to be recorded somewhere structured.
