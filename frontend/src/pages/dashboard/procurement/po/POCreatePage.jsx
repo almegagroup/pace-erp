@@ -317,7 +317,11 @@ export default function POCreatePage() {
     () =>
       filterOptions.vendors.map((entry) => ({
         value: entry.id,
-        label: `${entry.vendor_code || ""} ${entry.vendor_name || ""}`.trim(),
+        // "{GST state code} - {vendor name}" -- same vendor can have a separate
+        // vendor_master row per state (separate GSTIN each); the state code
+        // disambiguates which one to pick. Falls back to the old vendor_code
+        // format if the server hasn't resolved a state code for this vendor.
+        label: entry.display_code || `${entry.vendor_code || ""} ${entry.vendor_name || ""}`.trim(),
       })),
     [filterOptions.vendors]
   );

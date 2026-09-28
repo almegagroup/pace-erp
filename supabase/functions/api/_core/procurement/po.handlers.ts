@@ -18,6 +18,7 @@ import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
+import { gstStateCodeFromGstNumber, gstStateCodeFromState } from "../../_shared/gstStateCodes.ts";
 import { recalculateAndBuildUpdates } from "./csn.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1712,7 +1713,7 @@ export async function getPoFilterOptionsHandler(
     if (companyIds !== null && companyIds.length > 0) companyQuery = companyQuery.in("id", companyIds);
 
     let vendorQuery = serviceRoleClient.schema("erp_master").from("vendor_master")
-      .select("id, vendor_code, vendor_name, vendor_type, indent_number_required")
+      .select("id, vendor_code, vendor_name, vendor_type, indent_number_required, gst_number, reg_address_state")
       .eq("status", "ACTIVE")
       .order("vendor_name", { ascending: true });
     if (vendorIds !== null && vendorIds.length > 0) vendorQuery = vendorQuery.in("id", vendorIds);
@@ -1738,9 +1739,27 @@ export async function getPoFilterOptionsHandler(
       throw new Error("PROCUREMENT_PO_FILTER_OPTIONS_FAILED");
     }
 
+    // Same vendor legal entity can carry separate vendor_master rows per state
+    // (separate GSTIN each) -- prefix the label with the GST state code so the
+    // right one is picked at PO creation (state code = GSTIN's own first 2
+    // digits, falling back to the registered address state; same resolution
+    // order as Customer Master's display_code, see gstStateCodes.ts).
+    const vendorsWithDisplayCode = ((vendorsResult.data ?? []) as JsonRecord[]).map((row) => {
+      const gstStateCode =
+        gstStateCodeFromGstNumber(row.gst_number as string | null) ??
+        gstStateCodeFromState(row.reg_address_state as string | null);
+      return {
+        ...row,
+        gst_state_code: gstStateCode,
+        display_code: gstStateCode
+          ? `${gstStateCode} - ${row.vendor_name as string}`
+          : (row.vendor_name as string),
+      };
+    });
+
     return okResponse({
       companies: companiesResult.data ?? [],
-      vendors: vendorsResult.data ?? [],
+      vendors: vendorsWithDisplayCode,
       materials: materialsResult.data ?? [],
     }, ctx.request_id, req);
   } catch (err) {
