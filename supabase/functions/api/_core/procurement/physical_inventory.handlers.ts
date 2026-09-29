@@ -2496,7 +2496,7 @@ export async function listPIDifferencesHandler(
     let itemQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("physical_inventory_item")
-      .select("id, document_id, material_id, stock_type, storage_location_id, batch_number, book_qty, physical_qty, difference_qty, base_uom_code, posted_stock_document_id, counted_by, counted_at")
+      .select("id, document_id, material_id, stock_type, storage_location_id, batch_number, packing_order_id, book_qty, physical_qty, difference_qty, base_uom_code, posted_stock_document_id, counted_by, counted_at")
       .in("document_id", documentIds);
     if (storageLocationIds.length > 0) itemQuery = itemQuery.in("storage_location_id", storageLocationIds);
     if (materialIds.length > 0) itemQuery = itemQuery.in("material_id", materialIds);
@@ -2514,11 +2514,16 @@ export async function listPIDifferencesHandler(
     const companyIds = [...new Set(documents.map((d) => toTrimmedString(d.company_id)).filter(Boolean))];
     const locationIds = [...new Set(items.map((i) => toTrimmedString(i.storage_location_id)).filter(Boolean))];
     const matIds = [...new Set(items.map((i) => toTrimmedString(i.material_id)).filter(Boolean))];
+    // §Q1-followup-2026-09-29 — same FG identity gap as MI04/MI05/MI02-MI03: an FG item is
+    // keyed by batch_number + packing_order_id together (§83.14 balance-barrel), so this
+    // report needs the Packing PO number resolved too, not just batch_number.
+    const packingOrderIds = [...new Set(items.map((i) => toTrimmedString(i.packing_order_id)).filter(Boolean))];
 
-    const [companyRows, locationRows, materialRows] = await Promise.all([
+    const [companyRows, locationRows, materialRows, packingOrderMap] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      getPackingOrdersByIds(packingOrderIds),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
@@ -2594,6 +2599,7 @@ export async function listPIDifferencesHandler(
         material_name: material?.material_name ?? null,
         material_external_code: material?.external_code ?? null,
         batch_number: item.batch_number ?? null,
+        packing_order_number: packingOrderMap.get(toTrimmedString(item.packing_order_id))?.po_number ?? null,
         stock_type: item.stock_type,
         book_qty: item.book_qty,
         physical_qty: item.physical_qty,

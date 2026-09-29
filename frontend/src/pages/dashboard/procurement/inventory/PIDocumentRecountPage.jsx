@@ -346,6 +346,17 @@ export default function PIDocumentRecountPage() {
                     render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
                   },
                   { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                  {
+                    // §Q1-followup-2026-09-29 — same read-only Packing PO identity column as
+                    // MI04 (see that file's comment for the full "why"). An FG item is keyed by
+                    // batch_number + packing_order_id together (§83.14 balance-barrel), and
+                    // without this column two rows sharing a batch could be visually
+                    // indistinguishable during recount.
+                    key: "packing_order_number",
+                    label: "Packing PO",
+                    width: "130px",
+                    render: (row) => row.packing_order_number ?? "—",
+                  },
                   { key: "stock_type", label: "Stock Type", width: "140px" },
                   {
                     key: "storage_location_id",

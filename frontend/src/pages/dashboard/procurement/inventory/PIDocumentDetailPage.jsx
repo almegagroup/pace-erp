@@ -560,6 +560,16 @@ export default function PIDocumentDetailPage() {
                   render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
                 },
                 { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                {
+                  // §Q1-followup-2026-09-29 — same identity column as MI04/MI05 (see those
+                  // files for the full "why"): an FG item is keyed by batch_number +
+                  // packing_order_id together, and this review/approval page needs the same
+                  // ability to tell two same-batch rows apart before Submit/Post.
+                  key: "packing_order_number",
+                  label: "Packing PO",
+                  width: "130px",
+                  render: (row) => row.packing_order_number ?? "—",
+                },
                 ...(status === "PENDING_APPROVAL" ? [{
                   key: "apply_reco_adjustment",
                   label: "Reco?",

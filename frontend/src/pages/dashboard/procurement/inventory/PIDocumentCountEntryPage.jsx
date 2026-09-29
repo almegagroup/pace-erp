@@ -380,6 +380,21 @@ export default function PIDocumentCountEntryPage() {
                       render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
                     },
                     { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                    {
+                      // §Q1-followup-2026-09-29 (business owner) — an FG PID item is keyed by
+                      // batch_number + packing_order_id together (§83.14 balance-barrel: several
+                      // Packing POs can share one batch), but until now nothing on screen showed
+                      // the Packing PO side of that identity. Two rows sharing a batch (and, if
+                      // they also share the same fill size, the same Per-Pack Qty default) were
+                      // visually indistinguishable, risking counts being recorded against the
+                      // wrong PO. Read-only, same as Batch — this is part of WHAT is being
+                      // counted, never something the counter edits. "—" for RM/PM/INT/SFG (no
+                      // Packing PO link at all) and for MTS FG (blended, no per-PO split).
+                      key: "packing_order_number",
+                      label: "Packing PO",
+                      width: "130px",
+                      render: (row) => row.packing_order_number ?? "—",
+                    },
                     { key: "stock_type", label: "Stock Type", width: "150px" },
                     {
                       key: "storage_location_id",

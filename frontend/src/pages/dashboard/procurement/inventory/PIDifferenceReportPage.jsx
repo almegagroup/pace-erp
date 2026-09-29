@@ -41,6 +41,10 @@ const GRID_COLUMNS = [
   { key: "material_name", label: "Material", width: "260px", render: (row) => row.material_name ?? "—" },
   { key: "material_external_code", label: "External Code", width: "150px", render: (row) => row.material_external_code ?? "—" },
   { key: "batch_number", label: "Batch", width: "100px", render: (row) => row.batch_number ?? "—" },
+  // §Q1-followup-2026-09-29 — same identity column as MI04/MI05/MI02-MI03: an FG row is keyed
+  // by batch_number + packing_order_id together, and without this two same-batch rows are
+  // indistinguishable here too.
+  { key: "packing_order_number", label: "Packing PO", width: "120px", render: (row) => row.packing_order_number ?? "—" },
   { key: "stock_type", label: "Stock Type", width: "130px" },
   { key: "book_qty", label: "Book Qty", width: "100px" },
   { key: "physical_qty", label: "Physical Qty", width: "100px", render: (row) => row.physical_qty ?? "—" },
