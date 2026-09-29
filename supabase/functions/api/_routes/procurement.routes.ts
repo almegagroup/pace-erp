@@ -199,6 +199,8 @@ import {
   resolvePIDByNumberForCountHandler,
   resolvePIDByNumberForRecountHandler,
   resolvePIDByNumberHandler,
+  searchPIBatchNumbersHandler,
+  searchPIDocumentNumbersHandler,
   submitPIDForApprovalHandler,
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
@@ -546,6 +548,10 @@ export async function dispatchProcurementRoutes(
     // collides with the :id pattern route below.
     case "GET:/api/procurement/physical-inventory-differences":
       return await listPIDifferencesHandler(req, ctx);
+    case "GET:/api/procurement/physical-inventory-differences/search-document-numbers":
+      return await searchPIDocumentNumbersHandler(req, ctx);
+    case "GET:/api/procurement/physical-inventory-differences/search-batch-numbers":
+      return await searchPIBatchNumbersHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory-material-locations":
       return await getMaterialLocationBreakdownHandler(req, ctx);
     case "GET:/api/procurement/location-transfer-requests":

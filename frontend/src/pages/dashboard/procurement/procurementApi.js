@@ -1311,6 +1311,16 @@ export function listPIDifferences(params) {
   return fetchProcurement("GET", "/api/procurement/physical-inventory-differences", undefined, params);
 }
 
+// §Q6-2026-09-29 — MI20's own Document Number / Batch Number typeahead search, backing its
+// MultiValueFilterField pickers (same shape as searchStockLedgerBatchNumbers/
+// searchStockLedgerPackingPoNumbers in stock_reports.handlers.ts).
+export function searchPIDocumentNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-differences/search-document-numbers", undefined, params);
+}
+export function searchPIBatchNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-differences/search-batch-numbers", undefined, params);
+}
+
 // §119.12 — Create page (ITEM_WISE) material-location breakdown preview.
 export function getPIMaterialLocationBreakdown(params) {
   return fetchProcurement("GET", "/api/procurement/physical-inventory-material-locations", undefined, params);
