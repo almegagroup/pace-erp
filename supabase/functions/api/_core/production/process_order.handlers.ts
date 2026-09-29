@@ -5078,6 +5078,30 @@ async function runMtsProcessOrderVerify(
     statusIndex += 1;
   }
 
+  // §Q1-2026-09-29 (business owner, "R MTS er khetre?" follow-up) — runMtsProcessOrderVerify
+  // is a WHOLLY SEPARATE function from runProcessOrderVerify (MTS branches off at the top of
+  // verifyProcessOrderHandler) and had been missed entirely by the earlier Q1 sweep — it posts
+  // RM/PM issue, FG/SKU receipt, AND hold movements (P322/P344), none of which had any PID
+  // check. Checked here against the fully-accumulated `movements` array, right before the
+  // single postDocument call. Deliberately NOT batch-aware: even though these movements each
+  // carry a real per-batch batch_number (§138, 2026-09-22 per-batch posting design), MTS is
+  // one of the po_types PID treats as fully blended (excluded from BATCH_TRACKED_PO_TYPES in
+  // physical_inventory.handlers.ts) — its block rows are always registered with
+  // batch_number=NULL. Passing the movement's own real batch tag here would search for a
+  // batch-specific block that can never exist for MTS, silently missing the real (blended)
+  // block — so this uses the plain "any batch" hasPhysicalInventoryBlock() (via
+  // findFirstPhysicalInventoryBlock with no batchNumber key), same as reverseMtsProcessOrderHandler.
+  const mtsVerifyBlockedCombo = await findFirstPhysicalInventoryBlock(
+    movements.map((m) => ({
+      materialId: String(m.material_id ?? ""),
+      storageLocationId: String(m.storage_location_id ?? ""),
+      stockType: String(m.stock_type_code ?? ""),
+    })),
+  );
+  if (mtsVerifyBlockedCombo) {
+    return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "One or more materials/locations on this MTS Process PO are under an active Physical Inventory count — verification is blocked until the PID is posted or cancelled.");
+  }
+
   // §138 MTS reco decision (business owner, 2026-09-21): AC10's dispatch-driven
   // AP Reco derivation never depends on MTS's actual RM/PM consumption -- only
   // dispatch qty + formulation + costing-vs-WAR rate difference. MTS Verify
