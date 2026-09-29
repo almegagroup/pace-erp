@@ -1577,6 +1577,163 @@ async function formatMaterialLabels(materialIds: string[]): Promise<string> {
     .join(", ");
 }
 
+// Found live 2026-09-29 (CMP006, PO 9300000551): applyFinalOrVerifyLineUpdates() writes
+// a new "+Add Row" line (and its reservation_document) to the DB immediately, but the
+// stock-availability check that can still reject the whole request only ran AFTER that
+// write. There is no transaction wrapping either call, so a rejected request left the
+// new line committed anyway. The frontend never learns that line's real id from a 422
+// response, so it resends the same id-less row on the next click — every retry therefore
+// inserted ANOTHER brand-new duplicate (7 accumulated this way for RM-00006, 3 of them
+// pointed at a Storage Location with zero stock, causing the very shortage that kept
+// blocking every subsequent attempt). This mirrors the SLoc-missing guard already added
+// 2026-09-23 for the same root cause (RM-00046) — that guard only covers a *missing*
+// SLoc; this one covers a *present but insufficient* one, which is the far more common
+// case. Builds, purely in memory, the line set applyFinalOrVerifyLineUpdates() WOULD
+// persist — used to run the availability check BEFORE any write happens, so a request
+// that will be rejected never writes anything at all.
+async function buildProspectiveLinesForAvailabilityCheck(
+  existingLines: JsonRecord[],
+  bodyLines: JsonRecord[],
+): Promise<JsonRecord[]> {
+  const existingLineMap = new Map(existingLines.map((line) => [String(line.id), line]));
+  const touchedIds = new Set<string>();
+
+  const newLineMaterialIds = new Set<string>();
+  for (const bodyLine of bodyLines) {
+    if (!toTrimmedString(bodyLine.id)) {
+      const materialId = toTrimmedString(bodyLine.material_id);
+      if (materialId) newLineMaterialIds.add(materialId);
+    }
+  }
+  const newLineMaterialMap = newLineMaterialIds.size > 0
+    ? await getMaterialMapByIds(
+        Array.from(newLineMaterialIds),
+        "[process_order.buildProspectiveLinesForAvailabilityCheck]",
+        "PROD_PO_FETCH_FAILED",
+        "id, material_type",
+      )
+    : new Map<string, JsonRecord>();
+
+  const prospective: JsonRecord[] = [];
+  for (const bodyLine of bodyLines) {
+    const lineId = toTrimmedString(bodyLine.id);
+    const existingLine = lineId ? existingLineMap.get(lineId) ?? null : null;
+    const actualQty = parseNonNegativeNumber(bodyLine.actual_qty) ?? 0;
+
+    if (existingLine) {
+      touchedIds.add(String(existingLine.id));
+      const nextActualMaterialId = toTrimmedString(bodyLine.actual_material_id) || null;
+      const effectiveActualMaterialId =
+        nextActualMaterialId && nextActualMaterialId !== String(existingLine.material_id)
+          ? nextActualMaterialId
+          : null;
+      const nextStorageLocationId =
+        toTrimmedString(bodyLine.storage_location_id) || toTrimmedString(existingLine.issue_sloc_id) || null;
+      prospective.push({
+        ...existingLine,
+        actual_qty: actualQty,
+        actual_material_id: effectiveActualMaterialId,
+        issue_sloc_id: nextStorageLocationId,
+      });
+      continue;
+    }
+
+    const materialId = toTrimmedString(bodyLine.material_id);
+    if (!materialId) continue;
+    prospective.push({
+      material_id: materialId,
+      actual_qty: actualQty,
+      issue_sloc_id: toTrimmedString(bodyLine.storage_location_id) || null,
+      actual_material_id: null,
+      material: newLineMaterialMap.get(materialId) ?? null,
+    });
+  }
+
+  for (const existingLine of existingLines) {
+    if (!touchedIds.has(String(existingLine.id))) {
+      prospective.push(existingLine);
+    }
+  }
+
+  return prospective;
+}
+
+// Extracted verbatim from finalizeProcessOrderHandler's old post-write stock check (see
+// buildProspectiveLinesForAvailabilityCheck's comment for why it moved) — behavior is
+// unchanged, only the call site and its input (now pre-write prospective lines instead
+// of post-write persisted lines) are new.
+async function assertProcessOrderStockAvailability(
+  req: Request,
+  ctx: ProdHandlerContext,
+  po: JsonRecord,
+  lines: JsonRecord[],
+  excludePoId: string,
+): Promise<Response | null> {
+  const stockNeeds = buildLineAvailabilityNeeds(lines);
+  const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, excludePoId);
+  const shortRows = physicalRows.filter((row) => row.short);
+  if (shortRows.length === 0) return null;
+
+  const materialTypeById = new Map<string, string>();
+  for (const line of lines) {
+    const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+    const effectiveMaterial = (toTrimmedString(line.actual_material_id)
+      ? line.actual_material
+      : line.material) as JsonRecord | null;
+    if (effectiveMaterialId && effectiveMaterial?.material_type) {
+      materialTypeById.set(effectiveMaterialId, String(effectiveMaterial.material_type));
+    }
+  }
+
+  const nonIntShortages = shortRows.filter((row) => materialTypeById.get(row.material_id) !== "INT");
+  if (nonIntShortages.length > 0) {
+    return poErr(
+      req,
+      ctx,
+      "PROD_PO_INSUFFICIENT_STOCK",
+      422,
+      `Insufficient UNRESTRICTED stock for ${nonIntShortages.length} material(s): ${await formatShortageDetail(nonIntShortages)}`,
+    );
+  }
+
+  const intNeeded = new Map<string, number>();
+  for (const row of shortRows) {
+    intNeeded.set(row.material_id, (intNeeded.get(row.material_id) ?? 0) + (row.needed_qty - row.available_qty));
+  }
+
+  const { data: declaredIntPOs, error: intErr } = await serviceRoleClient
+    .schema("erp_production")
+    .from("process_order")
+    .select("material_id, actual_qty")
+    .eq("company_id", String(po.company_id))
+    .eq("po_type", "INT")
+    .in("status", ["FINAL", "VERIFIED"])
+    .in("material_id", Array.from(intNeeded.keys()));
+  if (intErr) {
+    console.error("[process_order.assertProcessOrderStockAvailability] declared-int query failed:", JSON.stringify(intErr));
+    throw new Error("PROD_PO_FINALIZE_FAILED");
+  }
+
+  const declaredQty = new Map<string, number>();
+  for (const intPo of (declaredIntPOs ?? []) as JsonRecord[]) {
+    const materialId = String(intPo.material_id);
+    declaredQty.set(materialId, (declaredQty.get(materialId) ?? 0) + Number(intPo.actual_qty ?? 0));
+  }
+
+  const unmet: string[] = [];
+  for (const [materialId, neededQty] of intNeeded.entries()) {
+    if ((declaredQty.get(materialId) ?? 0) < neededQty - EPSILON) {
+      unmet.push(materialId);
+    }
+  }
+
+  if (unmet.length > 0) {
+    return poErr(req, ctx, "PROD_PO_INT_NOT_VERIFIED", 422, `INT material(s) short in stock and output not yet declared: ${await formatMaterialLabels(unmet)}. Finalize or verify the INT Process Orders first.`);
+  }
+
+  return null;
+}
+
 export async function availabilityPreviewProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -4143,78 +4300,27 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
       return poErr(req, ctx, "PROD_PO_ACTUAL_QTY_REQUIRED", 400, "actual_qty required");
     }
 
+    // Stock availability is now checked BEFORE any line/reservation write happens (see
+    // buildProspectiveLinesForAvailabilityCheck's comment) -- a request that will be
+    // rejected here never inserts a duplicate "+Add Row" line into process_order_line.
+    const bodyLinesInput = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const existingLinesForStockCheck = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+    const prospectiveLines = bodyLinesInput.length > 0
+      ? await buildProspectiveLinesForAvailabilityCheck(existingLinesForStockCheck, bodyLinesInput)
+      : existingLinesForStockCheck;
+    const stockError = await assertProcessOrderStockAvailability(req, ctx, po, prospectiveLines, id);
+    if (stockError) return stockError;
+
     const applyResult = await applyFinalOrVerifyLineUpdates({
       req,
       ctx,
       po,
-      bodyLines: Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [],
+      bodyLines: bodyLinesInput,
       plannedStartDate: toTrimmedString(po.planned_start_date) || null,
     });
     if (applyResult.response) return applyResult.response;
 
     const allLines = applyResult.lines ?? [];
-    const stockNeeds = buildLineAvailabilityNeeds(allLines);
-    const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, id);
-    const shortRows = physicalRows.filter((row) => row.short);
-
-    if (shortRows.length > 0) {
-      const materialTypeById = new Map<string, string>();
-      for (const line of allLines) {
-        const effectiveMaterialId = toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
-        const effectiveMaterial = (toTrimmedString(line.actual_material_id)
-          ? line.actual_material
-          : line.material) as JsonRecord | null;
-        if (effectiveMaterialId && effectiveMaterial?.material_type) {
-          materialTypeById.set(effectiveMaterialId, String(effectiveMaterial.material_type));
-        }
-      }
-
-      const nonIntShortages = shortRows.filter((row) => materialTypeById.get(row.material_id) !== "INT");
-      if (nonIntShortages.length > 0) {
-        return poErr(
-          req,
-          ctx,
-          "PROD_PO_INSUFFICIENT_STOCK",
-          422,
-          `Insufficient UNRESTRICTED stock for ${nonIntShortages.length} material(s): ${await formatShortageDetail(nonIntShortages)}`,
-        );
-      }
-
-      const intNeeded = new Map<string, number>();
-      for (const row of shortRows) {
-        intNeeded.set(row.material_id, (intNeeded.get(row.material_id) ?? 0) + (row.needed_qty - row.available_qty));
-      }
-
-      const { data: declaredIntPOs, error: intErr } = await serviceRoleClient
-        .schema("erp_production")
-        .from("process_order")
-        .select("material_id, actual_qty")
-        .eq("company_id", String(po.company_id))
-        .eq("po_type", "INT")
-        .in("status", ["FINAL", "VERIFIED"])
-        .in("material_id", Array.from(intNeeded.keys()));
-      if (intErr) {
-        console.error("[process_order.finalize] declared-int query failed:", JSON.stringify(intErr));
-        throw new Error("PROD_PO_FINALIZE_FAILED");
-      }
-
-      const declaredQty = new Map<string, number>();
-      for (const intPo of (declaredIntPOs ?? []) as JsonRecord[]) {
-        const materialId = String(intPo.material_id);
-        declaredQty.set(materialId, (declaredQty.get(materialId) ?? 0) + Number(intPo.actual_qty ?? 0));
-      }
-
-      const unmet: string[] = [];
-      for (const [materialId, neededQty] of intNeeded.entries()) {
-        if ((declaredQty.get(materialId) ?? 0) < neededQty - EPSILON) {
-          unmet.push(materialId);
-        }
-      }
-
-      if (unmet.length > 0) {
-        return poErr(req, ctx, "PROD_PO_INT_NOT_VERIFIED", 422, `INT material(s) short in stock and output not yet declared: ${await formatMaterialLabels(unmet)}. Finalize or verify the INT Process Orders first.`);
-      }
-    }
 
     // INT is the only po_type using THIS branch's simple direct-post shape (RM issue +
     // single output receipt, no reco, no QI hold). MTEST also now posts at Final
@@ -4443,11 +4549,35 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       return await runMtsProcessOrderVerify(req, ctx, po, id, body);
     }
     const verifiedQty = parsePositiveNumber(body.verified_qty ?? body.verified_qty_kg) ?? Number(po.actual_qty ?? 0);
+
+    // Same fix as finalizeProcessOrderHandler (see buildProspectiveLinesForAvailabilityCheck's
+    // comment): check stock BEFORE applyFinalOrVerifyLineUpdates() writes anything, so a
+    // rejected Verify request never leaves a duplicate "+Add Row" line behind either.
+    // Verify's own check (inside runProcessOrderVerify, run again below on the real
+    // post-write lines) has no INT exception -- mirrored here as-is, not reusing
+    // finalize's assertProcessOrderStockAvailability which does carve out INT shortages.
+    const bodyLinesInput = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const existingLinesForStockCheck = await fetchOrderLines(id, toTrimmedString(po.stroke_master_id) || null);
+    const prospectiveLines = bodyLinesInput.length > 0
+      ? await buildProspectiveLinesForAvailabilityCheck(existingLinesForStockCheck, bodyLinesInput)
+      : existingLinesForStockCheck;
+    const prospectiveStockNeeds = buildLineAvailabilityNeeds(prospectiveLines);
+    const prospectiveShortRows = (await computePhysicalAvailabilityRows(String(po.company_id), prospectiveStockNeeds, id)).filter((row) => row.short);
+    if (prospectiveShortRows.length > 0) {
+      return poErr(
+        req,
+        ctx,
+        "PROD_PO_INSUFFICIENT_STOCK",
+        422,
+        `Insufficient UNRESTRICTED stock for ${prospectiveShortRows.length} material(s): ${await formatShortageDetail(prospectiveShortRows)}`,
+      );
+    }
+
     const applyResult = await applyFinalOrVerifyLineUpdates({
       req,
       ctx,
       po,
-      bodyLines: Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [],
+      bodyLines: bodyLinesInput,
       plannedStartDate: toTrimmedString(po.planned_start_date) || null,
     });
     if (applyResult.response) return applyResult.response;
