@@ -684,6 +684,47 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
   });
 }
 
+// §Q9-2026-09-29 (business owner) — found a real gap: PR19's PM breakdown always read the raw
+// packing_order_line.actual_qty (the original Final-time value), unlike the RM/INT side which
+// already reads process_order_line_reco (including any PID_ADJUSTMENT rows §119.14 wrote in
+// since). A PID gain/loss correction on a batch-tracked FG bumps packing_order.actual_qty_kg (the
+// ratio's denominator here) and writes a proportional PID_ADJUSTMENT row into
+// packing_order_line_reco per PM line — but PR19 never looked at that table for PM, so the PM
+// qty it returns understates (on a PID gain) or overstates (on a PID loss) the true proportional
+// PM. Mirrors buildRmIntPreview's own source_txn_type filter and fallback reasoning.
+async function resolvePmLineBaseQtyMap(
+  packingOrderId: string,
+  pmLines: JsonRecord[],
+): Promise<Map<string, number>> {
+  const { data: recoRows, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("packing_order_line_reco")
+    .select("packing_order_line_id, actual_qty")
+    .eq("packing_order_id", packingOrderId)
+    .eq("is_voided", false)
+    .in("source_txn_type", ["PRODUCTION", "OPENING", "PID_ADJUSTMENT"]);
+  if (error) {
+    console.error("[partial_reversal.resolvePmLineBaseQtyMap] reco query failed:", JSON.stringify(error));
+    throw new Error("PR19_PM_RECO_LOOKUP_FAILED");
+  }
+  const sums = new Map<string, number>();
+  for (const row of (recoRows ?? []) as JsonRecord[]) {
+    const lineId = String(row.packing_order_line_id ?? "");
+    if (!lineId) continue;
+    sums.set(lineId, (sums.get(lineId) ?? 0) + Number(row.actual_qty ?? 0));
+  }
+  // PMTS skips the PM reco write entirely (§108.2 item 6 — its costing is dispatch-triggered,
+  // not production-time) — for that po_type (and defensively, any line with no reco rows yet)
+  // fall back to the line's own actual_qty, same as before this fix.
+  for (const line of pmLines) {
+    const lineId = String(line.id);
+    if (!sums.has(lineId)) {
+      sums.set(lineId, Number(line.actual_qty ?? line.total_qty ?? 0));
+    }
+  }
+  return sums;
+}
+
 // GET /api/production/partial-reversals/detail?process_order_id=&row_type=&packing_order_id=&reverse_qty=
 // Page 3 read-only preview — RM/INT breakdown for an SFG row, or RM+INT+PM
 // for a SKU row (PM lines get a per-line checkbox client-side, default on).
@@ -771,9 +812,10 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
       .eq("packing_order_id", packingOrderId)
       .eq("line_type", "PM");
     if (pmErr) throw new Error("PR19_DETAIL_FAILED");
+    const pmBaseQtyMap = await resolvePmLineBaseQtyMap(packingOrderId, (pmLines ?? []) as JsonRecord[]);
 
     const pmPreview = ((pmLines ?? []) as JsonRecord[]).map((line) => {
-      const baseQty = Number(line.actual_qty ?? line.total_qty ?? 0);
+      const baseQty = pmBaseQtyMap.get(String(line.id)) ?? 0;
       return {
         packing_order_line_id: String(line.id),
         material_id: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
@@ -1200,10 +1242,11 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         toTrimmedString(row.actual_material_id) || String(row.material_id ?? ""),
       ]);
       const pmMaterialMap = await getMaterialMapByIds(pmMaterialIds, "id, base_uom_code");
+      const pmBaseQtyMap = await resolvePmLineBaseQtyMap(packingOrderId as string, (pmLines ?? []) as JsonRecord[]);
 
       for (const pmLine of (pmLines ?? []) as JsonRecord[]) {
         const pmLineId = String(pmLine.id);
-        const baseQty = Number(pmLine.actual_qty ?? pmLine.total_qty ?? 0);
+        const baseQty = pmBaseQtyMap.get(pmLineId) ?? 0;
         const proportionalQty = baseQty * ratioPm;
         const effectiveMaterialId = toTrimmedString(pmLine.actual_material_id) || String(pmLine.material_id ?? "");
         const included = !pmLineExclusions.has(pmLineId);

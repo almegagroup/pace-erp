@@ -1063,6 +1063,11 @@ export async function listPIDsHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
+    // §Q2-2026-09-29 (business owner) — IN01 list page needs a Count Date range so a supervisor
+    // can pull "everything created for tomorrow's count" the same day it's generated, not just
+    // the most recent 100 documents.
+    const countDateFrom = toTrimmedString(url.searchParams.get("count_date_from"));
+    const countDateTo = toTrimmedString(url.searchParams.get("count_date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
 
     let query = serviceRoleClient
@@ -1075,6 +1080,8 @@ export async function listPIDsHandler(
     if (status && PID_STATUSES.has(status)) {
       query = query.eq("status", status);
     }
+    if (countDateFrom) query = query.gte("count_date", countDateFrom);
+    if (countDateTo) query = query.lte("count_date", countDateTo);
 
     const scopedCompanyIds = await listPIScopedCompanyIds(ctx);
     if (scopedCompanyIds && scopedCompanyIds.length === 0) {
@@ -1321,6 +1328,16 @@ async function getPIDForResource(
         line_number: index + 1,
       }));
 
+    // §119 blind-count principle (business owner, 2026-09-29) — MI04 AND MI05 must both be
+    // genuinely blind, not just hidden in the UI. Strip book_qty/difference_qty from the wire
+    // payload itself for both count-entry resources so a network-tools-savvy counter can't see
+    // the book figure either. MI02/MI03 (PID_RESOURCE) and MI20 keep them — those are review/
+    // reporting surfaces, not the blind-entry moment.
+    const isBlindCountResource = resourceCode === PID_COUNT_RESOURCE || resourceCode === PID_RECOUNT_RESOURCE;
+    const responseItems = isBlindCountResource
+      ? sortedItems.map(({ book_qty: _bookQty, difference_qty: _differenceQty, ...rest }) => rest)
+      : sortedItems;
+
     return okResponse(
       {
         ...hydrated,
@@ -1328,7 +1345,7 @@ async function getPIDForResource(
         company_name: company?.company_name ?? null,
         storage_location_code: locationMap.get(toTrimmedString(document.storage_location_id))?.code ?? null,
         storage_location_name: locationMap.get(toTrimmedString(document.storage_location_id))?.name ?? null,
-        items: sortedItems,
+        items: responseItems,
       },
       ctx.request_id,
       req,

@@ -15,6 +15,7 @@ import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE }
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { hasPhysicalInventoryBlock as sharedHasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { getEligibleProdshadeIdsForVendorCode, isPrimaryVendorCodeForCompany } from "../production/vendor_code.handlers.ts";
@@ -419,29 +420,11 @@ async function hydrateSo(soId: string, ctx?: ProcurementHandlerContext): Promise
   };
 }
 
-// Exported so delivery_order.handlers.ts's PGI+Invoice handler can reuse
-// the same pre-posting checks the legacy atomic SO/STO issue handlers
-// already use, instead of duplicating them.
-export async function hasPhysicalInventoryBlock(
-  materialId: string,
-  storageLocationId: string,
-  stockType: string,
-): Promise<boolean> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("physical_inventory_block")
-    .select("id")
-    .eq("material_id", materialId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("stock_type", stockType)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error("MATERIAL_POSTING_BLOCK_LOOKUP_FAILED");
-  }
-
-  return Boolean(data?.id);
-}
+// Re-exported (not redefined) so delivery_order.handlers.ts / rtv.handlers.ts / do_unified.handlers.ts
+// keep working unchanged — the real implementation now lives in _shared/physicalInventoryBlock.ts
+// (§Q1-2026-09-29) so every caller (including Process PO/Packing PO/Inward QA/Opening Stock/PTO/
+// Location Transfer, newly wired up) shares one definition instead of hand-copied duplicates.
+export const hasPhysicalInventoryBlock = sharedHasPhysicalInventoryBlock;
 
 export async function getSnapshotForIssue(
   companyId: string,

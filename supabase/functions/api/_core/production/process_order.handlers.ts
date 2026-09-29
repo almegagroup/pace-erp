@@ -42,6 +42,7 @@ import {
 } from "./batch_series.handlers.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { findFirstPhysicalInventoryBlock, hasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockPostingResult = { stock_document_id: string; stock_ledger_id: string };
@@ -1670,6 +1671,28 @@ async function assertProcessOrderStockAvailability(
   excludePoId: string,
 ): Promise<Response | null> {
   const stockNeeds = buildLineAvailabilityNeeds(lines);
+
+  // §Q1-2026-09-29 (business owner, SAP comparison) — Process PO Standard/Final/Verify had NO
+  // PID posting-block at all before this fix. Checked here, ahead of the shortage check, since
+  // every RM/PM/INT issue location this PO would touch must be blocked while under an active
+  // count, independent of whether stock happens to be sufficient.
+  const blockedNeed = await findFirstPhysicalInventoryBlock(
+    Array.from(stockNeeds.values()).map((need) => ({
+      materialId: need.materialId,
+      storageLocationId: need.storageLocationId,
+      stockType: "UNRESTRICTED",
+    })),
+  );
+  if (blockedNeed) {
+    return poErr(
+      req,
+      ctx,
+      "PROD_PO_PI_BLOCKED",
+      409,
+      "One or more materials/locations on this Process PO are under an active Physical Inventory count — this action is blocked until the PID is posted or cancelled.",
+    );
+  }
+
   const physicalRows = await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, excludePoId);
   const shortRows = physicalRows.filter((row) => row.short);
   if (shortRows.length === 0) return null;
@@ -4562,6 +4585,18 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       ? await buildProspectiveLinesForAvailabilityCheck(existingLinesForStockCheck, bodyLinesInput)
       : existingLinesForStockCheck;
     const prospectiveStockNeeds = buildLineAvailabilityNeeds(prospectiveLines);
+    // §Q1-2026-09-29 — same PID posting-block as assertProcessOrderStockAvailability, mirrored
+    // here since Verify's own check is a separate path (see comment above).
+    const verifyBlockedNeed = await findFirstPhysicalInventoryBlock(
+      Array.from(prospectiveStockNeeds.values()).map((need) => ({
+        materialId: need.materialId,
+        storageLocationId: need.storageLocationId,
+        stockType: "UNRESTRICTED",
+      })),
+    );
+    if (verifyBlockedNeed) {
+      return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "One or more materials/locations on this Process PO are under an active Physical Inventory count — Verify is blocked until the PID is posted or cancelled.");
+    }
     const prospectiveShortRows = (await computePhysicalAvailabilityRows(String(po.company_id), prospectiveStockNeeds, id)).filter((row) => row.short);
     if (prospectiveShortRows.length > 0) {
       return poErr(
@@ -5088,6 +5123,18 @@ async function runProcessOrderVerify(
   hasUnapprovedDeviation: boolean,
 ): Promise<Response> {
   const stockNeeds = buildLineAvailabilityNeeds(lines);
+    // §Q1-2026-09-29 — PID posting-block, RM/PM/INT issue side, mirrored from the other two
+    // Verify check sites in this file (this is runProcessOrderVerify's own copy).
+    const issueBlockedNeed = await findFirstPhysicalInventoryBlock(
+      Array.from(stockNeeds.values()).map((need) => ({
+        materialId: need.materialId,
+        storageLocationId: need.storageLocationId,
+        stockType: "UNRESTRICTED",
+      })),
+    );
+    if (issueBlockedNeed) {
+      return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "One or more materials/locations on this Process PO are under an active Physical Inventory count — Verify is blocked until the PID is posted or cancelled.");
+    }
     const shortRows = (await computePhysicalAvailabilityRows(String(po.company_id), stockNeeds, id)).filter((row) => row.short);
     if (shortRows.length > 0) {
       return poErr(
@@ -5102,6 +5149,10 @@ async function runProcessOrderVerify(
     const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
     if (!shopfloorSlocId) {
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
+    }
+    // §Q1-2026-09-29 — PID posting-block, SFG receipt side (P101 lands in QUALITY_INSPECTION).
+    if (await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION")) {
+      return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's SFG output location is under an active Physical Inventory count — Verify is blocked until the PID is posted or cancelled.");
     }
 
     // §136 (2026-09-04) — URGENT priority posts at Current date−1 automatically,

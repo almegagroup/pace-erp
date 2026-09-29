@@ -15,6 +15,7 @@ import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
+import { findFirstPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1575,6 +1576,27 @@ export async function postOpeningStockDocumentHandler(
         "OPENING_STOCK_DOCUMENT_POST_EMPTY",
         400,
         "At least one line is required before posting.",
+      );
+    }
+
+    // §Q1-2026-09-29 — extend the PID posting-block check here, checked before any line writes
+    // (not after), same discipline as §8D's check-before-write fix for Process PO.
+    const blockedCombo = await findFirstPhysicalInventoryBlock(
+      lines
+        .filter((line) => !line.posted_stock_document_id)
+        .map((line) => ({
+          materialId: toTrimmedString(line.material_id),
+          storageLocationId: toTrimmedString(line.storage_location_id),
+          stockType: toUpperTrimmedString(line.stock_type),
+        })),
+    );
+    if (blockedCombo) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_POST_PI_BLOCKED",
+        409,
+        "One or more lines are under an active Physical Inventory count at that material/location — posting is blocked until the PID is posted or cancelled.",
       );
     }
 

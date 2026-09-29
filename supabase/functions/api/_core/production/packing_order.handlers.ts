@@ -29,6 +29,7 @@ import {
   getIdFromPath,
 } from "./production.shared.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
+import { findFirstPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -2524,6 +2525,24 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const fgLineForCost = lineRows.find((line) => String(line.line_type ?? "") === "FG");
     const fgQtyForCost = Number(fgLineForCost?.actual_qty ?? fgLineForCost?.total_qty ?? 0);
     const fgCostPerKg = fgQtyForCost > 0 ? totalInputValue / fgQtyForCost : 0;
+
+    // §Q1-2026-09-29 — Packing PO Final had NO PID posting-block at all before this fix. Every
+    // line here posts against UNRESTRICTED (SFG/PM issue, FG receipt alike — confirmed below,
+    // stockTypeCode is always "UNRESTRICTED" in this handler), so one combo check covers all
+    // three line types. Checked before the posting loop starts, not per-line inside it, so a
+    // partial post never happens for a PO that will fail this check on a later line.
+    const packBlockedCombo = await findFirstPhysicalInventoryBlock(
+      lineRows
+        .filter((line) => Number(line.actual_qty ?? line.total_qty ?? 0) > 0 && !toTrimmedString(line.stock_ledger_id))
+        .map((line) => ({
+          materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+          storageLocationId: (line.issue_sloc_id || (String(line.line_type ?? "") === "PM" ? defaultPmSlocId : null)) as string,
+          stockType: "UNRESTRICTED",
+        })),
+    );
+    if (packBlockedCombo) {
+      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count — Final is blocked until the PID is posted or cancelled.");
+    }
 
     // DEPENDENT: all lines share the same brand-new Material Document number (never
     // posted before). post_stock_movement()'s item_number assignment locks existing
