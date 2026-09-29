@@ -2759,6 +2759,22 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
         lineRows.map((line) => toTrimmedString(line.stock_ledger_id)),
       );
 
+      // §Q1-2026-09-29 (business owner, SAP comparison, table item #6) — Packing PO CORS
+      // posts real stock movements same as Final/COR6, must be blocked under an active
+      // PID too. Every line here posts against UNRESTRICTED. Checked before the loop.
+      const packReverseBlockedCombo = await findFirstPhysicalInventoryBlock(
+        lineRows
+          .filter((line) => Boolean(line.stock_ledger_id) && Number(line.actual_qty ?? line.total_qty ?? 0) > 0)
+          .map((line) => ({
+            materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+            storageLocationId: (line.issue_sloc_id || (String(line.line_type ?? "") === "PM" ? defaultPmSlocId : null)) as string ?? "",
+            stockType: "UNRESTRICTED",
+          })),
+      );
+      if (packReverseBlockedCombo) {
+        return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count — CORS reversal is blocked until the PID is posted or cancelled.");
+      }
+
       // DEPENDENT: same reasoning as finalizePackingOrderHandler — revDocNum is
       // a brand-new document_number (first reversal for this PO), so
       // post_stock_movement()'s FOR UPDATE item_number lock has nothing to
@@ -2941,6 +2957,32 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     // §106: this COR6 correction is its own Material Document event; the Packing PO number
     // is the reference.
     const correctionMatDoc = await generateMaterialDocNumber(String(poData.company_id));
+
+    // §Q1-2026-09-29 (business owner, SAP comparison, table item #5) — Packing PO COR6
+    // posts real stock movements just like Final, so it must be blocked under an active
+    // PID the same way. Every line here posts against UNRESTRICTED (confirmed below,
+    // stockTypeCode is always "UNRESTRICTED" in this handler, same as Final), so one
+    // check covers FG/SFG/PM alike. Checked before the posting loop starts.
+    const packCorrectionBlockedCombo = await findFirstPhysicalInventoryBlock(
+      corrections
+        .filter((correction) => Math.abs(Number(correction.delta_qty ?? 0)) > 0)
+        .map((correction) => {
+          const isNewLine = !toTrimmedString(correction.id);
+          const line = isNewLine ? null : lineMap.get(toTrimmedString(correction.id));
+          return {
+            materialId: isNewLine
+              ? toTrimmedString(correction.material_id)
+              : (toTrimmedString(line?.actual_material_id) || String(line?.material_id ?? "")),
+            storageLocationId: isNewLine
+              ? (toTrimmedString(correction.storage_location_id) || defaultPmSlocId || "")
+              : ((line?.issue_sloc_id || (String(line?.line_type ?? "") === "PM" ? defaultPmSlocId : null)) as string ?? ""),
+            stockType: "UNRESTRICTED",
+          };
+        }),
+    );
+    if (packCorrectionBlockedCombo) {
+      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more correction lines are under an active Physical Inventory count — correction is blocked until the PID is posted or cancelled.");
+    }
 
     // DEPENDENT: these postings previously ran in parallel safely because they reused the
     // PO's already-existing document_number (so post_stock_movement()'s FOR UPDATE

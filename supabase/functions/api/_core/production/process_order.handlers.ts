@@ -5592,6 +5592,36 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
       "id, base_uom_code, material_type",
     );
 
+    // §Q1-2026-09-29 (business owner, SAP comparison, table item #5) — COR6 correction
+    // posts real stock movements just like Final/Verify, so it must be blocked under an
+    // active PID the same way. Checked before the posting loop starts (a partial COR6
+    // post is worse than refusing the whole request up front). Covers every RM/INT
+    // correction line's storage location; the output (SFG/INT) correction's own
+    // location is checked separately below, once its storage location is resolved.
+    const correctionBlockedCombo = await findFirstPhysicalInventoryBlock(
+      corrections
+        .filter((correction) => Math.abs(Number(correction.delta_qty ?? 0)) > 0)
+        .map((correction) => {
+          const lineId = toTrimmedString(correction.id);
+          if (lineId) {
+            const existingLine = lineMap.get(lineId);
+            return {
+              materialId: existingLine ? (toTrimmedString(existingLine.actual_material_id) || String(existingLine.material_id ?? "")) : "",
+              storageLocationId: existingLine ? (getIssueStorageLocationId(existingLine) ?? "") : "",
+              stockType: "UNRESTRICTED",
+            };
+          }
+          return {
+            materialId: toTrimmedString(correction.material_id),
+            storageLocationId: toTrimmedString(correction.storage_location_id),
+            stockType: "UNRESTRICTED",
+          };
+        }),
+    );
+    if (correctionBlockedCombo) {
+      return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "One or more correction lines are under an active Physical Inventory count — correction is blocked until the PID is posted or cancelled.");
+    }
+
     const today = todayIso();
     const docNumber = String(po.po_number);
     const postedBy = ctx.auth_user_id;
@@ -5778,6 +5808,10 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const outputDelta = isIncrease ? outputMagnitude : -outputMagnitude;
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
       if (!shopfloorSlocId) return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
+      // §Q1-2026-09-29 — output-side PID block, same reasoning as the RM/INT check above.
+      if (await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "UNRESTRICTED")) {
+        return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count — correction is blocked until the PID is posted or cancelled.");
+      }
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
       const fgLedgerRef = ledgerRefByLedgerId.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;
       let reversalOfId: string | null = null;
@@ -6015,6 +6049,19 @@ async function reverseMtsProcessOrderHandler(
     return poErr(req, ctx, "PROD_MTS_REVERSE_NOTHING_TO_REVERSE", 422, "No postings were found to reverse for this MTS Process PO.");
   }
 
+  // §Q1-2026-09-29 — same PID posting-block as the non-MTS CORS path, checked against
+  // every combo this reversal is about to touch (RM/PM restore, hold reversals, FG).
+  const mtsReverseBlockedCombo = await findFirstPhysicalInventoryBlock(
+    movements.map((m) => ({
+      materialId: String(m.material_id ?? ""),
+      storageLocationId: String(m.storage_location_id ?? ""),
+      stockType: String(m.stock_type_code ?? ""),
+    })),
+  );
+  if (mtsReverseBlockedCombo) {
+    return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "One or more materials/locations on this MTS Process PO are under an active Physical Inventory count — reversal is blocked until the PID is posted or cancelled.");
+  }
+
   await cancelReservationsForProcessOrder(id, ctx.auth_user_id, new Date().toISOString());
 
   const postings = await postDocument({
@@ -6114,6 +6161,22 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       ];
       const stockLedgerRefById = await resolveStockLedgerRefsByLedgerIds(reversalSourceLedgerIds);
 
+      // §Q1-2026-09-29 (business owner, SAP comparison, table item #6) — CORS reversal
+      // posts real stock movements, same as Final/Verify/COR6, so it must be blocked
+      // under an active PID too. Checked before the posting loop starts.
+      const reverseBlockedCombo = await findFirstPhysicalInventoryBlock(
+        lines
+          .filter((line) => Number(line.actual_qty ?? 0) > 0)
+          .map((line) => ({
+            materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+            storageLocationId: getIssueStorageLocationId(line) ?? "",
+            stockType: "UNRESTRICTED",
+          })),
+      );
+      if (reverseBlockedCombo) {
+        return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "One or more materials/locations on this Process PO are under an active Physical Inventory count — CORS reversal is blocked until the PID is posted or cancelled.");
+      }
+
       // DEPENDENT: each P262 reversal must follow the original issue lines one by one.
       for (const line of lines) {
         const actualQty = Number(line.actual_qty ?? 0);
@@ -6158,6 +6221,15 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
 
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
+
+      // §Q1-2026-09-29 — output-side PID block for CORS, same as COR6's output check.
+      if (
+        shopfloorSlocId &&
+        ((await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "UNRESTRICTED")) ||
+          (await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION")))
+      ) {
+        return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count — CORS reversal is blocked until the PID is posted or cancelled.");
+      }
 
       const qiReleaseRef = stockLedgerRefById.get(toTrimmedString(po.qi_release_stock_ledger_id)) ?? null;
       const fgReceiptRef = stockLedgerRefById.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;

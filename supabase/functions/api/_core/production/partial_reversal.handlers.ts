@@ -28,6 +28,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { findFirstPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1322,6 +1323,22 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         reference_document_type: "PARTIAL_REV",
         last_updated_by: postedBy,
       }));
+
+    // §Q1-2026-09-29 (business owner, SAP comparison, table item #7) — PR19 posts real
+    // stock movements (P102/P262/P261) just like Verify/COR6, so it must be blocked
+    // under an active PID too. Checked here against every combo the whole request is
+    // about to post (both SFG and SKU branches funnel into this same `movements` array),
+    // right before the single transactional post — no partial-post risk either way.
+    const pr19BlockedCombo = await findFirstPhysicalInventoryBlock(
+      movements.map((m) => ({
+        materialId: String(m.material_id ?? ""),
+        storageLocationId: String(m.storage_location_id ?? ""),
+        stockType: String(m.stock_type_code ?? ""),
+      })),
+    );
+    if (pr19BlockedCombo) {
+      return prErr(req, ctx, "PR19_PI_BLOCKED", 409, "One or more materials/locations in this reversal are under an active Physical Inventory count — reversal is blocked until the PID is posted or cancelled.");
+    }
 
     // §8D / feasibility §107.8 — every movement above plus the header/line/reco writes
     // now go through ONE transactional RPC (erp_production.complete_partial_batch_reversal,
