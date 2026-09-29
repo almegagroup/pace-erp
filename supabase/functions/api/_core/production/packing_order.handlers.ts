@@ -2531,17 +2531,31 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     // stockTypeCode is always "UNRESTRICTED" in this handler), so one combo check covers all
     // three line types. Checked before the posting loop starts, not per-line inside it, so a
     // partial post never happens for a PO that will fail this check on a later line.
+    //
+    // Batch-precise for SFG/FG (per business owner, §Q1 follow-up): MI04/MI05 show Batch
+    // Number as a fixed identity for these line types, exactly matching how
+    // physical_inventory_block itself stores batch_number — a count on a DIFFERENT batch at
+    // this same location must not block this Final. PM lines have no batch dimension in PID
+    // (always blended), so they deliberately carry no batchNumber key here — see
+    // hasPhysicalInventoryBlockForBatch's own comment for why passing one for them would be
+    // actively wrong, not just imprecise. line.batch_number is already the FINAL, post-SFG-
+    // batch-link value by this point (the batch assignment above already ran).
     const packBlockedCombo = await findFirstPhysicalInventoryBlock(
       lineRows
         .filter((line) => Number(line.actual_qty ?? line.total_qty ?? 0) > 0 && !toTrimmedString(line.stock_ledger_id))
-        .map((line) => ({
-          materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
-          storageLocationId: (line.issue_sloc_id || (String(line.line_type ?? "") === "PM" ? defaultPmSlocId : null)) as string,
-          stockType: "UNRESTRICTED",
-        })),
+        .map((line) => {
+          const lineType = String(line.line_type ?? "");
+          const isBatchTracked = lineType === "SFG" || lineType === "FG";
+          return {
+            materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+            storageLocationId: (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string,
+            stockType: "UNRESTRICTED",
+            ...(isBatchTracked ? { batchNumber: toTrimmedString(line.batch_number) || null } : {}),
+          };
+        }),
     );
     if (packBlockedCombo) {
-      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count — Final is blocked until the PID is posted or cancelled.");
+      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count for this batch — Final is blocked until the PID is posted or cancelled.");
     }
 
     // DEPENDENT: all lines share the same brand-new Material Document number (never
@@ -2762,17 +2776,24 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       // §Q1-2026-09-29 (business owner, SAP comparison, table item #6) — Packing PO CORS
       // posts real stock movements same as Final/COR6, must be blocked under an active
       // PID too. Every line here posts against UNRESTRICTED. Checked before the loop.
+      // Batch-precise for SFG/FG, same reasoning as Final's own check above — PM lines
+      // carry no batchNumber key (always blended in PID).
       const packReverseBlockedCombo = await findFirstPhysicalInventoryBlock(
         lineRows
           .filter((line) => Boolean(line.stock_ledger_id) && Number(line.actual_qty ?? line.total_qty ?? 0) > 0)
-          .map((line) => ({
-            materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
-            storageLocationId: (line.issue_sloc_id || (String(line.line_type ?? "") === "PM" ? defaultPmSlocId : null)) as string ?? "",
-            stockType: "UNRESTRICTED",
-          })),
+          .map((line) => {
+            const lineType = String(line.line_type ?? "");
+            const isBatchTracked = lineType === "SFG" || lineType === "FG";
+            return {
+              materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+              storageLocationId: (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string ?? "",
+              stockType: "UNRESTRICTED",
+              ...(isBatchTracked ? { batchNumber: toTrimmedString(line.batch_number) || null } : {}),
+            };
+          }),
       );
       if (packReverseBlockedCombo) {
-        return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count — CORS reversal is blocked until the PID is posted or cancelled.");
+        return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count for this batch — CORS reversal is blocked until the PID is posted or cancelled.");
       }
 
       // DEPENDENT: same reasoning as finalizePackingOrderHandler — revDocNum is
@@ -2962,26 +2983,31 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     // posts real stock movements just like Final, so it must be blocked under an active
     // PID the same way. Every line here posts against UNRESTRICTED (confirmed below,
     // stockTypeCode is always "UNRESTRICTED" in this handler, same as Final), so one
-    // check covers FG/SFG/PM alike. Checked before the posting loop starts.
+    // check covers FG/SFG/PM alike. Checked before the posting loop starts. Batch-precise
+    // for existing SFG/FG lines (a brand-new line here is always PM per this handler's own
+    // rule, so it never carries a batchNumber key).
     const packCorrectionBlockedCombo = await findFirstPhysicalInventoryBlock(
       corrections
         .filter((correction) => Math.abs(Number(correction.delta_qty ?? 0)) > 0)
         .map((correction) => {
           const isNewLine = !toTrimmedString(correction.id);
           const line = isNewLine ? null : lineMap.get(toTrimmedString(correction.id));
+          const lineType = String(line?.line_type ?? "");
+          const isBatchTracked = !isNewLine && (lineType === "SFG" || lineType === "FG");
           return {
             materialId: isNewLine
               ? toTrimmedString(correction.material_id)
               : (toTrimmedString(line?.actual_material_id) || String(line?.material_id ?? "")),
             storageLocationId: isNewLine
               ? (toTrimmedString(correction.storage_location_id) || defaultPmSlocId || "")
-              : ((line?.issue_sloc_id || (String(line?.line_type ?? "") === "PM" ? defaultPmSlocId : null)) as string ?? ""),
+              : ((line?.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string ?? ""),
             stockType: "UNRESTRICTED",
+            ...(isBatchTracked ? { batchNumber: toTrimmedString(line?.batch_number) || null } : {}),
           };
         }),
     );
     if (packCorrectionBlockedCombo) {
-      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more correction lines are under an active Physical Inventory count — correction is blocked until the PID is posted or cancelled.");
+      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more correction lines are under an active Physical Inventory count for this batch — correction is blocked until the PID is posted or cancelled.");
     }
 
     // DEPENDENT: these postings previously ran in parallel safely because they reused the

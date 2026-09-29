@@ -1329,15 +1329,29 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     // under an active PID too. Checked here against every combo the whole request is
     // about to post (both SFG and SKU branches funnel into this same `movements` array),
     // right before the single transactional post — no partial-post risk either way.
+    //
+    // Batch-precise for the SFG/FG legs (SFG_OUT/SFG_IN/SFG_OUT2/SKU_OUT — the fixed
+    // line_ref strings both branches above use for these), same reasoning as Verify/COR6's
+    // own SFG check: MI04/MI05's Batch Number is a fixed identity for these, mirroring
+    // physical_inventory_block's own stored batch_number. The RM/INT (process_order_line_id
+    // refs) and PM (packing_order_line_id refs) legs carry a batch tag on their OWN ledger
+    // posting for traceability only — that is NOT the same thing as how the PID itself
+    // registered them (always blended/batch-less), so they deliberately get no batchNumber
+    // key here, same as every other RM/PM/INT check in this codebase.
+    const SFG_FG_LEG_REFS = new Set(["SFG_OUT", "SFG_IN", "SFG_OUT2", "SKU_OUT"]);
     const pr19BlockedCombo = await findFirstPhysicalInventoryBlock(
-      movements.map((m) => ({
-        materialId: String(m.material_id ?? ""),
-        storageLocationId: String(m.storage_location_id ?? ""),
-        stockType: String(m.stock_type_code ?? ""),
-      })),
+      movements.map((m) => {
+        const isSfgFgLeg = SFG_FG_LEG_REFS.has(String(m.line_ref));
+        return {
+          materialId: String(m.material_id ?? ""),
+          storageLocationId: String(m.storage_location_id ?? ""),
+          stockType: String(m.stock_type_code ?? ""),
+          ...(isSfgFgLeg ? { batchNumber: toTrimmedString(poData.batch_number) || null } : {}),
+        };
+      }),
     );
     if (pr19BlockedCombo) {
-      return prErr(req, ctx, "PR19_PI_BLOCKED", 409, "One or more materials/locations in this reversal are under an active Physical Inventory count — reversal is blocked until the PID is posted or cancelled.");
+      return prErr(req, ctx, "PR19_PI_BLOCKED", 409, "One or more materials/locations in this reversal are under an active Physical Inventory count for this batch — reversal is blocked until the PID is posted or cancelled.");
     }
 
     // §8D / feasibility §107.8 — every movement above plus the header/line/reco writes

@@ -42,7 +42,7 @@ import {
 } from "./batch_series.handlers.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
-import { findFirstPhysicalInventoryBlock, hasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
+import { findFirstPhysicalInventoryBlock, hasPhysicalInventoryBlockForBatch } from "../../_shared/physicalInventoryBlock.ts";
 
 type JsonRecord = Record<string, unknown>;
 type StockPostingResult = { stock_document_id: string; stock_ledger_id: string };
@@ -5150,9 +5150,15 @@ async function runProcessOrderVerify(
     if (!shopfloorSlocId) {
       return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
     }
-    // §Q1-2026-09-29 — PID posting-block, SFG receipt side (P101 lands in QUALITY_INSPECTION).
-    if (await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION")) {
-      return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's SFG output location is under an active Physical Inventory count — Verify is blocked until the PID is posted or cancelled.");
+    // §Q1-2026-09-29 (batch-precise, per business owner) — PID posting-block, SFG receipt
+    // side (P101 lands in QUALITY_INSPECTION). Batch-aware: MI04/MI05's Batch Number field
+    // for a batch-tracked (MTO/HPS/MTEST) SFG item is a fixed identity, matching exactly
+    // what physical_inventory_block itself stores — a count on a DIFFERENT batch of this
+    // same SFG material at this same location must not block this Verify. For INT/MTS
+    // (blended, no batch), po.batch_number is naturally null, which correctly matches how
+    // the PID registered that blended item too.
+    if (await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION", toTrimmedString(po.batch_number) || null)) {
+      return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's SFG output location is under an active Physical Inventory count for this batch — Verify is blocked until the PID is posted or cancelled.");
     }
 
     // §136 (2026-09-04) — URGENT priority posts at Current date−1 automatically,
@@ -5808,9 +5814,10 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const outputDelta = isIncrease ? outputMagnitude : -outputMagnitude;
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
       if (!shopfloorSlocId) return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
-      // §Q1-2026-09-29 — output-side PID block, same reasoning as the RM/INT check above.
-      if (await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "UNRESTRICTED")) {
-        return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count — correction is blocked until the PID is posted or cancelled.");
+      // §Q1-2026-09-29 (batch-precise) — output-side PID block, same batch-aware reasoning
+      // as Verify's own SFG receipt check above.
+      if (await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "UNRESTRICTED", toTrimmedString(po.batch_number) || null)) {
+        return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count for this batch — correction is blocked until the PID is posted or cancelled.");
       }
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
       const fgLedgerRef = ledgerRefByLedgerId.get(toTrimmedString(po.fg_stock_ledger_id)) ?? null;
@@ -6222,13 +6229,13 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       const shopfloorSlocId = await resolveOutputStorageLocationId(toTrimmedString(po.stroke_master_id) || null, toTrimmedString(po.po_type) || null);
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
 
-      // §Q1-2026-09-29 — output-side PID block for CORS, same as COR6's output check.
+      // §Q1-2026-09-29 (batch-precise) — output-side PID block for CORS, same as COR6's.
       if (
         shopfloorSlocId &&
-        ((await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "UNRESTRICTED")) ||
-          (await hasPhysicalInventoryBlock(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION")))
+        ((await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "UNRESTRICTED", reversalBatchNumber)) ||
+          (await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION", reversalBatchNumber)))
       ) {
-        return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count — CORS reversal is blocked until the PID is posted or cancelled.");
+        return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count for this batch — CORS reversal is blocked until the PID is posted or cancelled.");
       }
 
       const qiReleaseRef = stockLedgerRefById.get(toTrimmedString(po.qi_release_stock_ledger_id)) ?? null;
