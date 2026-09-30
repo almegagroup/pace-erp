@@ -578,9 +578,16 @@ export default function SO05CreatePage() {
     }
   }, [companyId, form.company_id]);
 
+  // business owner, 2026-09-30: this call never passed company_id or
+  // status -- listMaterials() only scopes to a company (via
+  // material_company_ext) when the caller asks it to, and every OTHER
+  // query on this page (customers, transporters, locations) already does.
+  // Without it, this page leaked EVERY company's materials (a CMP003-only
+  // item showed up in CMP006's SO) and showed inactive materials too.
   const materialsQ = useQuery({
-    queryKey: ["so05-materials"],
-    queryFn: () => listMaterials({ limit: 1000 }),
+    queryKey: ["so05-materials", companyId],
+    queryFn: () => listMaterials({ company_id: companyId, status: "ACTIVE", limit: 1000 }),
+    enabled: !!companyId,
     select: rows,
   });
   const locationsQ = useQuery({

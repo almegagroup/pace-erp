@@ -312,9 +312,16 @@ export default function PlanFeedPage() {
 
   // ── Shared master lookups ─────────────────────────────────────────────────
   const [poTypeFilter, setPoTypeFilter] = useState("");
+  // business owner, 2026-09-30: was missing company_id -- leaked every
+  // company's FG materials into the Create tab's SKU field. Kept as its own
+  // query (scoped to the Create tab's own effectiveCompanyId) rather than
+  // reusing one shared query for both tabs, since the Edit tab below can be
+  // open on an FO from a DIFFERENT company than whatever the top-level
+  // company selector currently shows -- see editMaterialsQ.
   const materialsQ = useQuery({
-    queryKey: ["plan-feed-fg-materials"],
-    queryFn: () => listMaterials({ material_type: "FG", status: "ACTIVE", limit: 500 }),
+    queryKey: ["plan-feed-fg-materials", effectiveCompanyId],
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "FG", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectiveCompanyId,
     select: (d) => d?.data ?? [],
   });
   // §131.5 item #1 -- when the FO is MTEST-typed, the SKU field is restricted to ONLY
@@ -561,6 +568,21 @@ export default function PlanFeedPage() {
     return () => window.clearTimeout(timeoutId);
   }, [editSearch]);
   const [editData, setEditData] = useState(null);
+  // business owner, 2026-09-30: the Edit tab can be open on an FO from a
+  // DIFFERENT company than the top-level company selector currently shows
+  // (Edit looks the FO up by number, independent of effectiveCompanyId) --
+  // so its own SKU field needs its own company-scoped query, not
+  // materialsQ/nonMtestMaterials (which are Create-tab-scoped).
+  const editMaterialsQ = useQuery({
+    queryKey: ["plan-feed-fg-materials", editData?.company_id],
+    queryFn: () => listMaterials({ company_id: editData.company_id, material_type: "FG", status: "ACTIVE", limit: 500 }),
+    enabled: !!editData?.company_id,
+    select: (d) => d?.data ?? [],
+  });
+  const editNonMtestMaterials = useMemo(
+    () => (editMaterialsQ.data ?? []).filter((m) => !mtestSkuIdSet.has(m.id)),
+    [editMaterialsQ.data, mtestSkuIdSet],
+  );
   const [editDraft, setEditDraft] = useState({});
   const [selectedEditParty, setSelectedEditParty] = useState(null);
   // FO Number is a pure label (every real relationship keys off plan_feed.id) --
@@ -1492,7 +1514,7 @@ export default function PlanFeedPage() {
                     ) : (
                       <SkuTypeaheadField
                         skuText={editDraft.sku ?? ""}
-                        materials={nonMtestMaterials}
+                        materials={editNonMtestMaterials}
                         placeholder="Type SKU — pick a match, or keep typing for a new one"
                         disabled={skuLockedForEdit || editData.status === "CANCELLED"}
                         onTextChange={(text) => setEditDraft(d => ({ ...d, sku: text, material_id: "" }))}

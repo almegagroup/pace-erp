@@ -3284,16 +3284,32 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
       ? (toTrimmedString(headerUpdate.ship_to_state as string | null) || toTrimmedString(headerUpdate.bill_to_state as string | null) || null)
       : (toTrimmedString(so.ship_to_state) || toTrimmedString(so.bill_to_state) || null);
 
+    // §Q-so-edit-2026-09-30 (business owner, found live in prod CMP006) — a
+    // caller that edits ONLY header/identity fields (e.g. SODetailPage.jsx's
+    // handleSaveIdentity(), which posts buildIdentityPayload() with no
+    // "lines" key at all) never intends to touch lines. §133.10's own fix
+    // below ("unmapped lines missing from the submitted set are deleted")
+    // could not tell "lines omitted -- leave them alone" apart from "lines
+    // explicitly sent as []" -- both produced an empty submittedLines/
+    // submittedIds, so every unmapped line on the SO was silently deleted.
+    // Confirmed live: SO 9000000427/9000000428 (CMP006) each lost all of
+    // their (unmapped) lines the moment their Bill-To was corrected via this
+    // exact identity-only path. linesKeyPresent gates every line mutation
+    // (removal-block check, delete, and the new-line insert further below)
+    // so an identity-only PUT can never touch a line it was never shown.
+    const linesKeyPresent = Object.prototype.hasOwnProperty.call(body, "lines");
     const submittedLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
     const submittedIds = new Set(submittedLines.map((line) => toTrimmedString(line.id)).filter(Boolean));
 
     // A Mapped line missing from the submitted set = an attempted removal.
-    for (const line of lines) {
-      const lineId = toTrimmedString(line.id);
-      const mappedQty = mappedByLine.get(lineId) ?? 0;
-      if (mappedQty > QTY_TOL_SO_EDIT && !submittedIds.has(lineId)) {
-        return salesErrorResponse(req, ctx, "SO_EDIT_MAPPED_LINE_REMOVAL_BLOCKED", 422,
-          `Line is already Mapped (qty ${mappedQty}) — unmap it in SO Map first before removing it.`);
+    if (linesKeyPresent) {
+      for (const line of lines) {
+        const lineId = toTrimmedString(line.id);
+        const mappedQty = mappedByLine.get(lineId) ?? 0;
+        if (mappedQty > QTY_TOL_SO_EDIT && !submittedIds.has(lineId)) {
+          return salesErrorResponse(req, ctx, "SO_EDIT_MAPPED_LINE_REMOVAL_BLOCKED", 422,
+            `Line is already Mapped (qty ${mappedQty}) — unmap it in SO Map first before removing it.`);
+        }
       }
     }
 
@@ -3355,9 +3371,11 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
     // are validated via the same prepareUnifiedSoLine() Create uses and
     // inserted, numbered to continue after the highest existing line_number
     // (existing kept lines' own line_number is never touched).
-    const removableLineIds = lines
-      .map((line) => toTrimmedString(line.id))
-      .filter((lineId) => lineId && !submittedIds.has(lineId) && (mappedByLine.get(lineId) ?? 0) <= QTY_TOL_SO_EDIT);
+    const removableLineIds = linesKeyPresent
+      ? lines
+        .map((line) => toTrimmedString(line.id))
+        .filter((lineId) => lineId && !submittedIds.has(lineId) && (mappedByLine.get(lineId) ?? 0) <= QTY_TOL_SO_EDIT)
+      : [];
     if (removableLineIds.length > 0) {
       const { error: deleteError } = await serviceRoleClient
         .schema("erp_procurement").from("sales_order_line")
