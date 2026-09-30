@@ -227,6 +227,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // pattern: a separate cross-document report gets its own resource, "everyone" per §119.5,
   // never shared with the document-lifecycle resource (bug pattern #6, §117.6's own note).
   "GET:/api/procurement/physical-inventory-differences": { skipAcl: false, resourceCode: "PROC_PI_DIFFERENCES", action: "VIEW" },
+  // §Q6-2026-09-29 — MI20's own Document Number/Batch Number typeahead search endpoints,
+  // same resource/action as the report itself (they exist only to feed its own filters).
+  "GET:/api/procurement/physical-inventory-differences/search-document-numbers": { skipAcl: false, resourceCode: "PROC_PI_DIFFERENCES", action: "VIEW" },
+  "GET:/api/procurement/physical-inventory-differences/search-batch-numbers": { skipAcl: false, resourceCode: "PROC_PI_DIFFERENCES", action: "VIEW" },
   // §119.12 — Create page (ITEM_WISE) material-location preview. Same EDIT tier as create
   // itself (Auditor-only) since this is part of the Create flow, not a general report.
   "GET:/api/procurement/physical-inventory-material-locations": { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" },

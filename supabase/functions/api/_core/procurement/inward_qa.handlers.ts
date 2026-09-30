@@ -14,6 +14,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { hasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
@@ -859,6 +860,13 @@ export async function submitUsageDecisionHandler(
     const storageLocationId = toTrimmedString(grn.storage_location_id);
     if (!storageLocationId) {
       throw new ApiError(500, "GRN has no storage location — cannot post QA decision");
+    }
+
+    // §Q1-2026-09-29 — extend the PID posting-block check here: an active Physical Inventory on
+    // this material/location/QUALITY_INSPECTION stock must block a usage decision the same way it
+    // already blocks GRN/SO/RTV/DO postings.
+    if (await hasPhysicalInventoryBlock(String(qaDocument.material_id), storageLocationId, "QUALITY_INSPECTION")) {
+      throw new ApiError(409, "This material/location is under an active Physical Inventory count — usage decision is blocked until the PID is posted or cancelled.");
     }
 
     const baseUom = toTrimmedString(qaDocument.uom_code || grn.uom_code);

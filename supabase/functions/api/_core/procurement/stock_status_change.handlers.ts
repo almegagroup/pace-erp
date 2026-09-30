@@ -17,6 +17,7 @@ import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { hasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -383,6 +384,16 @@ export async function postStockStatusChangeHandler(req: Request, ctx: SscHandler
         return sscError(req, ctx, "SSC_LINE_INSUFFICIENT_BALANCE", 409,
           `Line ${index + 1}: only ${sourceBalance.quantity} available in ${line.fromStockType}, requested ${baseQuantity}.`);
       }
+      // §Q1-2026-09-29 — Stock Status Change had NO PID posting-block at all before this fix.
+      // Checked before even the pending/PENDING_APPROVAL row is created, not just before the
+      // immediate post — an approval later shouldn't be able to slip a change through against a
+      // count that started in between (approveStockStatusChangePostingHandler re-checks too).
+      if (
+        (await hasPhysicalInventoryBlock(line.materialId, line.storageLocationId, line.fromStockType)) ||
+        (await hasPhysicalInventoryBlock(line.materialId, line.storageLocationId, line.toStockType))
+      ) {
+        return sscError(req, ctx, "SSC_LINE_PI_BLOCKED", 409, `Line ${index + 1}: this material/location is under an active Physical Inventory count.`);
+      }
 
       const transition = TRANSITIONS[`${line.fromStockType}->${line.toStockType}`];
       const documentNumber = await generateSscDocNumber();
@@ -534,6 +545,14 @@ export async function approveStockStatusChangePostingHandler(req: Request, ctx: 
     const unitValue = balances[sourceStockType]?.valuationRate ?? 0;
     if ((balances[sourceStockType]?.quantity ?? 0) + EPSILON < quantity) {
       return sscError(req, ctx, "SSC_APPROVE_INSUFFICIENT_BALANCE", 409, "Balance has changed and is no longer sufficient to approve this line.");
+    }
+    // §Q1-2026-09-29 — re-check the PID block at approval time too, not just at proposal time —
+    // a PID could have started in the gap between the QA proposal and the manager's approval.
+    if (
+      (await hasPhysicalInventoryBlock(materialId, toTrimmedString(row.storage_location_id), sourceStockType)) ||
+      (await hasPhysicalInventoryBlock(materialId, toTrimmedString(row.storage_location_id), toUpperTrimmedString(row.to_stock_type)))
+    ) {
+      return sscError(req, ctx, "SSC_APPROVE_PI_BLOCKED", 409, "This material/location is now under an active Physical Inventory count — cannot approve.");
     }
 
     const movements = [

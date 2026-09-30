@@ -17,6 +17,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1063,6 +1064,11 @@ export async function listPIDsHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const status = toUpperTrimmedString(url.searchParams.get("status"));
+    // §Q2-2026-09-29 (business owner) — IN01 list page needs a Count Date range so a supervisor
+    // can pull "everything created for tomorrow's count" the same day it's generated, not just
+    // the most recent 100 documents.
+    const countDateFrom = toTrimmedString(url.searchParams.get("count_date_from"));
+    const countDateTo = toTrimmedString(url.searchParams.get("count_date_to"));
     const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
 
     let query = serviceRoleClient
@@ -1075,6 +1081,8 @@ export async function listPIDsHandler(
     if (status && PID_STATUSES.has(status)) {
       query = query.eq("status", status);
     }
+    if (countDateFrom) query = query.gte("count_date", countDateFrom);
+    if (countDateTo) query = query.lte("count_date", countDateTo);
 
     const scopedCompanyIds = await listPIScopedCompanyIds(ctx);
     if (scopedCompanyIds && scopedCompanyIds.length === 0) {
@@ -1321,6 +1329,16 @@ async function getPIDForResource(
         line_number: index + 1,
       }));
 
+    // §119 blind-count principle (business owner, 2026-09-29) — MI04 AND MI05 must both be
+    // genuinely blind, not just hidden in the UI. Strip book_qty/difference_qty from the wire
+    // payload itself for both count-entry resources so a network-tools-savvy counter can't see
+    // the book figure either. MI02/MI03 (PID_RESOURCE) and MI20 keep them — those are review/
+    // reporting surfaces, not the blind-entry moment.
+    const isBlindCountResource = resourceCode === PID_COUNT_RESOURCE || resourceCode === PID_RECOUNT_RESOURCE;
+    const responseItems = isBlindCountResource
+      ? sortedItems.map(({ book_qty: _bookQty, difference_qty: _differenceQty, ...rest }) => rest)
+      : sortedItems;
+
     return okResponse(
       {
         ...hydrated,
@@ -1328,7 +1346,7 @@ async function getPIDForResource(
         company_name: company?.company_name ?? null,
         storage_location_code: locationMap.get(toTrimmedString(document.storage_location_id))?.code ?? null,
         storage_location_name: locationMap.get(toTrimmedString(document.storage_location_id))?.name ?? null,
-        items: sortedItems,
+        items: responseItems,
       },
       ctx.request_id,
       req,
@@ -2435,7 +2453,14 @@ export async function listPIDifferencesHandler(
     const requestedCompanyIds = parseMultiValueParams(url, "company_ids", "company_id");
     const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
     const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
+    // §Q6-2026-09-29 (business owner) — SAP MI20's selection screen supports a range/multi-select
+    // on Document Number and Batch Number, not just one substring — exact-match lists, same
+    // pattern as the material/location filters above. document_number (singular) stays as a
+    // substring fallback for a quick free-type search; document_numbers (plural) is the
+    // exact-match list the new MultiValueFilterField picker sends.
+    const documentNumbers = parseMultiValueParams(url, "document_numbers");
     const documentNumber = toTrimmedString(url.searchParams.get("document_number"));
+    const batchNumbers = parseMultiValueParams(url, "batch_numbers");
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const differenceType = toUpperTrimmedString(url.searchParams.get("difference_type")); // GAIN/LOSS/ZERO
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
@@ -2465,7 +2490,8 @@ export async function listPIDifferencesHandler(
       .order("posting_date", { ascending: false })
       .limit(limit);
     if (effectiveCompanyIds) docQuery = docQuery.in("company_id", effectiveCompanyIds);
-    if (documentNumber) docQuery = docQuery.ilike("document_number", `%${documentNumber}%`);
+    if (documentNumbers.length > 0) docQuery = docQuery.in("document_number", documentNumbers);
+    else if (documentNumber) docQuery = docQuery.ilike("document_number", `%${documentNumber}%`);
     if (status && PID_STATUSES.has(status)) docQuery = docQuery.eq("status", status);
     if (dateFrom) docQuery = docQuery.gte("posting_date", dateFrom);
     if (dateTo) docQuery = docQuery.lte("posting_date", dateTo);
@@ -2479,10 +2505,11 @@ export async function listPIDifferencesHandler(
     let itemQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("physical_inventory_item")
-      .select("id, document_id, material_id, stock_type, storage_location_id, batch_number, book_qty, physical_qty, difference_qty, base_uom_code, posted_stock_document_id, counted_by, counted_at")
+      .select("id, document_id, material_id, stock_type, storage_location_id, batch_number, packing_order_id, book_qty, physical_qty, difference_qty, base_uom_code, posted_stock_document_id, counted_by, counted_at")
       .in("document_id", documentIds);
     if (storageLocationIds.length > 0) itemQuery = itemQuery.in("storage_location_id", storageLocationIds);
     if (materialIds.length > 0) itemQuery = itemQuery.in("material_id", materialIds);
+    if (batchNumbers.length > 0) itemQuery = itemQuery.in("batch_number", batchNumbers);
 
     const { data: itemRows, error: itemError } = await itemQuery;
     if (itemError) throw new Error("PI_DIFF_REPORT_FAILED");
@@ -2497,11 +2524,20 @@ export async function listPIDifferencesHandler(
     const companyIds = [...new Set(documents.map((d) => toTrimmedString(d.company_id)).filter(Boolean))];
     const locationIds = [...new Set(items.map((i) => toTrimmedString(i.storage_location_id)).filter(Boolean))];
     const matIds = [...new Set(items.map((i) => toTrimmedString(i.material_id)).filter(Boolean))];
+    // §Q1-followup-2026-09-29 — same FG identity gap as MI04/MI05/MI02-MI03: an FG item is
+    // keyed by batch_number + packing_order_id together (§83.14 balance-barrel), so this
+    // report needs the Packing PO number resolved too, not just batch_number.
+    const packingOrderIds = [...new Set(items.map((i) => toTrimmedString(i.packing_order_id)).filter(Boolean))];
+    // §Q6-2026-09-29 — SAP MI20 shows who counted each line; ours resolved counted_by/counted_at
+    // onto the item row but never surfaced a display name to the caller.
+    const countedByIds = [...new Set(items.map((i) => toTrimmedString(i.counted_by)).filter(Boolean))];
 
-    const [companyRows, locationRows, materialRows] = await Promise.all([
+    const [companyRows, locationRows, materialRows, packingOrderMap, countedByDisplayMap] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      getPackingOrdersByIds(packingOrderIds),
+      resolveUserDisplayNames(countedByIds),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
@@ -2568,6 +2604,7 @@ export async function listPIDifferencesHandler(
         pi_document_id: doc?.id ?? null,
         pi_document_number: doc?.document_number ?? null,
         pi_status: doc?.status ?? null,
+        count_date: doc?.count_date ?? null,
         posting_date: doc?.posting_date ?? null,
         company_code: company?.company_code ?? null,
         company_name: company?.company_name ?? null,
@@ -2577,6 +2614,9 @@ export async function listPIDifferencesHandler(
         material_name: material?.material_name ?? null,
         material_external_code: material?.external_code ?? null,
         batch_number: item.batch_number ?? null,
+        packing_order_number: packingOrderMap.get(toTrimmedString(item.packing_order_id))?.po_number ?? null,
+        counted_by_display: countedByDisplayMap.get(toTrimmedString(item.counted_by)) ?? null,
+        counted_at: item.counted_at ?? null,
         stock_type: item.stock_type,
         book_qty: item.book_qty,
         physical_qty: item.physical_qty,
@@ -2605,5 +2645,108 @@ export async function listPIDifferencesHandler(
     const code = error instanceof Error ? error.message : "PI_DIFF_REPORT_FAILED";
     const status = code === "PI_SCOPE_VIOLATION" ? 403 : 500;
     return piErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §Q6-2026-09-29 — typeahead search backing MI20's Document Number MultiValueFilterField,
+// same shape/pattern as stock_reports.handlers.ts's searchStockLedgerBatchNumbers/
+// searchStockLedgerPackingPoNumbers (this module has its own company-scope helper
+// (listPIScopedCompanyIds) instead of that file's resolveCompanyScopeList, so mirrored
+// rather than imported).
+export async function searchPIDocumentNumbersHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const q = toTrimmedString(url.searchParams.get("q"));
+    const requestedCompanyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const scopedCompanyIds = await listPIScopedCompanyIds(ctx);
+    let effectiveCompanyIds: string[] | null;
+    if (requestedCompanyIds.length > 0) {
+      if (scopedCompanyIds && requestedCompanyIds.some((id) => !scopedCompanyIds.includes(id))) {
+        return piErrorResponse(req, ctx, "PI_SCOPE_VIOLATION", 403, "One or more requested companies are outside your access.");
+      }
+      effectiveCompanyIds = requestedCompanyIds;
+    } else {
+      effectiveCompanyIds = scopedCompanyIds;
+    }
+    if (effectiveCompanyIds && effectiveCompanyIds.length === 0) {
+      return okResponse({ data: [] }, ctx.request_id, req);
+    }
+
+    let query = serviceRoleClient
+      .schema("erp_procurement")
+      .from("physical_inventory_document")
+      .select("document_number")
+      .order("document_number", { ascending: false })
+      .limit(50);
+    if (effectiveCompanyIds) query = query.in("company_id", effectiveCompanyIds);
+    if (q) query = query.ilike("document_number", `%${q}%`);
+
+    const { data, error } = await query;
+    if (error) throw new Error("PI_DOC_NUMBER_SEARCH_FAILED");
+    const values = [...new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.document_number)).filter(Boolean))]
+      .map((value) => ({ value, label: value }));
+    return okResponse({ data: values }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PI_DOC_NUMBER_SEARCH_FAILED";
+    return piErrorResponse(req, ctx, code, code === "PI_SCOPE_VIOLATION" ? 403 : 500, code);
+  }
+}
+
+// §Q6-2026-09-29 — typeahead search backing MI20's Batch Number MultiValueFilterField.
+// physical_inventory_item has no company_id column of its own — scope by first resolving
+// this caller's allowed documents, then searching items under those documents only.
+export async function searchPIBatchNumbersHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const q = toTrimmedString(url.searchParams.get("q"));
+    const requestedCompanyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const scopedCompanyIds = await listPIScopedCompanyIds(ctx);
+    let effectiveCompanyIds: string[] | null;
+    if (requestedCompanyIds.length > 0) {
+      if (scopedCompanyIds && requestedCompanyIds.some((id) => !scopedCompanyIds.includes(id))) {
+        return piErrorResponse(req, ctx, "PI_SCOPE_VIOLATION", 403, "One or more requested companies are outside your access.");
+      }
+      effectiveCompanyIds = requestedCompanyIds;
+    } else {
+      effectiveCompanyIds = scopedCompanyIds;
+    }
+    if (effectiveCompanyIds && effectiveCompanyIds.length === 0) {
+      return okResponse({ data: [] }, ctx.request_id, req);
+    }
+
+    let docQuery = serviceRoleClient.schema("erp_procurement").from("physical_inventory_document").select("id");
+    if (effectiveCompanyIds) docQuery = docQuery.in("company_id", effectiveCompanyIds);
+    const { data: docRows, error: docError } = await docQuery;
+    if (docError) throw new Error("PI_BATCH_SEARCH_FAILED");
+    const documentIds = ((docRows ?? []) as JsonRecord[]).map((row) => String(row.id));
+    if (documentIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    let itemQuery = serviceRoleClient
+      .schema("erp_procurement")
+      .from("physical_inventory_item")
+      .select("batch_number")
+      .not("batch_number", "is", null)
+      .in("document_id", documentIds)
+      .order("batch_number", { ascending: true })
+      .limit(200);
+    if (q) itemQuery = itemQuery.ilike("batch_number", `%${q}%`);
+
+    const { data, error } = await itemQuery;
+    if (error) throw new Error("PI_BATCH_SEARCH_FAILED");
+    const values = [...new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.batch_number)).filter(Boolean))]
+      .slice(0, 50)
+      .map((value) => ({ value, label: value }));
+    return okResponse({ data: values }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PI_BATCH_SEARCH_FAILED";
+    return piErrorResponse(req, ctx, code, code === "PI_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }

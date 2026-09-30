@@ -12,6 +12,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
+import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listPIDocuments } from "../procurementApi.js";
 import { getPIStatusMeta } from "./piStatusPresentation.js";
 
@@ -25,17 +26,30 @@ function formatDate(value) {
 
 const GRID_COLUMNS = [
   { key: "document_number", label: "Document #", width: "140px" },
-  { key: "company_name", label: "Company", width: "160px", render: (row) => row.company_name ?? row.company_code ?? "—" },
+  {
+    key: "company_name",
+    label: "Company",
+    width: "160px",
+    render: (row) => row.company_name ?? row.company_code ?? "—",
+    copyValue: (row) => row.company_name ?? row.company_code ?? "",
+  },
   { key: "mode", label: "Mode", width: "120px" },
-  { key: "count_date", label: "Count Date", width: "110px", render: (row) => formatDate(row.count_date) },
-  { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
+  { key: "count_date", label: "Count Date", width: "110px", render: (row) => formatDate(row.count_date), copyValue: (row) => formatDate(row.count_date) },
+  { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date), copyValue: (row) => formatDate(row.posting_date) },
   { key: "item_count", label: "Items", width: "70px" },
-  { key: "counted_count", label: "Counted", width: "80px", render: (row) => `${row.counted_count ?? 0}/${row.item_count ?? 0}` },
+  {
+    key: "counted_count",
+    label: "Counted",
+    width: "80px",
+    render: (row) => `${row.counted_count ?? 0}/${row.item_count ?? 0}`,
+    copyValue: (row) => `${row.counted_count ?? 0}/${row.item_count ?? 0}`,
+  },
   {
     key: "is_opening_stock_source",
     label: "Opening Src",
     width: "90px",
     render: (row) => (row.is_opening_stock_source ? "Yes" : "—"),
+    copyValue: (row) => (row.is_opening_stock_source ? "Yes" : ""),
   },
   {
     key: "status",
@@ -67,7 +81,10 @@ export default function PIDocumentListPage() {
   const [companyId, setCompanyId] = useState("");
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const [rows, setRows] = useState([]);
-  const [filters, setFilters] = useState({ status: "" });
+  // §Q2-2026-09-29 — Count Date range (business owner: "kalker date diye kon plant er jonno ki
+  // ki PID create korechi" — pull every PID generated for a given count date, not just the
+  // most recent 100 across all dates).
+  const [filters, setFilters] = useState({ status: "", countDateFrom: "", countDateTo: "" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -85,6 +102,8 @@ export default function PIDocumentListPage() {
       const result = await listPIDocuments({
         company_id: effectiveCompanyId || undefined,
         status: nextFilters.status || undefined,
+        count_date_from: nextFilters.countDateFrom || undefined,
+        count_date_to: nextFilters.countDateTo || undefined,
       });
       setRows(Array.isArray(result?.items) ? result.items : []);
     } catch (loadError) {
@@ -134,6 +153,20 @@ export default function PIDocumentListPage() {
     await loadDocuments(next);
   }
 
+  function handleExport() {
+    if (filteredRows.length === 0) return;
+    const exportRows = filteredRows.map((row) => {
+      const flat = {};
+      for (const column of GRID_COLUMNS) flat[column.key] = getColumnFilterText(column, row);
+      return flat;
+    });
+    downloadCsvFile({
+      fileName: `pid_register_${filters.countDateFrom || "all"}_${filters.countDateTo || "dates"}.csv`,
+      columns: GRID_COLUMNS.map((column) => ({ key: column.key, label: column.label })),
+      rows: exportRows,
+    });
+  }
+
   function openDetail(row) {
     openScreen(OPERATION_SCREENS.PROC_PI_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/physical-inventory/${encodeURIComponent(row.id)}`);
@@ -176,6 +209,13 @@ export default function PIDocumentListPage() {
           label: loading ? "Refreshing..." : "Refresh",
           tone: "neutral",
           onClick: () => void loadDocuments(filters),
+        },
+        {
+          key: "export",
+          label: "Export Excel",
+          tone: "neutral",
+          onClick: handleExport,
+          disabled: filteredRows.length === 0,
         },
         {
           // ACL gates who actually sees this succeed server-side (PROC_PI_LIST:EDIT,
@@ -233,7 +273,7 @@ export default function PIDocumentListPage() {
           )}
         >
           <div className="grid gap-3">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-3">
               <ErpDenseFormRow label="Status Filter">
                 <select
                   value={filters.status}
@@ -246,6 +286,22 @@ export default function PIDocumentListPage() {
                     </option>
                   ))}
                 </select>
+              </ErpDenseFormRow>
+              <ErpDenseFormRow label="Count Date From">
+                <input
+                  type="date"
+                  value={filters.countDateFrom}
+                  onChange={(event) => void applyFilters({ countDateFrom: event.target.value })}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                />
+              </ErpDenseFormRow>
+              <ErpDenseFormRow label="Count Date To">
+                <input
+                  type="date"
+                  value={filters.countDateTo}
+                  onChange={(event) => void applyFilters({ countDateTo: event.target.value })}
+                  className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                />
               </ErpDenseFormRow>
             </div>
             <div className="flex items-center gap-2">

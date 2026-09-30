@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { hasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -157,23 +158,6 @@ async function verifyLocationMapped(companyId: string, storageLocationId: string
     .limit(1)
     .maybeSingle();
   if (error || !data) throw new Error("GRN_LOCATION_MAP_NOT_FOUND");
-}
-
-async function hasPhysicalInventoryBlock(
-  materialId: string,
-  storageLocationId: string,
-  stockType: string,
-): Promise<boolean> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory")
-    .from("physical_inventory_block")
-    .select("id")
-    .eq("material_id", materialId)
-    .eq("storage_location_id", storageLocationId)
-    .eq("stock_type", stockType)
-    .maybeSingle();
-  if (error) throw new Error("MATERIAL_POSTING_BLOCK_LOOKUP_FAILED");
-  return Boolean(data?.id);
 }
 
 async function createQaDocumentForGrn(
