@@ -17,6 +17,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1123,14 +1124,36 @@ export async function listPIDsHandler(
       : { data: [] };
     const companyMap = new Map(((companyRows ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
 
+    // Only LOCATION_WISE PIDs carry a header-level storage_location_id
+    // (ITEM_WISE/MANUAL_WISE span multiple locations per line instead) --
+    // found live 2026-09-30, CMP003: the column was always populated
+    // correctly at create time, but this list handler's own `.select("*")`
+    // returned it as a raw UUID and the frontend grid never had a column
+    // for it at all, so the list never showed which location a PID covers.
+    const locationIds = [...new Set(rows.map((r) => toTrimmedString(r.storage_location_id)).filter(Boolean))];
+    let locationRows: JsonRecord[];
+    try {
+      locationRows = locationIds.length
+        ? await fetchInChunks<JsonRecord>(locationIds, (idChunk) =>
+          serviceRoleClient.schema("erp_inventory").from("storage_location_master")
+            .select("id, code, name").in("id", idChunk))
+        : [];
+    } catch {
+      return piErrorResponse(req, ctx, "PI_LIST_LOCATION_LOOKUP_FAILED", 500, "Unable to resolve storage locations.");
+    }
+    const locationMap = new Map(locationRows.map((l) => [String(l.id), l]));
+
     return okResponse(
       {
         items: rows.map((row) => {
           const company = companyMap.get(toTrimmedString(row.company_id));
+          const location = locationMap.get(toTrimmedString(row.storage_location_id));
           return {
             ...row,
             company_code: company?.company_code ?? null,
             company_name: company?.company_name ?? null,
+            storage_location_code: location?.code ?? null,
+            storage_location_name: location?.name ?? null,
             item_count: counts.get(String(row.id))?.item_count ?? 0,
             counted_count: counts.get(String(row.id))?.counted_count ?? 0,
           };

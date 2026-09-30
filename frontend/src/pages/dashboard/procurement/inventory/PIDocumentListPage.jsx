@@ -27,6 +27,17 @@ const GRID_COLUMNS = [
   { key: "document_number", label: "Document #", width: "140px" },
   { key: "company_name", label: "Company", width: "160px", render: (row) => row.company_name ?? row.company_code ?? "—" },
   { key: "mode", label: "Mode", width: "120px" },
+  {
+    key: "location",
+    label: "Location",
+    width: "180px",
+    render: (row) => (row.storage_location_code || row.storage_location_name
+      ? `${row.storage_location_code ?? "—"} — ${row.storage_location_name ?? "—"}`
+      : row.mode === "LOCATION_WISE" ? "—" : "Multiple"),
+    copyValue: (row) => (row.storage_location_code || row.storage_location_name
+      ? `${row.storage_location_code ?? ""} ${row.storage_location_name ?? ""}`.trim()
+      : ""),
+  },
   { key: "count_date", label: "Count Date", width: "110px", render: (row) => formatDate(row.count_date) },
   { key: "posting_date", label: "Posting Date", width: "110px", render: (row) => formatDate(row.posting_date) },
   { key: "item_count", label: "Items", width: "70px" },
