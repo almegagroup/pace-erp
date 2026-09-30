@@ -88,8 +88,11 @@ export default function ChangeBomItemApprovalPage() {
     select: (d) => d?.data ?? [],
     enabled: Boolean(companyId),
   });
-  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM"], queryFn: () => listMaterials({ material_type: "RM", limit: 500 }), select: (d) => d?.data ?? [] });
-  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT"], queryFn: () => listMaterials({ material_type: "INT", limit: 500 }), select: (d) => d?.data ?? [] });
+  // business owner, 2026-09-30: same cross-company material leak found across
+  // the SO create pages -- these never passed company_id, so a substitution
+  // candidate from another company showed up in this stroke's BOM line too.
+  const rmMaterialsQ = useQuery({ queryKey: ["om-materials", "RM", companyId], queryFn: () => listMaterials({ material_type: "RM", limit: 500, company_id: companyId || undefined }), enabled: Boolean(companyId), select: (d) => d?.data ?? [] });
+  const intMaterialsQ = useQuery({ queryKey: ["om-materials", "INT", companyId], queryFn: () => listMaterials({ material_type: "INT", limit: 500, company_id: companyId || undefined }), enabled: Boolean(companyId), select: (d) => d?.data ?? [] });
   const groups = groupsQ.data ?? [];
   const lineMaterialsByType = { RM: rmMaterialsQ.data ?? [], INT: intMaterialsQ.data ?? [] };
 

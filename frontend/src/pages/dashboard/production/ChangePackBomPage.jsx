@@ -47,7 +47,10 @@ export default function ChangePackBomPage() {
     queryFn: () => listPackBoms({ status: "ACTIVE" }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
-  const pmMaterialsQ = useQuery({ queryKey: ["om-materials", "PM"], queryFn: () => listMaterials({ material_type: "PM", limit: 500 }), select: (d) => d?.data ?? [] });
+  // business owner, 2026-09-30: same cross-company material leak found across
+  // the SO create pages -- this never passed company_id, so a substitution
+  // candidate from another company showed up in this Pack BOM's line too.
+  const pmMaterialsQ = useQuery({ queryKey: ["om-materials", "PM", bom?.company_id], queryFn: () => listMaterials({ material_type: "PM", limit: 500, company_id: bom?.company_id || undefined }), enabled: Boolean(bom?.company_id), select: (d) => d?.data ?? [] });
   const groupsQ = useQuery({
     queryKey: ["om-material-groups", bom?.company_id],
     queryFn: () => listMaterialCategoryGroups(bom?.company_id),

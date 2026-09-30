@@ -281,7 +281,15 @@ export default function SOCreatePage() {
     { company_id: form.company_id, limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" },
     { enabled: Boolean(form.company_id) }
   );
-  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
+  // business owner, 2026-09-30: same cross-company material leak found on
+  // SO05CreatePage.jsx (commit f58ee63) -- this query never passed
+  // company_id either, right next to customerQuery above which already does
+  // it correctly. Without it, a CMP003-only material showed up in CMP006's
+  // RM/PM/INT dropdown here too.
+  const materialQuery = useMaterialOptionsQuery(
+    { company_id: form.company_id, limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" },
+    { enabled: Boolean(form.company_id) }
+  );
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const customers = customerQuery.customers;
   const materials = materialQuery.materials;
