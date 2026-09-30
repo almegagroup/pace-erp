@@ -1677,6 +1677,7 @@ async function assertProcessOrderStockAvailability(
   // every RM/PM/INT issue location this PO would touch must be blocked while under an active
   // count, independent of whether stock happens to be sufficient.
   const blockedNeed = await findFirstPhysicalInventoryBlock(
+    String(po.company_id),
     Array.from(stockNeeds.values()).map((need) => ({
       materialId: need.materialId,
       storageLocationId: need.storageLocationId,
@@ -4588,6 +4589,7 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     // §Q1-2026-09-29 — same PID posting-block as assertProcessOrderStockAvailability, mirrored
     // here since Verify's own check is a separate path (see comment above).
     const verifyBlockedNeed = await findFirstPhysicalInventoryBlock(
+      String(po.company_id),
       Array.from(prospectiveStockNeeds.values()).map((need) => ({
         materialId: need.materialId,
         storageLocationId: need.storageLocationId,
@@ -5092,6 +5094,7 @@ async function runMtsProcessOrderVerify(
   // block — so this uses the plain "any batch" hasPhysicalInventoryBlock() (via
   // findFirstPhysicalInventoryBlock with no batchNumber key), same as reverseMtsProcessOrderHandler.
   const mtsVerifyBlockedCombo = await findFirstPhysicalInventoryBlock(
+    String(po.company_id),
     movements.map((m) => ({
       materialId: String(m.material_id ?? ""),
       storageLocationId: String(m.storage_location_id ?? ""),
@@ -5150,6 +5153,7 @@ async function runProcessOrderVerify(
     // §Q1-2026-09-29 — PID posting-block, RM/PM/INT issue side, mirrored from the other two
     // Verify check sites in this file (this is runProcessOrderVerify's own copy).
     const issueBlockedNeed = await findFirstPhysicalInventoryBlock(
+      String(po.company_id),
       Array.from(stockNeeds.values()).map((need) => ({
         materialId: need.materialId,
         storageLocationId: need.storageLocationId,
@@ -5181,7 +5185,7 @@ async function runProcessOrderVerify(
     // same SFG material at this same location must not block this Verify. For INT/MTS
     // (blended, no batch), po.batch_number is naturally null, which correctly matches how
     // the PID registered that blended item too.
-    if (await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION", toTrimmedString(po.batch_number) || null)) {
+    if (await hasPhysicalInventoryBlockForBatch(String(po.company_id), String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION", toTrimmedString(po.batch_number) || null)) {
       return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's SFG output location is under an active Physical Inventory count for this batch — Verify is blocked until the PID is posted or cancelled.");
     }
 
@@ -5629,6 +5633,7 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
     // correction line's storage location; the output (SFG/INT) correction's own
     // location is checked separately below, once its storage location is resolved.
     const correctionBlockedCombo = await findFirstPhysicalInventoryBlock(
+      String(po.company_id),
       corrections
         .filter((correction) => Math.abs(Number(correction.delta_qty ?? 0)) > 0)
         .map((correction) => {
@@ -5840,7 +5845,7 @@ export async function correctProcessOrderHandler(req: Request, ctx: ProdHandlerC
       if (!shopfloorSlocId) return poErr(req, ctx, "PROD_PO_SHOPFLOOR_SLOC_MISSING", 422, "Output storage location not configured for this stroke/segment");
       // §Q1-2026-09-29 (batch-precise) — output-side PID block, same batch-aware reasoning
       // as Verify's own SFG receipt check above.
-      if (await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "UNRESTRICTED", toTrimmedString(po.batch_number) || null)) {
+      if (await hasPhysicalInventoryBlockForBatch(String(po.company_id), String(po.material_id), shopfloorSlocId, "UNRESTRICTED", toTrimmedString(po.batch_number) || null)) {
         return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count for this batch — correction is blocked until the PID is posted or cancelled.");
       }
       const fgUom = await fetchProductionMaterialBaseUom(String(po.material_id));
@@ -6083,6 +6088,7 @@ async function reverseMtsProcessOrderHandler(
   // §Q1-2026-09-29 — same PID posting-block as the non-MTS CORS path, checked against
   // every combo this reversal is about to touch (RM/PM restore, hold reversals, FG).
   const mtsReverseBlockedCombo = await findFirstPhysicalInventoryBlock(
+    String(po.company_id),
     movements.map((m) => ({
       materialId: String(m.material_id ?? ""),
       storageLocationId: String(m.storage_location_id ?? ""),
@@ -6228,6 +6234,7 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       // posts real stock movements, same as Final/Verify/COR6, so it must be blocked
       // under an active PID too. Checked before the posting loop starts.
       const reverseBlockedCombo = await findFirstPhysicalInventoryBlock(
+        String(po.company_id),
         lines
           .filter((line) => Number(line.actual_qty ?? 0) > 0)
           .map((line) => ({
@@ -6288,8 +6295,8 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       // §Q1-2026-09-29 (batch-precise) — output-side PID block for CORS, same as COR6's.
       if (
         shopfloorSlocId &&
-        ((await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "UNRESTRICTED", reversalBatchNumber)) ||
-          (await hasPhysicalInventoryBlockForBatch(String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION", reversalBatchNumber)))
+        ((await hasPhysicalInventoryBlockForBatch(String(po.company_id), String(po.material_id), shopfloorSlocId, "UNRESTRICTED", reversalBatchNumber)) ||
+          (await hasPhysicalInventoryBlockForBatch(String(po.company_id), String(po.material_id), shopfloorSlocId, "QUALITY_INSPECTION", reversalBatchNumber)))
       ) {
         return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "This Process PO's output location is under an active Physical Inventory count for this batch — CORS reversal is blocked until the PID is posted or cancelled.");
       }

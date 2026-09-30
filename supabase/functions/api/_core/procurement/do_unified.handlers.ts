@@ -3045,7 +3045,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
 
       const movements: JsonRecord[] = [];
       for (const line of group.lines) {
-        const postingBlocked = await hasPhysicalInventoryBlock(line.material_id, line.storage_location_id, "UNRESTRICTED");
+        const postingBlocked = await hasPhysicalInventoryBlock(companyId, line.material_id, line.storage_location_id, "UNRESTRICTED");
         if (postingBlocked) return doErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, `Material has an active physical inventory count in progress (${group.document_number}).${alreadyPostedNote}`);
         let snapshot: JsonRecord;
         try {

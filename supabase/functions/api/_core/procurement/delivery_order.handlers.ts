@@ -1406,7 +1406,7 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
     for (const c of lineComputations) {
       const materialId = toTrimmedString(c.line.material_id);
       const storageLocationId = toTrimmedString(c.line.storage_location_id);
-      const postingBlocked = await hasPhysicalInventoryBlock(materialId, storageLocationId, "UNRESTRICTED");
+      const postingBlocked = await hasPhysicalInventoryBlock(companyId, materialId, storageLocationId, "UNRESTRICTED");
       if (postingBlocked) {
         return doErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
       }

@@ -1582,6 +1582,7 @@ export async function postOpeningStockDocumentHandler(
     // §Q1-2026-09-29 — extend the PID posting-block check here, checked before any line writes
     // (not after), same discipline as §8D's check-before-write fix for Process PO.
     const blockedCombo = await findFirstPhysicalInventoryBlock(
+      toTrimmedString(document.company_id),
       lines
         .filter((line) => !line.posted_stock_document_id)
         .map((line) => ({
