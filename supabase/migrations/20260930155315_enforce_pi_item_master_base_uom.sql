@@ -29,19 +29,3 @@ before insert or update of material_id, base_uom_code
 on erp_procurement.physical_inventory_item
 for each row
 execute function erp_procurement.set_physical_inventory_item_master_uom();
-
--- Correct only uncounted, open CMP003 PID lines; posted and counted records
--- remain immutable audit history.
-update erp_procurement.physical_inventory_item item
-set base_uom_code = master.base_uom_code
-from erp_procurement.physical_inventory_document document,
-     erp_master.material_master master
-where item.document_id = document.id
-  and master.id = item.material_id
-  and document.company_id = (
-    select id from erp_master.companies where company_code = 'CMP003'
-  )
-  and document.status = 'OPEN'
-  and item.physical_qty is null
-  and nullif(btrim(master.base_uom_code), '') is not null
-  and item.base_uom_code is distinct from master.base_uom_code;
