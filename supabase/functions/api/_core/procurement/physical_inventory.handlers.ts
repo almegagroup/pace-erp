@@ -413,7 +413,9 @@ async function getUniqueFinalPackingOrderIdByProcessOrderIds(
  * §119.7/§119.12 — book-qty + grain resolution for ONE material at ONE storage location, for a
  * given company. Aggregates `stock_ledger` (IN-OUT) grouped by stock_type — and, for batch-tracked
  * SFG/FG under MTO/HPS/MTEST, ALSO grouped by batch_number (SFG) or batch_number+packing_order_id
- * (FG, packing-order linkage read from stock_document.reference_document_type='PACK_PO').
+ * (FG, packing-order linkage read from direct PACK_PO receipts or Opening Stock
+ * genealogy).  Opening Stock's P561/P565 stock documents are deliberately
+ * referenced as OS, so their packing_order_id lives on opening_stock_line.
  *
  * Deliberate scope note: this is a leaner aggregate-only version of IN03's (§116) full
  * ledger-trail resolver (CurrentStockPage/getCurrentStockHandler) — PID only needs "what
@@ -458,7 +460,15 @@ async function getBookSnapshotsForMaterial(
 
   // FG needs the packing_order_id per ledger row — resolved via stock_document once, batched.
   let pkoByDocId = new Map<string, string>();
+  let openingPkoByLedgerBatchKey = new Map<string, string>();
   let uniqueDirectPkoIdByBatch = new Map<string, string | null>();
+  const directPkoIdForRow = (row: JsonRecord): string | null => {
+    const documentId = toTrimmedString(row.stock_document_id);
+    const batchNumber = toTrimmedString(row.batch_number);
+    return pkoByDocId.get(documentId)
+      || openingPkoByLedgerBatchKey.get(`${documentId}::${batchNumber}`)
+      || null;
+  };
   if (materialType === "FG" && !isBlended) {
     const docIds = [...new Set(rows.map((r) => toTrimmedString(r.stock_document_id)).filter(Boolean))];
     if (docIds.length > 0) {
@@ -474,6 +484,46 @@ async function getBookSnapshotsForMaterial(
           .map((d) => [toTrimmedString(d.id), toTrimmedString(d.reference_document_id)]),
       );
 
+      // IN03 also resolves P561/P565 Opening Stock rows through the source
+      // opening_stock_line. Keep PID at that same genealogy grain: an OS
+      // stock-document alone has no packing_order_id, but its document +
+      // material + batch line may have one.
+      const stockDocumentById = new Map(
+        ((docRows ?? []) as JsonRecord[]).map((doc) => [toTrimmedString(doc.id), doc]),
+      );
+      const openingDocumentIds = [...new Set(
+        ((docRows ?? []) as JsonRecord[])
+          .filter((doc) => toTrimmedString(doc.reference_document_type) === "OS")
+          .map((doc) => toTrimmedString(doc.reference_document_id))
+          .filter(Boolean),
+      )];
+      if (openingDocumentIds.length > 0) {
+        const { data: openingLines, error: openingLinesError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("opening_stock_line")
+          .select("document_id, batch_number, packing_order_id")
+          .in("document_id", openingDocumentIds)
+          .eq("material_id", materialId)
+          .not("packing_order_id", "is", null);
+        if (openingLinesError) throw new Error("PI_OPENING_STOCK_LOOKUP_FAILED");
+        const openingPkoByDocumentBatchKey = new Map(
+          ((openingLines ?? []) as JsonRecord[]).map((line) => [
+            `${toTrimmedString(line.document_id)}::${toTrimmedString(line.batch_number)}`,
+            toTrimmedString(line.packing_order_id),
+          ]),
+        );
+        for (const row of rows) {
+          const stockDocumentId = toTrimmedString(row.stock_document_id);
+          const batchNumber = toTrimmedString(row.batch_number);
+          const stockDocument = stockDocumentById.get(stockDocumentId);
+          if (!stockDocumentId || !batchNumber || toTrimmedString(stockDocument?.reference_document_type) !== "OS") continue;
+          const packingOrderId = openingPkoByDocumentBatchKey.get(
+            `${toTrimmedString(stockDocument.reference_document_id)}::${batchNumber}`,
+          );
+          if (packingOrderId) openingPkoByLedgerBatchKey.set(`${stockDocumentId}::${batchNumber}`, packingOrderId);
+        }
+      }
+
       // Sales/dispatch OUT rows normally do not carry PACK_PO on their own stock
       // document. When a batch was received from exactly one Packing PO, inherit
       // that lineage so IN and OUT net in the same PID group. Multiple receipt
@@ -481,7 +531,7 @@ async function getBookSnapshotsForMaterial(
       const pkoIdsByBatch = new Map<string, Set<string>>();
       for (const row of rows) {
         const batchNumber = toTrimmedString(row.batch_number);
-        const directPkoId = pkoByDocId.get(toTrimmedString(row.stock_document_id));
+        const directPkoId = directPkoIdForRow(row);
         if (!batchNumber || !directPkoId) continue;
         const ids = pkoIdsByBatch.get(batchNumber) ?? new Set<string>();
         ids.add(directPkoId);
@@ -549,7 +599,7 @@ async function getBookSnapshotsForMaterial(
       const owner = poTypeByBatch.get(batchNumber);
       const ownerPoType = toUpperTrimmedString(owner?.po_type);
       if (BATCH_TRACKED_PO_TYPES.has(ownerPoType)) {
-        const directPkoId = pkoByDocId.get(toTrimmedString(row.stock_document_id)) || null;
+        const directPkoId = directPkoIdForRow(row);
         const legacyPkoId = uniqueLegacyPackingOrderIdByProcessOrderId.get(toTrimmedString(owner?.id)) || null;
         const batchPkoId = uniqueDirectPkoIdByBatch.get(batchNumber) || null;
         const pkoId = directPkoId || batchPkoId || legacyPkoId;
