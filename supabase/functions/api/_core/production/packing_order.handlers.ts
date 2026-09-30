@@ -2719,6 +2719,64 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       return packErr(req, ctx, "PROD_PACK_ALREADY_REVERSED", 409, "Already reversed");
     }
 
+    // §Q-reversal-2026-09-30 (business owner) — found live in prod CMP003: a Packing
+    // PO whose entire FG output had already been dispatched (PGI'd via a Delivery
+    // Challan/Sales Invoice, DC still status=DISPATCHED, never cancelled) was later
+    // CORS-reversed anyway -- nothing here ever checked dispatch or FO-mapping state
+    // before allowing reversal. That reversal posted a second P102 OUT against a batch
+    // that was already at zero, driving it to -10kg in the ledger (masked in reports
+    // because stock_snapshot is blended across batches, not per-batch). Once something
+    // has physically left the building (or is earmarked to), CORS must never be able to
+    // dissolve its genealogy back to RM/PM -- only COR6 (add item / change qty) stays
+    // available. Both checks run in parallel and are combined into one message so the
+    // user sees every blocker at once, not one at a time across repeated attempts.
+    const [{ data: dcLineRows, error: dcLineErr }, { data: allocRows, error: allocCheckErr }] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_procurement")
+        .from("delivery_challan_line")
+        .select("id, delivery_challan!inner(status)")
+        .eq("packing_order_id", id)
+        .neq("delivery_challan.status", "CANCELLED"),
+      serviceRoleClient
+        .schema("erp_production")
+        .from("plan_feed_packing_order_allocation")
+        .select("id")
+        .eq("packing_order_id", id),
+    ]);
+    if (dcLineErr) {
+      console.error("[packing_order.reversePackingOrder] dispatch check failed:", JSON.stringify(dcLineErr));
+      throw new Error("PROD_PACK_REVERSE_FAILED");
+    }
+    if (allocCheckErr) {
+      console.error("[packing_order.reversePackingOrder] FO allocation check failed:", JSON.stringify(allocCheckErr));
+      throw new Error("PROD_PACK_REVERSE_FAILED");
+    }
+    const reverseBlockers: string[] = [];
+    // §Q-reversal-2026-09-30-b (business owner follow-up) — a Delivery Order can exist
+    // against this Packing PO in TWO distinct states, and each needs its own precise
+    // instruction rather than one blanket "reverse the invoice" message: (a) DISPATCHED
+    // -- the PGI already posted P601, so the Sales Invoice must be reversed first (that
+    // restores the stock and resets the DC to CREATED), and only then is the DO itself
+    // cancellable; (b) merely CREATED -- no PGI has happened yet, the DO is just holding
+    // a stock reservation, so cancelling the DO alone (no invoice exists to reverse) is
+    // enough. Telling a user to "reverse the invoice" when there isn't one yet would be
+    // actively confusing.
+    const dcStatuses = new Set(
+      ((dcLineRows ?? []) as JsonRecord[]).map((row) => toTrimmedString((row.delivery_challan as JsonRecord | null)?.status)),
+    );
+    if (dcStatuses.has("DISPATCHED")) {
+      reverseBlockers.push("has already been dispatched (PGI posted) against a Delivery Order -- reverse the Sales Invoice, then cancel the Delivery Order, first");
+    } else if (dcStatuses.size > 0) {
+      reverseBlockers.push("has an active Delivery Order created against it (not yet dispatched) -- cancel that Delivery Order first, which releases its stock reservation");
+    }
+    if ((allocRows ?? []).length > 0) {
+      reverseBlockers.push("is still mapped to an FO -- unmap it in Plan Feed first");
+    }
+    if (reverseBlockers.length > 0) {
+      return packErr(req, ctx, "PROD_PACK_REVERSE_BLOCKED", 422,
+        `This Packing PO ${reverseBlockers.join(" and ")}, then retry the reversal.`);
+    }
+
     const reverseNow = new Date().toISOString();
     const { error: cancelReservationErr } = await serviceRoleClient
       .schema("erp_production")
