@@ -83,9 +83,15 @@ function RecountCell({ row, canEdit, edit, onEditChange, disabled }) {
     return <span className="text-sm text-slate-600">{hasCount ? `${row.physical_qty} ${row.base_uom_code ?? ""}` : "Not counted"}</span>;
   }
 
-  const isZero = edit?.isZeroStock ?? false;
-  const numPacks = edit?.numPacks ?? "";
+  // MI04 saves the actual count in base quantity. On MI05, convert that saved
+  // value back into its visible pack count; otherwise a fully counted Pack-PO
+  // line appears blank even though it is ready for approval.
+  const isZero = edit?.isZeroStock ?? (hasCount && Number(row.physical_qty) === 0);
   const perPackQty = edit?.perPackQty ?? (row.packing_order_fill_qty_per_pack ?? "");
+  const savedNumPacks = hasCount && Number(row.physical_qty) > 0 && Number(perPackQty) > 0
+    ? String(Number((Number(row.physical_qty) / Number(perPackQty)).toFixed(6)))
+    : "";
+  const numPacks = edit?.numPacks ?? savedNumPacks;
   const derivedPackQty = Number(numPacks) > 0 && Number(perPackQty) > 0 ? Number(numPacks) * Number(perPackQty) : null;
   const seedValue = edit && !edit.isZeroStock && edit.physicalQty != null ? edit.physicalQty : (hasCount ? row.physical_qty : undefined);
 
