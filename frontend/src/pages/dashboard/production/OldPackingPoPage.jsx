@@ -84,17 +84,21 @@ export default function OldPackingPoPage() {
   }));
   const parent = parents.find((p) => p.id === processOrderId) ?? null;
 
+  // business owner, 2026-09-30: both queries were unscoped (no company_id/
+  // status) -- leaked every company's materials, including inactive ones.
   const fgMaterialsQ = useQuery({
-    queryKey: ["old-pack-fg-materials"],
-    queryFn: () => listMaterials({ material_type: "FG", limit: 500 }),
+    queryKey: ["old-pack-fg-materials", effectiveCompanyId],
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "FG", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectiveCompanyId,
     select: (d) => d?.data ?? [],
   });
   const skuOptions = (fgMaterialsQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) }));
   const selectedSku = (fgMaterialsQ.data ?? []).find((m) => m.id === skuMaterialId) ?? null;
 
   const pmMaterialsQ = useQuery({
-    queryKey: ["old-pack-pm-materials"],
-    queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
+    queryKey: ["old-pack-pm-materials", effectiveCompanyId],
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "PM", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectiveCompanyId,
     select: (d) => d?.data ?? [],
   });
   const pmMaterialOptions = (pmMaterialsQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) }));

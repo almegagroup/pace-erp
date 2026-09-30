@@ -732,9 +732,12 @@ export default function ProductionPOCreatePage() {
 
   // Non-fixed pack codes still support ad-hoc PM lines, but they now start
   // from the saved Pack BOM material template instead of an empty list.
+  // business owner, 2026-09-30: was unscoped (no company_id/status) -- leaked
+  // every company's PM materials, including inactive ones, into Packing PO create.
   const packingPmMaterialsQ = useQuery({
-    queryKey: ["packing-create-pm-materials"],
-    queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
+    queryKey: ["packing-create-pm-materials", effectiveCompanyId],
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "PM", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectiveCompanyId,
     select: (data) => data?.data ?? [],
   });
   const packingPmMaterialOptions = useMemo(

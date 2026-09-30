@@ -99,8 +99,11 @@ export default function OldProcessPoPage() {
   }));
 
   const materialsQ = useQuery({
-    queryKey: ["old-po-materials"],
-    queryFn: () => listMaterials({ limit: 1000 }),
+    queryKey: ["old-po-materials", effectiveCompanyId],
+    // business owner, 2026-09-30: was unscoped (no company_id/status) -- leaked
+    // every company's materials, including inactive ones, into this picker.
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, status: "ACTIVE", limit: 1000 }),
+    enabled: !!effectiveCompanyId,
     select: (d) => d?.data ?? [],
   });
   const locationQ = useQuery({
