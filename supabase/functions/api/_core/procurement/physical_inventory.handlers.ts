@@ -369,6 +369,46 @@ async function getPackingOrdersByIds(packingOrderIds: string[]): Promise<Map<str
   return new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 }
 
+// A legacy Opening Stock / stock-status-change row can carry a real MTO/HPS/MTEST
+// batch but predate the stock-document -> PACK_PO reference that normal Packing PO
+// posting writes. Resolve that gap only when the owning Process PO has exactly one
+// FINAL Packing PO for this specific FG material. A batch may legitimately have more
+// than one packing run for the same SKU, so an ambiguous match must stay unlinked
+// rather than silently assigning the wrong Packing PO to a PID count line.
+async function getUniqueFinalPackingOrderIdByProcessOrderIds(
+  processOrderIds: string[],
+  materialId: string,
+): Promise<Map<string, string | null>> {
+  const uniqueProcessOrderIds = [...new Set(processOrderIds.map(toTrimmedString).filter(Boolean))];
+  if (uniqueProcessOrderIds.length === 0 || !materialId) return new Map();
+
+  const rows = await fetchInChunks<JsonRecord>(uniqueProcessOrderIds, (idChunk) =>
+    serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order")
+      .select("id, process_order_id")
+      .in("process_order_id", idChunk)
+      .eq("material_id", materialId)
+      .eq("status", "FINAL"));
+
+  const idsByProcessOrderId = new Map<string, string[]>();
+  for (const row of rows) {
+    const processOrderId = toTrimmedString(row.process_order_id);
+    const packingOrderId = toTrimmedString(row.id);
+    if (!processOrderId || !packingOrderId) continue;
+    const matches = idsByProcessOrderId.get(processOrderId) ?? [];
+    matches.push(packingOrderId);
+    idsByProcessOrderId.set(processOrderId, matches);
+  }
+
+  const resolved = new Map<string, string | null>();
+  for (const processOrderId of uniqueProcessOrderIds) {
+    const matches = idsByProcessOrderId.get(processOrderId) ?? [];
+    resolved.set(processOrderId, matches.length === 1 ? matches[0] : null);
+  }
+  return resolved;
+}
+
 /*
  * §119.7/§119.12 — book-qty + grain resolution for ONE material at ONE storage location, for a
  * given company. Aggregates `stock_ledger` (IN-OUT) grouped by stock_type — and, for batch-tracked
@@ -434,9 +474,22 @@ async function getBookSnapshotsForMaterial(
   // For batch-tracked SFG, whether it's batch-tracked at all depends on the OWNING Process PO's
   // po_type — resolve once for every distinct batch seen.
   let poTypeByBatch = new Map<string, JsonRecord>();
+  let uniqueLegacyPackingOrderIdByProcessOrderId = new Map<string, string | null>();
   if ((materialType === "SFG" || materialType === "FG")) {
     const batches = [...new Set(rows.map((r) => toTrimmedString(r.batch_number)).filter(Boolean))];
     poTypeByBatch = await getProcessOrderPoTypeByBatch(batches);
+    if (materialType === "FG") {
+      const batchTrackedProcessOrderIds = [...new Set(
+        [...poTypeByBatch.values()]
+          .filter((owner) => BATCH_TRACKED_PO_TYPES.has(toUpperTrimmedString(owner.po_type)))
+          .map((owner) => toTrimmedString(owner.id))
+          .filter(Boolean),
+      )];
+      uniqueLegacyPackingOrderIdByProcessOrderId = await getUniqueFinalPackingOrderIdByProcessOrderIds(
+        batchTrackedProcessOrderIds,
+        materialId,
+      );
+    }
   }
 
   const aggregates = new Map<string, { stock_type: string; qty: number; base_uom_code: string; batch_number: string | null; packing_order_id: string | null }>();
@@ -464,7 +517,9 @@ async function getBookSnapshotsForMaterial(
       const owner = poTypeByBatch.get(batchNumber);
       const ownerPoType = toUpperTrimmedString(owner?.po_type);
       if (BATCH_TRACKED_PO_TYPES.has(ownerPoType)) {
-        const pkoId = pkoByDocId.get(toTrimmedString(row.stock_document_id)) || null;
+        const directPkoId = pkoByDocId.get(toTrimmedString(row.stock_document_id)) || null;
+        const legacyPkoId = uniqueLegacyPackingOrderIdByProcessOrderId.get(toTrimmedString(owner?.id)) || null;
+        const pkoId = directPkoId || legacyPkoId;
         effectiveBatch = batchNumber;
         effectivePko = pkoId;
         key = `${stockType}::${batchNumber}::${pkoId ?? ""}`;
