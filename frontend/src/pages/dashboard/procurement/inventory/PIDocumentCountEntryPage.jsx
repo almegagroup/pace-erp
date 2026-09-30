@@ -164,7 +164,10 @@ function BlindCountCell({ row, canEdit, edit, onEditChange, disabled }) {
       <UomQuantityInput
         key={row.id}
         baseUomCode={row.base_uom_code}
-        conversions={Array.isArray(conversionsQuery.data?.data) ? conversionsQuery.data.data : []}
+        // fetchProcurement unwraps the endpoint's { data: [...] } envelope, so
+        // React Query receives the conversion array itself (not { data: [...] }).
+        // Reading .data here made every multi-UoM PID row look single-UoM.
+        conversions={Array.isArray(conversionsQuery.data) ? conversionsQuery.data : []}
         value={seedValue}
         disabled={isZero || disabled}
         onChange={(baseQty, { enteredQty, enteredUomCode }) => {

@@ -1619,7 +1619,8 @@ export async function getCurrentStockHandler(
     // solely to show its planning context.
     const companyIdsForLookup = [companyId];
     const slocIdsForLookup = [...new Set(rows.map((row) => row.storage_location_id).filter(Boolean))];
-    const [companyResp, slocResp, packResp] = await Promise.all([
+    const reportMaterialIds = [...new Set(rows.map((row) => row.material_id).filter(Boolean))];
+    const [companyResp, slocResp, packResp, reportUomResp] = await Promise.all([
       companyIdsForLookup.length
         ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", companyIdsForLookup)
         : Promise.resolve({ data: [], error: null }),
@@ -1629,13 +1630,30 @@ export async function getCurrentStockHandler(
       packCodes.size > 0
         ? serviceRoleClient.schema("erp_production").from("pack_code_master").select("pack_code, outer_uom_code").in("pack_code", [...packCodes])
         : Promise.resolve({ data: [], error: null }),
+      reportMaterialIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+          .select("material_id, to_uom_code, conversion_factor")
+          .in("material_id", reportMaterialIds)
+          .eq("from_uom_code", "NOS")
+          .eq("active", true)
+        : Promise.resolve({ data: [], error: null }),
     ]);
-    if (companyResp.error || slocResp.error || packResp.error) {
+    if (companyResp.error || slocResp.error || packResp.error || reportUomResp.error) {
       return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
     }
     const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.company_code)]));
     const slocMap = new Map(((slocResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.code)]));
     const packCodeMap = new Map(((packResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.pack_code), toTrimmedString(row.outer_uom_code)]));
+    const nosDisplayFactorByMaterialId = new Map<string, number>();
+    for (const conversion of (reportUomResp.data ?? []) as JsonRecord[]) {
+      const material = materialMap.get(toTrimmedString(conversion.material_id));
+      const factor = Number(conversion.conversion_factor ?? 0);
+      if (toTrimmedString(material?.base_uom_code) === "MTR"
+        && toTrimmedString(conversion.to_uom_code) === toTrimmedString(material?.base_uom_code)
+        && Number.isFinite(factor) && factor > 0) {
+        nosDisplayFactorByMaterialId.set(toTrimmedString(conversion.material_id), factor);
+      }
+    }
 
     const pathAReservationMap = new Map<string, number>();
     const pathARows = rows.filter((row) => row.path_kind === "A");
@@ -1740,16 +1758,19 @@ export async function getCurrentStockHandler(
       const reservedBaseQty = row.path_kind === "A"
         ? pathAReservationMap.get([row.company_id, row.material_id, row.storage_location_id].join("__")) ?? 0
         : pathBCReservationMap.get([row.company_id, row.material_id, row.storage_location_id, row.batch_number ?? ""].join("__")) ?? 0;
-      const uomCode = row.path_kind === "C"
+      const nativeUomCode = row.path_kind === "C"
         ? packCodeMap.get(toTrimmedString(material?.pack_code)) || row.base_uom_code
         : row.base_uom_code;
-      const unrestrictedQty = row.path_kind === "C"
+      const displayFactor = row.path_kind === "C" ? 1 : (nosDisplayFactorByMaterialId.get(row.material_id) ?? 1);
+      const uomCode = displayFactor === 1 ? nativeUomCode : "NOS";
+      const toDisplayQty = (quantity: number) => normalizeNumber(quantity / displayFactor);
+      const unrestrictedBaseQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.unrestricted_qty, row.fill_qty_per_pack)
         : normalizeNumber(row.unrestricted_qty);
-      const qiQty = row.path_kind === "C"
+      const qiBaseQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.qi_qty, row.fill_qty_per_pack)
         : normalizeNumber(row.qi_qty);
-      const blockedQty = row.path_kind === "C"
+      const blockedBaseQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.blocked_qty, row.fill_qty_per_pack)
         : normalizeNumber(row.blocked_qty);
       // Plain quantity, no reservation/net-available concept — In Transit
@@ -1758,12 +1779,17 @@ export async function getCurrentStockHandler(
       // company's own receiving-side total (inbound CSN still at TRN + any PTO
       // targeting this company) computed further up in this handler — neither
       // is stock that can itself be reserved against.
-      const intransitQty = row.path_kind === "C"
+      const intransitBaseQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.intransit_qty, row.fill_qty_per_pack)
         : normalizeNumber(row.intransit_qty);
-      const reservedQty = row.path_kind === "C"
+      const reservedBaseDisplayQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(reservedBaseQty, row.fill_qty_per_pack)
         : normalizeNumber(reservedBaseQty);
+      const unrestrictedQty = toDisplayQty(unrestrictedBaseQty);
+      const qiQty = toDisplayQty(qiBaseQty);
+      const blockedQty = toDisplayQty(blockedBaseQty);
+      const intransitQty = toDisplayQty(intransitBaseQty);
+      const reservedQty = toDisplayQty(reservedBaseDisplayQty);
       const planningCoverage = planningStatusByMaterialLocation.get(`${row.material_id}::${row.storage_location_id}`);
       const planning_status = planningCoverage?.status ?? "NORMAL";
 

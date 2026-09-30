@@ -369,11 +369,53 @@ async function getPackingOrdersByIds(packingOrderIds: string[]): Promise<Map<str
   return new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 }
 
+// A legacy Opening Stock / stock-status-change row can carry a real MTO/HPS/MTEST
+// batch but predate the stock-document -> PACK_PO reference that normal Packing PO
+// posting writes. Resolve that gap only when the owning Process PO has exactly one
+// FINAL Packing PO for this specific FG material. A batch may legitimately have more
+// than one packing run for the same SKU, so an ambiguous match must stay unlinked
+// rather than silently assigning the wrong Packing PO to a PID count line.
+async function getUniqueFinalPackingOrderIdByProcessOrderIds(
+  processOrderIds: string[],
+  materialId: string,
+): Promise<Map<string, string | null>> {
+  const uniqueProcessOrderIds = [...new Set(processOrderIds.map(toTrimmedString).filter(Boolean))];
+  if (uniqueProcessOrderIds.length === 0 || !materialId) return new Map();
+
+  const rows = await fetchInChunks<JsonRecord>(uniqueProcessOrderIds, (idChunk) =>
+    serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order")
+      .select("id, process_order_id")
+      .in("process_order_id", idChunk)
+      .eq("material_id", materialId)
+      .eq("status", "FINAL"));
+
+  const idsByProcessOrderId = new Map<string, string[]>();
+  for (const row of rows) {
+    const processOrderId = toTrimmedString(row.process_order_id);
+    const packingOrderId = toTrimmedString(row.id);
+    if (!processOrderId || !packingOrderId) continue;
+    const matches = idsByProcessOrderId.get(processOrderId) ?? [];
+    matches.push(packingOrderId);
+    idsByProcessOrderId.set(processOrderId, matches);
+  }
+
+  const resolved = new Map<string, string | null>();
+  for (const processOrderId of uniqueProcessOrderIds) {
+    const matches = idsByProcessOrderId.get(processOrderId) ?? [];
+    resolved.set(processOrderId, matches.length === 1 ? matches[0] : null);
+  }
+  return resolved;
+}
+
 /*
  * §119.7/§119.12 — book-qty + grain resolution for ONE material at ONE storage location, for a
  * given company. Aggregates `stock_ledger` (IN-OUT) grouped by stock_type — and, for batch-tracked
  * SFG/FG under MTO/HPS/MTEST, ALSO grouped by batch_number (SFG) or batch_number+packing_order_id
- * (FG, packing-order linkage read from stock_document.reference_document_type='PACK_PO').
+ * (FG, packing-order linkage read from direct PACK_PO receipts or Opening Stock
+ * genealogy).  Opening Stock's P561/P565 stock documents are deliberately
+ * referenced as OS, so their packing_order_id lives on opening_stock_line.
  *
  * Deliberate scope note: this is a leaner aggregate-only version of IN03's (§116) full
  * ledger-trail resolver (CurrentStockPage/getCurrentStockHandler) — PID only needs "what
@@ -390,6 +432,10 @@ async function getBookSnapshotsForMaterial(
 ): Promise<Array<{ material_id: string; stock_type: string; book_qty: number; base_uom_code: string; batch_number: string | null; packing_order_id: string | null }>> {
   const materialType = toUpperTrimmedString(material.material_type);
   if (!PI_MATERIAL_TYPES.has(materialType)) return [];
+  // Material Master is the UoM authority. Historical stock ledgers can contain
+  // a legacy label (for example NOS after a material was standardised to MTR),
+  // but a PID must always offer the active conversions from the master base UoM.
+  const masterBaseUomCode = toTrimmedString(material.base_uom_code);
 
   // Paged via fetchAllRows, not a plain .select() -- this must aggregate
   // EVERY ledger row for the material+location (batch/packing-order grouping
@@ -410,10 +456,44 @@ async function getBookSnapshotsForMaterial(
   } catch {
     throw new Error("PI_STOCK_LEDGER_LOOKUP_FAILED");
   }
+  // Historical opening-stock ledger rows can retain their originally entered
+  // UoM (for example NOS) even after the material base is MTR. PID stores and
+  // posts its quantities in the active Material Master base UoM, so normalise
+  // those legacy rows before aggregating; never merely relabel their numbers.
+  const ledgerUomCodes = [...new Set(
+    rows.map((row) => toTrimmedString(row.base_uom_code)).filter((code) => code && code !== masterBaseUomCode),
+  )];
+  const ledgerToMasterFactorByUom = new Map<string, number>();
+  if (masterBaseUomCode && ledgerUomCodes.length > 0) {
+    const { data: conversionRows, error: conversionError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_uom_conversion")
+      .select("from_uom_code, conversion_factor")
+      .eq("material_id", materialId)
+      .eq("to_uom_code", masterBaseUomCode)
+      .eq("active", true)
+      .in("from_uom_code", ledgerUomCodes);
+    if (conversionError) throw new Error("PI_MATERIAL_UOM_LOOKUP_FAILED");
+    for (const conversion of (conversionRows ?? []) as JsonRecord[]) {
+      const factor = Number(conversion.conversion_factor ?? 0);
+      if (Number.isFinite(factor) && factor > 0) {
+        ledgerToMasterFactorByUom.set(toTrimmedString(conversion.from_uom_code), factor);
+      }
+    }
+  }
   const isBlended = PI_BLENDED_MATERIAL_TYPES.has(materialType);
 
   // FG needs the packing_order_id per ledger row — resolved via stock_document once, batched.
   let pkoByDocId = new Map<string, string>();
+  let openingPkoByLedgerBatchKey = new Map<string, string>();
+  let uniqueDirectPkoIdByBatch = new Map<string, string | null>();
+  const directPkoIdForRow = (row: JsonRecord): string | null => {
+    const documentId = toTrimmedString(row.stock_document_id);
+    const batchNumber = toTrimmedString(row.batch_number);
+    return pkoByDocId.get(documentId)
+      || openingPkoByLedgerBatchKey.get(`${documentId}::${batchNumber}`)
+      || null;
+  };
   if (materialType === "FG" && !isBlended) {
     const docIds = [...new Set(rows.map((r) => toTrimmedString(r.stock_document_id)).filter(Boolean))];
     if (docIds.length > 0) {
@@ -428,24 +508,106 @@ async function getBookSnapshotsForMaterial(
           .filter((d) => toTrimmedString(d.reference_document_type) === "PACK_PO")
           .map((d) => [toTrimmedString(d.id), toTrimmedString(d.reference_document_id)]),
       );
+
+      // IN03 also resolves P561/P565 Opening Stock rows through the source
+      // opening_stock_line. Keep PID at that same genealogy grain: an OS
+      // stock-document alone has no packing_order_id, but its document +
+      // material + batch line may have one.
+      const stockDocumentById = new Map(
+        ((docRows ?? []) as JsonRecord[]).map((doc) => [toTrimmedString(doc.id), doc]),
+      );
+      const openingDocumentIds = [...new Set(
+        ((docRows ?? []) as JsonRecord[])
+          .filter((doc) => toTrimmedString(doc.reference_document_type) === "OS")
+          .map((doc) => toTrimmedString(doc.reference_document_id))
+          .filter(Boolean),
+      )];
+      if (openingDocumentIds.length > 0) {
+        const { data: openingLines, error: openingLinesError } = await serviceRoleClient
+          .schema("erp_procurement")
+          .from("opening_stock_line")
+          .select("document_id, batch_number, packing_order_id")
+          .in("document_id", openingDocumentIds)
+          .eq("material_id", materialId)
+          .not("packing_order_id", "is", null);
+        if (openingLinesError) throw new Error("PI_OPENING_STOCK_LOOKUP_FAILED");
+        const openingPkoByDocumentBatchKey = new Map(
+          ((openingLines ?? []) as JsonRecord[]).map((line) => [
+            `${toTrimmedString(line.document_id)}::${toTrimmedString(line.batch_number)}`,
+            toTrimmedString(line.packing_order_id),
+          ]),
+        );
+        for (const row of rows) {
+          const stockDocumentId = toTrimmedString(row.stock_document_id);
+          const batchNumber = toTrimmedString(row.batch_number);
+          const stockDocument = stockDocumentById.get(stockDocumentId);
+          if (!stockDocumentId || !batchNumber || toTrimmedString(stockDocument?.reference_document_type) !== "OS") continue;
+          const packingOrderId = openingPkoByDocumentBatchKey.get(
+            `${toTrimmedString(stockDocument.reference_document_id)}::${batchNumber}`,
+          );
+          if (packingOrderId) openingPkoByLedgerBatchKey.set(`${stockDocumentId}::${batchNumber}`, packingOrderId);
+        }
+      }
+
+      // Sales/dispatch OUT rows normally do not carry PACK_PO on their own stock
+      // document. When a batch was received from exactly one Packing PO, inherit
+      // that lineage so IN and OUT net in the same PID group. Multiple receipt
+      // POs for one batch remain deliberately unresolved rather than guessed.
+      const pkoIdsByBatch = new Map<string, Set<string>>();
+      for (const row of rows) {
+        const batchNumber = toTrimmedString(row.batch_number);
+        const directPkoId = directPkoIdForRow(row);
+        if (!batchNumber || !directPkoId) continue;
+        const ids = pkoIdsByBatch.get(batchNumber) ?? new Set<string>();
+        ids.add(directPkoId);
+        pkoIdsByBatch.set(batchNumber, ids);
+      }
+      uniqueDirectPkoIdByBatch = new Map(
+        [...pkoIdsByBatch.entries()].map(([batchNumber, pkoIds]) => [
+          batchNumber,
+          pkoIds.size === 1 ? [...pkoIds][0] : null,
+        ]),
+      );
     }
   }
 
   // For batch-tracked SFG, whether it's batch-tracked at all depends on the OWNING Process PO's
   // po_type — resolve once for every distinct batch seen.
   let poTypeByBatch = new Map<string, JsonRecord>();
+  let uniqueLegacyPackingOrderIdByProcessOrderId = new Map<string, string | null>();
   if ((materialType === "SFG" || materialType === "FG")) {
     const batches = [...new Set(rows.map((r) => toTrimmedString(r.batch_number)).filter(Boolean))];
     poTypeByBatch = await getProcessOrderPoTypeByBatch(batches);
+    if (materialType === "FG") {
+      const batchTrackedProcessOrderIds = [...new Set(
+        [...poTypeByBatch.values()]
+          .filter((owner) => BATCH_TRACKED_PO_TYPES.has(toUpperTrimmedString(owner.po_type)))
+          .map((owner) => toTrimmedString(owner.id))
+          .filter(Boolean),
+      )];
+      uniqueLegacyPackingOrderIdByProcessOrderId = await getUniqueFinalPackingOrderIdByProcessOrderIds(
+        batchTrackedProcessOrderIds,
+        materialId,
+      );
+    }
   }
 
   const aggregates = new Map<string, { stock_type: string; qty: number; base_uom_code: string; batch_number: string | null; packing_order_id: string | null }>();
+  const fgNetQtyByBatch = new Map<string, number>();
   for (const row of rows) {
     const stockType = toUpperTrimmedString(row.stock_type_code);
     if (!STOCK_TYPES.has(stockType)) continue;
     const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
-    const qty = Number((parseNullableNumber(row.quantity) ?? 0) * sign);
+    const ledgerUomCode = toTrimmedString(row.base_uom_code);
+    const conversionFactor = ledgerToMasterFactorByUom.get(ledgerUomCode) ?? 1;
+    const qty = Number((parseNullableNumber(row.quantity) ?? 0) * sign * conversionFactor);
     const batchNumber = toTrimmedString(row.batch_number) || null;
+
+    if (materialType === "FG" && batchNumber) {
+      const batchKey = `${stockType}::${batchNumber}`;
+      const netQty = fgNetQtyByBatch.get(batchKey) ?? 0;
+      fgNetQtyByBatch.set(batchKey, Number((netQty + qty).toFixed(4)));
+    }
 
     let key: string;
     let effectiveBatch: string | null = null;
@@ -464,7 +626,10 @@ async function getBookSnapshotsForMaterial(
       const owner = poTypeByBatch.get(batchNumber);
       const ownerPoType = toUpperTrimmedString(owner?.po_type);
       if (BATCH_TRACKED_PO_TYPES.has(ownerPoType)) {
-        const pkoId = pkoByDocId.get(toTrimmedString(row.stock_document_id)) || null;
+        const directPkoId = directPkoIdForRow(row);
+        const legacyPkoId = uniqueLegacyPackingOrderIdByProcessOrderId.get(toTrimmedString(owner?.id)) || null;
+        const batchPkoId = uniqueDirectPkoIdByBatch.get(batchNumber) || null;
+        const pkoId = directPkoId || batchPkoId || legacyPkoId;
         effectiveBatch = batchNumber;
         effectivePko = pkoId;
         key = `${stockType}::${batchNumber}::${pkoId ?? ""}`;
@@ -478,17 +643,25 @@ async function getBookSnapshotsForMaterial(
     const current = aggregates.get(key) ?? {
       stock_type: stockType,
       qty: 0,
-      base_uom_code: toTrimmedString(row.base_uom_code),
+      base_uom_code: masterBaseUomCode || toTrimmedString(row.base_uom_code),
       batch_number: effectiveBatch,
       packing_order_id: effectivePko,
     };
     current.qty = Number((current.qty + qty).toFixed(4));
-    if (!current.base_uom_code) current.base_uom_code = toTrimmedString(row.base_uom_code);
+    if (!current.base_uom_code) current.base_uom_code = masterBaseUomCode || toTrimmedString(row.base_uom_code);
     aggregates.set(key, current);
   }
 
   return [...aggregates.values()]
-    .filter((entry) => (ignoreZeroStock ? entry.qty > 0 : true))
+    .filter((entry) => {
+      if (!ignoreZeroStock || entry.qty <= 0) return !ignoreZeroStock;
+      // A missing PO reference on an OUT movement must not allow a fully
+      // depleted FG batch to survive as a positive receipt-only PID row.
+      if (materialType === "FG" && entry.batch_number) {
+        return (fgNetQtyByBatch.get(`${entry.stock_type}::${entry.batch_number}`) ?? entry.qty) > 0;
+      }
+      return true;
+    })
     .map((entry) => ({
       material_id: materialId,
       stock_type: entry.stock_type,
@@ -2560,16 +2733,33 @@ export async function listPIDifferencesHandler(
     // onto the item row but never surfaced a display name to the caller.
     const countedByIds = [...new Set(items.map((i) => toTrimmedString(i.counted_by)).filter(Boolean))];
 
-    const [companyRows, locationRows, materialRows, packingOrderMap, countedByDisplayMap] = await Promise.all([
+    const [companyRows, locationRows, materialRows, packingOrderMap, countedByDisplayMap, materialUomRows] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
-      matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code, base_uom_code").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       getPackingOrdersByIds(packingOrderIds),
       resolveUserDisplayNames(countedByIds),
+      matIds.length
+        ? serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+          .select("material_id, to_uom_code, conversion_factor")
+          .in("material_id", matIds)
+          .eq("from_uom_code", "NOS")
+          .eq("active", true)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
     const materialMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
+    const nosDisplayFactorByMaterialId = new Map<string, number>();
+    for (const conversion of (materialUomRows.data ?? []) as JsonRecord[]) {
+      const material = materialMap.get(toTrimmedString(conversion.material_id));
+      const factor = Number(conversion.conversion_factor ?? 0);
+      if (toTrimmedString(material?.base_uom_code) === "MTR"
+        && toTrimmedString(conversion.to_uom_code) === toTrimmedString(material?.base_uom_code)
+        && Number.isFinite(factor) && factor > 0) {
+        nosDisplayFactorByMaterialId.set(toTrimmedString(conversion.material_id), factor);
+      }
+    }
 
     // §MI20 (2026-08-19) — SAP's own MI20 shows a Difference Value (money), not
     // just qty/%; this report never carried one. POSTED items get the ACTUAL
@@ -2625,6 +2815,13 @@ export async function listPIDifferencesHandler(
       const location = locationMap.get(toTrimmedString(item.storage_location_id));
       const material = materialMap.get(toTrimmedString(item.material_id));
       const differenceQty = parseNullableNumber(item.difference_qty) ?? 0;
+      const displayFactor = toTrimmedString(item.base_uom_code) === toTrimmedString(material?.base_uom_code)
+        ? (nosDisplayFactorByMaterialId.get(toTrimmedString(item.material_id)) ?? 1)
+        : 1;
+      const toDisplayQty = (quantity: number | null): number | null => quantity === null ? null : Number((quantity / displayFactor).toFixed(4));
+      const displayBookQty = toDisplayQty(parseNullableNumber(item.book_qty));
+      const displayPhysicalQty = toDisplayQty(parseNullableNumber(item.physical_qty));
+      const displayDifferenceQty = Number((differenceQty / displayFactor).toFixed(4));
       const valuationRate = item.posted_stock_document_id
         ? (postedRateByDocId.get(toTrimmedString(item.posted_stock_document_id)) ?? 0)
         : (pendingRateByCompanyKey.get(`${toTrimmedString(doc?.company_id)}|${toTrimmedString(item.material_id)}|${toTrimmedString(item.storage_location_id)}|${toUpperTrimmedString(item.stock_type)}`) ?? 0);
@@ -2646,13 +2843,13 @@ export async function listPIDifferencesHandler(
         counted_by_display: countedByDisplayMap.get(toTrimmedString(item.counted_by)) ?? null,
         counted_at: item.counted_at ?? null,
         stock_type: item.stock_type,
-        book_qty: item.book_qty,
-        physical_qty: item.physical_qty,
-        difference_qty: differenceQty,
+        book_qty: displayBookQty,
+        physical_qty: displayPhysicalQty,
+        difference_qty: displayDifferenceQty,
         difference_pct: item.book_qty ? Number(((differenceQty / Number(item.book_qty)) * 100).toFixed(2)) : null,
         valuation_rate: valuationRate,
         difference_value: Number((differenceQty * valuationRate).toFixed(2)),
-        base_uom_code: item.base_uom_code,
+        base_uom_code: displayFactor === 1 ? item.base_uom_code : "NOS",
         movement_type: item.posted_stock_document_id
           ? derivePIMovementType(String(item.stock_type), differenceQty)
           : null,
