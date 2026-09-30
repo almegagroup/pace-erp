@@ -40,8 +40,10 @@ function buildForm(detail) {
     cha_name_freetext: detail?.cha_name_freetext ?? "",
     scheduled_eta_to_port: detail?.scheduled_eta_to_port ?? "",
     etd: detail?.etd ?? "",
+    etd_is_manual_override: detail?.etd_is_manual_override ?? false,
     bl_date: detail?.bl_date ?? "",
     eta_at_port: detail?.eta_at_port ?? "",
+    eta_at_port_is_manual_override: detail?.eta_at_port_is_manual_override ?? false,
     ata_at_port: detail?.ata_at_port ?? "",
     post_clearance_lr_date: detail?.post_clearance_lr_date ?? "",
     transporter_id: detail?.transporter_id ?? "",
@@ -280,6 +282,18 @@ export default function CSNDetailPage() {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  // Same fix as CSNTrackerPage.jsx: ETD/ETA at Port are auto-recalculated on
+  // every save (calculateETACascade, csn.handlers.ts) unless the matching
+  // *_is_manual_override flag is true. Typing a date pins it; clearing it
+  // releases the pin so auto-calculation resumes.
+  function patchManualDate(field, overrideField, value) {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+      [overrideField]: Boolean(value),
+    }));
+  }
+
   async function handleSave() {
     if (!detail?.id || !detail?.company_id) {
       return;
@@ -388,11 +402,11 @@ export default function CSNDetailPage() {
                 <ErpDenseFormRow label="BL Number">
                   <input value={form.bl_number} onChange={(event) => patchField("bl_number", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="ETD Origin">
-                  <input type="date" value={form.etd || ""} onChange={(event) => patchField("etd", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                <ErpDenseFormRow label={form.etd_is_manual_override ? "ETD Origin (Manual)" : "ETD Origin"}>
+                  <input type="date" value={form.etd || ""} onChange={(event) => patchManualDate("etd", "etd_is_manual_override", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
                 </ErpDenseFormRow>
-                <ErpDenseFormRow label="ETA Destination Port">
-                  <input type="date" value={form.eta_at_port || ""} onChange={(event) => patchField("eta_at_port", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
+                <ErpDenseFormRow label={form.eta_at_port_is_manual_override ? "ETA Destination Port (Manual)" : "ETA Destination Port"}>
+                  <input type="date" value={form.eta_at_port || ""} onChange={(event) => patchManualDate("eta_at_port", "eta_at_port_is_manual_override", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
                 </ErpDenseFormRow>
                 <ErpDenseFormRow label="Scheduled ETA Port">
                   <input type="date" value={form.scheduled_eta_to_port || ""} onChange={(event) => patchField("scheduled_eta_to_port", event.target.value)} className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />

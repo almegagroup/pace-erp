@@ -692,6 +692,24 @@ export default function CSNTrackerPage() {
     setDraft((current) => ({ ...(current || {}), [field]: value }));
   }
 
+  // ETD/ETA at Port are auto-recalculated on every save from
+  // scheduled_eta_to_port + BL date + the vendor's import lead time
+  // (calculateETACascade, csn.handlers.ts) UNLESS the matching
+  // *_is_manual_override flag is true -- these flags exist in the schema
+  // specifically for a user to pin a manually-typed date, but until now
+  // nothing in the UI ever set them, so a typed ETD/ETA at Port was
+  // silently recomputed back to the auto value on every save (and, since
+  // nothing net-changed in the DB row, no field-history entry was written
+  // either). Typing a date now pins it; clearing it releases the pin so
+  // auto-calculation resumes.
+  function patchManualDate(field, overrideField, value) {
+    setDraft((current) => ({
+      ...(current || {}),
+      [field]: value,
+      [overrideField]: Boolean(value),
+    }));
+  }
+
   async function invalidateTracker() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["csn-tracker"] }),
@@ -1360,8 +1378,8 @@ export default function CSNTrackerPage() {
                     <input type="date" value={draft.scheduled_eta_to_port ?? ""} onChange={(event) => patchDraft("scheduled_eta_to_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                   </EditField>
                 ) : null}
-                <EditField label="ETD" rowId={currentRow.id} fieldName="etd" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                  <input type="date" value={draft.etd ?? ""} onChange={(event) => patchDraft("etd", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                <EditField label={draft.etd_is_manual_override ? "ETD (Manual)" : "ETD"} rowId={currentRow.id} fieldName="etd" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                  <input type="date" value={draft.etd ?? ""} onChange={(event) => patchManualDate("etd", "etd_is_manual_override", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                 </EditField>
                 <EditField label="ATD (from LR/BL Date below)" rowId={currentRow.id} fieldName={currentRow.csn_type === "IMPORT" ? "bl_date" : "lr_date"} activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                   {/* §113 fix: this used to be its own editable input bound to a
@@ -1375,8 +1393,8 @@ export default function CSNTrackerPage() {
                 </EditField>
                 {currentRow.csn_type === "IMPORT" ? (
                   <>
-                    <EditField label="ETA at Port" rowId={currentRow.id} fieldName="eta_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
-                      <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchDraft("eta_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                    <EditField label={draft.eta_at_port_is_manual_override ? "ETA at Port (Manual)" : "ETA at Port"} rowId={currentRow.id} fieldName="eta_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                      <input type="date" value={draft.eta_at_port ?? ""} onChange={(event) => patchManualDate("eta_at_port", "eta_at_port_is_manual_override", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                     </EditField>
                     <EditField label="ATA at Port" rowId={currentRow.id} fieldName="ata_at_port" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                       <input type="date" value={draft.ata_at_port ?? ""} onChange={(event) => patchDraft("ata_at_port", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
