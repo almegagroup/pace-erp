@@ -294,7 +294,14 @@ export default function SO01CreatePage() {
     ? (noInboundSubType === "DIRECT" ? "DEPENDENT_DIRECT" : "DEPENDENT_DEPOT")
     : dispatchType;
 
-  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
+  // business owner, 2026-09-30: same cross-company material leak found on
+  // SO05CreatePage.jsx (commit f58ee63) and SOCreatePage.jsx -- this query
+  // never passed company_id either, so a CMP003-only material showed up in
+  // another company's RM/PM/INT/FG dropdown here too.
+  const materialQuery = useMaterialOptionsQuery(
+    { company_id: companyId, limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" },
+    { enabled: Boolean(companyId) }
+  );
   const materials = useMemo(() => materialQuery.materials ?? [], [materialQuery.materials]);
   const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);
   // Keep selected metadata independent of each row's current search results.

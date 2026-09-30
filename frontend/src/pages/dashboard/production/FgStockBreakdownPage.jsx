@@ -67,12 +67,17 @@ export default function FgStockBreakdownPage() {
   const [companyId, setCompanyId] = useState("");
   const [materialId, setMaterialId] = useState("");
   const { runtimeContext } = useMenu();
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
+  // business owner, 2026-09-30: same cross-company material leak found across
+  // the SO create pages -- this never passed company_id, so the Material
+  // filter offered other companies' FG SKUs too (a selection that would then
+  // just return an empty report, but a confusing filter option regardless).
   const materialsQ = useQuery({
-    queryKey: ["om-materials", "FG", "fg-stock-breakdown"],
-    queryFn: () => listMaterials({ material_type: "FG", limit: 500 }),
+    queryKey: ["om-materials", "FG", "fg-stock-breakdown", effectiveCompanyId],
+    queryFn: () => listMaterials({ material_type: "FG", limit: 500, company_id: effectiveCompanyId || undefined }),
+    enabled: Boolean(effectiveCompanyId),
     select: (data) => data?.data ?? [],
   });
-  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const reportQ = useQuery({
     queryKey: ["fg-stock-breakdown", effectiveCompanyId, materialId],
     queryFn: () => getFgStockBreakdown({ company_id: effectiveCompanyId, material_id: materialId }),
