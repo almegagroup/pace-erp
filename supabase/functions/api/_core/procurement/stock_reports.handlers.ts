@@ -1321,20 +1321,26 @@ export async function getCurrentStockHandler(
       } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
+      // §8E follow-up, found live 2026-09-30 (CMP003, IN03, all material/stock types, show_zero) --
+      // this docIds list was still a plain unchunked .in() even after the 2026-09-22 fix chunked
+      // the ledger query itself above. docIds is one entry per DISTINCT stock_document_id across
+      // every SFG/FG ledger row this company has ever posted (705 for CMP003 alone) -- the exact
+      // same URL-length cliff §8E already documents, just one step further downstream.
       const docIds = [...new Set(typedLedgerRows.map((row) => toTrimmedString(row.stock_document_id)).filter(Boolean))];
-      const { data: docRows, error: docError } = docIds.length
-        ? await serviceRoleClient
+      let docRows: JsonRecord[];
+      try {
+        docRows = await fetchInChunks<JsonRecord>(docIds, (idChunk) =>
+          serviceRoleClient
             .schema("erp_inventory")
             .from("stock_document")
             .select("id, document_number, source_lot_ref, reference_document_type, reference_document_number, reference_document_id")
-            .in("id", docIds)
-        : { data: [], error: null };
-      if (docError) {
+            .in("id", idChunk));
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-      const docMap = new Map(((docRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-      const openingLotMap = await buildOpeningStockLotMap((docRows ?? []) as JsonRecord[]);
-      const salesReturnLotMap = await buildSalesReturnLotMap((docRows ?? []) as JsonRecord[]);
+      const docMap = new Map(docRows.map((row) => [toTrimmedString(row.id), row]));
+      const openingLotMap = await buildOpeningStockLotMap(docRows);
+      const salesReturnLotMap = await buildSalesReturnLotMap(docRows);
       // Found live 2026-09-03 -- see resolveLotRef's own comment. Without
       // this, any posting whose reference_document_type isn't PACK_PO/OS
       // (an IN13 Stock Status Change approval, in the case that surfaced
@@ -1354,17 +1360,21 @@ export async function getCurrentStockHandler(
           ))
           .filter(Boolean),
       )];
-      const { data: poRows, error: poError } = poNumbers.length
-        ? await serviceRoleClient
+      // §8E follow-up (same 2026-09-30 finding as docIds above) -- poNumbers is derived from
+      // every distinct lot ref across this company's whole SFG/FG ledger history, unbounded the
+      // same way.
+      let poRows: JsonRecord[];
+      try {
+        poRows = await fetchInChunks<JsonRecord>(poNumbers, (chunk) =>
+          serviceRoleClient
             .schema("erp_production")
             .from("packing_order")
             .select("po_number, source_po_type, num_packs, fill_qty_per_pack")
-            .in("po_number", poNumbers)
-        : { data: [], error: null };
-      if (poError) {
+            .in("po_number", chunk));
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-      const poMap = new Map(((poRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.po_number), row]));
+      const poMap = new Map(poRows.map((row) => [toTrimmedString(row.po_number), row]));
 
       for (const ledger of typedLedgerRows) {
         const materialId = toTrimmedString(ledger.material_id);
