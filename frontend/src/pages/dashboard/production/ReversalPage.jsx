@@ -24,7 +24,7 @@ function companyLabel(company) {
 }
 
 function materialLabel(material) {
-  return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
+  return [material?.material_name, material?.document_name].filter(Boolean).join(" — ");
 }
 
 function slocLabel(location) {

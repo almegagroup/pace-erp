@@ -30,8 +30,9 @@ const money = (value) => value == null ? "—" : Number(value).toFixed(4);
 const errorMessage = (error) => error?.backendMessage || error?.message || "Request failed.";
 // SKU dropdown labels always carry the Material Master Document Name so
 // users can identify a SKU without leaving the combobox — same convention
-// SO01's own FG SKU picker (§141) already established.
-const skuLabel = (sku) => [sku.pace_code, sku.document_name || sku.material_name].filter(Boolean).join(" — ");
+// SO01's own FG SKU picker (§141) already established. pace_code never
+// appears in a material label -- Item Name / Document Name only.
+const skuLabel = (sku) => [sku.material_name, sku.document_name].filter(Boolean).join(" — ");
 
 function numberInput(value, onChange, extra = {}) {
   return (
@@ -149,7 +150,7 @@ function PendingRateModal({ row, companyId, onClose, onSaved }) {
       </>}>
       <div className="grid gap-4">
         <div className="text-sm text-slate-600">
-          {row.vendor_code} · {row.sku?.pace_code} — {row.sku?.material_name}
+          {row.vendor_code} · {[row.sku?.material_name, row.sku?.document_name].filter(Boolean).join(" — ") || "—"}
           <br /><span className="text-xs">Effective {row.effective_date}; this is the manually-entered commercial rate.</span>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -207,7 +208,7 @@ export default function MtsSkuCostingPage() {
   }
   const rows = (ratesQuery.data ?? []).filter((row) => JSON.stringify(row).toLowerCase().includes(search.trim().toLowerCase()));
   const columns = [
-    { key: "vendor_code", label: "Vendor Code", width: "110px" }, { key: "sku", label: "SKU", width: "260px", render: (row) => <span>{row.sku?.pace_code ?? "—"} — {row.sku?.document_name || row.sku?.material_name || "—"}</span> },
+    { key: "vendor_code", label: "Vendor Code", width: "110px" }, { key: "sku", label: "SKU", width: "260px", render: (row) => <span>{[row.sku?.material_name, row.sku?.document_name].filter(Boolean).join(" — ") || "—"}</span> },
     { key: "rate_per_base_uom", label: "Manual / Base", width: "125px", align: "right", render: (row) => money(row.rate_per_base_uom) }, { key: "rate_per_inner_pack", label: "Manual / Inner", width: "125px", align: "right", render: (row) => money(row.rate_per_inner_pack) }, { key: "rate_per_outer_uom", label: "Manual / Outer", width: "125px", align: "right", render: (row) => <strong>{money(row.rate_per_outer_uom)}</strong> },
     { key: "rm_wastage_pct", label: "RM Waste %", width: "95px", align: "right", render: (row) => money(row.rm_wastage_pct) }, { key: "pack_wastage_pct", label: "Pack Waste %", width: "100px", align: "right", render: (row) => money(row.pack_wastage_pct) }, { key: "effective_date", label: "Effective", width: "110px" },
     { key: "status", label: "Status", width: "95px", render: (row) => <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${row.status === "PENDING" ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>{row.status}</span> },

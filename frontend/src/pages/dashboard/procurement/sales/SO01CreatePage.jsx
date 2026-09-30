@@ -516,9 +516,9 @@ export default function SO01CreatePage() {
       .filter((entry) => String(entry.material_type || "").toUpperCase() === materialType)
       .map((entry) => ({
         value: entry.id,
-        label: [entry.pace_code, entry.external_code, entry.document_name || entry.material_name]
+        label: [entry.material_name, entry.document_name]
           .filter(Boolean)
-          .join(" | "),
+          .join(" — "),
       }));
   }
 

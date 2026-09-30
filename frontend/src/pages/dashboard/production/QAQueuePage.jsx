@@ -48,7 +48,7 @@ function friendlyError(error) {
 }
 
 function materialLabel(material) {
-  return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
+  return [material?.material_name, material?.document_name].filter(Boolean).join(" — ");
 }
 
 function machineLabel(machine) {

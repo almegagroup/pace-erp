@@ -139,7 +139,7 @@ export default function LocationTransferRequestWorkspacePage() {
   const materialOptions = useMemo(
     () => (materialQuery.materials ?? []).map((row) => ({
       value: row.id,
-      label: `${row.pace_code ?? "—"} — ${row.material_name ?? row.document_name ?? "Material"}`,
+      label: [row.material_name, row.document_name].filter(Boolean).join(" — ") || "Material",
       base_uom_code: row.base_uom_code || "KG",
     })),
     [materialQuery.materials],

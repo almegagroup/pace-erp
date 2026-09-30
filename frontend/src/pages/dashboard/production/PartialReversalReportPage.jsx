@@ -21,7 +21,7 @@ const PO_TYPES = ["MTO", "HPS"];
 
 function materialLabel(m) {
   if (!m) return "--";
-  return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
+  return [m.material_name, m.document_name].filter(Boolean).join(" — ");
 }
 function fmt(n) {
   const v = Number(n ?? 0);

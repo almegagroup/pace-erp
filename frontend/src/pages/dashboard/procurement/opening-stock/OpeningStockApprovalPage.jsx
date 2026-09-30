@@ -210,7 +210,7 @@ export default function OpeningStockApprovalPage() {
   }, [detail]);
 
   const materialMap = useMemo(() => new Map(materials.map((material) => [material.id, material])), [materials]);
-  const materialOptions = useMemo(() => materials.map((material) => ({ value: material.id, label: `${material.material_name ?? "Material"} (${material.pace_code ?? material.material_code ?? material.id})` })), [materials]);
+  const materialOptions = useMemo(() => materials.map((material) => ({ value: material.id, label: [material.material_name, material.document_name].filter(Boolean).join(" — ") || "Material" })), [materials]);
   const locationOptions = useMemo(() => locations.map((location) => ({ value: location.id, label: formatLocationLabel(location) })), [locations]);
   const companyMap = useMemo(() => new Map(companies.map((company) => [company.id, `${company.company_code ?? "COMP"} | ${company.company_name ?? "Company"}`])), [companies]);
 

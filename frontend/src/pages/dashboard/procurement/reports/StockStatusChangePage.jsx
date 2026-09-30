@@ -106,7 +106,7 @@ export default function StockStatusChangePage() {
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
       value: material.id,
-      label: `${material.pace_code ?? "—"} — ${material.material_name || material.document_name || "Material"}`,
+      label: [material.material_name, material.document_name].filter(Boolean).join(" — ") || "Material",
       isFg: toTrimmedString(material.material_type).toUpperCase() === "FG",
     })),
     [materialsQuery.materials],
