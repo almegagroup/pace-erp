@@ -456,6 +456,31 @@ async function getBookSnapshotsForMaterial(
   } catch {
     throw new Error("PI_STOCK_LEDGER_LOOKUP_FAILED");
   }
+  // Historical opening-stock ledger rows can retain their originally entered
+  // UoM (for example NOS) even after the material base is MTR. PID stores and
+  // posts its quantities in the active Material Master base UoM, so normalise
+  // those legacy rows before aggregating; never merely relabel their numbers.
+  const ledgerUomCodes = [...new Set(
+    rows.map((row) => toTrimmedString(row.base_uom_code)).filter((code) => code && code !== masterBaseUomCode),
+  )];
+  const ledgerToMasterFactorByUom = new Map<string, number>();
+  if (masterBaseUomCode && ledgerUomCodes.length > 0) {
+    const { data: conversionRows, error: conversionError } = await serviceRoleClient
+      .schema("erp_master")
+      .from("material_uom_conversion")
+      .select("from_uom_code, conversion_factor")
+      .eq("material_id", materialId)
+      .eq("to_uom_code", masterBaseUomCode)
+      .eq("active", true)
+      .in("from_uom_code", ledgerUomCodes);
+    if (conversionError) throw new Error("PI_MATERIAL_UOM_LOOKUP_FAILED");
+    for (const conversion of (conversionRows ?? []) as JsonRecord[]) {
+      const factor = Number(conversion.conversion_factor ?? 0);
+      if (Number.isFinite(factor) && factor > 0) {
+        ledgerToMasterFactorByUom.set(toTrimmedString(conversion.from_uom_code), factor);
+      }
+    }
+  }
   const isBlended = PI_BLENDED_MATERIAL_TYPES.has(materialType);
 
   // FG needs the packing_order_id per ledger row — resolved via stock_document once, batched.
@@ -573,7 +598,9 @@ async function getBookSnapshotsForMaterial(
     const stockType = toUpperTrimmedString(row.stock_type_code);
     if (!STOCK_TYPES.has(stockType)) continue;
     const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
-    const qty = Number((parseNullableNumber(row.quantity) ?? 0) * sign);
+    const ledgerUomCode = toTrimmedString(row.base_uom_code);
+    const conversionFactor = ledgerToMasterFactorByUom.get(ledgerUomCode) ?? 1;
+    const qty = Number((parseNullableNumber(row.quantity) ?? 0) * sign * conversionFactor);
     const batchNumber = toTrimmedString(row.batch_number) || null;
 
     if (materialType === "FG" && batchNumber) {
@@ -2701,16 +2728,33 @@ export async function listPIDifferencesHandler(
     // onto the item row but never surfaced a display name to the caller.
     const countedByIds = [...new Set(items.map((i) => toTrimmedString(i.counted_by)).filter(Boolean))];
 
-    const [companyRows, locationRows, materialRows, packingOrderMap, countedByDisplayMap] = await Promise.all([
+    const [companyRows, locationRows, materialRows, packingOrderMap, countedByDisplayMap, materialUomRows] = await Promise.all([
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       locationIds.length ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds) : Promise.resolve({ data: [] as JsonRecord[] }),
-      matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
+      matIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type, external_code, base_uom_code").in("id", matIds) : Promise.resolve({ data: [] as JsonRecord[] }),
       getPackingOrdersByIds(packingOrderIds),
       resolveUserDisplayNames(countedByIds),
+      matIds.length
+        ? serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+          .select("material_id, to_uom_code, conversion_factor")
+          .in("material_id", matIds)
+          .eq("from_uom_code", "NOS")
+          .eq("active", true)
+        : Promise.resolve({ data: [] as JsonRecord[] }),
     ]);
     const companyMap = new Map(((companyRows.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
     const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((l) => [String(l.id), l]));
     const materialMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
+    const nosDisplayFactorByMaterialId = new Map<string, number>();
+    for (const conversion of (materialUomRows.data ?? []) as JsonRecord[]) {
+      const material = materialMap.get(toTrimmedString(conversion.material_id));
+      const factor = Number(conversion.conversion_factor ?? 0);
+      if (toTrimmedString(material?.base_uom_code) === "MTR"
+        && toTrimmedString(conversion.to_uom_code) === toTrimmedString(material?.base_uom_code)
+        && Number.isFinite(factor) && factor > 0) {
+        nosDisplayFactorByMaterialId.set(toTrimmedString(conversion.material_id), factor);
+      }
+    }
 
     // §MI20 (2026-08-19) — SAP's own MI20 shows a Difference Value (money), not
     // just qty/%; this report never carried one. POSTED items get the ACTUAL
@@ -2766,6 +2810,13 @@ export async function listPIDifferencesHandler(
       const location = locationMap.get(toTrimmedString(item.storage_location_id));
       const material = materialMap.get(toTrimmedString(item.material_id));
       const differenceQty = parseNullableNumber(item.difference_qty) ?? 0;
+      const displayFactor = toTrimmedString(item.base_uom_code) === toTrimmedString(material?.base_uom_code)
+        ? (nosDisplayFactorByMaterialId.get(toTrimmedString(item.material_id)) ?? 1)
+        : 1;
+      const toDisplayQty = (quantity: number | null): number | null => quantity === null ? null : Number((quantity / displayFactor).toFixed(4));
+      const displayBookQty = toDisplayQty(parseNullableNumber(item.book_qty));
+      const displayPhysicalQty = toDisplayQty(parseNullableNumber(item.physical_qty));
+      const displayDifferenceQty = Number((differenceQty / displayFactor).toFixed(4));
       const valuationRate = item.posted_stock_document_id
         ? (postedRateByDocId.get(toTrimmedString(item.posted_stock_document_id)) ?? 0)
         : (pendingRateByCompanyKey.get(`${toTrimmedString(doc?.company_id)}|${toTrimmedString(item.material_id)}|${toTrimmedString(item.storage_location_id)}|${toUpperTrimmedString(item.stock_type)}`) ?? 0);
@@ -2787,13 +2838,13 @@ export async function listPIDifferencesHandler(
         counted_by_display: countedByDisplayMap.get(toTrimmedString(item.counted_by)) ?? null,
         counted_at: item.counted_at ?? null,
         stock_type: item.stock_type,
-        book_qty: item.book_qty,
-        physical_qty: item.physical_qty,
-        difference_qty: differenceQty,
+        book_qty: displayBookQty,
+        physical_qty: displayPhysicalQty,
+        difference_qty: displayDifferenceQty,
         difference_pct: item.book_qty ? Number(((differenceQty / Number(item.book_qty)) * 100).toFixed(2)) : null,
         valuation_rate: valuationRate,
         difference_value: Number((differenceQty * valuationRate).toFixed(2)),
-        base_uom_code: item.base_uom_code,
+        base_uom_code: displayFactor === 1 ? item.base_uom_code : "NOS",
         movement_type: item.posted_stock_document_id
           ? derivePIMovementType(String(item.stock_type), differenceQty)
           : null,

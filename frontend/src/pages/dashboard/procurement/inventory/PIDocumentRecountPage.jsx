@@ -118,7 +118,9 @@ function RecountCell({ row, canEdit, edit, onEditChange, disabled }) {
         <UomQuantityInput
           key={row.id}
           baseUomCode={row.base_uom_code}
-          conversions={Array.isArray(conversionsQuery.data?.data) ? conversionsQuery.data.data : []}
+          // fetchProcurement unwraps the endpoint's { data: [...] } envelope,
+          // so the query result is already the conversion array.
+          conversions={Array.isArray(conversionsQuery.data) ? conversionsQuery.data : []}
           value={seedValue}
           disabled={isZero || disabled}
           onChange={(baseQty, { enteredQty, enteredUomCode }) => {
