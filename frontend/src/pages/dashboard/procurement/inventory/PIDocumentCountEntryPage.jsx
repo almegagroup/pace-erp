@@ -305,7 +305,7 @@ export default function PIDocumentCountEntryPage() {
       notices={[
         ...(error ? [{ key: "count-entry-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "count-entry-notice", tone: "success", message: notice }] : []),
-        ...(id ? [{ key: "count-entry-stage", tone: isFullyLocked ? "warning" : "info", message: stageMessage }] : []),
+        ...(detail ? [{ key: "count-entry-stage", tone: isFullyLocked ? "warning" : "info", message: stageMessage }] : []),
       ]}
       actions={id ? [
         { key: "back", label: "Back To Detail", tone: "neutral", onClick: openDetail },
