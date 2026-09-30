@@ -458,6 +458,7 @@ async function getBookSnapshotsForMaterial(
 
   // FG needs the packing_order_id per ledger row — resolved via stock_document once, batched.
   let pkoByDocId = new Map<string, string>();
+  let uniqueDirectPkoIdByBatch = new Map<string, string | null>();
   if (materialType === "FG" && !isBlended) {
     const docIds = [...new Set(rows.map((r) => toTrimmedString(r.stock_document_id)).filter(Boolean))];
     if (docIds.length > 0) {
@@ -471,6 +472,26 @@ async function getBookSnapshotsForMaterial(
         ((docRows ?? []) as JsonRecord[])
           .filter((d) => toTrimmedString(d.reference_document_type) === "PACK_PO")
           .map((d) => [toTrimmedString(d.id), toTrimmedString(d.reference_document_id)]),
+      );
+
+      // Sales/dispatch OUT rows normally do not carry PACK_PO on their own stock
+      // document. When a batch was received from exactly one Packing PO, inherit
+      // that lineage so IN and OUT net in the same PID group. Multiple receipt
+      // POs for one batch remain deliberately unresolved rather than guessed.
+      const pkoIdsByBatch = new Map<string, Set<string>>();
+      for (const row of rows) {
+        const batchNumber = toTrimmedString(row.batch_number);
+        const directPkoId = pkoByDocId.get(toTrimmedString(row.stock_document_id));
+        if (!batchNumber || !directPkoId) continue;
+        const ids = pkoIdsByBatch.get(batchNumber) ?? new Set<string>();
+        ids.add(directPkoId);
+        pkoIdsByBatch.set(batchNumber, ids);
+      }
+      uniqueDirectPkoIdByBatch = new Map(
+        [...pkoIdsByBatch.entries()].map(([batchNumber, pkoIds]) => [
+          batchNumber,
+          pkoIds.size === 1 ? [...pkoIds][0] : null,
+        ]),
       );
     }
   }
@@ -497,12 +518,19 @@ async function getBookSnapshotsForMaterial(
   }
 
   const aggregates = new Map<string, { stock_type: string; qty: number; base_uom_code: string; batch_number: string | null; packing_order_id: string | null }>();
+  const fgNetQtyByBatch = new Map<string, number>();
   for (const row of rows) {
     const stockType = toUpperTrimmedString(row.stock_type_code);
     if (!STOCK_TYPES.has(stockType)) continue;
     const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
     const qty = Number((parseNullableNumber(row.quantity) ?? 0) * sign);
     const batchNumber = toTrimmedString(row.batch_number) || null;
+
+    if (materialType === "FG" && batchNumber) {
+      const batchKey = `${stockType}::${batchNumber}`;
+      const netQty = fgNetQtyByBatch.get(batchKey) ?? 0;
+      fgNetQtyByBatch.set(batchKey, Number((netQty + qty).toFixed(4)));
+    }
 
     let key: string;
     let effectiveBatch: string | null = null;
@@ -523,7 +551,8 @@ async function getBookSnapshotsForMaterial(
       if (BATCH_TRACKED_PO_TYPES.has(ownerPoType)) {
         const directPkoId = pkoByDocId.get(toTrimmedString(row.stock_document_id)) || null;
         const legacyPkoId = uniqueLegacyPackingOrderIdByProcessOrderId.get(toTrimmedString(owner?.id)) || null;
-        const pkoId = directPkoId || legacyPkoId;
+        const batchPkoId = uniqueDirectPkoIdByBatch.get(batchNumber) || null;
+        const pkoId = directPkoId || batchPkoId || legacyPkoId;
         effectiveBatch = batchNumber;
         effectivePko = pkoId;
         key = `${stockType}::${batchNumber}::${pkoId ?? ""}`;
@@ -547,7 +576,15 @@ async function getBookSnapshotsForMaterial(
   }
 
   return [...aggregates.values()]
-    .filter((entry) => (ignoreZeroStock ? entry.qty > 0 : true))
+    .filter((entry) => {
+      if (!ignoreZeroStock || entry.qty <= 0) return !ignoreZeroStock;
+      // A missing PO reference on an OUT movement must not allow a fully
+      // depleted FG batch to survive as a positive receipt-only PID row.
+      if (materialType === "FG" && entry.batch_number) {
+        return (fgNetQtyByBatch.get(`${entry.stock_type}::${entry.batch_number}`) ?? entry.qty) > 0;
+      }
+      return true;
+    })
     .map((entry) => ({
       material_id: materialId,
       stock_type: entry.stock_type,
