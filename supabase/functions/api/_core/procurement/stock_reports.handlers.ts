@@ -1731,7 +1731,12 @@ export async function getCurrentStockHandler(
       const companyCode = companyMap.get(row.company_id) ?? "";
       const slocCode = slocMap.get(row.storage_location_id) ?? "";
       const documentName = toTrimmedString(material?.document_name);
-      const materialLabel = documentName || toTrimmedString(material?.material_name);
+      // "Material" is the material-master name/code (matches resolveMaterialLabel's
+      // rule, used elsewhere in this file) -- document name is the separate
+      // commercial-description column above and must never replace it.
+      const materialLabel = toTrimmedString(material?.material_name)
+        || toTrimmedString(material?.external_code)
+        || toTrimmedString(material?.pace_code);
       const reservedBaseQty = row.path_kind === "A"
         ? pathAReservationMap.get([row.company_id, row.material_id, row.storage_location_id].join("__")) ?? 0
         : pathBCReservationMap.get([row.company_id, row.material_id, row.storage_location_id, row.batch_number ?? ""].join("__")) ?? 0;
@@ -1870,7 +1875,9 @@ export async function getCurrentStockHandler(
       const material = materialMap.get(member.material_id);
       if (!material) continue;
       const documentName = toTrimmedString(material.document_name);
-      const materialLabel = documentName || toTrimmedString(material.material_name);
+      const materialLabel = toTrimmedString(material.material_name)
+        || toTrimmedString(material.external_code)
+        || toTrimmedString(material.pace_code);
       responseRows.push({
         row_key: [companyCode, material.pace_code ?? member.material_id, member.storage_location_id, "PLANNING_GROUP_CONTEXT"].join("__"),
         material_id: member.material_id,
