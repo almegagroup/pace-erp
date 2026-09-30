@@ -753,7 +753,7 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_STORAGE_REQUIRED", 400, "Storage location is required.");
     }
     await verifyLocationMapped(String(gateEntry.company_id), storageLocationId);
-    const pidBlocked = await hasPhysicalInventoryBlock(String(geLine.material_id), storageLocationId, targetStockType);
+    const pidBlocked = await hasPhysicalInventoryBlock(String(gateEntry.company_id), String(geLine.material_id), storageLocationId, targetStockType);
     if (pidBlocked) {
       return procurementErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, "Material has an active physical inventory count in progress.");
     }

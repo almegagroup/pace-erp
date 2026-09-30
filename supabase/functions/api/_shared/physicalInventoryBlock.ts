@@ -9,6 +9,14 @@
 // sales_order.handlers.ts separately).
 import { serviceRoleClient } from "./serviceRoleClient.ts";
 
+// Found live 2026-09-30 (business owner): erp_inventory.storage_location_master carries no
+// company_id at all — a location code like "R003" is shared/reused across sister companies
+// that share a physical site (stock_snapshot/stock_ledger are what actually separate each
+// company's stock at that same storage_location_id). physical_inventory_block itself only
+// gained a company_id column in the same fix (migration 20260930120000) — every lookup here
+// MUST be scoped by the acting company, or a PID opened in one company spuriously blocks (or,
+// via the old unique indexes, outright prevents) every other company sharing that location code.
+
 // Material+location+stock-type only, no batch filter — matches ANY block row for this
 // combination regardless of what batch (or no batch) it was registered under. Correct and
 // exact (not just "safe") for RM/PM/INT: those PID items are always blended (no batch
@@ -17,6 +25,7 @@ import { serviceRoleClient } from "./serviceRoleClient.ts";
 // Transfer/Stock Status Change/Inward QA/Opening Stock) and every RM/PM/INT check added
 // since keeps using this one, unchanged.
 export async function hasPhysicalInventoryBlock(
+  companyId: string,
   materialId: string,
   storageLocationId: string,
   stockType: string,
@@ -25,6 +34,7 @@ export async function hasPhysicalInventoryBlock(
     .schema("erp_inventory")
     .from("physical_inventory_block")
     .select("id")
+    .eq("company_id", companyId)
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
     .eq("stock_type", stockType)
@@ -59,6 +69,7 @@ export async function hasPhysicalInventoryBlock(
 // process output, MTS process/packing orders) so it correctly matches how the PID itself
 // registered that item.
 export async function hasPhysicalInventoryBlockForBatch(
+  companyId: string,
   materialId: string,
   storageLocationId: string,
   stockType: string,
@@ -68,6 +79,7 @@ export async function hasPhysicalInventoryBlockForBatch(
     .schema("erp_inventory")
     .from("physical_inventory_block")
     .select("id")
+    .eq("company_id", companyId)
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
     .eq("stock_type", stockType);
@@ -91,15 +103,17 @@ export interface PhysicalInventoryBlockCombo {
 // Convenience for handlers that need to check several combinations before writing anything
 // (e.g. every RM/PM/INT + SFG/FG line in a Packing PO Final save) — returns the first blocked
 // combo found, or null if none are blocked. Deliberately sequential (small, bounded list — a
-// PO's own line count — not worth parallelizing per §8B).
+// PO's own line count — not worth parallelizing per §8B). companyId is a single value because
+// every combo in one call always belongs to the same acting company/handler invocation.
 export async function findFirstPhysicalInventoryBlock(
+  companyId: string,
   combos: PhysicalInventoryBlockCombo[],
 ): Promise<PhysicalInventoryBlockCombo | null> {
   for (const combo of combos) {
     if (!combo.materialId || !combo.storageLocationId || !combo.stockType) continue;
     const blocked = "batchNumber" in combo
-      ? await hasPhysicalInventoryBlockForBatch(combo.materialId, combo.storageLocationId, combo.stockType, combo.batchNumber ?? null)
-      : await hasPhysicalInventoryBlock(combo.materialId, combo.storageLocationId, combo.stockType);
+      ? await hasPhysicalInventoryBlockForBatch(companyId, combo.materialId, combo.storageLocationId, combo.stockType, combo.batchNumber ?? null)
+      : await hasPhysicalInventoryBlock(companyId, combo.materialId, combo.storageLocationId, combo.stockType);
     if (blocked) return combo;
   }
   return null;

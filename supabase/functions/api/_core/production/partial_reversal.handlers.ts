@@ -1445,6 +1445,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     // key here, same as every other RM/PM/INT check in this codebase.
     const SFG_FG_LEG_REFS = new Set(["SFG_OUT", "SFG_IN", "SFG_OUT2", "SKU_OUT"]);
     const pr19BlockedCombo = await findFirstPhysicalInventoryBlock(
+      String(poData.company_id),
       movements.map((m) => {
         const isSfgFgLeg = SFG_FG_LEG_REFS.has(String(m.line_ref));
         return {

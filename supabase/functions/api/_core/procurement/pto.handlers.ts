@@ -584,8 +584,8 @@ export async function oneStepTransferHandler(
     }
     // §Q1-2026-09-29 — PID posting-block, both legs, checked before any write.
     if (
-      (await hasPhysicalInventoryBlock(String(pto.material_id), String(pto.source_sloc_id), "UNRESTRICTED")) ||
-      (await hasPhysicalInventoryBlock(String(pto.material_id), String(pto.target_sloc_id), "UNRESTRICTED"))
+      (await hasPhysicalInventoryBlock(String(pto.source_company_id), String(pto.material_id), String(pto.source_sloc_id), "UNRESTRICTED")) ||
+      (await hasPhysicalInventoryBlock(String(pto.target_company_id), String(pto.material_id), String(pto.target_sloc_id), "UNRESTRICTED"))
     ) {
       return ptoErrorResponse(req, ctx, "PTO_PI_BLOCKED", 409, "Source or target is under an active Physical Inventory count.");
     }
@@ -673,7 +673,7 @@ export async function issueTransferHandler(
       return ptoErrorResponse(req, ctx, "INSUFFICIENT_STOCK", 400, "Insufficient unrestricted stock.");
     }
     // §Q1-2026-09-29 — PID posting-block, checked before any write.
-    if (await hasPhysicalInventoryBlock(String(pto.material_id), String(pto.source_sloc_id), "UNRESTRICTED")) {
+    if (await hasPhysicalInventoryBlock(String(pto.source_company_id), String(pto.material_id), String(pto.source_sloc_id), "UNRESTRICTED")) {
       return ptoErrorResponse(req, ctx, "PTO_PI_BLOCKED", 409, "Source is under an active Physical Inventory count.");
     }
 
@@ -746,7 +746,7 @@ export async function receiveTransferHandler(
     const quantity = Number(pto.transfer_qty ?? 0);
     const valuationRate = Number(pto.valuation_rate ?? 0);
     // §Q1-2026-09-29 — PID posting-block, checked before any write.
-    if (await hasPhysicalInventoryBlock(String(pto.material_id), String(pto.target_sloc_id), "UNRESTRICTED")) {
+    if (await hasPhysicalInventoryBlock(String(pto.target_company_id), String(pto.material_id), String(pto.target_sloc_id), "UNRESTRICTED")) {
       return ptoErrorResponse(req, ctx, "PTO_PI_BLOCKED", 409, "Target is under an active Physical Inventory count.");
     }
     // §106: one Material Document for this transit-receipt event (both legs), minted from
@@ -866,8 +866,8 @@ export async function storageLocationTransferHandler(
     // §Q1-2026-09-29 — Location Transfer (P311) is one of the modules with NO posting-block
     // check at all before this fix, both legs checked before any write.
     if (
-      (await hasPhysicalInventoryBlock(materialId, sourceSlocId, "UNRESTRICTED")) ||
-      (await hasPhysicalInventoryBlock(materialId, targetSlocId, "UNRESTRICTED"))
+      (await hasPhysicalInventoryBlock(companyId, materialId, sourceSlocId, "UNRESTRICTED")) ||
+      (await hasPhysicalInventoryBlock(companyId, materialId, targetSlocId, "UNRESTRICTED"))
     ) {
       return ptoErrorResponse(req, ctx, "PTO_SLOC_TRANSFER_PI_BLOCKED", 409, "Source or target is under an active Physical Inventory count.");
     }
