@@ -341,10 +341,14 @@ export default function PIDocumentRecountPage() {
                 columns={[
                   { key: "line_number", label: "Line", width: "60px" },
                   {
+                    // business owner, 2026-09-30: pace_code must never appear in a material
+                    // label -- External Code goes in its own column instead (same rule
+                    // already applied elsewhere this session).
                     key: "material_id",
                     label: "Material",
-                    render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
+                    render: (row) => row.material_name ?? "—",
                   },
+                  { key: "material_external_code", label: "External Code", width: "130px", render: (row) => row.material_external_code ?? "—" },
                   { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
                   {
                     // §Q1-followup-2026-09-29 — same read-only Packing PO identity column as
@@ -381,7 +385,11 @@ export default function PIDocumentRecountPage() {
                 ]}
                 rows={pagedItems}
                 rowKey={(row) => row.id}
-                rowTabIndex={-1}
+                // §keyboard-nav-2026-09-30 — same fix as MI04 (see that file's comment):
+                // rowTabIndex={-1} alone left this grid with no reachable keyboard nav at
+                // all. cellNavigate matches the CSN Tracker "dense entry grid" convention;
+                // virtualize skipped since rows are already paginated here.
+                cellNavigate
                 maxHeight="calc(100vh - 340px)"
                 getRowProps={(row) => {
                   const edit = edits[row.id];

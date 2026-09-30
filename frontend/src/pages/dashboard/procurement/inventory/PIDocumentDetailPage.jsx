@@ -200,7 +200,10 @@ export default function PIDocumentDetailPage() {
     () =>
       materials
         .filter((row) => PI_MATERIAL_TYPES.has(String(row.material_type || "").toUpperCase()))
-        .map((row) => ({ value: row.id, label: `${row.material_name ?? "Material"} (${row.pace_code ?? row.material_code ?? row.id})` })),
+        // business owner, 2026-09-30: pace_code must never appear in a material label (same
+        // rule already applied elsewhere this session) -- External Code only, and never fall
+        // back to a raw id (§8A).
+        .map((row) => ({ value: row.id, label: [row.material_name ?? "Material", row.external_code].filter(Boolean).join(" — ") })),
     [materials],
   );
   const locationOptions = useMemo(
@@ -554,11 +557,15 @@ export default function PIDocumentDetailPage() {
                 }] : []),
                 { key: "line_number", label: "Line", width: "60px" },
                 {
+                  // business owner, 2026-09-30: pace_code must never appear in a material
+                  // label -- External Code goes in its own column instead (same rule
+                  // already applied elsewhere this session).
                   key: "material_id",
                   label: "Material",
                   // §8A fix — "—" on lookup miss, never a raw UUID.
-                  render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
+                  render: (row) => row.material_name ?? "—",
                 },
+                { key: "material_external_code", label: "External Code", width: "130px", render: (row) => row.material_external_code ?? "—" },
                 { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
                 {
                   // §Q1-followup-2026-09-29 — same identity column as MI04/MI05 (see those

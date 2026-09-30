@@ -375,10 +375,14 @@ export default function PIDocumentCountEntryPage() {
                   columns={[
                     { key: "line_number", label: "Line", width: "60px" },
                     {
+                      // business owner, 2026-09-30: pace_code must never appear in a material
+                      // label -- External Code goes in its own column instead (same rule
+                      // already applied elsewhere this session).
                       key: "material_id",
                       label: "Material",
-                      render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
+                      render: (row) => row.material_name ?? "—",
                     },
+                    { key: "material_external_code", label: "External Code", width: "130px", render: (row) => row.material_external_code ?? "—" },
                     { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
                     {
                       // §Q1-followup-2026-09-29 (business owner) — an FG PID item is keyed by
@@ -422,7 +426,15 @@ export default function PIDocumentCountEntryPage() {
                   ]}
                   rows={pagedItems}
                   rowKey={(row) => row.id}
-                  rowTabIndex={-1}
+                  // §keyboard-nav-2026-09-30 — a bare rowTabIndex={-1} left this dense
+                  // count-entry grid with NO row/cell arrow-key navigation at all (a <tr>
+                  // with tabIndex=-1 is never reachable, and nothing here ever calls
+                  // focusRow() to put it there) -- only native Tab-between-inputs worked.
+                  // cellNavigate matches the same "dense entry grid" convention CSN Tracker
+                  // already uses (Excel-style arrow keys once a cell/input has focus);
+                  // virtualize is intentionally skipped since this grid is already paginated
+                  // (pagedItems), unlike CSN Tracker's large unpaginated set.
+                  cellNavigate
                   maxHeight="calc(100vh - 340px)"
                   emptyMessage="No items on this PI document."
                 />
