@@ -281,7 +281,7 @@ export default function PIDocumentRecountPage() {
       notices={[
         ...(error ? [{ key: "recount-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "recount-notice", tone: "success", message: notice }] : []),
-        ...(id ? [{ key: "recount-stage", tone: canEdit ? "info" : "warning", message: stageMessage }] : []),
+        ...(detail ? [{ key: "recount-stage", tone: canEdit ? "info" : "warning", message: stageMessage }] : []),
       ]}
       actions={id ? [
         { key: "back", label: "Back To Detail", tone: "neutral", onClick: openDetail },
