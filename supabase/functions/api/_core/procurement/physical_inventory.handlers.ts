@@ -430,6 +430,10 @@ async function getBookSnapshotsForMaterial(
 ): Promise<Array<{ material_id: string; stock_type: string; book_qty: number; base_uom_code: string; batch_number: string | null; packing_order_id: string | null }>> {
   const materialType = toUpperTrimmedString(material.material_type);
   if (!PI_MATERIAL_TYPES.has(materialType)) return [];
+  // Material Master is the UoM authority. Historical stock ledgers can contain
+  // a legacy label (for example NOS after a material was standardised to MTR),
+  // but a PID must always offer the active conversions from the master base UoM.
+  const masterBaseUomCode = toTrimmedString(material.base_uom_code);
 
   // Paged via fetchAllRows, not a plain .select() -- this must aggregate
   // EVERY ledger row for the material+location (batch/packing-order grouping
@@ -533,12 +537,12 @@ async function getBookSnapshotsForMaterial(
     const current = aggregates.get(key) ?? {
       stock_type: stockType,
       qty: 0,
-      base_uom_code: toTrimmedString(row.base_uom_code),
+      base_uom_code: masterBaseUomCode || toTrimmedString(row.base_uom_code),
       batch_number: effectiveBatch,
       packing_order_id: effectivePko,
     };
     current.qty = Number((current.qty + qty).toFixed(4));
-    if (!current.base_uom_code) current.base_uom_code = toTrimmedString(row.base_uom_code);
+    if (!current.base_uom_code) current.base_uom_code = masterBaseUomCode || toTrimmedString(row.base_uom_code);
     aggregates.set(key, current);
   }
 
