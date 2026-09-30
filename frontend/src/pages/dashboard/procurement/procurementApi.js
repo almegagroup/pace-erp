@@ -373,6 +373,15 @@ export function knockOffPO(id, data) {
   return fetchProcurement("POST", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/knock-off`, data);
 }
 
+// CRCP (Cross Company) — PROCUREMENT-DESIGN-DOC.md §3.7 Point 3.2.2/3.2.9.
+export function setPoCrcp(id, data) {
+  return fetchProcurement("PATCH", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/crcp`, data);
+}
+
+export function setStoCrcp(id, data) {
+  return fetchProcurement("PATCH", `/api/procurement/stos/${encodeURIComponent(id)}/crcp`, data);
+}
+
 export function listCSNs(params) {
   return fetchProcurement("GET", "/api/procurement/csns", undefined, params);
 }
@@ -889,6 +898,41 @@ export function listSalesOrders(params) {
   return fetchProcurement("GET", "/api/procurement/sales-orders", undefined, params);
 }
 
+export function listSalesReturns(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns", undefined, params);
+}
+export function createSalesReturn(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-returns", data);
+}
+export function listPendingSalesReturnInvoices(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/pending-invoices", undefined, params);
+}
+export function saveSalesReturnInvoiceDetail(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-returns/invoice-detail", data);
+}
+export function listSalesReturnBatchOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/batch-options", undefined, params);
+}
+export function resolveSalesReturnPackingOrderOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/packing-order-options", undefined, params);
+}
+export function listSalesReturnRepackSkuOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/repack-sku-options", undefined, params);
+}
+export function listPendingSalesReturnStrokes(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/pending-strokes", undefined, params);
+}
+export function listPendingSalesReturnGenealogy(params) {
+  const suffix = params?.kind === "PROCESS" ? "pending-process-entries" : "pending-packing-entries";
+  return fetchProcurement("GET", `/api/procurement/sales-returns/${suffix}`, undefined, params);
+}
+export function listSalesReturnStrokeCheckOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/stroke-check-options", undefined, params);
+}
+export function resolveSalesReturnProdshade(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-returns/prodshade", undefined, params);
+}
+
 export function getSalesOrder(id) {
   return fetchProcurement("GET", `/api/procurement/sales-orders/${encodeURIComponent(id)}`);
 }
@@ -1265,6 +1309,16 @@ export function reopenPIDocument(id, reason) {
 // §119.15 — MI20 difference report (IN07), standalone.
 export function listPIDifferences(params) {
   return fetchProcurement("GET", "/api/procurement/physical-inventory-differences", undefined, params);
+}
+
+// §Q6-2026-09-29 — MI20's own Document Number / Batch Number typeahead search, backing its
+// MultiValueFilterField pickers (same shape as searchStockLedgerBatchNumbers/
+// searchStockLedgerPackingPoNumbers in stock_reports.handlers.ts).
+export function searchPIDocumentNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-differences/search-document-numbers", undefined, params);
+}
+export function searchPIBatchNumbers(params) {
+  return fetchProcurement("GET", "/api/procurement/physical-inventory-differences/search-batch-numbers", undefined, params);
 }
 
 // §119.12 — Create page (ITEM_WISE) material-location breakdown preview.

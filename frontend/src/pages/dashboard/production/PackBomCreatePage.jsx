@@ -135,8 +135,12 @@ export default function PackBomCreatePage() {
     enabled: Boolean(effectiveCompanyId && poType),
   });
   const pmMaterialsQ = useQuery({
-    queryKey: ["om-materials", "PM"],
-    queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
+    queryKey: ["om-materials", "PM", effectiveCompanyId],
+    // business owner, 2026-09-30: was unscoped (no company_id/status) -- Pack
+    // BOM is company-wise (§83.15), so this leaked every company's PM
+    // materials, including inactive ones, into the picker.
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "PM", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectiveCompanyId,
     select: (d) => d?.data ?? [],
   });
   const groupsQ = useQuery({

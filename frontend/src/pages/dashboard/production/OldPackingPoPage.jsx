@@ -24,6 +24,7 @@ import {
 } from "./prodApi.js";
 import { listMaterials, listStorageLocations } from "../om/omApi.js";
 import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
+import SalesReturnPendingButton from "./SalesReturnPendingButton.jsx";
 
 const ERRORS = {
   PROD_OLD_PACKING_PO_INVALID: "Company, parent batch, SKU and Actual Qty are required.",
@@ -83,17 +84,21 @@ export default function OldPackingPoPage() {
   }));
   const parent = parents.find((p) => p.id === processOrderId) ?? null;
 
+  // business owner, 2026-09-30: both queries were unscoped (no company_id/
+  // status) -- leaked every company's materials, including inactive ones.
   const fgMaterialsQ = useQuery({
-    queryKey: ["old-pack-fg-materials"],
-    queryFn: () => listMaterials({ material_type: "FG", limit: 500 }),
+    queryKey: ["old-pack-fg-materials", effectiveCompanyId],
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "FG", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectiveCompanyId,
     select: (d) => d?.data ?? [],
   });
   const skuOptions = (fgMaterialsQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) }));
   const selectedSku = (fgMaterialsQ.data ?? []).find((m) => m.id === skuMaterialId) ?? null;
 
   const pmMaterialsQ = useQuery({
-    queryKey: ["old-pack-pm-materials"],
-    queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
+    queryKey: ["old-pack-pm-materials", effectiveCompanyId],
+    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "PM", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectiveCompanyId,
     select: (d) => d?.data ?? [],
   });
   const pmMaterialOptions = (pmMaterialsQ.data ?? []).map((m) => ({ value: m.id, label: materialLabel(m) }));
@@ -250,6 +255,7 @@ export default function OldPackingPoPage() {
       toast(`Old Packing PO ${res?.po_number ?? ""} created for batch ${res?.batch_number ?? ""} — no stock moved.`);
       setSkuMaterialId(""); setNumPacks(""); setFillQty(""); setActualQtyKg(""); setPmEdits({}); setManualPmLines([]);
       qc.invalidateQueries({ queryKey: ["old-process-po-batches"] });
+      qc.invalidateQueries({ queryKey: ["so05-pending-production", "PACKING"] });
     } catch (err) {
       toast(friendly(err.code, err.message), "error");
     } finally { setSaving(false); }
@@ -261,6 +267,7 @@ export default function OldPackingPoPage() {
       subtitle="PR23 — genealogy for a pre-go-live FG batch (§104.9). Links to its parent Old Process PO; FG, SFG, and PM lines all carry explicit storage locations for later reversal-safe traceability. Saves a FINAL paper order; posts NO stock movement."
       actions={[{ label: "Save", tone: "primary", mnemonic: "S", disabled: !canSave || saving, onClick: handleSave }]}
     >
+      <div className="flex justify-end"><SalesReturnPendingButton companyId={effectiveCompanyId} kind="PACKING" /></div>
       <ErpSectionCard title="Header">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="flex flex-col gap-1">

@@ -199,6 +199,8 @@ import {
   resolvePIDByNumberForCountHandler,
   resolvePIDByNumberForRecountHandler,
   resolvePIDByNumberHandler,
+  searchPIBatchNumbersHandler,
+  searchPIDocumentNumbersHandler,
   submitPIDForApprovalHandler,
 } from "../_core/procurement/physical_inventory.handlers.ts";
 import {
@@ -291,6 +293,7 @@ import {
   getPoFilterOptionsHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
+  setPoCrcpHandler,
   listMaterialUomConversionsForProcurementHandler,
   listPOsHandler,
   listPOOrderGroupsHandler,
@@ -341,6 +344,19 @@ import {
   updateSalesOrderUnifiedHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
 import {
+  createSalesReturnReceiptHandler,
+  listPendingGenealogyEntriesHandler,
+  listPendingReturnInvoicesHandler,
+  listPendingStrokesHandler,
+  listRepackTargetSkuOptionsHandler,
+  listSalesReturnReceiptsHandler,
+  listSalesReturnStrokeCheckOptionsHandler,
+  resolveBatchNumberOptionsHandler,
+  resolveSalesReturnPackingOrderOptionsHandler,
+  resolveSalesReturnProdshadeHandler,
+  saveReturnInvoiceDetailHandler,
+} from "../_core/procurement/sales_return.handlers.ts";
+import {
   getSoMapStatusHandler,
   listCustomerAddressesForSoHandler,
   listFoOptionsForSoHandler,
@@ -384,6 +400,7 @@ import {
   approveSTOHandler,
   approveSTOAmendmentHandler,
   cancelSTOHandler,
+  setStoCrcpHandler,
   amendSTOHandler,
   closeSTOHandler,
   confirmSTOHandler,
@@ -531,6 +548,10 @@ export async function dispatchProcurementRoutes(
     // collides with the :id pattern route below.
     case "GET:/api/procurement/physical-inventory-differences":
       return await listPIDifferencesHandler(req, ctx);
+    case "GET:/api/procurement/physical-inventory-differences/search-document-numbers":
+      return await searchPIDocumentNumbersHandler(req, ctx);
+    case "GET:/api/procurement/physical-inventory-differences/search-batch-numbers":
+      return await searchPIBatchNumbersHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory-material-locations":
       return await getMaterialLocationBreakdownHandler(req, ctx);
     case "GET:/api/procurement/location-transfer-requests":
@@ -691,6 +712,30 @@ export async function dispatchProcurementRoutes(
       return await createSOHandler(req, ctx);
     case "GET:/api/procurement/sales-orders":
       return await listSOsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns":
+      return await listSalesReturnReceiptsHandler(req, ctx);
+    case "POST:/api/procurement/sales-returns":
+      return await createSalesReturnReceiptHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-invoices":
+      return await listPendingReturnInvoicesHandler(req, ctx);
+    case "POST:/api/procurement/sales-returns/invoice-detail":
+      return await saveReturnInvoiceDetailHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/batch-options":
+      return await resolveBatchNumberOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/packing-order-options":
+      return await resolveSalesReturnPackingOrderOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/repack-sku-options":
+      return await listRepackTargetSkuOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/stroke-check-options":
+      return await listSalesReturnStrokeCheckOptionsHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/prodshade":
+      return await resolveSalesReturnProdshadeHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-strokes":
+      return await listPendingStrokesHandler(req, ctx);
+    case "GET:/api/procurement/sales-returns/pending-genealogy":
+    case "GET:/api/procurement/sales-returns/pending-process-entries":
+    case "GET:/api/procurement/sales-returns/pending-packing-entries":
+      return await listPendingGenealogyEntriesHandler(req, ctx);
     case "POST:/api/procurement/sales-orders-v2":
       return await createSalesOrderUnifiedHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/fg-sku-options":
@@ -1335,6 +1380,10 @@ export async function dispatchProcurementRoutes(
     return await cancelSTOHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/stos\/[^/]+\/crcp$/.test(pathname) && req.method === "PATCH") {
+    return await setStoCrcpHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
     return await knockOffSTOLineHandler(req, ctx);
   }
@@ -1437,6 +1486,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
     return await knockOffPOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/crcp$/.test(pathname) && req.method === "PATCH") {
+    return await setPoCrcpHandler(req, ctx);
   }
 
   return null;

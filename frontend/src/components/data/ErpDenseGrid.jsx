@@ -431,7 +431,16 @@ export default function ErpDenseGrid({
   return (
     <div className="grid gap-0">
       <div className={viewportClassName} style={viewportStyle} ref={scrollElementRef}>
-        <table className={`erp-grid-table min-w-full text-xs ${fitColumnWidths ? "w-max table-fixed" : ""}`.trim()}>
+        {/* min-w-full forces the table to at least fill its container -- correct
+            for the default stretch layout, but it fights fitColumnWidths's own
+            point (declared widths stay authoritative, no stretching, the
+            viewport scrolls instead) when a grid has few/narrow columns: with
+            table-fixed, a table forced wider than the sum of its own declared
+            column widths redistributes the extra space across columns
+            proportionally, which looks exactly like the widths being ignored.
+            Found live 2026-09-26 (business owner) on Plan Feed's Report tab,
+            5 narrow columns in a wide container. */}
+        <table className={`erp-grid-table text-xs ${fitColumnWidths ? "w-max table-fixed" : "min-w-full"}`.trim()}>
           {fitColumnWidths ? (
             <colgroup>
               {columns.map((column) => <col key={column.key} style={column.width ? { width: column.width, minWidth: column.width } : undefined} />)}

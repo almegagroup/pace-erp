@@ -162,7 +162,9 @@ export default function BatchCostingReportPage() {
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
       value: material.id,
-      label: `${material.pace_code ?? "—"} — ${material.document_name || material.material_name || "—"}`,
+      // business owner, 2026-09-26: pace_code must never appear in a
+      // material label -- Item Name / Document Name / External Code only.
+      label: [material.material_name, material.document_name, material.external_code].filter(Boolean).join(" — ") || "—",
     })),
     [materialsQuery.materials],
   );

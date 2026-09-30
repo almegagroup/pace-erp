@@ -1026,6 +1026,25 @@ function computeRowValues(row) {
 }
 
 function makeDraftRow(line) {
+  // business owner, 2026-09-27: found live (CMP003 stroke #2, PO 9300000512) --
+  // dosage%-derived quantities (planned_qty, and actual_qty/ap_approved_qty
+  // whenever they fall back to planned_qty because nothing was saved yet)
+  // carry ~1e-6..1e-10 of floating-point noise from the backend's own
+  // (dosage_pct/100)*batchQty math. Plain String(...) showed that noise
+  // verbatim (e.g. "51.519999991999995"); formatPreciseNumber's own
+  // artifact-detector doesn't catch it either -- its regex only fires on a
+  // long trailing run of 0s/9s within 8 total fractional digits, and this
+  // shape has 12+. formatSum (already used for dosage-total display
+  // elsewhere in this file) rounds to the same 6dp every quantity here is
+  // entered/stored at before formatting -- safe for a real typed value
+  // (nobody types 7+ decimal digits) and correct for a computed one.
+  const plannedQty = formatSum(Number(line.planned_qty ?? 0));
+  const actualQty = line.actual_qty !== null && line.actual_qty !== undefined
+    ? formatSum(Number(line.actual_qty))
+    : plannedQty;
+  const apApprovedQty = line.ap_approved_qty !== null && line.ap_approved_qty !== undefined
+    ? formatSum(Number(line.ap_approved_qty))
+    : actualQty;
   return {
     key: line.id,
     id: line.id,
@@ -1037,11 +1056,11 @@ function makeDraftRow(line) {
     allowed_alternate_material_options: buildActualMaterialOptions(line),
     actual_material_id: line.actual_material_id || "",
     issue_sloc_id: line.issue_sloc_id || line.issue_storage_location?.id || "",
-    planned_qty: String(line.planned_qty ?? 0),
-    actual_qty: String(line.actual_qty ?? line.planned_qty ?? 0),
+    planned_qty: plannedQty,
+    actual_qty: actualQty,
     approved_status: line.approved_status || "YES",
-    ap_approved_qty: String(line.ap_approved_qty ?? line.actual_qty ?? line.planned_qty ?? 0),
-    variance_qty: String(line.variance_qty ?? 0),
+    ap_approved_qty: apApprovedQty,
+    variance_qty: formatSum(Number(line.variance_qty ?? 0)),
     is_formulation_line: line.is_formulation_line !== false,
   };
 }

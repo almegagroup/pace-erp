@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
@@ -129,6 +130,11 @@ export default function GateEntryCreatePage() {
     selected: null,
   });
 
+  // ── STO GE drawer (§3.7 STO GE-Creation Drawer design, 2026-09-28) — one
+  // STO can carry many line items, unlike one PO line, so selecting an STO
+  // opens this big center drawer instead of the small CSN-picker drawer.
+  const [stoDrawer, setStoDrawer] = useState({ open: false, rowIndex: null, sto: null, rows: [] });
+
   // ── save / success modal
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -199,10 +205,7 @@ export default function GateEntryCreatePage() {
     if (item.__kind === "STO") {
       updateLine(rowIndex, { refQuery: item.sto_number, po: null, poLine: null, sto: item, stoLine: null, csn: null });
       setPoDropRow(null);
-      const csns = getCsnsForRef("STO", item.id);
-      if (csns.length > 0) {
-        setTimeout(() => openDrawer(rowIndex, null, item), 60);
-      }
+      setTimeout(() => openStoDrawer(rowIndex, item), 60);
       return;
     }
     const po = item;
@@ -278,6 +281,60 @@ export default function GateEntryCreatePage() {
   function setDrawerHi(idx) {
     if (idx < 0 || idx >= drawer.csns.length) return;
     setDrawer((d) => ({ ...d, hiIdx: idx, selected: d.csns[idx] }));
+  }
+
+  // ── STO GE drawer (§3.7 STO GE-Creation Drawer design) ──────────────────
+  function openStoDrawer(rowIndex, sto) {
+    const stoLines = sto.lines ?? [];
+    const rows = stoLines.map((stoLine) => ({
+      selected: true,
+      stoLine,
+      geQty: stoLine.expected_qty != null ? String(stoLine.expected_qty) : "",
+      invoiceNo: stoLine.invoice_number || "",
+      lrDate: stoLine.lr_date || "",
+    }));
+    setStoDrawer({ open: true, rowIndex, sto, rows });
+  }
+
+  function closeStoDrawer() {
+    setStoDrawer({ open: false, rowIndex: null, sto: null, rows: [] });
+  }
+
+  function updateStoDrawerRow(idx, patch) {
+    setStoDrawer((d) => ({ ...d, rows: d.rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)) }));
+  }
+
+  function confirmStoDrawer() {
+    const { rowIndex, sto, rows } = stoDrawer;
+    const selectedRows = rows.filter((r) => r.selected && r.stoLine);
+    const newLines = selectedRows.map((r) => ({
+      refQuery: sto.sto_number,
+      po: null,
+      poLine: null,
+      sto,
+      stoLine: r.stoLine,
+      csn: {
+        id: r.stoLine.csn_id,
+        csn_number: r.stoLine.csn_number,
+        csn_type: "DOMESTIC",
+        material_id: r.stoLine.material_id,
+        material_name: r.stoLine.material_name,
+        po_uom_code: r.stoLine.uom_code,
+        dispatch_qty: r.stoLine.expected_qty,
+        invoice_number: r.stoLine.invoice_number,
+        boe_number: r.stoLine.boe_number,
+        lr_date: r.stoLine.lr_date,
+      },
+      rcvQty: r.geQty,
+      lrNumber: r.invoiceNo,
+      lrDate: r.lrDate,
+    }));
+
+    setLines((prev) => {
+      const withoutTrigger = rowIndex !== null ? prev.filter((_, i) => i !== rowIndex) : prev;
+      return [...withoutTrigger, ...newLines];
+    });
+    closeStoDrawer();
   }
 
   async function handleSave() {
@@ -871,6 +928,130 @@ export default function GateEntryCreatePage() {
             </p>
             {drawer.csns.map((csn, idx) => renderCsnCard(csn, idx))}
           </div>
+        )}
+      </DrawerBase>
+
+      {/* ── STO GE Drawer (§3.7 STO GE-Creation Drawer design) ── */}
+      <DrawerBase
+        visible={stoDrawer.open}
+        title={stoDrawer.sto ? `STO items — ${stoDrawer.sto.sto_number}` : "STO items"}
+        side="center"
+        width="min(920px, calc(100vw - 48px))"
+        onEscape={closeStoDrawer}
+        onClose={closeStoDrawer}
+        actions={
+          <>
+            <button type="button" className="h-9 border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700" onClick={closeStoDrawer}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="h-9 border border-sky-700 bg-sky-600 px-4 text-sm font-semibold text-white"
+              onClick={confirmStoDrawer}
+              disabled={!stoDrawer.rows.some((r) => r.selected)}
+            >
+              Add selected to GE
+            </button>
+          </>
+        }
+      >
+        {stoDrawer.sto?.mother && (
+          <div className="mb-3 grid grid-cols-3 gap-3 border border-violet-200 bg-violet-50 px-3 py-2 text-[11px]">
+            <div>
+              <span className="block text-violet-600">Mother PO Number</span>
+              <span className="font-semibold text-violet-900">{stoDrawer.sto.mother.mother_po_number || "—"}</span>
+            </div>
+            <div>
+              <span className="block text-violet-600">Mother Invoice Number</span>
+              <span className="font-semibold text-violet-900">{stoDrawer.sto.mother.mother_invoice_number || "—"}</span>
+            </div>
+            <div>
+              <span className="block text-violet-600">Mother BOE Number</span>
+              <span className="font-semibold text-violet-900">{stoDrawer.sto.mother.mother_boe_number || "—"}</span>
+            </div>
+          </div>
+        )}
+        {stoDrawer.rows.length === 0 ? (
+          <p className="text-sm text-slate-500">No open lines for this STO.</p>
+        ) : (
+          <ErpDenseGrid
+            columns={[
+              {
+                key: "selected",
+                label: "",
+                width: "36px",
+                render: (row, idx) => (
+                  <input
+                    type="checkbox"
+                    checked={row.selected}
+                    onChange={(e) => updateStoDrawerRow(idx, { selected: e.target.checked })}
+                  />
+                ),
+              },
+              { key: "sto_number", label: "STO Number", width: "110px", render: () => stoDrawer.sto?.sto_number },
+              { key: "csn_number", label: "CSN", width: "110px", render: (row) => row.stoLine?.csn_number || "—" },
+              { key: "material_name", label: "Material", render: (row) => row.stoLine?.material_name || "—" },
+              { key: "uom_code", label: "UOM", width: "70px", render: (row) => row.stoLine?.uom_code || "—" },
+              { key: "expected_qty", label: "Expected qty", width: "100px", render: (row) => Number(row.stoLine?.expected_qty ?? 0).toLocaleString() },
+              {
+                key: "ge_qty",
+                label: "GE quantity",
+                width: "100px",
+                render: (row, idx) => (
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.001"
+                    className="h-7 w-full border border-slate-200 bg-white px-2 text-right text-[11px] outline-none focus:border-sky-500"
+                    value={row.geQty}
+                    onChange={(e) => updateStoDrawerRow(idx, { geQty: e.target.value })}
+                  />
+                ),
+              },
+              {
+                key: "invoice_no",
+                label: "Invoice No",
+                width: "120px",
+                render: (row, idx) => (
+                  <input
+                    type="text"
+                    className="h-7 w-full border border-slate-200 bg-white px-2 text-[11px] outline-none focus:border-sky-500"
+                    value={row.invoiceNo}
+                    onChange={(e) => updateStoDrawerRow(idx, { invoiceNo: e.target.value })}
+                  />
+                ),
+              },
+              {
+                key: "lr_date",
+                label: "LR/BL Date",
+                width: "130px",
+                render: (row, idx) => (
+                  <input
+                    type="date"
+                    className="h-7 w-full border border-slate-200 bg-white px-2 text-[11px] outline-none focus:border-sky-500"
+                    value={row.lrDate || ""}
+                    onChange={(e) => updateStoDrawerRow(idx, { lrDate: e.target.value })}
+                  />
+                ),
+              },
+              {
+                key: "remove",
+                label: "",
+                width: "36px",
+                render: (row, idx) => (
+                  <button
+                    type="button"
+                    className="text-[11px] text-rose-600"
+                    onClick={() => updateStoDrawerRow(idx, { selected: false })}
+                  >
+                    ✕
+                  </button>
+                ),
+              },
+            ]}
+            rows={stoDrawer.rows}
+            rowKey={(row, idx) => row.stoLine?.id ?? idx}
+          />
         )}
       </DrawerBase>
 

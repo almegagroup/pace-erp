@@ -348,10 +348,11 @@ function computeDashboardBlocks(rows, monthValue, groupConfigs = [], canonicalDe
       const totalTrn = sortedItems.reduce((sum, row) => sum + Number(row.trn_stock_qty || 0), 0);
       const totalGe = sortedItems.reduce((sum, row) => sum + Number(row.ge_stock_qty || 0), 0);
       const totalQa = sortedItems.reduce((sum, row) => sum + Number(row.qa_stock_qty || 0), 0);
-      // Match the server and IN03: only unrestricted stock after open
-      // reservations can satisfy a procurement threshold. TRN, Gate Entry,
-      // and QA remain visible below, but are not usable inventory yet.
-      const totalStock = totalAvailable;
+      // business owner, 2026-09-26: reverted 2026-09-13's "usable stock
+      // only" change -- matches the backend revert in planning.handlers.ts,
+      // restoring the original locked PO11 design brief's
+      // Total Stock = Available + TRN + GE + In QA.
+      const totalStock = totalAvailable + totalTrn + totalGe + totalQa;
       const tone = getPlanningStatusTone(totalStock, effectiveSafety, effectiveReplenishment);
       groupBlocks.push({
         type: "group-total",

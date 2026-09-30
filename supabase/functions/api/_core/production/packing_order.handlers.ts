@@ -29,6 +29,7 @@ import {
   getIdFromPath,
 } from "./production.shared.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
+import { findFirstPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -2525,6 +2526,38 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     const fgQtyForCost = Number(fgLineForCost?.actual_qty ?? fgLineForCost?.total_qty ?? 0);
     const fgCostPerKg = fgQtyForCost > 0 ? totalInputValue / fgQtyForCost : 0;
 
+    // §Q1-2026-09-29 — Packing PO Final had NO PID posting-block at all before this fix. Every
+    // line here posts against UNRESTRICTED (SFG/PM issue, FG receipt alike — confirmed below,
+    // stockTypeCode is always "UNRESTRICTED" in this handler), so one combo check covers all
+    // three line types. Checked before the posting loop starts, not per-line inside it, so a
+    // partial post never happens for a PO that will fail this check on a later line.
+    //
+    // Batch-precise for SFG/FG (per business owner, §Q1 follow-up): MI04/MI05 show Batch
+    // Number as a fixed identity for these line types, exactly matching how
+    // physical_inventory_block itself stores batch_number — a count on a DIFFERENT batch at
+    // this same location must not block this Final. PM lines have no batch dimension in PID
+    // (always blended), so they deliberately carry no batchNumber key here — see
+    // hasPhysicalInventoryBlockForBatch's own comment for why passing one for them would be
+    // actively wrong, not just imprecise. line.batch_number is already the FINAL, post-SFG-
+    // batch-link value by this point (the batch assignment above already ran).
+    const packBlockedCombo = await findFirstPhysicalInventoryBlock(
+      lineRows
+        .filter((line) => Number(line.actual_qty ?? line.total_qty ?? 0) > 0 && !toTrimmedString(line.stock_ledger_id))
+        .map((line) => {
+          const lineType = String(line.line_type ?? "");
+          const isBatchTracked = lineType === "SFG" || lineType === "FG";
+          return {
+            materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+            storageLocationId: (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string,
+            stockType: "UNRESTRICTED",
+            ...(isBatchTracked ? { batchNumber: toTrimmedString(line.batch_number) || null } : {}),
+          };
+        }),
+    );
+    if (packBlockedCombo) {
+      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count for this batch — Final is blocked until the PID is posted or cancelled.");
+    }
+
     // DEPENDENT: all lines share the same brand-new Material Document number (never
     // posted before). post_stock_movement()'s item_number assignment locks existing
     // stock_document rows FOR UPDATE to serialize concurrent callers — but on the very
@@ -2686,6 +2719,64 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       return packErr(req, ctx, "PROD_PACK_ALREADY_REVERSED", 409, "Already reversed");
     }
 
+    // §Q-reversal-2026-09-30 (business owner) — found live in prod CMP003: a Packing
+    // PO whose entire FG output had already been dispatched (PGI'd via a Delivery
+    // Challan/Sales Invoice, DC still status=DISPATCHED, never cancelled) was later
+    // CORS-reversed anyway -- nothing here ever checked dispatch or FO-mapping state
+    // before allowing reversal. That reversal posted a second P102 OUT against a batch
+    // that was already at zero, driving it to -10kg in the ledger (masked in reports
+    // because stock_snapshot is blended across batches, not per-batch). Once something
+    // has physically left the building (or is earmarked to), CORS must never be able to
+    // dissolve its genealogy back to RM/PM -- only COR6 (add item / change qty) stays
+    // available. Both checks run in parallel and are combined into one message so the
+    // user sees every blocker at once, not one at a time across repeated attempts.
+    const [{ data: dcLineRows, error: dcLineErr }, { data: allocRows, error: allocCheckErr }] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_procurement")
+        .from("delivery_challan_line")
+        .select("id, delivery_challan!inner(status)")
+        .eq("packing_order_id", id)
+        .neq("delivery_challan.status", "CANCELLED"),
+      serviceRoleClient
+        .schema("erp_production")
+        .from("plan_feed_packing_order_allocation")
+        .select("id")
+        .eq("packing_order_id", id),
+    ]);
+    if (dcLineErr) {
+      console.error("[packing_order.reversePackingOrder] dispatch check failed:", JSON.stringify(dcLineErr));
+      throw new Error("PROD_PACK_REVERSE_FAILED");
+    }
+    if (allocCheckErr) {
+      console.error("[packing_order.reversePackingOrder] FO allocation check failed:", JSON.stringify(allocCheckErr));
+      throw new Error("PROD_PACK_REVERSE_FAILED");
+    }
+    const reverseBlockers: string[] = [];
+    // §Q-reversal-2026-09-30-b (business owner follow-up) — a Delivery Order can exist
+    // against this Packing PO in TWO distinct states, and each needs its own precise
+    // instruction rather than one blanket "reverse the invoice" message: (a) DISPATCHED
+    // -- the PGI already posted P601, so the Sales Invoice must be reversed first (that
+    // restores the stock and resets the DC to CREATED), and only then is the DO itself
+    // cancellable; (b) merely CREATED -- no PGI has happened yet, the DO is just holding
+    // a stock reservation, so cancelling the DO alone (no invoice exists to reverse) is
+    // enough. Telling a user to "reverse the invoice" when there isn't one yet would be
+    // actively confusing.
+    const dcStatuses = new Set(
+      ((dcLineRows ?? []) as JsonRecord[]).map((row) => toTrimmedString((row.delivery_challan as JsonRecord | null)?.status)),
+    );
+    if (dcStatuses.has("DISPATCHED")) {
+      reverseBlockers.push("has already been dispatched (PGI posted) against a Delivery Order -- reverse the Sales Invoice, then cancel the Delivery Order, first");
+    } else if (dcStatuses.size > 0) {
+      reverseBlockers.push("has an active Delivery Order created against it (not yet dispatched) -- cancel that Delivery Order first, which releases its stock reservation");
+    }
+    if ((allocRows ?? []).length > 0) {
+      reverseBlockers.push("is still mapped to an FO -- unmap it in Plan Feed first");
+    }
+    if (reverseBlockers.length > 0) {
+      return packErr(req, ctx, "PROD_PACK_REVERSE_BLOCKED", 422,
+        `This Packing PO ${reverseBlockers.join(" and ")}, then retry the reversal.`);
+    }
+
     const reverseNow = new Date().toISOString();
     const { error: cancelReservationErr } = await serviceRoleClient
       .schema("erp_production")
@@ -2739,6 +2830,29 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       const ledgerRefByLedgerId = await resolveStockLedgerRefsByLedgerIds(
         lineRows.map((line) => toTrimmedString(line.stock_ledger_id)),
       );
+
+      // §Q1-2026-09-29 (business owner, SAP comparison, table item #6) — Packing PO CORS
+      // posts real stock movements same as Final/COR6, must be blocked under an active
+      // PID too. Every line here posts against UNRESTRICTED. Checked before the loop.
+      // Batch-precise for SFG/FG, same reasoning as Final's own check above — PM lines
+      // carry no batchNumber key (always blended in PID).
+      const packReverseBlockedCombo = await findFirstPhysicalInventoryBlock(
+        lineRows
+          .filter((line) => Boolean(line.stock_ledger_id) && Number(line.actual_qty ?? line.total_qty ?? 0) > 0)
+          .map((line) => {
+            const lineType = String(line.line_type ?? "");
+            const isBatchTracked = lineType === "SFG" || lineType === "FG";
+            return {
+              materialId: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+              storageLocationId: (line.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string ?? "",
+              stockType: "UNRESTRICTED",
+              ...(isBatchTracked ? { batchNumber: toTrimmedString(line.batch_number) || null } : {}),
+            };
+          }),
+      );
+      if (packReverseBlockedCombo) {
+        return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more materials/locations on this Packing PO are under an active Physical Inventory count for this batch — CORS reversal is blocked until the PID is posted or cancelled.");
+      }
 
       // DEPENDENT: same reasoning as finalizePackingOrderHandler — revDocNum is
       // a brand-new document_number (first reversal for this PO), so
@@ -2923,6 +3037,37 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     // is the reference.
     const correctionMatDoc = await generateMaterialDocNumber(String(poData.company_id));
 
+    // §Q1-2026-09-29 (business owner, SAP comparison, table item #5) — Packing PO COR6
+    // posts real stock movements just like Final, so it must be blocked under an active
+    // PID the same way. Every line here posts against UNRESTRICTED (confirmed below,
+    // stockTypeCode is always "UNRESTRICTED" in this handler, same as Final), so one
+    // check covers FG/SFG/PM alike. Checked before the posting loop starts. Batch-precise
+    // for existing SFG/FG lines (a brand-new line here is always PM per this handler's own
+    // rule, so it never carries a batchNumber key).
+    const packCorrectionBlockedCombo = await findFirstPhysicalInventoryBlock(
+      corrections
+        .filter((correction) => Math.abs(Number(correction.delta_qty ?? 0)) > 0)
+        .map((correction) => {
+          const isNewLine = !toTrimmedString(correction.id);
+          const line = isNewLine ? null : lineMap.get(toTrimmedString(correction.id));
+          const lineType = String(line?.line_type ?? "");
+          const isBatchTracked = !isNewLine && (lineType === "SFG" || lineType === "FG");
+          return {
+            materialId: isNewLine
+              ? toTrimmedString(correction.material_id)
+              : (toTrimmedString(line?.actual_material_id) || String(line?.material_id ?? "")),
+            storageLocationId: isNewLine
+              ? (toTrimmedString(correction.storage_location_id) || defaultPmSlocId || "")
+              : ((line?.issue_sloc_id || (lineType === "PM" ? defaultPmSlocId : null)) as string ?? ""),
+            stockType: "UNRESTRICTED",
+            ...(isBatchTracked ? { batchNumber: toTrimmedString(line?.batch_number) || null } : {}),
+          };
+        }),
+    );
+    if (packCorrectionBlockedCombo) {
+      return packErr(req, ctx, "PROD_PACK_PI_BLOCKED", 409, "One or more correction lines are under an active Physical Inventory count for this batch — correction is blocked until the PID is posted or cancelled.");
+    }
+
     // DEPENDENT: these postings previously ran in parallel safely because they reused the
     // PO's already-existing document_number (so post_stock_movement()'s FOR UPDATE
     // item_number lock had rows to lock). Under §106 they share a BRAND-NEW Material
@@ -2979,6 +3124,19 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
       const delta = isIncrease ? magnitude : -magnitude;
       if (isNewLine && !isIncrease) throw new Error("PROD_PACK_CORRECTION_INVALID");
       if (isNewLine && !effectiveMaterialId) throw new Error("PROD_PACK_CORRECTION_MATERIAL_REQUIRED");
+
+      // business owner, 2026-09-27: found live (CMP006, Process PO sibling of this same
+      // bug, PO 9300000414) -- must compute BEFORE the packing_order_line write below,
+      // not only inside the pmRecoRows block after it. The line write used to touch
+      // actual_qty only; ap_approved_qty/variance_qty/approved_status on
+      // packing_order_line were never updated by a correction at all, so the LIVE line
+      // (and every later Final-page display reading it) kept showing whatever stale
+      // value predated the very first correction, while packing_order_line_reco (a
+      // separate, correctly-maintained history) quietly had the right numbers all along.
+      const tracksPmApproval = lineType === "PM" && String(poData.po_type ?? "") !== "PMTS";
+      const pmFields = tracksPmApproval
+        ? computePmApprovalFields(0, delta, toTrimmedString(correction.approved_status) || null, parsePositiveNumber(correction.ap_approved_qty))
+        : null;
 
       const slocId = isNewLine
         ? (toTrimmedString(correction.storage_location_id) || defaultPmSlocId)
@@ -3039,6 +3197,9 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
             qty_per_pack: Number(poData.num_packs) > 0 ? delta / Number(poData.num_packs) : delta,
             total_qty: delta,
             actual_qty: delta,
+            ap_approved_qty: pmFields?.apApproved ?? null,
+            approved_status: pmFields?.approved ?? null,
+            variance_qty: pmFields?.variance ?? null,
             issue_sloc_id: slocId,
             uom_code: baseUom,
             movement_type_code: "P261",
@@ -3058,16 +3219,19 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
         // ORIGINAL Final-time posting, which any future correction's rate/reversal
         // lookup still needs) — only actual_qty (+ any material swap) advances.
         linePatch.actual_qty = Number(line.actual_qty ?? line.total_qty ?? 0) + delta;
+        if (pmFields) {
+          linePatch.ap_approved_qty = Number(line.ap_approved_qty ?? line.actual_qty ?? line.total_qty ?? 0) + pmFields.apApproved;
+          linePatch.variance_qty = Number(line.variance_qty ?? 0) + pmFields.variance;
+          linePatch.approved_status = pmFields.approved;
+        }
         await serviceRoleClient.schema("erp_production").from("packing_order_line")
           .update(linePatch).eq("id", line.id as string);
       }
       postings.push({ line_id: line?.id, movement_type_code: movementTypeCode, stock_ledger_id: posting.stock_ledger_id });
 
       // §108.2 item 6 — same PMTS reco skip as Final, applied to COR6 correction rows too.
-      if (lineType === "PM" && String(poData.po_type ?? "") !== "PMTS") {
-        const approvedInput = toTrimmedString(correction.approved_status) || null;
-        const apApprovedInput = parsePositiveNumber(correction.ap_approved_qty);
-        const fields = computePmApprovalFields(0, delta, approvedInput, apApprovedInput);
+      if (tracksPmApproval && pmFields) {
+        const fields = pmFields;
         pmRecoRows.push({
           company_id: poData.company_id,
           po_number: poData.po_number,

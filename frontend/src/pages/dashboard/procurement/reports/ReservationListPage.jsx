@@ -148,14 +148,14 @@ export default function ReservationListPage() {
   const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
 
   // Material column is name-only (document_name/material_name), matching
-  // IN03 — not IN02's old combined pace_code+name format (§125, corrected
-  // 2026-08-19). This picker's own dropdown label still shows pace_code
-  // for search-ability, same as IN02/IN03's material pickers do — that's
-  // a different, unrelated concern from what the results grid displays.
+  // IN03 (§125, corrected 2026-08-19). business owner, 2026-09-26: the
+  // picker's own dropdown label previously still showed pace_code "for
+  // search-ability" -- that carve-out is now revoked, pace_code must never
+  // appear in a material label anywhere, same fix applied to IN02/IN03.
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({
       value: material.id,
-      label: `${material.pace_code ?? "—"} — ${material.document_name || material.material_name || "—"}`,
+      label: [material.material_name, material.document_name, material.external_code].filter(Boolean).join(" — ") || "—",
     })),
     [materialsQuery.materials],
   );

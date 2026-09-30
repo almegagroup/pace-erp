@@ -143,6 +143,19 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // ── Procurement: Sales ───────────────────────────────────────────────────
   "GET:/api/procurement/sales-orders":                { skipAcl: false, resourceCode: "PROC_SO_LIST",   action: "VIEW"  },
   "POST:/api/procurement/sales-orders":               { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
+  "GET:/api/procurement/sales-returns":               { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "POST:/api/procurement/sales-returns":              { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "WRITE" },
+  "GET:/api/procurement/sales-returns/pending-invoices": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "POST:/api/procurement/sales-returns/invoice-detail": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "EDIT" },
+  "GET:/api/procurement/sales-returns/batch-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/packing-order-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/repack-sku-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/stroke-check-options": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/prodshade": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-strokes": { skipAcl: false, resourceCode: "PROD_STROKE_MASTER", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-genealogy": { skipAcl: false, resourceCode: "PROC_SALES_RETURN_LIST", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-process-entries": { skipAcl: false, resourceCode: "PROD_OLD_PROCESS_PO", action: "VIEW" },
+  "GET:/api/procurement/sales-returns/pending-packing-entries": { skipAcl: false, resourceCode: "PROD_OLD_PACKING_PO", action: "VIEW" },
 
   // ── SO01 unified RM/PM/INT/SFG/FG redesign (feasibility §133.7-§133.11) ──
   // SO01/SO02/SO03 are the SAME existing tx_codes/resources (PROC_SO_CREATE,
@@ -214,6 +227,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // pattern: a separate cross-document report gets its own resource, "everyone" per §119.5,
   // never shared with the document-lifecycle resource (bug pattern #6, §117.6's own note).
   "GET:/api/procurement/physical-inventory-differences": { skipAcl: false, resourceCode: "PROC_PI_DIFFERENCES", action: "VIEW" },
+  // §Q6-2026-09-29 — MI20's own Document Number/Batch Number typeahead search endpoints,
+  // same resource/action as the report itself (they exist only to feed its own filters).
+  "GET:/api/procurement/physical-inventory-differences/search-document-numbers": { skipAcl: false, resourceCode: "PROC_PI_DIFFERENCES", action: "VIEW" },
+  "GET:/api/procurement/physical-inventory-differences/search-batch-numbers": { skipAcl: false, resourceCode: "PROC_PI_DIFFERENCES", action: "VIEW" },
   // §119.12 — Create page (ITEM_WISE) material-location preview. Same EDIT tier as create
   // itself (Auditor-only) since this is part of the Create flow, not a general report.
   "GET:/api/procurement/physical-inventory-material-locations": { skipAcl: false, resourceCode: "PROC_PI_LIST", action: "EDIT" },
@@ -533,6 +550,9 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // not hold Plan Feed access at all.
   "GET:/api/production/mtest-skus":                   { skipAcl: false, resourceCode: "PROD_PO_CREATE", action: "VIEW" },
   "GET:/api/production/plan-feed/mtest-capability":   { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "GET:/api/production/plan-feed/prioritize":         { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
+  "POST:/api/production/plan-feed/prioritize":        { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "EDIT" },
+  "GET:/api/production/plan-feed/category-report":    { skipAcl: false, resourceCode: "PROD_PLAN_FEED", action: "VIEW" },
   // PR24 §122 — deliberately its own resource, not PROD_ORDER_LIST (PR13 stays the plain list).
   "GET:/api/production/order-information-system":    { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   // Batch Counts sub-report, same PR24 screen/resource — just a different view, not a
@@ -800,6 +820,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/lines\/[^/]+\/knock-off$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
+  },
+  {
+    // CRCP (Cross Company) — PROCUREMENT-DESIGN-DOC.md §3.7 Point 3.2.9:
+    // editable by anyone holding ordinary PROC_PO_CREATE:EDIT access, no
+    // separate CRCP role, as a lightweight action independent of amend.
+    pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/crcp$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
   },
 
   // ── PO Order Group (internal batch-approval wrapper, 87.12A) ──────────────
@@ -1161,6 +1188,11 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
+  },
+  {
+    // CRCP (Cross Company) — same pattern as PO's own crcp route above.
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/crcp$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/stos\/[^/]+\/close$/,

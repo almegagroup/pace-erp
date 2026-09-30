@@ -243,9 +243,25 @@ async function getLiveStockBalance(params: {
   stockTypeCode: string;
   batchNumber?: string | null;
   sourceLotRef?: string | null;
+  materialType: string;
 }): Promise<{ quantity: number; valuationRate: number }> {
   const batchNumber = toTrimmedString(params.batchNumber);
   const sourceLotRef = toTrimmedString(params.sourceLotRef);
+  // business owner, 2026-09-26 -- same root cause found live in IN13's
+  // stock_status_change.handlers.ts (CMP003, 2026-09-24): SFG/FG are the
+  // only material types genuinely split into per-batch stock pools (§116);
+  // RM/PM/INT are always "blended" at the stock level even though a
+  // production-consumption posting against them routinely carries a
+  // batch_number anyway (tagging WHICH production batch it fed, for
+  // genealogy -- §83.15.1/§104.9), not because the RM/PM/INT itself has
+  // multiple lots. line.batch_number is only ever required for SFG/FG here
+  // (see normalizeLinesForSave above) -- an ordinary RM/PM/INT Location
+  // Transfer line always calls this with batchNumber blank, and the old
+  // ".is('batch_number', null)" fallback excluded every one of those
+  // batch-tagged production-consumption OUT rows, inflating availableQty
+  // by the full amount ever issued to production. Only SFG/FG (genuinely
+  // batch-split) keep that fallback; RM/PM/INT sum every row regardless.
+  const isBatchTrackedType = params.materialType === "SFG" || params.materialType === "FG";
   // Paged via fetchAllRows, not a plain .select() -- a busy material+location
   // can accumulate well over PostgREST's 1000-row default cap in its ledger
   // history, and this balance is batch-specific (or explicitly NULL-batch),
@@ -264,7 +280,11 @@ async function getLiveStockBalance(params: {
         .eq("stock_type_code", params.stockTypeCode)
         .order("ledger_seq", { ascending: true })
         .range(from, to);
-      query = batchNumber ? query.eq("batch_number", batchNumber) : query.is("batch_number", null);
+      if (batchNumber) {
+        query = query.eq("batch_number", batchNumber);
+      } else if (isBatchTrackedType) {
+        query = query.is("batch_number", null);
+      }
       if (sourceLotRef) {
         query = query.eq("source_lot_ref", sourceLotRef);
       }
@@ -330,6 +350,7 @@ async function getLineAvailability(params: {
   sourceLotRef?: string | null;
   excludeRequestId?: string | null;
   excludeLineId?: string | null;
+  materialType: string;
 }): Promise<{ liveQty: number; reservedOtherQty: number; availableQty: number; valuationRate: number }> {
   const [live, reservedOtherQty] = await Promise.all([
     getLiveStockBalance({
@@ -339,6 +360,7 @@ async function getLineAvailability(params: {
       stockTypeCode: params.stockTypeCode,
       batchNumber: params.batchNumber,
       sourceLotRef: params.sourceLotRef,
+      materialType: params.materialType,
     }),
     getReservedQtyOther({
       companyId: params.companyId,
@@ -423,6 +445,7 @@ async function normalizeLinesForSave(companyId: string, rawLines: unknown, reque
       sourceLotRef: line.source_lot_ref,
       excludeRequestId: requestId ?? null,
       excludeLineId: line.id ?? null,
+      materialType,
     });
     if (line.requested_qty > availability.availableQty + EPSILON) {
       throw new Error("LTR_REQUEST_QTY_EXCEEDS_AVAILABLE");
@@ -475,12 +498,13 @@ async function buildAvailabilityPreview(
       invalidReason = "Material is not mapped to this company.";
     }
 
+    let materialType = "";
     if (!invalidReason) {
       const material = materialInfo.get(line.material_id);
       if (!material) {
         invalidReason = "Material not found.";
       } else {
-        const materialType = toUpperTrimmedString(material.material_type);
+        materialType = toUpperTrimmedString(material.material_type);
         if (materialType === "SFG" && !line.batch_number) {
           invalidReason = "Batch number is required for SFG materials.";
         } else if (materialType === "FG" && (!line.batch_number || !line.source_lot_ref)) {
@@ -511,6 +535,7 @@ async function buildAvailabilityPreview(
         sourceLotRef: line.source_lot_ref,
         excludeRequestId: requestId ?? null,
         excludeLineId: line.id ?? null,
+        materialType,
       });
       liveQty = availability.liveQty;
       reservedOtherQty = availability.reservedOtherQty;
@@ -683,7 +708,7 @@ async function hydrateRequestPayload(requestId: string): Promise<JsonRecord> {
 
   const [materialRows, locationRows, userRows] = await Promise.all([
     materialIds.length
-      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds)
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name, material_type").in("id", materialIds)
       : Promise.resolve({ data: [] as JsonRecord[] }),
     locationIds.length
       ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
@@ -696,6 +721,10 @@ async function hydrateRequestPayload(requestId: string): Promise<JsonRecord> {
   const materialMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((row) => [
     toTrimmedString(row.id),
     `${toTrimmedString(row.pace_code)} - ${toTrimmedString(row.material_name)}`.trim(),
+  ]));
+  const materialTypeMap = new Map(((materialRows.data ?? []) as JsonRecord[]).map((row) => [
+    toTrimmedString(row.id),
+    toUpperTrimmedString(row.material_type),
   ]));
   const locationMap = new Map(((locationRows.data ?? []) as JsonRecord[]).map((row) => [
     toTrimmedString(row.id),
@@ -719,6 +748,7 @@ async function hydrateRequestPayload(requestId: string): Promise<JsonRecord> {
     sourceLotRef: toTrimmedString(line.source_lot_ref) || null,
     excludeRequestId: requestId,
     excludeLineId: toTrimmedString(line.id),
+    materialType: materialTypeMap.get(toTrimmedString(line.material_id)) ?? "",
   })));
 
   return {
@@ -1124,6 +1154,9 @@ export async function postLocationTransferHandler(
     }
     const lineRows = await fetchRequestLines(requestId);
     const lineMap = new Map(lineRows.map((line) => [toTrimmedString(line.id), line]));
+    // business owner, 2026-09-26: this materialType feeds getLineAvailability's
+    // batch-filter fix below -- see that function's own comment.
+    const materialInfoForPost = await getMaterialInfo(lineRows.map((line) => toTrimmedString(line.material_id)));
     const requestNumber = toTrimmedString(requestRow.ltr_number);
     const matDoc = await generateMaterialDocNumber(companyId);
     const postingDate = todayIsoDate();
@@ -1157,6 +1190,7 @@ export async function postLocationTransferHandler(
         sourceLotRef: toTrimmedString(line.source_lot_ref) || null,
         excludeRequestId: requestId,
         excludeLineId: entry.request_line_id,
+        materialType: toUpperTrimmedString(materialInfoForPost.get(toTrimmedString(line.material_id))?.material_type),
       });
       if (entry.quantity > availability.availableQty + EPSILON) {
         throw new Error("LTR_REQUEST_QTY_EXCEEDS_AVAILABLE");
@@ -1625,6 +1659,7 @@ export async function reverseLocationTransferPostingHandler(
     const targetStorageLocationId = toTrimmedString(line.target_storage_location_id);
     const materialId = toTrimmedString(line.material_id);
     const batchNumber = toTrimmedString((posting as JsonRecord).batch_number) || toTrimmedString(line.batch_number) || null;
+    const reversalMaterialInfo = await getMaterialInfo([materialId]);
     const targetBalance = await getLiveStockBalance({
       companyId,
       storageLocationId: targetStorageLocationId,
@@ -1632,6 +1667,7 @@ export async function reverseLocationTransferPostingHandler(
       stockTypeCode,
       batchNumber,
       sourceLotRef: toTrimmedString((posting as JsonRecord).source_lot_ref) || toTrimmedString(line.source_lot_ref) || null,
+      materialType: toUpperTrimmedString(reversalMaterialInfo.get(materialId)?.material_type),
     });
     if (quantity > targetBalance.quantity + EPSILON) {
       return ltrErrorResponse(req, ctx, "LTR_REVERSE_INVALID", 409, "Target location no longer has enough quantity to reverse.");

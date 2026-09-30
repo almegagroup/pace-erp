@@ -369,7 +369,7 @@ function procurementErrorResponse(
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
-async function generateProcurementDocNumber(docType: string): Promise<string> {
+export async function generateProcurementDocNumber(docType: string): Promise<string> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
     .rpc("generate_doc_number", { p_doc_type: docType });
@@ -381,7 +381,7 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
   return String(data);
 }
 
-async function getCsnById(id: string, companyId?: string): Promise<CsnRow | null> {
+export async function getCsnById(id: string, companyId?: string): Promise<CsnRow | null> {
   let query: any = serviceRoleClient
     .schema("erp_procurement")
     .from("consignment_note")

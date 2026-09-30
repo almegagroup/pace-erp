@@ -137,6 +137,14 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/delivery-orders/create",  "/dashboard/procurement/delivery-orders/:id/edit"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/:id"],
     ["/dashboard/procurement/sales-invoices",          "/dashboard/procurement/sales-invoices/pgi/create"],
+    // SO05 Sales Return — Create and Invoice Posting are companion routes off
+    // the list page (erp_menu.menu_master only has one row, PROC_SALES_RETURN_LIST,
+    // for the list route per §134.2/§8's companion-screen convention). Without
+    // these, every "Create Return"/"Invoice Posting" click bounces straight
+    // back to the dashboard — same shape as every other companion-route gap
+    // documented in this file (found live 2026-09-25, business owner).
+    ["/dashboard/procurement/sales/sales-return",      "/dashboard/procurement/sales/sales-return/create"],
+    ["/dashboard/procurement/sales/sales-return",      "/dashboard/procurement/sales/sales-return/invoices"],
     ["/dashboard/procurement/physical-inventory",      "/dashboard/procurement/physical-inventory/:id"],
     ["/dashboard/procurement/location-transfer",       "/dashboard/procurement/location-transfer/create"],
     ["/dashboard/procurement/location-transfer",       "/dashboard/procurement/location-transfer/:id"],

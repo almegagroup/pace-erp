@@ -1,10 +1,16 @@
 /*
  * PIDocumentRecountPage — MI05, dedicated Change Count screen (§119.4/MI04-MI05 split,
  * 2026-08-14). Only reachable once MI04 has locked (every item already has a Count or Zero
- * Check, document status = COUNTED) — this is the review-and-correct step: unlike MI04, Book Qty
- * is shown here on purpose (the blind-entry moment already happened, so there's nothing left to
- * bias), and any item can be changed either direction — Count -> new Count, Count -> Zero Check,
- * Zero Check -> Count. Submit for Approval lives on this page, not the Detail/review page.
+ * Check, document status = COUNTED) — this is the review-and-correct step: any item can be
+ * changed either direction — Count -> new Count, Count -> Zero Check, Zero Check -> Count.
+ * Submit for Approval lives on this page, not the Detail/review page.
+ *
+ * §119-blind-2026-09-29 (business owner correction) — MI05 must be JUST AS BLIND as MI04, not a
+ * "review the book qty" step. Only the counted stock already on file (from MI04) is shown, and
+ * that is what gets edited — Book Qty and the derived Difference are never shown here. The
+ * backend itself strips book_qty/difference_qty from this resource's wire payload
+ * (physical_inventory.handlers.ts's getPIDForResource, isBlindCountResource branch) so this
+ * isn't just a UI hide — the data never reaches this page at all.
  *
  * §MI04-batch-save-2026-08-15 — same local-edit-then-Save pattern as MI04 (see that file's header
  * for the full "why": saving on every keystroke was a real bug, not intended behavior). Submit for
@@ -43,12 +49,6 @@ function getStorageScopeLabel(detail) {
   return detail?.mode === "LOCATION_WISE"
     ? (detail.storage_location_name || detail.storage_location_code || "—")
     : `Multiple (${getModeLabel(detail?.mode)})`;
-}
-
-function toneForDifference(value) {
-  if (value < 0) return "text-rose-700";
-  if (value > 0) return "text-emerald-700";
-  return "text-slate-600";
 }
 
 function hasPendingValue(edit) {
@@ -341,11 +341,26 @@ export default function PIDocumentRecountPage() {
                 columns={[
                   { key: "line_number", label: "Line", width: "60px" },
                   {
+                    // business owner, 2026-09-30: pace_code must never appear in a material
+                    // label -- External Code goes in its own column instead (same rule
+                    // already applied elsewhere this session).
                     key: "material_id",
                     label: "Material",
-                    render: (row) => (row.material_pace_code || row.material_name ? `${row.material_name ?? "Material"} (${row.material_pace_code ?? "—"})` : "—"),
+                    render: (row) => row.material_name ?? "—",
                   },
+                  { key: "material_external_code", label: "External Code", width: "130px", render: (row) => row.material_external_code ?? "—" },
                   { key: "batch_number", label: "Batch", width: "110px", render: (row) => row.batch_number ?? "—" },
+                  {
+                    // §Q1-followup-2026-09-29 — same read-only Packing PO identity column as
+                    // MI04 (see that file's comment for the full "why"). An FG item is keyed by
+                    // batch_number + packing_order_id together (§83.14 balance-barrel), and
+                    // without this column two rows sharing a batch could be visually
+                    // indistinguishable during recount.
+                    key: "packing_order_number",
+                    label: "Packing PO",
+                    width: "130px",
+                    render: (row) => row.packing_order_number ?? "—",
+                  },
                   { key: "stock_type", label: "Stock Type", width: "140px" },
                   {
                     key: "storage_location_id",
@@ -353,10 +368,9 @@ export default function PIDocumentRecountPage() {
                     width: "140px",
                     render: (row) => (row.storage_location_code || row.storage_location_name ? `${row.storage_location_code ?? "—"}` : "—"),
                   },
-                  { key: "book_qty", label: "Book Qty", width: "100px" },
                   {
                     key: "physical_qty",
-                    label: "Physical Count",
+                    label: "Counted Stock",
                     width: "260px",
                     render: (row) => (
                       <RecountCell
@@ -368,35 +382,18 @@ export default function PIDocumentRecountPage() {
                       />
                     ),
                   },
-                  {
-                    key: "difference_qty",
-                    label: "Difference",
-                    width: "110px",
-                    render: (row) => {
-                      const edit = edits[row.id];
-                      const pending = hasPendingValue(edit);
-                      const effectiveQty = pending ? edit.physicalQty : row.physical_qty;
-                      if (effectiveQty === null || effectiveQty === undefined) return <span className="text-slate-400">—</span>;
-                      const diff = Number(effectiveQty) - Number(row.book_qty ?? 0);
-                      return (
-                        <span className={`font-semibold ${toneForDifference(diff)}`}>
-                          {diff.toFixed(4)}{pending ? <span className="ml-1 text-xs font-normal text-amber-600">(unsaved)</span> : null}
-                        </span>
-                      );
-                    },
-                  },
                 ]}
                 rows={pagedItems}
                 rowKey={(row) => row.id}
-                rowTabIndex={-1}
+                // §keyboard-nav-2026-09-30 — same fix as MI04 (see that file's comment):
+                // rowTabIndex={-1} alone left this grid with no reachable keyboard nav at
+                // all. cellNavigate matches the CSN Tracker "dense entry grid" convention;
+                // virtualize skipped since rows are already paginated here.
+                cellNavigate
                 maxHeight="calc(100vh - 340px)"
                 getRowProps={(row) => {
                   const edit = edits[row.id];
-                  const pending = hasPendingValue(edit);
-                  const effectiveQty = pending ? edit.physicalQty : row.physical_qty;
-                  if (effectiveQty === null || effectiveQty === undefined) return {};
-                  const diff = Number(effectiveQty) - Number(row.book_qty ?? 0);
-                  return { className: diff < 0 ? "bg-rose-50" : diff > 0 ? "bg-emerald-50" : "bg-slate-50" };
+                  return hasPendingValue(edit) ? { className: "bg-amber-50" } : {};
                 }}
                 emptyMessage="No items on this PI document."
               />

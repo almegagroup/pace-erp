@@ -571,10 +571,16 @@ export async function listFoOptionsForSoHandler(req: Request, ctx: ProcurementHa
         && (!toTrimmedString(so.bill_to_parent_company_id)
           || toTrimmedString(destinationDepot.parent_company_id) === toTrimmedString(so.bill_to_parent_company_id)),
       );
-      // §133.9's FO picker is defined by company, non-cancelled status and
-      // running FO balance. Packing-PO allocation is a later production/DO
-      // concern, never a condition for selecting an FO on SO Map.
-      return inDestinationScope && !row.dispatch_complete && row.remaining_qty > QTY_TOL;
+      // business owner, 2026-09-26: corrects this comment's own earlier
+      // claim ("Packing-PO allocation is a later production/DO concern,
+      // never a condition for selecting an FO on SO Map") -- that was
+      // never actually true. Feasibility §133.18 Finding 3 (2026-08-28,
+      // same file) had already LOCKED the opposite: the FO picker "only
+      // lists FOs with packing_po_count > 0" -- mapping an SO to demand
+      // nothing has been produced against yet has no point. That locked
+      // filter was flagged "Not yet implemented" there and never actually
+      // landed here -- this closes that gap.
+      return inDestinationScope && !row.dispatch_complete && row.remaining_qty > QTY_TOL && Number(row.packing_po_count ?? 0) > 0;
     });
 
     return okResponse(result, ctx.request_id, req);

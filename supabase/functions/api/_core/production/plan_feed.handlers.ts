@@ -589,6 +589,10 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
     const orderDate = toTrimmedString(body.order_date);
     const scheduledDeliveryDate = toTrimmedString(body.scheduled_delivery_date) || null;
     const orderedStrokeNumber = toTrimmedString(body.ordered_stroke_number) || null;
+    // MTEST-only fields (frontend gates visibility to MTEST FOs) -- manually
+    // typed by the user, no validation beyond trimming.
+    const siteContactPerson = toTrimmedString(body.site_contact_person) || null;
+    const siteContactNumber = toTrimmedString(body.site_contact_number) || null;
 
     if (!companyId || !foNumber || !partyId || !partyName || (!sku && !materialId) || !description
       || !orderedQtyKg || !packQty || !orderDate || !scheduledDeliveryDate) {
@@ -630,6 +634,8 @@ export async function createPlanFeedHandler(req: Request, ctx: ProdHandlerContex
         order_date: orderDate,
         scheduled_delivery_date: scheduledDeliveryDate,
         ordered_stroke_number: orderedStrokeNumber,
+        site_contact_person: siteContactPerson,
+        site_contact_number: siteContactNumber,
         status: "ACTIVE",
         created_by: ctx.auth_user_id,
         last_updated_at: new Date().toISOString(),
@@ -810,6 +816,14 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
     if (body.order_serial_number !== undefined) {
       updates.order_serial_number = toTrimmedString(body.order_serial_number) || null;
     }
+    // MTEST-only fields (frontend gates visibility to MTEST FOs) -- manually
+    // typed by the user, no validation beyond trimming.
+    if (body.site_contact_person !== undefined) {
+      updates.site_contact_person = toTrimmedString(body.site_contact_person) || null;
+    }
+    if (body.site_contact_number !== undefined) {
+      updates.site_contact_number = toTrimmedString(body.site_contact_number) || null;
+    }
     if (body.order_confirmation_date !== undefined) {
       const orderConfirmationDate = toTrimmedString(body.order_confirmation_date);
       if (orderConfirmationDate && !isManualDocumentDateWithinWindow(orderConfirmationDate)) {
@@ -823,6 +837,23 @@ async function updatePlanFeed(req: Request, ctx: ProdHandlerContext, mtestOnly: 
         return foErr(req, ctx, "PROD_PLAN_FEED_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
       }
       updates.formula_confirmation_date = formulaConfirmationDate || null;
+    }
+    // Per-dispatch Transporter/LR Number/LR Date -- one entry auto-appends per
+    // PGI'd DO (see delivery_order.handlers.ts's createPgiInvoiceHandler), the
+    // user can freely add/edit/remove here afterwards. This column is never
+    // read back into erp_procurement.delivery_challan, so editing it can
+    // never affect the real DO/Invoice -- full-array replace on every save,
+    // same convention as Vendor Master's contacts/emails/banks lists.
+    if (body.dispatch_lr_entries !== undefined) {
+      const rawEntries = Array.isArray(body.dispatch_lr_entries) ? body.dispatch_lr_entries : [];
+      updates.dispatch_lr_entries = rawEntries
+        .map((entry: JsonRecord) => ({
+          transporter_name: toTrimmedString(entry?.transporter_name) || null,
+          lr_number: toTrimmedString(entry?.lr_number) || null,
+          lr_date: toTrimmedString(entry?.lr_date) || null,
+          source_dc_id: toTrimmedString(entry?.source_dc_id) || null,
+        }))
+        .filter((entry: JsonRecord) => entry.transporter_name || entry.lr_number || entry.lr_date);
     }
     // Revision session -- see the function comment above for why a rename is safe.
     // original_fo_number is deliberately never touched here.
@@ -1041,6 +1072,24 @@ async function getFoSoMapConsumedQty(planFeedId: string): Promise<number> {
   return ((data ?? []) as JsonRecord[]).reduce((sum, row) => sum + (Number(row.allocated_qty) || 0), 0);
 }
 
+// Single-Packing-PO version of the same dispatched-qty sum listUnmappedStockHandler
+// computes in bulk above (see that handler's own comment for the full "why") -- used
+// by upsertFoAllocation, which only ever validates one packing_order_id at a time, so
+// there is no N-PO batching benefit to be had here (§8B: a genuinely single-row lookup
+// doesn't need chunking).
+async function sumDispatchedQtyForPackingOrder(packingOrderId: string): Promise<number> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement").from("delivery_challan_line")
+    .select("quantity, delivery_challan!inner(status)")
+    .eq("packing_order_id", packingOrderId)
+    .neq("delivery_challan.status", "CANCELLED");
+  if (error) {
+    console.error("[plan_feed.sumDispatchedQtyForPackingOrder] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PLAN_FEED_DISPATCH_LOOKUP_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[]).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
+}
+
 async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOnly: boolean): Promise<Response> {
   try {
     const planFeedId = getIdFromPath(req);
@@ -1113,8 +1162,12 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
         .reduce((sum, row) => sum + (Number(row.allocated_qty_kg) || 0), 0);
       const itemOrderedQty = Number((selectedItem as JsonRecord).ordered_qty_kg) || 0;
       if (itemAllocatedElsewhere + Math.max(0, requestedQty) > itemOrderedQty + QTY_TOL) {
+        // business owner, 2026-09-30: this cap is intentional and must never be
+        // bypassed -- an FO's total Packing-PO allocation can never exceed its own
+        // Ordered Qty. If more genuinely needs to be allocated, the Ordered Qty
+        // itself must be raised first, in Edit FO -- never by relaxing this check.
         return foErr(req, ctx, "PROD_PLAN_FEED_ITEM_ALLOCATION_EXCEEDS_ORDERED", 422,
-          `Allocation exceeds the selected FO item's ordered quantity (${itemOrderedQty} KG).`);
+          `Allocation exceeds the selected FO item's ordered quantity (${itemOrderedQty} KG). To allocate more, first increase the Ordered Qty in Edit FO.`);
       }
     }
 
@@ -1169,20 +1222,31 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
         "Packing PO material differs from this FO's SKU — confirm to allocate anyway");
     }
 
-    const availableQty = Number((po as JsonRecord).actual_qty_kg) || Number((po as JsonRecord).planned_qty_kg) || 0;
+    const totalOutputQty = Number((po as JsonRecord).actual_qty_kg) || Number((po as JsonRecord).planned_qty_kg) || 0;
 
-    const { data: otherAllocs, error: otherErr } = await serviceRoleClient
-      .schema("erp_production").from("plan_feed_packing_order_allocation")
-      .select("plan_feed_id, allocated_qty_kg")
-      .eq("packing_order_id", packingOrderId);
+    // §Q-reversal-2026-09-30-d (business owner follow-up) -- same root cause as
+    // listUnmappedStockHandler above and the CORS/PR19 dispatch checks (commit
+    // 66e97eb): this Packing PO's own already-dispatched (or on an active,
+    // not-yet-PGI'd Delivery Order) quantity was never subtracted before allowing a
+    // NEW or increased FO allocation against it, so stock that has already left the
+    // building (or is committed to leave) could be mapped to a different FO.
+    const [{ data: otherAllocs, error: otherErr }, dispatchedQty] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_production").from("plan_feed_packing_order_allocation")
+        .select("plan_feed_id, allocated_qty_kg")
+        .eq("packing_order_id", packingOrderId),
+      sumDispatchedQtyForPackingOrder(packingOrderId),
+    ]);
     if (otherErr) throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
     const otherSum = ((otherAllocs ?? []) as JsonRecord[])
       .filter((a) => String(a.plan_feed_id) !== planFeedId)
       .reduce((sum, a) => sum + (Number(a.allocated_qty_kg) || 0), 0);
+    const availableQty = Math.max(0, totalOutputQty - dispatchedQty);
 
     if (otherSum + requestedQty > availableQty + QTY_TOL) {
+      const dispatchNote = dispatchedQty > QTY_TOL ? `, already dispatched/on an active Delivery Order: ${dispatchedQty}` : "";
       return foErr(req, ctx, "PROD_PLAN_FEED_ALLOCATION_EXCEEDS_STOCK", 422,
-        `Allocation exceeds this Packing PO's available qty (${availableQty}, already allocated elsewhere: ${otherSum})`);
+        `Allocation exceeds this Packing PO's available qty (${availableQty}, already allocated elsewhere: ${otherSum}${dispatchNote})`);
     }
 
     const now = new Date().toISOString();
@@ -1260,10 +1324,25 @@ export async function listUnmappedStockHandler(req: Request, ctx: ProdHandlerCon
     if (poRows.length === 0) return okResponse({ data: { total_free_qty_kg: 0, lines: [] } }, ctx.request_id, req);
 
     const poIds = poRows.map((p) => String(p.id));
-    const { data: allocs, error: allocErr } = await serviceRoleClient
-      .schema("erp_production").from("plan_feed_packing_order_allocation")
-      .select("packing_order_id, allocated_qty_kg")
-      .in("packing_order_id", poIds);
+    // §Q-reversal-2026-09-30-c (business owner follow-up) -- this handler previously only
+    // subtracted FO allocation, never dispatched quantity, so a Packing PO already fully
+    // dispatched (whether FO-linked or the §136 Independent/non-FO path -- both stamp
+    // delivery_challan_line.packing_order_id the same way) still showed its whole
+    // actual_qty_kg as "free" here. Same fix shape as computeSkuAvailability
+    // (partial_reversal.handlers.ts) and reversePackingOrderHandler's own dispatch/FO-map
+    // block: a non-cancelled Delivery Challan line against this packing_order_id is a live
+    // commitment (dispatched or merely on an active, not-yet-PGI'd DO), not "free" stock.
+    const [{ data: allocs, error: allocErr }, dcLineRows] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_production").from("plan_feed_packing_order_allocation")
+        .select("packing_order_id, allocated_qty_kg")
+        .in("packing_order_id", poIds),
+      fetchInChunks<JsonRecord>(poIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+          .select("packing_order_id, quantity, delivery_challan!inner(status)")
+          .in("packing_order_id", chunk)
+          .neq("delivery_challan.status", "CANCELLED")),
+    ]);
     if (allocErr) throw new Error("PROD_PLAN_FEED_UNMAPPED_FAILED");
 
     const allocatedByPo = new Map<string, number>();
@@ -1271,12 +1350,22 @@ export async function listUnmappedStockHandler(req: Request, ctx: ProdHandlerCon
       const key = String(a.packing_order_id);
       allocatedByPo.set(key, (allocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
     }
+    const dispatchedByPo = new Map<string, number>();
+    for (const row of dcLineRows) {
+      const key = toTrimmedString(row.packing_order_id);
+      if (!key) continue;
+      dispatchedByPo.set(key, (dispatchedByPo.get(key) ?? 0) + Number(row.quantity ?? 0));
+    }
 
     const lines = poRows.map((p) => {
       const actualQty = Number(p.actual_qty_kg) || 0;
       const allocated = allocatedByPo.get(String(p.id)) ?? 0;
-      const freeQty = Math.max(0, actualQty - allocated);
-      return { packing_order_id: p.id, po_number: p.po_number, actual_qty_kg: actualQty, allocated_qty_kg: allocated, free_qty_kg: freeQty };
+      const dispatched = dispatchedByPo.get(String(p.id)) ?? 0;
+      const freeQty = Math.max(0, actualQty - allocated - dispatched);
+      return {
+        packing_order_id: p.id, po_number: p.po_number, actual_qty_kg: actualQty,
+        allocated_qty_kg: allocated, dispatched_qty_kg: dispatched, free_qty_kg: freeQty,
+      };
     }).filter((l) => l.free_qty_kg > QTY_TOL);
 
     const totalFreeQty = lines.reduce((sum, l) => sum + l.free_qty_kg, 0);
@@ -1521,7 +1610,8 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       .select(`
         id, company_id, fo_number, original_fo_number, order_serial_number, party_id, party_name, sku, description, material_id,
         ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
-        ordered_stroke_number, order_confirmation_date, formula_confirmation_date
+        ordered_stroke_number, order_confirmation_date, formula_confirmation_date, dispatch_lr_entries,
+        priority_date, priority_number, site_contact_person, site_contact_number
       `)
       .neq("status", "CANCELLED");
     if (companyId) foQuery = foQuery.eq("company_id", companyId);
@@ -1849,6 +1939,11 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         delivery_orders: Array.from((deliveryOrdersByFo.get(foId) ?? new Map<string, { dc_number: string; dc_date: string }>()).values())
           .sort((a, b) => b.dc_date.localeCompare(a.dc_date)),
         pending_dispatch_kg: Math.max(0, orderedKg - dispatchedKg),
+        dispatch_lr_entries: Array.isArray(fo.dispatch_lr_entries) ? fo.dispatch_lr_entries : [],
+        priority_date: fo.priority_date ?? null,
+        priority_number: fo.priority_number ?? null,
+        site_contact_person: fo.site_contact_person ?? null,
+        site_contact_number: fo.site_contact_number ?? null,
       };
     });
 
@@ -1873,5 +1968,578 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
   } catch (err) {
     const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_SUMMARY_FAILED";
     return foErr(req, ctx, code, 500, "Plan feed summary failed");
+  }
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysIso(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// GET /api/production/plan-feed/prioritize?company_id=
+// Lists MTO/HPS FOs (MTEST/MTS excluded) that are not yet FULLY_MAPPED --
+// the working set the business owner sets dispatch Priority Date/Number
+// against. A FULLY_MAPPED FO drops off this list (its priority values stay
+// visible as history on the Total Table, but this page no longer edits them).
+export async function planFeedPrioritizeListHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_COMPANY_REQUIRED", 400, "company_id is required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
+    const { data: fos, error: foFetchErr } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select(`
+        id, company_id, fo_number, order_serial_number, party_id, party_name, customer_address_id, sku, description,
+        ordered_qty_kg, pack_qty, scheduled_delivery_date, status, priority_date, priority_number
+      `)
+      .eq("company_id", companyId)
+      .neq("status", "CANCELLED");
+    if (foFetchErr) throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+    if (!fos || fos.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const partyIds = [...new Set((fos as JsonRecord[]).map((fo) => toTrimmedString(fo.party_id)).filter(Boolean))];
+    const customerMap = await getCustomerMapByIds(partyIds);
+
+    const addressIds = [...new Set((fos as JsonRecord[]).map((fo) => toTrimmedString(fo.customer_address_id)).filter(Boolean))];
+    const addressMap = new Map<string, JsonRecord>();
+    if (addressIds.length > 0) {
+      const addressRows = await fetchInChunks<JsonRecord>(addressIds, (chunk) => serviceRoleClient
+        .schema("erp_master").from("customer_address")
+        .select("id, site_name, town").in("id", chunk));
+      for (const row of addressRows) addressMap.set(String(row.id), row);
+    }
+
+    const foIds = (fos as JsonRecord[]).map((fo) => String(fo.id));
+    const allocs = await fetchInChunks<JsonRecord>(foIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("plan_feed_packing_order_allocation")
+      .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("plan_feed_id", chunk));
+    const allocByFo: Record<string, JsonRecord[]> = {};
+    for (const a of allocs) {
+      const foId = String(a.plan_feed_id);
+      if (!allocByFo[foId]) allocByFo[foId] = [];
+      allocByFo[foId].push(a);
+    }
+
+    // Production Date = the date the mapped batch(es) actually got produced --
+    // for FG (SKU), that is when the Packing PO carrying that batch went
+    // FINAL (packing_order.finalized_at), never a Process PO's own Verify
+    // date (that is the SFG's production date, one level upstream of the FG
+    // this FO is ordering).
+    const poIds = [...new Set(allocs.map((a) => toTrimmedString(a.packing_order_id)).filter(Boolean))];
+    const finalizedAtByPoId = new Map<string, string>();
+    if (poIds.length > 0) {
+      const packingOrders = await fetchInChunks<JsonRecord>(poIds, (chunk) => serviceRoleClient
+        .schema("erp_production").from("packing_order")
+        .select("id, finalized_at").in("id", chunk));
+      for (const po of packingOrders) {
+        const finalizedAt = toTrimmedString(po.finalized_at);
+        if (finalizedAt) finalizedAtByPoId.set(String(po.id), finalizedAt.slice(0, 10));
+      }
+    }
+
+    const rows = (fos as JsonRecord[])
+      .map((fo) => {
+        const party = customerMap.get(toTrimmedString(fo.party_id));
+        const poType = toUpperTrimmedString(party?.fo_customer_type);
+        const address = addressMap.get(toTrimmedString(fo.customer_address_id));
+        const foAllocs = allocByFo[String(fo.id)] ?? [];
+        const orderedKg = Number(fo.ordered_qty_kg) || 0;
+        const allocatedKg = foAllocs.reduce((s, a) => s + (Number(a.allocated_qty_kg) || 0), 0);
+        const productionDates = [...new Set(
+          foAllocs
+            .map((a) => finalizedAtByPoId.get(toTrimmedString(a.packing_order_id)) ?? "")
+            .filter(Boolean),
+        )].sort();
+        return {
+          id: String(fo.id),
+          company_id: fo.company_id,
+          order_serial_number: fo.order_serial_number,
+          fo_number: fo.fo_number,
+          site_name: toTrimmedString(address?.site_name) || null,
+          town: toTrimmedString(address?.town) || toTrimmedString(party?.town) || null,
+          sku: fo.sku,
+          description: fo.description,
+          ordered_qty_kg: orderedKg,
+          pack_qty: fo.pack_qty,
+          scheduled_delivery_date: fo.scheduled_delivery_date,
+          production_dates: productionDates,
+          priority_date: fo.priority_date ?? null,
+          priority_number: fo.priority_number ?? null,
+          poType,
+          _allocatedKg: allocatedKg,
+          _orderedKg: orderedKg,
+        };
+      })
+      // Only MTO/HPS (customer_master.fo_customer_type = "MTO_HPS") -- MTS and MTEST excluded.
+      .filter((row) => row.poType === "MTO_HPS")
+      .filter((row) => computeProductionStatus(row._orderedKg, row._allocatedKg) !== "FULLY_MAPPED")
+      .map(({ poType: _poType, _allocatedKg, _orderedKg, ...rest }) => rest);
+
+    rows.sort((a, b) => {
+      const aNum = typeof a.priority_number === "number" ? a.priority_number : Number.MAX_SAFE_INTEGER;
+      const bNum = typeof b.priority_number === "number" ? b.priority_number : Number.MAX_SAFE_INTEGER;
+      if (aNum !== bNum) return aNum - bNum;
+      const aDate = a.scheduled_delivery_date ? String(a.scheduled_delivery_date) : "9999-12-31";
+      const bDate = b.scheduled_delivery_date ? String(b.scheduled_delivery_date) : "9999-12-31";
+      return aDate.localeCompare(bDate);
+    });
+
+    return okResponse({ data: rows, priority_window: { min: addDaysIso(todayIsoDate(), -5), max: addDaysIso(todayIsoDate(), 5) } }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_PRIORITIZE_FAILED";
+    return foErr(req, ctx, code, 500, "Plan feed prioritize list failed");
+  }
+}
+
+// POST /api/production/plan-feed/prioritize
+// Body: { company_id, entries: [{ id, priority_date, priority_number }] }
+// Saves Priority Date/Number for a batch of FOs in one call. Both fields
+// must be set together (or both cleared together) per row; the pair must be
+// unique per company (enforced here for a friendly message, and by the DB's
+// own partial unique index as the real guarantee); priority_date must fall
+// within [today-5, today+5].
+export async function updatePlanFeedPriorityHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = toTrimmedString(body.company_id);
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_COMPANY_REQUIRED", 400, "company_id is required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainCompanyResource(ctx, companyId, "PROD_PLAN_FEED", "EDIT"))) {
+      return foErr(req, ctx, "PROD_PLAN_FEED_ACCESS_DENIED", 403, "You do not have Plan Feed edit access for this company.");
+    }
+
+    const rawEntries = Array.isArray(body.entries) ? (body.entries as JsonRecord[]) : [];
+    if (rawEntries.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const minDate = addDaysIso(todayIsoDate(), -5);
+    const maxDate = addDaysIso(todayIsoDate(), 5);
+
+    type Entry = { id: string; priority_date: string | null; priority_number: number | null };
+    const entries: Entry[] = [];
+    for (const raw of rawEntries) {
+      const id = toTrimmedString(raw.id);
+      if (!id) return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_ID_REQUIRED", 400, "Each entry needs an FO id");
+      const priorityDate = toTrimmedString(raw.priority_date) || null;
+      const priorityNumberRaw = raw.priority_number;
+      const priorityNumber = priorityNumberRaw === null || priorityNumberRaw === undefined || priorityNumberRaw === ""
+        ? null
+        : Number(priorityNumberRaw);
+      if ((priorityDate && priorityNumber === null) || (!priorityDate && priorityNumber !== null)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_INCOMPLETE", 400, "Priority Date and Priority Number must be set together (or both cleared).");
+      }
+      if (priorityDate && (priorityDate < minDate || priorityDate > maxDate)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_DATE_OUT_OF_RANGE", 400, `Priority Date must be between ${minDate} and ${maxDate}.`);
+      }
+      if (priorityNumber !== null && (!Number.isInteger(priorityNumber) || priorityNumber <= 0)) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_NUMBER_INVALID", 400, "Priority Number must be a positive whole number.");
+      }
+      entries.push({ id, priority_date: priorityDate, priority_number: priorityNumber });
+    }
+
+    // In-batch collision check -- friendlier than waiting for the DB's unique index to reject it.
+    const seenPairs = new Map<string, string>();
+    for (const entry of entries) {
+      if (!entry.priority_date || entry.priority_number === null) continue;
+      const key = `${entry.priority_date}|${entry.priority_number}`;
+      if (seenPairs.has(key) && seenPairs.get(key) !== entry.id) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_DUPLICATE", 409, `Priority Number ${entry.priority_number} is already used for ${entry.priority_date} in this batch.`);
+      }
+      seenPairs.set(key, entry.id);
+    }
+
+    const entryIds = entries.map((e) => e.id);
+    const { data: existingFos, error: existingFoErr } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, company_id, ordered_qty_kg")
+      .in("id", entryIds);
+    if (existingFoErr) throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+    const foById = new Map(((existingFos ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+    for (const entry of entries) {
+      const fo = foById.get(entry.id);
+      if (!fo || toTrimmedString(fo.company_id) !== companyId) {
+        return foErr(req, ctx, "PROD_PLAN_FEED_NOT_FOUND", 404, `FO ${entry.id} not found in this company.`);
+      }
+    }
+
+    // Cross-check against the DB for a pair already claimed by a DIFFERENT FO
+    // not in this same save batch (e.g. someone else prioritized that date/
+    // number in between page-load and Save).
+    const datedEntries = entries.filter((e) => e.priority_date && e.priority_number !== null);
+    if (datedEntries.length > 0) {
+      const { data: conflicting, error: conflictErr } = await serviceRoleClient
+        .schema("erp_production").from("plan_feed")
+        .select("id, priority_date, priority_number")
+        .eq("company_id", companyId)
+        .in("priority_date", [...new Set(datedEntries.map((e) => e.priority_date as string))]);
+      if (conflictErr) throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+      for (const row of (conflicting ?? []) as JsonRecord[]) {
+        const rowId = String(row.id);
+        const match = datedEntries.find((e) => e.priority_date === row.priority_date && e.priority_number === row.priority_number);
+        if (match && match.id !== rowId) {
+          return foErr(req, ctx, "PROD_PLAN_FEED_PRIORITIZE_DUPLICATE", 409, `Priority Number ${row.priority_number} is already used for ${row.priority_date} by another FO.`);
+        }
+      }
+    }
+
+    await Promise.all(entries.map(async (entry) => {
+      const { error } = await serviceRoleClient
+        .schema("erp_production").from("plan_feed")
+        .update({ priority_date: entry.priority_date, priority_number: entry.priority_number })
+        .eq("id", entry.id);
+      if (error) {
+        const message = String((error as { message?: string })?.message ?? "");
+        if (message.includes("ux_plan_feed_priority_date_number")) {
+          throw new Error("PROD_PLAN_FEED_PRIORITIZE_DUPLICATE");
+        }
+        throw new Error("PROD_PLAN_FEED_PRIORITIZE_FAILED");
+      }
+    }));
+
+    return okResponse({ data: entries }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_PRIORITIZE_FAILED";
+    const status = code === "PROD_PLAN_FEED_PRIORITIZE_DUPLICATE" ? 409 : 500;
+    return foErr(req, ctx, code, status, "Plan feed prioritize save failed");
+  }
+}
+
+// ── "Report" (Plan Feed Total Table's Report button) ────────────────────────
+// PO Type (MTO/HPS/MTEST) x Category. Date Range is the Order Date window --
+// it picks the FO cohort. Against that SAME cohort (regardless of when
+// production/dispatch actually happened): Order Qty (ordered_qty_kg),
+// Production Qty (allocated/mapped qty against those orders), Dispatch Qty
+// (invoiced qty against those orders). Two more columns are independent of
+// the cohort -- Actual Production and Actual Dispatch are activity that
+// happened WITHIN the date range by its own date (Process PO's verified_at /
+// posted Sales Invoice's tally_invoice_date), regardless of which order.
+
+// HPS Prodshades are individually-named products (not a numbered grade
+// series like Admix's PC100/PC200/...), so for HPS the Category IS the
+// Category Group as-is -- no letter-prefix stripping.
+const HPS_CATEGORIES = new Set(["90 SA", "AF 100"]);
+
+// MTO/MTEST categories are a numbered grade series (PC100, PC 250, PC300...)
+// -- the Category Group is the letter-prefix (PC/PX/S), stripping the grade
+// number so PC100/PC200/PC300 all roll into one "PC" total line.
+function normalizeCategoryGroup(rawCategory: string, poType: string): string {
+  const trimmed = rawCategory.trim();
+  if (poType === "HPS") return trimmed;
+  const match = trimmed.match(/^[A-Za-z]+/);
+  return match ? match[0].toUpperCase() : trimmed;
+}
+
+function resolveReportPoType(fo_customer_type: string, category: string | null): string | null {
+  const type = toUpperTrimmedString(fo_customer_type);
+  if (type === "MTEST" || type === "ZTEST") return "MTEST";
+  if (type === "MTO_HPS") return category && HPS_CATEGORIES.has(category) ? "HPS" : "MTO";
+  return null; // MTS (or unresolved) -- out of this report's scope
+}
+
+// Bulk version of resolveProdshadeForSku -- given a set of FG SKU material
+// ids, resolve each one's underlying Prodshade's own material_category
+// (§83.15's shade_code+pack_code match via prodshade_pack_config, same
+// mechanism, batched instead of per-SKU).
+async function resolveProdshadeCategoryMap(fgMaterialIds: string[]): Promise<Map<string, string | null>> {
+  const ids = [...new Set(fgMaterialIds.filter(Boolean))];
+  const result = new Map<string, string | null>();
+  if (ids.length === 0) return result;
+
+  const fgRows = await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient
+    .schema("erp_master").from("material_master")
+    .select("id, shade_code, pack_code").in("id", chunk));
+
+  const { data: configRows, error: configErr } = await serviceRoleClient
+    .schema("erp_production").from("prodshade_pack_config")
+    .select("material_id, pack_code_id").eq("active", true);
+  if (configErr) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+
+  const packCodeIds = [...new Set(((configRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.pack_code_id)).filter(Boolean))];
+  const packCodeById = new Map<string, string>();
+  if (packCodeIds.length > 0) {
+    const packRows = await fetchInChunks<JsonRecord>(packCodeIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("pack_code_master")
+      .select("id, pack_code").in("id", chunk));
+    for (const row of packRows) packCodeById.set(String(row.id), toTrimmedString(row.pack_code));
+  }
+
+  const prodshadeIds = [...new Set(((configRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.material_id)).filter(Boolean))];
+  const prodshadeMap = new Map<string, JsonRecord>();
+  if (prodshadeIds.length > 0) {
+    const prodRows = await fetchInChunks<JsonRecord>(prodshadeIds, (chunk) => serviceRoleClient
+      .schema("erp_master").from("material_master")
+      .select("id, shade_code, material_category").eq("material_type", "SFG").in("id", chunk));
+    for (const row of prodRows) prodshadeMap.set(String(row.id), row);
+  }
+
+  const categoryByKey = new Map<string, string>();
+  for (const cfg of (configRows ?? []) as JsonRecord[]) {
+    const prod = prodshadeMap.get(toTrimmedString(cfg.material_id));
+    const packCode = packCodeById.get(toTrimmedString(cfg.pack_code_id));
+    if (!prod || !packCode) continue;
+    const shadeCode = toTrimmedString(prod.shade_code);
+    const category = toTrimmedString(prod.material_category);
+    if (shadeCode && category) categoryByKey.set(`${shadeCode}|${packCode}`, category);
+  }
+
+  for (const fg of fgRows) {
+    const shadeCode = toTrimmedString(fg.shade_code);
+    const packCode = toTrimmedString(fg.pack_code);
+    const category = shadeCode && packCode ? categoryByKey.get(`${shadeCode}|${packCode}`) ?? null : null;
+    result.set(String(fg.id), category);
+  }
+  return result;
+}
+
+// GET /api/production/plan-feed/category-report?company_id=&date_from=&date_to=
+export async function planFeedCategoryReportHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from") ?? "");
+    const dateTo = toTrimmedString(url.searchParams.get("date_to") ?? "");
+    if (!companyId) return foErr(req, ctx, "PROD_PLAN_FEED_CATEGORY_REPORT_COMPANY_REQUIRED", 400, "company_id is required");
+    if (!dateFrom || !dateTo) return foErr(req, ctx, "PROD_PLAN_FEED_CATEGORY_REPORT_DATE_RANGE_REQUIRED", 400, "date_from and date_to are required");
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return foErr(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const dateToExclusiveEnd = addDaysIso(dateTo, 1);
+
+    type Metric = {
+      order_qty: number;
+      production_qty_vs_order: number;
+      dispatch_qty_vs_order: number;
+      actual_production_qty: number;
+      actual_dispatch_qty: number;
+    };
+    const EMPTY_METRIC: Metric = {
+      order_qty: 0, production_qty_vs_order: 0, dispatch_qty_vs_order: 0,
+      actual_production_qty: 0, actual_dispatch_qty: 0,
+    };
+    const metricsByKey = new Map<string, Metric>();
+    function bump(poType: string, leafCategory: string, field: keyof Metric, qty: number) {
+      const key = `${poType}|${leafCategory}`;
+      const entry = metricsByKey.get(key) ?? { ...EMPTY_METRIC };
+      entry[field] += qty;
+      metricsByKey.set(key, entry);
+    }
+
+    // ---- FO cohort (order_date within range) -- everything in the first 3
+    // metrics is measured against THIS SAME set of orders, regardless of when
+    // production/dispatch for them actually happened.
+    const { data: foRows, error: foErrQuery } = await serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, party_id, material_id, ordered_qty_kg")
+      .eq("company_id", companyId)
+      .neq("status", "CANCELLED")
+      .gte("order_date", dateFrom)
+      .lte("order_date", dateTo);
+    if (foErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+    const foCohort = (foRows ?? []) as JsonRecord[];
+    const foCohortIds = foCohort.map((r) => String(r.id));
+
+    // ---- Production Qty vs Order (allocated/mapped qty against the cohort's own FOs) ----
+    const allocRows = foCohortIds.length > 0 ? await fetchInChunks<JsonRecord>(foCohortIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("plan_feed_packing_order_allocation")
+      .select("plan_feed_id, allocated_qty_kg").in("plan_feed_id", chunk)) : [];
+    const allocatedQtyByFoId = new Map<string, number>();
+    for (const row of allocRows) {
+      const foId = toTrimmedString(row.plan_feed_id);
+      allocatedQtyByFoId.set(foId, (allocatedQtyByFoId.get(foId) ?? 0) + (Number(row.allocated_qty_kg) || 0));
+    }
+
+    // ---- Dispatch Qty vs Order (invoiced qty against the cohort's own FOs, any
+    // invoice date -- POSTED only, not filtered by invoice date at all) ----
+    const { data: cohortInvRows, error: cohortInvErrQuery } = foCohortIds.length > 0 ? await serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice")
+      .select("id, fo_id")
+      .eq("status", "POSTED")
+      .in("fo_id", foCohortIds) : { data: [], error: null };
+    if (cohortInvErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+    const cohortInvoiceRows = (cohortInvRows ?? []) as JsonRecord[];
+    const cohortInvoiceIds = cohortInvoiceRows.map((r) => String(r.id));
+    const foIdByCohortInvoiceId = new Map(cohortInvoiceRows.map((r) => [String(r.id), toTrimmedString(r.fo_id)]));
+    const cohortInvoiceLineRows = cohortInvoiceIds.length > 0 ? await fetchInChunks<JsonRecord>(cohortInvoiceIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice_line")
+      .select("invoice_id, quantity").in("invoice_id", chunk)) : [];
+    const dispatchedQtyByFoId = new Map<string, number>();
+    for (const line of cohortInvoiceLineRows) {
+      const foId = foIdByCohortInvoiceId.get(toTrimmedString(line.invoice_id));
+      if (!foId) continue;
+      dispatchedQtyByFoId.set(foId, (dispatchedQtyByFoId.get(foId) ?? 0) + (Number(line.quantity) || 0));
+    }
+
+    // ---- Actual Production (Process PO verified_at within range, SFG-level --
+    // independent of the cohort, activity by its OWN date) ----
+    const { data: poRows, error: poErrQuery } = await serviceRoleClient
+      .schema("erp_production").from("process_order")
+      .select("id, po_type, stroke_master_id, actual_qty")
+      .eq("company_id", companyId)
+      .in("po_type", ["MTO", "HPS", "MTEST"])
+      .eq("status", "VERIFIED")
+      .gte("verified_at", dateFrom)
+      .lt("verified_at", dateToExclusiveEnd);
+    if (poErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+
+    const strokeIds = [...new Set(((poRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.stroke_master_id)).filter(Boolean))];
+    const strokeRows = strokeIds.length > 0 ? await fetchInChunks<JsonRecord>(strokeIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("id, prodshade_material_id").in("id", chunk)) : [];
+    const prodshadeIdByStrokeId = new Map(strokeRows.map((r) => [String(r.id), toTrimmedString(r.prodshade_material_id)]));
+    const prodshadeIdsForProduction = [...new Set(strokeRows.map((r) => toTrimmedString(r.prodshade_material_id)).filter(Boolean))];
+    const prodshadeCategoryById = new Map<string, string>();
+    if (prodshadeIdsForProduction.length > 0) {
+      const rows = await fetchInChunks<JsonRecord>(prodshadeIdsForProduction, (chunk) => serviceRoleClient
+        .schema("erp_master").from("material_master")
+        .select("id, material_category").in("id", chunk));
+      for (const row of rows) prodshadeCategoryById.set(String(row.id), toTrimmedString(row.material_category));
+    }
+
+    // ---- Actual Dispatch (posted Sales Invoice's tally_invoice_date within
+    // range -- independent of the cohort, activity by its OWN date) ----
+    const { data: invRows, error: invErrQuery } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice")
+      .select("id, fo_id")
+      .eq("company_id", companyId)
+      .eq("status", "POSTED")
+      .not("fo_id", "is", null)
+      .gte("tally_invoice_date", dateFrom)
+      .lte("tally_invoice_date", dateTo);
+    if (invErrQuery) throw new Error("PROD_PLAN_FEED_CATEGORY_REPORT_FAILED");
+
+    const invoiceIds = ((invRows ?? []) as JsonRecord[]).map((r) => String(r.id));
+    const foIdByInvoiceId = new Map(((invRows ?? []) as JsonRecord[]).map((r) => [String(r.id), toTrimmedString(r.fo_id)]));
+    const invoiceLineRows = invoiceIds.length > 0 ? await fetchInChunks<JsonRecord>(invoiceIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("sales_invoice_line")
+      .select("invoice_id, material_id, quantity").in("invoice_id", chunk)) : [];
+
+    const actualDispatchFoIds = [...new Set(((invRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.fo_id)).filter(Boolean))];
+    const actualDispatchFoRows = actualDispatchFoIds.length > 0 ? await fetchInChunks<JsonRecord>(actualDispatchFoIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("plan_feed")
+      .select("id, party_id").in("id", chunk)) : [];
+    const partyIdByFoId = new Map(actualDispatchFoRows.map((r) => [String(r.id), toTrimmedString(r.party_id)]));
+
+    // ---- Resolve customer types + prodshade categories (shared by every metric) ----
+    const allPartyIds = [...new Set([
+      ...foCohort.map((r) => toTrimmedString(r.party_id)),
+      ...actualDispatchFoRows.map((r) => toTrimmedString(r.party_id)),
+    ].filter(Boolean))];
+    const customerMap = await getCustomerMapByIds(allPartyIds);
+
+    const allFgMaterialIds = [...new Set([
+      ...foCohort.map((r) => toTrimmedString(r.material_id)),
+      ...invoiceLineRows.map((r) => toTrimmedString(r.material_id)),
+    ].filter(Boolean))];
+    const categoryByFgMaterialId = await resolveProdshadeCategoryMap(allFgMaterialIds);
+
+    // Order Qty + Production Qty vs Order + Dispatch Qty vs Order -- all three
+    // keyed off the SAME cohort FO, so the (poType, category) resolved for a
+    // given FO is reused for all three of its metrics.
+    for (const fo of foCohort) {
+      const foId = String(fo.id);
+      const party = customerMap.get(toTrimmedString(fo.party_id));
+      const category = categoryByFgMaterialId.get(toTrimmedString(fo.material_id)) ?? null;
+      const poType = resolveReportPoType(toTrimmedString(party?.fo_customer_type), category);
+      if (!poType || !category) continue;
+      bump(poType, category, "order_qty", Number(fo.ordered_qty_kg) || 0);
+      bump(poType, category, "production_qty_vs_order", allocatedQtyByFoId.get(foId) ?? 0);
+      bump(poType, category, "dispatch_qty_vs_order", dispatchedQtyByFoId.get(foId) ?? 0);
+    }
+
+    // Actual Production (independent of cohort)
+    for (const po of (poRows ?? []) as JsonRecord[]) {
+      const prodshadeId = prodshadeIdByStrokeId.get(toTrimmedString(po.stroke_master_id));
+      const category = prodshadeId ? (prodshadeCategoryById.get(prodshadeId) ?? null) : null;
+      const poType = toUpperTrimmedString(po.po_type);
+      if (!category) continue;
+      bump(poType, category, "actual_production_qty", Number(po.actual_qty) || 0);
+    }
+
+    // Actual Dispatch (independent of cohort)
+    for (const line of invoiceLineRows) {
+      const foId = foIdByInvoiceId.get(toTrimmedString(line.invoice_id));
+      const partyId = foId ? partyIdByFoId.get(foId) : undefined;
+      const party = partyId ? customerMap.get(partyId) : undefined;
+      const category = categoryByFgMaterialId.get(toTrimmedString(line.material_id)) ?? null;
+      const poType = resolveReportPoType(toTrimmedString(party?.fo_customer_type), category);
+      if (!poType || !category) continue;
+      bump(poType, category, "actual_dispatch_qty", Number(line.quantity) || 0);
+    }
+
+    // ---- Build PO Type -> Category Group -> leaf Category rows, with a Group
+    // Total row (always, even for a single-member group) and a PO Type Total row.
+    const PO_TYPE_ORDER = ["MTO", "HPS", "MTEST"];
+    type LeafRow = { po_type: string; leaf_category: string; group: string } & Metric;
+    const leafRows: LeafRow[] = [];
+    for (const [key, metric] of metricsByKey) {
+      const [poType, leafCategory] = key.split("|");
+      leafRows.push({ po_type: poType, leaf_category: leafCategory, group: normalizeCategoryGroup(leafCategory, poType), ...metric });
+    }
+
+    function addMetric(target: Metric, source: Metric) {
+      target.order_qty += source.order_qty;
+      target.production_qty_vs_order += source.production_qty_vs_order;
+      target.dispatch_qty_vs_order += source.dispatch_qty_vs_order;
+      target.actual_production_qty += source.actual_production_qty;
+      target.actual_dispatch_qty += source.actual_dispatch_qty;
+    }
+
+    const outputRows: JsonRecord[] = [];
+    for (const poType of PO_TYPE_ORDER) {
+      const poTypeLeaves = leafRows.filter((r) => r.po_type === poType);
+      if (poTypeLeaves.length === 0) continue;
+      const groups = [...new Set(poTypeLeaves.map((r) => r.group))].sort((a, b) => a.localeCompare(b));
+      const poTypeTotal: Metric = { ...EMPTY_METRIC };
+      for (const group of groups) {
+        const groupLeaves = poTypeLeaves.filter((r) => r.group === group).sort((a, b) => a.leaf_category.localeCompare(b.leaf_category));
+        const groupTotal: Metric = { ...EMPTY_METRIC };
+        for (const leaf of groupLeaves) {
+          outputRows.push({
+            row_type: "LEAF", po_type: poType, category: leaf.leaf_category,
+            order_qty: leaf.order_qty, production_qty_vs_order: leaf.production_qty_vs_order,
+            dispatch_qty_vs_order: leaf.dispatch_qty_vs_order,
+            actual_production_qty: leaf.actual_production_qty, actual_dispatch_qty: leaf.actual_dispatch_qty,
+          });
+          addMetric(groupTotal, leaf);
+        }
+        outputRows.push({
+          row_type: "GROUP_TOTAL", po_type: poType, category: `${group} Total`,
+          order_qty: groupTotal.order_qty, production_qty_vs_order: groupTotal.production_qty_vs_order,
+          dispatch_qty_vs_order: groupTotal.dispatch_qty_vs_order,
+          actual_production_qty: groupTotal.actual_production_qty, actual_dispatch_qty: groupTotal.actual_dispatch_qty,
+        });
+        addMetric(poTypeTotal, groupTotal);
+      }
+      outputRows.push({
+        row_type: "PO_TYPE_TOTAL", po_type: poType, category: `${poType} TOTAL`,
+        order_qty: poTypeTotal.order_qty, production_qty_vs_order: poTypeTotal.production_qty_vs_order,
+        dispatch_qty_vs_order: poTypeTotal.dispatch_qty_vs_order,
+        actual_production_qty: poTypeTotal.actual_production_qty, actual_dispatch_qty: poTypeTotal.actual_dispatch_qty,
+      });
+    }
+
+    return okResponse({ data: outputRows }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_PLAN_FEED_CATEGORY_REPORT_FAILED";
+    return foErr(req, ctx, code, 500, "Plan feed category report failed");
   }
 }

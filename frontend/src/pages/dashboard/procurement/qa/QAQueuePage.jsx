@@ -427,11 +427,50 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
     return testLineForMethod(methodId)?.test_result ?? "";
   }
 
+  // Business owner, 2026-09-28: a mandatory method can be marked Skip so a decision can be
+  // submitted before its real lab result is back — the skip is persisted on the test line
+  // (is_skipped) so it survives a refresh; the user later opens the QA row again, unchecks
+  // Skip, and fills in the real value.
+  function isMethodSkipped(methodId) {
+    return Boolean(testLineForMethod(methodId)?.is_skipped);
+  }
+
+  async function handleSkipToggle(config, nextSkipped) {
+    const existingLine = testLineForMethod(config.test_method_id);
+    const testType = config.qa_test_method?.test_group === "OTHR" ? "OTHER" : "MCT";
+    setSaving(true);
+    try {
+      if (existingLine) {
+        await updateQATestLine(row.id, existingLine.id, { is_skipped: nextSkipped });
+      } else {
+        await addQATestLine(row.id, {
+          test_type: testType,
+          test_parameter: config.qa_test_method?.method_name || "",
+          result_value: "",
+          test_method_id: config.test_method_id,
+          lsl: config.lsl,
+          usl: config.usl,
+          is_skipped: nextSkipped,
+        });
+      }
+      await refreshDetail();
+    } catch (toggleError) {
+      toast(toggleError instanceof Error ? toggleError.message : "PROCUREMENT_QA_TEST_SKIP_FAILED", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const failedMctMethods = mctConfigs.filter(
-    (cfg) => computePassFail(currentResultValue(cfg.test_method_id), cfg.lsl, cfg.usl) === "FAIL",
+    (cfg) =>
+      !isMethodSkipped(cfg.test_method_id) &&
+      computePassFail(currentResultValue(cfg.test_method_id), cfg.lsl, cfg.usl) === "FAIL",
   );
   const anyMctFail = failedMctMethods.length > 0;
-  const allMctFilled = mctConfigs.every((cfg) => String(currentResultValue(cfg.test_method_id)).trim() !== "");
+  const allMctFilled = mctConfigs.every(
+    (cfg) => isMethodSkipped(cfg.test_method_id) || String(currentResultValue(cfg.test_method_id)).trim() !== "",
+  );
+  const skippedMctMethods = mctConfigs.filter((cfg) => isMethodSkipped(cfg.test_method_id));
 
   useEffect(() => {
     if (decisionRows.length === 0 && isMutable) {
@@ -668,6 +707,7 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
                 <th className="py-1">LSL</th>
                 <th className="py-1">USL</th>
                 <th className="py-1">Result</th>
+                <th className="py-1 text-center">Skip</th>
                 {canManage ? <th className="py-1"></th> : null}
               </tr>
             </thead>
@@ -675,6 +715,7 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
               {configs.map((cfg) => {
                 const line = testLineForMethod(cfg.test_method_id);
                 const draftValue = resultDrafts[cfg.test_method_id] ?? line?.test_result ?? "";
+                const skipped = isMethodSkipped(cfg.test_method_id);
                 const canDelete = canManage && group === "MCT" && !line?.test_result;
                 return (
                   <tr key={cfg.id} className="border-t border-slate-100">
@@ -711,11 +752,22 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
                     </td>
                     <td className="py-1 pr-2">
                       <input
-                        value={draftValue}
-                        disabled={!isMutable}
+                        value={skipped ? "" : draftValue}
+                        disabled={!isMutable || skipped}
+                        placeholder={skipped ? "Skipped" : undefined}
                         onChange={(event) => void handleResultChange(cfg, event.target.value)}
                         onBlur={() => void handleResultSave(cfg)}
-                        className="h-7 w-24 border border-slate-300 bg-white px-1.5 text-[12px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100"
+                        className="h-7 w-24 border border-slate-300 bg-white px-1.5 text-[12px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:italic disabled:text-slate-400"
+                      />
+                    </td>
+                    <td className="py-1 pr-2 text-center">
+                      <input
+                        type="checkbox"
+                        disabled={!isMutable || saving}
+                        checked={skipped}
+                        onChange={(event) => void handleSkipToggle(cfg, event.target.checked)}
+                        title={skipped ? "Uncheck to enter the real result" : "Skip this test for now"}
+                        className="h-3.5 w-3.5 accent-amber-600"
                       />
                     </td>
                     {canManage ? (
@@ -839,6 +891,13 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
 
           <div className="grid gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Test Results — {materialCategory || "No category on material"}</p>
+            {skippedMctMethods.length > 0 ? (
+              <p className="text-[11px] font-medium text-amber-700">
+                {skippedMctMethods.length} mandatory test{skippedMctMethods.length === 1 ? "" : "s"} skipped (
+                {skippedMctMethods.map((cfg) => cfg.qa_test_method?.method_name).filter(Boolean).join(", ")}) — treated
+                as partial for now. Open this QA row later, uncheck Skip, and fill in the real result.
+              </p>
+            ) : null}
             {materialCategory ? (
               <div className="grid gap-2 lg:grid-cols-2">
                 {renderMethodGroup("MCT", mctConfigs, mctMethods)}

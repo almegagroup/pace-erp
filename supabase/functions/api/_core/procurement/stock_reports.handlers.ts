@@ -258,6 +258,53 @@ async function buildOpeningStockLotMap(docs: JsonRecord[]): Promise<Map<string, 
   return lotMap;
 }
 
+// Sales Return P651 documents point directly at a sales_return_item. PR23 can
+// backfill that item's packing_order_id after the immutable stock rows exist,
+// so IN02/IN03 resolve the live relation instead of rewriting ledger history.
+async function buildSalesReturnLotMap(docs: JsonRecord[]): Promise<Map<string, string>> {
+  const itemIds = [...new Set(
+    docs
+      .filter((doc) => toTrimmedString(doc.reference_document_type) === "SALES_RETURN")
+      .map((doc) => toTrimmedString(doc.reference_document_id))
+      .filter(Boolean),
+  )];
+  if (itemIds.length === 0) return new Map();
+
+  let items: JsonRecord[];
+  try {
+    items = await fetchInChunks<JsonRecord>(itemIds, (idChunk) => serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_return_item")
+      .select("id, packing_order_id")
+      .in("id", idChunk)
+      .not("packing_order_id", "is", null));
+  } catch {
+    return new Map();
+  }
+  const packingOrderIds = [...new Set(items.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
+  if (packingOrderIds.length === 0) return new Map();
+
+  let packingOrders: JsonRecord[];
+  try {
+    packingOrders = await fetchInChunks<JsonRecord>(packingOrderIds, (idChunk) => serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order")
+      .select("id, po_number")
+      .in("id", idChunk));
+  } catch {
+    return new Map();
+  }
+  const poNumberById = new Map<string, string>(
+    packingOrders.map((row): [string, string] => [toTrimmedString(row.id), toTrimmedString(row.po_number)]),
+  );
+  const map = new Map<string, string>();
+  for (const item of items) {
+    const poNumber = poNumberById.get(toTrimmedString(item.packing_order_id));
+    if (poNumber) map.set(toTrimmedString(item.id), poNumber);
+  }
+  return map;
+}
+
 // Shared by both IN02 (stock ledger) and IN03 (current stock) — same
 // fallback chain as fgStockBreakdownHandler's resolveLotRef(). Kept as one
 // function per the task brief's explicit "don't duplicate" instruction.
@@ -292,6 +339,7 @@ function resolveLotRefStrict(
   materialId: string,
   batchNumber: string | null,
   openingLotMap: Map<string, string>,
+  salesReturnLotMap: Map<string, string>,
 ): string {
   if (!doc) return "";
   const lot = toTrimmedString(doc.source_lot_ref);
@@ -305,6 +353,10 @@ function resolveLotRefStrict(
     const openingPoNumber = openingLotMap.get(key);
     if (openingPoNumber) return openingPoNumber;
   }
+  if (toTrimmedString(doc.reference_document_type) === "SALES_RETURN") {
+    const poNumber = salesReturnLotMap.get(toTrimmedString(doc.reference_document_id));
+    if (poNumber) return poNumber;
+  }
   return "";
 }
 
@@ -313,10 +365,11 @@ function resolveLotRef(
   materialId: string,
   batchNumber: string | null,
   openingLotMap: Map<string, string>,
+  salesReturnLotMap: Map<string, string>,
   batchPoMap?: Map<string, string>,
 ): string {
   if (!doc) return "";
-  const strict = resolveLotRefStrict(doc, materialId, batchNumber, openingLotMap);
+  const strict = resolveLotRefStrict(doc, materialId, batchNumber, openingLotMap, salesReturnLotMap);
   if (strict) return strict;
   const trimmedBatch = toTrimmedString(batchNumber);
   if (batchPoMap && trimmedBatch) {
@@ -338,6 +391,7 @@ function buildBatchPoMap(
   ledgerRows: JsonRecord[],
   docMap: Map<string, JsonRecord>,
   openingLotMap: Map<string, string>,
+  salesReturnLotMap: Map<string, string>,
 ): Map<string, string> {
   const map = new Map<string, string>();
   for (const row of ledgerRows) {
@@ -346,7 +400,7 @@ function buildBatchPoMap(
     if (!materialId || !batchNumber) continue;
     const key = `${materialId}::${batchNumber}`;
     if (map.has(key)) continue;
-    const resolved = resolveLotRefStrict(docMap.get(toTrimmedString(row.stock_document_id)), materialId, batchNumber, openingLotMap);
+    const resolved = resolveLotRefStrict(docMap.get(toTrimmedString(row.stock_document_id)), materialId, batchNumber, openingLotMap, salesReturnLotMap);
     if (resolved) map.set(key, resolved);
   }
   return map;
@@ -740,10 +794,11 @@ export async function getStockLedgerReportHandler(
       conversionsByMaterialId.get(materialId)?.push(row);
     }
     const openingLotMap = await buildOpeningStockLotMap(stockDocRows);
+    const salesReturnLotMap = await buildSalesReturnLotMap(stockDocRows);
     const salesInvoicePackingMap = await buildSalesInvoicePackingMap(stockDocRows);
     // Found live 2026-09-03 -- see resolveLotRef's own comment (same fix as
     // getCurrentStockHandler/IN03 below).
-    const batchPoMap = buildBatchPoMap(ledgerRows, docMap, openingLotMap);
+    const batchPoMap = buildBatchPoMap(ledgerRows, docMap, openingLotMap, salesReturnLotMap);
 
     const userIds = new Set<string>();
     const fgPoNumbers = new Set<string>();
@@ -759,7 +814,7 @@ export async function getStockLedgerReportHandler(
       }
       const material = materialMap.get(row.material_id);
       if (toTrimmedString(material?.material_type) === "FG") {
-        const poNumber = resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, batchPoMap);
+        const poNumber = resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, salesReturnLotMap, batchPoMap);
         if (poNumber) fgPoNumbers.add(poNumber);
       }
       const packCode = toTrimmedString(material?.pack_code);
@@ -889,7 +944,7 @@ export async function getStockLedgerReportHandler(
       const conversion = resolveAltUomConversion(material, conversionsByMaterialId.get(row.material_id) ?? []);
       const altFactor = Number(conversion?.conversion_factor ?? 0);
       const fgPoNumber = materialType === "FG"
-        ? invoicePacking?.po_number || resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, batchPoMap)
+        ? invoicePacking?.po_number || resolveLotRef(doc, row.material_id, row.batch_number, openingLotMap, salesReturnLotMap, batchPoMap)
         : "";
       const fgPo = fgPoNumber ? packingOrderMap.get(fgPoNumber) : null;
       const packUomCode = packCodeMap.get(toTrimmedString(material?.pack_code)) || null;
@@ -1266,26 +1321,33 @@ export async function getCurrentStockHandler(
       } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
+      // §8E follow-up, found live 2026-09-30 (CMP003, IN03, all material/stock types, show_zero) --
+      // this docIds list was still a plain unchunked .in() even after the 2026-09-22 fix chunked
+      // the ledger query itself above. docIds is one entry per DISTINCT stock_document_id across
+      // every SFG/FG ledger row this company has ever posted (705 for CMP003 alone) -- the exact
+      // same URL-length cliff §8E already documents, just one step further downstream.
       const docIds = [...new Set(typedLedgerRows.map((row) => toTrimmedString(row.stock_document_id)).filter(Boolean))];
-      const { data: docRows, error: docError } = docIds.length
-        ? await serviceRoleClient
+      let docRows: JsonRecord[];
+      try {
+        docRows = await fetchInChunks<JsonRecord>(docIds, (idChunk) =>
+          serviceRoleClient
             .schema("erp_inventory")
             .from("stock_document")
             .select("id, document_number, source_lot_ref, reference_document_type, reference_document_number, reference_document_id")
-            .in("id", docIds)
-        : { data: [], error: null };
-      if (docError) {
+            .in("id", idChunk));
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-      const docMap = new Map(((docRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-      const openingLotMap = await buildOpeningStockLotMap((docRows ?? []) as JsonRecord[]);
+      const docMap = new Map(docRows.map((row) => [toTrimmedString(row.id), row]));
+      const openingLotMap = await buildOpeningStockLotMap(docRows);
+      const salesReturnLotMap = await buildSalesReturnLotMap(docRows);
       // Found live 2026-09-03 -- see resolveLotRef's own comment. Without
       // this, any posting whose reference_document_type isn't PACK_PO/OS
       // (an IN13 Stock Status Change approval, in the case that surfaced
       // this) invents a phantom "Packing PO Number" bucket from its own
       // unrelated document_number instead of staying under the batch's real
       // Packing PO.
-      const batchPoMap = buildBatchPoMap(typedLedgerRows, docMap, openingLotMap);
+      const batchPoMap = buildBatchPoMap(typedLedgerRows, docMap, openingLotMap, salesReturnLotMap);
       const poNumbers = [...new Set(
         typedLedgerRows
           .map((row) => resolveLotRef(
@@ -1293,21 +1355,26 @@ export async function getCurrentStockHandler(
             toTrimmedString(row.material_id),
             toTrimmedString(row.batch_number) || null,
             openingLotMap,
+            salesReturnLotMap,
             batchPoMap,
           ))
           .filter(Boolean),
       )];
-      const { data: poRows, error: poError } = poNumbers.length
-        ? await serviceRoleClient
+      // §8E follow-up (same 2026-09-30 finding as docIds above) -- poNumbers is derived from
+      // every distinct lot ref across this company's whole SFG/FG ledger history, unbounded the
+      // same way.
+      let poRows: JsonRecord[];
+      try {
+        poRows = await fetchInChunks<JsonRecord>(poNumbers, (chunk) =>
+          serviceRoleClient
             .schema("erp_production")
             .from("packing_order")
             .select("po_number, source_po_type, num_packs, fill_qty_per_pack")
-            .in("po_number", poNumbers)
-        : { data: [], error: null };
-      if (poError) {
+            .in("po_number", chunk));
+      } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
-      const poMap = new Map(((poRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.po_number), row]));
+      const poMap = new Map(poRows.map((row) => [toTrimmedString(row.po_number), row]));
 
       for (const ledger of typedLedgerRows) {
         const materialId = toTrimmedString(ledger.material_id);
@@ -1322,6 +1389,7 @@ export async function getCurrentStockHandler(
           materialId,
           batchNumber,
           openingLotMap,
+          salesReturnLotMap,
           batchPoMap,
         ) || null;
         const packingOrder = resolvedPoNumber ? poMap.get(resolvedPoNumber) : undefined;
@@ -2896,7 +2964,10 @@ export async function getStockHistoryMachineWiseHandler(
         is_total: false,
         material_id: row.materialId,
         material_type: toTrimmedString(material?.material_type) || "—",
-        material: [toTrimmedString(material?.pace_code), toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name)].filter(Boolean).join(" — ") || "—",
+        // business owner, 2026-09-26: pace_code must never appear in a
+        // material label -- Item Name / Document Name only (external_code
+        // is already its own separate field on this row, below).
+        material: [toTrimmedString(material?.material_name), toTrimmedString(material?.document_name)].filter(Boolean).join(" — ") || "—",
         external_code: toTrimmedString(material?.external_code) || "—",
         base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",

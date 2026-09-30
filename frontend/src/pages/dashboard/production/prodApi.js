@@ -181,6 +181,9 @@ export const listMtestSkus = (p) => fetchProd("GET", "/api/production/plan-feed/
 // route (PROD_PO_CREATE ACL, not PROD_PLAN_FEED) — see route-acl-registry.ts comment.
 export const listMtestSkusForPacking = (p) => fetchProd("GET", "/api/production/mtest-skus", undefined, p);
 export const getMtestPlanFeedCapability = (companyId) => fetchProd("GET", "/api/production/plan-feed/mtest-capability", undefined, { company_id: companyId });
+export const listPlanFeedPrioritize = (p) => fetchProd("GET", "/api/production/plan-feed/prioritize", undefined, p);
+export const savePlanFeedPriority = (body) => fetchProd("POST", "/api/production/plan-feed/prioritize", body);
+export const getPlanFeedCategoryReport = (p) => fetchProd("GET", "/api/production/plan-feed/category-report", undefined, p);
 
 // ── Process Orders ────────────────────────────────────────────────────────────
 export const listProcessOrders = (p) => fetchProd("GET", "/api/production/process-orders", undefined, p);
