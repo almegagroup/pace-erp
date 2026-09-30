@@ -6162,6 +6162,38 @@ export async function reverseProcessOrderHandler(req: Request, ctx: ProdHandlerC
       return poErr(req, ctx, "PROD_PO_HAS_PACKING_ORDERS", 422, "Reverse all Packing Orders first");
     }
 
+    // §Q-reversal-2026-09-30 (business owner) — defense-in-depth alongside the
+    // "Reverse all Packing Orders first" check above: reversePackingOrderHandler now
+    // blocks a Packing PO's own CORS while it is still FO-mapped, so by the time every
+    // child Packing PO here is REVERSED none of them should carry a live allocation —
+    // but Process PO CORS re-checks explicitly rather than relying on that invariant
+    // holding for every historical/edge-case row.
+    const { data: childPkos, error: childPkoErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("packing_order")
+      .select("id")
+      .eq("process_order_id", id);
+    if (childPkoErr) {
+      console.error("[process_order.reverse] child packing-order lookup failed:", JSON.stringify(childPkoErr));
+      throw new Error("PROD_PO_REVERSE_FAILED");
+    }
+    const childPkoIds = ((childPkos ?? []) as JsonRecord[]).map((row) => String(row.id));
+    if (childPkoIds.length > 0) {
+      const { count: allocCount, error: allocErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("plan_feed_packing_order_allocation")
+        .select("id", { count: "exact", head: true })
+        .in("packing_order_id", childPkoIds) as { count?: number; error?: unknown };
+      if (allocErr) {
+        console.error("[process_order.reverse] FO allocation check failed:", JSON.stringify(allocErr));
+        throw new Error("PROD_PO_REVERSE_FAILED");
+      }
+      if ((allocCount ?? 0) > 0) {
+        return poErr(req, ctx, "PROD_PO_PACKING_ORDERS_STILL_FO_MAPPED", 422,
+          "One or more Packing Orders under this batch are still mapped to an FO -- unmap them in Plan Feed first.");
+      }
+    }
+
     const now = new Date().toISOString();
     const ledgerEntries: JsonRecord[] = [];
     const reversalBatchNumber = toTrimmedString(po.batch_number) || null;
