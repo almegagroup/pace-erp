@@ -391,20 +391,20 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     queryKey: ["material-uom-conversions", singleForm.material_id],
     queryFn: () => listMaterialUomConversionsForProcurement(singleForm.material_id),
     enabled: Boolean(singleForm.material_id),
-    select: (response) => response?.data ?? [],
+    select: (response) => Array.isArray(response) ? response : [],
   });
   const editConversionsQuery = useQuery({
     queryKey: ["material-uom-conversions", editForm.material_id],
     queryFn: () => listMaterialUomConversionsForProcurement(editForm.material_id),
     enabled: Boolean(editForm.material_id),
-    select: (response) => response?.data ?? [],
+    select: (response) => Array.isArray(response) ? response : [],
   });
   const bulkConversionQueries = useQueries({
     queries: bulkRows.map((row) => ({
       queryKey: ["material-uom-conversions", row.material_id],
       queryFn: () => listMaterialUomConversionsForProcurement(row.material_id),
       enabled: Boolean(row.material_id),
-      select: (response) => response?.data ?? [],
+      select: (response) => Array.isArray(response) ? response : [],
     })),
   });
   const singleOpeningSfgQuery = useQuery({

@@ -219,7 +219,7 @@ export default function OpeningStockApprovalPage() {
       queryKey: ["material-uom-conversions", line.material_id, line.row_key, "approval"],
       queryFn: () => listMaterialUomConversionsForProcurement(line.material_id),
       enabled: Boolean(line.material_id),
-      select: (response) => response?.data ?? [],
+      select: (response) => Array.isArray(response) ? response : [],
     })),
   });
   const openingQueries = useQueries({
