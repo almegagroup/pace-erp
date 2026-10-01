@@ -1333,7 +1333,7 @@ export async function getCurrentStockHandler(
           serviceRoleClient
             .schema("erp_inventory")
             .from("stock_document")
-            .select("id, document_number, source_lot_ref, reference_document_type, reference_document_number, reference_document_id")
+            .select("id, document_number, item_number, source_lot_ref, reference_document_type, reference_document_number, reference_document_id")
             .in("id", idChunk));
       } catch {
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
@@ -1341,6 +1341,10 @@ export async function getCurrentStockHandler(
       const docMap = new Map(docRows.map((row) => [toTrimmedString(row.id), row]));
       const openingLotMap = await buildOpeningStockLotMap(docRows);
       const salesReturnLotMap = await buildSalesReturnLotMap(docRows);
+      // A sales issue's immutable stock row carries the invoice and item number, while its
+      // actual Packing PO lives on the invoice line's DC line. Reuse IN02's exact lineage
+      // instead of assigning a multi-PO batch's issue to whichever PO happens to be first.
+      const salesInvoicePackingMap = await buildSalesInvoicePackingMap(docRows);
       // Found live 2026-09-03 -- see resolveLotRef's own comment. Without
       // this, any posting whose reference_document_type isn't PACK_PO/OS
       // (an IN13 Stock Status Change approval, in the case that surfaced
@@ -1350,14 +1354,20 @@ export async function getCurrentStockHandler(
       const batchPoMap = buildBatchPoMap(typedLedgerRows, docMap, openingLotMap, salesReturnLotMap);
       const poNumbers = [...new Set(
         typedLedgerRows
-          .map((row) => resolveLotRef(
-            docMap.get(toTrimmedString(row.stock_document_id)),
-            toTrimmedString(row.material_id),
-            toTrimmedString(row.batch_number) || null,
-            openingLotMap,
-            salesReturnLotMap,
-            batchPoMap,
-          ))
+          .map((row) => {
+            const stockDocument = docMap.get(toTrimmedString(row.stock_document_id));
+            const invoicePacking = toTrimmedString(stockDocument?.reference_document_type).toUpperCase() === "SALES_INVOICE"
+              ? salesInvoicePackingMap.get(`${toTrimmedString(stockDocument?.reference_document_id)}:${toTrimmedString(stockDocument?.item_number)}`)
+              : null;
+            return invoicePacking?.po_number || resolveLotRef(
+              stockDocument,
+              toTrimmedString(row.material_id),
+              toTrimmedString(row.batch_number) || null,
+              openingLotMap,
+              salesReturnLotMap,
+              batchPoMap,
+            );
+          })
           .filter(Boolean),
       )];
       // §8E follow-up (same 2026-09-30 finding as docIds above) -- poNumbers is derived from
@@ -1384,8 +1394,12 @@ export async function getCurrentStockHandler(
           ? Number(ledger.quantity ?? 0)
           : -Number(ledger.quantity ?? 0);
         const batchNumber = toTrimmedString(ledger.batch_number) || null;
-        const resolvedPoNumber = resolveLotRef(
-          docMap.get(toTrimmedString(ledger.stock_document_id)),
+        const stockDocument = docMap.get(toTrimmedString(ledger.stock_document_id));
+        const invoicePacking = toTrimmedString(stockDocument?.reference_document_type).toUpperCase() === "SALES_INVOICE"
+          ? salesInvoicePackingMap.get(`${toTrimmedString(stockDocument?.reference_document_id)}:${toTrimmedString(stockDocument?.item_number)}`)
+          : null;
+        const resolvedPoNumber = invoicePacking?.po_number || resolveLotRef(
+          stockDocument,
           materialId,
           batchNumber,
           openingLotMap,
