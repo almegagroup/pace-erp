@@ -275,7 +275,13 @@ export default function StockLedgerReportPage() {
     { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: effectiveCompanyId },
     { enabled: Boolean(effectiveCompanyId) },
   );
-  const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
+  // Storage locations are company-mapped master data, not a global report
+  // filter. Without company_id this picker exposed every active SLoc, even
+  // locations unavailable to the selected IN02 company.
+  const slocQuery = useStorageLocationOptionsQuery(
+    { company_id: effectiveCompanyId, is_active: true, limit: 1000 },
+    { enabled: Boolean(effectiveCompanyId) },
+  );
   // §138.8 -- "Machine wise stock" button only shows for a company that
   // actually has MTS machines mapped, same company-level visibility check
   // already established for IN11's "Distribute to Machine" button (§138.13).

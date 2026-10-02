@@ -123,6 +123,15 @@ export async function listStorageLocationsHandler(
     const isActive = url.searchParams.get("is_active");
 
     if (companyId) {
+      // A company-scoped location list must never disclose another company's
+      // plant mappings through a caller-supplied company_id. IN02/IN03 use
+      // this branch for their Storage Location filter.
+      try {
+        await assertCompanyScope(ctx, companyId);
+      } catch {
+        return locationErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+
       let mapQuery = serviceRoleClient
         .schema("erp_inventory")
         .from("storage_location_plant_map")
