@@ -2023,6 +2023,47 @@ directions §3.9.2 itself supports.
   rollout, and retrying the original `DROP INDEX` once the Supabase infra issue clears
   (tracked in the migration's own header note, not required for this feature to work).
 
+**GRN Split — AC01 fix (2026-10-02, same day, business-owner follow-up question):**
+business owner asked, right after the feature shipped: "the row whose GRN gets reversed —
+what happens to ITS payment date calculation, and what about the new ones, and how does PO
+Number carry forward to the new ones?" Investigating found PO Number already carries
+correctly (every split row clones `{...grn, ...overrides}`, and `po_id`/`po_number` were
+never in the overrides list) and the new split rows' own payment dates compute correctly
+(each is a normal POSTED row with its own `invoice_date`/`invoice_rate`) — but the **design
+lock's own promise** ("AC01-এ reversed GRN-এর line inactive হবে... marker থাকবে") had never
+actually been built: AC01 had no `status` filter/marker at all, and
+`computeActualPaymentDate` ran unconditionally regardless of `status`, so a REVERSED
+original (split or plain) still showed a computed due date as if it were still payable.
+Fixed, same day, approved ("ha kore dao"):
+- **`ac01.handlers.ts`:** `buildListRow` (list endpoint) now returns `status`,
+  `is_reversed` (`status === 'REVERSED'`), `split_source_grn_id`, and
+  `split_into_grn_numbers` (a new reverse-lookup bulk query — for each page's GRN ids, which
+  new GRN(s) reference it via `split_source_grn_id`, same `fetchInChunks`/map-building
+  pattern as the file's other bulk lookups, §8B INDEPENDENT). `actual_payment_date` is now
+  `null` whenever `is_reversed` is true, overriding both the manual
+  `revised_payment_date` override and the computed due-date — a reversed receipt is never
+  payment-relevant, full stop. `getAC01GRNHandler` (detail endpoint) gets the identical
+  guard plus its own single-GRN `split_into_grn_numbers` lookup (`...grn` already spread
+  `status`/`split_source_grn_id` through via its own `select("*")`, so only the derived
+  fields needed adding).
+- **`AC01Page.jsx`:** the Status column's two-dot render is replaced with a rose "REVERSED"
+  (or "REVERSED (split)") badge whenever `row.is_reversed` — tooltip names which new GRN(s)
+  it became when `split_into_grn_numbers` is present; copy/Excel-export paths get the same
+  plain-text marker instead of the dots. The detail drawer also gets a banner at the top
+  (`"This GRN has been REVERSED and is no longer payment-relevant... split into: ..."`) so
+  opening a reversed row makes this unmissable, not just a column dot.
+- **Verification:** `deno check` on `ac01.handlers.ts` message-diffed against its own
+  pre-change baseline (0 errors before, 0 after — this file was already fully clean),
+  `eslint` clean on `AC01Page.jsx`, `jsx-no-undef-guard`/`hardcoded-role-check-guard`/
+  `wrong-company-source-guard`/`stock-posting-guard`/`frontend-payload-guard` all green
+  (stock-posting-guard baseline unchanged at 12 — this fix touches no posting call at all).
+  Confirmed against live Dev schema that `goods_receipt.status`/`split_source_grn_id`/
+  `source_gate_entry_line_id` all exist with the expected types, so both handlers'
+  `select("*")` already carries them through with no new column list needed. **Not yet
+  done:** a real live REVERSED row to click-through against (Dev has none yet — no GRN has
+  actually been reversed/split there since this is all same-day-shipped and not yet
+  exercised through the real HTTP endpoint).
+
 #### 3.9.3 — Who performs the mapping, and cross-company visibility
 
 Confirmed: whichever company performs this PO↔Invoice mapping (e.g. CMP011, if it manages
