@@ -410,7 +410,11 @@ export default function GateEntryCreatePage() {
             ge_qty: rcvQty,
             uom_code: isBulk ? (l.poLine?.uom_code || l.poLine?.po_uom_code || "") : (l.csn?.po_uom_code || ""),
             challan_or_invoice_no: l.lrNumber.trim() || null,
-            rst_number: l.lrDate || null,
+            // rst_number is the weighbridge RST/slip number captured at Gate Exit
+            // (gate_exit_inbound.rst_number_tare) — this page has no RST input,
+            // and l.lrDate is an LR/BL date, not an RST number, so it must not
+            // be written here.
+            rst_number: null,
             gross_weight: lineGrossWeight,
           };
         }),
