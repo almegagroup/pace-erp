@@ -85,6 +85,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/grns/invoice-mapping/check-invoice":{ skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
   "POST:/api/procurement/grns/invoice-mapping/map":         { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "EDIT"  },
   "POST:/api/procurement/grns/invoice-mapping/unmap":       { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "EDIT"  },
+  // §3.9.5 "GRN Split" (2026-10-02) — same resource as the Invoice Mapping actions above.
+  "POST:/api/procurement/grns/split":                       { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "EDIT"  },
 
   // ── Procurement: Inward QA ────────────────────────────────────────────────
   "GET:/api/procurement/qa-documents":                { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },

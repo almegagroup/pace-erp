@@ -22,6 +22,7 @@ import {
   checkExistingGrnInvoice,
   listGrnInvoiceMappingCandidates,
   mapGrnInvoice,
+  splitGrn,
   unmapGrnInvoice,
 } from "../procurementApi.js";
 
@@ -65,6 +66,13 @@ export default function GRNInvoiceMappingPage() {
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
+
+  // §3.9.5 "GRN Split" (1 GRN : many Invoices) — Bulk-only.
+  const [splitTarget, setSplitTarget] = useState(null);
+  const [splitSlices, setSplitSlices] = useState([]);
+  const [sliceDraft, setSliceDraft] = useState({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", quantity: "" });
+  const [splitSaving, setSplitSaving] = useState(false);
+  const [splitError, setSplitError] = useState("");
 
   const listQuery = useQuery({
     queryKey: ["procurement", "grn-invoice-mapping", effectiveCompanyId, tab],
@@ -169,6 +177,63 @@ export default function GRNInvoiceMappingPage() {
       setActionError(err instanceof Error ? err.message : "GRN_MAPPING_UNMAP_FAILED");
     } finally {
       setSaving(false);
+    }
+  }
+
+  const splitSlicesTotal = splitSlices.reduce((sum, s) => sum + Number(s.quantity || 0), 0);
+  const splitTargetQty = Number(splitTarget?.received_qty ?? 0);
+  const splitQtyMatches = splitSlices.length >= 2 && Math.abs(splitSlicesTotal - splitTargetQty) < 0.0001;
+
+  function openSplit(row) {
+    setSplitTarget(row);
+    setSplitSlices([]);
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", quantity: "" });
+    setSplitError("");
+  }
+  function closeSplit() {
+    setSplitTarget(null);
+    setSplitSlices([]);
+    setSplitError("");
+  }
+  function addSlice() {
+    const qty = Number(sliceDraft.quantity);
+    if (!sliceDraft.invoiceNumber.trim() || !sliceDraft.invoiceDate || !sliceDraft.invoiceRate || !qty || qty <= 0) {
+      setSplitError("Every slice needs an Invoice Number, Date, Rate, and a positive Quantity.");
+      return;
+    }
+    setSplitSlices((current) => [...current, { ...sliceDraft, invoiceNumber: sliceDraft.invoiceNumber.trim(), quantity: qty }]);
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", quantity: "" });
+    setSplitError("");
+  }
+  function removeSlice(index) {
+    setSplitSlices((current) => current.filter((_, i) => i !== index));
+  }
+
+  async function handleSplit() {
+    setSplitError("");
+    if (!splitQtyMatches) {
+      setSplitError("Slice quantities must sum exactly to the GRN's received quantity before splitting.");
+      return;
+    }
+    setSplitSaving(true);
+    try {
+      await splitGrn({
+        grn_id: splitTarget.id,
+        slices: splitSlices.map((s) => ({
+          invoice_number: s.invoiceNumber,
+          invoice_date: s.invoiceDate,
+          invoice_rate: Number(s.invoiceRate),
+          quantity: Number(s.quantity),
+        })),
+      });
+      setActionNotice(`GRN ${splitTarget.grn_number} split into ${splitSlices.length} new GRNs.`);
+      closeSplit();
+      await listQuery.refetch();
+      queryClient.invalidateQueries({ queryKey: ["procurement", "grns"] });
+    } catch (err) {
+      setSplitError(err instanceof Error ? err.message : "GRN_SPLIT_FAILED");
+    } finally {
+      setSplitSaving(false);
     }
   }
 
@@ -313,6 +378,19 @@ export default function GRNInvoiceMappingPage() {
                 ),
               },
               ...columns,
+              ...(tab === "pending" ? [{
+                key: "__split",
+                label: "",
+                width: "80px",
+                render: (row) => (
+                  <button
+                    onClick={() => openSplit(row)}
+                    className="h-7 px-2 border border-amber-300 bg-amber-50 text-xs font-medium text-amber-800 rounded hover:bg-amber-100"
+                  >
+                    Split
+                  </button>
+                ),
+              }] : []),
             ]}
             rows={filteredRows}
             rowKey={(row) => row.id}
@@ -339,6 +417,109 @@ export default function GRNInvoiceMappingPage() {
             )}
           </div>
         </ErpSectionCard>
+
+        {splitTarget && (
+          <ErpSectionCard
+            eyebrow="GRN Split"
+            title={`Split GRN ${splitTarget.grn_number} (${Number(splitTarget.received_qty ?? 0).toFixed(4)}) into multiple invoices`}
+          >
+            {splitError && (
+              <div className="mb-3 border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800">{splitError}</div>
+            )}
+            <p className="mb-3 text-xs text-slate-500">
+              Vendor split this one truck's material across multiple invoices. Add each invoice's own Number/Date/Rate/Quantity below — the quantities must sum exactly to this GRN's own received quantity ({Number(splitTarget.received_qty ?? 0).toFixed(4)}) before Split is enabled. Same Truck Number, Delivery Challan Number, and RST Number carry over automatically to every new GRN.
+            </p>
+
+            <div className="overflow-x-auto border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Invoice Number</th>
+                    <th className="px-3 py-2 text-left">Invoice Date</th>
+                    <th className="px-3 py-2 text-right">Rate</th>
+                    <th className="px-3 py-2 text-right">Quantity</th>
+                    <th className="px-3 py-2 w-16"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {splitSlices.map((s, i) => (
+                    <tr key={i} className="border-t border-slate-200">
+                      <td className="px-3 py-2">{s.invoiceNumber}</td>
+                      <td className="px-3 py-2">{s.invoiceDate}</td>
+                      <td className="px-3 py-2 text-right">{Number(s.invoiceRate).toFixed(4)}</td>
+                      <td className="px-3 py-2 text-right">{Number(s.quantity).toFixed(4)}</td>
+                      <td className="px-3 py-2 text-center">
+                        <button onClick={() => removeSlice(i)} className="text-xs text-rose-600 hover:underline">Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-slate-200 bg-slate-50">
+                    <td className="px-2 py-2">
+                      <input
+                        type="text"
+                        placeholder="Invoice Number"
+                        value={sliceDraft.invoiceNumber}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, invoiceNumber: e.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        type="date"
+                        value={sliceDraft.invoiceDate}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, invoiceDate: e.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.0001"
+                        value={sliceDraft.invoiceRate}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, invoiceRate: e.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-right outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.0001"
+                        value={sliceDraft.quantity}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, quantity: e.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-right outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td className="px-2 py-2 text-center">
+                      <button onClick={addSlice} className="h-8 px-2 border border-sky-300 bg-sky-50 text-xs font-medium text-sky-700 rounded hover:bg-sky-100">
+                        Add
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p className={`mt-3 text-xs ${splitQtyMatches ? "text-emerald-700" : "text-amber-700"}`}>
+              Slices total: <strong>{splitSlicesTotal.toFixed(4)}</strong> vs. GRN quantity: <strong>{splitTargetQty.toFixed(4)}</strong>
+              {splitSlices.length < 2 ? " — add at least 2 slices." : splitQtyMatches ? " — match, ready to split." : " — mismatch."}
+            </p>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={closeSplit} className="h-9 px-4 border border-slate-300 bg-white text-sm font-medium text-slate-600 hover:bg-slate-50">
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleSplit()}
+                disabled={splitSaving || !splitQtyMatches}
+                className="h-9 px-4 border border-amber-700 bg-amber-100 text-sm font-semibold text-amber-950 disabled:opacity-50"
+              >
+                {splitSaving ? "Splitting…" : "Split"}
+              </button>
+            </div>
+          </ErpSectionCard>
+        )}
       </div>
     </ErpScreenScaffold>
   );

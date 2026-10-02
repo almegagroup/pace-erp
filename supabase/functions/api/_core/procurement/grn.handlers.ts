@@ -530,6 +530,16 @@ export async function getGELinesForGRNHandler(
         .not("gate_entry_line_id", "is", null),
     ]);
 
+    // §3.9.5 "GRN Split" -- a split-created GRN carries the GE line reference
+    // via source_gate_entry_line_id, not gate_entry_line_id (see migration
+    // 20261002110000's deviation note). Fetched separately and merged below
+    // so a split line's new GRN status still shows correctly here instead of
+    // falling back to its now-REVERSED original.
+    const { data: splitGrnRows } = await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+      .select("source_gate_entry_line_id, grn_number, status, id")
+      .eq("gate_entry_id", String(gateEntry.id))
+      .not("source_gate_entry_line_id", "is", null);
+
     const poIds = [...new Set((poLineResp.data ?? []).map((pl: JsonRecord) => String(pl.po_id ?? "")).filter(Boolean))];
     const poResp = poIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("purchase_order")
@@ -585,6 +595,11 @@ export async function getGELinesForGRNHandler(
     const vendorMap = new Map((vendorResp.data ?? []).map((v: JsonRecord) => [v.id, v]));
     const csnMap = new Map((csnResp.data ?? []).map((c: JsonRecord) => [c.id, c]));
     const grnByLineId = new Map((existingGrnResp.data ?? []).map((g: JsonRecord) => [g.gate_entry_line_id, g]));
+    // Merged AFTER the plain rows so a split's new (POSTED) GRN wins over its
+    // now-REVERSED original for the same GE line.
+    for (const g of (splitGrnRows ?? []) as JsonRecord[]) {
+      grnByLineId.set(String(g.source_gate_entry_line_id), g);
+    }
 
     // Bulk fetch UOM conversions for lines where PO UOM ≠ base UOM
     const uomMismatchMatIds = [...new Set(linesList
@@ -802,12 +817,22 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_GATE_ENTRY_LINE_NOT_FOUND", 404, "Gate entry line not found.");
     }
 
-    // Check no active GRN for this line
+    // Check no active GRN for this line. §3.9.5 "GRN Split" -- also checks
+    // source_gate_entry_line_id, since a split-created GRN carries the GE
+    // line reference there instead of gate_entry_line_id (migration
+    // 20261002110000's deviation note).
     const { data: existing } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
       .select("id, status").eq("gate_entry_line_id", gateEntryLineId)
       .in("status", ["DRAFT", "POSTED"]).maybeSingle();
     if (existing) {
+      return procurementErrorResponse(req, ctx, "GRN_ALREADY_EXISTS", 400, "A GRN already exists for this gate entry line.");
+    }
+    const { data: existingSplit } = await serviceRoleClient
+      .schema("erp_procurement").from("goods_receipt")
+      .select("id, status").eq("source_gate_entry_line_id", gateEntryLineId)
+      .in("status", ["DRAFT", "POSTED"]).maybeSingle();
+    if (existingSplit) {
       return procurementErrorResponse(req, ctx, "GRN_ALREADY_EXISTS", 400, "A GRN already exists for this gate entry line.");
     }
 
@@ -2006,6 +2031,231 @@ export async function unmapGrnInvoiceHandler(
     return okResponse({ results }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_MAPPING_UNMAP_FAILED";
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
+  }
+}
+
+// §3.9.5 "GRN Split" (1 GRN : many Invoices) -- Bulk-only. Splits a slice's
+// received_qty (and the proportional fields below) by the same ratio-with-
+// last-slice-absorbs-remainder rule GateEntryCreatePage.jsx already uses for
+// splitting one vehicle's Gross Weight across multiple GE lines.
+function splitProportionally(totalValue: number, slices: { quantity: number }[], totalQty: number): number[] {
+  if (totalValue == null || !Number.isFinite(totalValue) || totalQty <= 0) {
+    return slices.map(() => 0);
+  }
+  const shares: number[] = [];
+  let allocated = 0;
+  for (let i = 0; i < slices.length; i += 1) {
+    if (i === slices.length - 1) {
+      shares.push(Number((totalValue - allocated).toFixed(6)));
+    } else {
+      const share = Number(((totalValue * slices[i].quantity) / totalQty).toFixed(6));
+      shares.push(share);
+      allocated += share;
+    }
+  }
+  return shares;
+}
+
+export async function splitGrnHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const grnId = toTrimmedString(body.grn_id);
+    const rawSlices = Array.isArray(body.slices) ? body.slices : [];
+    const rawSlicesParsed = rawSlices.map((s) => ({
+      invoiceNumber: toTrimmedString((s as JsonRecord).invoice_number),
+      invoiceDate: toTrimmedString((s as JsonRecord).invoice_date),
+      invoiceRate: parseNullableNumber((s as JsonRecord).invoice_rate),
+      quantity: parseNullableNumber((s as JsonRecord).quantity),
+    }));
+    if (!grnId || rawSlicesParsed.length < 2) {
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_INVALID", 400, "grn_id and at least 2 invoice slices are required.");
+    }
+    for (let i = 0; i < rawSlicesParsed.length; i += 1) {
+      const s = rawSlicesParsed[i];
+      if (!s.invoiceNumber || !s.invoiceDate || s.invoiceRate === null || s.quantity === null || s.quantity <= 0) {
+        return procurementErrorResponse(req, ctx, "GRN_SPLIT_SLICE_INVALID", 400, `Slice ${i + 1} is missing invoice number, date, rate, or a positive quantity.`);
+      }
+    }
+    // Re-typed with non-null quantity/invoiceRate -- every element already
+    // passed the validation loop above, so this narrowing is safe.
+    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; quantity: number }[];
+
+    const { data: grn, error: grnError } = await serviceRoleClient
+      .schema("erp_procurement").from("goods_receipt")
+      .select("*").eq("id", grnId).single();
+    if (grnError || !grn) {
+      return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
+    }
+    if (toUpperTrimmedString(grn.status) !== "POSTED") {
+      return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be split.");
+    }
+    const grnCompanyId = String(grn.company_id);
+    try {
+      await assertCompanyScope(ctx, grnCompanyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const canSplit = await canMaintainCompanyResource(ctx, grnCompanyId, "PROC_GRN_LIST", "EDIT");
+    if (!canSplit) {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have EDIT access to GRNs at this company.");
+    }
+
+    // §3.9.5 -- Bulk-only.
+    let deliveryType = "";
+    if (grn.po_id) {
+      const { data: po } = await serviceRoleClient.schema("erp_procurement").from("purchase_order").select("delivery_type").eq("id", String(grn.po_id)).maybeSingle();
+      deliveryType = toUpperTrimmedString(po?.delivery_type);
+    } else if (grn.sto_id) {
+      const { data: sto } = await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("delivery_type").eq("id", String(grn.sto_id)).maybeSingle();
+      deliveryType = toUpperTrimmedString(sto?.delivery_type);
+    }
+    if (deliveryType !== "BULK") {
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_NOT_BULK", 400, "GRN Split is only available for Bulk-delivery GRNs.");
+    }
+
+    const originalReceivedQty = parsePositiveNumber(grn.received_qty) ?? 0;
+    const sliceQtySum = Number(slices.reduce((sum, s) => sum + (s.quantity ?? 0), 0).toFixed(6));
+    if (Math.abs(sliceQtySum - originalReceivedQty) > 0.0001) {
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_QTY_MISMATCH", 400, `Invoice quantities (${sliceQtySum}) must sum exactly to the GRN's received quantity (${originalReceivedQty}).`);
+    }
+
+    const material = await fetchMaterial(String(grn.material_id));
+    const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(grn.uom_code) || "PCS";
+    const grnUomMismatch = toTrimmedString(grn.uom_code) !== baseUomCode;
+    const grnPerPackQty = parseNullableNumber(grn.per_pack_qty);
+    const toBaseQty = (qty: number) => (grnUomMismatch && grnPerPackQty && grnPerPackQty > 0 ? Number((qty * grnPerPackQty).toFixed(6)) : qty);
+    const toBaseRate = (rate: number) => (grnUomMismatch && grnPerPackQty && grnPerPackQty > 0 ? Number((rate / grnPerPackQty).toFixed(6)) : rate);
+    const stockTypeCode = toUpperTrimmedString(grn.target_stock_type) || "UNRESTRICTED";
+
+    const geQtyShares = splitProportionally(parseNullableNumber(grn.ge_qty) ?? 0, slices, originalReceivedQty);
+    const consideredQtyShares = splitProportionally(parseNullableNumber(grn.considered_qty) ?? 0, slices, originalReceivedQty);
+    const netWeightShares = splitProportionally(parseNullableNumber(grn.net_weight_from_weighbridge) ?? 0, slices, originalReceivedQty);
+
+    const nowIso = new Date().toISOString();
+    const grnMatDoc = await generateMaterialDocNumber(grnCompanyId);
+
+    const movements: JsonRecord[] = [{
+      document_number: grn.grn_number,
+      document_date: todayIsoInKolkata(),
+      posting_date: todayIsoInKolkata(),
+      movement_type_code: "P102",
+      company_id: grnCompanyId,
+      storage_location_id: grn.storage_location_id,
+      material_id: grn.material_id,
+      quantity: toBaseQty(originalReceivedQty),
+      base_uom_code: baseUomCode,
+      unit_value: toBaseRate(parseNullableNumber(grn.grn_rate) ?? 0),
+      stock_type_code: stockTypeCode,
+      direction: "OUT",
+      posted_by: ctx.auth_user_id,
+      reversal_of_id: grn.stock_document_id,
+      material_doc_number: grnMatDoc.docNumber,
+      material_doc_year: grnMatDoc.docYear,
+      reference_document_number: grn.grn_number,
+      line_ref: "REVERSAL",
+    }];
+
+    const splitPayloads: JsonRecord[] = [];
+    for (let i = 0; i < slices.length; i += 1) {
+      const slice = slices[i];
+      const lineRef = `SPLIT_${i}`;
+      const newGrnNumber = await generateProcurementDocNumber("GRN");
+      const newId = crypto.randomUUID();
+
+      movements.push({
+        document_number: newGrnNumber,
+        document_date: todayIsoInKolkata(),
+        posting_date: todayIsoInKolkata(),
+        movement_type_code: "P101",
+        company_id: grnCompanyId,
+        storage_location_id: grn.storage_location_id,
+        material_id: grn.material_id,
+        quantity: toBaseQty(slice.quantity),
+        base_uom_code: baseUomCode,
+        unit_value: toBaseRate(slice.invoiceRate),
+        stock_type_code: stockTypeCode,
+        direction: "IN",
+        posted_by: ctx.auth_user_id,
+        material_doc_number: grnMatDoc.docNumber,
+        material_doc_year: grnMatDoc.docYear,
+        reference_document_number: newGrnNumber,
+        line_ref: lineRef,
+      });
+
+      splitPayloads.push({
+        ...grn,
+        id: newId,
+        grn_number: newGrnNumber,
+        received_qty: slice.quantity,
+        ge_qty: geQtyShares[i],
+        considered_qty: consideredQtyShares[i],
+        net_weight_from_weighbridge: netWeightShares[i],
+        invoice_number: slice.invoiceNumber,
+        invoice_date: slice.invoiceDate,
+        invoice_rate: slice.invoiceRate,
+        rate_confirmed: true,
+        status: "POSTED",
+        // §DEVIATION note in the migration -- gate_entry_line_id must stay
+        // NULL on every split row (the old unique index is still active and
+        // undroppable right now); source_gate_entry_line_id carries the same
+        // reference instead.
+        gate_entry_line_id: null,
+        source_gate_entry_line_id: grn.gate_entry_line_id,
+        split_source_grn_id: grn.id,
+        stock_document_id: null,
+        stock_ledger_id: null,
+        reversal_grn_id: null,
+        reversal_approved_by: null,
+        reversal_approved_at: null,
+        reversal_reason: null,
+        confirmed_rate: null,
+        confirmed_rate_by: null,
+        confirmed_rate_at: null,
+        vendor_payable_override: null,
+        transporter_payable_override: null,
+        last_mile_payable_override: null,
+        cha_payable_override: null,
+        revised_payment_date: null,
+        created_at: nowIso,
+        last_updated_at: nowIso,
+        system_created_at: nowIso,
+        created_by: ctx.auth_user_id,
+        posted_by: ctx.auth_user_id,
+        posted_at: nowIso,
+        line_ref: lineRef,
+      });
+    }
+
+    const context = {
+      actor: ctx.auth_user_id,
+      reversal_reason: `GRN Split into ${slices.length} invoices`,
+      splits: splitPayloads,
+    };
+
+    const { error: postError } = await serviceRoleClient
+      .schema("erp_inventory")
+      .rpc("post_document", {
+        p_reference_document_type: "GRN",
+        p_reference_document_id: grnId,
+        p_movements: movements,
+        p_posted_by: ctx.auth_user_id,
+        p_context: context,
+      });
+    if (postError) {
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_POST_FAILED", 500, postError.message || "Unable to split GRN.");
+    }
+
+    return okResponse({
+      original_grn_id: grnId,
+      new_grns: splitPayloads.map((p) => ({ id: p.id, grn_number: p.grn_number, received_qty: p.received_qty, invoice_number: p.invoice_number })),
+    }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GRN_SPLIT_FAILED";
     return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }

@@ -1057,6 +1057,45 @@ case with the same mechanism.
   Return/Invoice-mixing rule has no enforcement anywhere.
 - Final Design: ⏳ NOT YET LOCKED
 
+**Phase C — Design Session Started (2026-10-02) — GST legal grounding reframes "Return vs.
+Invoice" from an equal business choice into a legally-ordered default + exception.**
+
+Business owner supplied external reference material (GST Bill-To/Ship-To treatment) that
+reframes Point 3.2.7:
+
+- Under GST law, a Bill-To (A) ≠ Ship-To (B, as named on the vendor's documents) ≠ Actual
+  Physical Receiver (C) scenario is **legally two separate supplies**, not one: **Leg 1**
+  (Vendor → Company A — the vendor's own invoice; A is the "deemed recipient" and claims
+  ITC on it) and **Leg 2** (Company A → Company C — a **mandatory** Tax Invoice to
+  regularize the fact that the goods physically sit with C, not A).
+- **Reframes "Return vs. Invoice" as NOT a free business choice for the default case.**
+  Invoice (Leg 2, A→C) is the GST-mandatory path whenever C **retains/consumes** the
+  goods — which is the normal case, since C-retaining-the-goods is the entire point of
+  CRCP. **"Return" only applies when C does NOT want to keep the goods and sends them back
+  physically** (to A, or onward) — a genuine reversal, no Leg-2 invoice needed since nothing
+  was transacted at C's end.
+- **The external material's own "Action Item"** (Company C should record an internal
+  Material Receipt Note acknowledging vehicle number + vendor's delivery challan) **is
+  already satisfied by Phase A-D's existing CRCP work** — the CRCP-shared company (C) is
+  the one who actually performs the GE+GRN (not A), and that GE/GRN already captures
+  vehicle number, vendor delivery challan/invoice, etc. No new mechanism needed for this
+  part of the legal requirement.
+- **Open structural question raised, not yet resolved:** in the CRCP flow, stock physically
+  posts under **Company C's own GRN** (C does its own GE+GRN, per Phase A's
+  `isCrcpSharedCompany` gate) — **Company A never holds physical stock for this material at
+  all.** So Leg 2 (A→C) may need **zero `stock_ledger` movement** on either side (A never
+  had stock to move out; C's stock, already GRN-posted, doesn't change) — making Leg 2 a
+  **pure financial/value settlement document** (Qty × Rate + GST), not a physical transfer.
+  This puts PTO's (PO12's) own physical-movement-type design (P301/P303/P305, Point 3.2.6)
+  in question for this specific use case — two options floated, **neither decided yet:**
+  1. Leg 2 becomes a **new "Cross-Company Settlement Invoice"** mechanism, reusing the
+     existing Sales Invoice/PGI pattern (§113.15) but with no stock posting at all — PTO
+     stays untouched, scoped to its own original L6 (physical plant transfer) purpose only.
+  2. PTO itself gets redesigned to also support an **invoice-only / no-movement mode** for
+     this specific Leg-2 case, alongside its existing physical-movement modes.
+- **Next:** business owner has a PO12-specific design idea to bring to this question before
+  Option 1 vs 2 gets decided — continuing below.
+
 **GRN-level "Ship To Leg" capture — Final Design: ✅ LOCKED 2026-10-02 (business owner +
 design session). Scope: CRCP-general — applies to a GRN against any CRCP-enabled PO/STO,
 any `delivery_type` (Standard/Tanker/Bulk/STO alike), not Bulk-specific.**
@@ -1807,6 +1846,182 @@ the same UI *pattern* (filterable multi-select + batch action), not the same tab
   `resource-code-domain`, `stock-posting`, `route-acl-registry`) green.
   **Not yet done:** live click-through (no dev login in this environment),
   Prod migration + ACL rollout.
+
+#### 3.9.5 — GRN Split (1 GRN : many Invoices) — Final Design: ✅ LOCKED 2026-10-02
+
+**Scope: Bulk-only** (confirmed by business owner — RM/PM/INT under Bulk are not
+batch-tracked, so none of §3.9.2's "never split a GRN across invoices" risk about
+batch-genealogy-aware partial reversal applies here; this is the exact INVERSE of
+§3.9.2's explicitly-excluded case, reopened specifically for this narrower,
+non-batch-tracked scope).
+
+**Trigger:** a vendor splits ONE truck's material across MULTIPLE invoices — commonly
+to stay under the e-way-bill value threshold — but the GRN was already created as
+exactly ONE GRN (1 GE = 1 GRN, unchanged). When the invoices finally arrive, Store
+needs to turn that one GRN into N GRNs, one per invoice, each carrying its own
+quantity/rate slice of the original.
+
+**Mechanism — a new "GRN Split" option inside the existing GRN Invoice Mapping page**
+(§3.9.2), not a separate page:
+- User picks ONE Pending GRN (unlike Map, which can multi-select across several GRNs).
+- User enters each invoice's own Number/Date/Quantity/Rate, one at a time, against
+  that same GRN, building up a running list of slices.
+- **System validates: Σ(slice quantities) == the GRN's own `received_qty`.** Mismatch
+  → the "Split" action stays disabled on the frontend AND is rejected server-side (same
+  disabled-button + backend-block pattern already used for Map/Unmap's duplicate-GRN
+  guard and GE's §4.1 duplicate-CSN guard). A mismatch means the vendor needs to issue a
+  corrected invoice — that's a business process outside the system, not something this
+  mechanism resolves.
+- **On Split:** the original ("Main") GRN is **reversed** (status → `REVERSED`, same
+  `reversal_grn_id`/`reversal_approved_by`/`reversal_approved_at`/`reversal_reason`
+  fields `reverseGRNHandler` already uses — no new reversal vocabulary). **N new GRNs**
+  are created, each a near-clone of the original but with: its own new `grn_number`,
+  its own slice's `received_qty`/`ge_qty`/`considered_qty`/`net_weight_from_weighbridge`
+  (proportionally split — see below), its own `invoice_number`/`invoice_date`/
+  `invoice_rate`, and `rate_confirmed = true` (this operation IS the invoice-confirmation
+  moment, same effect as a regular Map). **Same GE number, same Truck Number, same
+  Delivery Challan Number, same RST Number** — these all carry over automatically from
+  the original (physically the same truck/delivery, only the paper is being split), not
+  re-entered by the user.
+- **Proportional split of quantity fields:** reuses the exact same pattern already built
+  in `GateEntryCreatePage.jsx` for splitting one vehicle's Gross Weight across multiple
+  GE lines — `share = (this slice's qty ÷ original GRN's total qty) × field value`, with
+  the **last slice absorbing any rounding remainder** so the parts always sum back
+  exactly to the original.
+- **AC01:** the reversed original GRN's line becomes inactive (no further AC01 action
+  possible against it), with a visual marker/badge so a user looking at it immediately
+  understands it was split, not just an ordinary reversal — distinguishable from a plain
+  reversal by checking whether any other GRN references it via the new
+  `split_source_grn_id` column (see Engineering below).
+- Stock valuation (WAR) for each new split GRN's own rate uses the same §109
+  `cascadeRecalculate` engine already reused for §3.9.2's Map action — no new valuation
+  logic, same reuse.
+
+**Engineering — resolved during design, before locking:**
+- **Atomicity is mandatory, not optional.** Reverse-then-repost nets to zero, but if
+  anything else touched the same material/location's `stock_snapshot` in the window
+  between the original GRN and this split (another GRN, another issue), doing the
+  reversal and the N re-posts as separate steps risks a transient negative-stock state
+  mid-operation even though the net is zero. **Resolved:** built as one call to
+  `erp_inventory.post_document()` (§8D's "common gate", already proven for Process PO
+  Verify and §113.15's PGI+Invoice) — one P102 reversal of the original's full quantity
+  + N fresh P101 receipts for the splits, all in the SAME transaction, with a new
+  `erp_procurement.complete_grn_split()` completion function (registered against the
+  existing `GRN` entry in `posting_source_registry`, whose `completion_function` was
+  previously NULL — confirmed live before locking, no existing completion function is
+  being overwritten) doing the actual header-reversal + N-row-insert as the completion
+  step. Calculations (proportional split, validation) stay in TypeScript; only the
+  writes move into the completion function, same division of labor as every other
+  `post_document` migration in this codebase.
+- **Real pre-existing gap found while designing this (unrelated to the split feature
+  itself, but it blocks it):** `ux_goods_receipt_gate_entry_line` is a unique index on
+  `gate_entry_line_id` with **no status filter at all** (`WHERE gate_entry_line_id IS
+  NOT NULL` only) — meaning even a `REVERSED` GRN permanently occupies that GE line's
+  slot, and the system could never have posted a replacement GRN for a reversed line
+  even in the single-reversal case, let alone an N-way split. Never caught before
+  because this has 0 real occurrences in Prod data. **Fix:** drop this unique index
+  entirely — the real "one ACTIVE GRN per GE line" invariant is already enforced at the
+  application layer (`createAndPostGRNFromLineHandler`'s own
+  `.in("status", ["DRAFT","POSTED"])` check), so the DB-level index was a redundant,
+  overly-strict duplicate of that check, not an independent safety net. A plain
+  non-unique index on the same column replaces it for lookup performance.
+- **New column:** `goods_receipt.split_source_grn_id` (nullable uuid, FK to
+  `goods_receipt.id`) — set on each of the N new rows, pointing back to the original
+  (now-reversed) GRN. Drives the AC01 "split" marker and any future "what was this GRN
+  split into" lookup. NULL on every ordinary GRN.
+
+**Not locked / explicitly out of scope for this pass:** what happens if a user wants to
+*undo* a GRN Split (un-split back to one GRN) — not asked for, not designed; today's
+mechanism is one-directional (Split only), matching how Map/Unmap are the only two
+directions §3.9.2 itself supports.
+
+**GRN Split — Implementation Log (2026-10-02)**
+
+> Built directly (no subagent delegation), verified statically (`deno check`/`eslint`/
+> full frontend `build`/all 9 relevant guards) and **against real Dev data via two
+> isolated rolled-back transactions** (not just code-reading) before being treated as
+> done — this feature posts and reverses real stock, so static checks alone weren't
+> enough. **Not yet applied to Prod, not yet live-tested end-to-end through the actual
+> HTTP endpoint** (no dev login in this environment — verified at the SQL-mechanism
+> level only).
+
+- **Migration (Dev only,
+  `supabase/migrations/20261002110000_grn_split_feature.sql`):** adds
+  `goods_receipt.split_source_grn_id` + `goods_receipt.source_gate_entry_line_id`
+  (the latter is a deviation from the original lock — see its own header note: dropping
+  `ux_goods_receipt_gate_entry_line` hung indefinitely on this Supabase project via both
+  `apply_migration` and `execute_sql`, reproduced on a throwaway scratch index too, so
+  it's an infra-level issue outside application control, not a lock/code problem — worked
+  around by giving split rows a separate GE-line-reference column instead of touching
+  that index at all); `erp_procurement.complete_grn_split()` (post_document's completion
+  function for `GRN`, registered against the pre-existing registry row whose
+  `completion_function` was confirmed NULL before writing this). Applied via `execute_sql`
+  statement-by-statement (since `apply_migration`'s own wrapping transaction kept failing
+  on the same DROP INDEX before the design changed), reconciled into
+  `supabase_migrations.schema_migrations`, `NOTIFY pgrst, 'reload schema'` run,
+  `migration-integrity-check.mjs` confirms local in sync (only the 2 already-known,
+  unrelated pre-existing Dev drift rows remain, not this migration's own).
+- **Backend — `grn.handlers.ts`:** new `splitGrnHandler` — validates ≥2 slices, each with
+  Invoice Number/Date/Rate/positive Quantity; fetches the GRN, requires `POSTED` + Bulk
+  delivery type (via its PO's or STO's own `delivery_type`) + company scope + EDIT-level
+  ACL (reused `canMaintainCompanyResource`, same pattern as Map/Unmap); hard-blocks unless
+  Σ(slice quantities) exactly equals the GRN's `received_qty` (0.0001 tolerance); mirrors
+  `reverseGRNHandler`'s own PO-UOM→base-UOM conversion for the reversal and applies the
+  same conversion per slice; splits `ge_qty`/`considered_qty`/`net_weight_from_weighbridge`
+  proportionally via a new `splitProportionally()` helper (ratio-based, **last slice
+  absorbs the rounding remainder** — same rule `GateEntryCreatePage.jsx`'s own Gross
+  Weight split already uses); builds one P102 reversal + N fresh P101 movements and calls
+  `post_document('GRN', ...)` in a single atomic call (§8D) — `stock-posting-guard.mjs`
+  confirms this added **zero** new direct `post_stock_movement` calls (baseline stays 12).
+  Each split row's full payload is built by cloning the original GRN row (`{...grn,
+  ...overrides}`) so every NOT NULL column is already populated from the live row before
+  any override is applied — `id`/`grn_number` (new), `received_qty`/`ge_qty`/
+  `considered_qty`/`net_weight_from_weighbridge`/`invoice_number`/`invoice_date`/
+  `invoice_rate` (slice-specific), `rate_confirmed=true`, `status="POSTED"`,
+  `gate_entry_line_id=null` + `source_gate_entry_line_id=<original's line>` (the
+  deviation above), `split_source_grn_id=<original>`, every reversal/AC01-override field
+  nulled out fresh.
+- **Backend — two existing read-paths updated** to also recognize
+  `source_gate_entry_line_id` (not just `gate_entry_line_id`), since a split-created GRN
+  carries its GE-line reference there: `createAndPostGRNFromLineHandler`'s "no active GRN
+  for this line" guard (now checks both columns) and `getGELinesForGRNHandler`'s
+  existing-GRN-per-line map (fetches both, merges split rows AFTER plain rows so a
+  split's new POSTED GRN correctly wins over its now-REVERSED original for the same GE
+  line in the UI's per-line status).
+- **SQL — `complete_grn_split()`:** reverses the original GRN's header exactly like
+  `reverseGRNHandler` already does (same `status`/`reversal_grn_id`/
+  `reversal_approved_by`/`reversal_approved_at`/`reversal_reason` fields — no new
+  reversal vocabulary), then for each context-supplied split payload, matches its own
+  posting by `line_ref`, merges in that posting's `stock_document_id`/`stock_ledger_id`
+  via `jsonb_populate_record`, and inserts the resulting full row with a plain
+  `INSERT ... SELECT (v_row).*` (no column list to maintain/risk-drifting against the
+  ~70-column table). **Verified against real Dev data, twice, in isolated rolled-back
+  transactions** (a fresh synthetic receipt posted and immediately split within the same
+  transaction, to control the exact stock balance rather than depending on whatever a
+  real historical GRN's material happens to have left — most real Dev GRNs' stock has
+  already moved since posting, which is itself a useful confirmation that the engine's
+  negative-stock guard correctly blocks a reversal once the balance is insufficient):
+  even-split (500 → 300+200) and uneven-split with non-integer quantities and different
+  rates (500 → 333.33+166.67) both produced correct REVERSED original + POSTED new rows
+  with the right `stock_document_id`/`stock_ledger_id`/`split_source_grn_id` wiring.
+- **Routes + ACL:** one new exact route (`POST /api/procurement/grns/split`), reusing
+  `PROC_GRN_LIST:EDIT` (no new resource code). `route-acl-registry-guard.mjs` confirms 0
+  missing matches.
+- **Frontend — `GRNInvoiceMappingPage.jsx`:** new "Split" button per Pending-tab row
+  (single-GRN action, distinct from Map's multi-select); opens an inline card where the
+  user builds up slices one at a time (Invoice Number/Date/Rate/Quantity + "Add"), with a
+  running total checked live against the target GRN's own quantity — the "Split" button
+  stays disabled until ≥2 slices are entered and they sum exactly (mirrors the same
+  disabled-button + backend-block pattern as Map/Unmap's own guards and GE's §4.1
+  duplicate-CSN guard). New `splitGrn()` wrapper in `procurementApi.js`.
+- **Verification:** `deno check` message-diffed against each touched backend file's
+  pre-session baseline (zero new errors), `eslint` clean, full frontend `build` succeeds,
+  all 9 relevant guards green, migration-integrity confirmed, and the two real-data
+  rolled-back-transaction tests above. **Not yet done:** live click-through through the
+  actual Bulk GE→GRN→Split flow end-to-end (no Bulk GRN exists in Dev yet — Phase D's own
+  Bulk flow hasn't been live-tested either, see its own implementation log), Prod
+  rollout, and retrying the original `DROP INDEX` once the Supabase infra issue clears
+  (tracked in the migration's own header note, not required for this feature to work).
 
 #### 3.9.3 — Who performs the mapping, and cross-company visibility
 

@@ -65,6 +65,7 @@ import {
   mapGrnInvoiceHandler,
   postGRNHandler,
   reverseGRNHandler,
+  splitGrnHandler,
   unmapGrnInvoiceHandler,
   updateGRNDraftHandler,
 } from "../_core/procurement/grn.handlers.ts";
@@ -629,6 +630,8 @@ export async function dispatchProcurementRoutes(
       return await mapGrnInvoiceHandler(req, ctx);
     case "POST:/api/procurement/grns/invoice-mapping/unmap":
       return await unmapGrnInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/grns/split":
+      return await splitGrnHandler(req, ctx);
     case "POST:/api/procurement/invoice-verifications":
       return await createIVDraftHandler(req, ctx);
     case "GET:/api/procurement/invoice-verifications":

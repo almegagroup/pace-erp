@@ -568,6 +568,11 @@ export function unmapGrnInvoice(data) {
   return fetchProcurement("POST", "/api/procurement/grns/invoice-mapping/unmap", data);
 }
 
+// §3.9.5 "GRN Split" (1 GRN : many Invoices) — Bulk-only.
+export function splitGrn(data) {
+  return fetchProcurement("POST", "/api/procurement/grns/split", data);
+}
+
 export function listQADocuments(params) {
   return fetchProcurement("GET", "/api/procurement/qa-documents", undefined, params);
 }
