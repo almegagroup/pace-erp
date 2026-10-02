@@ -296,13 +296,33 @@ export default function GateEntryCreatePage() {
     }
   }
 
+  // §4.1 "GE duplicate CSN/line selection across rows" -- the ids already
+  // picked by every OTHER active row in this GE, so a drawer can exclude
+  // them from its own candidate list instead of letting the same CSN/STO
+  // line get selected twice across rows.
+  function getUsedCsnIds(excludeRowIndex) {
+    return new Set(
+      lines
+        .filter((l, idx) => idx !== excludeRowIndex && l.csn?.id)
+        .map((l) => l.csn.id)
+    );
+  }
+  function getUsedStoLineIds(excludeRowIndex) {
+    return new Set(
+      lines
+        .filter((l, idx) => idx !== excludeRowIndex && l.stoLine?.id)
+        .map((l) => l.stoLine.id)
+    );
+  }
+
   function openDrawer(rowIndex, po, sto) {
     const resolvedPo = po ?? lines[rowIndex]?.po;
     const resolvedSto = sto ?? lines[rowIndex]?.sto;
     const kind = resolvedSto ? "STO" : "PO";
     const refItem = resolvedSto ?? resolvedPo;
     if (!refItem) return;
-    const csns = getCsnsForRef(kind, refItem.id);
+    const usedCsnIds = getUsedCsnIds(rowIndex);
+    const csns = getCsnsForRef(kind, refItem.id).filter((c) => !usedCsnIds.has(c.id));
     const currentCsn = lines[rowIndex]?.csn;
     const hiIdx = csns.findIndex((c) => c.id === currentCsn?.id);
     setDrawer({
@@ -357,13 +377,18 @@ export default function GateEntryCreatePage() {
   // ── STO GE drawer (§3.7 STO GE-Creation Drawer design) ──────────────────
   function openStoDrawer(rowIndex, sto) {
     const stoLines = sto.lines ?? [];
-    const rows = stoLines.map((stoLine) => ({
-      selected: true,
-      stoLine,
-      geQty: stoLine.expected_qty != null ? String(stoLine.expected_qty) : "",
-      invoiceNo: stoLine.invoice_number || "",
-      lrDate: stoLine.lr_date || "",
-    }));
+    // §4.1 "GE duplicate CSN/line selection across rows" -- exclude STO lines
+    // already picked by another active row in this same GE.
+    const usedStoLineIds = getUsedStoLineIds(rowIndex);
+    const rows = stoLines
+      .filter((stoLine) => !usedStoLineIds.has(stoLine.id))
+      .map((stoLine) => ({
+        selected: true,
+        stoLine,
+        geQty: stoLine.expected_qty != null ? String(stoLine.expected_qty) : "",
+        invoiceNo: stoLine.invoice_number || "",
+        lrDate: stoLine.lr_date || "",
+      }));
     setStoDrawer({ open: true, rowIndex, sto, rows });
   }
 
@@ -524,6 +549,28 @@ export default function GateEntryCreatePage() {
     if (activeLines.length === 0) {
       setError("At least one PO or STO line must be added.");
       return;
+    }
+    // §4.1 "GE duplicate CSN/line selection across rows" -- defense in depth;
+    // the drawers above already exclude already-used candidates, but this
+    // catches any stale-state edge case before it ever reaches the server.
+    const seenCsnIds = new Set();
+    const seenStoLineIds = new Set();
+    for (let i = 0; i < activeLines.length; i++) {
+      const l = activeLines[i];
+      if (l.csn?.id) {
+        if (seenCsnIds.has(l.csn.id)) {
+          setError(`Line ${i + 1}: this CSN is already selected on another line in this Gate Entry.`);
+          return;
+        }
+        seenCsnIds.add(l.csn.id);
+      }
+      if (l.stoLine?.id) {
+        if (seenStoLineIds.has(l.stoLine.id)) {
+          setError(`Line ${i + 1}: this STO line is already selected on another line in this Gate Entry.`);
+          return;
+        }
+        seenStoLineIds.add(l.stoLine.id);
+      }
     }
     for (let i = 0; i < activeLines.length; i++) {
       const l = activeLines[i];

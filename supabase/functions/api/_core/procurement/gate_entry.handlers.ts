@@ -651,6 +651,31 @@ export async function createGateEntryHandler(
       return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
+    // §4.1 "GE duplicate CSN/line selection across rows" -- the frontend
+    // drawers now exclude already-used CSN/STO-line candidates, but this is
+    // the actual save-time guard: a stale client (or any other caller) could
+    // still submit the same csn_id/sto_line_id on two lines of one GE.
+    {
+      const seenCsnIds = new Set<string>();
+      const seenStoLineIds = new Set<string>();
+      for (let index = 0; index < lines.length; index += 1) {
+        const dupCsnId = toTrimmedString(lines[index].csn_id);
+        if (dupCsnId) {
+          if (seenCsnIds.has(dupCsnId)) {
+            return procurementErrorResponse(req, ctx, "GE_DUPLICATE_CSN", 400, `Line ${index + 1} selects a CSN already used by another line in this Gate Entry.`);
+          }
+          seenCsnIds.add(dupCsnId);
+        }
+        const dupStoLineId = toTrimmedString(lines[index].sto_line_id);
+        if (dupStoLineId) {
+          if (seenStoLineIds.has(dupStoLineId)) {
+            return procurementErrorResponse(req, ctx, "GE_DUPLICATE_STO_LINE", 400, `Line ${index + 1} selects an STO line already used by another line in this Gate Entry.`);
+          }
+          seenStoLineIds.add(dupStoLineId);
+        }
+      }
+    }
+
     const personNameResult = await resolveGePersonName(ctx, toTrimmedString(body.person_name));
     if ("error" in personNameResult) {
       return procurementErrorResponse(req, ctx, personNameResult.error, 400, "Person Name is required.");

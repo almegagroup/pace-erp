@@ -1843,14 +1843,28 @@ wider scope, not just add a single `container_number` column.
 
 ## 4. Open Items — needs a decision or a fix before "Procurement = 100% done"
 
-### 4.1 GE — duplicate CSN/line selection across rows (small, confirmed gap)
-`GateEntryCreatePage.jsx`'s `getCsnsForRef(kind, refId)` returns **all** CSNs for a
+### 4.1 GE — duplicate CSN/line selection across rows (small, confirmed gap) — ✅ FIXED 2026-10-02
+`GateEntryCreatePage.jsx`'s `getCsnsForRef(kind, refId)` returned **all** CSNs for a
 PO/STO regardless of what other rows in the same GE already picked. No de-duplication
-exists at the frontend (drawer list) or at `createGateEntryHandler`'s save-time
-validation. Risk: a user could pick the same STO line twice across two rows in one GE.
-**Fix (not yet applied):** exclude any `stoLine.id`/`csn.id` already used by another
-active row in `lines[]` from the drawer's candidate list, and add a save-time guard.
-Low effort, no schema change needed.
+existed at the frontend (drawer list) or at `createGateEntryHandler`'s save-time
+validation. Risk: a user could pick the same CSN/STO line twice across two rows in one GE.
+**Fix applied:**
+- `GateEntryCreatePage.jsx` — new `getUsedCsnIds(excludeRowIndex)`/
+  `getUsedStoLineIds(excludeRowIndex)` helpers (ids used by every OTHER active row);
+  `openDrawer()` (PO+CSN path) filters its `csns` candidate list through
+  `getUsedCsnIds`; `openStoDrawer()` (STO path) filters its `stoLines` candidate list
+  through `getUsedStoLineIds` before building drawer rows. `handleSave()` also gets a
+  defense-in-depth duplicate check (same CSN/STO-line id across two active lines) before
+  the save request is even sent.
+- `gate_entry.handlers.ts`'s `createGateEntryHandler` — new save-time guard right after
+  the initial required-field check: walks the raw `body.lines[]` and rejects
+  (`GE_DUPLICATE_CSN`/`GE_DUPLICATE_STO_LINE`, 400) the moment the same non-empty
+  `csn_id`/`sto_line_id` appears twice, independent of and in addition to the frontend
+  checks (a stale client or any other caller could otherwise still submit duplicates).
+- No schema change needed, as originally scoped. Verified: `deno check` message-diffed
+  against baseline (zero new errors), `eslint` clean, full frontend `build` succeeds,
+  `jsx-no-undef-guard`/`frontend-payload-guard`/`wrong-company-source-guard`/
+  `company-scope-guard`/`hardcoded-role-check-guard` all green.
 
 ### 4.2 Inward QA "redesign" — scope unknown, needs discovery
 The 2026-09-22 note defers this without ever describing what's wrong with today's
