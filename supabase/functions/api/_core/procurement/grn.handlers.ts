@@ -14,6 +14,9 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { cascadeRecalculate } from "./opening_stock.handlers.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -265,6 +268,45 @@ async function fetchStoLineBundle(stoLineId: string): Promise<{ stoLine: JsonRec
   return { stoLine: stoLine as JsonRecord, sto: sto as JsonRecord };
 }
 
+// §3.2.7 "GRN-level Ship To Leg capture" (LOCKED 2026-10-02) — CRCP-general,
+// any delivery_type. Validates the GRN-creating user's picked Ship-To company
+// against the source PO/STO's own issuing company + its CRCP allow-list, and
+// resolves that allow-list for the frontend dropdown. Returns null (no Ship-To
+// needed/allowed) when crcp_enabled is false on the source document.
+async function resolveShipToValidation(
+  poData: PurchaseOrderRow | null,
+  stoData: JsonRecord | null,
+  shipToCompanyIdInput: string,
+): Promise<{ shipToCompanyId: string | null; error?: string }> {
+  const crcpEnabled = Boolean(poData?.crcp_enabled ?? stoData?.crcp_enabled);
+  if (!crcpEnabled) {
+    return { shipToCompanyId: null };
+  }
+  const shipToCompanyId = toTrimmedString(shipToCompanyIdInput);
+  if (!shipToCompanyId) {
+    return { shipToCompanyId: null, error: "GRN_SHIP_TO_REQUIRED" };
+  }
+  const issuingCompanyId = poData
+    ? toTrimmedString(poData.company_id)
+    : toTrimmedString(stoData?.sending_company_id);
+  let allowedIds = new Set<string>([issuingCompanyId]);
+  if (poData) {
+    const { data: rows } = await serviceRoleClient
+      .schema("erp_procurement").from("purchase_order_crcp_company")
+      .select("company_id").eq("po_id", String(poData.id));
+    for (const row of (rows ?? []) as JsonRecord[]) allowedIds.add(toTrimmedString(row.company_id));
+  } else if (stoData) {
+    const { data: rows } = await serviceRoleClient
+      .schema("erp_procurement").from("stock_transfer_order_crcp_company")
+      .select("company_id").eq("sto_id", String(stoData.id));
+    for (const row of (rows ?? []) as JsonRecord[]) allowedIds.add(toTrimmedString(row.company_id));
+  }
+  if (!allowedIds.has(shipToCompanyId)) {
+    return { shipToCompanyId: null, error: "GRN_SHIP_TO_INVALID" };
+  }
+  return { shipToCompanyId };
+}
+
 async function updateStoLineReceipt(stoLineId: string, deltaQty: number): Promise<void> {
   const { stoLine } = await fetchStoLineBundle(stoLineId);
   const quantity = parsePositiveNumber(stoLine.quantity) ?? 0;
@@ -491,8 +533,24 @@ export async function getGELinesForGRNHandler(
     const poIds = [...new Set((poLineResp.data ?? []).map((pl: JsonRecord) => String(pl.po_id ?? "")).filter(Boolean))];
     const poResp = poIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("purchase_order")
-          .select("id, po_number, vendor_id, vendor_type").in("id", poIds)
+          .select("id, po_number, vendor_id, vendor_type, delivery_type, crcp_enabled, company_id").in("id", poIds)
       : { data: [] };
+
+    // §3.7 "Bulk GE-Creation Drawer" / §3.2.7 "Ship To Leg" -- an STO-sourced
+    // GE line needs its own delivery_type/crcp_enabled too (tab-hiding and
+    // Ship-To both apply to STO-origin GRNs just as much as PO-origin).
+    const stoLineIds = [...new Set(linesList.map((l) => String(l.sto_line_id ?? "")).filter(Boolean))];
+    const stoLineResp = stoLineIds.length > 0
+      ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
+          .select("id, sto_id").in("id", stoLineIds)
+      : { data: [] };
+    const stoIds = [...new Set((stoLineResp.data ?? []).map((sl: JsonRecord) => String(sl.sto_id ?? "")).filter(Boolean))];
+    const stoResp = stoIds.length > 0
+      ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order")
+          .select("id, sto_number, delivery_type, crcp_enabled, sending_company_id, receiving_company_id").in("id", stoIds)
+      : { data: [] };
+    const stoLineMap = new Map<string, JsonRecord>((stoLineResp.data ?? []).map((sl: JsonRecord) => [String(sl.id), sl]));
+    const stoMap = new Map<string, JsonRecord>((stoResp.data ?? []).map((s: JsonRecord) => [String(s.id), s]));
 
     // Fetch CSN data for pre-filling (1 CSN per GE line)
     const csnIds = [...new Set(linesList.map((l) => String(l.csn_id ?? "")).filter(Boolean))];
@@ -523,7 +581,7 @@ export async function getGELinesForGRNHandler(
 
     const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
     const poLineMap = new Map((poLineResp.data ?? []).map((pl: JsonRecord) => [pl.id, pl]));
-    const poMap = new Map((poResp.data ?? []).map((p: JsonRecord) => [p.id, p]));
+    const poMap = new Map<string, JsonRecord>((poResp.data ?? []).map((p: JsonRecord) => [String(p.id), p]));
     const vendorMap = new Map((vendorResp.data ?? []).map((v: JsonRecord) => [v.id, v]));
     const csnMap = new Map((csnResp.data ?? []).map((c: JsonRecord) => [c.id, c]));
     const grnByLineId = new Map((existingGrnResp.data ?? []).map((g: JsonRecord) => [g.gate_entry_line_id, g]));
@@ -549,11 +607,70 @@ export async function getGELinesForGRNHandler(
       )
     );
 
+    // §3.2.7 "GRN-level Ship To Leg capture" -- resolve each line's own
+    // CRCP allow-list (issuing company + whichever companies the PO/STO
+    // shares with), bulk-fetched once for the union of po_ids/sto_ids on
+    // this GE (INDEPENDENT per §8B, parallelized).
+    const crcpPoIds = (poResp.data ?? []).filter((p: JsonRecord) => p.crcp_enabled).map((p: JsonRecord) => String(p.id));
+    const crcpStoIds = (stoResp.data ?? []).filter((s: JsonRecord) => s.crcp_enabled).map((s: JsonRecord) => String(s.id));
+    const [poCrcpRowsResp, stoCrcpRowsResp] = await Promise.all([
+      crcpPoIds.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("purchase_order_crcp_company")
+            .select("po_id, company_id").in("po_id", crcpPoIds)
+        : Promise.resolve({ data: [] }),
+      crcpStoIds.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_crcp_company")
+            .select("sto_id, company_id").in("sto_id", crcpStoIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const poCrcpCompaniesMap = new Map<string, Set<string>>();
+    for (const row of (poCrcpRowsResp.data ?? []) as JsonRecord[]) {
+      const key = String(row.po_id);
+      if (!poCrcpCompaniesMap.has(key)) poCrcpCompaniesMap.set(key, new Set());
+      poCrcpCompaniesMap.get(key)!.add(String(row.company_id));
+    }
+    const stoCrcpCompaniesMap = new Map<string, Set<string>>();
+    for (const row of (stoCrcpRowsResp.data ?? []) as JsonRecord[]) {
+      const key = String(row.sto_id);
+      if (!stoCrcpCompaniesMap.has(key)) stoCrcpCompaniesMap.set(key, new Set());
+      stoCrcpCompaniesMap.get(key)!.add(String(row.company_id));
+    }
+    const allShipToCompanyIds = new Set<string>();
+    for (const po of (poResp.data ?? []) as JsonRecord[]) {
+      if (!po.crcp_enabled) continue;
+      allShipToCompanyIds.add(String(po.company_id));
+      for (const id of poCrcpCompaniesMap.get(String(po.id)) ?? []) allShipToCompanyIds.add(id);
+    }
+    for (const sto of (stoResp.data ?? []) as JsonRecord[]) {
+      if (!sto.crcp_enabled) continue;
+      allShipToCompanyIds.add(String(sto.sending_company_id));
+      for (const id of stoCrcpCompaniesMap.get(String(sto.id)) ?? []) allShipToCompanyIds.add(id);
+    }
+    const shipToCompanyResp = allShipToCompanyIds.size > 0
+      ? await serviceRoleClient.schema("erp_master").from("companies")
+          .select("id, company_code, company_name, state_name").in("id", [...allShipToCompanyIds])
+      : { data: [] };
+    const shipToCompanyMap = new Map<string, JsonRecord>((shipToCompanyResp.data ?? []).map((c: JsonRecord) => [String(c.id), c]));
+
     const resolvedLines = linesList.map((l) => {
       const mat = matMap.get(String(l.material_id));
       const poLine = l.po_line_id ? poLineMap.get(String(l.po_line_id)) : null;
       const po = poLine ? poMap.get(String(poLine.po_id)) : null;
       const vendor = po ? vendorMap.get(String(po.vendor_id)) : null;
+      const stoLine = l.sto_line_id ? stoLineMap.get(String(l.sto_line_id)) : null;
+      const sto = stoLine ? stoMap.get(String(stoLine.sto_id)) : null;
+      const deliveryType = toTrimmedString(po?.delivery_type ?? sto?.delivery_type) || "STANDARD";
+      const crcpEnabled = Boolean(po?.crcp_enabled ?? sto?.crcp_enabled);
+      const shipToOptionIds: string[] = crcpEnabled
+        ? [
+            String(po ? po.company_id : sto?.sending_company_id),
+            ...(po ? poCrcpCompaniesMap.get(String(po.id)) ?? [] : stoCrcpCompaniesMap.get(String(sto?.id)) ?? []),
+          ]
+        : [];
+      const shipToOptions = [...new Set(shipToOptionIds)]
+        .map((id) => shipToCompanyMap.get(id))
+        .filter((c): c is JsonRecord => Boolean(c))
+        .map((c) => ({ id: c.id, company_code: c.company_code, company_name: c.company_name, state_name: c.state_name }));
       const csn = l.csn_id ? csnMap.get(String(l.csn_id)) : null;
       const csnTransporterId = csn?.domestic_transporter_id ?? csn?.transporter_id ?? null;
       const csnTransporter = csnTransporterId ? csnTransporterMap.get(String(csnTransporterId)) : null;
@@ -579,9 +696,15 @@ export async function getGELinesForGRNHandler(
         expiry_tracking_enabled: mat?.expiry_tracking_enabled ?? false,
         hsn_code: mat?.hsn_code ?? null,
         po_number: po?.po_number ?? null,
+        sto_number: sto?.sto_number ?? null,
         po_rate: poLine?.unit_rate ?? null,
         vendor_id: po?.vendor_id ?? null,
         vendor_type: po?.vendor_type ?? "DOMESTIC",
+        // §3.7/§3.2.7 -- drives GRNPostFlow's tab-hiding (Bulk, invoice not
+        // yet known) and the mandatory Ship-To dropdown (any CRCP GRN).
+        delivery_type: deliveryType,
+        crcp_enabled: crcpEnabled,
+        ship_to_options: shipToOptions,
         csn_invoice_number: csn?.invoice_number ?? null,
         csn_invoice_date: csn?.invoice_date ?? null,
         csn_bl_number: csn?.bl_number ?? null,
@@ -736,6 +859,16 @@ export async function createAndPostGRNFromLineHandler(
       vendorId = toTrimmedString(stoData.sending_company_id) || null;
     }
 
+    // §3.2.7 "GRN-level Ship To Leg capture" — mandatory whenever the source
+    // PO/STO has crcp_enabled=true, regardless of delivery_type.
+    const shipToResult = await resolveShipToValidation(poData, stoData, toTrimmedString(body.ship_to_company_id));
+    if (shipToResult.error) {
+      const message = shipToResult.error === "GRN_SHIP_TO_REQUIRED"
+        ? "Ship To Location (as mentioned in the vendor's invoice) is required for a CRCP-enabled document."
+        : "Selected Ship To company is not in this document's CRCP allow-list.";
+      return procurementErrorResponse(req, ctx, shipToResult.error, 400, message);
+    }
+
     // Receipt calculations
     const geQty = parsePositiveNumber(geLine.ge_qty) ?? 0;
     const receivedQty = parseNullableNumber(body.received_qty) ?? geQty;
@@ -873,17 +1006,29 @@ export async function createAndPostGRNFromLineHandler(
         expiry_date: expiryDate,
         shelf_life_months: body.shelf_life_months ? Number(body.shelf_life_months) : null,
         per_pack_qty: parseNullableNumber(body.per_pack_qty),
-        // Documents
-        invoice_number: toTrimmedString(body.invoice_number) || null,
-        invoice_date: toTrimmedString(body.invoice_date) || null,
+        // Documents -- §3.9.2 "GRN Invoice Mapping": for a Bulk GE line whose
+        // invoice wasn't yet known, body.invoice_number/date are always empty
+        // (GRNPostFlow hides those tabs for this case), so these fall back to
+        // whatever the GE line itself carried (blank unless the vendor's
+        // invoice genuinely travelled with the truck) -- never re-typed.
+        invoice_number: toTrimmedString(body.invoice_number) || toTrimmedString(geLine.bulk_invoice_number) || null,
+        invoice_date: toTrimmedString(body.invoice_date) || toTrimmedString(geLine.bulk_invoice_date) || null,
         bl_number: toTrimmedString(body.bl_number) || null,
         bl_date: toTrimmedString(body.bl_date) || null,
         boe_number: toTrimmedString(body.boe_number) || null,
         boe_date: toTrimmedString(body.boe_date) || null,
+        // §3.7 "Bulk GE-Creation Drawer" GRN carry-forward -- Bulk-only, no
+        // re-entry. Invoice/LR reuse the existing columns above/below; these
+        // four have no pre-existing GRN equivalent.
+        bulk_challan_number: toTrimmedString(geLine.bulk_challan_number) || null,
+        bulk_challan_date: toTrimmedString(geLine.bulk_challan_date) || null,
+        bulk_container_number: toTrimmedString(geLine.bulk_container_number) || null,
+        bulk_ewaybill_number: toTrimmedString(geLine.bulk_ewaybill_number) || null,
+        rst_number: toTrimmedString(geLine.rst_number) || null,
         // Transporter
         transporter_id: toTrimmedString(body.transporter_id) || null,
         last_mile_transporter_id: toTrimmedString(body.last_mile_transporter_id) || null,
-        lr_number: toTrimmedString(body.lr_number) || null,
+        lr_number: toTrimmedString(body.lr_number) || toTrimmedString(geLine.bulk_lr_number) || null,
         lr_date: toTrimmedString(body.lr_date) || null,
         // Material
         invoice_name: toTrimmedString(body.invoice_name) || null,
@@ -894,6 +1039,8 @@ export async function createAndPostGRNFromLineHandler(
         rate_confirmed: rateConfirmed,
         gst_pct: parseNullableNumber(body.gst_pct),
         grn_rate: effectiveGrnRate,
+        // §3.2.7 "GRN-level Ship To Leg capture"
+        ship_to_company_id: shipToResult.shipToCompanyId,
         created_by: ctx.auth_user_id,
       })
       .select("*").single();
@@ -1550,4 +1697,315 @@ export async function postGRNHandler(
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
   return procurementErrorResponse(req, ctx, "GRN_USE_FROM_LINE_ENDPOINT", 400, "Use POST /api/procurement/grns/from-line to create and post a GRN.");
+}
+
+// ── §3.9.2 "GRN Invoice Mapping" (LOCKED 2026-10-02) ─────────────────────────
+// Bulk-only for now. Scenario 2 (1 GRN : 1 Invoice) and Scenario 3 (1 Invoice :
+// many GRNs) both map through the same "Map" action below -- the only
+// difference is how many grn_ids the caller selects.
+
+async function resolveBulkGrnCandidates(companyId: string, tab: "pending" | "mapped"): Promise<JsonRecord[]> {
+  const [bulkPoResp, bulkStoResp] = await Promise.all([
+    serviceRoleClient.schema("erp_procurement").from("purchase_order")
+      .select("id").eq("company_id", companyId).eq("delivery_type", "BULK"),
+    serviceRoleClient.schema("erp_procurement").from("stock_transfer_order")
+      .select("id").eq("receiving_company_id", companyId).eq("delivery_type", "BULK"),
+  ]);
+  const bulkPoIds = (bulkPoResp.data ?? []).map((p: JsonRecord) => String(p.id));
+  const bulkStoIds = (bulkStoResp.data ?? []).map((s: JsonRecord) => String(s.id));
+  if (bulkPoIds.length === 0 && bulkStoIds.length === 0) return [];
+
+  const isPending = tab === "pending";
+  const [poGrns, stoGrns] = await Promise.all([
+    bulkPoIds.length > 0
+      ? fetchInChunks<JsonRecord>(bulkPoIds, (idChunk) => {
+          const query = serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+            .select("*").eq("company_id", companyId).eq("status", "POSTED").in("po_id", idChunk);
+          return isPending ? query.is("invoice_number", null) : query.not("invoice_number", "is", null);
+        })
+      : Promise.resolve([] as JsonRecord[]),
+    bulkStoIds.length > 0
+      ? fetchInChunks<JsonRecord>(bulkStoIds, (idChunk) => {
+          const query = serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+            .select("*").eq("company_id", companyId).eq("status", "POSTED").in("sto_id", idChunk);
+          return isPending ? query.is("invoice_number", null) : query.not("invoice_number", "is", null);
+        })
+      : Promise.resolve([] as JsonRecord[]),
+  ]);
+  return [...poGrns, ...stoGrns];
+}
+
+export async function listGrnInvoiceMappingCandidatesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    if (!companyId) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_COMPANY_REQUIRED", 400, "company_id is required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const tab = toTrimmedString(url.searchParams.get("tab")) === "mapped" ? "mapped" : "pending";
+
+    const grns = await resolveBulkGrnCandidates(companyId, tab);
+
+    const vendorIds = [...new Set(grns.map((g) => String(g.vendor_id ?? "")).filter(Boolean))];
+    const materialIds = [...new Set(grns.map((g) => String(g.material_id ?? "")).filter(Boolean))];
+    const poIds = [...new Set(grns.map((g) => String(g.po_id ?? "")).filter(Boolean))];
+    const stoIds = [...new Set(grns.map((g) => String(g.sto_id ?? "")).filter(Boolean))];
+    const gateEntryIds = [...new Set(grns.map((g) => String(g.gate_entry_id ?? "")).filter(Boolean))];
+
+    const [vendorResp, materialResp, poResp, stoResp, gateEntryResp] = await Promise.all([
+      vendorIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name").in("id", vendorIds)
+        : Promise.resolve({ data: [] }),
+      materialIds.length > 0
+        ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, pace_code").in("id", materialIds)
+        : Promise.resolve({ data: [] }),
+      poIds.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number").in("id", poIds)
+        : Promise.resolve({ data: [] }),
+      stoIds.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", stoIds)
+        : Promise.resolve({ data: [] }),
+      gateEntryIds.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("gate_entry").select("id, vehicle_number").in("id", gateEntryIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const vendorMap = new Map<string, JsonRecord>((vendorResp.data ?? []).map((v: JsonRecord) => [String(v.id), v]));
+    const materialMap = new Map<string, JsonRecord>((materialResp.data ?? []).map((m: JsonRecord) => [String(m.id), m]));
+    const poMap = new Map<string, JsonRecord>((poResp.data ?? []).map((p: JsonRecord) => [String(p.id), p]));
+    const stoMap = new Map<string, JsonRecord>((stoResp.data ?? []).map((s: JsonRecord) => [String(s.id), s]));
+    const gateEntryMap = new Map<string, JsonRecord>((gateEntryResp.data ?? []).map((g: JsonRecord) => [String(g.id), g]));
+
+    // An STO-sourced GRN stores the sending company's id in `vendor_id`
+    // (same convention hydrateGrn()'s resolveVendorName() already follows)
+    // -- not a real vendor_master row, so bulk-resolve the remainder via
+    // companies too, or every STO row on this page would show no vendor name.
+    const unresolvedVendorIds = vendorIds.filter((id) => !vendorMap.has(id));
+    const vendorCompanyResp = unresolvedVendorIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("companies")
+          .select("id, company_code, company_name").in("id", unresolvedVendorIds)
+      : { data: [] };
+    for (const c of (vendorCompanyResp.data ?? []) as JsonRecord[]) {
+      vendorMap.set(String(c.id), { vendor_code: c.company_code, vendor_name: c.company_name });
+    }
+
+    const rows = grns.map((g) => {
+      const vendor = vendorMap.get(String(g.vendor_id));
+      const material = materialMap.get(String(g.material_id));
+      const po = g.po_id ? poMap.get(String(g.po_id)) : null;
+      const sto = g.sto_id ? stoMap.get(String(g.sto_id)) : null;
+      const gateEntry = gateEntryMap.get(String(g.gate_entry_id));
+      return {
+        id: g.id,
+        grn_number: g.grn_number,
+        vendor_name: vendor ? `${vendor.vendor_code} — ${vendor.vendor_name}` : null,
+        material_name: material ? `${material.pace_code} — ${material.material_name}` : null,
+        received_qty: g.received_qty,
+        po_number: po?.po_number ?? null,
+        sto_number: sto?.sto_number ?? null,
+        vehicle_number: gateEntry?.vehicle_number ?? null,
+        bulk_challan_number: g.bulk_challan_number ?? null,
+        bulk_container_number: g.bulk_container_number ?? null,
+        bulk_ewaybill_number: g.bulk_ewaybill_number ?? null,
+        invoice_number: g.invoice_number ?? null,
+        invoice_date: g.invoice_date ?? null,
+        invoice_rate: g.invoice_rate ?? null,
+      };
+    });
+
+    return okResponse({ items: rows }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GRN_MAPPING_LIST_FAILED";
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
+  }
+}
+
+export async function checkExistingGrnInvoiceHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = toTrimmedString(url.searchParams.get("company_id"));
+    const invoiceNumber = toTrimmedString(url.searchParams.get("invoice_number"));
+    if (!companyId || !invoiceNumber) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_CHECK_INVALID", 400, "company_id and invoice_number are required.");
+    }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const { data: existing } = await serviceRoleClient
+      .schema("erp_procurement").from("goods_receipt")
+      .select("invoice_number, invoice_date, invoice_rate")
+      .eq("company_id", companyId).eq("invoice_number", invoiceNumber)
+      .limit(1).maybeSingle();
+
+    if (!existing) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_INVOICE_NOT_FOUND", 404, "No existing GRN carries this invoice number yet.");
+    }
+    return okResponse({
+      invoice_number: existing.invoice_number,
+      invoice_date: existing.invoice_date,
+      invoice_rate: existing.invoice_rate,
+    }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GRN_MAPPING_CHECK_FAILED";
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
+  }
+}
+
+export async function mapGrnInvoiceHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const grnIds = Array.isArray(body.grn_ids) ? body.grn_ids.map((id) => toTrimmedString(id)).filter(Boolean) : [];
+    const invoiceNumber = toTrimmedString(body.invoice_number);
+    const invoiceDate = toTrimmedString(body.invoice_date);
+    const invoiceRate = parseNullableNumber(body.invoice_rate);
+    if (grnIds.length === 0 || !invoiceNumber || !invoiceDate || invoiceRate === null) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_MAP_INVALID", 400, "grn_ids, invoice_number, invoice_date, and invoice_rate are all required.");
+    }
+
+    const grns = await fetchInChunks<JsonRecord>(grnIds, (idChunk) =>
+      serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("*").in("id", idChunk));
+    if (grns.length !== grnIds.length) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_GRN_NOT_FOUND", 404, "One or more selected GRNs were not found.");
+    }
+    for (const grn of grns) {
+      const grnCompanyId = String(grn.company_id);
+      try {
+        await assertCompanyScope(ctx, grnCompanyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+      // §8A pattern #2 -- membership at grnCompanyId is not enough; the
+      // caller's ACL grant must be EDIT-level at THIS specific company for
+      // PROC_GRN_LIST (same resource:action the route itself requires).
+      const canMap = await canMaintainCompanyResource(ctx, grnCompanyId, "PROC_GRN_LIST", "EDIT");
+      if (!canMap) {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have EDIT access to GRNs at this company.");
+      }
+    }
+
+    const results: JsonRecord[] = [];
+    // DEPENDENT: each GRN's own stock_ledger correction can cascade into a
+    // shared SFG/FG downstream consumption (§109) -- processed one at a time,
+    // not in parallel, so a later GRN's cascade sees the already-corrected
+    // state of an earlier one rather than racing it.
+    for (const grn of grns) {
+      const { error: updateError } = await serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt")
+        .update({
+          invoice_number: invoiceNumber,
+          invoice_date: invoiceDate,
+          invoice_rate: invoiceRate,
+          rate_confirmed: true,
+          last_updated_at: new Date().toISOString(),
+        })
+        .eq("id", String(grn.id));
+      if (updateError) {
+        results.push({ grn_id: grn.id, ok: false, error: "GRN_MAPPING_UPDATE_FAILED" });
+        continue;
+      }
+      const ledgerId = toTrimmedString(grn.stock_ledger_id);
+      if (!ledgerId) {
+        results.push({ grn_id: grn.id, ok: true, recalculated: false });
+        continue;
+      }
+      const cascadeResults = await cascadeRecalculate(
+        [{ ledgerId, newRate: invoiceRate }],
+        ctx.auth_user_id,
+        `GRN Invoice Mapping — ${invoiceNumber}`,
+      );
+      results.push({ grn_id: grn.id, ok: true, recalculated: true, cascade: cascadeResults });
+    }
+
+    return okResponse({ results }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GRN_MAPPING_MAP_FAILED";
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
+  }
+}
+
+export async function unmapGrnInvoiceHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const grnIds = Array.isArray(body.grn_ids) ? body.grn_ids.map((id) => toTrimmedString(id)).filter(Boolean) : [];
+    if (grnIds.length === 0) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_UNMAP_INVALID", 400, "grn_ids is required.");
+    }
+
+    const grns = await fetchInChunks<JsonRecord>(grnIds, (idChunk) =>
+      serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("*").in("id", idChunk));
+    if (grns.length !== grnIds.length) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_GRN_NOT_FOUND", 404, "One or more selected GRNs were not found.");
+    }
+    for (const grn of grns) {
+      const grnCompanyId = String(grn.company_id);
+      try {
+        await assertCompanyScope(ctx, grnCompanyId);
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+      // §8A pattern #2 -- same EDIT-level check as mapGrnInvoiceHandler.
+      const canUnmap = await canMaintainCompanyResource(ctx, grnCompanyId, "PROC_GRN_LIST", "EDIT");
+      if (!canUnmap) {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have EDIT access to GRNs at this company.");
+      }
+    }
+
+    const results: JsonRecord[] = [];
+    // DEPENDENT: see mapGrnInvoiceHandler's own note -- same cascade engine,
+    // same reasoning for processing one GRN at a time.
+    for (const grn of grns) {
+      const { error: updateError } = await serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt")
+        .update({
+          invoice_number: null,
+          invoice_date: null,
+          invoice_rate: null,
+          rate_confirmed: false,
+          last_updated_at: new Date().toISOString(),
+        })
+        .eq("id", String(grn.id));
+      if (updateError) {
+        results.push({ grn_id: grn.id, ok: false, error: "GRN_MAPPING_UPDATE_FAILED" });
+        continue;
+      }
+      const ledgerId = toTrimmedString(grn.stock_ledger_id);
+      if (!ledgerId) {
+        results.push({ grn_id: grn.id, ok: true, recalculated: false });
+        continue;
+      }
+      const cascadeResults = await cascadeRecalculate(
+        [{ ledgerId, newRate: 0 }],
+        ctx.auth_user_id,
+        "GRN Invoice Unmap",
+      );
+      results.push({ grn_id: grn.id, ok: true, recalculated: true, cascade: cascadeResults });
+    }
+
+    return okResponse({ results }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GRN_MAPPING_UNMAP_FAILED";
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
+  }
 }

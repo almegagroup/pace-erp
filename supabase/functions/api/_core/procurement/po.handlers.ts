@@ -1389,6 +1389,14 @@ export async function createPOHandler(
     if (!DELIVERY_TYPES.has(deliveryType)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_DELIVERY_TYPE", 400, "Invalid delivery type");
     }
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — mandatory only for BULK.
+    // Vendor Challan/Invoice dates at GE are validated against this PO's window (see
+    // resolveBulkEffectiveWindow in gate_entry.handlers.ts), replacing knock-off as the
+    // authority that gates whether a document can post against this PO.
+    const effectiveStartDate = toTrimmedString(body.effective_start_date) || null;
+    if (deliveryType === "BULK" && !effectiveStartDate) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_EFFECTIVE_DATE_REQUIRED", 400, "Effective Start Date is required for Bulk delivery type.");
+    }
     const incoterm = toTrimmedString(body.incoterm) || await getLastUsedIncoterm(vendorId) || null;
     if (vendorType === "IMPORT" && !incoterm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INCOTERM_REQUIRED", 400, "Incoterm required for import PO");
@@ -1568,6 +1576,7 @@ export async function createPOHandler(
             payment_term_id: paymentTermId,
             lc_required: lcRequired,
             delivery_type: deliveryType,
+            effective_start_date: effectiveStartDate,
             gst_terms: gstTerms || null,
             has_rebate: materialRecord.has_rebate === true,
             rebate_remarks: toTrimmedString(materialRecord.rebate_remarks) || null,
@@ -2908,6 +2917,17 @@ export async function knockOffPOLineHandler(
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_LINE_NOT_FOUND", 404, "PO line not found");
     }
 
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — a Bulk PO with no
+    // successor must not knock off unbounded; require a cutoff_date here instead.
+    const cutoffError = await resolveBulkCutoffRequirement(
+      poId, toTrimmedString(po.company_id), toTrimmedString(po.vendor_id),
+      toTrimmedString(targetLine.material_id), toUpperTrimmedString(po.delivery_type),
+      toTrimmedString(body.cutoff_date),
+    );
+    if (cutoffError) {
+      return procurementErrorResponse(req, ctx, cutoffError, 400, "A cutoff date is required to knock off this Bulk PO line -- no successor PO exists yet.");
+    }
+
     const nowIso = new Date().toISOString();
     const { data: updatedLine, error } = await serviceRoleClient
       .schema("erp_procurement")
@@ -3003,6 +3023,20 @@ export async function knockOffPOHandler(
     }
 
     const lines = await getPOLines(poId);
+
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — Bulk PO has exactly one
+    // material line, so that line's material_id is the grouping key.
+    if (lines.length > 0) {
+      const cutoffError = await resolveBulkCutoffRequirement(
+        poId, toTrimmedString(po.company_id), toTrimmedString(po.vendor_id),
+        toTrimmedString(lines[0].material_id), toUpperTrimmedString(po.delivery_type),
+        toTrimmedString(body.cutoff_date),
+      );
+      if (cutoffError) {
+        return procurementErrorResponse(req, ctx, cutoffError, 400, "A cutoff date is required to knock off this Bulk PO -- no successor PO exists yet.");
+      }
+    }
+
     const nowIso = new Date().toISOString();
     const lineUpdateResult = await serviceRoleClient
       .schema("erp_procurement")
@@ -3237,6 +3271,110 @@ export async function setPoCrcpHandler(
     const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404 : code === "COMPANY_SCOPE_VIOLATION" ? 403 : code === "PROCUREMENT_PO_CRCP_STATUS_LOCKED" ? 400 : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order CRCP update failed");
   }
+}
+
+export async function setPoEffectiveDateHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const poId = getPoIdFromPath(req);
+    const body = await parseBody(req);
+    const effectiveStartDate = toTrimmedString(body.effective_start_date);
+    if (!effectiveStartDate) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_EFFECTIVE_DATE_REQUIRED", 400, "Effective Start Date is required.");
+    }
+
+    const po = await getPOById(poId);
+    if (!po) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
+    }
+    if (toUpperTrimmedString(po.delivery_type) !== "BULK") {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_EFFECTIVE_DATE_BULK_ONLY", 400, "Effective Start Date only applies to Bulk delivery type.");
+    }
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(po.company_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    const canEdit = await canMaintainPoCrcp(ctx, toTrimmedString(po.company_id));
+    if (!canEdit) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_EFFECTIVE_DATE_FORBIDDEN", 403, "You do not have edit access to this purchase order's company.");
+    }
+    const status = toUpperTrimmedString(po.status);
+    if (status === "CANCELLED" || status === "CLOSED") {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_EFFECTIVE_DATE_STATUS_LOCKED", 400, "Effective Start Date cannot be changed on a Cancelled or Closed PO.");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order")
+      .update({ effective_start_date: effectiveStartDate, last_updated_at: new Date().toISOString() })
+      .eq("id", poId);
+    if (error) {
+      throw new Error("PROCUREMENT_EFFECTIVE_DATE_UPDATE_FAILED");
+    }
+
+    return okResponse({ data: { id: poId, effective_start_date: effectiveStartDate } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_EFFECTIVE_DATE_UPDATE_FAILED";
+    const status = code === "PROCUREMENT_PO_NOT_FOUND" ? 404
+      : (code === "COMPANY_SCOPE_VIOLATION" || code === "PROCUREMENT_EFFECTIVE_DATE_FORBIDDEN") ? 403
+      : (code.includes("REQUIRED") || code.includes("BULK_ONLY") || code.includes("STATUS_LOCKED")) ? 400
+      : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Purchase order effective date update failed");
+  }
+}
+
+// §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — a Bulk PO/STO with no
+// successor (same vendor+company+material, later effective_start_date) must not
+// knock off unbounded; the caller must supply a cutoff_date at that moment instead.
+// Returns an error-code string to bubble up, or null if the cutoff requirement is
+// satisfied (either not applicable, a successor already exists, or cutoff_date was
+// supplied and persisted).
+async function resolveBulkCutoffRequirement(
+  poId: string,
+  companyId: string,
+  vendorId: string,
+  materialId: string,
+  deliveryType: string,
+  cutoffDateInput: string,
+): Promise<string | null> {
+  if (deliveryType !== "BULK") return null;
+
+  const { data: successor } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order")
+    .select("id, purchase_order_line!inner(material_id), effective_start_date")
+    .eq("company_id", companyId)
+    .eq("vendor_id", vendorId)
+    .eq("purchase_order_line.material_id", materialId)
+    .neq("id", poId)
+    .not("effective_start_date", "is", null)
+    .order("effective_start_date", { ascending: true })
+    .limit(50);
+
+  const currentPo = await getPOById(poId);
+  const currentEffectiveDate = toTrimmedString(currentPo?.effective_start_date);
+  const hasSuccessor = (successor ?? []).some(
+    (row: JsonRecord) => currentEffectiveDate && String(row.effective_start_date) > currentEffectiveDate,
+  );
+  if (hasSuccessor) return null;
+
+  if (!cutoffDateInput) {
+    return "PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED";
+  }
+
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order")
+    .update({ cutoff_date: cutoffDateInput })
+    .eq("id", poId);
+  if (error) {
+    return "PROCUREMENT_BULK_CUTOFF_DATE_UPDATE_FAILED";
+  }
+  return null;
 }
 
 // ───────────────────────────────────────────────────────────────────────

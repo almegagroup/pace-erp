@@ -9,7 +9,7 @@ import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { getGELinesForGRN, createAndPostGRNFromLine, getMaterialVendorDocNames, listTransporters } from "../procurementApi.js";
 
-const TABS = ["Receipt", "Vendor", "Documents", "Material", "Accounts", "Transporter", "Pack & shelf life"];
+const ALL_TABS = ["Receipt", "Vendor", "Documents", "Material", "Accounts", "Transporter", "Pack & shelf life"];
 
 function statusBadge(status) {
   if (status === "DONE") return <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800">DONE</span>;
@@ -169,7 +169,14 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice, onDismissN
 function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   // Restore form state from screen context (survives openScreen navigation to transporter master)
   const _saved = getActiveScreenContext()?.grnFormValues ?? {};
-  const [activeTab, setActiveTab] = useState(_saved.activeTab ?? 0);
+  // §3.9.2 "GRN Invoice Mapping" -- a Bulk GE line whose invoice genuinely
+  // wasn't known at GE time skips Documents/Accounts entirely; the invoice
+  // is captured later via the GRN List "Invoice Mapping" page instead.
+  const isBulkNoInvoice = geLine.delivery_type === "BULK"
+    && !(geLine.bulk_invoice_number && String(geLine.bulk_invoice_number).trim());
+  const TABS = isBulkNoInvoice ? ALL_TABS.filter((t) => t !== "Documents" && t !== "Accounts") : ALL_TABS;
+  const [activeTab, setActiveTab] = useState(Math.min(_saved.activeTab ?? 0, TABS.length - 1));
+  const activeTabName = TABS[activeTab];
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const { allowedRoutes } = useMenu();
@@ -187,14 +194,21 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const vendorType = geLine.vendor_type ?? "DOMESTIC";
   const isImport = vendorType === "IMPORT";
 
+  // §3.2.7 "GRN-level Ship To Leg capture" -- CRCP-general, any delivery_type.
+  const crcpEnabled = Boolean(geLine.crcp_enabled);
+  const shipToOptions = geLine.ship_to_options ?? [];
+
   // Form state — restored from screen context if returning from PROC_TRANSPORTER_MASTER
   const conversionFactor = geLine.uom_conversion_factor ?? null;
   const variableConversion = geLine.uom_variable_conversion ?? null;
   const [receivedQty, setReceivedQty] = useState(_saved.receivedQty ?? String(geLine.ge_qty ?? ""));
   const [discrepancyRemarks, setDiscrepancyRemarks] = useState(_saved.discrepancyRemarks ?? "");
   const [storageLocationId, setStorageLocationId] = useState(_saved.storageLocationId ?? "");
-  const [invoiceNumber, setInvoiceNumber] = useState(_saved.invoiceNumber ?? (geLine.csn_invoice_number ?? ""));
-  const [invoiceDate, setInvoiceDate] = useState(_saved.invoiceDate ?? (geLine.csn_invoice_date ?? ""));
+  // §3.7 "Bulk GE-Creation Drawer" carry-forward -- a Bulk GE line's own
+  // invoice fields (captured at GE time, no CSN involved) pre-fill here
+  // exactly like CSN does for the Standard/Tanker flow.
+  const [invoiceNumber, setInvoiceNumber] = useState(_saved.invoiceNumber ?? (geLine.csn_invoice_number || geLine.bulk_invoice_number || ""));
+  const [invoiceDate, setInvoiceDate] = useState(_saved.invoiceDate ?? (geLine.csn_invoice_date || geLine.bulk_invoice_date || ""));
   const [blNumber, setBlNumber] = useState(_saved.blNumber ?? (geLine.csn_bl_number ?? ""));
   const [blDate, setBlDate] = useState(_saved.blDate ?? "");
   const [boeNumber, setBoeNumber] = useState(_saved.boeNumber ?? "");
@@ -211,7 +225,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [lastMileTransporterSearch, setLastMileTransporterSearch] = useState("");
   const [lastMileTransporterName, setLastMileTransporterName] = useState(_saved.lastMileTransporterName ?? "");
   const [lastMileTransporterHighlight, setLastMileTransporterHighlight] = useState(-1);
-  const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number ?? ""));
+  const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number || geLine.bulk_lr_number || ""));
   const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
   const [hsnCode, setHsnCode] = useState(_saved.hsnCode ?? (geLine.hsn_code ?? ""));
   const [batchLotNumber, setBatchLotNumber] = useState(_saved.batchLotNumber ?? "");
@@ -219,6 +233,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [expiryType, setExpiryType] = useState(_saved.expiryType ?? "N_A");
   const [expiryDate, setExpiryDate] = useState(_saved.expiryDate ?? "");
   const [shelfLifeMonths, setShelfLifeMonths] = useState(_saved.shelfLifeMonths ?? "");
+  const [shipToCompanyId, setShipToCompanyId] = useState(_saved.shipToCompanyId ?? (shipToOptions[0]?.id ?? ""));
 
   const geQty = Number(geLine.ge_qty ?? 0);
   const receivedQtyNum = Number(receivedQty) || 0;
@@ -321,16 +336,21 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         lrNumber, lrDate,
         batchLotNumber, perPackQty,
         expiryType, expiryDate, shelfLifeMonths,
+        shipToCompanyId,
       },
     });
     openScreen("PROC_TRANSPORTER_MASTER");
   }
 
+  // §3.2.7 "GRN-level Ship To Leg capture" -- mandatory, Save disabled until picked.
+  const shipToMissing = crcpEnabled && !shipToCompanyId;
+
   async function handleSave() {
     setError("");
-    if (!storageLocationId) { setError("Storage location is required. (Tab: Receipt)"); setActiveTab(0); return; }
-    if (discrepancy !== 0 && !discrepancyRemarks.trim()) { setError("Remarks are required when received qty differs from invoice qty. (Tab: Receipt)"); setActiveTab(0); return; }
-    if (geLine.batch_tracking_required && !batchLotNumber.trim()) { setError("Batch/lot number is required for this material. (Tab: Pack & shelf life)"); setActiveTab(6); return; }
+    if (!storageLocationId) { setError("Storage location is required. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
+    if (discrepancy !== 0 && !discrepancyRemarks.trim()) { setError("Remarks are required when received qty differs from invoice qty. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
+    if (shipToMissing) { setError("Ship To Location Mentioned In Invoice is required for a CRCP-enabled document. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
+    if (geLine.batch_tracking_required && !batchLotNumber.trim()) { setError("Batch/lot number is required for this material. (Tab: Pack & shelf life)"); setActiveTab(TABS.indexOf("Pack & shelf life")); return; }
 
     setSaving(true);
     try {
@@ -339,18 +359,22 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         received_qty: receivedQtyNum,
         discrepancy_remarks: discrepancyRemarks || null,
         storage_location_id: storageLocationId,
-        invoice_number: invoiceNumber || null,
-        invoice_date: invoiceDate || null,
-        bl_number: blNumber || null,
-        bl_date: blDate || null,
-        boe_number: boeNumber || null,
-        boe_date: boeDate || null,
+        // §3.9.2 "GRN Invoice Mapping" -- a Bulk-no-invoice line never sends
+        // invoice/rate values from this form; those arrive later via the
+        // Invoice Mapping page. Explicit nulls/false, not whatever the
+        // (now-hidden) Documents/Accounts tab state happens to hold.
+        invoice_number: isBulkNoInvoice ? null : (invoiceNumber || null),
+        invoice_date: isBulkNoInvoice ? null : (invoiceDate || null),
+        bl_number: isBulkNoInvoice ? null : (blNumber || null),
+        bl_date: isBulkNoInvoice ? null : (blDate || null),
+        boe_number: isBulkNoInvoice ? null : (boeNumber || null),
+        boe_date: isBulkNoInvoice ? null : (boeDate || null),
         invoice_name: invoiceName || null,
         hsn_code: hsnCode || null,
         po_rate: geLine.po_rate ?? null,
-        rate_confirmed: rateConfirmed,
-        invoice_rate: invoiceRate ? Number(invoiceRate) : null,
-        gst_pct: gstPct ? Number(gstPct) : null,
+        rate_confirmed: isBulkNoInvoice ? false : rateConfirmed,
+        invoice_rate: isBulkNoInvoice ? null : (invoiceRate ? Number(invoiceRate) : null),
+        gst_pct: isBulkNoInvoice ? null : (gstPct ? Number(gstPct) : null),
         transporter_id: transporterId || null,
         last_mile_transporter_id: lastMileTransporterId || null,
         lr_number: lrNumber || null,
@@ -360,6 +384,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         expiry_type: expiryType,
         expiry_date: expiryType === "DATE" ? (expiryDate || null) : null,
         shelf_life_months: expiryType === "SPAN" ? (shelfLifeMonths ? Number(shelfLifeMonths) : null) : null,
+        ship_to_company_id: shipToCompanyId || null,
       };
       const result = await createAndPostGRNFromLine(payload);
       onPosted(result);
@@ -377,7 +402,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
       notices={error ? [{ key: "grn-form-err", tone: "error", message: error }] : []}
       actions={[
         { key: "cancel", label: "Cancel", tone: "neutral", onClick: onCancel },
-        { key: "save", label: saving ? "Posting…" : "Save & post GRN", tone: "primary", onClick: () => void handleSave(), disabled: saving },
+        { key: "save", label: saving ? "Posting…" : "Save & post GRN", tone: "primary", onClick: () => void handleSave(), disabled: saving || shipToMissing },
       ]}
     >
       {/* Tab bar */}
@@ -399,7 +424,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
 
       <div className="grid gap-4">
         {/* Tab 0 — Receipt */}
-        {activeTab === 0 && (
+        {activeTabName === "Receipt" && (
           <ErpSectionCard eyebrow="Receipt" title="Quantity & location">
             <div className="grid grid-cols-3 gap-3 mb-4">
               <div className="rounded border border-slate-200 bg-slate-50 p-3">
@@ -490,8 +515,34 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
           </ErpSectionCard>
         )}
 
+        {/* §3.2.7 "GRN-level Ship To Leg capture" -- CRCP-general, shown on Receipt tab */}
+        {activeTabName === "Receipt" && crcpEnabled && (
+          <ErpSectionCard eyebrow="Ship To" title="Ship To Location Mentioned In Invoice">
+            <ErpDenseFormRow label={<>Ship To company <span className="text-red-500">*</span></>}>
+              <select
+                value={shipToCompanyId}
+                onChange={(e) => setShipToCompanyId(e.target.value)}
+                className={`h-9 w-full border bg-white px-3 text-sm outline-none focus:border-sky-500 ${
+                  shipToMissing ? "border-red-400" : "border-slate-300"
+                }`}
+              >
+                <option value="">— Select —</option>
+                {shipToOptions.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.company_code} — {c.company_name} ({c.state_name || "—"})
+                  </option>
+                ))}
+              </select>
+            </ErpDenseFormRow>
+            <p className="mt-2 text-xs text-slate-500">
+              Select whichever company the vendor's physical invoice itself names as "Ship To" —
+              this can differ from the company actually receiving this GRN.
+            </p>
+          </ErpSectionCard>
+        )}
+
         {/* Tab 1 — Vendor */}
-        {activeTab === 1 && (
+        {activeTabName === "Vendor" && (
           <ErpSectionCard eyebrow="Vendor" title="Vendor details (read-only)">
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
               {[
@@ -515,7 +566,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         )}
 
         {/* Tab 2 — Documents */}
-        {activeTab === 2 && (
+        {activeTabName === "Documents" && (
           <ErpSectionCard eyebrow="Documents" title={isImport ? "Invoice + BL + BoE" : "Invoice"}>
             {!isImport && (
               <p className="mb-3 text-xs text-slate-500">Entry type: DOMESTIC — BL/BoE fields hidden.</p>
@@ -555,7 +606,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         )}
 
         {/* Tab 3 — Material */}
-        {activeTab === 3 && (
+        {activeTabName === "Material" && (
           <ErpSectionCard eyebrow="Material" title="Material identity">
             <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-3">
               {[
@@ -603,7 +654,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         )}
 
         {/* Tab 4 — Accounts */}
-        {activeTab === 4 && (
+        {activeTabName === "Accounts" && (
           <ErpSectionCard eyebrow="Accounts" title="Rate & GST">
             <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3 inline-block">
               <p className="text-[11px] text-slate-500">PO rate</p>
@@ -649,7 +700,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         )}
 
         {/* Tab 5 — Transporter */}
-        {activeTab === 5 && (
+        {activeTabName === "Transporter" && (
           <ErpSectionCard eyebrow="Transporter" title="Logistics">
             <p className="mb-3 text-xs text-slate-500">Pre-filled from CSN. Changes here sync back to CSN on post.</p>
             <div className="grid gap-3 md:grid-cols-3">
@@ -788,7 +839,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         )}
 
         {/* Tab 6 — Pack & shelf life */}
-        {activeTab === 6 && (
+        {activeTabName === "Pack & shelf life" && (
           <ErpSectionCard eyebrow="Pack & shelf life" title="Packaging & expiry">
             <div className="grid gap-3 md:grid-cols-3">
               <ErpDenseFormRow label={geLine.batch_tracking_required ? <>Batch / lot number <span className="text-red-500">*</span></> : "Batch / lot number"}>

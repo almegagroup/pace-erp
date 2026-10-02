@@ -85,6 +85,10 @@ export default function GRNListPage() {
     openScreen(OPERATION_SCREENS.PROC_GRN_POST_FLOW.screen_code, {});
   }
 
+  function openInvoiceMapping() {
+    openScreen(OPERATION_SCREENS.PROC_GRN_INVOICE_MAPPING.screen_code, {});
+  }
+
   return (
     <ErpMasterListTemplate
       eyebrow="Procurement"
@@ -95,6 +99,12 @@ export default function GRNListPage() {
           label: "Post GRN (F6)",
           tone: "primary",
           onClick: openPostFlow,
+        },
+        {
+          key: "invoice-mapping",
+          label: "Invoice Mapping",
+          tone: "neutral",
+          onClick: openInvoiceMapping,
         },
         {
           key: "refresh",

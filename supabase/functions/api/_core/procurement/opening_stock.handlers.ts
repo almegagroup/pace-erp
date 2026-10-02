@@ -1680,8 +1680,8 @@ export async function postOpeningStockDocumentHandler(
   }
 }
 
-type CascadeNode = { ledgerId: string; newRate: number };
-type CascadeStepResult = {
+export type CascadeNode = { ledgerId: string; newRate: number };
+export type CascadeStepResult = {
   ledgerId: string;
   ok: boolean;
   materialId?: string;
@@ -1805,7 +1805,10 @@ async function findDownstreamGroup(
 // cascade run — once corrected, re-targeting it is always redundant
 // (the snapshot already reflects it), so skipping an already-visited
 // target is always safe, never a missed correction.
-async function cascadeRecalculate(
+// Exported for reuse by other modules whose own posting can land at rate=0
+// pending a later correction (e.g. GRN Invoice Mapping, §3.9.2) -- this is
+// the generic §109 RM->SFG->FG cascade engine, not Opening-Stock-specific.
+export async function cascadeRecalculate(
   roots: CascadeNode[],
   actor: string,
   reason: string,

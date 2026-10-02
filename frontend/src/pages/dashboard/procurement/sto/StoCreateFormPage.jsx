@@ -181,6 +181,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
     sending_cost_center_id: "",
     receiving_cost_center_id: "",
     delivery_type: "STANDARD",
+    effective_start_date: "",
     sto_number: "",
     sto_date: new Date().toISOString().slice(0, 10),
     remarks: "",
@@ -447,6 +448,11 @@ export default function StoCreateFormPage({ openingMode = false }) {
       setError("Each rebate-enabled STO line requires a rebate rate and basis.");
       return;
     }
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" (LOCKED 2026-09-30)
+    if (form.delivery_type === "BULK" && !form.effective_start_date) {
+      setError("Effective Start Date is required for BULK stock transfer orders.");
+      return;
+    }
 
     setSaving(true);
     setError("");
@@ -461,6 +467,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
         receiving_cost_center_id: form.receiving_cost_center_id,
         remarks: form.remarks.trim() || null,
         delivery_type: form.delivery_type,
+        effective_start_date: form.delivery_type === "BULK" ? form.effective_start_date : null,
         lines: lines.map((line) => ({
           material_id: line.material_id,
           source_csn_id: line.source_csn_id || null,
@@ -782,6 +789,20 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     ))}
                   </select>
                 </label>
+                {form.delivery_type === "BULK" && (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Effective Start Date <span className="text-rose-500">*</span>
+                    <input
+                      type="date"
+                      value={form.effective_start_date}
+                      onChange={(event) => updateHeaderField("effective_start_date", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                    <span className="text-[10px] font-normal text-slate-400">
+                      Window start for validating a vendor Challan/Invoice date at Gate Entry.
+                    </span>
+                  </label>
+                )}
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Material Type
                   <select

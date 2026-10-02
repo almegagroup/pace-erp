@@ -46,6 +46,7 @@ import {
   getGateEntryHandler,
   getGateExitInboundHandler,
   listGateEntriesHandler,
+  getGePersonNameContextHandler,
   listOpenCSNsForGEHandler,
   listOpenPOsForGEHandler,
   listOpenSTOsForGEHandler,
@@ -53,14 +54,18 @@ import {
   updateGateEntryHandler,
 } from "../_core/procurement/gate_entry.handlers.ts";
 import {
+  checkExistingGrnInvoiceHandler,
   createAndPostGRNFromLineHandler,
   createGRNDraftHandler,
   getGELinesForGRNHandler,
   getGRNHandler,
   getMaterialVendorDocNamesHandler,
   listGRNsHandler,
+  listGrnInvoiceMappingCandidatesHandler,
+  mapGrnInvoiceHandler,
   postGRNHandler,
   reverseGRNHandler,
+  unmapGrnInvoiceHandler,
   updateGRNDraftHandler,
 } from "../_core/procurement/grn.handlers.ts";
 import {
@@ -292,6 +297,7 @@ import {
   knockOffPOLineHandler,
   knockOffPOHandler,
   setPoCrcpHandler,
+  setPoEffectiveDateHandler,
   listMaterialUomConversionsForProcurementHandler,
   listPOsHandler,
   listPOOrderGroupsHandler,
@@ -399,6 +405,7 @@ import {
   approveSTOAmendmentHandler,
   cancelSTOHandler,
   setStoCrcpHandler,
+  setStoEffectiveDateHandler,
   amendSTOHandler,
   closeSTOHandler,
   confirmSTOHandler,
@@ -588,6 +595,8 @@ export async function dispatchProcurementRoutes(
       return await listOpenPOsForGEHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/open-stos":
       return await listOpenSTOsForGEHandler(req, ctx);
+    case "GET:/api/procurement/gate-entries/person-name-context":
+      return await getGePersonNameContextHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/by-number":
       return await getGateEntryByNumberHandler(req, ctx);
     case "POST:/api/procurement/gate-exits/inbound":
@@ -612,6 +621,14 @@ export async function dispatchProcurementRoutes(
       return await getGELinesForGRNHandler(req, ctx);
     case "GET:/api/procurement/grns/material-vendor-doc-names":
       return await getMaterialVendorDocNamesHandler(req, ctx);
+    case "GET:/api/procurement/grns/invoice-mapping-candidates":
+      return await listGrnInvoiceMappingCandidatesHandler(req, ctx);
+    case "GET:/api/procurement/grns/invoice-mapping/check-invoice":
+      return await checkExistingGrnInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/grns/invoice-mapping/map":
+      return await mapGrnInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/grns/invoice-mapping/unmap":
+      return await unmapGrnInvoiceHandler(req, ctx);
     case "POST:/api/procurement/invoice-verifications":
       return await createIVDraftHandler(req, ctx);
     case "GET:/api/procurement/invoice-verifications":
@@ -1378,6 +1395,10 @@ export async function dispatchProcurementRoutes(
     return await setStoCrcpHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/stos\/[^/]+\/effective-date$/.test(pathname) && req.method === "PATCH") {
+    return await setStoEffectiveDateHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
     return await knockOffSTOLineHandler(req, ctx);
   }
@@ -1484,6 +1505,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/crcp$/.test(pathname) && req.method === "PATCH") {
     return await setPoCrcpHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/effective-date$/.test(pathname) && req.method === "PATCH") {
+    return await setPoEffectiveDateHandler(req, ctx);
   }
 
   return null;

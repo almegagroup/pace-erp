@@ -976,6 +976,11 @@ export async function createSTOHandler(
     if (!DELIVERY_TYPES.has(deliveryType)) {
       return stoErrorResponse(req, ctx, "STO_DELIVERY_TYPE_INVALID", 400, "delivery_type must be STANDARD, BULK, or TANKER.");
     }
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — mandatory only for BULK.
+    const effectiveStartDate = toTrimmedString(body.effective_start_date) || null;
+    if (deliveryType === "BULK" && !effectiveStartDate) {
+      return stoErrorResponse(req, ctx, "STO_EFFECTIVE_DATE_REQUIRED", 400, "Effective Start Date is required for Bulk delivery type.");
+    }
     if (!sendingCostCenterId || !receivingCostCenterId) {
       return stoErrorResponse(req, ctx, "STO_COST_CENTER_REQUIRED", 400, "Sending and receiving cost centers are required.");
     }
@@ -1037,6 +1042,7 @@ export async function createSTOHandler(
       receiving_company_id: receivingCompanyId, sending_cost_center_id: sendingCostCenterId,
       receiving_cost_center_id: receivingCostCenterId, related_csn_id: relatedCsnId,
       status: "DRAFT", is_opening_sto: isOpeningSto, delivery_type: deliveryType,
+      effective_start_date: effectiveStartDate,
       remarks: toTrimmedString(body.remarks) || null, group_number: await generatePrintGroupNumber(),
       created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id,
     };
@@ -1420,6 +1426,21 @@ export async function cancelSTOHandler(
       return stoErrorResponse(req, ctx, "STO_CANCEL_BLOCKED", 400, "STO cannot be cancelled after receipt or final closure.");
     }
 
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — cancelling a Bulk STO
+    // with no successor must not leave its document-date window unbounded.
+    if (toUpperTrimmedString(sto.delivery_type) === "BULK") {
+      const stoLines = await fetchStoLines(stoId);
+      if (stoLines.length > 0) {
+        const cutoffError = await resolveBulkCutoffRequirementSto(
+          stoId, toTrimmedString(sto.sending_company_id), toTrimmedString(sto.receiving_company_id),
+          toTrimmedString(stoLines[0].material_id), "BULK", toTrimmedString(body.cutoff_date),
+        );
+        if (cutoffError) {
+          return stoErrorResponse(req, ctx, cutoffError, 400, "A cutoff date is required to cancel this Bulk STO -- no successor STO exists yet.");
+        }
+      }
+    }
+
     const { error } = await serviceRoleClient.schema("erp_procurement").rpc("cancel_sto_atomic", {
       p_sto_id: stoId, p_reason: reason, p_actor: ctx.auth_user_id,
     });
@@ -1501,6 +1522,111 @@ async function canMaintainStoCrcp(ctx: ProcurementHandlerContext, companyId: str
   });
   if (error || !data) return false;
   return data.decision === "ALLOW";
+}
+
+// §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — STO twin of
+// po.handlers.ts's resolveBulkCutoffRequirement. STO has no external vendor, so the
+// grouping key is (sending_company_id, receiving_company_id, material_id) instead of
+// (vendor_id, company_id, material_id) -- confirmed with business owner 2026-09-30.
+// Wired into cancelSTOHandler, not knockOffSTOLineHandler -- that line-level handler
+// already hard-blocks knock-off once dispatched_qty > 0, so it can never hit the
+// in-transit-orphaned risk this mechanism exists to close; cancelSTOHandler is the one
+// that can still act on an already-DISPATCHED STO.
+async function resolveBulkCutoffRequirementSto(
+  stoId: string,
+  sendingCompanyId: string,
+  receivingCompanyId: string,
+  materialId: string,
+  deliveryType: string,
+  cutoffDateInput: string,
+): Promise<string | null> {
+  if (deliveryType !== "BULK") return null;
+
+  const { data: currentSto } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order")
+    .select("effective_start_date")
+    .eq("id", stoId)
+    .maybeSingle();
+  const currentEffectiveDate = toTrimmedString((currentSto as JsonRecord | null)?.effective_start_date);
+
+  const { data: successors } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order")
+    .select("id, effective_start_date, stock_transfer_order_line!inner(material_id)")
+    .eq("sending_company_id", sendingCompanyId)
+    .eq("receiving_company_id", receivingCompanyId)
+    .eq("stock_transfer_order_line.material_id", materialId)
+    .neq("id", stoId)
+    .not("effective_start_date", "is", null)
+    .limit(50);
+
+  const hasSuccessor = (successors ?? []).some(
+    (row: JsonRecord) => currentEffectiveDate && String(row.effective_start_date) > currentEffectiveDate,
+  );
+  if (hasSuccessor) return null;
+
+  if (!cutoffDateInput) {
+    return "STO_BULK_CUTOFF_DATE_REQUIRED";
+  }
+
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("stock_transfer_order")
+    .update({ cutoff_date: cutoffDateInput })
+    .eq("id", stoId);
+  if (error) {
+    return "STO_BULK_CUTOFF_DATE_UPDATE_FAILED";
+  }
+  return null;
+}
+
+export async function setStoEffectiveDateHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    const body = await parseBody(req);
+    const effectiveStartDate = toTrimmedString(body.effective_start_date);
+    if (!effectiveStartDate) {
+      return stoErrorResponse(req, ctx, "STO_EFFECTIVE_DATE_REQUIRED", 400, "Effective Start Date is required.");
+    }
+
+    const sto = await fetchSto(stoId);
+    if (toUpperTrimmedString(sto.delivery_type) !== "BULK") {
+      return stoErrorResponse(req, ctx, "STO_EFFECTIVE_DATE_BULK_ONLY", 400, "Effective Start Date only applies to Bulk delivery type.");
+    }
+    await assertStoVisibleToContext(ctx, sto);
+    const canEdit =
+      (await canMaintainStoCrcp(ctx, toTrimmedString(sto.sending_company_id)))
+      || (await canMaintainStoCrcp(ctx, toTrimmedString(sto.receiving_company_id)));
+    if (!canEdit) {
+      return stoErrorResponse(req, ctx, "STO_EFFECTIVE_DATE_FORBIDDEN", 403, "You do not have edit access to this stock transfer order's company.");
+    }
+    if (["CANCELLED", "CLOSED"].includes(toUpperTrimmedString(sto.status))) {
+      return stoErrorResponse(req, ctx, "STO_EFFECTIVE_DATE_STATUS_LOCKED", 400, "Effective Start Date cannot be changed on a Cancelled or Closed STO.");
+    }
+
+    const { error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .update({ effective_start_date: effectiveStartDate, last_updated_at: new Date().toISOString() })
+      .eq("id", stoId);
+    if (error) {
+      throw new Error("STO_EFFECTIVE_DATE_UPDATE_FAILED");
+    }
+
+    return okResponse({ data: { id: stoId, effective_start_date: effectiveStartDate } }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_EFFECTIVE_DATE_UPDATE_FAILED";
+    const status = code === "STO_NOT_FOUND" ? 404
+      : (code === "STO_SCOPE_VIOLATION" || code === "STO_EFFECTIVE_DATE_FORBIDDEN") ? 403
+      : (code.includes("REQUIRED") || code.includes("BULK_ONLY") || code.includes("STATUS_LOCKED")) ? 400
+      : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
+  }
 }
 
 export async function setStoCrcpHandler(
