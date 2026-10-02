@@ -101,7 +101,10 @@ export default function StockStatusChangePage() {
     { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: effectiveCompanyId },
     { enabled: Boolean(effectiveCompanyId) },
   );
-  const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: MASTER_PICKER_FETCH_LIMIT });
+  const slocQuery = useStorageLocationOptionsQuery(
+    { company_id: effectiveCompanyId, is_active: true, limit: MASTER_PICKER_FETCH_LIMIT },
+    { enabled: Boolean(effectiveCompanyId) },
+  );
 
   const materialOptions = useMemo(
     () => (materialsQuery.materials ?? []).map((material) => ({

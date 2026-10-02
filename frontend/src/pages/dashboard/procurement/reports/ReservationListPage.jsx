@@ -145,7 +145,10 @@ export default function ReservationListPage() {
     { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: effectiveCompanyId },
     { enabled: Boolean(effectiveCompanyId) },
   );
-  const slocQuery = useStorageLocationOptionsQuery({ is_active: true, limit: 1000 });
+  const slocQuery = useStorageLocationOptionsQuery(
+    { company_id: effectiveCompanyId, is_active: true, limit: 1000 },
+    { enabled: Boolean(effectiveCompanyId) },
+  );
 
   // Material column is name-only (document_name/material_name), matching
   // IN03 (§125, corrected 2026-08-19). business owner, 2026-09-26: the

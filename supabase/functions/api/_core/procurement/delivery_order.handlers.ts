@@ -315,6 +315,11 @@ export async function listDOStorageLocationOptionsHandler(req: Request, ctx: Pro
     if (!companyId || !materialId) {
       return doErrorResponse(req, ctx, "DO_LOCATION_FILTERS_REQUIRED", 400, "company_id and material_id are required.");
     }
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
 
     const { data, error } = await serviceRoleClient
       .schema("erp_inventory")
