@@ -3254,6 +3254,52 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/grn/GRNInvoiceMappingPage.jsx",
+    "dependencyCount": 5,
+    "deps": [
+      {
+        "fn": "listGrnInvoiceMappingCandidates",
+        "method": "GET",
+        "path": "/api/procurement/grns/invoice-mapping-candidates",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "checkExistingGrnInvoice",
+        "method": "GET",
+        "path": "/api/procurement/grns/invoice-mapping/check-invoice",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "mapGrnInvoice",
+        "method": "POST",
+        "path": "/api/procurement/grns/invoice-mapping/map",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "unmapGrnInvoice",
+        "method": "POST",
+        "path": "/api/procurement/grns/invoice-mapping/unmap",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "splitGrn",
+        "method": "POST",
+        "path": "/api/procurement/grns/split",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/grn/GRNListPage.jsx",
     "dependencyCount": 1,
     "deps": [
