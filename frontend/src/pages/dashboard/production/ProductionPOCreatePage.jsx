@@ -134,6 +134,7 @@ const PACKING_ERRORS = {
   PROD_PACK_QTY_INVALID: "Could not derive a valid planned quantity from the Pack BOM.",
   PROD_PACK_PM_SLOC_REQUIRED: "Select an issue storage location for every PM line.",
   PROD_PACK_PM_SLOC_INVALID: "PM storage location must be active and mapped to the selected company.",
+  PROD_PACK_MATERIAL_COMPANY_NOT_MAPPED: "Every Packing PO material must be active and mapped to the selected company.",
   PROD_PACK_SUBSTITUTE_NOT_REGISTERED: "Actual material must match a registered Pack BOM alternate group member.",
   PROD_PACK_PM_ONLY: "Only PM materials are allowed in PM lines.",
   PROD_PACK_PM_SHORTAGE: "Stock is short for one or more PM lines.",
@@ -732,12 +733,13 @@ export default function ProductionPOCreatePage() {
 
   // Non-fixed pack codes still support ad-hoc PM lines, but they now start
   // from the saved Pack BOM material template instead of an empty list.
-  // business owner, 2026-09-30: was unscoped (no company_id/status) -- leaked
-  // every company's PM materials, including inactive ones, into Packing PO create.
+  // This must follow the Packing PO's company, not `effectiveCompanyId` from
+  // the neighbouring Process PO tab. A user may be in CMP003 while creating a
+  // CMP006 Packing PO; using the former leaked CMP003-only PMs into this list.
   const packingPmMaterialsQ = useQuery({
-    queryKey: ["packing-create-pm-materials", effectiveCompanyId],
-    queryFn: () => listMaterials({ company_id: effectiveCompanyId, material_type: "PM", status: "ACTIVE", limit: 500 }),
-    enabled: !!effectiveCompanyId,
+    queryKey: ["packing-create-pm-materials", effectivePackingCompanyId],
+    queryFn: () => listMaterials({ company_id: effectivePackingCompanyId, material_type: "PM", status: "ACTIVE", limit: 500 }),
+    enabled: !!effectivePackingCompanyId,
     select: (data) => data?.data ?? [],
   });
   const packingPmMaterialOptions = useMemo(

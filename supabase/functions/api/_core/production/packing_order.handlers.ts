@@ -173,6 +173,33 @@ async function getMaterialMapByIds(
   return matMap;
 }
 
+/**
+ * Pack BOM is company-owned, but a manual PM line (or an alternate selected
+ * for a fixed BOM) arrives from the client. Keep the company boundary on the
+ * server as well as in the picker so a stale UI or crafted request cannot
+ * consume a material that is not enabled for this company.
+ */
+async function getActiveCompanyMappedMaterialIds(
+  companyId: string,
+  materialIds: string[],
+): Promise<Set<string>> {
+  const ids = [...new Set(materialIds.filter(Boolean))];
+  if (ids.length === 0) return new Set<string>();
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_company_ext")
+    .select("material_id")
+    .eq("company_id", companyId)
+    .eq("status", "ACTIVE")
+    .in("material_id", ids);
+  if (error) {
+    console.error("[packing_order.getActiveCompanyMappedMaterialIds] query failed:", JSON.stringify(error));
+    throw new Error("PROD_PACK_MATERIAL_MAPPING_LOOKUP_FAILED");
+  }
+  return new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.material_id)).filter(Boolean));
+}
+
 async function getCompanyMapByIds(ids: string[]): Promise<Map<string, JsonRecord>> {
   const companyIds = [...new Set(ids.filter(Boolean))];
   const map = new Map<string, JsonRecord>();
@@ -1714,6 +1741,20 @@ export async function createPackingOrderHandler(req: Request, ctx: ProdHandlerCo
       "PROD_PACK_MATERIAL_LOOKUP_FAILED",
       "id, material_type, base_uom_code",
     );
+
+    // Do not trust only the frontend list filter. This also covers selected
+    // alternates on fixed BOMs and every stock-bearing material derived for
+    // this Packing PO.
+    const packingMaterialIds = [
+      materialId,
+      String(sfgBomLine.material_id ?? ""),
+      ...normalizedPmLines.map((line) => line.materialId),
+      ...normalizedPmLines.map((line) => line.effectiveMaterialId),
+    ].filter(Boolean);
+    const activeCompanyMaterialIds = await getActiveCompanyMappedMaterialIds(companyId, packingMaterialIds);
+    if (packingMaterialIds.some((id) => !activeCompanyMaterialIds.has(id))) {
+      return packErr(req, ctx, "PROD_PACK_MATERIAL_COMPANY_NOT_MAPPED", 422, "Every Packing PO material must be active and mapped to the selected company");
+    }
 
     // SFG batch selection remains a Final-only step. Create should not block on
     // batch-blind total SFG availability; the exact batch/stock validation still
