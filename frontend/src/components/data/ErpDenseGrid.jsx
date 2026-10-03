@@ -106,6 +106,70 @@ function FilterIcon({ active }) {
   );
 }
 
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+// Recognizes this codebase's two existing date-string conventions (ISO
+// "YYYY-MM-DD..." and this app's own display format "DD-MM-YYYY" — see
+// AC01Page.jsx's toDDMMYYYY/toISODate) so a date column's filterValue can
+// supply either and still group correctly. Returns null for anything else
+// (falls into the tree's own "Other" bucket below, never silently dropped).
+function parseDateParts(value) {
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (iso) return { year: iso[1], month: iso[2] };
+  const ddmmyyyy = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value);
+  if (ddmmyyyy) return { year: ddmmyyyy[3], month: ddmmyyyy[2] };
+  return null;
+}
+
+// Year -> Month -> [date values] (plus an "Other" bucket for anything that
+// didn't parse as a date at all) — the grouping Excel's own date-column
+// AutoFilter shows, built fresh from whatever distinct values this column
+// currently has (so it stays dependent/cascading exactly like the flat-list
+// case does).
+function buildDateTree(values) {
+  const years = new Map();
+  const other = [];
+  for (const value of values) {
+    const parts = parseDateParts(value);
+    if (!parts) { other.push(value); continue; }
+    if (!years.has(parts.year)) years.set(parts.year, new Map());
+    const months = years.get(parts.year);
+    if (!months.has(parts.month)) months.set(parts.month, []);
+    months.get(parts.month).push(value);
+  }
+  return { years, other };
+}
+
+function getGroupCheckState(groupValues, draft) {
+  const checkedCount = groupValues.filter((v) => draft.has(v)).length;
+  if (checkedCount === 0) return "unchecked";
+  if (checkedCount === groupValues.length) return "checked";
+  return "indeterminate";
+}
+
+// One checkbox that can show Excel's third "indeterminate" state (some but
+// not all of this node's descendant dates are selected) — a plain <input
+// type="checkbox"> has no indeterminate styling of its own, so this sets
+// the DOM property directly via a ref (React has no prop for it).
+function TriStateCheckbox({ state, onChange }) {
+  const inputRef = useRef(null);
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.indeterminate = state === "indeterminate";
+  }, [state]);
+  return (
+    <input
+      ref={inputRef}
+      type="checkbox"
+      checked={state === "checked"}
+      onChange={onChange}
+      className="h-3 w-3"
+    />
+  );
+}
+
 // One column's Excel-style AutoFilter panel — a DRAFT checkbox selection
 // (only committed to the grid's real columnFilters state on "OK", mirroring
 // real Excel) so toggling individual checkboxes doesn't re-filter/re-render
@@ -114,11 +178,13 @@ function FilterIcon({ active }) {
 // ErpComboboxField's own dropdown panel — otherwise any ancestor with
 // overflow-hidden/overflow-auto (this grid's own scroll viewport included)
 // would clip it.
-function ColumnFilterPanel({ anchorMapRef, columnKey, options, selected, onApply, onClose }) {
+function ColumnFilterPanel({ anchorMapRef, columnKey, options, selected, dateHierarchy = false, onApply, onClose }) {
   const [draft, setDraft] = useState(() => new Set(selected));
   const [query, setQuery] = useState("");
   const [rect, setRect] = useState(null);
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set());
   const panelRef = useRef(null);
+  const dateTree = useMemo(() => (dateHierarchy ? buildDateTree(options) : null), [dateHierarchy, options]);
 
   useLayoutEffect(() => {
     function updateRect() {
@@ -159,9 +225,31 @@ function ColumnFilterPanel({ anchorMapRef, columnKey, options, selected, onApply
     });
   }
 
+  // Toggling a Year or Month node toggles every date it rolls up — same
+  // "check the parent, get all its children" behavior as Excel's own
+  // date-hierarchy filter.
+  function toggleGroup(groupValues) {
+    const state = getGroupCheckState(groupValues, draft);
+    setDraft((current) => {
+      const next = new Set(current);
+      if (state === "checked") groupValues.forEach((v) => next.delete(v));
+      else groupValues.forEach((v) => next.add(v));
+      return next;
+    });
+  }
+
+  function toggleExpanded(groupId) {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }
+
   if (!rect) return null;
 
-  const filteredOptions = query.trim()
+  const filteredOptions = !dateHierarchy && query.trim()
     ? options.filter((opt) => opt.toLowerCase().includes(query.trim().toLowerCase()))
     : options;
 
@@ -174,16 +262,18 @@ function ColumnFilterPanel({ anchorMapRef, columnKey, options, selected, onApply
         if (event.key === "Escape") { event.preventDefault(); onClose(); }
       }}
     >
-      <div className="border-b border-slate-200 p-1.5">
-        <input
-          autoFocus
-          type="text"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search…"
-          className="h-6 w-full border border-slate-300 px-1.5 text-xs outline-none focus:border-sky-500"
-        />
-      </div>
+      {dateHierarchy ? null : (
+        <div className="border-b border-slate-200 p-1.5">
+          <input
+            autoFocus
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search…"
+            className="h-6 w-full border border-slate-300 px-1.5 text-xs outline-none focus:border-sky-500"
+          />
+        </div>
+      )}
       <div className="flex gap-2 border-b border-slate-200 px-1.5 py-1">
         <button type="button" className="text-[11px] text-sky-700 hover:underline" onClick={() => setDraft(new Set(options))}>
           Select All
@@ -193,7 +283,78 @@ function ColumnFilterPanel({ anchorMapRef, columnKey, options, selected, onApply
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-1">
-        {filteredOptions.length === 0 ? (
+        {dateHierarchy ? (
+          dateTree.years.size === 0 && dateTree.other.length === 0 ? (
+            <p className="px-1.5 py-2 text-slate-400">No values</p>
+          ) : (
+            <>
+              {[...dateTree.years.keys()].sort().map((year) => {
+                const months = dateTree.years.get(year);
+                const yearValues = [...months.values()].flat();
+                const yearState = getGroupCheckState(yearValues, draft);
+                const yearExpanded = expandedGroups.has(year);
+                return (
+                  <div key={year}>
+                    <div className="flex items-center gap-1 px-1 py-0.5 hover:bg-slate-50">
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(year)}
+                        className="h-3 w-3 flex-shrink-0 text-center text-[10px] leading-none text-slate-500"
+                      >
+                        {yearExpanded ? "−" : "+"}
+                      </button>
+                      <label className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <TriStateCheckbox state={yearState} onChange={() => toggleGroup(yearValues)} />
+                        <span className="truncate">{year}</span>
+                      </label>
+                    </div>
+                    {yearExpanded
+                      ? [...months.keys()].sort().map((month) => {
+                        const dayValues = months.get(month);
+                        const monthState = getGroupCheckState(dayValues, draft);
+                        const monthId = `${year}-${month}`;
+                        const monthExpanded = expandedGroups.has(monthId);
+                        return (
+                          <div key={monthId}>
+                            <div className="flex items-center gap-1 py-0.5 pl-4 hover:bg-slate-50">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpanded(monthId)}
+                                className="h-3 w-3 flex-shrink-0 text-center text-[10px] leading-none text-slate-500"
+                              >
+                                {monthExpanded ? "−" : "+"}
+                              </button>
+                              <label className="flex min-w-0 flex-1 items-center gap-1.5">
+                                <TriStateCheckbox state={monthState} onChange={() => toggleGroup(dayValues)} />
+                                <span className="truncate">{MONTH_NAMES[Number(month) - 1] ?? month}</span>
+                              </label>
+                            </div>
+                            {monthExpanded
+                              ? dayValues.sort().map((value) => (
+                                <label key={value} className="flex items-center gap-1.5 py-0.5 pl-8 hover:bg-slate-50">
+                                  <input type="checkbox" checked={draft.has(value)} onChange={() => toggleValue(value)} className="h-3 w-3" />
+                                  <span className="min-w-0 truncate" title={value}>{value}</span>
+                                </label>
+                              ))
+                              : null}
+                          </div>
+                        );
+                      })
+                      : null}
+                  </div>
+                );
+              })}
+              {dateTree.other.length > 0
+                ? dateTree.other.sort().map((value) => (
+                  <label key={value || "__blank__"} className="flex items-center gap-1.5 px-1.5 py-0.5 hover:bg-slate-50">
+                    <input type="checkbox" checked={draft.has(value)} onChange={() => toggleValue(value)} className="h-3 w-3" />
+                    <span className="min-w-0 truncate" title={value}>{value || "(blank)"}</span>
+                  </label>
+                ))
+                : null}
+            </>
+          )
+        ) : filteredOptions.length === 0 ? (
           <p className="px-1.5 py-2 text-slate-400">No values</p>
         ) : (
           filteredOptions.map((value) => (
@@ -292,7 +453,15 @@ export default function ErpDenseGrid({
   // column with buttons, nothing meaningful to filter). A column with a
   // custom `render` should supply `filterValue(row)` (falls back to
   // `copyValue`, then the raw `row[column.key]`, same precedent as
-  // copyValue's own fallback chain).
+  // copyValue's own fallback chain). The dropdown's own search box narrows
+  // the checkbox list live on every keystroke (same autosuggest feel as
+  // Excel/Google Sheets' own filter search). A date column should set
+  // `filterType: "date"` on top of this — its dropdown becomes a
+  // Year/Month/Day tree (tri-state checkboxes, expand/collapse) instead of
+  // the flat list, matching Excel's own date-column AutoFilter; parses
+  // either this codebase's ISO or DD-MM-YYYY date-string convention from
+  // `filterValue`/`copyValue`, anything else falls into an "Other" bucket
+  // rather than being silently dropped.
   columnFilter = false,
 }) {
   const effectiveCellNavigate = cellNavigate || rangeSelect;
@@ -696,6 +865,7 @@ export default function ErpDenseGrid({
                             columnKey={column.key}
                             options={getAvailableValuesForColumn(column)}
                             selected={columnFilters[column.key] ?? new Set(getAvailableValuesForColumn(column))}
+                            dateHierarchy={column.filterType === "date"}
                             onApply={(draftSet) => applyColumnFilter(column, draftSet)}
                             onClose={() => setOpenFilterColumnKey(null)}
                           />
