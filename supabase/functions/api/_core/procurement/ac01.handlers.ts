@@ -389,6 +389,7 @@ function buildListRow(
   costLinesByLc: Map<string, JsonRecord[]>,
   deductionLinesByLc: Map<string, JsonRecord[]>,
   deductionTypeNameMap: Map<string, string>,
+  splitIntoGrnNumbersMap: Map<string, string[]>,
 ): JsonRecord {
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
@@ -424,9 +425,20 @@ function buildListRow(
   const referenceType = paymentTerms?.reference_date_type as JsonRecord | JsonRecord[] | undefined;
   const referenceTypeCode = Array.isArray(referenceType) ? referenceType[0]?.code : referenceType?.code;
 
+  // §3.9.5 "GRN Split" (2026-10-02) — a REVERSED GRN (whether from an
+  // ordinary reversal or from a Split) is not payable anymore; the ordinary
+  // due-date math below means nothing once the receipt itself has been
+  // undone. The frontend uses `status`/`is_reversed` to grey the row out and
+  // `split_into_grn_numbers` to show which new GRNs it was split into.
+  const isReversed = toTrimmedString(grn.status).toUpperCase() === "REVERSED";
+
   return {
     grn_id: grn.id,
     grn_number: grn.grn_number,
+    status: grn.status ?? null,
+    is_reversed: isReversed,
+    split_source_grn_id: grn.split_source_grn_id ?? null,
+    split_into_grn_numbers: splitIntoGrnNumbersMap.get(String(grn.id)) ?? null,
     csn_number: csn?.csn_display_number ?? csn?.csn_number ?? null,
     company_id: grn.company_id,
     company_code: company?.company_code ?? null,
@@ -482,11 +494,13 @@ function buildListRow(
     // Revised Payment Date (manual override) always wins when set; otherwise
     // the calculated due-date from payment terms. TRUE "date actually paid"
     // still needs AC02's Vendor Ledger — that's payment_status below, not this.
-    actual_payment_date: grn.revised_payment_date ?? computeActualPaymentDate(
+    // REVERSED (incl. §3.9.5 Split originals) is never payment-relevant —
+    // the receipt itself no longer stands, so no due date applies.
+    actual_payment_date: isReversed ? null : (grn.revised_payment_date ?? computeActualPaymentDate(
       grn,
       toUpperTrimmedString(referenceTypeCode),
       Number(paymentTerms?.credit_days ?? 0),
-    ),
+    )),
     revised_payment_date: grn.revised_payment_date ?? null,
     freight_type: po?.freight_term ?? null,
     transporter_id: grn.transporter_id ?? null,
@@ -590,7 +604,7 @@ export async function listAC01GRNsHandler(
         .map((id) => String(id)),
     )];
 
-    const [materials, vendors, companies, purchaseOrders, landedCosts, qaDocuments, csnRows, transporters] = await Promise.all([
+    const [materials, vendors, companies, purchaseOrders, landedCosts, qaDocuments, csnRows, transporters, splitIntoRows] = await Promise.all([
       fetchInChunks<JsonRecord>(materialIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("material_master")
           .select("id, material_name, external_code, base_uom_code").in("id", chunk)),
@@ -615,6 +629,12 @@ export async function listAC01GRNsHandler(
       fetchInChunks<JsonRecord>(transporterIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("transporter_master")
           .select("id, transporter_code, transporter_name").in("id", chunk)),
+      // §3.9.5 "GRN Split" (2026-10-02) — reverse lookup: for each row on this
+      // page, which new GRN(s) (if any) it was split into. INDEPENDENT of the
+      // other bulk fetches here (§8B), keyed purely off the page's own ids.
+      fetchInChunks<JsonRecord>(grnIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+          .select("grn_number, split_source_grn_id").in("split_source_grn_id", chunk)),
     ]);
 
     const paymentTermIds = [...new Set(purchaseOrders.map((po) => String(po.payment_term_id)).filter(Boolean))];
@@ -711,11 +731,20 @@ export async function listAC01GRNsHandler(
       if (!deductionLinesByLc.has(key)) deductionLinesByLc.set(key, []);
       deductionLinesByLc.get(key)!.push(line);
     }
+    const splitIntoGrnNumbersMap = new Map<string, string[]>();
+    for (const row of splitIntoRows) {
+      const key = String(row.split_source_grn_id);
+      const grnNumber = toTrimmedString(row.grn_number);
+      if (!grnNumber) continue;
+      if (!splitIntoGrnNumbersMap.has(key)) splitIntoGrnNumbersMap.set(key, []);
+      splitIntoGrnNumbersMap.get(key)!.push(grnNumber);
+    }
 
     const items = rows.map((row) =>
       buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
+        splitIntoGrnNumbersMap,
       ),
     );
 
@@ -835,11 +864,17 @@ export async function getAC01GRNHandler(
       }
     }
 
+    // §3.9.5 "GRN Split" (2026-10-02) — same REVERSED guard as buildListRow's
+    // list-row version: a reversed receipt is never payment-relevant.
+    const isReversed = toTrimmedString(grn.status).toUpperCase() === "REVERSED";
+
     // freight_type (for the FOR-aware party UI hint) + the payment-terms
     // reference date, same source buildListRow's list-row version uses.
     let freightType: string | null = null;
-    let actualPaymentDate: string | null = grn.revised_payment_date ? String(grn.revised_payment_date) : null;
-    if (grn.po_id) {
+    let actualPaymentDate: string | null = isReversed
+      ? null
+      : (grn.revised_payment_date ? String(grn.revised_payment_date) : null);
+    if (!isReversed && grn.po_id) {
       const { data: po } = await serviceRoleClient
         .schema("erp_procurement").from("purchase_order")
         .select("freight_term, payment_term_id")
@@ -904,8 +939,18 @@ export async function getAC01GRNHandler(
     const suggestedPayables = computeSuggestedPayables(grn, costLines, deductionLines);
     const landedCostTotalForView = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
 
+    // §3.9.5 "GRN Split" — if this GRN was the original that got split, show
+    // which new GRN(s) it became. Same reverse-lookup as the list endpoint.
+    const { data: splitIntoRows } = await serviceRoleClient
+      .schema("erp_procurement").from("goods_receipt")
+      .select("grn_number").eq("split_source_grn_id", grnId);
+    const splitIntoGrnNumbers = ((splitIntoRows ?? []) as JsonRecord[])
+      .map((row) => toTrimmedString(row.grn_number)).filter(Boolean);
+
     return okResponse({
       ...grn,
+      is_reversed: isReversed,
+      split_into_grn_numbers: splitIntoGrnNumbers.length > 0 ? splitIntoGrnNumbers : null,
       item_name: materialName,
       external_code: materialExternalCode,
       supplier_name: vendorName,

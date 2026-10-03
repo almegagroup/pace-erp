@@ -382,6 +382,14 @@ export function setStoCrcp(id, data) {
   return fetchProcurement("PATCH", `/api/procurement/stos/${encodeURIComponent(id)}/crcp`, data);
 }
 
+export function setPoEffectiveDate(id, data) {
+  return fetchProcurement("PATCH", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/effective-date`, data);
+}
+
+export function setStoEffectiveDate(id, data) {
+  return fetchProcurement("PATCH", `/api/procurement/stos/${encodeURIComponent(id)}/effective-date`, data);
+}
+
 export function listCSNs(params) {
   return fetchProcurement("GET", "/api/procurement/csns", undefined, params);
 }
@@ -497,6 +505,10 @@ export function listOpenSTOsForGE(params) {
   return fetchProcurement("GET", "/api/procurement/gate-entries/open-stos", undefined, params);
 }
 
+export function getGePersonNameContext() {
+  return fetchProcurement("GET", "/api/procurement/gate-entries/person-name-context");
+}
+
 export function createGateExitInbound(data) {
   return fetchProcurement("POST", "/api/procurement/gate-exits/inbound", data);
 }
@@ -530,6 +542,35 @@ export function getMaterialVendorDocNames(materialId, vendorId) {
 
 export function reverseGRN(id, data) {
   return fetchProcurement("POST", `/api/procurement/grns/${encodeURIComponent(id)}/reverse`, data);
+}
+
+// §3.9.2 "GRN Invoice Mapping" — Bulk-only, Store maps a vendor invoice to
+// one or more already-posted GRNs after the fact.
+export function listGrnInvoiceMappingCandidates(companyId, tab) {
+  return fetchProcurement("GET", "/api/procurement/grns/invoice-mapping-candidates", undefined, {
+    company_id: companyId,
+    tab,
+  });
+}
+
+export function checkExistingGrnInvoice(companyId, invoiceNumber) {
+  return fetchProcurement("GET", "/api/procurement/grns/invoice-mapping/check-invoice", undefined, {
+    company_id: companyId,
+    invoice_number: invoiceNumber,
+  });
+}
+
+export function mapGrnInvoice(data) {
+  return fetchProcurement("POST", "/api/procurement/grns/invoice-mapping/map", data);
+}
+
+export function unmapGrnInvoice(data) {
+  return fetchProcurement("POST", "/api/procurement/grns/invoice-mapping/unmap", data);
+}
+
+// §3.9.5 "GRN Split" (1 GRN : many Invoices) — Bulk-only.
+export function splitGrn(data) {
+  return fetchProcurement("POST", "/api/procurement/grns/split", data);
 }
 
 export function listQADocuments(params) {

@@ -471,40 +471,50 @@ UI / Backend / DB-level design happens **separately, when that point's build tur
   GE-creation flow/page for STO doesn't exist yet today; since STO's cross-company GE depends
   on the same CSN/consignment-ownership fixes this phase already covers, building the STO GE
   page as a standalone step first would risk rework once Phase B lands. Build them together.**
-- **Phase C (reordered 2026-09-27, was Phase B — moved after CSN on business-owner
-  instruction):** Point 3.2.6 — the actual PTO redesign/implementation to record CRCP
-  cross-company movement. **Point 3.2.6's `Final Design` was only ever a decision lock
-  ("finish, don't retire") — the real mechanism design is still open and substantial; PTO
-  has its own significant remaining work beyond CRCP.** Business owner's explicit reasoning
-  for sequencing PTO after CSN: PTO's own design can't be properly worked out until the
-  CSN-side ownership/attribution model (Phase B) is clear — PTO's cross-company recording
-  shape depends on how Phase B ends up representing ownership.
-- **Phase D:** Point 3.3 — the same CRCP mechanism (Phase A) applied to Bulk's CSN-less case.
-  Needs Phase A; benefits from running after Phase C (PTO) rather than in parallel, since
-  Bulk has no CSN alternative at all — it relies on PTO for tracking even more than the
-  CSN-based path does. **This is where the Bulk GE-page redesign (business owner, 2026-09-27)
-  belongs — Bulk's own GE-creation flow adapted for CRCP's direct-`po_line_id` path — no
-  separate build step needed, it's the same work as Point 3.3 itself.**
-- **Phase D.5 (new, 2026-09-27):** the GRN "Ship To Leg" mechanism (captured under Point 3.2.7
-  above — a new GRN tab/field, "SHIP TO LOCATION MENTIONED IN INVOICE"). Sequenced **after**
-  Phase B (STO GE) and Phase D (Bulk GE) have both landed, so the field's dropdown/visibility
-  behavior can be validated against all three GE paths (Standard/Tanker via CSN, STO, Bulk)
-  before Phase E's settlement engine starts consuming it. **Business owner explicitly declined
-  to build this alongside/ahead of Phase A (2026-09-27)** despite the timing/backfill risk
-  flagged under Point 3.2.7 (data captured per-GRN, unrecoverable once posted without it) — a
-  deliberate trade-off in favor of finishing the GE redesigns first, one phase at a time, over
-  rushing this field in early.
-- **Early/parallel validation (do before locking Phase E's invoice-date design):** Point 3.4.4
+- **Phase D (moved ahead of Phase C, business owner, 2026-09-28):** Point 3.3 — the same CRCP
+  mechanism (Phase A) applied to Bulk's CSN-less case, including the Bulk GE-page redesign
+  (Bulk's own GE-creation flow adapted for CRCP's direct-`po_line_id` path — no separate build
+  step, it's the same work as Point 3.3 itself). Needs Phase A. **Accepted trade-off:** Phase D
+  still relies on PTO (Phase C, below) for full cross-company movement *tracking/recording* —
+  building Phase D first means Bulk's CRCP GE-access works immediately, but the actual
+  recorded-movement/settlement trail for those Bulk GEs stays incomplete until the merged
+  Phase C lands. Business owner explicitly chose this order over waiting for PTO first.
+- **Phase D.5 — reversed (business owner, 2026-10-02):** the GRN "Ship To Leg" mechanism
+  (Final Design locked under Point 3.2.7 above — new GRN field, "SHIP TO LOCATION MENTIONED
+  IN INVOICE") is now built **immediately, in the same batch as Phase A/D**, not deferred —
+  superseding the 2026-09-27 decision to wait until after Phase B+D landed. Both Phase B (STO
+  GE) and Phase D (Bulk GE) are already implemented (not yet Prod) by the time this reversal
+  was made, so the original sequencing concern (validate the field against all three GE paths
+  before building) is moot — all three paths already exist to validate against, in the same
+  pending batch. This also closes the timing/backfill risk flagged under Point 3.2.7 (data
+  captured per-GRN, unrecoverable once posted without it) before any of Phase A/B/D reaches
+  Prod.
+- **Early/parallel validation (do before locking Phase C's invoice-date design):** Point 3.4.4
   + Point 3.5.5 together — one shared investigation into whether the system tolerates
   cross-month/cross-FY backdating the way Tally does.
-- **Phase E:** Point 3.2.7 + Point 3.2.8 + Point 3.4.2 together — Return-vs-Invoice
-  settlement, designed as a general STO/PTO capability from the start (not CRCP-only),
-  with aggregate-balance support built in from day one (not bolted on later for the weekly
-  invoice case). Needs Phase B/C/D/D.5 to exist first (something must be recorded before it can
-  be settled). Point 3.4.3 (freight/components on the invoice) rides on top of this, once the
-  invoice mechanism itself exists. **Note:** for the Scenario 7 multi-invoice-commingled edge
-  case specifically (not the general CRCP case), Phase E's settlement amount also needs Point
-  3.9.2's output as an input — see Track 3 below.
+- **Phase C (merged with the former Phase E, business owner, 2026-09-28) — PTO + Settlement,
+  one unified design:** Point 3.2.6 + Point 3.2.7 + Point 3.2.8 + Point 3.4.2 together, not
+  sequentially. **Why merged:** business owner's own insight — PTO isn't just a movement-record
+  page, it is meant to be the place from which the Invoice-vs-Return/Settlement decision itself
+  gets made, and it must also support a plain, deliberate company-to-company transfer with no
+  CRCP/vendor trigger at all (exactly Point 3.2.8's generalization). Designing PTO's mechanism
+  (Point 3.2.6) without already knowing the settlement decision it has to drive (Points
+  3.2.7/3.2.8) would risk building the wrong shape and redoing it once Phase C/E's original
+  split was attempted separately — so they are locked together as one design, covering:
+  CRCP-triggered cross-company GR capture, plain inter-company transfer, and the
+  Return-vs-Invoice settlement decision surfaced from the same page, with aggregate-balance
+  support built in from day one (not bolted on later for the weekly invoice case). **`Final
+  Design` for Point 3.2.6 remains only a decision lock ("finish, don't retire") until this
+  merged design session actually happens — the real mechanism is still fully open.** Sequenced
+  after Phase D/D.5 per business owner's explicit build-order choice above (not a hard
+  dependency — PTO's own design doesn't strictly require Bulk's GE work to exist first, this is
+  a scheduling choice). Point 3.4.3 (freight/components on the invoice) rides on top of this,
+  once the invoice mechanism itself exists. **Note:** for the Scenario 7 multi-invoice-
+  commingled edge case specifically (not the general CRCP case), this phase's settlement amount
+  also needs Point 3.9.2's output as an input — see Track 3 below.
+- **Phase E — MERGED INTO PHASE C ABOVE (2026-09-28).** Kept as a heading only so
+  `Point 3.2.7`/`3.2.8`/`3.4.2` references elsewhere in this doc still resolve to a phase name
+  — the design and build both happen as part of Phase C now, not as a separate later phase.
 
 *Track 2 — Bulk Vendor-Invoicing / AC01 Bulk Cost-Component Mapper, Scenario 5 — fully
 independent of Track 1, can run in parallel or first:*
@@ -827,6 +837,193 @@ case with the same mechanism.
     added — migration count still 609, matching Phase A's last verified state).
   - **Not performed:** live UI click-through (no dev login in this environment).
 
+**Phase D — Implementation Log (2026-09-30)**
+
+> Covers Point 3.3 (Bulk CRCP — confirmed already works unchanged, no
+> `delivery_type` branching anywhere in the CRCP allow-list check) plus the two
+> new subsections above: "Bulk PO/STO — Effective Date + Cutoff mechanism" and
+> "Bulk GE-Creation Drawer — Design". Migration:
+> `supabase/migrations/20260930040511_bulk_po_sto_effective_date_ge_fields.sql`
+> — applied to **Dev only** (project `ytapuwiqicmvpanmzelb`), reconciled via
+> `UPDATE supabase_migrations.schema_migrations SET version = '20260930040511' ...`
+> + `NOTIFY pgrst, 'reload schema'`. **Not yet applied to Prod.** Not yet
+> committed/pushed, not yet click-tested live (no dev login in this
+> environment). **GRN-side carry-forward of the `bulk_*` fields is
+> deliberately out of scope for this phase** — business owner's own
+> sequencing: "eta implement hoye gele amra GRN side e jabo" (once this is
+> implemented, we move to the GRN side) — that is the next phase, not part of
+> Phase D.
+>
+> **✅ GRN-side carry-forward done 2026-10-02** — see "GRN Invoice Mapping +
+> Ship-To Leg + Bulk Carry-Forward — Implementation Log" under §3.9.2 below.
+
+- **Migration** adds: `purchase_order.effective_start_date`/`cutoff_date`,
+  `stock_transfer_order.effective_start_date`/`cutoff_date` (both Bulk-only,
+  nullable), `gate_entry.person_name` (general, all GE types), and
+  `gate_entry_line.bulk_challan_number`/`bulk_challan_date`/
+  `bulk_invoice_number`/`bulk_invoice_date`/`bulk_container_number`/
+  `bulk_ewaybill_number`/`bulk_lr_number` (Bulk-only capture, since Bulk has
+  no CSN to carry these). `rst_number` already existed as a generic
+  gate-entry-line column pre-dating this phase — reused as-is, not
+  duplicated.
+- **Backend — `po.handlers.ts`:**
+  - `createPOHandler` — parses `effective_start_date`, hard-blocks creation
+    when `delivery_type === "BULK"` and it's missing, persists it on the
+    `purchase_order` insert.
+  - New `setPoEffectiveDateHandler` (`PATCH
+    /api/procurement/purchase-orders/:id/effective-date`) — BULK-only,
+    company-scoped, gated on the existing `canMaintainPoCrcp()` EDIT check
+    (Phase B's own write-ACL fix, reused rather than duplicated), blocked on
+    CANCELLED/CLOSED — editable any time otherwise, per the design's "same as
+    CRCP" rule.
+  - New `resolveBulkCutoffRequirement(poId, companyId, vendorId, materialId,
+    deliveryType, cutoffDateInput)` — looks for a successor PO (same
+    vendor+company+material, a later `effective_start_date`); if none exists
+    and no `cutoff_date` was supplied, returns
+    `PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED`; otherwise persists the supplied
+    cutoff and returns null (no-op for non-BULK).
+  - Wired into `knockOffPOLineHandler` (using the target line's own
+    `material_id`) and `knockOffPOHandler` (using the PO's single line, since
+    a Bulk PO always has exactly one).
+- **Backend — `sto.handlers.ts`:** STO twin of the above —
+  `createSTOHandler` parses/validates/persists `effective_start_date`; new
+  `setStoEffectiveDateHandler` (`PATCH /api/procurement/stos/:id/effective-date`)
+  gated on `canMaintainPoCrcp`'s STO twin `canMaintainStoCrcp` (either sending
+  or receiving company); new `resolveBulkCutoffRequirementSto`, grouped by
+  `(sending_company_id, receiving_company_id, material_id)` since STO has no
+  external vendor. **Wired into `cancelSTOHandler`, not
+  `knockOffSTOLineHandler`** — traced via code reading that the line-level
+  handler already hard-blocks knock-off once `dispatched_qty > 0`
+  (`STO_LINE_ALREADY_DISPATCHED`), so it can never reach the
+  in-transit-orphaned risk this mechanism exists to close; `cancelSTOHandler`
+  *can* cancel an already-DISPATCHED STO, making it the actual correct hook
+  point.
+- **Backend — `gate_entry.handlers.ts` (Bulk GE-Creation Drawer):**
+  - `isSecurityDepartmentUser(ctx)` — resolves the caller's department via
+    `ctx.context.workContextId` → `erp_acl.work_contexts.department_id` →
+    `erp_master.departments.department_name === 'SECURITY'` (confirmed live
+    against Dev that a real "SECURITY" department exists per company:
+    DPT028/038/048/058).
+  - `resolveGePersonName(ctx, personNameInput)` — non-Security: auto-fills
+    from `erp_core.signup_requests.name` (name only, no user code, per
+    business owner's explicit "without ID, Name chole asbe"); Security:
+    requires manual input, errors `GE_PERSON_NAME_REQUIRED` if blank. Wired
+    into `createGateEntryHandler`, `person_name` added to the `gate_entry`
+    insert.
+  - New `GET /api/procurement/gate-entries/person-name-context` handler
+    (`getGePersonNameContextHandler`) — lets the Create GE page prefill/lock
+    the field before the user ever submits, without duplicating the
+    Security-department resolution logic client-side.
+  - `resolveBulkDocumentWindowUpperBound(table, documentId, groupingFilters,
+    materialId, currentEffectiveDate, currentCutoffDate)` — generic
+    PO/STO window-upper-bound resolver (successor's `effective_start_date`,
+    or this document's own `cutoff_date` if none); `validateBulkDocumentDate`
+    checks a vendor-document date against `[effective_start_date, upper
+    bound)`.
+  - `validateAndPrepareBulkLineFields(...)` — the actual GE-line gate: at
+    least one of Challan/Invoice/Container/Ewaybill Number is mandatory, a
+    filled Challan/Invoice Number makes its own paired Date mandatory,
+    whichever date(s) are filled are checked against the window. Wired into
+    **both** the PO branch and the STO branch of `createGateEntryHandler`
+    (BULK only — TANKER stays on the existing CSN-based path).
+  - `listOpenPOsForGEHandler`/`listOpenSTOsForGEHandler` extended: PO lines
+    now carry `ordered_qty`→`expected_qty`; both POs and STOs, when
+    `delivery_type === "BULK"`, get a computed `bulk_window_upper_bound`
+    attached server-side (via the same `resolveBulkDocumentWindowUpperBound`,
+    resolved in parallel per §8B) — lets the frontend drawer validate dates
+    in real time with zero extra round trips per keystroke.
+- **Routes + ACL registry:** `PATCH .../purchase-orders/:id/effective-date`
+  and `PATCH .../stos/:id/effective-date` added to
+  `procurement.routes.ts`/`route-acl-registry.ts` reusing
+  `PROC_PO_CREATE`/`PROC_STO_CREATE:EDIT` (Phase B's own pattern, not a new
+  resource code); `GET .../gate-entries/person-name-context` added reusing
+  `PROC_GATE_ENTRY_CREATE:VIEW`. `route-acl-registry-guard.mjs` confirms every
+  dispatched route still resolves.
+- **Frontend — `POCreatePage.jsx`/`StoCreateFormPage.jsx`:** new "Effective
+  Start Date" field, shown only when `delivery_type === "BULK"`, mandatory
+  (blocks `handleSubmit` with an inline error otherwise), sent as
+  `effective_start_date` (null for non-BULK).
+- **Frontend — `EffectiveDateEditModal.jsx`** (new, shared like
+  `CrcpEditModal.jsx`): single date field, wired into both `PODetailPage.jsx`
+  and `STODetailPage.jsx` as a new header action ("Set Effective Date" /
+  "Effective Date: <date>"), shown only for BULK, same edit-guard as CRCP
+  (not CANCELLED/CLOSED).
+- **Frontend — Cutoff Date retry flow (`PODetailPage.jsx`'s
+  `handleKnockOffPo`/`handleKnockOffLine`, `STODetailPage.jsx`'s
+  `handleCancel`):** each now attempts the action first; on
+  `PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED`, prompts for a Cutoff Date
+  (`openActionPrompt`, `YYYY-MM-DD` validated client-side) and retries once
+  with `cutoff_date` included — no new modal component needed, reuses the
+  existing text-prompt store.
+- **Frontend — `GateEntryCreatePage.jsx` (Bulk GE-Creation Drawer):**
+  - New "Person Name" header field — auto-filled read-only for non-Security
+    users (fetched via the new `getGePersonNameContext()` API call on mount),
+    blank + editable + mandatory for Security users; blocks the main Save
+    button when blank for a Security user.
+  - `selectRef` restructured: BULK sensing (PO **or** STO, checked before the
+    existing STO/PO branches) now opens a new single-item-shaped
+    `bulkDrawer` instead of the CSN picker or the multi-row STO drawer — Bulk
+    always has exactly one material regardless of document type.
+  - New `bulkDrawer` state + `openBulkDrawer`/`closeBulkDrawer`/
+    `updateBulkDrawer`/`confirmBulkDrawer`/`getBulkDrawerErrors`. The drawer
+    shows the 6 header fields (Challan/Invoice Number+Date, Container
+    Number, Ewaybill Number) + optional LR Number + RST Number, the vendor
+    name (PO) or nothing (STO, no external vendor), the document's own
+    Effective Start Date for context, and a single-row table (Material/UOM
+    read-only, Ordered/Expected Qty read-only, GE Quantity editable).
+    `getBulkDrawerErrors` mirrors the backend's
+    `validateAndPrepareBulkLineFields` exactly (same mandatory-identifier and
+    paired-date rules) plus the window check against
+    `item.effective_start_date`/`item.bulk_window_upper_bound` — runs on
+    every keystroke (no debounce needed, pure in-memory comparison), driving
+    **real-time red English validation messages** under each offending field
+    and disabling the drawer's own "Save to line" button whenever any error
+    exists, per the business owner's explicit final instruction. The same
+    `getBulkDrawerErrors` check is reused for the main "Save GE" button
+    (disabled while any Bulk line in the grid still has an unresolved error)
+    and inside `handleSave`'s own pre-submit validation loop, so all three
+    surfaces (drawer, row grid, final submit) enforce identically.
+  - Re-opening a Bulk row (the row's "Edit Bulk details" button) prefills the
+    drawer from that row's already-captured `bulk*` fields instead of
+    starting blank.
+  - `handleSave`'s per-line payload construction branches cleanly on a new
+    `isBulkLine(l)` module-level helper (checks `l.po?.delivery_type ??
+    l.sto?.delivery_type`) — the pre-existing code only ever checked
+    `l.po?.delivery_type`, meaning a Bulk-type **STO** was silently never
+    detected as Bulk at all before this fix (a real latent gap, not
+    introduced by this phase — STO Bulk sensing simply never existed until
+    now).
+- **Verification performed:**
+  - `deno check` on the full touched-backend set
+    (`po.handlers.ts`+`sto.handlers.ts`+`gate_entry.handlers.ts`+
+    `procurement.routes.ts`+`route-acl-registry.ts` together), git-stash
+    before/after, location-diffed — **99 errors before, 99 after, zero new**
+    (individual-file baselines: 19 for the PO/STO pair, 12 for
+    `gate_entry.handlers.ts` alone — both unchanged).
+  - `npx eslint` on every touched/added frontend file — 0 new errors (one
+    pre-existing unrelated warning on `PODetailPage.jsx`'s `csns`
+    dependency, confirmed via diff to predate this phase).
+  - Full guard suite: `hardcoded-role-check-guard`, `jsx-no-undef-guard`,
+    `frontend-payload-guard`, `wrong-company-source-guard`,
+    `company-scope-guard`, `company-scope-write-acl-guard`,
+    `resource-code-domain-guard`, `stock-posting-guard`,
+    `route-acl-registry-guard` — all green, zero new findings.
+  - `migration-integrity-check.mjs` run against Dev: this migration's own
+    row (`20260930040511_bulk_po_sto_effective_date_ge_fields`) reconciled
+    correctly, confirmed by direct query. Remote count is 611 vs local 610 —
+    entirely the pre-existing, unrelated `20260928060000
+    inward_qa_test_line_skip_flag` drift flagged earlier in this session
+    (no local file exists anywhere in git history for it); not this phase's
+    migration, not fixed here (out of scope, someone else's gap).
+  - `dependency-provisioning-check.mjs` (SU24): this phase adds no new
+    frontend page and no new ACL resource code (the new PATCH/GET routes all
+    reuse existing `PROC_PO_CREATE`/`PROC_STO_CREATE`/
+    `PROC_GATE_ENTRY_CREATE` resource codes), so no new dependency-mapping
+    gap is expected or was found.
+  - **Not performed:** live UI click-through (no dev login in this
+    environment); Prod migration apply (needs explicit go-ahead, per
+    standing dev-then-prod workflow).
+
 **Point 3.2.6 — PO12 (PTO) role**
 - Business: the cross-company GE/GRN movement needs to be recorded somewhere structured.
 - System: PTO (`pto.handlers.ts`, Gate-23, L6) exists, fully built, 0 real Prod rows —
@@ -840,6 +1037,12 @@ case with the same mechanism.
   PTO's cross-company recording shape depends on how the CSN-side ownership/attribution model
   ends up being represented, so designing PTO first would risk a mismatch. See the
   Recommended Build Sequence above — this is now Phase C, not Phase B.
+  **Further correction (business owner, 2026-09-28):** this point's design is now **merged**
+  with the former Phase E (Points 3.2.7/3.2.8/3.4.2) into one unified "Phase C" design — PTO
+  must be designed together with the Return-vs-Invoice settlement decision it is meant to
+  drive, not separately (see Point 3.2.7's own note and the Recommended Build Sequence above).
+  Phase D (Bulk's CRCP variant) was also moved ahead of this merged Phase C in build order —
+  a scheduling choice, not a design dependency change.
 
 **Point 3.2.7 — Settlement: Return vs. Invoice**
 - Business: after a cross-company GE/GRN, the two companies must formally settle — either a
@@ -854,37 +1057,77 @@ case with the same mechanism.
   Return/Invoice-mixing rule has no enforcement anywhere.
 - Final Design: ⏳ NOT YET LOCKED
 
-**GRN-level "Ship To Leg" capture — proposed mechanism (business owner, 2026-09-27), a
-promising resolution for the settlement-chain problem, pending refinement/sequencing
-sign-off, not itself a `Final Design` lock yet:**
+**Phase C — Design Session Started (2026-10-02) — GST legal grounding reframes "Return vs.
+Invoice" from an equal business choice into a legally-ordered default + exception.**
+
+Business owner supplied external reference material (GST Bill-To/Ship-To treatment) that
+reframes Point 3.2.7:
+
+- Under GST law, a Bill-To (A) ≠ Ship-To (B, as named on the vendor's documents) ≠ Actual
+  Physical Receiver (C) scenario is **legally two separate supplies**, not one: **Leg 1**
+  (Vendor → Company A — the vendor's own invoice; A is the "deemed recipient" and claims
+  ITC on it) and **Leg 2** (Company A → Company C — a **mandatory** Tax Invoice to
+  regularize the fact that the goods physically sit with C, not A).
+- **Reframes "Return vs. Invoice" as NOT a free business choice for the default case.**
+  Invoice (Leg 2, A→C) is the GST-mandatory path whenever C **retains/consumes** the
+  goods — which is the normal case, since C-retaining-the-goods is the entire point of
+  CRCP. **"Return" only applies when C does NOT want to keep the goods and sends them back
+  physically** (to A, or onward) — a genuine reversal, no Leg-2 invoice needed since nothing
+  was transacted at C's end.
+- **The external material's own "Action Item"** (Company C should record an internal
+  Material Receipt Note acknowledging vehicle number + vendor's delivery challan) **is
+  already satisfied by Phase A-D's existing CRCP work** — the CRCP-shared company (C) is
+  the one who actually performs the GE+GRN (not A), and that GE/GRN already captures
+  vehicle number, vendor delivery challan/invoice, etc. No new mechanism needed for this
+  part of the legal requirement.
+- **Open structural question raised, not yet resolved:** in the CRCP flow, stock physically
+  posts under **Company C's own GRN** (C does its own GE+GRN, per Phase A's
+  `isCrcpSharedCompany` gate) — **Company A never holds physical stock for this material at
+  all.** So Leg 2 (A→C) may need **zero `stock_ledger` movement** on either side (A never
+  had stock to move out; C's stock, already GRN-posted, doesn't change) — making Leg 2 a
+  **pure financial/value settlement document** (Qty × Rate + GST), not a physical transfer.
+  This puts PTO's (PO12's) own physical-movement-type design (P301/P303/P305, Point 3.2.6)
+  in question for this specific use case — two options floated, **neither decided yet:**
+  1. Leg 2 becomes a **new "Cross-Company Settlement Invoice"** mechanism, reusing the
+     existing Sales Invoice/PGI pattern (§113.15) but with no stock posting at all — PTO
+     stays untouched, scoped to its own original L6 (physical plant transfer) purpose only.
+  2. PTO itself gets redesigned to also support an **invoice-only / no-movement mode** for
+     this specific Leg-2 case, alongside its existing physical-movement modes.
+- **Next:** business owner has a PO12-specific design idea to bring to this question before
+  Option 1 vs 2 gets decided — continuing below.
+
+**GRN-level "Ship To Leg" capture — Final Design: ✅ LOCKED 2026-10-02 (business owner +
+design session). Scope: CRCP-general — applies to a GRN against any CRCP-enabled PO/STO,
+any `delivery_type` (Standard/Tanker/Bulk/STO alike), not Bulk-specific.**
 - Replaces the earlier "predetermined Leg 2/3 at CRCP setup" idea (rejected — unworkable for
   Scenario 1's ad-hoc/first-come-first-served pool, since the actual split is unknowable in
   advance). Instead, capture the real Ship-To **per GRN, at the moment the actual vendor
   invoice is in hand** — no prediction, no pre-declaration, purely actual-data-driven (same
   principle as the settlement-leg-amount discussion above).
-- New GRN tab/field, **"SHIP TO LOCATION MENTIONED IN INVOICE"** — a dropdown, defaulting to
-  the PO/STO's own issuing company; the GRN-creating user reads the vendor's physical invoice
-  and selects whichever company that invoice actually names as Ship-To.
-- This alone gives Phase E's settlement engine all three data points it needs, for both the
-  direct (Scenario 1) and chained (Scenario 2) cases, with zero manual leg-assignment
-  anywhere: **Bill-To** = the PO/STO's own `company_id` (always, unchanged); **Invoice-stated
-  Ship-To** = this new GRN field; **Actual physical receiver** = the GRN's own company (already
-  known — whichever CRCP-shared company is performing that GRN).
-- **Refinements to confirm before build:** (a) dropdown options must be constrained to the
-  PO/STO's own issuing company **plus only its CRCP-allowed companies**
-  (`purchase_order_crcp_company`/`stock_transfer_order_crcp_company`), never any company in the
-  system; (b) the field/tab should stay hidden (fixed to the issuing company) when
-  `crcp_enabled = false` — no ambiguity to resolve in the non-CRCP case.
-- **⚠️ Timing/sequencing flag (raised in this same discussion, not yet resolved):** this data
-  is captured **per-transaction, at GRN time** — unlike a config field, it cannot be
-  reconstructed retroactively once a GRN has already posted without it (same class of problem
-  as §109's Opening Rate/WAR discussion — data missed at transaction time is permanently
-  missed). If Phase A (CRCP flag, already implemented) goes live in Prod before this GRN field
-  exists, every cross-company GRN raised in the gap will permanently lack this ground-truth
-  data, with no way to backfill later. This argues for building this GRN capture **alongside
-  or immediately after Phase A**, not deferred all the way to Phase E's full
-  settlement-mechanism build — even though the actual *use* of this data (billing/settlement)
-  still belongs to Phase E. Needs an explicit sequencing decision before Phase A ships to Prod.
+- New GRN field, **"SHIP TO LOCATION MENTIONED IN INVOICE"** — a dropdown, single-select.
+  Shows **Company Code, Name, and State** per option (same display convention as
+  `CrcpEditModal`'s own company list). An English helper line tells the user to pick whichever
+  company the physical invoice itself names as Ship-To.
+- **Default** = the PO/STO's own issuing company.
+- **Dropdown options constrained to the PO/STO's own issuing company plus only its
+  CRCP-allowed companies** (`purchase_order_crcp_company`/`stock_transfer_order_crcp_company`)
+  — never any other company in the system.
+- **Hidden entirely when `crcp_enabled = false`** — no field/tab shown at all in the
+  non-CRCP case (implicitly the issuing company, no ambiguity to resolve).
+- **Mandatory when `crcp_enabled = true`** — GRN's Save button stays disabled until a value
+  is selected, same real-time-gating discipline as Phase D's own Bulk Effective Date/GE-drawer
+  validation.
+- This alone gives the settlement engine (§3.2.7/merged Phase C) all three data points it
+  needs, for both the direct (Scenario 1) and chained (Scenario 2) cases, with zero manual
+  leg-assignment anywhere: **Bill-To** = the PO/STO's own `company_id` (always, unchanged);
+  **Invoice-stated Ship-To** = this new GRN field; **Actual physical receiver** = the GRN's own
+  company (already known — whichever CRCP-shared company is performing that GRN).
+- **Timing — build now, not deferred:** this data is captured **per-transaction, at GRN
+  time** — unlike a config field, it cannot be reconstructed retroactively once a GRN has
+  already posted without it (same class of problem as §109's Opening Rate/WAR discussion —
+  data missed at transaction time is permanently missed). Business owner confirmed
+  (2026-10-02): build this **now**, in the same batch as Phase A/D, before either reaches
+  Prod — not deferred to the full Phase C settlement-mechanism build.
 
 **Point 3.2.8 — Generalization (not CRCP-only)**
 - Business: this Return-vs-Invoice choice applies to any inter-company stock movement,
@@ -1024,7 +1267,91 @@ sign-off, not itself a `Final Design` lock yet:**
   3.2.3-3.2.5 mechanisms must be redesigned as pure GE/GRN + PTO logic for Bulk, not
   CSN-based; the "known upfront" Bill-To≠Ship-To pattern does **not** exempt Bulk from needing
   Point 3.2.9's post-approval editability.
-- Final Design: ⏳ NOT YET LOCKED
+- Final Design: ✅ **LOCKED 2026-09-30 (business owner + design session), pending code+Prod
+  blocker-check before implementation.** Same CRCP mechanism as Phase A (flag + company
+  allow-list + shared pool), applied to Bulk with **no CSN involved at all** — Bulk simply
+  never creates a CSN, so Point 3.2.1's GE-creation allow-list check is the only piece that
+  needed to extend to Bulk; Points 3.2.3-3.2.5 (CSN split logic) do not apply here by
+  construction. Bulk-type STO (`stock_transfer_order.delivery_type = 'BULK'`) gets the
+  identical treatment — same drawer/field mechanism, applied to the STO branch of
+  `createGateEntryHandler` instead of the PO branch. **Explicitly parked, not part of this
+  lock:** the future CRCP settlement/invoice-adjustment STO (merged Phase C) is a
+  differently-shaped, later mechanism — not to be conflated with ordinary Bulk-type STO
+  dispatch handled here.
+
+**Bulk PO/STO — Effective Date + Cutoff mechanism (LOCKED 2026-09-30, business owner).**
+Resolves the real gap found while designing Bulk's CRCP flow: a Bulk PO has no CSN, so
+(unlike the CSN-based path, where `knockOffPOLineHandler`'s `inactivateCsnsForPo(...,
+eligibleStatuses: ["ORD"])` safely leaves an already-in-transit CSN alone) knocking off a
+Bulk PO line has **no way to know** whether a shipment is still legitimately in transit under
+that PO — verified live in `knockOffPOLineHandler`, which has no equivalent safeguard for
+Bulk. A qty-based "declare pending in-transit amount" fix was considered and **rejected**
+(business owner: would require the team to keep phoning the vendor to find out, not workable).
+**Locked mechanism instead — self-enforcing from the vendor's own paperwork, no
+vendor-communication dependency:**
+- New field **Effective Start Date** on Bulk PO/STO (distinct from PO/STO Date), set at
+  creation, editable later at any time — same post-approval editability as CRCP (Point 3.2.9).
+- A PO's validity window is **[its own Effective Start Date, the next chronologically-later
+  Effective Start Date for the same vendor+company+material combination)** — the moment a new
+  PO (say PO B, effective 1 Dec) is created for the same vendor/company/material as an
+  existing PO (PO A, effective 1 Oct), PO A's window automatically closes at 1 Dec — no manual
+  end-date entry needed on PO A.
+- If a PO/STO has no successor yet and gets manually knocked off/closed, the window does
+  **not** stay unbounded — knock-off itself must capture a cutoff date at that moment (same
+  role as a successor PO's effective date would have played).
+- **What actually gets validated, and when:** the check is against the **vendor's own
+  document date** (Challan/Invoice date entered at GE — see the drawer design below), **not**
+  the GE's own calendar date. GE can physically happen any day (a delayed truck is fine); what
+  gets rejected is a vendor document dated on/after the window's upper bound being posted
+  against the earlier PO. This makes knock-off/close no longer the authority that blocks GE —
+  the Effective Date window is.
+- **UI requirement:** entering a document date that falls outside the PO's effective window
+  must show an immediate, real-time **red-colored English validation message** right at the
+  point of entry (not deferred to a save-time error) and the GE drawer's Save action must stay
+  **disabled** while any locked validation condition (this one, or the drawer's own
+  field-completeness rules below) is unmet.
+
+**Bulk GE-Creation Drawer — Design (LOCKED 2026-09-30, business owner + design session).**
+Same trigger pattern as the STO drawer (Phase B) — sensing a Bulk PO/STO in the main GE page's
+`"PO / STO *"` cell opens a center drawer — but shaped for Bulk's single-material,
+no-CSN reality.
+- **Header (synced two-way with the main GE page's own header fields — editing here updates
+  there and vice versa):**
+  - 6 fields: **Challan Number + Challan Date**, **Invoice Number + Invoice Date**,
+    **Container Number**, **Ewaybill Number**. At least one of the four identifier fields
+    (Challan/Invoice/Container/Ewaybill Number) is mandatory; whichever of Challan/Invoice
+    Number is filled makes its paired Date mandatory too (Container/Ewaybill have no paired
+    date).
+  - **LR Number** — a separate, **optional** field (not mandatory); if filled, carries forward
+    to GRN like the other identifier fields.
+  - **Person Name** (general GE header feature, not Bulk-specific — applies to every GE):
+    mandatory field for who is physically filling the GE. If the logged-in user's department
+    is **not** Security, this auto-fills with that user's own name, read-only (name only, no
+    ID shown). If the department **is** Security, the field stays blank but mandatory — the
+    actual person's name must be typed manually, and the line table below stays inaccessible
+    until it is.
+  - **Vendor name** displayed read-only once the PO is selected (resolved from the PO, never
+    a raw ID, per CLAUDE.md §8A).
+  - **Container Number's master-list mapping/cross-tally** is explicitly **Phase 2** (matches
+    the already-locked Point 3.6) — this lock only covers capturing the field, not validating
+    it against a container master list.
+- **Line table (Bulk has exactly one material, so this is effectively one row):** Material
+  (read-only), UOM, Ordered/Expected Qty (the PO line's remaining `open_qty`, reference only),
+  **GE Quantity = the vendor document's own stated quantity** (not weight-derived — Gross
+  Weight already lives at the main GE header per the existing page, no need to duplicate it
+  here; Tare Weight is **not** captured at GE at all — it is only known at Gate Exit, once the
+  truck leaves empty, via the existing `gate_exit_inbound`/`GEX` mechanism, so Net Weight
+  cannot be computed until then either), **RST Number** (important, carries forward to GRN).
+- **Main GE page impact:** once confirmed, the extra Bulk-specific columns (Challan/Invoice/
+  Container/Ewaybill/LR + their dates, RST Number) appear in the main line table **only for
+  Bulk-type rows** — Standard/Tanker/STO rows are unaffected.
+- **GRN carry-forward:** every one of these fields (Challan/Invoice/Container/Ewaybill/LR
+  numbers+dates, RST Number) must carry forward into GRN without re-entry — GRN is where
+  Transporter and (after Gate Exit) Tare/Net Weight get captured, not GE.
+- **Save-button gating:** the drawer's Save stays disabled whenever any locked condition is
+  unmet — no identifier field filled, a filled Challan/Invoice Number missing its paired date,
+  Person Name empty for a Security-department user, or a document date outside the Effective
+  Date window (shown immediately in red, per the UI requirement above).
 
 **Point 3.4.1 — Mother-issuer cross-company read visibility**
 - Business: CMP003 (issuing/"mother" company) needs to see CMP011's/CMP005's cross-company
@@ -1188,19 +1515,30 @@ sign-off, not itself a `Final Design` lock yet:**
   sufficient here; Point 3.9.2's mechanism is required on top before Point 3.2.7's
   settlement can even be computed for this case. See §3.9.1 for the full reasoning.
 
-**Point 3.9.2 — PO↔Invoice Quantity Mapping (sequential/FIFO balance-fill)**
-- Business: each invoice carries a total quantity; incoming GRN quantity should sequentially
-  fill open invoice balances, letting one GRN split across multiple invoice numbers when it
-  straddles a balance boundary — a commercial-convention match, not physical traceability.
-- System: no such mechanism exists; `goods_receipt_line.invoice_number` is a single free-text
-  field, can't represent a GRN split across invoices.
-- Gap: net-new mechanism, structurally separate from the Bulk Cost Component Mapper (Point
-  3.5.8) — this is base material-value/invoice attribution, not landed-cost components.
-- Final Design: 🟡 **MOSTLY LOCKED 2026-09-27** — sequential balance-fill mechanism agreed;
-  open item: fill-sequence must anchor to the vendor's real `invoice_date`/`invoice_number`
-  order (not GRN-entry timestamp), confirmed to work correctly even when adjacent invoices in
-  the queue belong to different companies — but the business owner has not yet given final
-  explicit sign-off on `invoice_date`/`invoice_number` as the anchor field. See §3.9.2.
+**Point 3.9.2 — PO↔Invoice Quantity Mapping**
+- Business: GRN happens off Delivery Challan/Container Number (invoice not yet known); the
+  real vendor Invoice arrives later and must be mapped onto the GRN(s) it covers — confirmed
+  (business owner, 2026-10-01/02) as exactly 3 scenarios: (1) Standard/Tanker's straight
+  upfront invoice (CSN-carried, already works, untouched); (2) 1 GRN : 1 Invoice, mapped
+  after the fact; (3) 1 Invoice : many GRNs, same invoice number stamped onto every one.
+  **Confirmed: never the reverse (one GRN split across two invoices)** — this simplifies the
+  original sequential/FIFO balance-fill idea away entirely; no invoice-balance tracking, no
+  splitting, no anchor-field-order question (that whole concern is now moot, since nothing
+  fills sequentially anymore).
+- System: `goods_receipt.invoice_number`/`invoice_date` already exist (header-level, verified
+  via code — AC01's own display/filter logic reads exactly these, `ac01.handlers.ts:434-435`)
+  and are **already optional/nullable at GRN-creation time**, both frontend
+  (`GRNPostFlow.jsx`'s `handleSave()` never requires them) and backend (`grn.handlers.ts`'s
+  insert payload always falls back to `null`). AC01's own existing `save_ac01_grn_cost` RPC
+  (migration `20260826100000_ac01_considered_qty.sql`) already updates these same fields
+  post-creation via plain `COALESCE`, proven not to disturb the original stock posting —
+  confirms post-hoc invoice capture is a safe, already-exercised pattern, not a new risk.
+- Gap: no dedicated **bulk mapping UI** exists (only AC01's own one-GRN-at-a-time cost-entry
+  flow touches these fields today); GRN's own Documents/Accounts tabs still force the user to
+  decide Invoice/Rate at GRN-creation time, even when (Bulk, invoice not yet known) there is
+  nothing to enter yet.
+- Final Design: ✅ **LOCKED 2026-10-02 (business owner + design session, blocker-checked
+  against live code, no blockers found).** Full mechanism below — "GRN Invoice Mapping".
 
 **Point 3.9.3 — Mapping visibility + write-authority**
 - Business: whoever performs the PO↔Invoice mapping needs to see GRNs posted under other
@@ -1275,43 +1613,456 @@ This is a **two-layer problem**, and CRCP (§3.2) only ever addressed one layer:
   necessary but not sufficient for this scenario** — it needs an additional mechanism on top
   (§3.9.2) to even know how much needs settling.
 
-#### 3.9.2 — PO↔Invoice Quantity Mapping (sequential/FIFO balance-fill) — resolves Layer 1
+#### 3.9.2 — GRN Invoice Mapping — Final Design (LOCKED 2026-10-02)
 
-**Locked mechanism (business owner's proposal, 2026-09-27):** each invoice carries a **total
-invoice quantity**, entered as a running balance. Incoming GRN quantity gets matched against
-open invoice balances **sequentially** — filling one invoice's remaining balance before
-spilling over into the next. A single GRN's quantity can therefore legitimately end up
-attributed across **two or more different invoice numbers** if it straddles a balance
-boundary (e.g. a 30MT GRN against an invoice with only 25MT balance remaining: 25MT closes
-that invoice, the remaining 5MT rolls over and opens against the next invoice in sequence).
-This is a **commercial-convention** match (like open-item/FIFO invoice reconciliation in
-accounting), not a claim of physical truth — which is exactly right, since physical truth is
-unrecoverable per §3.9.1.
+**Scope: Bulk-only, for now.** Applies to a GRN whose source GE line's `bulk_invoice_number`
+was blank (invoice genuinely not known at GE time) — not a blanket `delivery_type=BULK` rule.
+A Bulk GRN whose GE line *did* capture an invoice (vendor's invoice travelled with the truck)
+is unaffected — it keeps the normal Documents/Accounts tabs, pre-filled, exactly like today.
 
-**Why this feeds Layer 2's settlement (§3.2.7), not replaces it:** once this mechanism
-establishes the *true ownership* breakdown of a shipment (e.g. 20MT CMP011 / 10MT CMP005,
-from matching the GRN against Invoice 1+2+3), comparing that against the *actual physical
-receipt* per company (e.g. 15MT/15MT) gives the exact cross-company quantity that needs
-CRCP-tracking (via PTO, §3.2.6) and Return-or-Invoice settlement (§3.2.7) — in this example,
-5MT of CMP011's material physically ended up at CMP005 and must be settled. **Without §3.9.2,
-§3.2.7's settlement amount would be uncomputable for this multi-invoice-per-shipment case.**
+**Why no sequential/FIFO balance-fill (superseding the earlier 2026-09-27 proposal):**
+business owner confirmed (2026-10-01/02) the real pattern is always one of exactly 3
+scenarios — (1) Standard/Tanker's upfront invoice, CSN-carried, already works; (2) 1 GRN : 1
+Invoice, mapped after the fact; (3) 1 Invoice : many GRNs, same invoice number stamped onto
+every one — and **never** the reverse (one GRN split across two invoices). This removes the
+entire balance-tracking/sequencing/anchor-field question that the original proposal needed —
+there is nothing to split, so there is nothing to sequence.
 
-**Sequencing-correctness requirement (open, needs explicit lock):** the fill-sequence must
-follow the **vendor's own real invoice-issue order** (`invoice_date`/`invoice_number`), not
-an incidental system order like GRN-entry timestamp — a wrong sequence risks misattributing
-one company's material to another company's invoice, especially where invoices from
-*different* companies are adjacent in the fill queue (confirmed this still works correctly
-in that case too, as long as the sequence itself is anchored to the vendor's real order, not
-to which company an invoice belongs to). **Still needs the business owner's explicit
-confirmation of `invoice_date`/`invoice_number` as the anchor field before this is fully
-locked.**
+**Blocker-check against live code (no blockers found):**
+- `goods_receipt.invoice_number`/`invoice_date` are header-level fields, already optional at
+  GRN-creation time in both `GRNPostFlow.jsx` (`handleSave()` never requires them) and
+  `grn.handlers.ts` (insert always falls back to `null`).
+- `rate_confirmed=false` is an **already-existing, intentional** fallback — GRNPostFlow's own
+  Accounts tab already says "GRN will post at rate = 0. Accounts team confirms rate later." —
+  i.e. stock posting (`post_stock_movement`) is already invoice/rate-independent by design.
+- AC01's own `save_ac01_grn_cost` RPC (migration `20260826100000_ac01_considered_qty.sql`)
+  already updates `invoice_number`/`invoice_date`/rate on a GRN post-creation via plain
+  `COALESCE`, proven not to touch the original stock posting — post-hoc invoice/rate capture
+  is already a safe, exercised pattern in this codebase, not a new risk.
+- The one real consequence of posting at `rate=0`: `stock_snapshot.valuation_rate` (WAR)
+  dilutes toward zero until corrected — same class of problem §109's Recalculate engine
+  (`erp_inventory.recalculate_valuation_at_row`) already exists for, including its proven
+  4-level RM→SFG-QI→SFG-UNRESTRICTED→FG cascade (real-data-verified, 2026-07-24). **Decision
+  (business owner, 2026-10-02): the Map action below calls this automatically** — not left as
+  a separate manual step that risks being skipped.
 
-**Structural note:** this mapping mechanism needs its own dedicated home — it is **not** the
-same as the Bulk Cost Component Mapper (§3.5.8, Point 3.5.8), which is about landed-cost
-*components* (freight/unloading/etc.), not about the GRN's own base material-value/invoice
-attribution. `goods_receipt_line.invoice_number` (today a single free-text field) cannot
-represent a GRN split across two invoice numbers — this needs its own design, separate from
-but related to Point 3.5.8.
+**GRN-creation-side change:** for a GE line with blank `bulk_invoice_number`, `GRNPostFlow.jsx`
+removes its Documents and Accounts tabs entirely (not just makes them optional) — tab
+list/indexing/cycling (Alt+[/Alt+]) and tab-referencing error messages adjust to the shrunk
+list. The create payload defaults `invoice_number=null`, `invoice_date=null`,
+`rate_confirmed=false`, `invoice_rate=null`, `gst_pct=null` with zero user input. Stock still
+posts immediately (at rate 0, per the existing fallback) — only the commercial/invoice side is
+deferred.
+
+**The Invoice Mapping page** (a dedicated page, not a drawer — decided for column clarity: a
+drawer's left/right split would cramp the many-column table into half the screen width):
+reached via a new "Invoice Mapping" button on the GRN List page.
+- **Header (top of page):** Invoice Number, Invoice Date, Invoice Quantity, Rate — the same
+  commercial fields the standard GRN flow already has, just relocated here for the
+  no-invoice-yet case. A **"Map to existing Invoice"** toggle: instead of typing fresh values,
+  the user types just the Invoice Number and clicks **"Check"** — the system fetches that
+  invoice's already-stored Date/Qty/Rate (pulled from any GRN already carrying that invoice
+  number) into these header fields, read-only/prefilled, ready to map more GRNs against it
+  (the Scenario-3 "add one more truck to an invoice already in use" case).
+- **Table (full width, below the header):** `ErpDenseGrid` with Excel-style keyboard
+  navigation. Columns: row checkbox, Vendor Name, Material Name, Quantity (per GRN), GRN
+  Number, PO Number, Truck Number, Container Number, Delivery Challan Number. A "Select All"
+  checkbox in the header row.
+- **One single all-column search bar** above the table (not per-field filters) — free text,
+  matches against any of the listed columns, filters rows live. Deliberately kept to one box
+  for speed, per business owner's own framing ("user er time oi search bar e banchabe").
+- **Live running total** of Quantity across every currently-checked row — lets the user
+  visually confirm the selected GRNs' total matches the typed Invoice Quantity before mapping.
+- **Two tabs:**
+  - **Pending** (default) — GRNs with `invoice_number IS NULL`. Select one (Scenario 2) or
+    many (Scenario 3) rows, fill/confirm the header, click **"Map"**.
+  - **Mapped** — same table + same single search bar, with Invoice Number and Invoice Date
+    added as extra columns. Selecting rows and clicking **"Unmap"** clears their
+    invoice/rate fields and returns them to Pending.
+- **"Map" action (per selected GRN, one batch action):** sets `invoice_number`, `invoice_date`,
+  `invoice_rate` (the typed Rate), `rate_confirmed = true`, then calls
+  `recalculate_valuation_at_row` against that GRN's own stock-ledger IN-posting to replay its
+  value forward from 0 to the real rate (cascading into any downstream RM→SFG/FG consumption
+  that happened in the window before the invoice arrived, per §109's existing engine).
+- **"Unmap" action (LOCKED 2026-10-02 — Option 1, immediate reverse):** clears
+  `invoice_number`/`invoice_date`/`invoice_rate`/`rate_confirmed` back to the pre-mapping state
+  **and** calls `recalculate_valuation_at_row` again on the same stock-ledger row, this time
+  with rate 0 — reversing the valuation back to the pre-mapping state too, so a GRN's displayed
+  valuation always matches its current mapped/unmapped reality, with no stale-rate window.
+  **Verified safe, not a new risk:** `recalculate_valuation_at_row`'s one-time-use lock was
+  already deliberately removed on 2026-08-21 (migration
+  `20260821090000_ac01_grn_landed_cost_hub.sql`, comment: "Repeatable valuation correction —
+  remove the one-time-use lock so a GRN's rate can be [revised again]") — precisely because
+  AC01's own landed-cost flow already needed to revise a GRN's rate more than once. Map→Unmap→
+  Map-again on the same row is exactly the same repeat-call shape, already exercised by that
+  existing path.
+- **Access/ACL:** reuses the existing `PROC_GRN_LIST` resource code (no new resource code) —
+  `VIEW` for opening/searching the page, `EDIT` for Map/Unmap — consistent with GRN's own
+  existing single-resource/multi-action-tier pattern (`PUT /grns/:id` already uses `EDIT` for
+  corrections). No new cross-company grant needed: the page is naturally scoped to the
+  logged-in user's own company's GRNs (same company-scope as GRN List today) — matches the
+  business rule that the receiving/unloading company's own Store performs this mapping, not
+  the issuing company (resolves Point 3.9.3's "who maps" question for this specific action;
+  that point's broader cross-company-visibility question, for other uses, stays open).
+
+**Why this still feeds Layer 2's settlement (§3.2.7), simplified:** once a GRN carries its
+real invoice (now always 1:1 per GRN, never split), comparing the invoice's own Bill-To against
+the GRN's actual receiving company still gives the cross-company quantity that needs
+CRCP-tracking (via PTO, §3.2.6) and Return-or-Invoice settlement (§3.2.7) — the mechanism is
+simpler than originally proposed (no balance-fill math) but still supplies the same data Layer
+2 needs.
+
+**Structural note (still valid):** this mapping mechanism is **not** the same as the Bulk Cost
+Component Mapper (§3.5.8), which is about landed-cost *components* (freight/unloading/etc.),
+not the GRN's own base material-value/invoice attribution — kept as its own page, reusing only
+the same UI *pattern* (filterable multi-select + batch action), not the same table or backend.
+
+**GRN Invoice Mapping + Ship-To Leg + Bulk Carry-Forward — Implementation Log (2026-10-02)**
+
+> Covers Point A (GE→GRN carry-forward of Bulk fields), Point B (the GRN
+> Invoice Mapping mechanism above), and Point C (§3.2.7's "Ship To Location
+> Mentioned In Invoice" field) — all three built together in one batch, per
+> business owner's explicit sequencing decision. Built directly (no
+> subagent delegation), verified statically (`deno check`/`eslint`/full
+> frontend `build`/all 9 relevant `.mjs` guards/`migration-integrity-check`),
+> **not yet applied to Prod, not yet click-tested live** (no dev login in
+> this environment).
+
+- **Migration (Dev only,
+  `supabase/migrations/20261002100000_grn_bulk_carry_forward_and_ship_to.sql`):**
+  adds `goods_receipt.bulk_challan_number`/`bulk_challan_date`/
+  `bulk_container_number`/`bulk_ewaybill_number`/`rst_number` (Bulk-only
+  carry-forward target — Invoice Number/Date/LR Number reuse the GRN's own
+  pre-existing columns instead of duplicating them) and
+  `goods_receipt.ship_to_company_id` (CRCP-general, no FK, same convention
+  as `company_id`/`vendor_id` on the same table). Applied via
+  `mcp__Supabase__apply_migration`, reconciled to the local filename's
+  timestamp, `NOTIFY pgrst, 'reload schema'` run,
+  `migration-integrity-check.mjs` confirmed local 611 files/md5
+  `fb570c9e10635505394fc34a39ecd6e9` — Dev remote carries 2 **pre-existing,
+  unrelated** drift rows (`20260928060000 inward_qa_test_line_skip_flag`,
+  `20260930120000 pi_block_company_scope`), neither touched by this batch;
+  this migration's own row verified correctly reconciled by a direct diff
+  query.
+- **Backend — `grn.handlers.ts` (Point A, carry-forward):**
+  `createAndPostGRNFromLineHandler`'s `goods_receipt` insert now falls back
+  to `geLine.bulk_invoice_number`/`bulk_invoice_date`/`bulk_lr_number` when
+  the request body doesn't supply them, and unconditionally copies
+  `geLine.bulk_challan_number`/`bulk_challan_date`/`bulk_container_number`/
+  `bulk_ewaybill_number`/`rst_number` — no re-entry at GRN time for any of
+  these, matching the GE-Creation Drawer's own capture.
+- **Backend — `grn.handlers.ts` (Point B, Invoice Mapping):** four new
+  handlers — `listGrnInvoiceMappingCandidatesHandler` (GET, Pending/Mapped
+  tabs via `resolveBulkGrnCandidates()`, bulk-resolves vendor/material/PO/
+  STO/gate-entry names, `fetchInChunks`-safe throughout per §8E),
+  `checkExistingGrnInvoiceHandler` (GET, the "Map to existing Invoice"
+  lookup), `mapGrnInvoiceHandler` and `unmapGrnInvoiceHandler` (POST,
+  batch-action over `grn_ids[]`, DEPENDENT sequential loop per §8B since
+  each GRN's own `cascadeRecalculate()` call can touch shared downstream
+  SFG/FG state). Both write handlers resolve `company_id` from the fetched
+  GRN rows (not the session's active company) and were caught + fixed by
+  `company-scope-write-acl-guard.mjs` for missing a secondary EDIT-level
+  ACL check at that specific company — now call
+  `canMaintainCompanyResource(ctx, grnCompanyId, "PROC_GRN_LIST", "EDIT")`
+  per-GRN before mutating (§8A pattern #2). `resolveBulkGrnCandidates()`'s
+  vendor-name resolution also needed the same `vendor_master → companies`
+  fallback `hydrateGrn()`'s `resolveVendorName()` already has (an
+  STO-sourced GRN stores the sending company's id in `vendor_id`, not a
+  real vendor row) — added, else every STO-origin row on this page would
+  have shown no vendor name.
+- **Backend — `opening_stock.handlers.ts`:** `cascadeRecalculate()` (+ its
+  `CascadeNode`/`CascadeStepResult` types) changed from file-local to
+  `export`ed, for reuse by `grn.handlers.ts` — this is the generic §109
+  RM→SFG→FG valuation-cascade engine, not Opening-Stock-specific; no logic
+  changes.
+- **Backend — `grn.handlers.ts` (Point C, Ship-To):** new
+  `resolveShipToValidation(poData, stoData, shipToCompanyIdInput)` helper —
+  no-op when `crcp_enabled=false`, otherwise validates the submitted
+  company against the issuing company + that PO/STO's own
+  `purchase_order_crcp_company`/`stock_transfer_order_crcp_company`
+  allow-list, 400s with `GRN_SHIP_TO_REQUIRED`/`GRN_SHIP_TO_INVALID`
+  otherwise. Wired into `createAndPostGRNFromLineHandler` right after PO/STO
+  resolution. `getGELinesForGRNHandler` extended to resolve and return each
+  line's own `delivery_type`/`crcp_enabled`/`ship_to_options`
+  (Company Code/Name/State, issuing company first) — this handler had
+  **zero STO-side resolution at all** before this batch (PO-sourced lines
+  only); added the missing `stock_transfer_order_line`/`stock_transfer_order`
+  bulk-resolution alongside it, since both the tab-hiding (Point A/below)
+  and Ship-To logic need it for STO-origin GRNs too, not just PO-origin.
+- **Routes + ACL:** 4 new exact routes in `procurement.routes.ts`
+  (`GET .../grns/invoice-mapping-candidates`,
+  `GET .../grns/invoice-mapping/check-invoice`,
+  `POST .../grns/invoice-mapping/map`, `POST .../grns/invoice-mapping/unmap`)
+  — all reuse `PROC_GRN_LIST` (`VIEW` for the two GETs, `EDIT` for the two
+  POSTs), registered as **exact** matches in `route-acl-registry.ts` ahead
+  of the existing `/grns/:id` pattern route so they can never fall through
+  to it. No new resource code (per §3.9.2's own Access/ACL lock).
+  `route-acl-registry-guard.mjs` confirmed 0 missing matches.
+- **Frontend — `GRNPostFlow.jsx` (Points A + C):** `TABS` (now `ALL_TABS`)
+  computed per-instance via `isBulkNoInvoice = delivery_type === "BULK" &&
+  !bulk_invoice_number`, filtering out Documents/Accounts when true; every
+  tab-section condition switched from a numeric `activeTab === N` literal to
+  `activeTabName === "<Name>"` (and `setActiveTab(0)`/`setActiveTab(6)` to
+  `setActiveTab(TABS.indexOf(...))`) so the hidden-tab case can never
+  desync an index against the wrong section — the alternative (keeping
+  numeric literals and just shrinking the array) would have silently shown
+  the wrong tab's content the moment Documents/Accounts were hidden.
+  `handleSave()`'s payload forces `invoice_number`/`invoice_date`/
+  `bl_number`/`bl_date`/`boe_number`/`boe_date`/`invoice_rate`/`gst_pct` to
+  `null` and `rate_confirmed` to `false` when `isBulkNoInvoice`, regardless
+  of local state defaults (`rateConfirmed` itself still defaults `true` for
+  the normal case, unchanged). New Ship-To card on the Receipt tab, shown
+  only when `crcp_enabled`, Save button `disabled` until a value is picked
+  (`shipToMissing`). **Real gap caught during self-review before commit:**
+  the Documents tab's own pre-fill (`invoiceNumber`/`invoiceDate`/
+  `lrNumber` state initializers) only fell back to `geLine.csn_invoice_*`,
+  never to the new `geLine.bulk_invoice_*`/`bulk_lr_number` — meaning a
+  Bulk GE line that *did* capture its invoice at GE time (so the tabs stay
+  visible) would show them blank instead of "pre-filled, exactly like
+  today" per this section's own lock text; fixed by adding the
+  `bulk_invoice_number`/`bulk_invoice_date`/`bulk_lr_number` fallback
+  alongside the CSN one.
+- **Frontend — new page `GRNInvoiceMappingPage.jsx`:** header (Invoice
+  Number/Date/Quantity/Rate + "Map to existing Invoice" toggle+Check),
+  Pending/Mapped tabs, single all-column search bar (same pattern as
+  `SO01MapPage.jsx`), checkbox multi-select + "Select All", live selected-
+  qty total cross-checked against the typed Invoice Quantity, Map/Unmap
+  batch actions. Registered as screen `PROC_GRN_INVOICE_MAPPING`
+  (`operationScreens.js`), routed at `/dashboard/procurement/grns/
+  invoice-mapping` (`AppRouter.jsx`), and added as a companion route of
+  `/dashboard/procurement/grns` in `routeIndex.js` (same convention as
+  `/grns/post` — no new tx_code/menu row, reuses GRN List's own ACL). New
+  "Invoice Mapping" button added to `GRNListPage.jsx`.
+- **Verification:** `deno check` on every touched backend file compared
+  message-for-message against each file's pre-session baseline via
+  `git stash`/`git stash pop` (not just error *count*) — confirmed zero new
+  distinct error messages anywhere, several pre-existing errors fixed as a
+  side effect of properly typing new `Map`s. `eslint` clean on every
+  touched/new frontend file (two pre-existing, untouched warnings elsewhere
+  in the same files, confirmed via `git diff` not to be in this batch's own
+  changed lines). Full `npm run build` succeeds. All 9 relevant guards
+  (`hardcoded-role-check`, `jsx-no-undef`, `frontend-payload`,
+  `wrong-company-source`, `company-scope`, `company-scope-write-acl`,
+  `resource-code-domain`, `stock-posting`, `route-acl-registry`) green.
+  **Not yet done:** live click-through (no dev login in this environment),
+  Prod migration + ACL rollout.
+
+#### 3.9.5 — GRN Split (1 GRN : many Invoices) — Final Design: ✅ LOCKED 2026-10-02
+
+**Scope: Bulk-only** (confirmed by business owner — RM/PM/INT under Bulk are not
+batch-tracked, so none of §3.9.2's "never split a GRN across invoices" risk about
+batch-genealogy-aware partial reversal applies here; this is the exact INVERSE of
+§3.9.2's explicitly-excluded case, reopened specifically for this narrower,
+non-batch-tracked scope).
+
+**Trigger:** a vendor splits ONE truck's material across MULTIPLE invoices — commonly
+to stay under the e-way-bill value threshold — but the GRN was already created as
+exactly ONE GRN (1 GE = 1 GRN, unchanged). When the invoices finally arrive, Store
+needs to turn that one GRN into N GRNs, one per invoice, each carrying its own
+quantity/rate slice of the original.
+
+**Mechanism — a new "GRN Split" option inside the existing GRN Invoice Mapping page**
+(§3.9.2), not a separate page:
+- User picks ONE Pending GRN (unlike Map, which can multi-select across several GRNs).
+- User enters each invoice's own Number/Date/Quantity/Rate, one at a time, against
+  that same GRN, building up a running list of slices.
+- **System validates: Σ(slice quantities) == the GRN's own `received_qty`.** Mismatch
+  → the "Split" action stays disabled on the frontend AND is rejected server-side (same
+  disabled-button + backend-block pattern already used for Map/Unmap's duplicate-GRN
+  guard and GE's §4.1 duplicate-CSN guard). A mismatch means the vendor needs to issue a
+  corrected invoice — that's a business process outside the system, not something this
+  mechanism resolves.
+- **On Split:** the original ("Main") GRN is **reversed** (status → `REVERSED`, same
+  `reversal_grn_id`/`reversal_approved_by`/`reversal_approved_at`/`reversal_reason`
+  fields `reverseGRNHandler` already uses — no new reversal vocabulary). **N new GRNs**
+  are created, each a near-clone of the original but with: its own new `grn_number`,
+  its own slice's `received_qty`/`ge_qty`/`considered_qty`/`net_weight_from_weighbridge`
+  (proportionally split — see below), its own `invoice_number`/`invoice_date`/
+  `invoice_rate`, and `rate_confirmed = true` (this operation IS the invoice-confirmation
+  moment, same effect as a regular Map). **Same GE number, same Truck Number, same
+  Delivery Challan Number, same RST Number** — these all carry over automatically from
+  the original (physically the same truck/delivery, only the paper is being split), not
+  re-entered by the user.
+- **Proportional split of quantity fields:** reuses the exact same pattern already built
+  in `GateEntryCreatePage.jsx` for splitting one vehicle's Gross Weight across multiple
+  GE lines — `share = (this slice's qty ÷ original GRN's total qty) × field value`, with
+  the **last slice absorbing any rounding remainder** so the parts always sum back
+  exactly to the original.
+- **AC01:** the reversed original GRN's line becomes inactive (no further AC01 action
+  possible against it), with a visual marker/badge so a user looking at it immediately
+  understands it was split, not just an ordinary reversal — distinguishable from a plain
+  reversal by checking whether any other GRN references it via the new
+  `split_source_grn_id` column (see Engineering below).
+- Stock valuation (WAR) for each new split GRN's own rate uses the same §109
+  `cascadeRecalculate` engine already reused for §3.9.2's Map action — no new valuation
+  logic, same reuse.
+
+**Engineering — resolved during design, before locking:**
+- **Atomicity is mandatory, not optional.** Reverse-then-repost nets to zero, but if
+  anything else touched the same material/location's `stock_snapshot` in the window
+  between the original GRN and this split (another GRN, another issue), doing the
+  reversal and the N re-posts as separate steps risks a transient negative-stock state
+  mid-operation even though the net is zero. **Resolved:** built as one call to
+  `erp_inventory.post_document()` (§8D's "common gate", already proven for Process PO
+  Verify and §113.15's PGI+Invoice) — one P102 reversal of the original's full quantity
+  + N fresh P101 receipts for the splits, all in the SAME transaction, with a new
+  `erp_procurement.complete_grn_split()` completion function (registered against the
+  existing `GRN` entry in `posting_source_registry`, whose `completion_function` was
+  previously NULL — confirmed live before locking, no existing completion function is
+  being overwritten) doing the actual header-reversal + N-row-insert as the completion
+  step. Calculations (proportional split, validation) stay in TypeScript; only the
+  writes move into the completion function, same division of labor as every other
+  `post_document` migration in this codebase.
+- **Real pre-existing gap found while designing this (unrelated to the split feature
+  itself, but it blocks it):** `ux_goods_receipt_gate_entry_line` is a unique index on
+  `gate_entry_line_id` with **no status filter at all** (`WHERE gate_entry_line_id IS
+  NOT NULL` only) — meaning even a `REVERSED` GRN permanently occupies that GE line's
+  slot, and the system could never have posted a replacement GRN for a reversed line
+  even in the single-reversal case, let alone an N-way split. Never caught before
+  because this has 0 real occurrences in Prod data. **Fix:** drop this unique index
+  entirely — the real "one ACTIVE GRN per GE line" invariant is already enforced at the
+  application layer (`createAndPostGRNFromLineHandler`'s own
+  `.in("status", ["DRAFT","POSTED"])` check), so the DB-level index was a redundant,
+  overly-strict duplicate of that check, not an independent safety net. A plain
+  non-unique index on the same column replaces it for lookup performance.
+- **New column:** `goods_receipt.split_source_grn_id` (nullable uuid, FK to
+  `goods_receipt.id`) — set on each of the N new rows, pointing back to the original
+  (now-reversed) GRN. Drives the AC01 "split" marker and any future "what was this GRN
+  split into" lookup. NULL on every ordinary GRN.
+
+**Not locked / explicitly out of scope for this pass:** what happens if a user wants to
+*undo* a GRN Split (un-split back to one GRN) — not asked for, not designed; today's
+mechanism is one-directional (Split only), matching how Map/Unmap are the only two
+directions §3.9.2 itself supports.
+
+**GRN Split — Implementation Log (2026-10-02)**
+
+> Built directly (no subagent delegation), verified statically (`deno check`/`eslint`/
+> full frontend `build`/all 9 relevant guards) and **against real Dev data via two
+> isolated rolled-back transactions** (not just code-reading) before being treated as
+> done — this feature posts and reverses real stock, so static checks alone weren't
+> enough. **Not yet applied to Prod, not yet live-tested end-to-end through the actual
+> HTTP endpoint** (no dev login in this environment — verified at the SQL-mechanism
+> level only).
+
+- **Migration (Dev only,
+  `supabase/migrations/20261002110000_grn_split_feature.sql`):** adds
+  `goods_receipt.split_source_grn_id` + `goods_receipt.source_gate_entry_line_id`
+  (the latter is a deviation from the original lock — see its own header note: dropping
+  `ux_goods_receipt_gate_entry_line` hung indefinitely on this Supabase project via both
+  `apply_migration` and `execute_sql`, reproduced on a throwaway scratch index too, so
+  it's an infra-level issue outside application control, not a lock/code problem — worked
+  around by giving split rows a separate GE-line-reference column instead of touching
+  that index at all); `erp_procurement.complete_grn_split()` (post_document's completion
+  function for `GRN`, registered against the pre-existing registry row whose
+  `completion_function` was confirmed NULL before writing this). Applied via `execute_sql`
+  statement-by-statement (since `apply_migration`'s own wrapping transaction kept failing
+  on the same DROP INDEX before the design changed), reconciled into
+  `supabase_migrations.schema_migrations`, `NOTIFY pgrst, 'reload schema'` run,
+  `migration-integrity-check.mjs` confirms local in sync (only the 2 already-known,
+  unrelated pre-existing Dev drift rows remain, not this migration's own).
+- **Backend — `grn.handlers.ts`:** new `splitGrnHandler` — validates ≥2 slices, each with
+  Invoice Number/Date/Rate/positive Quantity; fetches the GRN, requires `POSTED` + Bulk
+  delivery type (via its PO's or STO's own `delivery_type`) + company scope + EDIT-level
+  ACL (reused `canMaintainCompanyResource`, same pattern as Map/Unmap); hard-blocks unless
+  Σ(slice quantities) exactly equals the GRN's `received_qty` (0.0001 tolerance); mirrors
+  `reverseGRNHandler`'s own PO-UOM→base-UOM conversion for the reversal and applies the
+  same conversion per slice; splits `ge_qty`/`considered_qty`/`net_weight_from_weighbridge`
+  proportionally via a new `splitProportionally()` helper (ratio-based, **last slice
+  absorbs the rounding remainder** — same rule `GateEntryCreatePage.jsx`'s own Gross
+  Weight split already uses); builds one P102 reversal + N fresh P101 movements and calls
+  `post_document('GRN', ...)` in a single atomic call (§8D) — `stock-posting-guard.mjs`
+  confirms this added **zero** new direct `post_stock_movement` calls (baseline stays 12).
+  Each split row's full payload is built by cloning the original GRN row (`{...grn,
+  ...overrides}`) so every NOT NULL column is already populated from the live row before
+  any override is applied — `id`/`grn_number` (new), `received_qty`/`ge_qty`/
+  `considered_qty`/`net_weight_from_weighbridge`/`invoice_number`/`invoice_date`/
+  `invoice_rate` (slice-specific), `rate_confirmed=true`, `status="POSTED"`,
+  `gate_entry_line_id=null` + `source_gate_entry_line_id=<original's line>` (the
+  deviation above), `split_source_grn_id=<original>`, every reversal/AC01-override field
+  nulled out fresh.
+- **Backend — two existing read-paths updated** to also recognize
+  `source_gate_entry_line_id` (not just `gate_entry_line_id`), since a split-created GRN
+  carries its GE-line reference there: `createAndPostGRNFromLineHandler`'s "no active GRN
+  for this line" guard (now checks both columns) and `getGELinesForGRNHandler`'s
+  existing-GRN-per-line map (fetches both, merges split rows AFTER plain rows so a
+  split's new POSTED GRN correctly wins over its now-REVERSED original for the same GE
+  line in the UI's per-line status).
+- **SQL — `complete_grn_split()`:** reverses the original GRN's header exactly like
+  `reverseGRNHandler` already does (same `status`/`reversal_grn_id`/
+  `reversal_approved_by`/`reversal_approved_at`/`reversal_reason` fields — no new
+  reversal vocabulary), then for each context-supplied split payload, matches its own
+  posting by `line_ref`, merges in that posting's `stock_document_id`/`stock_ledger_id`
+  via `jsonb_populate_record`, and inserts the resulting full row with a plain
+  `INSERT ... SELECT (v_row).*` (no column list to maintain/risk-drifting against the
+  ~70-column table). **Verified against real Dev data, twice, in isolated rolled-back
+  transactions** (a fresh synthetic receipt posted and immediately split within the same
+  transaction, to control the exact stock balance rather than depending on whatever a
+  real historical GRN's material happens to have left — most real Dev GRNs' stock has
+  already moved since posting, which is itself a useful confirmation that the engine's
+  negative-stock guard correctly blocks a reversal once the balance is insufficient):
+  even-split (500 → 300+200) and uneven-split with non-integer quantities and different
+  rates (500 → 333.33+166.67) both produced correct REVERSED original + POSTED new rows
+  with the right `stock_document_id`/`stock_ledger_id`/`split_source_grn_id` wiring.
+- **Routes + ACL:** one new exact route (`POST /api/procurement/grns/split`), reusing
+  `PROC_GRN_LIST:EDIT` (no new resource code). `route-acl-registry-guard.mjs` confirms 0
+  missing matches.
+- **Frontend — `GRNInvoiceMappingPage.jsx`:** new "Split" button per Pending-tab row
+  (single-GRN action, distinct from Map's multi-select); opens an inline card where the
+  user builds up slices one at a time (Invoice Number/Date/Rate/Quantity + "Add"), with a
+  running total checked live against the target GRN's own quantity — the "Split" button
+  stays disabled until ≥2 slices are entered and they sum exactly (mirrors the same
+  disabled-button + backend-block pattern as Map/Unmap's own guards and GE's §4.1
+  duplicate-CSN guard). New `splitGrn()` wrapper in `procurementApi.js`.
+- **Verification:** `deno check` message-diffed against each touched backend file's
+  pre-session baseline (zero new errors), `eslint` clean, full frontend `build` succeeds,
+  all 9 relevant guards green, migration-integrity confirmed, and the two real-data
+  rolled-back-transaction tests above. **Not yet done:** live click-through through the
+  actual Bulk GE→GRN→Split flow end-to-end (no Bulk GRN exists in Dev yet — Phase D's own
+  Bulk flow hasn't been live-tested either, see its own implementation log), Prod
+  rollout, and retrying the original `DROP INDEX` once the Supabase infra issue clears
+  (tracked in the migration's own header note, not required for this feature to work).
+
+**GRN Split — AC01 fix (2026-10-02, same day, business-owner follow-up question):**
+business owner asked, right after the feature shipped: "the row whose GRN gets reversed —
+what happens to ITS payment date calculation, and what about the new ones, and how does PO
+Number carry forward to the new ones?" Investigating found PO Number already carries
+correctly (every split row clones `{...grn, ...overrides}`, and `po_id`/`po_number` were
+never in the overrides list) and the new split rows' own payment dates compute correctly
+(each is a normal POSTED row with its own `invoice_date`/`invoice_rate`) — but the **design
+lock's own promise** ("AC01-এ reversed GRN-এর line inactive হবে... marker থাকবে") had never
+actually been built: AC01 had no `status` filter/marker at all, and
+`computeActualPaymentDate` ran unconditionally regardless of `status`, so a REVERSED
+original (split or plain) still showed a computed due date as if it were still payable.
+Fixed, same day, approved ("ha kore dao"):
+- **`ac01.handlers.ts`:** `buildListRow` (list endpoint) now returns `status`,
+  `is_reversed` (`status === 'REVERSED'`), `split_source_grn_id`, and
+  `split_into_grn_numbers` (a new reverse-lookup bulk query — for each page's GRN ids, which
+  new GRN(s) reference it via `split_source_grn_id`, same `fetchInChunks`/map-building
+  pattern as the file's other bulk lookups, §8B INDEPENDENT). `actual_payment_date` is now
+  `null` whenever `is_reversed` is true, overriding both the manual
+  `revised_payment_date` override and the computed due-date — a reversed receipt is never
+  payment-relevant, full stop. `getAC01GRNHandler` (detail endpoint) gets the identical
+  guard plus its own single-GRN `split_into_grn_numbers` lookup (`...grn` already spread
+  `status`/`split_source_grn_id` through via its own `select("*")`, so only the derived
+  fields needed adding).
+- **`AC01Page.jsx`:** the Status column's two-dot render is replaced with a rose "REVERSED"
+  (or "REVERSED (split)") badge whenever `row.is_reversed` — tooltip names which new GRN(s)
+  it became when `split_into_grn_numbers` is present; copy/Excel-export paths get the same
+  plain-text marker instead of the dots. The detail drawer also gets a banner at the top
+  (`"This GRN has been REVERSED and is no longer payment-relevant... split into: ..."`) so
+  opening a reversed row makes this unmissable, not just a column dot.
+- **Verification:** `deno check` on `ac01.handlers.ts` message-diffed against its own
+  pre-change baseline (0 errors before, 0 after — this file was already fully clean),
+  `eslint` clean on `AC01Page.jsx`, `jsx-no-undef-guard`/`hardcoded-role-check-guard`/
+  `wrong-company-source-guard`/`stock-posting-guard`/`frontend-payload-guard` all green
+  (stock-posting-guard baseline unchanged at 12 — this fix touches no posting call at all).
+  Confirmed against live Dev schema that `goods_receipt.status`/`split_source_grn_id`/
+  `source_gate_entry_line_id` all exist with the expected types, so both handlers'
+  `select("*")` already carries them through with no new column list needed. **Not yet
+  done:** a real live REVERSED row to click-through against (Dev has none yet — no GRN has
+  actually been reversed/split there since this is all same-day-shipped and not yet
+  exercised through the real HTTP endpoint).
 
 #### 3.9.3 — Who performs the mapping, and cross-company visibility
 
@@ -1348,14 +2099,28 @@ wider scope, not just add a single `container_number` column.
 
 ## 4. Open Items — needs a decision or a fix before "Procurement = 100% done"
 
-### 4.1 GE — duplicate CSN/line selection across rows (small, confirmed gap)
-`GateEntryCreatePage.jsx`'s `getCsnsForRef(kind, refId)` returns **all** CSNs for a
+### 4.1 GE — duplicate CSN/line selection across rows (small, confirmed gap) — ✅ FIXED 2026-10-02
+`GateEntryCreatePage.jsx`'s `getCsnsForRef(kind, refId)` returned **all** CSNs for a
 PO/STO regardless of what other rows in the same GE already picked. No de-duplication
-exists at the frontend (drawer list) or at `createGateEntryHandler`'s save-time
-validation. Risk: a user could pick the same STO line twice across two rows in one GE.
-**Fix (not yet applied):** exclude any `stoLine.id`/`csn.id` already used by another
-active row in `lines[]` from the drawer's candidate list, and add a save-time guard.
-Low effort, no schema change needed.
+existed at the frontend (drawer list) or at `createGateEntryHandler`'s save-time
+validation. Risk: a user could pick the same CSN/STO line twice across two rows in one GE.
+**Fix applied:**
+- `GateEntryCreatePage.jsx` — new `getUsedCsnIds(excludeRowIndex)`/
+  `getUsedStoLineIds(excludeRowIndex)` helpers (ids used by every OTHER active row);
+  `openDrawer()` (PO+CSN path) filters its `csns` candidate list through
+  `getUsedCsnIds`; `openStoDrawer()` (STO path) filters its `stoLines` candidate list
+  through `getUsedStoLineIds` before building drawer rows. `handleSave()` also gets a
+  defense-in-depth duplicate check (same CSN/STO-line id across two active lines) before
+  the save request is even sent.
+- `gate_entry.handlers.ts`'s `createGateEntryHandler` — new save-time guard right after
+  the initial required-field check: walks the raw `body.lines[]` and rejects
+  (`GE_DUPLICATE_CSN`/`GE_DUPLICATE_STO_LINE`, 400) the moment the same non-empty
+  `csn_id`/`sto_line_id` appears twice, independent of and in addition to the frontend
+  checks (a stale client or any other caller could otherwise still submit duplicates).
+- No schema change needed, as originally scoped. Verified: `deno check` message-diffed
+  against baseline (zero new errors), `eslint` clean, full frontend `build` succeeds,
+  `jsx-no-undef-guard`/`frontend-payload-guard`/`wrong-company-source-guard`/
+  `company-scope-guard`/`hardcoded-role-check-guard` all green.
 
 ### 4.2 Inward QA "redesign" — scope unknown, needs discovery
 The 2026-09-22 note defers this without ever describing what's wrong with today's

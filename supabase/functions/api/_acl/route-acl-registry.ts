@@ -69,6 +69,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/gate-entries/open-csns":      { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
   "GET:/api/procurement/gate-entries/open-pos":       { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
   "GET:/api/procurement/gate-entries/open-stos":      { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/gate-entries/person-name-context": { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
   "GET:/api/procurement/gate-entries/by-number":      { skipAcl: false, resourceCode: "PROC_GATE_EXIT",         action: "VIEW"  },
   "POST:/api/procurement/gate-exits/inbound":         { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "WRITE" },
   "GET:/api/procurement/gate-report":                 { skipAcl: false, resourceCode: "PROC_GATE_REPORT",       action: "VIEW"  },
@@ -79,6 +80,13 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/grns/ge-lines":                     { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
   "POST:/api/procurement/grns/from-line":                   { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },
   "GET:/api/procurement/grns/material-vendor-doc-names":    { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
+  // §3.9.2 "GRN Invoice Mapping" (2026-10-02) — reuses PROC_GRN_LIST, no new resource code.
+  "GET:/api/procurement/grns/invoice-mapping-candidates":   { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
+  "GET:/api/procurement/grns/invoice-mapping/check-invoice":{ skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
+  "POST:/api/procurement/grns/invoice-mapping/map":         { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "EDIT"  },
+  "POST:/api/procurement/grns/invoice-mapping/unmap":       { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "EDIT"  },
+  // §3.9.5 "GRN Split" (2026-10-02) — same resource as the Invoice Mapping actions above.
+  "POST:/api/procurement/grns/split":                       { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "EDIT"  },
 
   // ── Procurement: Inward QA ────────────────────────────────────────────────
   "GET:/api/procurement/qa-documents":                { skipAcl: false, resourceCode: "PROC_QA_QUEUE", action: "VIEW"  },
@@ -828,6 +836,12 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/crcp$/,
     methods: { PATCH: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
   },
+  {
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — same lightweight
+    // ordinary-EDIT-access pattern as CRCP above.
+    pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/effective-date$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
+  },
 
   // ── PO Order Group (internal batch-approval wrapper, 87.12A) ──────────────
   {
@@ -1192,6 +1206,12 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     // CRCP (Cross Company) — same pattern as PO's own crcp route above.
     pattern: /^\/api\/procurement\/stos\/[^/]+\/crcp$/,
+    methods: { PATCH: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
+  },
+  {
+    // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — same lightweight
+    // ordinary-EDIT-access pattern as CRCP above.
+    pattern: /^\/api\/procurement\/stos\/[^/]+\/effective-date$/,
     methods: { PATCH: { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "EDIT" } },
   },
   {
