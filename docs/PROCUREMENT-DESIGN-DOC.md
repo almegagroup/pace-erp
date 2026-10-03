@@ -1043,6 +1043,11 @@ case with the same mechanism.
   drive, not separately (see Point 3.2.7's own note and the Recommended Build Sequence above).
   Phase D (Bulk's CRCP variant) was also moved ahead of this merged Phase C in build order —
   a scheduling choice, not a design dependency change.
+  **Tab 1 design LOCKED 2026-10-03 — see "PO12 (PTO) — Tab 1 Design" below** (after Point
+  3.2.7/the Phase C GST note): the 2-tab split (Tab 1 = CRCP discrepancy + settlement,
+  everyone with PO12 access; Tab 2 = physical Transfer/Receive, restricted to an
+  SA-configured allow-list of physically-capable company pairs) is business owner's own
+  framing. **Tab 2 itself remains undesigned** — explicitly deferred, not part of this lock.
 
 **Point 3.2.7 — Settlement: Return vs. Invoice**
 - Business: after a cross-company GE/GRN, the two companies must formally settle — either a
@@ -1093,8 +1098,12 @@ reframes Point 3.2.7:
      stays untouched, scoped to its own original L6 (physical plant transfer) purpose only.
   2. PTO itself gets redesigned to also support an **invoice-only / no-movement mode** for
      this specific Leg-2 case, alongside its existing physical-movement modes.
-- **Next:** business owner has a PO12-specific design idea to bring to this question before
-  Option 1 vs 2 gets decided — continuing below.
+- **Resolved 2026-10-03 — Option 2 wins, in spirit:** business owner's own PO12-specific
+  idea (see "PO12 (PTO) — Tab 1 Design" below, after Point 3.2.7) settles this as PTO itself
+  carrying the invoice-only/no-movement mode — but as its own **separate tab** (Tab 1) rather
+  than a mode toggle inside Tab 2's existing physical-movement screens. So PTO absorbs Leg 2
+  as designed, without disturbing Tab 2's original L6 physical-transfer purpose at all —
+  effectively Option 2's intent, delivered via a tab split instead of a mode flag.
 
 **GRN-level "Ship To Leg" capture — Final Design: ✅ LOCKED 2026-10-02 (business owner +
 design session). Scope: CRCP-general — applies to a GRN against any CRCP-enabled PO/STO,
@@ -1128,6 +1137,171 @@ any `delivery_type` (Standard/Tanker/Bulk/STO alike), not Bulk-specific.**
   data missed at transaction time is permanently missed). Business owner confirmed
   (2026-10-02): build this **now**, in the same batch as Phase A/D, before either reaches
   Prod — not deferred to the full Phase C settlement-mechanism build.
+
+**PO12 (PTO) — Tab 1 Design — Final Design: ✅ LOCKED 2026-10-03 (business owner + design
+session). Resolves Point 3.2.6's "mechanism NOT yet designed" status for Tab 1 specifically —
+Tab 2 (physical Transfer/Receive) stays explicitly un-designed, business owner's own
+instruction ("Tab 2 niye akhon vebona").**
+
+**0. Two-tab architecture (business owner's own framing):**
+- **Tab 1 — CRCP discrepancy + settlement + tracking.** Open to every company with PO12
+  access, including a pure Bill-To company (e.g. CMP003) that never physically touches the
+  material. This is where today's design work below applies.
+- **Tab 2 — Transfer/Receive (physical movement).** The existing `plant_transfer_order`
+  mechanism (Gate-23, L6 — `pto.handlers.ts`, ONE_STEP/TWO_STEP, 0 real Prod rows today).
+  Access restricted to only the companies an SA-configured allow-list flags as
+  physical-transfer-capable (business owner's own example: Jayashree ↔ Coatings, 4km apart,
+  real Return/transfer physically feasible; companies far apart never get this tab at all,
+  they only ever go through the Invoice/Leg-2 path). **Not designed yet** — config shape
+  (per-pair vs flat company list), and the tab's own screen/flow, are open for a later
+  session.
+- **Why Tab 1 alone can carry CMP003's visibility need (resolves this doc's own earlier "PTO
+  has no PO/GRN reference, so a non-source/target company can never see it" concern):** Tab
+  1 does not filter by `plant_transfer_order.source_company_id`/`target_company_id`
+  membership at all — it is a GRN-sourced discrepancy list (§1 below) plus a settlement
+  action, neither of which requires CMP003 to ever be a PTO source/target. The concern is
+  resolved by construction, not by adding a new reference column to `plant_transfer_order`.
+
+**1. Discrepancy List — row-inclusion rule (corrects this doc's own first draft of the
+rule, caught live during this session):**
+- **Trigger: `Bill-To ≠ Actual-Receiver`** — not "the underlying PO/STO has `crcp_enabled =
+  true`." A GRN on a CRCP-enabled PO/STO that happens to still be received by the issuing
+  company itself (Bill-To = Actual-Receiver) is the ordinary/straightforward case and must
+  NOT appear here, even though CRCP is technically available on that document.
+- The three source fields (no new schema — all already captured): **Bill-To** = the PO/STO's
+  own `company_id`; **Ship-To (invoice-stated)** = `goods_receipt.ship_to_company_id`;
+  **Actual Receiver** = `goods_receipt.company_id` (whichever CRCP-shared company performed
+  the GE+GRN).
+- **Per-company visibility, three distinct roles, same underlying rows:**
+  - **Bill-To viewer** (e.g. CMP003): sees every row where it is Bill-To and
+    Bill-To ≠ Actual-Receiver — regardless of whether Ship-To equals Actual-Receiver (a
+    direct, non-chained CRCP case) or differs from it (the fuller 3-way chain case). This
+    was the first-draft rule's own bug — it originally required Ship-To ≠ Actual-Receiver
+    too, which would have wrongly hidden the simple direct A→C case from CMP003.
+  - **Ship-To-named viewer** (e.g. CMP005 in the chain case): sees rows where it is named
+    Ship-To but Actual-Receiver differs — **purely informational/audit, no settlement
+    action** for this company on this row (see §2 below — Leg 2 settles A→C directly, never
+    through the named-but-wrong party).
+  - **Actual-Receiver viewer** (e.g. Jayashree): sees rows where it is the actual receiver
+    and Bill-To differs.
+
+**2. Settlement Invoice (Leg 2) — a separate button inside Tab 1 (business owner's own
+placement decision; its own detailed create-flow is still pending, revisit separately):**
+- **Zero `stock_ledger` movement, "direct."** Company A (Bill-To) never had physical stock
+  of this material (no GRN exists under its own `company_id`) — there is nothing to receive
+  (101) or issue (601). Company C (Actual Receiver) keeps what it already GRN-posted — this
+  is the Invoice case precisely because C retains/consumes the goods, so nothing physically
+  moves at C's end either. The whole thing is a pure financial/value document: Qty × Rate +
+  GST (+ cost components, §3 below).
+- **Always issued directly A → C (Actual Receiver), never through a named-but-wrong Ship-To
+  party**, confirmed against the business owner's own GST reference material: "Leg 2
+  (Company A → Company C)" is stated directly in those terms, not A→B→C. So in the 3-way
+  chain case, CMP003 invoices Jayashree directly; CMP005 (named but not actual receiver) is
+  never an economic party to this leg, consistent with §1's "informational/audit only" rule
+  for that viewer.
+- **GRN selection happens at Settlement Invoice creation time** — the invoice itself carries
+  the list of GRNs it settles (same pattern as other documents in this codebase that pick
+  source rows at create time, e.g. DO picking SO/STO lines). This is also why variance
+  tracking (below) needs no separate per-GRN breakdown mechanism — the invoice's own
+  GRN-list already is that mapping.
+- **Provisional/FOR-inclusive invoicing, for late-arriving transporter bills:** the
+  transporter's actual freight bill routinely arrives after the Settlement Invoice must be
+  issued. CMP003 issues the invoice now on a FOR (delivered/inclusive) basis, using an
+  estimated freight folded into the rate — not broken out as its own line — rather than
+  waiting.
+- **Variance (provisional estimate vs. actual, once the real bill lands via §3's Bulk Cost
+  Component Mapper flow): tracked at the Settlement-Invoice level (aggregate), not per-GRN**
+  — business owner's own call, since the invoice's GRN-list is already the per-GRN record if
+  ever needed later.
+- **Correction is manual, never automatic.** No auto-generated Debit/Credit Note. The
+  Debit/Credit Note mechanism itself (how the correction document actually gets created,
+  numbered, posted) is explicitly deferred to the already-locked future **Accounts Module
+  redesign** session (§111's priority order: Dispatch → Costing/AP-Reco → Accounts Module →
+  WAR). Today's lock only establishes that the variance must be visible/flagged for that
+  later manual action — not how that action itself works.
+
+**3. CRCP Cost Component Entry (Freight/other, entered by the Bill-To company) — reuses
+AC01's existing schema, does not widen AC01's own access model:**
+- **Same underlying table, not a mirror.** Tab 1's cost-entry action writes into the exact
+  same `erp_procurement.landed_cost`/`landed_cost_line` rows AC01 already uses for this GRN
+  — there is still only one landed-cost document per GRN, never two parallel ones to
+  reconcile.
+- **New, separate write-path — not a change to `canWriteAC01()`/`requireAC01WriteAccess()`.**
+  AC01's own access model stays exactly as today: strictly scoped to the GRN's own
+  `company_id`. CMP003 never gets AC01 page access to a GRN it doesn't own. Instead, Tab 1
+  gets its **own dedicated handler**, gated by PO12's own ACL
+  (`PROC_PLANT_TRANSFER_LIST:WRITE`) plus a CRCP condition (the GRN's underlying PO/STO has
+  `crcp_enabled = true` AND the caller's company is that PO/STO's own `company_id`, i.e. its
+  Bill-To) — a structurally separate authorization path, deliberately not a widening of
+  AC01's own check (avoids any risk of that check's semantics drifting for its other,
+  unrelated callers).
+- **No `cost_type` restriction.** Business owner explicitly declined a system-enforced split
+  (e.g. "Bill-To may only add FREIGHT, never UNLOADING") — any party with a valid write-path
+  (its own AC01, or this new PO12 path) may add any component, trusted to only enter what it
+  was actually billed for.
+- **Full mutual visibility by construction, no sync needed.** Because both paths write the
+  same rows: the unloading/actual-receiving company (e.g. CMP005) sees CMP003's PO12-entered
+  Freight line the next time it opens its own AC01 for that GRN, and can edit/delete it there
+  with its own ordinary AC01 write access (no "entered-by" lock distinguishing the two
+  origins). CMP003, conversely, sees CMP005's own AC01-entered Unloading Charge from within
+  Tab 1 — but only ever through Tab 1's narrow view, never full AC01 (no rate-confirmation
+  workflow, no other GRN fields, no page access).
+- **Multi-vendor, single-rake freight bill (business owner's own real example — JK White-
+  style rail rake, 3 vendors, one transporter bill covering all their containers' freight,
+  per-container or proportionate rate, vendor-specific rate):** no new mechanism — reuses the
+  already-locked **Bulk Cost Component Mapper** (§3.5.8) as-is, run **once per vendor**
+  against the same `bill_reference` (its existing duplicate-prevention warning already
+  anticipates this exact repeat-usage shape). **One confirmed refinement to that tool's own
+  build, not yet explicit in its original §3.5.8 lock:** its right-side GRN filter list must
+  carry **Vendor as an explicit, first-class filter column** (the original text only said "or
+  any other column," which is not strong enough given this business rule — freight rate is
+  always vendor-specific even when multiple vendors share one rake/bill).
+- **Explicitly deferred, not solved now:** the UX efficiency of picking/entering each
+  vendor's subset separately against one bill (business owner's own flag — "khub time
+  taking hobe") is left for the dedicated future AC01/PO12 Bulk Map UI design session, not
+  this round.
+- **Still open, not yet decided:** whether the "Add Component" action is a per-row button on
+  the Discrepancy List grid itself, or a separate header-level flow (parallel to the
+  Settlement Invoice button in §2) — revisit before building Tab 1's frontend.
+
+**4. Material Receipt Note (MRN) — researched, explicitly deferred, not part of this lock:**
+- Confirmed via web research (not assumed): MRN/GRN is **not a GST-statutory document** —
+  GST law only prescribes the Tax Invoice, Delivery Challan, and E-way Bill. No fixed MRN
+  format exists to match against.
+- The ITC legal basis for why Company A (CMP003) can claim ITC despite never physically
+  touching the goods: CGST Act 2017, **Section 16(2)(b)'s Explanation** — a registered
+  person is **deemed to have received** goods delivered to a third party "on the direction
+  of" that registered person. So CMP003's own audit trail for its ITC claim is **its own PO
+  (crcp_enabled + the CRCP company allow-list, proving it directed delivery to that specific
+  company) together with the Actual Receiver's own GRN** (vehicle number + challan,
+  already-captured fields, proving the delivery itself genuinely happened) — not a
+  separate MRN artifact given to/by anyone.
+- **MRN is never "given" between companies** — it is each physical receiver's own internal
+  record of its own receipt. In the 3-way chain case, only the Actual Receiver (e.g.
+  Jayashree) would ever hold one; the named-but-wrong Ship-To company (CMP005) and the
+  Bill-To company (CMP003) never physically receive anything, so neither prepares or
+  receives an MRN at all.
+- **A formatted/printable MRN view, auto-generated purely from existing GRN fields (zero new
+  data, zero new schema)** is technically feasible and was discussed, but business owner
+  deferred the decision ("MRN niye pore vaba jabe") — not built, not scheduled, revisit
+  later.
+
+**5. Tab 1 Discrepancy Grid — UI (ErpDenseGrid, full Excel-style keyboard navigation),
+LOCKED column order:**
+1. **CRCP Triangle** — Bill-To Company, Ship-To Company (invoice-stated), Actual Receiving
+   Company (all company_code — company_name, never raw UUID, per §8A)
+2. **Quantity** — GRN Quantity + Base UOM
+3. **Identification** — GRN Number, GRN Date, PO Number / STO Number, Vendor Name, Material
+   Name + External Code
+4. **Document Numbers + Dates** — Invoice Number + Date, Delivery Challan Number + Date,
+   Container Number, E-way Bill Number, RST Number, LR Number + Date, Transporter Name
+5. **AC01 Relation** — Landed Cost Total, Rate Confirmed, Settlement Status (Pending /
+   Settled, derived from whether a Settlement Invoice already references this GRN)
+- **Filters, above the grid:** one single all-column free-text search bar (same pattern as
+  the GRN Invoice Mapping page — one box, not per-field filters, for speed); a **Date Range +
+  Date-Column dropdown** (choices: GRN Date, Invoice Date, Delivery Challan Date, LR Date) —
+  same established `date_field`+`date_from`+`date_to` pattern already used by AC01/IN02, not
+  a new mechanism.
 
 **Point 3.2.8 — Generalization (not CRCP-only)**
 - Business: this Return-vs-Invoice choice applies to any inter-company stock movement,
