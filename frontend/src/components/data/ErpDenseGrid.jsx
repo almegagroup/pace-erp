@@ -8,7 +8,8 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 // Matches --erp-row-height in index.css. Only used as the virtualizer's size
@@ -81,6 +82,145 @@ async function copyTextToClipboard(text) {
   legacyCopyToClipboard(text);
 }
 
+// A column's own value for Excel-style filtering — same fallback chain as
+// copyValue's own precedent (a column with a custom JSX `render`, e.g. a
+// colored badge, should supply plain text here or via copyValue; otherwise
+// filtering falls back to the raw row[column.key] value).
+function getColumnFilterValue(column, row) {
+  if (typeof column.filterValue === "function") return String(column.filterValue(row) ?? "");
+  if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
+  return String(row?.[column.key] ?? "");
+}
+
+// Small funnel icon, two visual states — outline (no exclusion applied for
+// this column) vs filled/highlighted (this column currently excludes at
+// least one of its own values). Fixed 12px, flex-shrink-0 at every call
+// site, so it never eats into a narrow column's own header label (found
+// live 2026-10-03, business owner: a naive inline icon can crowd out the
+// header text until it's unreadable).
+function FilterIcon({ active }) {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" className="shrink-0">
+      <path d="M1 2.5h14L9.5 9v4.5l-3 2V9L1 2.5z" className={active ? "fill-sky-300" : "fill-slate-400"} />
+    </svg>
+  );
+}
+
+// One column's Excel-style AutoFilter panel — a DRAFT checkbox selection
+// (only committed to the grid's real columnFilters state on "OK", mirroring
+// real Excel) so toggling individual checkboxes doesn't re-filter/re-render
+// the whole grid on every click. Portaled to document.body, positioned via
+// getBoundingClientRect of its own trigger button, same technique as
+// ErpComboboxField's own dropdown panel — otherwise any ancestor with
+// overflow-hidden/overflow-auto (this grid's own scroll viewport included)
+// would clip it.
+function ColumnFilterPanel({ anchorMapRef, columnKey, options, selected, onApply, onClose }) {
+  const [draft, setDraft] = useState(() => new Set(selected));
+  const [query, setQuery] = useState("");
+  const [rect, setRect] = useState(null);
+  const panelRef = useRef(null);
+
+  useLayoutEffect(() => {
+    function updateRect() {
+      const el = anchorMapRef.current[columnKey];
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const PANEL_WIDTH = 220;
+      const VIEWPORT_MARGIN = 8;
+      const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - PANEL_WIDTH - VIEWPORT_MARGIN);
+      setRect({ top: r.bottom, left: Math.min(r.left, maxLeft), width: PANEL_WIDTH });
+    }
+    updateRect();
+    window.addEventListener("scroll", updateRect, true);
+    window.addEventListener("resize", updateRect);
+    return () => {
+      window.removeEventListener("scroll", updateRect, true);
+      window.removeEventListener("resize", updateRect);
+    };
+  }, [anchorMapRef, columnKey]);
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      const anchorEl = anchorMapRef.current[columnKey];
+      const insideAnchor = anchorEl && anchorEl.contains(event.target);
+      const insidePanel = panelRef.current && panelRef.current.contains(event.target);
+      if (!insideAnchor && !insidePanel) onClose();
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [anchorMapRef, columnKey, onClose]);
+
+  function toggleValue(value) {
+    setDraft((current) => {
+      const next = new Set(current);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  }
+
+  if (!rect) return null;
+
+  const filteredOptions = query.trim()
+    ? options.filter((opt) => opt.toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      style={{ position: "fixed", top: rect.top, left: rect.left, width: rect.width, zIndex: 1000300 }}
+      className="flex max-h-72 flex-col border border-slate-400 bg-white text-xs text-slate-800 shadow-lg"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") { event.preventDefault(); onClose(); }
+      }}
+    >
+      <div className="border-b border-slate-200 p-1.5">
+        <input
+          autoFocus
+          type="text"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search…"
+          className="h-6 w-full border border-slate-300 px-1.5 text-xs outline-none focus:border-sky-500"
+        />
+      </div>
+      <div className="flex gap-2 border-b border-slate-200 px-1.5 py-1">
+        <button type="button" className="text-[11px] text-sky-700 hover:underline" onClick={() => setDraft(new Set(options))}>
+          Select All
+        </button>
+        <button type="button" className="text-[11px] text-sky-700 hover:underline" onClick={() => setDraft(new Set())}>
+          Clear
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-1">
+        {filteredOptions.length === 0 ? (
+          <p className="px-1.5 py-2 text-slate-400">No values</p>
+        ) : (
+          filteredOptions.map((value) => (
+            <label key={value || "__blank__"} className="flex items-center gap-1.5 px-1.5 py-0.5 hover:bg-slate-50">
+              <input type="checkbox" checked={draft.has(value)} onChange={() => toggleValue(value)} className="h-3 w-3" />
+              <span className="min-w-0 truncate" title={value}>{value || "(blank)"}</span>
+            </label>
+          ))
+        )}
+      </div>
+      <div className="flex justify-end gap-1.5 border-t border-slate-200 p-1.5">
+        <button type="button" className="h-6 border border-slate-300 bg-white px-2 text-[11px] hover:bg-slate-50" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="h-6 border border-sky-600 bg-sky-600 px-2 text-[11px] font-semibold text-white hover:bg-sky-700"
+          onClick={() => onApply(draft)}
+        >
+          OK
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function normalizeSelection(selection) {
   if (!selection) return null;
   return {
@@ -93,7 +233,7 @@ function normalizeSelection(selection) {
 
 export default function ErpDenseGrid({
   columns = [],
-  rows = [],
+  rows: rawRows = [],
   rowKey,
   onRowActivate,
   getRowProps,
@@ -142,6 +282,18 @@ export default function ErpDenseGrid({
   // Opt-in for wide entry grids. Declared widths remain authoritative so
   // input values stay visible; the viewport scrolls instead of squeezing.
   fitColumnWidths = false,
+  // Opt-in only (business owner, 2026-10-03) — default false, every existing
+  // caller unaffected. Pass true for an Excel-style per-column AutoFilter: a
+  // small funnel button in each header opens a checkbox dropdown of that
+  // column's own distinct values (dependent/cascading on every OTHER
+  // column's currently-active filter, same as real Excel). Hidden/off until
+  // the user clicks a column's own funnel — no filter row is ever shown by
+  // default. A column opts OUT with `filterable: false` (e.g. an Actions
+  // column with buttons, nothing meaningful to filter). A column with a
+  // custom `render` should supply `filterValue(row)` (falls back to
+  // `copyValue`, then the raw `row[column.key]`, same precedent as
+  // copyValue's own fallback chain).
+  columnFilter = false,
 }) {
   const effectiveCellNavigate = cellNavigate || rangeSelect;
   const rowRefs = useRef([]);
@@ -158,6 +310,74 @@ export default function ErpDenseGrid({
   // highlight, unlike the single active cell above which only needs tabIndex.
   const [selection, setSelection] = useState(null);
   const isDraggingRef = useRef(false);
+
+  // columnFilter state. { [columnKey]: Set<string> } — a column only ever
+  // appears as a key once the user has excluded at least one of its own
+  // values (see applyColumnFilter below); absent key = that column imposes
+  // no restriction of its own, even if OTHER columns' filters still narrow
+  // what's shown.
+  const [columnFilters, setColumnFilters] = useState({});
+  const [openFilterColumnKey, setOpenFilterColumnKey] = useState(null);
+  const filterAnchorMapRef = useRef({});
+
+  // Every distinct value a column holds across ALL rows, ignoring every
+  // active filter — the fixed "total universe" used only to detect whether
+  // a freshly-applied selection actually excludes anything (see
+  // applyColumnFilter), never used to populate the dropdown's own checkbox
+  // list (that's getAvailableValuesForColumn below, which IS dependent).
+  const getAllValuesForColumn = useCallback(
+    (column) => [...new Set(rawRows.map((row) => getColumnFilterValue(column, row)))].sort((a, b) => a.localeCompare(b)),
+    [rawRows],
+  );
+
+  // Dependent/cascading: a column's own dropdown only ever lists values
+  // still reachable once every OTHER column's current filter is applied —
+  // same behavior as real Excel AutoFilter (filtering column A narrows what
+  // column B's own dropdown can even offer).
+  const getAvailableValuesForColumn = useCallback(
+    (column) => {
+      const otherEntries = Object.entries(columnFilters).filter(([key]) => key !== column.key);
+      const candidateRows = otherEntries.length === 0
+        ? rawRows
+        : rawRows.filter((row) => otherEntries.every(([key, set]) => {
+          const otherColumn = columns.find((c) => c.key === key);
+          return !otherColumn || set.has(getColumnFilterValue(otherColumn, row));
+        }));
+      return [...new Set(candidateRows.map((row) => getColumnFilterValue(column, row)))].sort((a, b) => a.localeCompare(b));
+    },
+    [columnFilters, columns, rawRows],
+  );
+
+  const filteredRows = useMemo(() => {
+    if (!columnFilter) return rawRows;
+    const activeEntries = Object.entries(columnFilters);
+    if (activeEntries.length === 0) return rawRows;
+    return rawRows.filter((row) => activeEntries.every(([key, set]) => {
+      const column = columns.find((c) => c.key === key);
+      return !column || set.has(getColumnFilterValue(column, row));
+    }));
+  }, [columnFilter, rawRows, columns, columnFilters]);
+
+  // Every reference below this point reads `rows` — shadowing it with the
+  // filtered result means virtualizer/focus/selection/copy/render logic
+  // needs zero further changes to respect an active column filter.
+  const rows = filteredRows;
+
+  function applyColumnFilter(column, draftSet) {
+    const allValues = getAllValuesForColumn(column);
+    setColumnFilters((current) => {
+      const next = { ...current };
+      // Selecting every value this column actually has (its full universe,
+      // not just the currently-narrowed dropdown list) means this column
+      // itself excludes nothing — drop its key entirely so its funnel icon
+      // correctly reverts to the inactive state.
+      if (draftSet.size >= allValues.length) delete next[column.key];
+      else next[column.key] = draftSet;
+      return next;
+    });
+    setOpenFilterColumnKey(null);
+  }
+
   const hasRows = Array.isArray(rows) && rows.length > 0;
   const viewportClassName =
     maxHeight === "none"
@@ -450,13 +670,40 @@ export default function ErpDenseGrid({
             <tr>
               {columns.map((column, colIndex) => {
                 const isStickyFirst = stickyFirstColumn && colIndex === 0;
+                const canFilterColumn = columnFilter && column.filterable !== false;
+                const isFilterActive = Boolean(columnFilters[column.key]);
                 return (
                   <th
                     key={column.key}
                     className={`${stickyHeader ? "sticky top-0" : ""} ${isStickyFirst ? "sticky left-0 z-20" : stickyHeader ? "z-10" : ""} border-b border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white ${isStickyFirst ? "border-r border-slate-600" : ""} ${normalizeCellAlign(column.align)}`.trim()}
                     style={column.width ? { width: column.width, minWidth: column.width } : undefined}
                   >
-                    {column.label}
+                    {canFilterColumn ? (
+                      <div className="flex w-full items-center justify-between gap-1">
+                        <span className="min-w-0 flex-1 truncate" title={column.label}>{column.label}</span>
+                        <button
+                          type="button"
+                          ref={(el) => { filterAnchorMapRef.current[column.key] = el; }}
+                          onClick={() => setOpenFilterColumnKey((current) => (current === column.key ? null : column.key))}
+                          title={`Filter ${column.label}`}
+                          className={`flex-shrink-0 rounded p-0.5 normal-case tracking-normal hover:bg-slate-700 ${isFilterActive ? "bg-slate-700" : ""}`}
+                        >
+                          <FilterIcon active={isFilterActive} />
+                        </button>
+                        {openFilterColumnKey === column.key ? (
+                          <ColumnFilterPanel
+                            anchorMapRef={filterAnchorMapRef}
+                            columnKey={column.key}
+                            options={getAvailableValuesForColumn(column)}
+                            selected={columnFilters[column.key] ?? new Set(getAvailableValuesForColumn(column))}
+                            onApply={(draftSet) => applyColumnFilter(column, draftSet)}
+                            onClose={() => setOpenFilterColumnKey(null)}
+                          />
+                        ) : null}
+                      </div>
+                    ) : (
+                      column.label
+                    )}
                   </th>
                 );
               })}
