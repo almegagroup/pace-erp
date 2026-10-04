@@ -1178,6 +1178,43 @@ gap):** CRCP Cost Component Entry's own frontend UI/button placement — decide 
 AC01's future Bulk Component Mapper UI. **Not yet done:** live click-through on the deployed
 app (no dev login in this environment, per this doc's own established limitation elsewhere).
 
+**PO12 Tab 1 — ACL decision — Final Design: ✅ LOCKED 2026-10-04 (business owner).**
+Triggered by checking Prod directly: `PROC_PLANT_TRANSFER_LIST` (the resource Tab 1 and Tab
+2 both share) currently has **zero real grant in Prod** — `acl.work_context_capabilities`
+shows its 3 existing capabilities (`CAP_PROC_PLANT_TRANSFER` full V/W/E/D/Approve,
+`CAP_PROC_LOGISTICS` VIEW-only, `CAP_PROC_PLANT_TRANSFER_VIEW` VIEW-only) assigned **only to
+each company's ACL-MASTER work context** — the 2026-08-06 "Stores+Logistics+SCM full
+V/W/E/D" lock in `PROD-ACL-Access-Decisions.md` was apparently never actually pushed to a
+real (non-ACL-MASTER) work context in Prod, only written down. This correction belongs in
+that doc too, not just here — flagged, not yet written there.
+- **Locked decision:** Accounts = full access (VIEW+WRITE+EDIT: Discrepancy List, CRCP Cost
+  Component Entry, Settlement create/reverse) at **every** CRCP company, not just the ones
+  with a physical Stores/Logistics presence. L3_MANAGER and DIRECTOR = full access too.
+  P0076 (ACL-MASTER) = full access, as always, automatic. Stores and SCM = VIEW only (they
+  need to see the discrepancy/settlement picture, but Tab 1's actions are an Accounts/
+  Commercial function, not theirs to write).
+- **No new capability needed — reuses the exact AC01 Accounts capability family as-is, found
+  live in Prod to already match this split perfectly:** `CAP_ACC_GRN_COST_MAKER` (already
+  role-mapped to L1_MANAGER/L1_USER/L2_MANAGER/L2_USER/L3_USER/L4_USER — "Accounts") and
+  `CAP_ACC_GRN_COST_PLANTHEAD` (already role-mapped to exactly `L3_MANAGER` + `DIRECTOR`) —
+  both already live-granted via `work_context_capabilities` to real Accounts work contexts at
+  every CRCP company for AC01 itself, so granting these two capabilities VIEW+WRITE+EDIT on
+  `PROC_PLANT_TRANSFER_LIST` needs only new `acl.capability_menu_actions` rows (6 total: 2
+  capabilities × 3 actions) — no new `work_context_capabilities` row at all, since the same
+  people already hold these capabilities for AC01.
+- **Stores/SCM VIEW reuses the existing `CAP_PROC_LOGISTICS` capability** ("Stock transfers
+  and plant transfers" — already VIEW-only on this exact resource, confirmed above) — this
+  one DOES need new `work_context_capabilities` rows, since it currently has zero real
+  (non-ACL-MASTER) grant anywhere in Prod.
+- **Rollout sequence (per CLAUDE.md §8's locked "new (capability, menu) grant" rule — insert
+  live rows, then `capture_acl_version_source` on a version that has NOT already been
+  captured, or a fresh `acl_versions` row if it has, then `generate_acl_snapshot` +
+  `rebuild_acl_menu_snapshot`):** build and verify in Dev first (this feature's own migrations
+  are Dev-only today, see the implementation note above), then repeat the identical MCP
+  sequence in Prod once the code itself is deployed there — same two-step workflow this
+  codebase always uses for a schema+ACL pair. Not yet executed in either environment as of
+  this lock — next step.
+
 **0. Two-tab architecture (business owner's own framing):**
 - **Tab 1 — CRCP discrepancy + settlement + tracking.** Open to every company with PO12
   access, including a pure Bill-To company (e.g. CMP003) that never physically touches the
