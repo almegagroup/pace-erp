@@ -390,7 +390,16 @@ function buildListRow(
   deductionLinesByLc: Map<string, JsonRecord[]>,
   deductionTypeNameMap: Map<string, string>,
   splitIntoGrnNumbersMap: Map<string, string[]>,
+  settlementInvoiceMap: Map<string, JsonRecord>,
 ): JsonRecord {
+  // PO12 "AC01 Settlement Invoice" column (locked 2026-10-04) -- shows the
+  // Tally Invoice Number (the primary user-facing identifier), never the
+  // internal SETTLEMENT series number -- only ever set for a genuine CRCP
+  // discrepancy GRN (settlement_invoice_id only gets set by
+  // create_settlement_invoice(), which itself refuses a same-company GRN).
+  const settlementInvoice = grn.settlement_invoice_id
+    ? settlementInvoiceMap.get(String(grn.settlement_invoice_id))
+    : null;
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
   const company = companyMap.get(String(grn.company_id));
@@ -521,6 +530,14 @@ function buildListRow(
     boe_date: grn.boe_date ?? null,
     ud_status: udStatusMap.get(String(grn.id)) ?? null,
     payment_status: null, // Same deferral as actual_payment_date above.
+    // PO12 "AC01 Settlement Invoice" column -- Tally Invoice Number, never
+    // the internal SETTLEMENT series number. View/Print reuses that
+    // internal settlement_number separately (not surfaced in this column).
+    settlement_invoice_id: grn.settlement_invoice_id ?? null,
+    settlement_invoice_tally_number: settlementInvoice?.tally_invoice_number ?? null,
+    settlement_invoice_tally_date: settlementInvoice?.tally_invoice_date ?? null,
+    settlement_document_number: settlementInvoice?.settlement_number ?? null,
+    settlement_document_date: settlementInvoice?.posting_date ?? null,
   };
 }
 
@@ -544,6 +561,25 @@ export async function listAC01GRNsHandler(
     const ALLOWED_DATE_FIELDS = new Set(["invoice_date", "grn_date", "posting_date"]);
     const dateColumn = ALLOWED_DATE_FIELDS.has(dateField) ? dateField : "invoice_date";
 
+    // AC01 "ITC To" + cross-company visibility (locked 2026-10-04) -- a
+    // company sees a GRN whenever it owns it (today's existing rule) OR it
+    // is that GRN's own landed_cost.itc_owner_company_id (the CRCP case,
+    // §5 of the PO12 design doc section). Write access is unchanged --
+    // still strictly GRN-company-scoped via canWriteAC01() below.
+    let itcOwnerGrnIds: string[] = [];
+    if (companyId) {
+      const { data: itcOwnerLcRows } = await serviceRoleClient
+        .schema("erp_procurement").from("landed_cost")
+        .select("grn_id").eq("itc_owner_company_id", companyId).not("grn_id", "is", null);
+      itcOwnerGrnIds = [...new Set(((itcOwnerLcRows ?? []) as JsonRecord[]).map((row) => String(row.grn_id)))];
+      // §8E guard -- this list is inlined into a single .or() URL below, not
+      // read via fetchInChunks' .in(), so cap it defensively. A company
+      // being the CRCP ITC owner on hundreds of GRNs is not expected for
+      // this brand-new, low-volume feature; revisit with a dedicated view
+      // if this cap is ever actually hit in practice.
+      itcOwnerGrnIds = itcOwnerGrnIds.slice(0, 300);
+    }
+
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("goods_receipt")
@@ -551,7 +587,11 @@ export async function listAC01GRNsHandler(
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (companyId) query = query.eq("company_id", companyId);
+    if (companyId && itcOwnerGrnIds.length > 0) {
+      query = query.or(`company_id.eq.${companyId},id.in.(${itcOwnerGrnIds.join(",")})`);
+    } else if (companyId) {
+      query = query.eq("company_id", companyId);
+    }
     if (rateStatus === "PENDING") query = query.eq("rate_confirmed", false);
     if (rateStatus === "CONFIRMED") query = query.eq("rate_confirmed", true);
     if (dateFrom) query = query.gte(dateColumn, dateFrom);
@@ -740,11 +780,19 @@ export async function listAC01GRNsHandler(
       splitIntoGrnNumbersMap.get(key)!.push(grnNumber);
     }
 
+    const settlementInvoiceIds = [...new Set(rows.map((row) => String(row.settlement_invoice_id ?? "")).filter(Boolean))];
+    const settlementInvoiceRows = settlementInvoiceIds.length > 0
+      ? await fetchInChunks<JsonRecord>(settlementInvoiceIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("settlement_invoice")
+          .select("id, settlement_number, tally_invoice_number, tally_invoice_date, posting_date").in("id", chunk))
+      : [];
+    const settlementInvoiceMap = toMap(settlementInvoiceRows);
+
     const items = rows.map((row) =>
       buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
-        splitIntoGrnNumbersMap,
+        splitIntoGrnNumbersMap, settlementInvoiceMap,
       ),
     );
 

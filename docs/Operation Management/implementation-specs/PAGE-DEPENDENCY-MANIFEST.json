@@ -6774,6 +6774,52 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/transfer/PlantTransferPage.jsx",
+    "dependencyCount": 5,
+    "deps": [
+      {
+        "fn": "listCrcpDiscrepancy",
+        "method": "GET",
+        "path": "/api/procurement/crcp-discrepancy",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listPTOs",
+        "method": "GET",
+        "path": "/api/procurement/ptos",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createPTO",
+        "method": "POST",
+        "path": "/api/procurement/ptos",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials?${params.toString()}",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStorageLocations",
+        "method": "GET",
+        "path": "/api/om/storage-locations?${query.toString()}",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/production/BatchNumberReleasePage.jsx",
     "dependencyCount": 2,
     "deps": [

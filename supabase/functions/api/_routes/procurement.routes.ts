@@ -126,6 +126,17 @@ import {
   storageLocationTransferHandler,
 } from "../_core/procurement/pto.handlers.ts";
 import {
+  createCrcpCostComponentHandler,
+  listCrcpDiscrepancyHandler,
+} from "../_core/procurement/crcp_discrepancy.handlers.ts";
+import {
+  createSettlementInvoiceHandler,
+  getSettlementByTallyInvoiceHandler,
+  getSettlementPrintDataHandler,
+  listSettlementPendingHandler,
+  reverseSettlementInvoiceHandler,
+} from "../_core/procurement/settlement.handlers.ts";
+import {
   addIVLineHandler,
   createIVDraftHandler,
   getIVHandler,
@@ -706,6 +717,21 @@ export async function dispatchProcurementRoutes(
       return await listPTOsHandler(req, ctx);
     case "POST:/api/procurement/sloc-transfer":
       return await storageLocationTransferHandler(req, ctx);
+    // PO12 (PTO) Phase C — Tab 1 Discrepancy List + CRCP Cost Component
+    // Entry + Settlement (Leg 2 Invoice). Design: PROCUREMENT-DESIGN-DOC.md
+    // "PO12 (PTO) — Tab 1 Design" / "Settlement (Leg 2 Invoice)" sections.
+    case "GET:/api/procurement/crcp-discrepancy":
+      return await listCrcpDiscrepancyHandler(req, ctx);
+    case "POST:/api/procurement/crcp-cost-components":
+      return await createCrcpCostComponentHandler(req, ctx);
+    case "GET:/api/procurement/settlements/pending":
+      return await listSettlementPendingHandler(req, ctx);
+    case "GET:/api/procurement/settlements/lookup":
+      return await getSettlementByTallyInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/settlements":
+      return await createSettlementInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/settlements/reverse":
+      return await reverseSettlementInvoiceHandler(req, ctx);
     case "POST:/api/procurement/landed-costs":
       return await createLandedCostHandler(req, ctx);
     case "GET:/api/procurement/landed-costs":
@@ -1202,6 +1228,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/ptos\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getPTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/settlements\/[^/]+\/print$/.test(pathname) && req.method === "GET") {
+    return await getSettlementPrintDataHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/ptos\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
