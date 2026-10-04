@@ -36,6 +36,13 @@ function toTrimmedString(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+// Nullable UUIDs must be removed before a PostgREST `.in()` lookup. Casting
+// null with String() produces the literal value "null", which fails UUID
+// parsing in Postgres (22P02) when a selected GRN uses the other document leg.
+function collectIds(rows: JsonRecord[], field: string): string[] {
+  return [...new Set(rows.map((row) => toTrimmedString(row[field])).filter(Boolean))];
+}
+
 function settlementErrorResponse(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -68,8 +75,8 @@ async function resolveSharedBillTo(grnIds: string[]): Promise<{ billTo: string |
     .schema("erp_procurement").from("goods_receipt")
     .select("id, company_id, po_id, sto_id").in("id", grnIds);
   const rows = (grns ?? []) as JsonRecord[];
-  const poIds = [...new Set(rows.map((row) => String(row.po_id)).filter(Boolean))];
-  const stoIds = [...new Set(rows.map((row) => String(row.sto_id)).filter(Boolean))];
+  const poIds = collectIds(rows, "po_id");
+  const stoIds = collectIds(rows, "sto_id");
   const [poRows, stoRows] = await Promise.all([
     fetchInChunks<JsonRecord>(poIds, (chunk) =>
       serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, company_id").in("id", chunk)),
@@ -86,7 +93,8 @@ async function resolveSharedBillTo(grnIds: string[]): Promise<{ billTo: string |
       ? toTrimmedString(poMap.get(String(row.po_id))?.company_id)
       : toTrimmedString(stoMap.get(String(row.sto_id))?.receiving_company_id);
     if (billTo) billToSet.add(billTo);
-    if (row.company_id) actualReceiverSet.add(String(row.company_id));
+    const actualReceiver = toTrimmedString(row.company_id);
+    if (actualReceiver) actualReceiverSet.add(actualReceiver);
   }
   return {
     billTo: billToSet.size === 1 ? [...billToSet][0] : null,
@@ -334,7 +342,7 @@ export async function getSettlementPrintDataHandler(
     ]);
 
     const grnRows = (coveredGrns ?? []) as JsonRecord[];
-    const materialIds = [...new Set(grnRows.map((row) => String(row.material_id)).filter(Boolean))];
+    const materialIds = collectIds(grnRows, "material_id");
     const materials = materialIds.length > 0
       ? await fetchInChunks<JsonRecord>(materialIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("material_master")
