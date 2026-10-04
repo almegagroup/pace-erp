@@ -1399,8 +1399,9 @@ Discrepancy row — Final Design: ✅ LOCKED 2026-10-04 (business owner + design
     covered back to Settlement Status `Pending` (reappearing in Tab 1's own Pending list) —
     no stock movement exists to unwind, so this is a pure status-flip, simpler than
     GRN/PO/Sales-Invoice reversal.
-- **Not yet decided:** any approval/role-gating or mandatory-reason requirement specifically
-  on the Reverse action — revisit if needed.
+- **No separate approval on Reverse (business owner, 2026-10-04)** — ordinary PO12 write
+  access (same ACL grant the Settlement create action itself uses) is sufficient; no
+  mandatory-reason field, no extra role gate beyond that.
 
 **Correction to this doc's own CLAUDE.md note (2026-10-04) — Prod Supabase access.**
 CLAUDE.md states "আমার MCP শুধু dev-এ যুক্ত, prod আমি কখনো দেখিনি" (MCP is dev-only, Prod has
