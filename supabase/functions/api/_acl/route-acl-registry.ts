@@ -336,6 +336,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/production/ac06/costing-groups/assign": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
   "POST:/api/production/ac06/costing-groups/unassign": { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
   "POST:/api/production/ac06/material-inclusion":    { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
+  "POST:/api/production/ac06/fg-type-scope":         { skipAcl: false, resourceCode: "ACC_SLOC_COSTING_SETUP", action: "WRITE" },
   "GET:/api/production/vendor-codes":                { skipAcl: false, resourceCode: "SA_VENDOR_CODE_MASTER", action: "VIEW" },
   "POST:/api/production/vendor-codes":               { skipAcl: false, resourceCode: "SA_VENDOR_CODE_MASTER", action: "WRITE" },
   "GET:/api/production/company-vendor-codes":        { skipAcl: false, resourceCode: "ACC_COMPANY_VENDOR_CODE", action: "VIEW" },
