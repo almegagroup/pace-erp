@@ -1301,7 +1301,118 @@ LOCKED column order:**
   the GRN Invoice Mapping page — one box, not per-field filters, for speed); a **Date Range +
   Date-Column dropdown** (choices: GRN Date, Invoice Date, Delivery Challan Date, LR Date) —
   same established `date_field`+`date_from`+`date_to` pattern already used by AC01/IN02, not
-  a new mechanism.
+  a new mechanism. **Per-column Excel-style AutoFilter also applies here** — see
+  `ErpDenseGrid`'s new `columnFilter`/`filterType: "date"` capability, locked just below.
+
+**ErpDenseGrid — Excel-style per-column AutoFilter — Final Design: ✅ LOCKED + BUILT
+2026-10-03/04.** Came up directly from this grid's own filter needs, built as a shared
+`ErpDenseGrid` capability (not page-local) so any table built on it can opt in.
+- **Opt-in, `columnFilter={true}` prop — default off, zero behavior change for any of this
+  component's 119 existing callers.** A funnel button in each filterable column's header
+  opens a checkbox dropdown of that column's own distinct values, dependent/cascading on
+  every OTHER column's currently-active filter (same as real Excel — filtering column A
+  narrows what column B's own dropdown can even offer, in either order, since the math is
+  symmetric). The dropdown's own search box narrows the checkbox list live on every
+  keystroke (same autosuggest feel as Excel/Google Sheets' own filter box). A column opts
+  OUT with `filterable: false` (e.g. an Action-button column, nothing meaningful to filter);
+  a column with a custom `render` should supply `filterValue(row)` (falls back to
+  `copyValue`, then the raw `row[column.key]`).
+- **Date columns get `filterType: "date"`** — the dropdown becomes a collapsible
+  Year → Month → Day tree with tri-state checkboxes (checking a Year/Month toggles every
+  date it rolls up) and expand/collapse, matching Excel's own date-column AutoFilter
+  exactly. Parses either of this codebase's two existing date-string conventions (ISO, or
+  this app's own DD-MM-YYYY display format) from `filterValue`/`copyValue`; anything
+  unparseable falls into an "Other" bucket rather than being silently dropped.
+- **Selection is a draft, committed only on "OK"** (not on each checkbox click) — toggling
+  individual checkboxes doesn't re-filter/re-render the whole grid mid-selection. The panel
+  is portaled to `document.body`, positioned off the filter button's own bounding rect (same
+  technique as `ErpComboboxField`'s own dropdown), escaping the grid's own scroll-viewport
+  clipping.
+- **Header label never gets crowded by the new button** — the label sits in its own
+  `flex-1 truncate` slot, the funnel button is `flex-shrink-0`, so a narrow column's name
+  stays readable (ellipsis, not squeezed) regardless of the icon.
+- **Deliberately NOT turned on for any of the 119 existing `ErpDenseGrid` callers in this
+  same pass** — business owner's own call: flipping it on everywhere at once is cosmetically
+  harmless (every header just gains a small icon; no page's data/behavior changes until a
+  user actually opens a dropdown and applies a filter), but doing it *correctly* means
+  walking each file's own column definitions first (which need `filterable: false`, which
+  date column needs `filterType: "date"`, which custom-render column needs a real
+  `filterValue`) — a dedicated future sweep, not a blind one-line flip across 119 files in
+  this same session. This page's own grid (and the Settlement page's grid, below) is the
+  first real caller.
+- Commits: `49bc253` (flat per-column filter), `17189d1` (date-column Year/Month/Day tree).
+
+**Settlement (Leg 2 Invoice) — a separate button inside Tab 1, reached from a Pending-status
+Discrepancy row — Final Design: ✅ LOCKED 2026-10-04 (business owner + design session).**
+- **One page, two tabs — "Pending" (create) and "Settled" (view + reverse)** — same shape as
+  the GRN Invoice Mapping page's own Pending/Mapped split, reused rather than building a
+  second standalone page for reversal.
+- **"Pending" tab — create flow:**
+  - **Header:** Tally Invoice Number + Date; Posting Date (tied to/against the Tally Invoice
+    Date, not independently entered); **Invoice Quantity** (manually entered, the commercial
+    total this real external invoice states) alongside a **live, read-only Running Total**
+    of the currently-checked rows' own Quantity column; Rate per UOM; Currency; **Freight
+    Term** (reuses the exact same `FREIGHT_TERM_OPTIONS` already defined in
+    `POCreatePage.jsx`/`SOCreatePage.jsx` — FOR / Freight Separate / Freight at Actuals / Ex
+    Transporter Godown, no new options invented — this is the same field that formalizes the
+    earlier-locked provisional/FOR-inclusive-invoicing behavior into an explicit choice, not
+    a separate new mechanism); **Payment Terms** (reuses the existing
+    `usePaymentTermOptionsQuery` hook + dropdown pattern, same as `SOCreatePage.jsx`); GST
+    rate + Inclusive/Exclusive; CGST+SGST vs IGST (reuses `deriveSalesInvoiceGstType()` from
+    `sales_order.handlers.ts`, already shared across SO/DO — compares the two companies'
+    state names, no new GST logic).
+  - **Match rule — hard gate on posting:** `Invoice Quantity` must exactly equal the Running
+    Total of the checked rows; the Settlement action stays disabled on mismatch — same
+    disabled-button discipline as the GRN Invoice Mapping page's own Map button.
+  - **Grid:** the same Discrepancy Grid as above (identical columns), filtered to
+    Settlement Status = Pending only, with a row checkbox and the same column-filter
+    capability.
+  - **Posting is a single atomic transaction** (one dedicated plpgsql function, not routed
+    through `post_document()`/`posting_source_registry` since there is zero `stock_ledger`
+    movement to post — this is purely a business-table write, not a stock posting): creates
+    the Settlement Invoice header row and flips every selected GRN's Settlement Status to
+    `SETTLED` with a reference back to this invoice, all in one commit.
+  - **New global Document Number Series entry — `SETTLEMENT`, range start `9900000001`
+    (band `99xxxxxxxx`), `pad_width=10`** — same §8 global/non-company-scoped mechanism
+    every other doc_type uses (`generate_doc_number()`), **not** a reuse of the externally-
+    entered Tally Invoice Number (that stays a separate tracking field, same dual-number
+    shape Sales Invoice already has: its own internal number *and* a separately-tracked
+    Tally reference). Confirmed free in **both** Dev (`ytapuwiqicmvpanmzelb`) and Prod
+    (`bsjpvkigpllichlknmah`) via a live query of each project's own
+    `erp_procurement.document_number_series` — both are in sync on the full doc_type set,
+    highest band taken in either is `SRET` at `98xxxxxxxx`, so `99xxxxxxxx` is clear in
+    both.
+- **"Settled" tab — reversal flow, whole-invoice only, never a specific row:**
+  - User types the Settlement Invoice's own Number + Date (same "type + Check" lookup
+    pattern as the GRN Invoice Mapping page's "Map to existing Invoice" toggle) → every GRN
+    row this invoice covers displays **read-only** → a single **"Reverse"** button.
+  - **Deliberately whole-invoice, no per-row reversal** — business owner's own instinct,
+    confirmed: the header's own commercial values (Invoice Quantity, Rate, GST amount) were
+    fixed against the *total* of every covered row at posting time; dropping one row without
+    also re-deriving those header values would both break this page's own match rule and
+    require editing a real, externally-issued Tally invoice number's stated commercial
+    terms after the fact — the same complexity class already deliberately kept out of scope
+    elsewhere in this doc (the PR19-style Partial Reversal mechanism, a separate, much
+    larger design). If the wrong rows were posted, the fix is reverse the whole invoice,
+    then re-settle correctly from scratch — never patch a single row out of a posted one.
+  - **Reverse flips `status = REVERSED`** on the Settlement Invoice and resets every row it
+    covered back to Settlement Status `Pending` (reappearing in Tab 1's own Pending list) —
+    no stock movement exists to unwind, so this is a pure status-flip, simpler than
+    GRN/PO/Sales-Invoice reversal.
+- **Not yet decided:** any approval/role-gating or mandatory-reason requirement specifically
+  on the Reverse action — revisit if needed.
+
+**Correction to this doc's own CLAUDE.md note (2026-10-04) — Prod Supabase access.**
+CLAUDE.md states "আমার MCP শুধু dev-এ যুক্ত, prod আমি কখনো দেখিনি" (MCP is dev-only, Prod has
+never been seen). **This is now stale** — `mcp__Supabase__list_projects` returns both
+`ytapuwiqicmvpanmzelb` ("pace-erp-dev") *and* `bsjpvkigpllichlknmah` ("pace-erp", i.e. Prod)
+as accessible projects, confirmed by successfully running a live read-only query against the
+latter (the `document_number_series` check above). Access appears to have been added at some
+point without the note being updated. Going forward: Prod verification (read-only checks like
+this one) can be done directly in-session rather than always deferring to "business owner
+checks Prod separately" — still never write/apply anything to Prod without explicit
+business-owner sign-off, per the existing dev→prod workflow (§7), but reads no longer need to
+wait.
 
 **Point 3.2.8 — Generalization (not CRCP-only)**
 - Business: this Return-vs-Invoice choice applies to any inter-company stock movement,
