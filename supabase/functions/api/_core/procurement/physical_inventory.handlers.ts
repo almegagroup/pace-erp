@@ -18,6 +18,7 @@ import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } from "../../_shared/workflow_scope.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { getMtsMachineStorageLocationIds } from "../../_shared/mtsMachineLocations.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
@@ -2129,51 +2130,6 @@ async function postDocument(args: {
   return { postings: (Array.isArray(postings) ? postings : []) as Array<{ line_ref: string; stock_document_id: string; stock_ledger_id: string; valuation_rate: number | null }> };
 }
 
-// §138.7/§138.13 — which of this company's storage locations are MTS machine-tracked shop floor
-// locations (any active machine's own storage_location_id, where that machine is either
-// MTS-mapped or carries no po_type restriction at all). Same derivation as
-// location_transfer.handlers.ts's getMtsStorageLocationIds — kept as a local copy here rather
-// than a shared export, matching this file's existing local-postDocument-per-handler-file
-// convention.
-async function getMtsStorageLocationIds(companyId: string): Promise<Set<string>> {
-  const { data: machines, error: machineError } = await serviceRoleClient
-    .schema("erp_master")
-    .from("machine_master")
-    .select("id, storage_location_id")
-    .eq("company_id", companyId)
-    .eq("active", true)
-    .not("storage_location_id", "is", null);
-  if (machineError) throw new Error("PI_MTS_LOCATION_LOOKUP_FAILED");
-  const machineRows = (machines ?? []) as JsonRecord[];
-  const machineIds = machineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
-  if (machineIds.length === 0) return new Set();
-
-  const { data: poTypeRows, error: poTypeError } = await serviceRoleClient
-    .schema("erp_master")
-    .from("machine_po_type_map")
-    .select("machine_id, po_type")
-    .in("machine_id", machineIds);
-  if (poTypeError) throw new Error("PI_MTS_LOCATION_LOOKUP_FAILED");
-  const poTypesByMachine = new Map<string, string[]>();
-  for (const row of (poTypeRows ?? []) as JsonRecord[]) {
-    const machineId = toTrimmedString(row.machine_id);
-    const list = poTypesByMachine.get(machineId) ?? [];
-    list.push(toUpperTrimmedString(row.po_type));
-    poTypesByMachine.set(machineId, list);
-  }
-
-  const locationIds = new Set<string>();
-  for (const row of machineRows) {
-    const machineId = toTrimmedString(row.id);
-    const poTypes = poTypesByMachine.get(machineId) ?? [];
-    if (poTypes.length === 0 || poTypes.includes("MTS")) {
-      const locationId = toTrimmedString(row.storage_location_id);
-      if (locationId) locationIds.add(locationId);
-    }
-  }
-  return locationIds;
-}
-
 // §119.10 — live WAR rate at post time (never cached), so PID automatically tracks whatever the
 // WAR/costing engine looks like later (§111 Landed Cost, etc.) without PID's own code changing.
 async function fetchCurrentValuationRates(
@@ -2327,7 +2283,7 @@ export async function postDifferencesHandler(
     // variance to a machine itself -- if the real cause is machine-specific, the user re-balances
     // it afterward via IN11's Distribute to Machine (§138.13.1, MANUAL_ALLOT). Same pattern as
     // Opening Stock (§138.3).
-    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const mtsLocationIds = await getMtsMachineStorageLocationIds(companyId);
     const machineStockLogRows: JsonRecord[] = batchItems
       .filter((item) => (parseNullableNumber(item.difference_qty) ?? 0) !== 0 && mtsLocationIds.has(toTrimmedString(item.storage_location_id)))
       .map((item) => {

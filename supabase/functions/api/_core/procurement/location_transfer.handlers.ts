@@ -12,6 +12,7 @@ import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/com
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { getMtsMachineStorageLocationIds } from "../../_shared/mtsMachineLocations.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -1166,7 +1167,7 @@ export async function postLocationTransferHandler(
     // §138.6 TRANSFER writer -- a P311 landing at an MTS machine-tracked
     // location always lands the Unassigned bucket (§138.3), never a specific
     // machine. Non-MTS targets skip this entirely, same table stays untouched.
-    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const mtsLocationIds = await getMtsMachineStorageLocationIds(companyId);
     const machineStockLogRows: JsonRecord[] = [];
 
     for (const entry of postingLines) {
@@ -1339,49 +1340,6 @@ const DISTRIBUTE_ERROR_CODES = new Set([
   "LTR_DISTRIBUTE_LOCATION_NOT_MTS",
 ]);
 
-// Same fail-open convention as machine.handlers.ts's listMachinesHandler po_type
-// filter -- a machine with no po_types configured yet still counts as
-// MTS-eligible, so pre-existing machines don't vanish from this feature the
-// moment SA hasn't visited machine_po_type_map for them yet.
-async function getMtsStorageLocationIds(companyId: string): Promise<Set<string>> {
-  const { data: machines, error: machineError } = await serviceRoleClient
-    .schema("erp_master")
-    .from("machine_master")
-    .select("id, storage_location_id")
-    .eq("company_id", companyId)
-    .eq("active", true)
-    .not("storage_location_id", "is", null);
-  if (machineError) throw new Error("LTR_DISTRIBUTE_MACHINE_LOOKUP_FAILED");
-  const machineRows = (machines ?? []) as JsonRecord[];
-  const machineIds = machineRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
-  if (machineIds.length === 0) return new Set();
-
-  const { data: poTypeRows, error: poTypeError } = await serviceRoleClient
-    .schema("erp_master")
-    .from("machine_po_type_map")
-    .select("machine_id, po_type")
-    .in("machine_id", machineIds);
-  if (poTypeError) throw new Error("LTR_DISTRIBUTE_MACHINE_LOOKUP_FAILED");
-  const poTypesByMachine = new Map<string, string[]>();
-  for (const row of (poTypeRows ?? []) as JsonRecord[]) {
-    const machineId = toTrimmedString(row.machine_id);
-    const list = poTypesByMachine.get(machineId) ?? [];
-    list.push(toUpperTrimmedString(row.po_type));
-    poTypesByMachine.set(machineId, list);
-  }
-
-  const locationIds = new Set<string>();
-  for (const row of machineRows) {
-    const machineId = toTrimmedString(row.id);
-    const poTypes = poTypesByMachine.get(machineId) ?? [];
-    if (poTypes.length === 0 || poTypes.includes("MTS")) {
-      const locationId = toTrimmedString(row.storage_location_id);
-      if (locationId) locationIds.add(locationId);
-    }
-  }
-  return locationIds;
-}
-
 async function getStorageLocationInfo(ids: string[]): Promise<Map<string, JsonRecord>> {
   const uniqueIds = [...new Set(ids.map((entry) => toTrimmedString(entry)).filter(Boolean))];
   const map = new Map<string, JsonRecord>();
@@ -1473,7 +1431,7 @@ export async function listUnassignedMachineStockHandler(
     }
     await assertScopedCompanyAccess(ctx, companyId, POST_RESOURCE, "VIEW");
 
-    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const mtsLocationIds = await getMtsMachineStorageLocationIds(companyId);
     const buckets = await fetchUnassignedBuckets(companyId, [...mtsLocationIds]);
 
     const [materialInfo, locationInfo] = await Promise.all([
@@ -1531,7 +1489,7 @@ export async function postMachineDistributionHandler(
       return ltrErrorResponse(req, ctx, "LTR_DISTRIBUTE_INVALID", 400, "At least one item with at least one machine split is required.");
     }
 
-    const mtsLocationIds = await getMtsStorageLocationIds(companyId);
+    const mtsLocationIds = await getMtsMachineStorageLocationIds(companyId);
     const storageLocationIds = [...new Set(distributions.map((entry) => entry.storage_location_id))];
     for (const locationId of storageLocationIds) {
       if (!mtsLocationIds.has(locationId)) {
@@ -1680,7 +1638,7 @@ export async function reverseLocationTransferPostingHandler(
     // machine (§138.13.1's MANUAL_ALLOT) since the original transfer, in
     // which case reversal is blocked here rather than silently leaving the
     // Unassigned bucket negative.
-    const mtsLocationIdsForReversal = await getMtsStorageLocationIds(companyId);
+    const mtsLocationIdsForReversal = await getMtsMachineStorageLocationIds(companyId);
     const targetIsMtsTracked = mtsLocationIdsForReversal.has(targetStorageLocationId);
     if (targetIsMtsTracked) {
       const unassignedBuckets = await fetchUnassignedBuckets(companyId, [targetStorageLocationId]);

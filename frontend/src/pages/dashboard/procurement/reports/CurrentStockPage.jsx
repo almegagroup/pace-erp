@@ -238,7 +238,7 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
       )}
     >
       <p className="mb-3 text-xs text-slate-500">
-        Same filters as the report just executed — company, materials, storage locations, batch numbers.
+        Same filters as the report just executed — company, material types, materials, storage locations, batch numbers.
       </p>
       {query.isLoading ? (
         <p className="py-6 text-center text-sm text-slate-500">Loading...</p>

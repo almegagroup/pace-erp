@@ -15,6 +15,7 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { getMtsMachineStorageLocationIds } from "../../_shared/mtsMachineLocations.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import {
   getCurrentProcurementPlanningStatusByLocation,
@@ -1009,11 +1010,10 @@ export async function getStockLedgerReportHandler(
 // erp_production.machine_stock_log directly instead of stock_ledger --
 // machine_stock_log already IS the machine-attributed ledger (§138.6), so
 // there is no ambiguous stock_ledger-row-to-machine_stock_log-row join
-// needed. A (company, storage_location) only ever has rows here if it is MTS
-// machine-tracked (machine_stock_log is structurally never written for any
-// other location), which naturally gives "only machine-tracked rows" without
-// a separate filter -- exactly the scope the business owner asked for. The
-// main report's own rows/state are untouched; this is a fully separate query.
+// needed. The report still scopes log rows to locations mapped to an explicit
+// MTS machine, so an old log row from a non-MTS shop floor can never leak into
+// the machine-wise report. The main report's own rows/state are untouched;
+// this is a fully separate query.
 export async function getStockLedgerMachineWiseHandler(
   req: Request,
   ctx: StockReportHandlerContext,
@@ -1039,6 +1039,16 @@ export async function getStockLedgerMachineWiseHandler(
     const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
     const batchNumbers = parseMultiValueParams(url, "batch_numbers", "batch_number");
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
+    const mtsStorageLocationIds = await getMtsMachineStorageLocationIds(companyId);
+    if (mtsStorageLocationIds.size === 0) {
+      return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+    }
+    const effectiveStorageLocationIds = storageLocationIds.length > 0
+      ? storageLocationIds.filter((id) => mtsStorageLocationIds.has(id))
+      : [...mtsStorageLocationIds];
+    if (effectiveStorageLocationIds.length === 0) {
+      return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+    }
 
     let logData: JsonRecord[];
     try {
@@ -1048,13 +1058,13 @@ export async function getStockLedgerMachineWiseHandler(
           .from("machine_stock_log")
           .select("id, company_id, storage_location_id, material_id, machine_id, batch_number, qty, direction, source_type, reference_document_type, reference_document_id, created_at, created_by")
           .eq("company_id", companyId)
+          .in("storage_location_id", effectiveStorageLocationIds)
           .order("created_at", { ascending: true })
           .order("id", { ascending: true })
           .range(from, to);
         query = (query as unknown as { gte: (column: string, value: string) => typeof query }).gte("created_at", `${dateFrom}T00:00:00.000Z`);
         query = (query as unknown as { lte: (column: string, value: string) => typeof query }).lte("created_at", `${dateTo}T23:59:59.999Z`);
         if (materialIds.length > 0) query = query.in("material_id", materialIds);
-        if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
         if (batchNumbers.length > 0) query = query.in("batch_number", batchNumbers);
         return query;
       });
@@ -1980,11 +1990,52 @@ export async function getCurrentStockMachineWiseHandler(
     assertProcurementReadRole(ctx);
     const url = new URL(req.url);
     const companyIds = parseMultiValueParams(url, "company_ids", "company_id");
-    const materialIds = parseMultiValueParams(url, "material_ids", "material_id");
+    const requestedMaterialIds = parseMultiValueParams(url, "material_ids", "material_id");
+    const materialTypes = parseMultiValueParams(url, "material_types", undefined, (value) => value.toUpperCase());
     const storageLocationIds = parseMultiValueParams(url, "storage_location_ids");
     const batchNumbers = parseMultiValueParams(url, "batch_numbers");
     const showZero = parseBooleanFlag(url.searchParams.get("show_zero"));
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
+    const mtsStorageLocationIds = await getMtsMachineStorageLocationIds(companyId);
+    if (mtsStorageLocationIds.size === 0) {
+      return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+    }
+    const effectiveStorageLocationIds = storageLocationIds.length > 0
+      ? storageLocationIds.filter((id) => mtsStorageLocationIds.has(id))
+      : [...mtsStorageLocationIds];
+    if (effectiveStorageLocationIds.length === 0) {
+      return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+    }
+
+    // Limit the report to explicit MTS-mapped locations, then resolve the
+    // selected material types because machine_stock_log has no material_type
+    // column. This keeps the drawer aligned with IN03's MTS scope and filters.
+    const requestedMaterialTypes = materialTypes.length
+      ? materialTypes.filter((value) => ["RM", "PM", "INT", "SFG", "FG"].includes(value))
+      : ["RM", "PM", "INT", "SFG", "FG"];
+    let materialIds = requestedMaterialIds;
+    try {
+      let typeMaterialQuery = serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id");
+      if (requestedMaterialTypes.length > 0) {
+        typeMaterialQuery = typeMaterialQuery.in("material_type", requestedMaterialTypes);
+      }
+      const { data: typeMaterials, error: typeError } = await typeMaterialQuery;
+      if (typeError) {
+        return reportErrorResponse(req, ctx, "CURRENT_STOCK_MACHINE_WISE_FETCH_FAILED", 500, "Unable to fetch machine-wise current stock.");
+      }
+      const typeMaterialIds = new Set(((typeMaterials ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)));
+      materialIds = requestedMaterialIds.length > 0
+        ? requestedMaterialIds.filter((id) => typeMaterialIds.has(id))
+        : [...typeMaterialIds];
+      if (materialIds.length === 0) {
+        return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+      }
+    } catch {
+      return reportErrorResponse(req, ctx, "CURRENT_STOCK_MACHINE_WISE_FETCH_FAILED", 500, "Unable to fetch machine-wise current stock.");
+    }
 
     let logData: JsonRecord[];
     try {
@@ -1994,10 +2045,10 @@ export async function getCurrentStockMachineWiseHandler(
           .from("machine_stock_log")
           .select("storage_location_id, material_id, machine_id, batch_number, qty, direction")
           .eq("company_id", companyId)
+          .in("storage_location_id", effectiveStorageLocationIds)
           .order("id", { ascending: true })
           .range(from, to);
         if (materialIds.length > 0) query = query.in("material_id", materialIds);
-        if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
         if (batchNumbers.length > 0) query = query.in("batch_number", batchNumbers);
         return query;
       });
@@ -2863,6 +2914,16 @@ export async function getStockHistoryMachineWiseHandler(
     const requestedMaterialIds = parseMultiValueParams(url, "material_ids", "material_id");
     const storageLocationIds = parseMultiValueParams(url, "storage_location_ids", "storage_location_id");
     const companyId = await resolveMandatorySingleCompanyId(ctx, companyIds);
+    const mtsStorageLocationIds = await getMtsMachineStorageLocationIds(companyId);
+    if (mtsStorageLocationIds.size === 0) {
+      return okResponse({ data: [], total: 0, visible_buckets: [] }, ctx.request_id, req);
+    }
+    const effectiveStorageLocationIds = storageLocationIds.length > 0
+      ? storageLocationIds.filter((id) => mtsStorageLocationIds.has(id))
+      : [...mtsStorageLocationIds];
+    if (effectiveStorageLocationIds.length === 0) {
+      return okResponse({ data: [], total: 0, visible_buckets: [] }, ctx.request_id, req);
+    }
 
     // material_types has no column on machine_stock_log -- resolve it to a
     // material id set first, same shape as getCurrentStockHandler's Path A.
@@ -2894,13 +2955,13 @@ export async function getStockHistoryMachineWiseHandler(
           .from("machine_stock_log")
           .select("storage_location_id, material_id, machine_id, qty, direction, source_type, created_at")
           .eq("company_id", companyId)
+          .in("storage_location_id", effectiveStorageLocationIds)
           .order("id", { ascending: true })
           .range(from, to);
         // Only need rows up to the end of the period -- anything after
         // date_to affects neither Opening nor Closing for this report.
         query = (query as unknown as { lt: (column: string, value: string) => typeof query }).lt("created_at", new Date(periodEndExclusiveMs).toISOString());
         if (materialIds.length > 0) query = query.in("material_id", materialIds);
-        if (storageLocationIds.length > 0) query = query.in("storage_location_id", storageLocationIds);
         return query;
       });
     } catch {
