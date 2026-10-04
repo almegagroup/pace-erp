@@ -1143,6 +1143,41 @@ session). Resolves Point 3.2.6's "mechanism NOT yet designed" status for Tab 1 s
 Tab 2 (physical Transfer/Receive) stays explicitly un-designed, business owner's own
 instruction ("Tab 2 niye akhon vebona").**
 
+**✅ IMPLEMENTATION COMPLETE (2026-10-04, commit `8d32ced`).** Covers every section locked
+in this whole Phase C scope end to end — Tab 1 Discrepancy List, CRCP Cost Component Entry,
+AC01 "ITC To" + cross-company visibility, Settlement (Leg 2 Invoice) create/reverse/print,
+AC01 "Settlement Invoice" column + View/Print, and PO12's own Excel export (the
+ErpDenseGrid AutoFilter capability itself was already built separately, commits
+`49bc253`/`17189d1`). Migrations: `landed_cost.itc_owner_company_id` + backfill, `SETTLEMENT`
+doc-series row, `erp_procurement.settlement_invoice` table + `goods_receipt.
+settlement_invoice_id` link + atomic `create_settlement_invoice()`/`reverse_settlement_invoice()`
+— verified in rolled-back Dev transactions, including the quantity-mismatch hard-gate firing
+correctly. Backend: `crcp_discrepancy.handlers.ts` (Tab 1 list + CRCP Cost Component Entry,
+with its own `canWriteCrcp()`/`requireCrcpWriteAccess()` — company-scope-write-acl-guard.mjs
+caught the same "resolves a company other than ctx.context.companyId without a secondary
+ACL-decision check" gap already fixed once in `ac01.handlers.ts`'s `canWriteAC01()`, same fix
+shape applied here), `settlement.handlers.ts` (create/reverse/pending-list/lookup/print-data),
+`ac01.handlers.ts` (broadened read + Settlement Invoice column data) — all reusing the
+existing `PROC_PLANT_TRANSFER_LIST` resource, no new menu/resource registered. Frontend:
+`PlantTransferPage.jsx` (new Tab1/Tab2 wrapper — Tab 2 is the pre-existing
+`PlantTransferListPage.jsx`, rendered unchanged), `CrcpDiscrepancyPage.jsx`,
+`SettlementInvoicePage.jsx`, `SettlementInvoicePrintPage.jsx` (reuses
+`SalesInvoicePrintPage.jsx`'s own `InvoiceCopy`, now exported, as-is), AC01's new column.
+Verification: `deno check`/`eslint` both confirmed zero *new* errors via git-stash baseline
+diff (93 and 1 pre-existing respectively), all 13 relevant guard scripts clean,
+`migration-integrity-check.mjs` confirms both new migrations byte-exact in sync with Dev,
+`dependency-provisioning-check.mjs --strict-manifest` clean (added the one missing
+`PlantTransferPage.jsx` manifest entry it caught). **Found, not caused by this work:**
+pre-existing Dev drift — one old `20260710004438` name mismatch, and 4 remote-only migrations
+(`inward_qa_test_line_skip_flag`, `pi_block_company_scope`, `pi_block_lifecycle_cleanup`,
+`enable_rls_remaining_business_tables`, `ac06_fg_type_group_scope`) applied to Dev by a
+different/concurrent session whose local files this checkout never had — flagged here per
+CLAUDE.md's own "two sessions against the same working directory" risk note, not touched.
+**Deliberately not built, per explicit business-owner deferral already recorded above (not a
+gap):** CRCP Cost Component Entry's own frontend UI/button placement — decide together with
+AC01's future Bulk Component Mapper UI. **Not yet done:** live click-through on the deployed
+app (no dev login in this environment, per this doc's own established limitation elsewhere).
+
 **0. Two-tab architecture (business owner's own framing):**
 - **Tab 1 — CRCP discrepancy + settlement + tracking.** Open to every company with PO12
   access, including a pure Bill-To company (e.g. CMP003) that never physically touches the
