@@ -1206,14 +1206,25 @@ that doc too, not just here — flagged, not yet written there.
   and plant transfers" — already VIEW-only on this exact resource, confirmed above) — this
   one DOES need new `work_context_capabilities` rows, since it currently has zero real
   (non-ACL-MASTER) grant anywhere in Prod.
-- **Rollout sequence (per CLAUDE.md §8's locked "new (capability, menu) grant" rule — insert
-  live rows, then `capture_acl_version_source` on a version that has NOT already been
-  captured, or a fresh `acl_versions` row if it has, then `generate_acl_snapshot` +
-  `rebuild_acl_menu_snapshot`):** build and verify in Dev first (this feature's own migrations
-  are Dev-only today, see the implementation note above), then repeat the identical MCP
-  sequence in Prod once the code itself is deployed there — same two-step workflow this
-  codebase always uses for a schema+ACL pair. Not yet executed in either environment as of
-  this lock — next step.
+- **✅ APPLIED — both Dev and Prod (2026-10-04, business owner: "joldi koro, amar prod e
+  dorkar eta").** Per CLAUDE.md §8's locked "new (capability, menu) grant" rule: inserted the
+  6 live `capability_menu_actions` rows (`CAP_ACC_GRN_COST_MAKER`/`CAP_ACC_GRN_COST_PLANTHEAD`
+  × VIEW/WRITE/EDIT on `PROC_PLANT_TRANSFER_LIST`) in both projects, then a fresh `acl_versions`
+  row per company (version bump, never re-capturing an already-captured one — Dev:
+  CMP003/005/006/007 v46→47/39→40/45→46/37→38; Prod: CMP003/005/006/011/014
+  v115→116/9→10/112→113/10→11/28→29), each `capture_acl_version_source` +
+  `generate_acl_snapshot` + activated. **Real gap found and fixed in Prod specifically:**
+  unlike Dev, Prod's `CAP_PROC_LOGISTICS` (Stores/SCM's own VIEW-only capability on this
+  resource) had **zero real grant anywhere** — only ACL-MASTER held it, confirming the
+  "PO12 ACL was never actually pushed to Prod" finding above applied to Stores/SCM too, not
+  just Accounts. Fixed: granted `CAP_PROC_LOGISTICS` to the real STORES/LOGISTICS/SUPPLY
+  CHAIN work contexts at all 5 Prod companies (13 new `work_context_capabilities` rows) in
+  the same pass. **Live-verified against Prod's own `precomputed_acl_view`** (CMP003):
+  ACCOUNTS = VIEW+WRITE+EDIT all ALLOW; MANAGEMENT = WRITE+EDIT ALLOW for its real
+  L3_MANAGER/DIRECTOR-ranked user (other-ranked users in the same department correctly DENY,
+  since the capability is role-scoped via `role_capabilities`, not department-blanket); STORES
+  and SUPPLY CHAIN = VIEW ALLOW only, no WRITE/EDIT rows at all (the capability itself only
+  ever grants VIEW). Matches the locked decision exactly.
 
 **0. Two-tab architecture (business owner's own framing):**
 - **Tab 1 — CRCP discrepancy + settlement + tracking.** Open to every company with PO12
