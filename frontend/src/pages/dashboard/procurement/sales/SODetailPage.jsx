@@ -154,7 +154,7 @@ export default function SODetailPage() {
   const [savingIdentity, setSavingIdentity] = useState(false);
   const [parentCompanies, setParentCompanies] = useState([]);
   const [depotCodes, setDepotCodes] = useState([]);
-  const [ac06Months, setAc06Months] = useState([]);
+  const [ac06MonthsByType, setAc06MonthsByType] = useState({});
   const [vendorCodeOptions, setVendorCodeOptions] = useState([]);
   const customerQuery = useCustomerOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
@@ -342,10 +342,14 @@ export default function SODetailPage() {
   // §133.8-E's Costing Rate Month dropdown, reused here so "Add Line"'s FG/SFG
   // MTO/HPS/MTEST rows have the same mandatory field Create requires.
   useEffect(() => {
-    if (!detail?.company_id) { setAc06Months([]); return; }
-    listAc06ApprovedMonths({ company_id: detail.company_id })
-      .then((result) => setAc06Months(Array.isArray(result) ? result : []))
-      .catch(() => setAc06Months([]));
+    if (!detail?.company_id) { setAc06MonthsByType({}); return; }
+    const scopes = ["FG", "SFG"].flatMap((lineMaterialType) => ["MTO", "HPS", "MTEST", "MTS"].map((fgType) => ({ lineMaterialType, fgType })));
+    Promise.all(scopes.map(async ({ lineMaterialType, fgType }) => ({
+      key: `${lineMaterialType}|${fgType}`,
+      months: await listAc06ApprovedMonths({ company_id: detail.company_id, line_material_type: lineMaterialType, fg_type: fgType }),
+    })))
+      .then((results) => setAc06MonthsByType(Object.fromEntries(results.map(({ key, months }) => [key, Array.isArray(months) ? months : []]))))
+      .catch(() => setAc06MonthsByType({}));
   }, [detail?.company_id]);
 
   // 2026-09-04 real gap closed — "Add Line"'s FG Item picker used the generic
@@ -1195,7 +1199,7 @@ export default function SODetailPage() {
                               Costing Rate Month
                               <select value={line.costing_rate_month || ""} onChange={(event) => updateNewLine(line.__key, { costing_rate_month: event.target.value })} className="h-8 w-36 border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
                                 <option value="">Select month</option>
-                                {ac06Months.map((entry) => <option key={entry.rate_month} value={entry.rate_month}>{formatMonthLabel(entry.rate_month)}</option>)}
+                                {(ac06MonthsByType[`${line.line_material_type || "FG"}|${line.fg_type || ""}`] ?? []).map((entry) => <option key={entry.rate_month} value={entry.rate_month}>{formatMonthLabel(entry.rate_month)}</option>)}
                                 <option value="MANUAL">Manual</option>
                               </select>
                             </label>
