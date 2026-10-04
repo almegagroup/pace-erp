@@ -1369,6 +1369,23 @@ LOCKED column order:**
   same established `date_field`+`date_from`+`date_to` pattern already used by AC01/IN02, not
   a new mechanism. **Per-column Excel-style AutoFilter also applies here** — see
   `ErpDenseGrid`'s new `columnFilter`/`filterType: "date"` capability, locked just below.
+- **"Export Excel" — exact same mechanism as AC01, Final Design: ✅ LOCKED 2026-10-04.**
+  Reuses the shared `downloadColoredExcelFile()` helper
+  (`frontend/src/shared/downloadColoredExcelFile.js`) verbatim — not a new export
+  mechanism, not a plain-CSV fallback. Same pattern AC01's own `handleExportExcel()`
+  already uses: `exceljs` loaded via dynamic `import()` only at the moment "Export Excel"
+  is actually clicked (never part of this page's own bundle), workbook built from the
+  grid's own column definitions (`getCellValue` defaulting to `copyValue`/raw
+  `row[column.key]`, with `getCellColor`/`getCellRichText` available for any column that
+  needs a colored/status cell — e.g. Settlement Status Pending/Settled — same as AC01's
+  rate-status coloring), identical header styling (slate-800 fill, bold white font).
+  **One "Export Excel" button** in `ErpMasterListTemplate`'s own `actions` (label toggles
+  "Exporting..." while in flight, disabled when exporting or when the grid has zero rows)
+  — present on **both** Tab 1's own Discrepancy Grid and the Settlement page's own grid
+  (Pending + Settled tabs), since both are the same grid reused. Exports exactly the
+  grid's own current filtered/sorted row-set (respecting the all-column search bar, Date
+  Range filter, and any active per-column AutoFilter selection) — same "what you see is
+  what you export" behavior AC01 already has, not a separate unfiltered full-table dump.
 
 **ErpDenseGrid — Excel-style per-column AutoFilter — Final Design: ✅ LOCKED + BUILT
 2026-10-03/04.** Came up directly from this grid's own filter needs, built as a shared
