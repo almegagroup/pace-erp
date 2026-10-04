@@ -1286,7 +1286,73 @@ AC01's existing schema, does not widen AC01's own access model:**
   deferred the decision ("MRN niye pore vaba jabe") — not built, not scheduled, revisit
   later.
 
-**5. Tab 1 Discrepancy Grid — UI (ErpDenseGrid, full Excel-style keyboard navigation),
+**5. AC01 "ITC To" + cross-company visibility — Final Design: ✅ LOCKED 2026-10-04.**
+Resolves a real gap this same session's own §4 (MRN) note left open: Section 16(2)(b)'s
+deeming Explanation gives CMP003 the *legal* basis for ITC, but PACE itself had nowhere to
+*record/report* that ITC — AC01 is GRN-company-scoped (CMP003 never sees it), and the old
+`invoice_verification`/`invoice_verification_line` mechanism (Gate-16.8, `IVDetailPage.jsx`/
+`BlockedIVListPage.jsx`), while still technically wired (routes live, tables exist), is
+**confirmed by business owner to be practically dead** — "আগের AC01-কে change করেই current
+AC01 করা হয়েছে" (the old AC01 was redesigned INTO the current one; there is no still-living
+separate predecessor). So fixing/extending the old IV mechanism (an earlier draft of this
+same lock) was the wrong target — discarded.
+
+**Two ideas considered and rejected before this one, kept here so neither gets re-proposed
+later:**
+- **P101 (receipt) → auto-generate STO → P601 (GI for dispatch) at CMP003**, purely to give
+  CMP003 a legitimate "receipt" event to hang GST/ITC data on, reusing the already-built
+  STO→DO→PGI→Sales-Invoice pipeline instead of a bespoke Settlement mechanism. **Rejected —
+  double-counting risk:** the Actual Receiver (e.g. Jayashree) already posted its own real
+  GRN against the vendor's delivery; if the STO's own receiving leg also posted a receipt at
+  Jayashree, the same physical material would be counted twice in its stock. Would only be
+  salvageable by making the STO's receiving leg a pure no-op/paper reference — a bespoke,
+  awkward variant of an already-built mechanism, not reused cleanly.
+- **A plain grid column showing the GRN's own Invoice Number/Rate/GST** (readable by eye,
+  already true of the already-locked Discrepancy Grid). **Rejected as insufficient on its
+  own** — business owner's own correction: "CMP003 jeta korche seta Sale only, tai ITC
+  dekhate gele to inward ba equivalent kichu dekhate hobe" (what CMP003 does is Sale-only;
+  to show ITC there must be an inward-equivalent too). A human reading a grid column is not
+  the same as PACE's own data having a reportable "this is CMP003's own ITC-relevant entry"
+  attribution — a future GST/ITC report could never correctly group/sum by company from a
+  value that structurally still belongs to Jayashree's own row.
+
+**Locked mechanism — no stock movement, no new document, one new column + one broadened
+visibility rule on AC01 itself:**
+- **New column, `landed_cost.itc_owner_company_id`** (header-level, one per GRN — **not**
+  per-line: confirmed sufficient because Unloading Charge never actually carries GST in this
+  business, option exists in the UI but is never used in practice, so there is no competing
+  claim to reconcile between it and Freight's own, genuinely GST-bearing, ITC owner).
+  Defaults to the GRN's own `company_id` for the ordinary, non-CRCP case (so an ordinary
+  purchase's "ITC To" is simply that same company, exactly matching today's reality with
+  zero behavior change) — explicitly set to the PO/STO's own Bill-To `company_id` for a
+  CRCP-flagged GRN.
+- **Two distinct tags, not one — do not conflate them:** `itc_owner_company_id` (who the
+  GST credit legally belongs to — this is what any GST report groups/sums by) is **not**
+  the same as "who physically keyed this line in" (a separate audit-trail concern, already
+  covered by the table's own `created_by`; no new field needed for that half). Caught live
+  in this same session: Jayashree might be the one who happens to key in a cost line, while
+  the GST credit on that exact line still belongs to CMP003 — an "entered by" tag would
+  have wrongly implied Jayashree owns that ITC.
+- **AC01's own list/read query is broadened** (its *write* path stays exactly as already
+  locked — unchanged, still strictly GRN-company-scoped, no widening of
+  `canWriteAC01()`/`requireAC01WriteAccess()`): a company's AC01 now lists a GRN whenever
+  EITHER it owns the GRN (`goods_receipt.company_id`, today's existing rule) OR it is that
+  GRN's `itc_owner_company_id` (the new CRCP case). CMP003 therefore sees this GRN's full
+  row in its own AC01 — vendor, rate, every existing field — but **read-only**: CMP003 has
+  no write access there (per the already-locked rule), its only write path for this GRN
+  remains PO12's own Cost-Component-Entry action.
+- **Live, two-way sync by construction, not by any new sync code:** since both views read
+  the exact same `landed_cost`/`landed_cost_line` rows, a Freight line CMP003 adds via PO12
+  appears immediately in Jayashree's own (fully editable) AC01 view of that GRN, and an
+  Unloading Charge line Jayashree adds via its own AC01 appears immediately in CMP003's
+  (read-only) mirrored view — no additional plumbing needed beyond the one new column and
+  the one broadened query.
+- **Unloading Charge's own existing GST Yes/No toggle on `landed_cost_line` is completely
+  untouched** — business owner's explicit instruction: the option to mark GST on Unloading
+  stays exactly as coded today (user's own free choice per line); this lock changes nothing
+  about that toggle, it only adds the new `itc_owner_company_id` column alongside it.
+
+**6. Tab 1 Discrepancy Grid — UI (ErpDenseGrid, full Excel-style keyboard navigation),
 LOCKED column order:**
 1. **CRCP Triangle** — Bill-To Company, Ship-To Company (invoice-stated), Actual Receiving
    Company (all company_code — company_name, never raw UUID, per §8A)
@@ -1360,7 +1426,22 @@ Discrepancy row — Final Design: ✅ LOCKED 2026-10-04 (business owner + design
     `usePaymentTermOptionsQuery` hook + dropdown pattern, same as `SOCreatePage.jsx`); GST
     rate + Inclusive/Exclusive; CGST+SGST vs IGST (reuses `deriveSalesInvoiceGstType()` from
     `sales_order.handlers.ts`, already shared across SO/DO — compares the two companies'
-    state names, no new GST logic).
+    state names, no new GST logic); **Cost Center** — two fields, Bill-To Company's own cost
+    center and Actual-Receiver Company's own cost center, same shape as
+    `stock_transfer_order.sending_cost_center_id`/`receiving_cost_center_id`; **Rebate** — the
+    same 4-field set `stock_transfer_order_line` already has (`has_rebate` Yes/No,
+    `rebate_rate`, `rebate_rate_uom_basis`, `rebate_remarks`), copied as-is, no new shape
+    invented. Both Cost Center and Rebate live at the **header** level here (unlike STO,
+    which has them per-line) — Settlement has no independently-editable line items of its
+    own, only already-posted GRN rows being referenced/checked, so there is nothing for a
+    per-line value to attach to.
+  - **No approval workflow anywhere on Settlement** — same as the already-locked Reverse
+    action, ordinary PO12 write access is sufficient for Create too (business owner,
+    2026-10-04).
+  - **Bill-To / Actual-Receiver company are never separate header fields of their own** —
+    they are always derived from the checked GRN rows themselves (Bill-To = those GRNs'
+    shared PO/STO company_id, Actual-Receiver = those GRNs' shared `company_id`), reusing
+    existing data rather than re-entering it.
   - **Match rule — hard gate on posting:** `Invoice Quantity` must exactly equal the Running
     Total of the checked rows; the Settlement action stays disabled on mismatch — same
     disabled-button discipline as the GRN Invoice Mapping page's own Map button.
