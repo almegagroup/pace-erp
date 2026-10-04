@@ -43,6 +43,15 @@ function toTrimmedString(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+// Do not stringify nullable UUID columns before sending them to PostgREST's
+// `.in()` filter: `String(null)` becomes the literal UUID candidate "null",
+// which Postgres rejects with 22P02. A GRN legitimately has only one of
+// po_id/sto_id (and several optional master references), so every bulk lookup
+// must omit absent identifiers first.
+function collectIds(rows: JsonRecord[], field: string): string[] {
+  return [...new Set(rows.map((row) => toTrimmedString(row[field])).filter(Boolean))];
+}
+
 function crcpErrorResponse(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -245,8 +254,8 @@ export async function fetchCrcpDiscrepancyRows(
   // can't silently widen the set.
   const candidateGrns = allGrns.filter((row) => row.po_id || row.sto_id);
 
-  const poIds = [...new Set(candidateGrns.map((row) => String(row.po_id)).filter(Boolean))];
-  const stoIds = [...new Set(candidateGrns.map((row) => String(row.sto_id)).filter(Boolean))];
+  const poIds = collectIds(candidateGrns, "po_id");
+  const stoIds = collectIds(candidateGrns, "sto_id");
 
   const [poRows, stoRows] = await Promise.all([
     fetchInChunks<JsonRecord>(poIds, (chunk) =>
@@ -276,13 +285,13 @@ export async function fetchCrcpDiscrepancyRows(
   const grns = discrepancyGrns.map((row) => row.grn);
   const billToByGrnId = new Map(discrepancyGrns.map((row) => [String(row.grn.id), row.billTo as string]));
 
-  const materialIds = [...new Set(grns.map((row) => String(row.material_id)).filter(Boolean))];
-  const vendorIds = [...new Set(grns.map((row) => String(row.vendor_id)).filter(Boolean))];
-  const transporterIds = [...new Set(grns.map((row) => String(row.transporter_id)).filter(Boolean))];
-  const grnIds = grns.map((row) => String(row.id));
+  const materialIds = collectIds(grns, "material_id");
+  const vendorIds = collectIds(grns, "vendor_id");
+  const transporterIds = collectIds(grns, "transporter_id");
+  const grnIds = collectIds(grns, "id");
   const companyIdsInvolved = [...new Set([
-    ...grns.map((row) => String(row.company_id)),
-    ...grns.map((row) => String(row.ship_to_company_id ?? "")),
+    ...grns.map((row) => toTrimmedString(row.company_id)),
+    ...grns.map((row) => toTrimmedString(row.ship_to_company_id)),
     ...[...billToByGrnId.values()],
   ].filter(Boolean))];
 
