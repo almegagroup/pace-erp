@@ -1484,6 +1484,43 @@ Discrepancy row — Final Design: ✅ LOCKED 2026-10-04 (business owner + design
   access (same ACL grant the Settlement create action itself uses) is sufficient; no
   mandatory-reason field, no extra role gate beyond that.
 
+**AC01 "Settlement Invoice" column + View/Print — Final Design: ✅ LOCKED 2026-10-04.**
+Closes the loop opened by the §5 "AC01 ITC To" lock above: that lock gets CMP003 a visible,
+read-only row in its own AC01 for a CRCP GRN; this lock makes that row show which Settlement
+(Leg 2) invoice, if any, has already recognized it — and lets anyone print/view that invoice
+in the same format already used for Sales Invoices.
+- **New AC01 column, "Settlement Invoice"** — shown only for rows where the viewing
+  company = that GRN's `itc_owner_company_id` in the CRCP case (i.e. exactly the same rows
+  the §5 broadened-visibility rule already surfaces). **Displays the Tally Invoice Number**
+  (not the internal `SETTLEMENT` series document number) — corrected mid-design from an
+  initial wrong proposal of showing the internal series number instead. This is consistent
+  with, not in conflict with, the Settlement page's own already-locked header fields and its
+  "Settled" tab reversal lookup above: both of those were always keyed on **Tally Invoice
+  Number + Date** as the primary, user-facing identifier (the header's own first fields), not
+  on the internal `SETTLEMENT` series number — that internal number is a backend system
+  document reference only (same role as every other `document_number_series` entry — PO
+  number, STO number, etc.), never the primary key a user types or reads to find a specific
+  Settlement. So this column's choice needed no change to anything already locked above, only
+  a correction to this one new proposal.
+- Since one real Settlement invoice commonly covers many GRN rows (one Tally Invoice Number
+  can repeat across multiple rows), each covered row independently shows that same Tally
+  Invoice Number in this column — no special multi-row grouping/merging needed in the grid.
+- **Clicking the Tally Invoice Number (or a separate "View/Print" action next to it) opens
+  the exact same print template Sales Invoice already uses** — `SalesInvoicePrintPage.jsx`
+  (3 copies: Original for Recipient / Duplicate for Transporter / Triplicate for Consignor,
+  `@media print` layout) — reused as-is, not forked/duplicated.
+  - **"Invoice No." needs no change at all** — the template already resolves it as
+    `invoice.tally_invoice_number || invoice.invoice_number`, i.e. it already prefers the
+    Tally number exactly as this column now also does.
+  - **"Delivery Note" / "Delivery Note Date"** (today `delivery.dc_number`/`delivery.dc_date`
+    — the template's own closest "origin reference" slot; there is no literal "STO Number"
+    field in this template) — for a Settlement-origin invoice, this slot instead shows the
+    **internal Settlement Document Number + Date** (the `SETTLEMENT` series number locked
+    above). This is the one place the internal system number is still shown to a user — as
+    the origin-reference audit trail, the same role a DC number plays for an ordinary Sales
+    Invoice print, not as the invoice's own primary identity (that stays the Tally number
+    throughout, both in this AC01 column and in "Invoice No." on the print itself).
+
 **Correction to this doc's own CLAUDE.md note (2026-10-04) — Prod Supabase access.**
 CLAUDE.md states "আমার MCP শুধু dev-এ যুক্ত, prod আমি কখনো দেখিনি" (MCP is dev-only, Prod has
 never been seen). **This is now stale** — `mcp__Supabase__list_projects` returns both
