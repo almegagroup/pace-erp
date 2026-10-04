@@ -135,6 +135,19 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/ptos":                       { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
   "POST:/api/procurement/sloc-transfer":              { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
 
+  // ── PO12 (PTO) Phase C — Tab 1 Discrepancy List + CRCP Cost Component
+  //    Entry + Settlement (Leg 2 Invoice). Same PROC_PLANT_TRANSFER_LIST
+  //    resource as the rest of PO12 -- these are new tabs/actions on the
+  //    same page, not a new menu/resource. Reverse is EDIT (not WRITE),
+  //    mirroring the Create/Edit action-tier split used elsewhere in this
+  //    codebase for a create-vs-correct pair on the same resource.
+  "GET:/api/procurement/crcp-discrepancy":            { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "POST:/api/procurement/crcp-cost-components":       { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
+  "GET:/api/procurement/settlements/pending":         { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "GET:/api/procurement/settlements/lookup":          { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "POST:/api/procurement/settlements":                { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
+  "POST:/api/procurement/settlements/reverse":        { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "EDIT"  },
+
   // ── Procurement: RTV / Debit Note / Exchange ──────────────────────────────
   "GET:/api/procurement/rtvs":                        { skipAcl: false, resourceCode: "PROC_RTV_LIST",   action: "VIEW"  },
   "POST:/api/procurement/rtvs":                       { skipAcl: false, resourceCode: "PROC_RTV_CREATE", action: "WRITE" },
@@ -1082,6 +1095,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
 
   // ── PTO / Plant Transfer ──────────────────────────────────────────────────
+  {
+    pattern: /^\/api\/procurement\/settlements\/[^/]+\/print$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW" } },
+  },
   {
     pattern: /^\/api\/procurement\/ptos\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW" } },

@@ -896,6 +896,36 @@ export function slocTransfer(data) {
   return fetchProcurement("POST", "/api/procurement/sloc-transfer", data);
 }
 
+// PO12 (PTO) Phase C — Tab 1 Discrepancy List + CRCP Cost Component Entry +
+// Settlement (Leg 2 Invoice). Design: PROCUREMENT-DESIGN-DOC.md.
+export function listCrcpDiscrepancy(params) {
+  return fetchProcurement("GET", "/api/procurement/crcp-discrepancy", undefined, params);
+}
+
+export function createCrcpCostComponent(data) {
+  return fetchProcurement("POST", "/api/procurement/crcp-cost-components", data);
+}
+
+export function listSettlementPending(params) {
+  return fetchProcurement("GET", "/api/procurement/settlements/pending", undefined, params);
+}
+
+export function getSettlementByTallyInvoice(params) {
+  return fetchProcurement("GET", "/api/procurement/settlements/lookup", undefined, params);
+}
+
+export function createSettlementInvoice(data) {
+  return fetchProcurement("POST", "/api/procurement/settlements", data);
+}
+
+export function reverseSettlementInvoice(data) {
+  return fetchProcurement("POST", "/api/procurement/settlements/reverse", data);
+}
+
+export function getSettlementPrintData(settlementInvoiceId) {
+  return fetchProcurement("GET", `/api/procurement/settlements/${encodeURIComponent(settlementInvoiceId)}/print`);
+}
+
 export function listLandedCosts(params) {
   return fetchProcurement("GET", "/api/procurement/landed-costs", undefined, params);
 }

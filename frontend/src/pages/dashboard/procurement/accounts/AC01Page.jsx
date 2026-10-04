@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -379,6 +380,27 @@ function buildColumns(components) {
     ...buildComponentColumns(components),
     { key: "landed_cost_total", label: "Landed Cost", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.landed_cost_total) },
     { key: "cost_per_unit", label: "Cost / Unit", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.cost_per_unit) },
+    {
+      // PO12 "AC01 Settlement Invoice" column (locked 2026-10-04) — shown
+      // only for the CRCP ITC-To rows this company's own AC01 now mirrors
+      // (§5 "AC01 ITC To"). Displays the Tally Invoice Number (never the
+      // internal SETTLEMENT series number — see settlement_document_number,
+      // used only by the print template's own "Delivery Note" slot).
+      key: "settlement_invoice_tally_number", label: "Settlement Invoice", width: "150px",
+      render: (row) => (
+        row.settlement_invoice_tally_number ? (
+          <Link
+            to={`/dashboard/procurement/settlements/${encodeURIComponent(row.settlement_invoice_id)}/print`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-sky-700 underline underline-offset-2"
+          >
+            {row.settlement_invoice_tally_number}
+          </Link>
+        ) : "—"
+      ),
+      copyValue: (row) => row.settlement_invoice_tally_number || "",
+    },
     { key: "vendor_payable", label: "Vendor Payable (material)", width: "150px", align: "right", render: (row) => formatNumberOrBlank(row.vendor_payable) },
     {
       key: "vendor_suggested_payable", label: "Vendor Payable (total)", width: "140px", align: "right",
