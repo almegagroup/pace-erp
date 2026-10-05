@@ -35,6 +35,7 @@ import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcure
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
+import { todayIsoInIndia } from "../../../../utils/indiaDate.js";
 import {
   cancelPgiInvoiceGroups,
   createAdditionalCostCategory,
@@ -281,14 +282,14 @@ function groupHasUrgentYes(group) {
   return (group.lines || []).some((line) => line.urgent_dispatch_decision === "YES");
 }
 function isTodayIso(dateStr) {
-  return dateStr === new Date().toISOString().slice(0, 10);
+  return dateStr === todayIsoInIndia();
 }
 
 function groupInputValidationMessage(group, input) {
   if (!input) return "Invoice group input is unavailable. Reload and try again.";
   if (!input.tally_invoice_number.trim() || !input.tally_invoice_date) return "Tally Invoice Number and Date are required.";
   if (!isManualDocumentDateWithinWindow(input.tally_invoice_date)) return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
-  const pastBackfillWindow = new Date().toISOString().slice(0, 10) >= PHASE_3_START;
+  const pastBackfillWindow = todayIsoInIndia() >= PHASE_3_START;
   if (pastBackfillWindow && !isTodayIso(input.tally_invoice_date) && !groupHasUrgentYes(group)) {
     return "Tally Invoice Date must equal today's date, unless this dispatch was marked Urgent (Yes) at DO creation.";
   }

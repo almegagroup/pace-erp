@@ -1,23 +1,25 @@
+import { todayIsoInIndia } from "./indiaDate.js";
+
 export const MANUAL_DOCUMENT_DATE_WINDOW_MONTHS = 3;
 
-function addCalendarMonths(date, months) {
-  const targetYear = date.getFullYear() + Math.floor((date.getMonth() + months) / 12);
-  const targetMonth = ((date.getMonth() + months) % 12 + 12) % 12;
-  const lastDay = new Date(targetYear, targetMonth + 1, 0).getDate();
-  return new Date(targetYear, targetMonth, Math.min(date.getDate(), lastDay));
+function addCalendarMonths(isoDate, months) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const monthIndex = year * 12 + (month - 1) + months;
+  const targetYear = Math.floor(monthIndex / 12);
+  const targetMonth = (monthIndex % 12) + 1;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
 }
 
-function toLocalIsoDate(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function toBusinessIsoDate(date) {
+  return todayIsoInIndia(date);
 }
 
 export function getManualDocumentDateBounds(today = new Date()) {
+  const businessToday = toBusinessIsoDate(today);
   return {
-    min: toLocalIsoDate(addCalendarMonths(today, -MANUAL_DOCUMENT_DATE_WINDOW_MONTHS)),
-    max: toLocalIsoDate(addCalendarMonths(today, MANUAL_DOCUMENT_DATE_WINDOW_MONTHS)),
+    min: addCalendarMonths(businessToday, -MANUAL_DOCUMENT_DATE_WINDOW_MONTHS),
+    max: addCalendarMonths(businessToday, MANUAL_DOCUMENT_DATE_WINDOW_MONTHS),
   };
 }
 
@@ -30,9 +32,10 @@ export function isManualDocumentDateWithinWindow(value, today = new Date()) {
 export const MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE = "Date must be within three calendar months before or after today.";
 
 export function getManualPastDateBounds(today = new Date()) {
+  const businessToday = toBusinessIsoDate(today);
   return {
-    min: toLocalIsoDate(addCalendarMonths(today, -MANUAL_DOCUMENT_DATE_WINDOW_MONTHS)),
-    max: toLocalIsoDate(today),
+    min: addCalendarMonths(businessToday, -MANUAL_DOCUMENT_DATE_WINDOW_MONTHS),
+    max: businessToday,
   };
 }
 

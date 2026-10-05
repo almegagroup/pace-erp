@@ -259,6 +259,35 @@ async function buildOpeningStockLotMap(docs: JsonRecord[]): Promise<Map<string, 
   return lotMap;
 }
 
+// Opening Stock FG rows retain their originating PO type on the opening-stock
+// document, not on the immutable stock ledger rows. MTS stock is intentionally
+// blended: it must not acquire a batch/packing-PO identity from the opening
+// document number. Its user-facing quantity still uses the material's outer
+// pack UOM after conversion from the ledger's KG quantity.
+async function buildOpeningStockPoTypeMap(docs: JsonRecord[]): Promise<Map<string, string>> {
+  const openingDocIds = [...new Set(
+    docs
+      .filter((doc) => toTrimmedString(doc.reference_document_type) === "OS")
+      .map((doc) => toTrimmedString(doc.reference_document_id))
+      .filter(Boolean),
+  )];
+  if (openingDocIds.length === 0) return new Map();
+
+  const { data: openingDocs, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("opening_stock_document")
+    .select("id, po_type")
+    .in("id", openingDocIds);
+  if (error || !openingDocs) return new Map();
+
+  return new Map(
+    (openingDocs as JsonRecord[]).map((row): [string, string] => [
+      toTrimmedString(row.id),
+      toTrimmedString(row.po_type).toUpperCase(),
+    ]),
+  );
+}
+
 // Sales Return P651 documents point directly at a sales_return_item. PR23 can
 // backfill that item's packing_order_id after the immutable stock rows exist,
 // so IN02/IN03 resolve the live relation instead of rewriting ledger history.
@@ -1350,6 +1379,7 @@ export async function getCurrentStockHandler(
       }
       const docMap = new Map(docRows.map((row) => [toTrimmedString(row.id), row]));
       const openingLotMap = await buildOpeningStockLotMap(docRows);
+      const openingPoTypeMap = await buildOpeningStockPoTypeMap(docRows);
       const salesReturnLotMap = await buildSalesReturnLotMap(docRows);
       // A sales issue's immutable stock row carries the invoice and item number, while its
       // actual Packing PO lives on the invoice line's DC line. Reuse IN02's exact lineage
@@ -1418,6 +1448,8 @@ export async function getCurrentStockHandler(
         ) || null;
         const packingOrder = resolvedPoNumber ? poMap.get(resolvedPoNumber) : undefined;
         const sourcePoType = toTrimmedString(packingOrder?.source_po_type).toUpperCase();
+        const isMtsOpeningStock = toTrimmedString(stockDocument?.reference_document_type).toUpperCase() === "OS"
+          && openingPoTypeMap.get(toTrimmedString(stockDocument?.reference_document_id)) === "MTS";
 
         if (material.material_type === "SFG") {
           if (packingPoNumbers.length > 0) continue;
@@ -1435,11 +1467,10 @@ export async function getCurrentStockHandler(
           continue;
         }
 
-        if (sourcePoType === "MTS") {
-          if (batchNumbers.length > 0) continue;
-          if (packingPoNumbers.length > 0 && (!resolvedPoNumber || !packingPoNumbers.includes(resolvedPoNumber))) {
-            continue;
-          }
+        if (sourcePoType === "MTS" || isMtsOpeningStock) {
+          // MTS FG is blended stock. Its stock position is not attributable to
+          // an individual batch or Packing PO, including MTS Opening Stock.
+          if (batchNumbers.length > 0 || packingPoNumbers.length > 0) continue;
           const row = getOrCreateRow(initializeCurrentStockDraftRow({
             company_id: toTrimmedString(ledger.company_id),
             material_id: materialId,
@@ -1656,9 +1687,8 @@ export async function getCurrentStockHandler(
         : Promise.resolve({ data: [], error: null }),
       reportMaterialIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_uom_conversion")
-          .select("material_id, to_uom_code, conversion_factor")
+          .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion")
           .in("material_id", reportMaterialIds)
-          .eq("from_uom_code", "NOS")
           .eq("active", true)
         : Promise.resolve({ data: [], error: null }),
     ]);
@@ -1668,14 +1698,30 @@ export async function getCurrentStockHandler(
     const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.company_code)]));
     const slocMap = new Map(((slocResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.code)]));
     const packCodeMap = new Map(((packResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.pack_code), toTrimmedString(row.outer_uom_code)]));
+    const outerUomCodesByPackCode = new Map<string, Set<string>>();
+    for (const rawPack of (packResp.data ?? []) as JsonRecord[]) {
+      const packCode = toTrimmedString(rawPack.pack_code);
+      const outerUomCode = toTrimmedString(rawPack.outer_uom_code);
+      if (!packCode || !outerUomCode) continue;
+      const outerUomCodes = outerUomCodesByPackCode.get(packCode) ?? new Set<string>();
+      outerUomCodes.add(outerUomCode);
+      outerUomCodesByPackCode.set(packCode, outerUomCodes);
+    }
     const nosDisplayFactorByMaterialId = new Map<string, number>();
+    const mtsFgDisplayByMaterialId = new Map<string, { uomCode: string; factor: number }>();
     for (const conversion of (reportUomResp.data ?? []) as JsonRecord[]) {
       const material = materialMap.get(toTrimmedString(conversion.material_id));
       const factor = Number(conversion.conversion_factor ?? 0);
-      if (toTrimmedString(material?.base_uom_code) === "MTR"
-        && toTrimmedString(conversion.to_uom_code) === toTrimmedString(material?.base_uom_code)
-        && Number.isFinite(factor) && factor > 0) {
+      const fromUomCode = toTrimmedString(conversion.from_uom_code);
+      if (conversion.variable_conversion || !Number.isFinite(factor) || factor <= 0
+        || toTrimmedString(conversion.to_uom_code) !== toTrimmedString(material?.base_uom_code)) continue;
+      if (toTrimmedString(material?.base_uom_code) === "MTR" && fromUomCode === "NOS") {
         nosDisplayFactorByMaterialId.set(toTrimmedString(conversion.material_id), factor);
+      }
+      const outerUomCodes = outerUomCodesByPackCode.get(toTrimmedString(material?.pack_code));
+      if (material?.material_type === "FG" && outerUomCodes?.has(fromUomCode)
+        && !mtsFgDisplayByMaterialId.has(toTrimmedString(conversion.material_id))) {
+        mtsFgDisplayByMaterialId.set(toTrimmedString(conversion.material_id), { uomCode: fromUomCode, factor });
       }
     }
 
@@ -1773,14 +1819,24 @@ export async function getCurrentStockHandler(
       const companyCode = companyMap.get(row.company_id) ?? "";
       const slocCode = slocMap.get(row.storage_location_id) ?? "";
       const documentName = toTrimmedString(material?.document_name);
-      const materialLabel = documentName || toTrimmedString(material?.material_name);
+      // "Material" is the material-master name/code (matches resolveMaterialLabel's
+      // rule, used elsewhere in this file) -- document name is the separate
+      // commercial-description column above and must never replace it.
+      const materialLabel = toTrimmedString(material?.material_name)
+        || toTrimmedString(material?.external_code)
+        || toTrimmedString(material?.pace_code);
       const reservedBaseQty = row.path_kind === "A"
         ? pathAReservationMap.get([row.company_id, row.material_id, row.storage_location_id].join("__")) ?? 0
         : pathBCReservationMap.get([row.company_id, row.material_id, row.storage_location_id, row.batch_number ?? ""].join("__")) ?? 0;
+      const mtsFgDisplay = row.path_kind === "A" && row.material_type === "FG"
+        ? mtsFgDisplayByMaterialId.get(row.material_id)
+        : undefined;
       const nativeUomCode = row.path_kind === "C"
         ? packCodeMap.get(toTrimmedString(material?.pack_code)) || row.base_uom_code
-        : row.base_uom_code;
-      const displayFactor = row.path_kind === "C" ? 1 : (nosDisplayFactorByMaterialId.get(row.material_id) ?? 1);
+        : mtsFgDisplay?.uomCode || row.base_uom_code;
+      const displayFactor = row.path_kind === "C"
+        ? 1
+        : (mtsFgDisplay?.factor ?? nosDisplayFactorByMaterialId.get(row.material_id) ?? 1);
       const uomCode = displayFactor === 1 ? nativeUomCode : "NOS";
       const toDisplayQty = (quantity: number) => normalizeNumber(quantity / displayFactor);
       const unrestrictedBaseQty = row.path_kind === "C"
@@ -1920,7 +1976,9 @@ export async function getCurrentStockHandler(
       const material = materialMap.get(member.material_id);
       if (!material) continue;
       const documentName = toTrimmedString(material.document_name);
-      const materialLabel = documentName || toTrimmedString(material.material_name);
+      const materialLabel = toTrimmedString(material.material_name)
+        || toTrimmedString(material.external_code)
+        || toTrimmedString(material.pace_code);
       responseRows.push({
         row_key: [companyCode, material.pace_code ?? member.material_id, member.storage_location_id, "PLANNING_GROUP_CONTEXT"].join("__"),
         material_id: member.material_id,

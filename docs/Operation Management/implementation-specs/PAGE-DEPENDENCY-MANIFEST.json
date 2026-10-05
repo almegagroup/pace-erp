@@ -3254,6 +3254,52 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/grn/GRNInvoiceMappingPage.jsx",
+    "dependencyCount": 5,
+    "deps": [
+      {
+        "fn": "listGrnInvoiceMappingCandidates",
+        "method": "GET",
+        "path": "/api/procurement/grns/invoice-mapping-candidates",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "checkExistingGrnInvoice",
+        "method": "GET",
+        "path": "/api/procurement/grns/invoice-mapping/check-invoice",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "mapGrnInvoice",
+        "method": "POST",
+        "path": "/api/procurement/grns/invoice-mapping/map",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "unmapGrnInvoice",
+        "method": "POST",
+        "path": "/api/procurement/grns/invoice-mapping/unmap",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "splitGrn",
+        "method": "POST",
+        "path": "/api/procurement/grns/split",
+        "resourceCode": "PROC_GRN_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/grn/GRNListPage.jsx",
     "dependencyCount": 1,
     "deps": [
@@ -6693,6 +6739,52 @@
     "page": "frontend/src/pages/dashboard/procurement/transfer/PlantTransferListPage.jsx",
     "dependencyCount": 4,
     "deps": [
+      {
+        "fn": "listPTOs",
+        "method": "GET",
+        "path": "/api/procurement/ptos",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createPTO",
+        "method": "POST",
+        "path": "/api/procurement/ptos",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials?${params.toString()}",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listStorageLocations",
+        "method": "GET",
+        "path": "/api/om/storage-locations?${query.toString()}",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/transfer/PlantTransferPage.jsx",
+    "dependencyCount": 5,
+    "deps": [
+      {
+        "fn": "listCrcpDiscrepancy",
+        "method": "GET",
+        "path": "/api/procurement/crcp-discrepancy",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
       {
         "fn": "listPTOs",
         "method": "GET",

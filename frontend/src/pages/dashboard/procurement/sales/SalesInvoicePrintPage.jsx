@@ -30,7 +30,12 @@ function taxRows(lines, gstType) {
   return [...rows.values()];
 }
 
-function InvoiceCopy({ invoice, copyLabel }) {
+// Exported so Settlement-origin invoices (PO12 AC01 "Settlement Invoice"
+// View/Print, locked 2026-10-04) can reuse this exact template — only the
+// data shape fed in differs (Settlement's own print-data endpoint shapes
+// its response into this same prop contract; the "Delivery Note" slot
+// below carries the Settlement Document Number + Date for that case).
+export function InvoiceCopy({ invoice, copyLabel }) {
   const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
   const gstType = invoice.gst_type === "IGST" ? "IGST" : "CGST_SGST";
   const hsnRows = taxRows(lines, gstType);

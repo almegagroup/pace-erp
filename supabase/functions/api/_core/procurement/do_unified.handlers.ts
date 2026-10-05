@@ -23,8 +23,9 @@ import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
+import { hasPhysicalInventoryBlock, hasPhysicalInventoryBlockForBatch } from "../../_shared/physicalInventoryBlock.ts";
 import { getAvailableQty } from "./delivery_order.handlers.ts";
-import { deriveSalesInvoiceGstType, getSnapshotForIssue, hasPhysicalInventoryBlock } from "./sales_order.handlers.ts";
+import { deriveSalesInvoiceGstType, getSnapshotForIssue } from "./sales_order.handlers.ts";
 import {
   assertPhase3PostingDateMatch,
   isHistoricalBackfillInvoiceDate,
@@ -3045,7 +3046,20 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
 
       const movements: JsonRecord[] = [];
       for (const line of group.lines) {
-        const postingBlocked = await hasPhysicalInventoryBlock(line.material_id, line.storage_location_id, "UNRESTRICTED");
+        // MTO/HPS/MTEST FG/SFG dispatches carry their Packing PO's exact batch.
+        // A PID against a different batch at F003 must neither block this PGI nor
+        // make the generic (unbatched) lookup return multiple rows. RM/PM/INT
+        // remain blended and therefore intentionally retain the generic check.
+        const isBatchTrackedFgOrSfg = ["FG", "SFG"].includes(toUpperTrimmedString(line.line_material_type));
+        const postingBlocked = isBatchTrackedFgOrSfg
+          ? await hasPhysicalInventoryBlockForBatch(
+            companyId,
+            line.material_id,
+            line.storage_location_id,
+            "UNRESTRICTED",
+            toTrimmedString(line.batch_number) || null,
+          )
+          : await hasPhysicalInventoryBlock(companyId, line.material_id, line.storage_location_id, "UNRESTRICTED");
         if (postingBlocked) return doErrorResponse(req, ctx, "MATERIAL_POSTING_BLOCKED", 409, `Material has an active physical inventory count in progress (${group.document_number}).${alreadyPostedNote}`);
         let snapshot: JsonRecord;
         try {
