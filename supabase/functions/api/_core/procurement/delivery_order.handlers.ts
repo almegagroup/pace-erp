@@ -941,46 +941,37 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       }
     }
 
-    let orderedIds: string[] | null = null;
-    let orderedTotal: number | null = null;
-    if (createdFirst) {
-      const { data: pageRows, error: pageError } = await serviceRoleClient
-        .schema("erp_procurement")
-        .rpc("list_delivery_order_page", {
-          p_company_id: companyId || null,
-          p_status: status || null,
-          p_search: search || null,
-          p_limit: limit,
-          p_offset: offset,
-          p_created_first: true,
-        });
-      if (pageError) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
-      orderedIds = ((pageRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.delivery_order_id)).filter(Boolean);
-      orderedTotal = orderedIds.length > 0 ? Number((pageRows as JsonRecord[])[0].total_count ?? 0) : 0;
-    }
+    // This RPC owns both the ordering and all-column search predicate for SO02
+    // and SO03.  Running it for both lists avoids a page-local client filter
+    // and means an SO/STO/customer/ship-to/invoice match remains findable on
+    // any page of the register.
+    const { data: pageRows, error: pageError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .rpc("list_delivery_order_page", {
+        p_company_id: companyId || null,
+        p_status: status || null,
+        p_search: search || null,
+        p_limit: limit,
+        p_offset: offset,
+        p_created_first: createdFirst,
+      });
+    if (pageError) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
+    const orderedIds = ((pageRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.delivery_order_id)).filter(Boolean);
+    const orderedTotal = orderedIds.length > 0 ? Number((pageRows as JsonRecord[])[0].total_count ?? 0) : 0;
 
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("delivery_challan")
       .select("*", { count: "exact" })
       .in("dc_type", ["SALES", "STO", "MIXED"]);
-    if (orderedIds) {
-      query = query.in("id", orderedIds);
-    } else {
-      query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
-    }
-    if (companyId) query = query.eq("selling_company_id", companyId);
-    if (status) query = query.eq("status", status);
-    if (search) query = query.or(`dc_number.ilike.%${search}%`);
-
-    const { data, error, count } = await query;
+    const { data, error, count } = orderedIds.length > 0
+      ? await query.in("id", orderedIds)
+      : { data: [] as JsonRecord[], error: null, count: 0 };
     if (error) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
 
     let rows = (data ?? []) as JsonRecord[];
-    if (orderedIds) {
-      const rowsById = new Map(rows.map((row) => [toTrimmedString(row.id), row]));
-      rows = orderedIds.map((id) => rowsById.get(id)).filter(Boolean) as JsonRecord[];
-    }
+    const rowsById = new Map(rows.map((row) => [toTrimmedString(row.id), row]));
+    rows = orderedIds.map((id) => rowsById.get(id)).filter(Boolean) as JsonRecord[];
     const dcIds = rows.map((row) => String(row.id));
     const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
       dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),

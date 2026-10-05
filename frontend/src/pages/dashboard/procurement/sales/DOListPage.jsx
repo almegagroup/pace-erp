@@ -41,7 +41,7 @@ const DO_EXPORT_COLUMNS = [
   { key: "total_value", label: "Total Value" },
 ];
 
-const DO_SEARCH_COLUMN_KEYS = ["dc_number", "source_display", "source_document_number", "customer_display", "ship_to_display", "vehicle_number", "transporter_display", "lr_number", "status", "dispatch_category"];
+const DO_SEARCH_COLUMN_KEYS = ["dc_number", "source_display", "source_document_number", "customer_display", "ship_to_display", "dc_date", "vehicle_number", "transporter_display", "lr_number", "status", "dispatch_category", "total_qty", "total_value"];
 
 function doStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -149,7 +149,7 @@ export default function DOListPage() {
               label="Search"
               value={search}
               onChange={(value) => { setSearch(value); setPage(1); }}
-              placeholder="DO number, SO/STO number, customer, status..."
+              placeholder="Search every column: DO, SO/STO, customer, truck, total..."
               inputProps={{ list: "do-list-search-options" }}
             />
             <datalist id="do-list-search-options">

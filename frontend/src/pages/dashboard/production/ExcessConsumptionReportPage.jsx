@@ -5,8 +5,8 @@
  * Domain: PRODUCTION
  * Purpose: PR26 "Excess Consumption Report" — replicates the business's manual Excel
  *          "Excess Consumption" tab. Row = one dispatch_reco line with a batch behind it
- *          (MTO/HPS/MTEST). "Actual" here is deliberately AP-Approved (not raw physical
- *          actual, which is PACE's own absorbed exposure, out of scope per §104.7).
+ *          (MTO/HPS/MTEST). The layout follows the existing worksheet, including
+ *          Asian Order (FO), Invoice and Purchase Order (SO) references.
  *          "Everyone Reports" (CAP_EVERYONE_REPORTS) — company-scoped, no per-row edit.
  * Authority: Frontend
  */
@@ -38,9 +38,16 @@ function toDDMMYYYY(value) {
   return `${match[3]}-${match[2]}-${match[1]}`;
 }
 
-function formatQty(value) {
+function formatMonth(value) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(value ?? "").trim());
+  if (!match) return String(value ?? "");
+  const label = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(match[2]) - 1];
+  return label ? `${label}-${match[1].slice(2)}` : String(value ?? "");
+}
+
+function formatQty(value, maximumFractionDigits = 3) {
   const num = Number(value ?? 0);
-  return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits: 3 }) : "";
+  return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits }) : "";
 }
 function formatPct(value) {
   const num = Number(value ?? 0);
@@ -52,60 +59,56 @@ function excelNum(value) {
 }
 
 const COLUMNS = [
-  { key: "month", label: "Month", width: "80px" },
-  { key: "order_number", label: "Order Number", width: "110px" },
-  { key: "item_type", label: "Item Type", width: "90px" },
-  { key: "item_name", label: "Item Name", width: "200px" },
-  { key: "external_code", label: "External Code", width: "110px" },
-  { key: "document_name", label: "Document Name", width: "200px" },
-  { key: "sku_item_name", label: "SKU Item Name", width: "200px" },
   {
-    key: "batch_qty", label: "Batch Qty (Dispatch)", width: "130px", align: "right",
+    key: "month", label: "Month (MM-YY)", width: "95px",
+    render: (row) => formatMonth(row.month), copyValue: (row) => formatMonth(row.month),
+  },
+  { key: "order_number", label: "Order Number", width: "110px" },
+  { key: "base_code", label: "Base Code", width: "115px" },
+  { key: "rm_code", label: "RM Code", width: "115px" },
+  { key: "rm_description", label: "RM Description", width: "210px" },
+  { key: "sku_code", label: "SKU Code", width: "120px" },
+  {
+    key: "batch_qty", label: "Batch Quantity (Dispatch)", width: "145px", align: "right",
     render: (row) => formatQty(row.batch_qty), copyValue: (row) => formatQty(row.batch_qty),
     excelValue: (row) => excelNum(row.batch_qty), numFmt: "#,##0.000",
   },
+  { key: "invoice_number", label: "Invoice No.", width: "110px" },
   {
     key: "invoice_date", label: "Invoice Date", width: "100px",
     render: (row) => toDDMMYYYY(row.invoice_date), copyValue: (row) => toDDMMYYYY(row.invoice_date),
   },
-  { key: "so_number", label: "SO Number", width: "110px" },
-  { key: "fo_number", label: "FO Number", width: "110px" },
+  { key: "asian_order_number", label: "Asian Order No. (FO Number)", width: "165px" },
+  { key: "purchase_order_number", label: "Purchase Order No. (SO Number)", width: "185px" },
   {
-    key: "standard_pct", label: "Standard % Dosage", width: "120px", align: "right",
+    key: "standard_pct", label: "Standard % Dosage (in %)", width: "145px", align: "right",
     render: (row) => formatPct(row.standard_pct), copyValue: (row) => formatPct(row.standard_pct),
     excelValue: (row) => excelNum(row.standard_pct), numFmt: "0.00\"%\"",
   },
   {
-    key: "standard_qty", label: "Standard (kg)", width: "110px", align: "right",
+    key: "standard_qty", label: "Standard - As per Formulation (in Kgs)", width: "210px", align: "right",
     render: (row) => formatQty(row.standard_qty), copyValue: (row) => formatQty(row.standard_qty),
     excelValue: (row) => excelNum(row.standard_qty), numFmt: "#,##0.000",
   },
   {
-    key: "actual_pct", label: "Actual % Dosage (APL)", width: "140px", align: "right",
+    key: "actual_pct", label: "Actual % Dosage (in %)", width: "145px", align: "right",
     render: (row) => formatPct(row.actual_pct), copyValue: (row) => formatPct(row.actual_pct),
     excelValue: (row) => excelNum(row.actual_pct), numFmt: "0.00\"%\"",
   },
   {
-    key: "actual_usage_qty", label: "Actual Usage (kg, APL)", width: "150px", align: "right",
+    key: "actual_usage_qty", label: "Actual Usage (in Kgs)", width: "140px", align: "right",
     render: (row) => formatQty(row.actual_usage_qty), copyValue: (row) => formatQty(row.actual_usage_qty),
     excelValue: (row) => excelNum(row.actual_usage_qty), numFmt: "#,##0.000",
   },
   {
-    // APL - STD in base qty (kg) -- the absolute variance, alongside the existing
-    // percentage-based Excess % column. Both figures derived client-side from the
-    // same two API fields, no backend change needed.
-    key: "apl_minus_std_qty", label: "APL - STD (kg)", width: "120px", align: "right",
-    render: (row) => {
-      const value = Number(row.actual_usage_qty ?? 0) - Number(row.standard_qty ?? 0);
-      return (
-        <span className={value > 0 ? "font-semibold text-rose-600" : value < 0 ? "text-emerald-600" : ""}>
-          {formatQty(value)}
-        </span>
-      );
-    },
-    copyValue: (row) => formatQty(Number(row.actual_usage_qty ?? 0) - Number(row.standard_qty ?? 0)),
-    excelValue: (row) => excelNum(Number(row.actual_usage_qty ?? 0) - Number(row.standard_qty ?? 0)),
-    numFmt: "#,##0.000",
+    key: "wastage_qty", label: "Wastage (in actuals)", width: "140px", align: "right",
+    render: (row) => formatQty(row.wastage_qty, 4), copyValue: (row) => formatQty(row.wastage_qty, 4),
+    excelValue: (row) => excelNum(row.wastage_qty), numFmt: "#,##0.0000",
+  },
+  {
+    key: "total_actual_qty", label: "Total Actuals", width: "120px", align: "right",
+    render: (row) => formatQty(row.total_actual_qty), copyValue: (row) => formatQty(row.total_actual_qty),
+    excelValue: (row) => excelNum(row.total_actual_qty), numFmt: "#,##0.000",
   },
   {
     key: "excess_pct", label: "Excess %", width: "100px", align: "right",
@@ -235,11 +238,11 @@ export default function ExcessConsumptionReportPage() {
               />
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              From date (Invoice)
+              From date (Tally Invoice)
               <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              To date (Invoice)
+              To date (Tally Invoice)
               <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
             </label>
             <label className="flex h-[26px] items-center gap-1.5 text-[11px] font-medium text-slate-600">
