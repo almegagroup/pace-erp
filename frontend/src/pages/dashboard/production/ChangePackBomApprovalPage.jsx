@@ -393,7 +393,7 @@ export default function ChangePackBomApprovalPage() {
         open={Boolean(memberModal)}
         memberMaterialId={memberMaterialId}
         setMemberMaterialId={setMemberMaterialId}
-        materialOptions={pmMaterials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        materialOptions={pmMaterials.map((m) => ({ value: m.id, label: [m.material_name, m.document_name].filter(Boolean).join(" — ") }))}
         onCancel={() => setMemberModal(null)}
         onAdd={handleAddMember}
       />

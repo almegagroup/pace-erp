@@ -56,12 +56,10 @@ export function dosageSumOf(lines) {
   return lines.reduce((s, l) => s + (parseFloat(l.dosage_pct) || 0), 0);
 }
 
-// Includes document_name (the human-recognizable product description) alongside
-// pace_code/material_name -- ErpComboboxField's search only matches label text,
-// and material_name alone is often just an internal numeric code, not something
-// a user would actually type to find a material.
+// business owner, 2026-09-30: pace_code must never appear in a material
+// label -- Item Name / Document Name only.
 export function materialLabel(m) {
-  return [m?.pace_code ?? "—", m?.material_name, m?.document_name].filter(Boolean).join(" — ");
+  return [m?.material_name, m?.document_name].filter(Boolean).join(" — ") || "—";
 }
 
 // DrawerBase renders `actions` as a raw node, not a descriptor array — turn

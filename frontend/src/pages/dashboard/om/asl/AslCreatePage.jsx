@@ -174,8 +174,8 @@ export default function AslCreatePage() {
         return {
           value: entry.id,
           label: isMapped
-            ? `${entry.pace_code} | ${entry.material_name} (Already Mapped)`
-            : `${entry.pace_code} | ${entry.material_name}`,
+            ? `${[entry.material_name, entry.document_name].filter(Boolean).join(" — ")} (Already Mapped)`
+            : [entry.material_name, entry.document_name].filter(Boolean).join(" — "),
           disabled: isMapped,
         };
       }),

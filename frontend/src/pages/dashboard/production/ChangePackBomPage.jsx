@@ -63,7 +63,7 @@ export default function ChangePackBomPage() {
   const groups = groupsQ.data ?? [];
   const bomOptions = activeBoms.map((b) => ({
     value: b.id,
-    label: `${b.sku?.pace_code ?? "—"} — ${b.sku?.material_name ?? ""}${b.sku?.pack_code ? ` (${b.sku.pack_code})` : ""}`,
+    label: `${[b.sku?.material_name, b.sku?.document_name].filter(Boolean).join(" — ")}${b.sku?.pack_code ? ` (${b.sku.pack_code})` : ""}`,
   }));
 
   async function handleBomChange(id) {
@@ -288,7 +288,7 @@ export default function ChangePackBomPage() {
         open={Boolean(memberModal)}
         memberMaterialId={memberMaterialId}
         setMemberMaterialId={setMemberMaterialId}
-        materialOptions={pmMaterials.map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        materialOptions={pmMaterials.map((m) => ({ value: m.id, label: [m.material_name, m.document_name].filter(Boolean).join(" — ") }))}
         onCancel={() => setMemberModal(null)}
         onAdd={handleAddMember}
       />

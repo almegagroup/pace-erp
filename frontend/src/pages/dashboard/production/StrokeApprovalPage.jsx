@@ -62,7 +62,7 @@ const STATUS_COLORS = {
 };
 
 function prodshadeLabel(s) {
-  if (s.material) return `${s.material.pace_code ?? "—"} — ${s.material.material_name ?? "—"}`;
+  if (s.material) return [s.material.material_name, s.material.document_name].filter(Boolean).join(" — ") || "—";
   if (s.prod_code || s.shade_code) return `${s.prod_code ?? "—"}${s.shade_code ?? ""} (new, pending Approve)`;
   return "—";
 }
@@ -708,7 +708,7 @@ export default function StrokeApprovalPage() {
         open={Boolean(memberModal)}
         memberMaterialId={memberMaterialId}
         setMemberMaterialId={setMemberMaterialId}
-        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: `${m.pace_code ?? "—"} — ${m.material_name ?? ""}` }))}
+        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: [m.material_name, m.document_name].filter(Boolean).join(" — ") }))}
         onCancel={() => setMemberModal(null)}
         onAdd={handleAddMember}
       />

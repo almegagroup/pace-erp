@@ -6,7 +6,7 @@ import { listSalesOrderFgSkuOptions } from "../procurementApi.js";
 const MINIMUM_SEARCH_LENGTH = 3;
 
 const labelFor = (sku) => sku
-  ? [sku.pace_code, sku.external_code, sku.document_name || sku.material_name].filter(Boolean).join(" | ")
+  ? [sku.material_name, sku.document_name].filter(Boolean).join(" — ")
   : undefined;
 
 // The paged endpoint returns { data, next_cursor }. During a rolling frontend /

@@ -28,7 +28,7 @@ const ERRORS = {
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
 };
 function friendly(code) { return ERRORS[code] ?? code; }
-function materialLabel(material) { return [material?.pace_code, material?.material_name].filter(Boolean).join(" - "); }
+function materialLabel(material) { return [material?.material_name, material?.document_name].filter(Boolean).join(" — "); }
 function companyLabel(company) { return [company?.company_code, company?.company_name].filter(Boolean).join(" - "); }
 function slocLabel(location) { return [location?.code, location?.name].filter(Boolean).join(" - "); }
 function readStoredCompanyFilter() {

@@ -186,7 +186,7 @@ export default function MaterialCategoryMasterPage() {
 
   async function handleRemoveMember(member, groupName) {
     const mat = materialMap.get(member.material_id);
-    const matLabel = mat ? `${mat.pace_code} | ${mat.material_name}` : member.material_id;
+    const matLabel = mat ? [mat.material_name, mat.document_name].filter(Boolean).join(" — ") : member.material_id;
     const confirmed = await openActionConfirm({
       eyebrow: "Category Group",
       title: `Remove member from "${groupName}"?`,
@@ -406,7 +406,7 @@ export default function MaterialCategoryMasterPage() {
                                   >
                                     <option value="">— select —</option>
                                     {matOptions.map((m) => (
-                                      <option key={m.id} value={m.id}>{m.pace_code} | {m.material_name}</option>
+                                      <option key={m.id} value={m.id}>{[m.material_name, m.document_name].filter(Boolean).join(" — ")}</option>
                                     ))}
                                   </select>
                                 </label>

@@ -161,7 +161,7 @@ function prodshadeLabel(item) {
 }
 
 function materialLabel(material) {
-  return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
+  return [material?.material_name, material?.document_name].filter(Boolean).join(" — ");
 }
 
 function slocLabel(location) {
@@ -2406,7 +2406,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
   function materialLabel(id) {
     const m = materials[id];
     if (!m) return "--";
-    return [m.pace_code, m.material_name].filter(Boolean).join(" - ") || "--";
+    return [m.material_name, m.document_name].filter(Boolean).join(" — ") || "--";
   }
   function slocLabel(id) {
     const s = storageLocations[id];
@@ -2570,7 +2570,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
         </div>
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">Prodshade</div>
-          <div className="mt-1 text-sm font-medium text-slate-900">{[header?.prodshade_pace_code, header?.prodshade_material_name].filter(Boolean).join(" - ") || "--"}</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">{header?.prodshade_material_name || "--"}</div>
         </div>
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">Description</div>
@@ -3143,7 +3143,7 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
   function materialLabel(id) {
     const m = materials[id];
     if (!m) return "--";
-    return [m.pace_code, m.material_name].filter(Boolean).join(" - ") || "--";
+    return [m.material_name, m.document_name].filter(Boolean).join(" — ") || "--";
   }
   function slocLabel(id) {
     const s = storageLocations[id];
