@@ -1178,6 +1178,54 @@ gap):** CRCP Cost Component Entry's own frontend UI/button placement — decide 
 AC01's future Bulk Component Mapper UI. **Not yet done:** live click-through on the deployed
 app (no dev login in this environment, per this doc's own established limitation elsewhere).
 
+**PO12 Tab 1 — ACL decision — Final Design: ✅ LOCKED 2026-10-04 (business owner).**
+Triggered by checking Prod directly: `PROC_PLANT_TRANSFER_LIST` (the resource Tab 1 and Tab
+2 both share) currently has **zero real grant in Prod** — `acl.work_context_capabilities`
+shows its 3 existing capabilities (`CAP_PROC_PLANT_TRANSFER` full V/W/E/D/Approve,
+`CAP_PROC_LOGISTICS` VIEW-only, `CAP_PROC_PLANT_TRANSFER_VIEW` VIEW-only) assigned **only to
+each company's ACL-MASTER work context** — the 2026-08-06 "Stores+Logistics+SCM full
+V/W/E/D" lock in `PROD-ACL-Access-Decisions.md` was apparently never actually pushed to a
+real (non-ACL-MASTER) work context in Prod, only written down. This correction belongs in
+that doc too, not just here — flagged, not yet written there.
+- **Locked decision:** Accounts = full access (VIEW+WRITE+EDIT: Discrepancy List, CRCP Cost
+  Component Entry, Settlement create/reverse) at **every** CRCP company, not just the ones
+  with a physical Stores/Logistics presence. L3_MANAGER and DIRECTOR = full access too.
+  P0076 (ACL-MASTER) = full access, as always, automatic. Stores and SCM = VIEW only (they
+  need to see the discrepancy/settlement picture, but Tab 1's actions are an Accounts/
+  Commercial function, not theirs to write).
+- **No new capability needed — reuses the exact AC01 Accounts capability family as-is, found
+  live in Prod to already match this split perfectly:** `CAP_ACC_GRN_COST_MAKER` (already
+  role-mapped to L1_MANAGER/L1_USER/L2_MANAGER/L2_USER/L3_USER/L4_USER — "Accounts") and
+  `CAP_ACC_GRN_COST_PLANTHEAD` (already role-mapped to exactly `L3_MANAGER` + `DIRECTOR`) —
+  both already live-granted via `work_context_capabilities` to real Accounts work contexts at
+  every CRCP company for AC01 itself, so granting these two capabilities VIEW+WRITE+EDIT on
+  `PROC_PLANT_TRANSFER_LIST` needs only new `acl.capability_menu_actions` rows (6 total: 2
+  capabilities × 3 actions) — no new `work_context_capabilities` row at all, since the same
+  people already hold these capabilities for AC01.
+- **Stores/SCM VIEW reuses the existing `CAP_PROC_LOGISTICS` capability** ("Stock transfers
+  and plant transfers" — already VIEW-only on this exact resource, confirmed above) — this
+  one DOES need new `work_context_capabilities` rows, since it currently has zero real
+  (non-ACL-MASTER) grant anywhere in Prod.
+- **✅ APPLIED — both Dev and Prod (2026-10-04, business owner: "joldi koro, amar prod e
+  dorkar eta").** Per CLAUDE.md §8's locked "new (capability, menu) grant" rule: inserted the
+  6 live `capability_menu_actions` rows (`CAP_ACC_GRN_COST_MAKER`/`CAP_ACC_GRN_COST_PLANTHEAD`
+  × VIEW/WRITE/EDIT on `PROC_PLANT_TRANSFER_LIST`) in both projects, then a fresh `acl_versions`
+  row per company (version bump, never re-capturing an already-captured one — Dev:
+  CMP003/005/006/007 v46→47/39→40/45→46/37→38; Prod: CMP003/005/006/011/014
+  v115→116/9→10/112→113/10→11/28→29), each `capture_acl_version_source` +
+  `generate_acl_snapshot` + activated. **Real gap found and fixed in Prod specifically:**
+  unlike Dev, Prod's `CAP_PROC_LOGISTICS` (Stores/SCM's own VIEW-only capability on this
+  resource) had **zero real grant anywhere** — only ACL-MASTER held it, confirming the
+  "PO12 ACL was never actually pushed to Prod" finding above applied to Stores/SCM too, not
+  just Accounts. Fixed: granted `CAP_PROC_LOGISTICS` to the real STORES/LOGISTICS/SUPPLY
+  CHAIN work contexts at all 5 Prod companies (13 new `work_context_capabilities` rows) in
+  the same pass. **Live-verified against Prod's own `precomputed_acl_view`** (CMP003):
+  ACCOUNTS = VIEW+WRITE+EDIT all ALLOW; MANAGEMENT = WRITE+EDIT ALLOW for its real
+  L3_MANAGER/DIRECTOR-ranked user (other-ranked users in the same department correctly DENY,
+  since the capability is role-scoped via `role_capabilities`, not department-blanket); STORES
+  and SUPPLY CHAIN = VIEW ALLOW only, no WRITE/EDIT rows at all (the capability itself only
+  ever grants VIEW). Matches the locked decision exactly.
+
 **0. Two-tab architecture (business owner's own framing):**
 - **Tab 1 — CRCP discrepancy + settlement + tracking.** Open to every company with PO12
   access, including a pure Bill-To company (e.g. CMP003) that never physically touches the
@@ -1572,6 +1620,53 @@ in the same format already used for Sales Invoices.
     the origin-reference audit trail, the same role a DC number plays for an ordinary Sales
     Invoice print, not as the invoice's own primary identity (that stays the Tally number
     throughout, both in this AC01 column and in "Invoice No." on the print itself).
+
+**AC01 "ITC To"/"Settlement Invoice" — implementation gap fix (2026-10-05).** Business
+owner asked about these two features the day after the §5/above locks were built, and a
+deliberate gap audit (not assuming "already built = already correct") against this doc's
+own locked text found 4 real gaps, all now fixed in `ac01.handlers.ts`/`AC01Page.jsx`:
+1. **`getAC01GRNHandler` (the drawer's own GET) never got the §5 broadened-visibility
+   fallback** — only `listAC01GRNsHandler` (the grid) had the `itc_owner_company_id` OR
+   check; the drawer's own `assertCompanyScope(ctx, grn.company_id)` call had no fallback
+   at all, so the ITC-owner company could see the row in the grid but got a 403 the moment
+   it tried to open it — the exact case this whole feature exists to serve was unusable
+   past the list view. Fixed: `landed_cost` is now fetched before the access check; access
+   is granted on direct ownership OR a matching `itc_owner_company_id`; a new
+   `is_editable_for_viewer` boolean (true only for direct ownership) is returned alongside.
+   Write access (`canWriteAC01`/`requireAC01WriteAccess`) is untouched — still strictly
+   GRN-company-scoped, per the already-locked rule.
+2. **No row-level "read-only"/"mirrored" marker existed anywhere in the frontend**, despite
+   the design saying the mirrored row must be read-only. Fixed: `buildListRow` now also
+   returns `is_editable_for_viewer` per row (`grn.company_id === viewerCompanyId`);
+   `AC01Page.jsx`'s grid greys these rows out via `getRowProps`, and the drawer derives
+   `effectiveReadOnly = readOnly || !rowEditable` (from the GET response's own
+   `is_editable_for_viewer`) and locks every input/action that already respected the
+   page-level `readOnly` prop — an amber banner names the mirrored-view reason. The 3
+   purely page-level (AC01-vs-AC03) occurrences — export filename/sheet-name and the list
+   page's own title — were deliberately left on the original `readOnly` prop, not this new
+   row-level flag.
+3. **No "ITC To" column existed at all** in the grid, even though §5 is the whole reason a
+   company can see a row it doesn't own. Fixed: `landed_cost.itc_owner_company_id` is now
+   in `buildListRow`'s bulk select, the `companies` bulk-fetch is extended to resolve any
+   ITC-owner company not already covered by the page's own `company_id` set, and a new
+   "ITC To" column (company_code, blank for the ordinary non-CRCP case) sits right after
+   "Company" — visible to every viewer, unlike Settlement Invoice below.
+4. **"Settlement Invoice" showed unconditionally whenever `settlement_invoice_id` was set**
+   — never actually gated to "viewing company = itc_owner_company_id" as §-above explicitly
+   locked, so the Actual Receiver's own unrelated view of its own GRN would have shown it
+   too. Fixed: `buildListRow` now only populates these fields when `viewerCompanyId` equals
+   the row's resolved ITC-owner company (or when no company filter is active at all, e.g.
+   SA/GA viewing across companies). Also split into two grid columns per business-owner
+   preference expressed this same day — a plain-text "Settlement Invoice" (Tally Invoice
+   Number) and a separate narrow "Preview" (View/Print link) — both still gated the same
+   way; the locked design's own wording ("clicking the number **or** a separate action")
+   explicitly sanctions either shape, so this is the "separate action" choice, not a
+   deviation from what was locked.
+Verified: `deno check`/`eslint` clean (zero new errors vs. `git stash` baseline on both
+touched files); all 8 relevant guard scripts (`company-scope-guard`,
+`company-scope-write-acl-guard`, `wrong-company-source-guard`, `jsx-no-undef-guard`,
+`route-acl-registry-guard`, `frontend-payload-guard`, `hardcoded-role-check-guard`,
+`resource-code-domain-guard`) pass with no new violations.
 
 **Correction to this doc's own CLAUDE.md note (2026-10-04) — Prod Supabase access.**
 CLAUDE.md states "আমার MCP শুধু dev-এ যুক্ত, prod আমি কখনো দেখিনি" (MCP is dev-only, Prod has

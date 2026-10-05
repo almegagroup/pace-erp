@@ -354,6 +354,13 @@ function buildColumns(components) {
     { key: "grn_number", label: "GRN Number", width: "120px" },
     { key: "grn_date", label: "GRN Date", width: "100px", render: (row) => toDDMMYYYY(row.grn_date), copyValue: (row) => toDDMMYYYY(row.grn_date) },
     { key: "company_code", label: "Company", width: "90px" },
+    {
+      // AC01 "ITC To" column (locked 2026-10-04) — who actually claims this
+      // GRN's ITC. Blank for the ordinary (non-CRCP) case. Shown to every
+      // viewer (unlike Settlement Invoice below, which is viewer-gated).
+      key: "itc_owner_company_code", label: "ITC To", width: "80px",
+      render: (row) => row.itc_owner_company_code || "—",
+    },
     { key: "supplier_name", label: "Supplier", width: "160px" },
     { key: "invoice_number", label: "Invoice No.", width: "120px" },
     { key: "invoice_date", label: "Invoice Date", width: "100px", render: (row) => toDDMMYYYY(row.invoice_date), copyValue: (row) => toDDMMYYYY(row.invoice_date) },
@@ -387,23 +394,36 @@ function buildColumns(components) {
     {
       // PO12 "AC01 Settlement Invoice" column (locked 2026-10-04) — shown
       // only for the CRCP ITC-To rows this company's own AC01 now mirrors
-      // (§5 "AC01 ITC To"). Displays the Tally Invoice Number (never the
-      // internal SETTLEMENT series number — see settlement_document_number,
-      // used only by the print template's own "Delivery Note" slot).
-      key: "settlement_invoice_tally_number", label: "Settlement Invoice", width: "150px",
+      // (§5 "AC01 ITC To"); the backend (buildListRow) only ever populates
+      // these fields when the viewer company is this GRN's own
+      // itc_owner_company_id, so the Actual Receiver's unrelated view of its
+      // own GRN never shows a value here. Displays the Tally Invoice Number
+      // (never the internal SETTLEMENT series number — see
+      // settlement_document_number, used only by the print template's own
+      // "Delivery Note" slot).
+      key: "settlement_invoice_tally_number", label: "Settlement Invoice", width: "130px",
+      render: (row) => row.settlement_invoice_tally_number || "—",
+      copyValue: (row) => row.settlement_invoice_tally_number || "",
+    },
+    {
+      // Separate "Preview" column (business owner, 2026-10-05) — View/Print
+      // link kept apart from the plain-text invoice number above (the locked
+      // design phrased "clicking the number OR a separate action" as an
+      // explicit either/or; this is the "separate action" choice).
+      key: "settlement_invoice_preview", label: "Preview", width: "70px",
       render: (row) => (
-        row.settlement_invoice_tally_number ? (
+        row.settlement_invoice_id ? (
           <Link
             to={`/dashboard/procurement/settlements/${encodeURIComponent(row.settlement_invoice_id)}/print`}
             target="_blank"
             rel="noreferrer"
             className="text-sky-700 underline underline-offset-2"
           >
-            {row.settlement_invoice_tally_number}
+            View/Print
           </Link>
         ) : "—"
       ),
-      copyValue: (row) => row.settlement_invoice_tally_number || "",
+      copyValue: () => "",
     },
     { key: "vendor_payable", label: "Vendor Payable (material)", width: "150px", align: "right", render: (row) => formatNumberOrBlank(row.vendor_payable) },
     {
@@ -627,6 +647,13 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     enabled: Boolean(selectedGrnId) && drawerOpen,
   });
 
+  // CRCP mirrored-view lock (locked 2026-10-04) -- false only when this GRN
+  // is open via the itc_owner_company_id fallback (getAC01GRNHandler), never
+  // via direct GRN-company ownership. Defaults true while loading/absent so
+  // the drawer doesn't flash locked before the detail query resolves.
+  const rowEditable = grnDetailQuery.data?.is_editable_for_viewer ?? true;
+  const effectiveReadOnly = readOnly || !rowEditable;
+
   const deductionTypesQuery = useQuery({
     queryKey: ["ac01", "deduction-types", companyId],
     queryFn: () => listDeductionTypes({ company_id: companyId }),
@@ -712,7 +739,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   }
 
   async function handleSave() {
-    if (readOnly || !selectedGrnId || !draft) return;
+    if (effectiveReadOnly || !selectedGrnId || !draft) return;
     setSaving(true);
     setError("");
     try {
@@ -811,7 +838,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       if (event.key === "Escape") {
         event.preventDefault();
         closeDrawer();
-      } else if (!readOnly && event.ctrlKey && event.key.toLowerCase() === "s") {
+      } else if (!effectiveReadOnly && event.ctrlKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
         void handleSave();
       }
@@ -819,7 +846,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawerOpen, draft, costLines, deductionLines, readOnly]);
+  }, [drawerOpen, draft, costLines, deductionLines, effectiveReadOnly]);
 
   const deductionTypeOptions = Array.isArray(deductionTypesQuery.data?.items) ? deductionTypesQuery.data.items : [];
   const chaOptions = Array.isArray(grnDetailQuery.data?.cha_options) ? grnDetailQuery.data.cha_options : [];
@@ -914,7 +941,14 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               rangeSelect
               virtualize
               emptyMessage={listQuery.isLoading ? "Loading GRNs..." : "No GRNs matched the current filter."}
-              getRowProps={() => ({ onDoubleClick: undefined })}
+              getRowProps={(row) => (
+                row.is_editable_for_viewer === false
+                  // CRCP mirrored row (locked 2026-10-04) -- visible only
+                  // because this company is the GRN's itc_owner_company_id,
+                  // not its actual owner; greyed out, read-only on open.
+                  ? { className: "bg-slate-50 text-slate-400", onDoubleClick: undefined }
+                  : { onDoubleClick: undefined }
+              )}
             />
           ),
         }}
@@ -928,7 +962,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         width="min(1480px, calc(100vw - 24px))"
         actions={
           <>
-            {!readOnly ? (
+            {!effectiveReadOnly ? (
               <button
                 type="button"
                 onClick={() => void handleSave()}
@@ -956,6 +990,14 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   : null}
               </div>
             ) : null}
+            {!readOnly && effectiveReadOnly && grnDetailQuery.data ? (
+              // CRCP mirrored view (locked 2026-10-04) -- this company is the
+              // ITC owner, not the Actual Receiver who created this GRN.
+              <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
+                You are viewing this GRN as the ITC-owning company — it belongs
+                to another company and is read-only here.
+              </div>
+            ) : null}
             <DrawerSection eyebrow="Identification" title="Company, supplier and invoice reference">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
                 <DrawerField label="Material name">
@@ -968,10 +1010,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   <input disabled value={grnDetailQuery.data?.supplier_name || "—"} className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Invoice number">
-                  <input disabled={readOnly} value={draft.invoice_number} onChange={(event) => setDraft((current) => ({ ...current, invoice_number: event.target.value }))} className={inputCls} />
+                  <input disabled={effectiveReadOnly} value={draft.invoice_number} onChange={(event) => setDraft((current) => ({ ...current, invoice_number: event.target.value }))} className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Invoice date">
-                  <input disabled={readOnly} value={draft.invoice_date} onChange={(event) => setDraft((current) => ({ ...current, invoice_date: event.target.value }))} placeholder="DD-MM-YYYY" className={inputCls} />
+                  <input disabled={effectiveReadOnly} value={draft.invoice_date} onChange={(event) => setDraft((current) => ({ ...current, invoice_date: event.target.value }))} placeholder="DD-MM-YYYY" className={inputCls} />
                 </DrawerField>
               </div>
             </DrawerSection>
@@ -989,7 +1031,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                 </DrawerField>
                 <DrawerField label="Considered Qty (drives Payable + Landed Cost)">
                   <input
-                    disabled={readOnly}
+                    disabled={effectiveReadOnly}
                     value={draft.considered_qty}
                     onChange={(event) => setDraft((current) => ({ ...current, considered_qty: event.target.value }))}
                     className={inputCls}
@@ -1007,10 +1049,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.invoice_rate)} className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Confirmed rate">
-                  <input disabled={readOnly} value={draft.confirmed_rate} onChange={(event) => setDraft((current) => ({ ...current, confirmed_rate: event.target.value }))} placeholder="Enter confirmed rate" className={inputCls} />
+                  <input disabled={effectiveReadOnly} value={draft.confirmed_rate} onChange={(event) => setDraft((current) => ({ ...current, confirmed_rate: event.target.value }))} placeholder="Enter confirmed rate" className={inputCls} />
                 </DrawerField>
                 <DrawerField label="GST %">
-                  <input disabled={readOnly} value={draft.gst_pct} onChange={(event) => setDraft((current) => ({ ...current, gst_pct: event.target.value }))} className={inputCls} />
+                  <input disabled={effectiveReadOnly} value={draft.gst_pct} onChange={(event) => setDraft((current) => ({ ...current, gst_pct: event.target.value }))} className={inputCls} />
                 </DrawerField>
               </div>
             </DrawerSection>
@@ -1025,7 +1067,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   />
                 </DrawerField>
                 <DrawerField label="Revised payment date">
-                  <input disabled={readOnly} value={draft.revised_payment_date} onChange={(event) => setDraft((current) => ({ ...current, revised_payment_date: event.target.value }))} placeholder="DD-MM-YYYY, optional" className={inputCls} />
+                  <input disabled={effectiveReadOnly} value={draft.revised_payment_date} onChange={(event) => setDraft((current) => ({ ...current, revised_payment_date: event.target.value }))} placeholder="DD-MM-YYYY, optional" className={inputCls} />
                 </DrawerField>
               </div>
             </DrawerSection>
@@ -1047,7 +1089,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                     <span className="flex h-8 flex-1 items-center border border-emerald-300 bg-emerald-50 px-2 text-sm text-emerald-900">
                       {lastMileTransporterName}
                     </span>
-                    {!readOnly ? (
+                    {!effectiveReadOnly ? (
                       <button
                         type="button"
                         onClick={() => {
@@ -1060,7 +1102,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       </button>
                     ) : null}
                   </div>
-                ) : readOnly ? (
+                ) : effectiveReadOnly ? (
                   <span className="text-sm text-slate-400">—</span>
                 ) : (
                   <div className="relative">
@@ -1104,7 +1146,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   </div>
                 )}
               </DrawerField>
-              {!readOnly && !draft.last_mile_transporter_id ? (
+              {!effectiveReadOnly && !draft.last_mile_transporter_id ? (
                 lmtCreateOpen ? (
                   <div className="mt-2 grid gap-2 border border-sky-200 bg-sky-50 p-3" style={{ gridTemplateColumns: "1fr 1fr auto auto" }}>
                     <input placeholder="Transporter name" value={lmtCreateName} onChange={(event) => setLmtCreateName(event.target.value)} className={inputCls} />
@@ -1131,7 +1173,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   return (
                     <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.3fr 0.6fr 0.55fr 0.55fr 0.55fr 0.45fr 0.8fr 0.9fr 0.5fr" }}>
                       <select
-                        disabled={readOnly}
+                        disabled={effectiveReadOnly}
                         value={line.cost_type}
                         onChange={(event) => {
                           const nextCostType = event.target.value;
@@ -1152,7 +1194,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       </select>
                       <div className="grid gap-0.5">
                         <input
-                          disabled={readOnly}
+                          disabled={effectiveReadOnly}
                           value={line.amount}
                           onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry)))}
                           placeholder={line.entry_mode === "PER_UOM" ? "Rate / unit" : "Amount"}
@@ -1167,7 +1209,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       </div>
                       {!isDuty ? (
                         <select
-                          disabled={readOnly}
+                          disabled={effectiveReadOnly}
                           value={line.entry_mode}
                           onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, entry_mode: event.target.value } : entry)))}
                           className={inputCls}
@@ -1178,7 +1220,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       ) : <div />}
                       {!isDuty ? (
                         <select
-                          disabled={readOnly}
+                          disabled={effectiveReadOnly}
                           value={line.has_gst ? "YES" : "NO"}
                           onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, has_gst: event.target.value === "YES" } : entry)))}
                           className={inputCls}
@@ -1189,7 +1231,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       ) : <div />}
                       {!isDuty && line.has_gst ? (
                         <select
-                          disabled={readOnly}
+                          disabled={effectiveReadOnly}
                           value={line.gst_treatment}
                           onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, gst_treatment: event.target.value } : entry)))}
                           className={inputCls}
@@ -1200,7 +1242,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       ) : <div />}
                       {!isDuty && line.has_gst ? (
                         <input
-                          disabled={readOnly}
+                          disabled={effectiveReadOnly}
                           value={line.gst_rate}
                           onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, gst_rate: event.target.value } : entry)))}
                           placeholder="GST %"
@@ -1208,7 +1250,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                         />
                       ) : <div />}
                       <select
-                        disabled={readOnly}
+                        disabled={effectiveReadOnly}
                         value={line.party_type}
                         onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, party_type: event.target.value } : entry)))}
                         className={inputCls}
@@ -1218,7 +1260,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       </select>
                       {line.party_type === "CHA" ? (
                         <select
-                          disabled={readOnly}
+                          disabled={effectiveReadOnly}
                           value={line.cha_id}
                           onChange={(event) => setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, cha_id: event.target.value } : entry)))}
                           className={inputCls}
@@ -1228,7 +1270,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           {chaOptions.map((cha) => <option key={cha.id} value={cha.id}>{cha.cha_code} — {cha.cha_name}</option>)}
                         </select>
                       ) : <div />}
-                      {!readOnly ? (
+                      {!effectiveReadOnly ? (
                         <button
                           type="button"
                           onClick={() => setCostLines((current) => current.filter((_, entryIndex) => entryIndex !== index))}
@@ -1240,12 +1282,12 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                     </div>
                   );
                 })}
-                {!readOnly ? (
+                {!effectiveReadOnly ? (
                   <button type="button" onClick={() => setCostLines((current) => [...current, nextEmptyCostLine()])} className="mt-1 justify-self-start text-[11px] font-semibold text-sky-700">
                     + Add cost line
                   </button>
                 ) : null}
-                {chaOptions.length === 0 && !readOnly ? (
+                {chaOptions.length === 0 && !effectiveReadOnly ? (
                   <p className="text-[10px] text-slate-400">
                     No CHA mapped to this company yet — create one from the CHA Master page first to select it here.
                   </p>
@@ -1258,7 +1300,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                 {deductionLines.map((line, index) => (
                   <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.2fr 0.6fr 0.5fr 0.6fr 0.9fr 0.5fr 0.5fr" }}>
                     <select
-                      disabled={readOnly}
+                      disabled={effectiveReadOnly}
                       value={line.deduction_type_id}
                       onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, deduction_type_id: event.target.value } : entry)))}
                       className={inputCls}
@@ -1266,11 +1308,11 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                       <option value="">Select type</option>
                       {deductionTypeOptions.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
                     </select>
-                    <input disabled={readOnly} value={line.amount} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry)))} placeholder="Amount" className={inputCls} />
-                    <input disabled={readOnly} value={line.percentage} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, percentage: event.target.value } : entry)))} placeholder="%" className={inputCls} />
-                    <input disabled={readOnly} value={line.round_off} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, round_off: event.target.value } : entry)))} placeholder="Round off" className={inputCls} />
+                    <input disabled={effectiveReadOnly} value={line.amount} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry)))} placeholder="Amount" className={inputCls} />
+                    <input disabled={effectiveReadOnly} value={line.percentage} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, percentage: event.target.value } : entry)))} placeholder="%" className={inputCls} />
+                    <input disabled={effectiveReadOnly} value={line.round_off} onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, round_off: event.target.value } : entry)))} placeholder="Round off" className={inputCls} />
                     <select
-                      disabled={readOnly}
+                      disabled={effectiveReadOnly}
                       value={line.party_type}
                       onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, party_type: event.target.value } : entry)))}
                       className={inputCls}
@@ -1281,20 +1323,20 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                     <label className="flex h-[26px] items-center gap-1 text-[10px] text-slate-600">
                       <input
                         type="checkbox"
-                        disabled={readOnly}
+                        disabled={effectiveReadOnly}
                         checked={line.in_landed}
                         onChange={(event) => setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, in_landed: event.target.checked } : entry)))}
                       />
                       In landed
                     </label>
-                    {!readOnly ? (
+                    {!effectiveReadOnly ? (
                       <button type="button" onClick={() => setDeductionLines((current) => current.filter((_, entryIndex) => entryIndex !== index))} className="h-[26px] border border-rose-300 bg-rose-50 text-[10px] font-semibold text-rose-800">
                         Remove
                       </button>
                     ) : <div />}
                   </div>
                 ))}
-                {!readOnly ? (
+                {!effectiveReadOnly ? (
                   <div className="mt-1 grid gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <button type="button" onClick={() => setDeductionLines((current) => [...current, nextEmptyDeductionLine()])} className="text-[11px] font-semibold text-sky-700">
@@ -1346,13 +1388,13 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                     </div>
                     <div className="flex items-center gap-1">
                       <input
-                        disabled={readOnly}
+                        disabled={effectiveReadOnly}
                         value={draft[draftKey]}
                         onChange={(event) => setDraft((current) => ({ ...current, [draftKey]: event.target.value }))}
                         placeholder="Confirmed / overwrite"
                         className={inputCls}
                       />
-                      {!readOnly ? (
+                      {!effectiveReadOnly ? (
                         <button
                           type="button"
                           onClick={() => setDraft((current) => ({
@@ -1364,7 +1406,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           Use suggested
                         </button>
                       ) : null}
-                      {!readOnly && draft[draftKey] !== "" ? (
+                      {!effectiveReadOnly && draft[draftKey] !== "" ? (
                         <button
                           type="button"
                           onClick={() => setDraft((current) => ({ ...current, [draftKey]: "" }))}
