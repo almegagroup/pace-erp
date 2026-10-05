@@ -389,7 +389,17 @@ function buildListRow(
   costLinesByLc: Map<string, JsonRecord[]>,
   deductionLinesByLc: Map<string, JsonRecord[]>,
   deductionTypeNameMap: Map<string, string>,
+  splitIntoGrnNumbersMap: Map<string, string[]>,
+  settlementInvoiceMap: Map<string, JsonRecord>,
 ): JsonRecord {
+  // PO12 "AC01 Settlement Invoice" column (locked 2026-10-04) -- shows the
+  // Tally Invoice Number (the primary user-facing identifier), never the
+  // internal SETTLEMENT series number -- only ever set for a genuine CRCP
+  // discrepancy GRN (settlement_invoice_id only gets set by
+  // create_settlement_invoice(), which itself refuses a same-company GRN).
+  const settlementInvoice = grn.settlement_invoice_id
+    ? settlementInvoiceMap.get(String(grn.settlement_invoice_id))
+    : null;
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
   const company = companyMap.get(String(grn.company_id));
@@ -424,9 +434,20 @@ function buildListRow(
   const referenceType = paymentTerms?.reference_date_type as JsonRecord | JsonRecord[] | undefined;
   const referenceTypeCode = Array.isArray(referenceType) ? referenceType[0]?.code : referenceType?.code;
 
+  // §3.9.5 "GRN Split" (2026-10-02) — a REVERSED GRN (whether from an
+  // ordinary reversal or from a Split) is not payable anymore; the ordinary
+  // due-date math below means nothing once the receipt itself has been
+  // undone. The frontend uses `status`/`is_reversed` to grey the row out and
+  // `split_into_grn_numbers` to show which new GRNs it was split into.
+  const isReversed = toTrimmedString(grn.status).toUpperCase() === "REVERSED";
+
   return {
     grn_id: grn.id,
     grn_number: grn.grn_number,
+    status: grn.status ?? null,
+    is_reversed: isReversed,
+    split_source_grn_id: grn.split_source_grn_id ?? null,
+    split_into_grn_numbers: splitIntoGrnNumbersMap.get(String(grn.id)) ?? null,
     csn_number: csn?.csn_display_number ?? csn?.csn_number ?? null,
     company_id: grn.company_id,
     company_code: company?.company_code ?? null,
@@ -482,11 +503,13 @@ function buildListRow(
     // Revised Payment Date (manual override) always wins when set; otherwise
     // the calculated due-date from payment terms. TRUE "date actually paid"
     // still needs AC02's Vendor Ledger — that's payment_status below, not this.
-    actual_payment_date: grn.revised_payment_date ?? computeActualPaymentDate(
+    // REVERSED (incl. §3.9.5 Split originals) is never payment-relevant —
+    // the receipt itself no longer stands, so no due date applies.
+    actual_payment_date: isReversed ? null : (grn.revised_payment_date ?? computeActualPaymentDate(
       grn,
       toUpperTrimmedString(referenceTypeCode),
       Number(paymentTerms?.credit_days ?? 0),
-    ),
+    )),
     revised_payment_date: grn.revised_payment_date ?? null,
     freight_type: po?.freight_term ?? null,
     transporter_id: grn.transporter_id ?? null,
@@ -507,6 +530,14 @@ function buildListRow(
     boe_date: grn.boe_date ?? null,
     ud_status: udStatusMap.get(String(grn.id)) ?? null,
     payment_status: null, // Same deferral as actual_payment_date above.
+    // PO12 "AC01 Settlement Invoice" column -- Tally Invoice Number, never
+    // the internal SETTLEMENT series number. View/Print reuses that
+    // internal settlement_number separately (not surfaced in this column).
+    settlement_invoice_id: grn.settlement_invoice_id ?? null,
+    settlement_invoice_tally_number: settlementInvoice?.tally_invoice_number ?? null,
+    settlement_invoice_tally_date: settlementInvoice?.tally_invoice_date ?? null,
+    settlement_document_number: settlementInvoice?.settlement_number ?? null,
+    settlement_document_date: settlementInvoice?.posting_date ?? null,
   };
 }
 
@@ -530,6 +561,25 @@ export async function listAC01GRNsHandler(
     const ALLOWED_DATE_FIELDS = new Set(["invoice_date", "grn_date", "posting_date"]);
     const dateColumn = ALLOWED_DATE_FIELDS.has(dateField) ? dateField : "invoice_date";
 
+    // AC01 "ITC To" + cross-company visibility (locked 2026-10-04) -- a
+    // company sees a GRN whenever it owns it (today's existing rule) OR it
+    // is that GRN's own landed_cost.itc_owner_company_id (the CRCP case,
+    // §5 of the PO12 design doc section). Write access is unchanged --
+    // still strictly GRN-company-scoped via canWriteAC01() below.
+    let itcOwnerGrnIds: string[] = [];
+    if (companyId) {
+      const { data: itcOwnerLcRows } = await serviceRoleClient
+        .schema("erp_procurement").from("landed_cost")
+        .select("grn_id").eq("itc_owner_company_id", companyId).not("grn_id", "is", null);
+      itcOwnerGrnIds = [...new Set(((itcOwnerLcRows ?? []) as JsonRecord[]).map((row) => String(row.grn_id)))];
+      // §8E guard -- this list is inlined into a single .or() URL below, not
+      // read via fetchInChunks' .in(), so cap it defensively. A company
+      // being the CRCP ITC owner on hundreds of GRNs is not expected for
+      // this brand-new, low-volume feature; revisit with a dedicated view
+      // if this cap is ever actually hit in practice.
+      itcOwnerGrnIds = itcOwnerGrnIds.slice(0, 300);
+    }
+
     let query = serviceRoleClient
       .schema("erp_procurement")
       .from("goods_receipt")
@@ -537,7 +587,11 @@ export async function listAC01GRNsHandler(
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (companyId) query = query.eq("company_id", companyId);
+    if (companyId && itcOwnerGrnIds.length > 0) {
+      query = query.or(`company_id.eq.${companyId},id.in.(${itcOwnerGrnIds.join(",")})`);
+    } else if (companyId) {
+      query = query.eq("company_id", companyId);
+    }
     if (rateStatus === "PENDING") query = query.eq("rate_confirmed", false);
     if (rateStatus === "CONFIRMED") query = query.eq("rate_confirmed", true);
     if (dateFrom) query = query.gte(dateColumn, dateFrom);
@@ -590,7 +644,7 @@ export async function listAC01GRNsHandler(
         .map((id) => String(id)),
     )];
 
-    const [materials, vendors, companies, purchaseOrders, landedCosts, qaDocuments, csnRows, transporters] = await Promise.all([
+    const [materials, vendors, companies, purchaseOrders, landedCosts, qaDocuments, csnRows, transporters, splitIntoRows] = await Promise.all([
       fetchInChunks<JsonRecord>(materialIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("material_master")
           .select("id, material_name, external_code, base_uom_code").in("id", chunk)),
@@ -615,6 +669,12 @@ export async function listAC01GRNsHandler(
       fetchInChunks<JsonRecord>(transporterIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("transporter_master")
           .select("id, transporter_code, transporter_name").in("id", chunk)),
+      // §3.9.5 "GRN Split" (2026-10-02) — reverse lookup: for each row on this
+      // page, which new GRN(s) (if any) it was split into. INDEPENDENT of the
+      // other bulk fetches here (§8B), keyed purely off the page's own ids.
+      fetchInChunks<JsonRecord>(grnIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+          .select("grn_number, split_source_grn_id").in("split_source_grn_id", chunk)),
     ]);
 
     const paymentTermIds = [...new Set(purchaseOrders.map((po) => String(po.payment_term_id)).filter(Boolean))];
@@ -711,11 +771,28 @@ export async function listAC01GRNsHandler(
       if (!deductionLinesByLc.has(key)) deductionLinesByLc.set(key, []);
       deductionLinesByLc.get(key)!.push(line);
     }
+    const splitIntoGrnNumbersMap = new Map<string, string[]>();
+    for (const row of splitIntoRows) {
+      const key = String(row.split_source_grn_id);
+      const grnNumber = toTrimmedString(row.grn_number);
+      if (!grnNumber) continue;
+      if (!splitIntoGrnNumbersMap.has(key)) splitIntoGrnNumbersMap.set(key, []);
+      splitIntoGrnNumbersMap.get(key)!.push(grnNumber);
+    }
+
+    const settlementInvoiceIds = [...new Set(rows.map((row) => String(row.settlement_invoice_id ?? "")).filter(Boolean))];
+    const settlementInvoiceRows = settlementInvoiceIds.length > 0
+      ? await fetchInChunks<JsonRecord>(settlementInvoiceIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("settlement_invoice")
+          .select("id, settlement_number, tally_invoice_number, tally_invoice_date, posting_date").in("id", chunk))
+      : [];
+    const settlementInvoiceMap = toMap(settlementInvoiceRows);
 
     const items = rows.map((row) =>
       buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
+        splitIntoGrnNumbersMap, settlementInvoiceMap,
       ),
     );
 
@@ -835,11 +912,17 @@ export async function getAC01GRNHandler(
       }
     }
 
+    // §3.9.5 "GRN Split" (2026-10-02) — same REVERSED guard as buildListRow's
+    // list-row version: a reversed receipt is never payment-relevant.
+    const isReversed = toTrimmedString(grn.status).toUpperCase() === "REVERSED";
+
     // freight_type (for the FOR-aware party UI hint) + the payment-terms
     // reference date, same source buildListRow's list-row version uses.
     let freightType: string | null = null;
-    let actualPaymentDate: string | null = grn.revised_payment_date ? String(grn.revised_payment_date) : null;
-    if (grn.po_id) {
+    let actualPaymentDate: string | null = isReversed
+      ? null
+      : (grn.revised_payment_date ? String(grn.revised_payment_date) : null);
+    if (!isReversed && grn.po_id) {
       const { data: po } = await serviceRoleClient
         .schema("erp_procurement").from("purchase_order")
         .select("freight_term, payment_term_id")
@@ -904,8 +987,18 @@ export async function getAC01GRNHandler(
     const suggestedPayables = computeSuggestedPayables(grn, costLines, deductionLines);
     const landedCostTotalForView = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
 
+    // §3.9.5 "GRN Split" — if this GRN was the original that got split, show
+    // which new GRN(s) it became. Same reverse-lookup as the list endpoint.
+    const { data: splitIntoRows } = await serviceRoleClient
+      .schema("erp_procurement").from("goods_receipt")
+      .select("grn_number").eq("split_source_grn_id", grnId);
+    const splitIntoGrnNumbers = ((splitIntoRows ?? []) as JsonRecord[])
+      .map((row) => toTrimmedString(row.grn_number)).filter(Boolean);
+
     return okResponse({
       ...grn,
+      is_reversed: isReversed,
+      split_into_grn_numbers: splitIntoGrnNumbers.length > 0 ? splitIntoGrnNumbers : null,
       item_name: materialName,
       external_code: materialExternalCode,
       supplier_name: vendorName,

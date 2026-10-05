@@ -33,11 +33,13 @@ import {
   listCSNs,
   rejectSTO,
   setStoCrcp,
+  setStoEffectiveDate,
   updateSTO,
   updateGateExitWeight,
 } from "../procurementApi.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import CrcpEditModal from "../CrcpEditModal.jsx";
+import EffectiveDateEditModal from "../EffectiveDateEditModal.jsx";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 
 const FREIGHT_TERM_OPTIONS = [
@@ -134,6 +136,9 @@ export default function STODetailPage() {
   const [crcpModalOpen, setCrcpModalOpen] = useState(false);
   const [crcpSaving, setCrcpSaving] = useState(false);
   const [crcpError, setCrcpError] = useState("");
+  const [effectiveDateModalOpen, setEffectiveDateModalOpen] = useState(false);
+  const [effectiveDateSaving, setEffectiveDateSaving] = useState(false);
+  const [effectiveDateError, setEffectiveDateError] = useState("");
 
   const detailQuery = useQuery({
     queryKey: ["procurement", "sto-detail", id],
@@ -163,6 +168,21 @@ export default function STODetailPage() {
       setCrcpError(saveError instanceof Error ? saveError.message : "STO_CRCP_UPDATE_FAILED");
     } finally {
       setCrcpSaving(false);
+    }
+  }
+
+  // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" (LOCKED 2026-09-30)
+  async function handleSaveEffectiveDate(effectiveStartDate) {
+    setEffectiveDateSaving(true);
+    setEffectiveDateError("");
+    try {
+      await setStoEffectiveDate(id, { effective_start_date: effectiveStartDate });
+      setEffectiveDateModalOpen(false);
+      await detailQuery.refetch();
+    } catch (saveError) {
+      setEffectiveDateError(saveError instanceof Error ? saveError.message : "STO_EFFECTIVE_DATE_UPDATE_FAILED");
+    } finally {
+      setEffectiveDateSaving(false);
     }
   }
   // INTER_PLANT STOs get their own CSN(s) at create time (unlike PO, which
@@ -347,11 +367,48 @@ export default function STODetailPage() {
     navigate("/dashboard/procurement/delivery-orders/create");
   }
 
+  // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — a Bulk STO with
+  // no later successor (same sending+receiving company+material) can't
+  // cancel unbounded; the backend replies PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED
+  // and this prompts for a Cutoff Date, then retries once with it.
+  async function promptForCutoffDate() {
+    const cutoff = await openActionPrompt({
+      eyebrow: "STO",
+      title: "Cutoff Date required",
+      label: "Cutoff Date (YYYY-MM-DD)",
+      message: "No later Bulk STO exists yet for this sending/receiving company/material — a Cutoff Date bounds this STO's Effective Date window instead of leaving it open-ended.",
+      required: true,
+    });
+    if (cutoff && !/^\d{4}-\d{2}-\d{2}$/.test(cutoff)) {
+      setError("Cutoff Date must be in YYYY-MM-DD format.");
+      return null;
+    }
+    return cutoff || null;
+  }
+
   async function handleCancel() {
     if (!detail) return;
     const reason = await openActionPrompt({ eyebrow: "STO", title: "Cancel this STO?", label: "Cancellation reason", required: true });
     if (!reason) return;
-    await runAction(() => cancelSTO(detail.id, { cancellation_reason: reason }), "STO cancelled.");
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await cancelSTO(detail.id, { cancellation_reason: reason });
+      setNotice("STO cancelled.");
+      await refreshDetailQueries();
+    } catch (actionError) {
+      if (actionError?.code === "PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED") {
+        setSaving(false);
+        const cutoff = await promptForCutoffDate();
+        if (!cutoff) return;
+        await runAction(() => cancelSTO(detail.id, { cancellation_reason: reason, cutoff_date: cutoff }), "STO cancelled.");
+        return;
+      }
+      setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_STO_ACTION_FAILED");
+    } finally {
+      setSaving(false);
+    }
   }
 
   // Same PO/STO parity fix requested by the business owner: a multi-item STO
@@ -568,6 +625,11 @@ export default function STODetailPage() {
         // except CANCELLED/CLOSED, header-level (unlike PO's per-row flag).
         ...(canEditCrcp
           ? [{ key: "crcp", label: detail?.crcp_enabled ? "CRCP (On)" : "CRCP", tone: "neutral", onClick: () => setCrcpModalOpen(true) }]
+          : []),
+        // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — BULK only,
+        // editable at any status except CANCELLED/CLOSED (same guard as CRCP).
+        ...(canEditCrcp && String(detail?.delivery_type || "").toUpperCase() === "BULK"
+          ? [{ key: "effective-date", label: detail?.effective_start_date ? `Effective Date: ${detail.effective_start_date}` : "Set Effective Date", tone: "neutral", onClick: () => setEffectiveDateModalOpen(true) }]
           : []),
       ]}
     >
@@ -1163,6 +1225,16 @@ export default function STODetailPage() {
           saving={crcpSaving}
           error={crcpError}
           onSave={handleSaveCrcp}
+        />
+      ) : null}
+      {effectiveDateModalOpen ? (
+        <EffectiveDateEditModal
+          visible={effectiveDateModalOpen}
+          onClose={() => setEffectiveDateModalOpen(false)}
+          initialValue={detail?.effective_start_date}
+          saving={effectiveDateSaving}
+          error={effectiveDateError}
+          onSave={handleSaveEffectiveDate}
         />
       ) : null}
     </>

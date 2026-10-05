@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -303,25 +304,47 @@ function buildComponentColumns(components) {
 function buildColumns(components) {
   return [
     {
-      key: "status", label: "Status", width: "70px",
+      key: "status", label: "Status", width: "88px",
       render: (row) => (
-        <div className="flex items-center gap-1">
-          <span className={`inline-block h-2 w-2 rounded-full ${udDotClass(row.ud_status)}`} title={row.ud_status ? `UD: ${row.ud_status}` : "No QA required"} />
+        row.is_reversed ? (
           <span
-            className={`inline-block h-2 w-2 rounded-full ${paymentDotStatus(row) === "GREEN" ? "bg-emerald-500" : paymentDotStatus(row) === "YELLOW" ? "bg-amber-500" : paymentDotStatus(row) === "RED" ? "bg-rose-500" : "bg-slate-300"}`}
-            title="Payment status (pending AC02 Vendor Ledger)"
-          />
-        </div>
+            className="inline-block rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-700"
+            title={
+              row.split_into_grn_numbers?.length
+                ? `REVERSED — split into: ${row.split_into_grn_numbers.join(", ")}`
+                : "REVERSED — this GRN has been reversed and is no longer payment-relevant."
+            }
+          >
+            REVERSED{row.split_into_grn_numbers?.length ? " (split)" : ""}
+          </span>
+        ) : (
+          <div className="flex items-center gap-1">
+            <span className={`inline-block h-2 w-2 rounded-full ${udDotClass(row.ud_status)}`} title={row.ud_status ? `UD: ${row.ud_status}` : "No QA required"} />
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${paymentDotStatus(row) === "GREEN" ? "bg-emerald-500" : paymentDotStatus(row) === "YELLOW" ? "bg-amber-500" : paymentDotStatus(row) === "RED" ? "bg-rose-500" : "bg-slate-300"}`}
+              title="Payment status (pending AC02 Vendor Ledger)"
+            />
+          </div>
+        )
       ),
       // Two dots, not one raw value. Ctrl+C copy is plain clipboard text, so
       // it gets a text summary; the Excel export can carry real formatting,
       // so it gets the same two colored dots shown on screen instead (see
-      // excelRichText below).
-      copyValue: (row) => `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"}`,
-      excelRichText: (row) => [
-        { text: "●", fontArgb: dotFontArgb(row.ud_status) },
-        { text: " ● ", fontArgb: dotFontArgb(paymentDotStatus(row)) },
-      ],
+      // excelRichText below). A REVERSED row (§3.9.5 "GRN Split" included)
+      // copies/exports as a plain text marker instead.
+      copyValue: (row) => (
+        row.is_reversed
+          ? `REVERSED${row.split_into_grn_numbers?.length ? ` (split into: ${row.split_into_grn_numbers.join(", ")})` : ""}`
+          : `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"}`
+      ),
+      excelRichText: (row) => (
+        row.is_reversed
+          ? [{ text: `REVERSED${row.split_into_grn_numbers?.length ? ` (split: ${row.split_into_grn_numbers.join(", ")})` : ""}`, fontArgb: "FFBE123C", bold: true }]
+          : [
+            { text: "●", fontArgb: dotFontArgb(row.ud_status) },
+            { text: " ● ", fontArgb: dotFontArgb(paymentDotStatus(row)) },
+          ]
+      ),
     },
     { key: "csn_number", label: "CSN Number", width: "120px" },
     { key: "grn_number", label: "GRN Number", width: "120px" },
@@ -357,6 +380,27 @@ function buildColumns(components) {
     ...buildComponentColumns(components),
     { key: "landed_cost_total", label: "Landed Cost", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.landed_cost_total) },
     { key: "cost_per_unit", label: "Cost / Unit", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.cost_per_unit) },
+    {
+      // PO12 "AC01 Settlement Invoice" column (locked 2026-10-04) — shown
+      // only for the CRCP ITC-To rows this company's own AC01 now mirrors
+      // (§5 "AC01 ITC To"). Displays the Tally Invoice Number (never the
+      // internal SETTLEMENT series number — see settlement_document_number,
+      // used only by the print template's own "Delivery Note" slot).
+      key: "settlement_invoice_tally_number", label: "Settlement Invoice", width: "150px",
+      render: (row) => (
+        row.settlement_invoice_tally_number ? (
+          <Link
+            to={`/dashboard/procurement/settlements/${encodeURIComponent(row.settlement_invoice_id)}/print`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-sky-700 underline underline-offset-2"
+          >
+            {row.settlement_invoice_tally_number}
+          </Link>
+        ) : "—"
+      ),
+      copyValue: (row) => row.settlement_invoice_tally_number || "",
+    },
     { key: "vendor_payable", label: "Vendor Payable (material)", width: "150px", align: "right", render: (row) => formatNumberOrBlank(row.vendor_payable) },
     {
       key: "vendor_suggested_payable", label: "Vendor Payable (total)", width: "140px", align: "right",
@@ -878,6 +922,14 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           <p className="p-6 text-center text-sm text-slate-400">Loading...</p>
         ) : (
           <div className="grid gap-2 p-3">
+            {grnDetailQuery.data?.is_reversed ? (
+              <div className="rounded border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
+                This GRN has been REVERSED and is no longer payment-relevant.
+                {grnDetailQuery.data?.split_into_grn_numbers?.length
+                  ? ` §3.9.5 "GRN Split" — split into: ${grnDetailQuery.data.split_into_grn_numbers.join(", ")}.`
+                  : null}
+              </div>
+            ) : null}
             <DrawerSection eyebrow="Identification" title="Company, supplier and invoice reference">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
                 <DrawerField label="Material name">

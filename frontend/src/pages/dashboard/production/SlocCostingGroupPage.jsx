@@ -23,6 +23,7 @@ import {
   getAc06Workspace,
   insertAc06RateSplit,
   saveAc06Rates,
+  setAc06FgTypeScope,
   setAc06MaterialInclusion,
   unassignAc06CostingGroup,
   updateAc06CostingGroup,
@@ -37,6 +38,7 @@ const AC06_BASE_ROUTE = "/dashboard/production/sloc-costing-group";
 // below) so the Excel export looks the same as the live grid -- same idiom
 // IN14's TOTAL_ROW_FILL_ARGB uses for its own Total row.
 const GROUP_LEAD_ROW_FILL_ARGB = "FFF0F9FF";
+const AC06_FG_TYPE_OPTIONS = ["MTO", "HPS", "MTEST", "MTS"];
 const unwrap = (payload) => payload?.data ?? payload ?? {};
 
 // §35.18 (PO11, carried into AC06 by §114.23): Pace Code is never shown on
@@ -202,6 +204,7 @@ export default function SlocCostingGroupPage() {
   const [costingName, setCostingName] = useState("");
   const [editingCostingId, setEditingCostingId] = useState("");
   const [costingParentId, setCostingParentId] = useState("");
+  const [costingParentFgTypes, setCostingParentFgTypes] = useState([]);
   const [costingManagerSlocGroupId, setCostingManagerSlocGroupId] = useState("");
   const [targetCostingGroupId, setTargetCostingGroupId] = useState("");
   const [itemPoolMaterialTypeFilter, setItemPoolMaterialTypeFilter] = useState("ALL");
@@ -303,6 +306,10 @@ export default function SlocCostingGroupPage() {
   const canRate = Boolean(permissions.can_rate);
   const canVerify = Boolean(permissions.can_verify);
   const canClose = Boolean(permissions.can_close);
+  useEffect(() => {
+    const group = slocGroups.find((entry) => entry.id === costingParentId);
+    setCostingParentFgTypes(Array.isArray(group?.fg_types) ? group.fg_types : []);
+  }, [costingParentId, slocGroups]);
   const slocGroupNameById = new Map(
     slocGroups.map((group) => [String(group.id), group.group_name]),
   );
@@ -1598,9 +1605,41 @@ export default function SlocCostingGroupPage() {
                       </button>
                     </div>
                   </div>
+                  <div className="flex flex-wrap items-end gap-3 border-t border-slate-200 pt-3">
+                    <div className="grid gap-1">
+                      <span className="text-xs font-semibold text-slate-700">Applies to FG/SFG Type</span>
+                      <div className="flex flex-wrap gap-3">
+                        {AC06_FG_TYPE_OPTIONS.map((fgType) => (
+                          <label key={fgType} className="flex items-center gap-1.5 text-xs text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={costingParentFgTypes.includes(fgType)}
+                              disabled={!costingParentId || busy}
+                              onChange={() => setCostingParentFgTypes((current) => current.includes(fgType)
+                                ? current.filter((value) => value !== fgType)
+                                : [...current, fgType])}
+                            />
+                            {fgType}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!costingParentId || busy}
+                      onClick={() => void withBusy(() => setAc06FgTypeScope({
+                        company_id: companyId,
+                        rate_month: month,
+                        sloc_group_id: costingParentId,
+                        fg_types: costingParentFgTypes,
+                      }))}
+                      className="h-9 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold text-sky-950 disabled:opacity-50"
+                    >
+                      Save Type Mapping
+                    </button>
+                  </div>
                   <p className="text-xs text-slate-500">
-                    Create or update the Costing Group directly where the parent
-                    SLOC Group scope is selected, then manage member mapping below.
+                    Select a parent SLOC Group, then map its FG/SFG types for this month. The mapping carries forward to the next month and can be changed there without changing the saved rates.
                   </p>
                 </div>
 

@@ -112,6 +112,7 @@ export const deleteAc06CostingGroup = (id, body) => fetchProd("DELETE", `/api/pr
 export const assignAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups/assign", body);
 export const unassignAc06CostingGroup = (body) => fetchProd("POST", "/api/production/ac06/costing-groups/unassign", body);
 export const setAc06MaterialInclusion = (body) => fetchProd("POST", "/api/production/ac06/material-inclusion", body);
+export const setAc06FgTypeScope = (body) => fetchProd("POST", "/api/production/ac06/fg-type-scope", body);
 export const saveAc06Rates = (body) => fetchProd("POST", "/api/production/ac06/rates", body);
 export const insertAc06RateSplit = (body) => fetchProd("POST", "/api/production/ac06/rates/split", body);
 export const deleteAc06RateSplit = (body) => fetchProd("POST", "/api/production/ac06/rates/split/delete", body);

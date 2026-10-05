@@ -273,6 +273,176 @@ async function resolveCrossCompanyCsnLink(
   return String(subCsn.id);
 }
 
+// §3.7 "Bulk GE-Creation Drawer" design — Person Name (all GE, not Bulk-only).
+// Non-Security department: auto-fill read-only with the logged-in user's own
+// name (name only, no user code/ID, per business owner). Security department:
+// left blank for the gate user to type manually (mandatory), since Security
+// terminals are commonly shared logins across shifts.
+async function isSecurityDepartmentUser(ctx: ProcurementHandlerContext): Promise<boolean> {
+  const workContextId = ctx.context.workContextId
+    || (ctx.context.workContextIds && ctx.context.workContextIds[0]);
+  if (!workContextId) return false;
+  const { data: wc } = await serviceRoleClient
+    .schema("erp_acl")
+    .from("work_contexts")
+    .select("department_id")
+    .eq("work_context_id", workContextId)
+    .maybeSingle();
+  const departmentId = toTrimmedString((wc as JsonRecord | null)?.department_id);
+  if (!departmentId) return false;
+  const { data: dept } = await serviceRoleClient
+    .schema("erp_master")
+    .from("departments")
+    .select("department_name")
+    .eq("id", departmentId)
+    .maybeSingle();
+  return toUpperTrimmedString((dept as JsonRecord | null)?.department_name) === "SECURITY";
+}
+
+async function resolveGePersonName(
+  ctx: ProcurementHandlerContext,
+  personNameInput: string,
+): Promise<{ personName: string } | { error: string }> {
+  if (await isSecurityDepartmentUser(ctx)) {
+    if (!personNameInput) {
+      return { error: "GE_PERSON_NAME_REQUIRED" };
+    }
+    return { personName: personNameInput };
+  }
+  const { data: signup } = await serviceRoleClient
+    .schema("erp_core")
+    .from("signup_requests")
+    .select("name")
+    .eq("auth_user_id", ctx.auth_user_id)
+    .maybeSingle();
+  const ownName = toTrimmedString((signup as JsonRecord | null)?.name);
+  return { personName: ownName || personNameInput };
+}
+
+// §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — resolves a Bulk
+// document's own validity window: [effective_start_date, upper bound), where
+// the upper bound is whichever comes first of (a) the next PO/STO's own
+// effective_start_date for the same grouping key, or (b) this document's own
+// cutoff_date if it was knocked off/cancelled with no successor. Returns null
+// upper bound when the window is still open (no successor, no cutoff yet).
+async function resolveBulkDocumentWindowUpperBound(
+  table: "purchase_order" | "stock_transfer_order",
+  documentId: string,
+  groupingFilters: Record<string, string>,
+  materialId: string,
+  currentEffectiveDate: string,
+  currentCutoffDate: string | null,
+): Promise<string | null> {
+  const lineTable = table === "purchase_order" ? "purchase_order_line" : "stock_transfer_order_line";
+  let query = serviceRoleClient
+    .schema("erp_procurement")
+    .from(table)
+    .select(`id, effective_start_date, ${lineTable}!inner(material_id)`)
+    .neq("id", documentId)
+    .not("effective_start_date", "is", null)
+    .eq(`${lineTable}.material_id`, materialId)
+    .limit(50);
+  for (const [column, value] of Object.entries(groupingFilters)) {
+    query = query.eq(column, value);
+  }
+  const { data: candidates } = await query;
+  const successorDates = ((candidates ?? []) as JsonRecord[])
+    .map((row) => toTrimmedString(row.effective_start_date))
+    .filter((date) => date && date > currentEffectiveDate)
+    .sort();
+  if (successorDates.length > 0) {
+    return successorDates[0];
+  }
+  return currentCutoffDate || null;
+}
+
+// Validates a Bulk vendor document (Challan/Invoice) date against the
+// document's own effective window. Returns an error code string, or null if
+// the date is within range.
+function validateBulkDocumentDate(
+  documentDate: string,
+  windowStart: string,
+  windowUpperBound: string | null,
+): string | null {
+  if (!documentDate) return null;
+  if (windowStart && documentDate < windowStart) {
+    return "GE_BULK_DOCUMENT_DATE_BEFORE_EFFECTIVE_WINDOW";
+  }
+  if (windowUpperBound && documentDate >= windowUpperBound) {
+    return "GE_BULK_DOCUMENT_DATE_OUTSIDE_EFFECTIVE_WINDOW";
+  }
+  return null;
+}
+
+// §3.7 "Bulk GE-Creation Drawer" — Bulk has no CSN, so these identifier/date
+// fields are captured directly at GE and carried forward to GRN unchanged.
+// At least one of the four identifier fields is mandatory; a filled
+// Challan/Invoice Number makes its own paired Date mandatory. Whichever
+// vendor-document date(s) are filled are also checked against the parent
+// PO/STO's own Bulk Effective Date window.
+async function validateAndPrepareBulkLineFields(
+  line: JsonRecord,
+  index: number,
+  table: "purchase_order" | "stock_transfer_order",
+  documentId: string,
+  groupingFilters: Record<string, string>,
+  materialId: string,
+  currentEffectiveDate: string,
+  currentCutoffDate: string | null,
+): Promise<{ fields: JsonRecord } | { error: string; message: string }> {
+  const challanNumber = toTrimmedString(line.bulk_challan_number);
+  const challanDate = toTrimmedString(line.bulk_challan_date);
+  const invoiceNumber = toTrimmedString(line.bulk_invoice_number);
+  const invoiceDate = toTrimmedString(line.bulk_invoice_date);
+  const containerNumber = toTrimmedString(line.bulk_container_number);
+  const ewaybillNumber = toTrimmedString(line.bulk_ewaybill_number);
+  const lrNumber = toTrimmedString(line.bulk_lr_number);
+
+  if (!challanNumber && !invoiceNumber && !containerNumber && !ewaybillNumber) {
+    return {
+      error: "GE_BULK_IDENTIFIER_REQUIRED",
+      message: `Line {n} requires at least one of Challan Number, Invoice Number, Container Number, or Ewaybill Number.`,
+    };
+  }
+  if (challanNumber && !challanDate) {
+    return { error: "GE_BULK_CHALLAN_DATE_REQUIRED", message: `Line {n}'s Challan Date is required when Challan Number is entered.` };
+  }
+  if (invoiceNumber && !invoiceDate) {
+    return { error: "GE_BULK_INVOICE_DATE_REQUIRED", message: `Line {n}'s Invoice Date is required when Invoice Number is entered.` };
+  }
+
+  if (!currentEffectiveDate) {
+    return { error: "GE_BULK_EFFECTIVE_DATE_MISSING", message: `Line {n}'s document has no Effective Start Date configured.` };
+  }
+
+  const windowUpperBound = await resolveBulkDocumentWindowUpperBound(
+    table, documentId, groupingFilters, materialId, currentEffectiveDate, currentCutoffDate,
+  );
+
+  for (const [dateValue, label] of [[challanDate, "Challan"], [invoiceDate, "Invoice"]] as const) {
+    if (!dateValue) continue;
+    const dateError = validateBulkDocumentDate(dateValue, currentEffectiveDate, windowUpperBound);
+    if (dateError) {
+      return {
+        error: dateError,
+        message: `Line {n}'s ${label} Date is outside the document's Bulk Effective Date window.`,
+      };
+    }
+  }
+
+  return {
+    fields: {
+      bulk_challan_number: challanNumber || null,
+      bulk_challan_date: challanDate || null,
+      bulk_invoice_number: invoiceNumber || null,
+      bulk_invoice_date: invoiceDate || null,
+      bulk_container_number: containerNumber || null,
+      bulk_ewaybill_number: ewaybillNumber || null,
+      bulk_lr_number: lrNumber || null,
+    },
+  };
+}
+
 async function fetchActiveCsnForGateEntry(csnId: string): Promise<CsnRow> {
   const { data: csn, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -481,6 +651,37 @@ export async function createGateEntryHandler(
       return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
 
+    // §4.1 "GE duplicate CSN/line selection across rows" -- the frontend
+    // drawers now exclude already-used CSN/STO-line candidates, but this is
+    // the actual save-time guard: a stale client (or any other caller) could
+    // still submit the same csn_id/sto_line_id on two lines of one GE.
+    {
+      const seenCsnIds = new Set<string>();
+      const seenStoLineIds = new Set<string>();
+      for (let index = 0; index < lines.length; index += 1) {
+        const dupCsnId = toTrimmedString(lines[index].csn_id);
+        if (dupCsnId) {
+          if (seenCsnIds.has(dupCsnId)) {
+            return procurementErrorResponse(req, ctx, "GE_DUPLICATE_CSN", 400, `Line ${index + 1} selects a CSN already used by another line in this Gate Entry.`);
+          }
+          seenCsnIds.add(dupCsnId);
+        }
+        const dupStoLineId = toTrimmedString(lines[index].sto_line_id);
+        if (dupStoLineId) {
+          if (seenStoLineIds.has(dupStoLineId)) {
+            return procurementErrorResponse(req, ctx, "GE_DUPLICATE_STO_LINE", 400, `Line ${index + 1} selects an STO line already used by another line in this Gate Entry.`);
+          }
+          seenStoLineIds.add(dupStoLineId);
+        }
+      }
+    }
+
+    const personNameResult = await resolveGePersonName(ctx, toTrimmedString(body.person_name));
+    if ("error" in personNameResult) {
+      return procurementErrorResponse(req, ctx, personNameResult.error, 400, "Person Name is required.");
+    }
+    const personName = personNameResult.personName;
+
     const preparedLines: JsonRecord[] = [];
     let geType = "INBOUND_PO";
 
@@ -546,6 +747,19 @@ export async function createGateEntryHandler(
         if (BULK_DELIVERY_TYPES.has(deliveryType) && parseNullableNumber(line.gross_weight) === null) {
           return procurementErrorResponse(req, ctx, "GE_GROSS_WEIGHT_REQUIRED", 400, `Line ${index + 1} requires gross_weight for BULK/TANKER deliveries.`);
         }
+        // §3.7 "Bulk GE-Creation Drawer" + "Effective Date + Cutoff mechanism"
+        // — BULK only (not TANKER, which stays on the CSN-based path).
+        if (deliveryType === "BULK") {
+          const bulkError = await validateAndPrepareBulkLineFields(
+            line, index, "purchase_order", String(po.id),
+            { vendor_id: toTrimmedString(po.vendor_id), company_id: toTrimmedString(po.company_id) },
+            materialId, toTrimmedString(po.effective_start_date), toTrimmedString(po.cutoff_date) || null,
+          );
+          if ("error" in bulkError) {
+            return procurementErrorResponse(req, ctx, bulkError.error, 400, bulkError.message.replace("{n}", String(index + 1)));
+          }
+          Object.assign(line, bulkError.fields);
+        }
       }
 
       // §133 gap found 2026-09-11 (Codex root-cause audit): the STO branch
@@ -590,7 +804,7 @@ export async function createGateEntryHandler(
         const { data: sto, error: stoError } = await serviceRoleClient
           .schema("erp_procurement")
           .from("stock_transfer_order")
-          .select("id, receiving_company_id, status, crcp_enabled")
+          .select("id, sending_company_id, receiving_company_id, status, crcp_enabled, delivery_type, effective_start_date, cutoff_date")
           .eq("id", resolvedStoId)
           .maybeSingle();
         if (stoError || !sto) {
@@ -615,6 +829,24 @@ export async function createGateEntryHandler(
         if (!["CREATED", "DISPATCHED"].includes(toUpperTrimmedString(sto.status))) {
           return procurementErrorResponse(req, ctx, "GE_STO_NOT_OPEN", 400, `Line ${index + 1}'s STO is not open for receiving.`);
         }
+        const stoDeliveryType = toUpperTrimmedString(sto.delivery_type);
+        if (BULK_DELIVERY_TYPES.has(stoDeliveryType) && parseNullableNumber(line.gross_weight) === null) {
+          return procurementErrorResponse(req, ctx, "GE_GROSS_WEIGHT_REQUIRED", 400, `Line ${index + 1} requires gross_weight for BULK/TANKER deliveries.`);
+        }
+        // §3.7 "Bulk GE-Creation Drawer" + "Effective Date + Cutoff mechanism"
+        // -- STO twin of the PO branch above, grouped by sending/receiving
+        // company instead of vendor (STO has no external vendor).
+        if (stoDeliveryType === "BULK") {
+          const bulkError = await validateAndPrepareBulkLineFields(
+            line, index, "stock_transfer_order", resolvedStoId,
+            { sending_company_id: toTrimmedString(sto.sending_company_id), receiving_company_id: toTrimmedString(sto.receiving_company_id) },
+            materialId, toTrimmedString(sto.effective_start_date), toTrimmedString(sto.cutoff_date) || null,
+          );
+          if ("error" in bulkError) {
+            return procurementErrorResponse(req, ctx, bulkError.error, 400, bulkError.message.replace("{n}", String(index + 1)));
+          }
+          Object.assign(line, bulkError.fields);
+        }
       }
 
       if (stoId || stoLineId) {
@@ -637,6 +869,13 @@ export async function createGateEntryHandler(
         tare_weight: parseNullableNumber(line.tare_weight),
         net_weight: parseNullableNumber(line.net_weight),
         net_weight_is_manual: Boolean(line.net_weight_is_manual),
+        bulk_challan_number: toTrimmedString(line.bulk_challan_number) || null,
+        bulk_challan_date: toTrimmedString(line.bulk_challan_date) || null,
+        bulk_invoice_number: toTrimmedString(line.bulk_invoice_number) || null,
+        bulk_invoice_date: toTrimmedString(line.bulk_invoice_date) || null,
+        bulk_container_number: toTrimmedString(line.bulk_container_number) || null,
+        bulk_ewaybill_number: toTrimmedString(line.bulk_ewaybill_number) || null,
+        bulk_lr_number: toTrimmedString(line.bulk_lr_number) || null,
       });
     }
 
@@ -692,6 +931,7 @@ export async function createGateEntryHandler(
         vehicle_number: vehicleNumber,
         driver_name: toTrimmedString(body.driver_name) || null,
         gate_staff_id: gateStaffId,
+        person_name: personName,
         status: "OPEN",
         remarks: toTrimmedString(body.remarks) || null,
       })
@@ -962,6 +1202,34 @@ export async function updateGateEntryHandler(
   }
 }
 
+// §3.7 "Bulk GE-Creation Drawer" — lets the Create GE page prefill/lock the
+// Person Name field before the user ever submits: Security department users
+// get an empty, mandatory-manual field; everyone else gets their own name,
+// read-only.
+export async function getGePersonNameContextHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const isSecurity = await isSecurityDepartmentUser(ctx);
+    if (isSecurity) {
+      return okResponse({ is_security: true, person_name: null }, ctx.request_id, req);
+    }
+    const { data: signup } = await serviceRoleClient
+      .schema("erp_core")
+      .from("signup_requests")
+      .select("name")
+      .eq("auth_user_id", ctx.auth_user_id)
+      .maybeSingle();
+    const ownName = toTrimmedString((signup as JsonRecord | null)?.name);
+    return okResponse({ is_security: false, person_name: ownName || null }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GE_PERSON_NAME_CONTEXT_FAILED";
+    return procurementErrorResponse(req, ctx, message, 500, message);
+  }
+}
+
 export async function listOpenCSNsForGEHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1037,7 +1305,7 @@ export async function listOpenPOsForGEHandler(
     let poQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("purchase_order")
-      .select("id, po_number, delivery_type, vendor_id, status, company_id, crcp_enabled")
+      .select("id, po_number, delivery_type, vendor_id, status, company_id, crcp_enabled, effective_start_date, cutoff_date")
       .in("status", ["CONFIRMED", "PARTIALLY_RECEIVED"])
       .order("created_at", { ascending: false });
     poQuery = crcpPoIds.length > 0
@@ -1055,7 +1323,7 @@ export async function listOpenPOsForGEHandler(
       const { data: lineData, error: lineError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("purchase_order_line")
-        .select("id, po_id, material_id, po_uom_code, line_status")
+        .select("id, po_id, material_id, po_uom_code, line_status, ordered_qty")
         .in("po_id", poIds)
         .in("line_status", ["OPEN", "PARTIALLY_RECEIVED"]);
 
@@ -1079,12 +1347,32 @@ export async function listOpenPOsForGEHandler(
     for (const line of lines) {
       const poId = String(line.po_id);
       if (!linesMap.has(poId)) linesMap.set(poId, []);
-      linesMap.get(poId)!.push({ ...line, material_name: lineMatMap.get(String(line.material_id)) ?? null });
+      linesMap.get(poId)!.push({
+        ...line,
+        material_name: lineMatMap.get(String(line.material_id)) ?? null,
+        expected_qty: Number(line.ordered_qty ?? 0),
+      });
     }
 
     const result = (pos ?? []).map((po) => ({
       ...po,
       lines: linesMap.get(String(po.id)) ?? [],
+    }));
+
+    // §3.7 "Bulk GE-Creation Drawer" — surface each BULK PO's own Effective
+    // Date window upper bound so the drawer can validate Challan/Invoice
+    // dates in real time, without a round trip per keystroke. INDEPENDENT
+    // per PO (§8B), resolved in parallel.
+    await Promise.all(result.map(async (po: JsonRecord) => {
+      const deliveryType = toUpperTrimmedString((po as JsonRecord).delivery_type);
+      const materialId = toTrimmedString((po.lines as JsonRecord[] | undefined)?.[0]?.material_id);
+      const effectiveStartDate = toTrimmedString((po as JsonRecord).effective_start_date);
+      if (deliveryType !== "BULK" || !materialId || !effectiveStartDate) return;
+      (po as JsonRecord).bulk_window_upper_bound = await resolveBulkDocumentWindowUpperBound(
+        "purchase_order", String(po.id),
+        { vendor_id: toTrimmedString((po as JsonRecord).vendor_id), company_id: toTrimmedString((po as JsonRecord).company_id) },
+        materialId, effectiveStartDate, toTrimmedString((po as JsonRecord).cutoff_date) || null,
+      );
     }));
 
     return okResponse({ items: result }, ctx.request_id, req);
@@ -1119,7 +1407,7 @@ export async function listOpenSTOsForGEHandler(
     let stoQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("stock_transfer_order")
-      .select("id, sto_number, sto_type, sending_company_id, receiving_company_id, status, crcp_enabled")
+      .select("id, sto_number, sto_type, sending_company_id, receiving_company_id, status, crcp_enabled, delivery_type, effective_start_date, cutoff_date")
       .in("status", ["CREATED", "DISPATCHED"])
       .order("created_at", { ascending: false });
     stoQuery = crcpStoIds.length > 0
@@ -1240,6 +1528,20 @@ export async function listOpenSTOsForGEHandler(
         mother: distributionMother,
       };
     });
+
+    // §3.7 "Bulk GE-Creation Drawer" — STO twin of the PO window-bound
+    // surfacing above, grouped by sending/receiving company instead of vendor.
+    await Promise.all(result.map(async (sto: JsonRecord) => {
+      const deliveryType = toUpperTrimmedString((sto as JsonRecord).delivery_type);
+      const materialId = toTrimmedString((sto.lines as JsonRecord[] | undefined)?.[0]?.material_id);
+      const effectiveStartDate = toTrimmedString((sto as JsonRecord).effective_start_date);
+      if (deliveryType !== "BULK" || !materialId || !effectiveStartDate) return;
+      (sto as JsonRecord).bulk_window_upper_bound = await resolveBulkDocumentWindowUpperBound(
+        "stock_transfer_order", String(sto.id),
+        { sending_company_id: toTrimmedString((sto as JsonRecord).sending_company_id), receiving_company_id: toTrimmedString((sto as JsonRecord).receiving_company_id) },
+        materialId, effectiveStartDate, toTrimmedString((sto as JsonRecord).cutoff_date) || null,
+      );
+    }));
 
     return okResponse({ items: result }, ctx.request_id, req);
   } catch (error) {

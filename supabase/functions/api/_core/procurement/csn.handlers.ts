@@ -2040,6 +2040,29 @@ export async function listCsnFieldHistoryHandler(req: Request, ctx: ProcurementH
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_HISTORY_FIELD_REQUIRED", 400, "field_name is required");
     }
 
+    // Found live 2026-09-30, CSN Tracker review: this route was gated by
+    // PROC_CSN_TRACKER:VIEW only (role-level), with no per-row company-scope
+    // check at all -- unlike every other single-CSN handler in this file
+    // (getCsnById(id, companyId), updateCSNHandler's assertCompanyScope call),
+    // so any user with generic CSN Tracker view access could pull the field
+    // history of ANY csn_id system-wide, including CSNs from companies they
+    // have no access to. companyScope.ts's own doc comment calls this out
+    // explicitly: "Read/detail handlers: with the fetched record's own
+    // company_id, before returning it to the caller."
+    const csn = await getCsnById(id);
+    if (!csn) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
+    }
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(csn.company_id));
+    } catch {
+      try {
+        await assertCompanyScope(ctx, toTrimmedString(csn.consignee_company_id));
+      } catch {
+        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+      }
+    }
+
     const { data, error } = await serviceRoleClient
       .schema("erp_procurement")
       .from("csn_field_history")

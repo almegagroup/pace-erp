@@ -247,6 +247,15 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §3.9.2 "GRN Invoice Mapping" (2026-10-02) — companion page, reuses PROC_GRN_LIST's ACL.
+  PROC_GRN_INVOICE_MAPPING: {
+    screen_code: "PROC_GRN_INVOICE_MAPPING",
+    route: "/dashboard/procurement/grns/invoice-mapping",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_QA_QUEUE: {
     screen_code: "PROC_QA_QUEUE",
     route: "/dashboard/procurement/qa-queue",

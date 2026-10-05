@@ -1465,6 +1465,7 @@ export async function issueSOStockHandler(
       }
 
       const postingBlocked = await hasPhysicalInventoryBlock(
+        String(so.company_id),
         String(soLine.material_id),
         storageLocationId,
         "UNRESTRICTED",

@@ -1582,6 +1582,7 @@ export async function postOpeningStockDocumentHandler(
     // §Q1-2026-09-29 — extend the PID posting-block check here, checked before any line writes
     // (not after), same discipline as §8D's check-before-write fix for Process PO.
     const blockedCombo = await findFirstPhysicalInventoryBlock(
+      toTrimmedString(document.company_id),
       lines
         .filter((line) => !line.posted_stock_document_id)
         .map((line) => ({
@@ -1702,8 +1703,8 @@ export async function postOpeningStockDocumentHandler(
   }
 }
 
-type CascadeNode = { ledgerId: string; newRate: number };
-type CascadeStepResult = {
+export type CascadeNode = { ledgerId: string; newRate: number };
+export type CascadeStepResult = {
   ledgerId: string;
   ok: boolean;
   materialId?: string;
@@ -1827,7 +1828,10 @@ async function findDownstreamGroup(
 // cascade run — once corrected, re-targeting it is always redundant
 // (the snapshot already reflects it), so skipping an already-visited
 // target is always safe, never a missed correction.
-async function cascadeRecalculate(
+// Exported for reuse by other modules whose own posting can land at rate=0
+// pending a later correction (e.g. GRN Invoice Mapping, §3.9.2) -- this is
+// the generic §109 RM->SFG->FG cascade engine, not Opening-Stock-specific.
+export async function cascadeRecalculate(
   roots: CascadeNode[],
   actor: string,
   reason: string,

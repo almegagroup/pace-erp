@@ -46,6 +46,7 @@ import {
   getGateEntryHandler,
   getGateExitInboundHandler,
   listGateEntriesHandler,
+  getGePersonNameContextHandler,
   listOpenCSNsForGEHandler,
   listOpenPOsForGEHandler,
   listOpenSTOsForGEHandler,
@@ -53,14 +54,19 @@ import {
   updateGateEntryHandler,
 } from "../_core/procurement/gate_entry.handlers.ts";
 import {
+  checkExistingGrnInvoiceHandler,
   createAndPostGRNFromLineHandler,
   createGRNDraftHandler,
   getGELinesForGRNHandler,
   getGRNHandler,
   getMaterialVendorDocNamesHandler,
   listGRNsHandler,
+  listGrnInvoiceMappingCandidatesHandler,
+  mapGrnInvoiceHandler,
   postGRNHandler,
   reverseGRNHandler,
+  splitGrnHandler,
+  unmapGrnInvoiceHandler,
   updateGRNDraftHandler,
 } from "../_core/procurement/grn.handlers.ts";
 import {
@@ -119,6 +125,17 @@ import {
   receiveTransferHandler,
   storageLocationTransferHandler,
 } from "../_core/procurement/pto.handlers.ts";
+import {
+  createCrcpCostComponentHandler,
+  listCrcpDiscrepancyHandler,
+} from "../_core/procurement/crcp_discrepancy.handlers.ts";
+import {
+  createSettlementInvoiceHandler,
+  getSettlementByTallyInvoiceHandler,
+  getSettlementPrintDataHandler,
+  listSettlementPendingHandler,
+  reverseSettlementInvoiceHandler,
+} from "../_core/procurement/settlement.handlers.ts";
 import {
   addIVLineHandler,
   createIVDraftHandler,
@@ -294,6 +311,7 @@ import {
   knockOffPOLineHandler,
   knockOffPOHandler,
   setPoCrcpHandler,
+  setPoEffectiveDateHandler,
   listMaterialUomConversionsForProcurementHandler,
   listPOsHandler,
   listPOOrderGroupsHandler,
@@ -401,6 +419,7 @@ import {
   approveSTOAmendmentHandler,
   cancelSTOHandler,
   setStoCrcpHandler,
+  setStoEffectiveDateHandler,
   amendSTOHandler,
   closeSTOHandler,
   confirmSTOHandler,
@@ -594,6 +613,8 @@ export async function dispatchProcurementRoutes(
       return await listOpenPOsForGEHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/open-stos":
       return await listOpenSTOsForGEHandler(req, ctx);
+    case "GET:/api/procurement/gate-entries/person-name-context":
+      return await getGePersonNameContextHandler(req, ctx);
     case "GET:/api/procurement/gate-entries/by-number":
       return await getGateEntryByNumberHandler(req, ctx);
     case "POST:/api/procurement/gate-exits/inbound":
@@ -618,6 +639,16 @@ export async function dispatchProcurementRoutes(
       return await getGELinesForGRNHandler(req, ctx);
     case "GET:/api/procurement/grns/material-vendor-doc-names":
       return await getMaterialVendorDocNamesHandler(req, ctx);
+    case "GET:/api/procurement/grns/invoice-mapping-candidates":
+      return await listGrnInvoiceMappingCandidatesHandler(req, ctx);
+    case "GET:/api/procurement/grns/invoice-mapping/check-invoice":
+      return await checkExistingGrnInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/grns/invoice-mapping/map":
+      return await mapGrnInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/grns/invoice-mapping/unmap":
+      return await unmapGrnInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/grns/split":
+      return await splitGrnHandler(req, ctx);
     case "POST:/api/procurement/invoice-verifications":
       return await createIVDraftHandler(req, ctx);
     case "GET:/api/procurement/invoice-verifications":
@@ -692,6 +723,21 @@ export async function dispatchProcurementRoutes(
       return await listPTOsHandler(req, ctx);
     case "POST:/api/procurement/sloc-transfer":
       return await storageLocationTransferHandler(req, ctx);
+    // PO12 (PTO) Phase C — Tab 1 Discrepancy List + CRCP Cost Component
+    // Entry + Settlement (Leg 2 Invoice). Design: PROCUREMENT-DESIGN-DOC.md
+    // "PO12 (PTO) — Tab 1 Design" / "Settlement (Leg 2 Invoice)" sections.
+    case "GET:/api/procurement/crcp-discrepancy":
+      return await listCrcpDiscrepancyHandler(req, ctx);
+    case "POST:/api/procurement/crcp-cost-components":
+      return await createCrcpCostComponentHandler(req, ctx);
+    case "GET:/api/procurement/settlements/pending":
+      return await listSettlementPendingHandler(req, ctx);
+    case "GET:/api/procurement/settlements/lookup":
+      return await getSettlementByTallyInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/settlements":
+      return await createSettlementInvoiceHandler(req, ctx);
+    case "POST:/api/procurement/settlements/reverse":
+      return await reverseSettlementInvoiceHandler(req, ctx);
     case "POST:/api/procurement/landed-costs":
       return await createLandedCostHandler(req, ctx);
     case "GET:/api/procurement/landed-costs":
@@ -1190,6 +1236,10 @@ export async function dispatchProcurementRoutes(
     return await getPTOHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/settlements\/[^/]+\/print$/.test(pathname) && req.method === "GET") {
+    return await getSettlementPrintDataHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/ptos\/[^/]+\/approve$/.test(pathname) && req.method === "POST") {
     return await approvePTOHandler(req, ctx);
   }
@@ -1384,6 +1434,10 @@ export async function dispatchProcurementRoutes(
     return await setStoCrcpHandler(req, ctx);
   }
 
+  if (/^\/api\/procurement\/stos\/[^/]+\/effective-date$/.test(pathname) && req.method === "PATCH") {
+    return await setStoEffectiveDateHandler(req, ctx);
+  }
+
   if (/^\/api\/procurement\/stos\/[^/]+\/lines\/[^/]+\/knock-off$/.test(pathname) && req.method === "POST") {
     return await knockOffSTOLineHandler(req, ctx);
   }
@@ -1490,6 +1544,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/crcp$/.test(pathname) && req.method === "PATCH") {
     return await setPoCrcpHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/effective-date$/.test(pathname) && req.method === "PATCH") {
+    return await setPoEffectiveDateHandler(req, ctx);
   }
 
   return null;

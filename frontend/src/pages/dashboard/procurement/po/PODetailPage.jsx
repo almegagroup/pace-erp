@@ -24,10 +24,12 @@ import {
   knockOffPOLine,
   knockOffPO,
   setPoCrcp,
+  setPoEffectiveDate,
   updatePurchaseOrder,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import CrcpEditModal from "../CrcpEditModal.jsx";
+import EffectiveDateEditModal from "../EffectiveDateEditModal.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -160,6 +162,9 @@ export default function PODetailPage() {
   const [crcpModalOpen, setCrcpModalOpen] = useState(false);
   const [crcpSaving, setCrcpSaving] = useState(false);
   const [crcpError, setCrcpError] = useState("");
+  const [effectiveDateModalOpen, setEffectiveDateModalOpen] = useState(false);
+  const [effectiveDateSaving, setEffectiveDateSaving] = useState(false);
+  const [effectiveDateError, setEffectiveDateError] = useState("");
   const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const poDetailQuery = useQuery({
@@ -192,6 +197,21 @@ export default function PODetailPage() {
       setCrcpError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_CRCP_UPDATE_FAILED");
     } finally {
       setCrcpSaving(false);
+    }
+  }
+
+  // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" (LOCKED 2026-09-30)
+  async function handleSaveEffectiveDate(effectiveStartDate) {
+    setEffectiveDateSaving(true);
+    setEffectiveDateError("");
+    try {
+      await setPoEffectiveDate(id, { effective_start_date: effectiveStartDate });
+      setEffectiveDateModalOpen(false);
+      await poDetailQuery.refetch();
+    } catch (saveError) {
+      setEffectiveDateError(saveError instanceof Error ? saveError.message : "PROCUREMENT_EFFECTIVE_DATE_UPDATE_FAILED");
+    } finally {
+      setEffectiveDateSaving(false);
     }
   }
 
@@ -354,13 +374,47 @@ export default function PODetailPage() {
     );
   }
 
+  // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — a Bulk PO with
+  // no later successor (same vendor+company+material) can't knock off
+  // unbounded; the backend replies PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED and
+  // this prompts for a Cutoff Date, then retries once with it.
+  async function promptForCutoffDate() {
+    const cutoff = await openActionPrompt({
+      eyebrow: "Purchase Order",
+      title: "Cutoff Date required",
+      label: "Cutoff Date (YYYY-MM-DD)",
+      message: "No later Bulk PO exists yet for this vendor/company/material — a Cutoff Date bounds this PO's Effective Date window instead of leaving it open-ended.",
+      required: true,
+    });
+    if (cutoff && !/^\d{4}-\d{2}-\d{2}$/.test(cutoff)) {
+      setError("Cutoff Date must be in YYYY-MM-DD format.");
+      return null;
+    }
+    return cutoff || null;
+  }
+
   async function handleKnockOffPo() {
     const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Knock off this PO?", label: "Knock-off reason", required: true });
     if (!reason) return;
-    await runAction(
-      () => knockOffPO(id, { reason }),
-      "Purchase order knocked off."
-    );
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await knockOffPO(id, { reason });
+      setNotice("Purchase order knocked off.");
+      await refreshDetailQueries();
+    } catch (actionError) {
+      if (actionError?.code === "PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED") {
+        setSaving(false);
+        const cutoff = await promptForCutoffDate();
+        if (!cutoff) return;
+        await runAction(() => knockOffPO(id, { reason, cutoff_date: cutoff }), "Purchase order knocked off.");
+        return;
+      }
+      setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_PO_ACTION_FAILED");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleKnockOffLine(lineId) {
@@ -384,10 +438,25 @@ export default function PODetailPage() {
 
     const reason = await openActionPrompt({ eyebrow: "Purchase Order", title: "Knock off this line?", label: "Knock-off reason", required: true });
     if (!reason) return;
-    await runAction(
-      () => knockOffPOLine(id, lineId, { reason }),
-      "PO line knocked off."
-    );
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      await knockOffPOLine(id, lineId, { reason });
+      setNotice("PO line knocked off.");
+      await refreshDetailQueries();
+    } catch (actionError) {
+      if (actionError?.code === "PROCUREMENT_BULK_CUTOFF_DATE_REQUIRED") {
+        setSaving(false);
+        const cutoff = await promptForCutoffDate();
+        if (!cutoff) return;
+        await runAction(() => knockOffPOLine(id, lineId, { reason, cutoff_date: cutoff }), "PO line knocked off.");
+        return;
+      }
+      setError(actionError instanceof Error ? actionError.message : "PROCUREMENT_PO_ACTION_FAILED");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleSubmitAmendment() {
@@ -603,6 +672,11 @@ export default function PODetailPage() {
         // amend flow above.
         ...(canEditCrcp
           ? [{ key: "crcp", label: po?.crcp_enabled ? "CRCP (On)" : "CRCP", tone: "neutral", onClick: () => setCrcpModalOpen(true) }]
+          : []),
+        // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — BULK only,
+        // editable at any status except CANCELLED/CLOSED (same guard as CRCP).
+        ...(canEditCrcp && String(po?.delivery_type || "").toUpperCase() === "BULK"
+          ? [{ key: "effective-date", label: po?.effective_start_date ? `Effective Date: ${po.effective_start_date}` : "Set Effective Date", tone: "neutral", onClick: () => setEffectiveDateModalOpen(true) }]
           : []),
       ]}
     >
@@ -1181,6 +1255,16 @@ export default function PODetailPage() {
           saving={crcpSaving}
           error={crcpError}
           onSave={handleSaveCrcp}
+        />
+      ) : null}
+      {effectiveDateModalOpen ? (
+        <EffectiveDateEditModal
+          visible={effectiveDateModalOpen}
+          onClose={() => setEffectiveDateModalOpen(false)}
+          initialValue={po?.effective_start_date}
+          saving={effectiveDateSaving}
+          error={effectiveDateError}
+          onSave={handleSaveEffectiveDate}
         />
       ) : null}
     </>

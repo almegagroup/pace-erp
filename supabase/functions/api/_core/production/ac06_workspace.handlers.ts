@@ -15,6 +15,7 @@ import { assertProdReadRole, parseBody, toTrimmedString } from "./production.sha
 type Row = Record<string, unknown>;
 const AC06_FIRST_MONTH = "2026-05-01";
 const AC06_EXCLUDED_MATERIAL_TYPES = new Set(["FG", "SFG"]);
+const AC06_FG_TYPES = new Set(["MTO", "HPS", "MTEST", "MTS"]);
 
 const ac06Error = (req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string) =>
   errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
@@ -171,11 +172,12 @@ async function getMonth(ctx: ProdHandlerContext, companyId: string, rateMonth: s
 
   // Carry-forward copies structure/rates, but never carries verification into a new month.
   if (prior?.id) {
-    const [{ data: priorLines, error: linesError }, { data: priorConfigs, error: configsError }] = await Promise.all([
+    const [{ data: priorLines, error: linesError }, { data: priorConfigs, error: configsError }, { data: priorFgTypeScopes, error: fgTypeScopeError }] = await Promise.all([
       db.from("ac06_month_line").select("source_sloc_group_id, material_id, costing_group_id, costing_group_name_snapshot, rate, wastage_other_pct, excluded_from_rate_input, display_order, parent_line_id, effective_date").eq("month_id", prior.id),
       db.from("ac06_month_group_config").select("source_sloc_group_id, costing_group_id, material_id, source_sloc_group_name_snapshot, costing_group_name_snapshot").eq("month_id", prior.id),
+      db.from("ac06_month_fg_type_scope").select("source_sloc_group_id, line_material_type, fg_type").eq("month_id", prior.id),
     ]);
-    if (linesError || configsError) throw new Error("AC06_CARRY_FORWARD_READ_FAILED");
+    if (linesError || configsError || fgTypeScopeError) throw new Error("AC06_CARRY_FORWARD_READ_FAILED");
     const priorLineMaterialIds = ids((priorLines ?? []).map((line: Row) => line.material_id));
     const priorMaterials = await materialMap(priorLineMaterialIds);
     // §139 intra-month rate split: the prior month can hold more than one row
@@ -227,6 +229,15 @@ async function getMonth(ctx: ProdHandlerContext, companyId: string, rateMonth: s
       const { error } = await db.from("ac06_month_group_config").insert(eligiblePriorConfigs.map((config) => ({
         ...config, month_id: created.id, company_id: companyId, created_by: ctx.auth_user_id,
         last_updated_by: ctx.auth_user_id, last_updated_at: now,
+      })));
+      if (error) throw new Error("AC06_CARRY_FORWARD_WRITE_FAILED");
+    }
+    if ((priorFgTypeScopes ?? []).length) {
+      const { error } = await db.from("ac06_month_fg_type_scope").insert((priorFgTypeScopes as Row[]).map((scope) => ({
+        month_id: created.id, company_id: companyId,
+        source_sloc_group_id: scope.source_sloc_group_id,
+        line_material_type: scope.line_material_type, fg_type: scope.fg_type,
+        created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
       })));
       if (error) throw new Error("AC06_CARRY_FORWARD_WRITE_FAILED");
     }
@@ -377,13 +388,22 @@ export async function getAc06WorkspaceHandler(req: Request, ctx: ProdHandlerCont
     await Promise.all(slocGroups.map((group) => ensureScopeRows(ctx, month, group)));
     const { data: lines, error } = await serviceRoleClient.schema("erp_production").from("ac06_month_line").select("*").eq("month_id", month.id);
     if (error) throw new Error("AC06_WORKSPACE_LOAD_FAILED");
+    const { data: fgTypeScopes, error: fgTypeScopeError } = await serviceRoleClient.schema("erp_production")
+      .from("ac06_month_fg_type_scope").select("source_sloc_group_id, fg_type").eq("month_id", month.id);
+    if (fgTypeScopeError) throw new Error("AC06_WORKSPACE_LOAD_FAILED");
+    const fgTypesBySlocGroup = new Map<string, string[]>();
+    for (const scope of (fgTypeScopes ?? []) as Row[]) {
+      const groupId = toTrimmedString(scope.source_sloc_group_id);
+      const type = toTrimmedString(scope.fg_type);
+      fgTypesBySlocGroup.set(groupId, [...new Set([...(fgTypesBySlocGroup.get(groupId) ?? []), type])]);
+    }
     const allLines = (lines ?? []) as Row[]; const materials = await materialMap(ids(allLines.map((line) => line.material_id)));
     const groupMap = new Map(costingGroups.map((group) => [toTrimmedString(group.id), group]));
     const rows = rowsForDisplay(allLines, materials, groupMap);
     const selectedSlocGroupId = toTrimmedString(url.searchParams.get("sloc_group_id"));
     const scopedRows = selectedSlocGroupId ? rows.filter((row) => toTrimmedString(row.source_sloc_group_id) === selectedSlocGroupId) : rows;
     const activeRows = scopedRows.filter((row) => !row.is_excluded);
-    return okResponse({ data: { month, rows: scopedRows, sloc_groups: slocGroups, costing_groups: costingGroups, permissions,
+    return okResponse({ data: { month, rows: scopedRows, sloc_groups: slocGroups.map((group) => ({ ...group, fg_types: fgTypesBySlocGroup.get(toTrimmedString(group.id)) ?? [] })), costing_groups: costingGroups, permissions,
       summary: { rows: activeRows.length, excluded: scopedRows.length - activeRows.length, verified: activeRows.filter((row) => row.verification_status === "VERIFIED").length,
         pending: activeRows.filter((row) => row.verification_status === "PENDING").length,
         standalone: activeRows.filter((row) => row.is_standalone).length } } }, ctx.request_id, req);
@@ -597,6 +617,63 @@ export async function resolveAc06RatesAsOf(
     });
   }
   return result;
+}
+
+// Edited from Costing Group Setup but attached to its parent SLOC Group: that
+// parent owns every AC06 line, including standalone lines which have no child
+// Costing Group.  A month's mapping is intentionally independent of its rates.
+export async function setAc06FgTypeScopeHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const companyId = await companyScope(ctx, toTrimmedString(body.company_id));
+    const rateMonth = monthStart(body.rate_month);
+    const slocGroupId = toTrimmedString(body.sloc_group_id);
+    const fgTypes = [...new Set((Array.isArray(body.fg_types) ? body.fg_types : []).map((value) => toTrimmedString(value).toUpperCase()))];
+    if (!companyId || !rateMonth || !slocGroupId || fgTypes.some((type) => !AC06_FG_TYPES.has(type))) {
+      return ac06Error(req, ctx, "AC06_FG_TYPE_SCOPE_INVALID", 400, "company_id, rate_month, SLOC Group, and valid FG Types are required.");
+    }
+    const accessError = await requireAc06Action(req, ctx, companyId, "ACC_SLOC_COSTING_SETUP", "WRITE");
+    if (accessError) return accessError;
+    const month = await getMonth(ctx, companyId, rateMonth);
+    const db = serviceRoleClient.schema("erp_production");
+    const { data: group } = await db.from("ac06_sloc_group").select("id, group_name").eq("id", slocGroupId).eq("company_id", companyId).eq("active", true).maybeSingle();
+    if (!group) return ac06Error(req, ctx, "AC06_FG_TYPE_SCOPE_INVALID", 409, "SLOC Group is not active in the selected company.");
+    if (fgTypes.length) {
+      const { data: conflicts, error: conflictError } = await db.from("ac06_month_fg_type_scope")
+        .select("fg_type, source_sloc_group_id").eq("month_id", month.id).eq("line_material_type", "FG").in("fg_type", fgTypes).neq("source_sloc_group_id", slocGroupId);
+      if (conflictError) throw new Error("AC06_FG_TYPE_SCOPE_SAVE_FAILED");
+      if ((conflicts ?? []).length) return ac06Error(req, ctx, "AC06_FG_TYPE_SCOPE_CONFLICT", 409, "An FG Type can belong to only one SLOC Group for a month.");
+    }
+    const now = new Date().toISOString();
+    const { error: deleteError } = await db.from("ac06_month_fg_type_scope").delete().eq("month_id", month.id).eq("source_sloc_group_id", slocGroupId);
+    if (deleteError) throw new Error("AC06_FG_TYPE_SCOPE_SAVE_FAILED");
+    if (fgTypes.length) {
+      const rows = ["FG", "SFG"].flatMap((line_material_type) => fgTypes.map((fg_type) => ({
+        month_id: month.id, company_id: companyId, source_sloc_group_id: slocGroupId,
+        line_material_type, fg_type, created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
+      })));
+      const { error: insertError } = await db.from("ac06_month_fg_type_scope").insert(rows);
+      if (insertError) throw new Error("AC06_FG_TYPE_SCOPE_SAVE_FAILED");
+    }
+    // Rates remain immutable after close, but this routing configuration is
+    // editable for a closed month and must update its archive snapshot too.
+    if (month.status === "CLOSED") {
+      const { data: archive, error: archiveError } = await db.from("ac06_month_archive").select("id").eq("source_month_id", month.id).maybeSingle();
+      if (archiveError || !archive) throw new Error("AC06_FG_TYPE_SCOPE_SAVE_FAILED");
+      const { error: archiveDeleteError } = await db.from("ac06_month_archive_fg_type_scope").delete().eq("archive_id", archive.id).eq("source_sloc_group_id_snapshot", slocGroupId);
+      if (archiveDeleteError) throw new Error("AC06_FG_TYPE_SCOPE_SAVE_FAILED");
+      if (fgTypes.length) {
+        const rows = ["FG", "SFG"].flatMap((line_material_type) => fgTypes.map((fg_type) => ({
+          archive_id: archive.id, company_id: companyId, source_sloc_group_id_snapshot: slocGroupId,
+          source_sloc_group_name_snapshot: group.group_name, line_material_type, fg_type,
+          created_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, last_updated_at: now,
+        })));
+        const { error: archiveInsertError } = await db.from("ac06_month_archive_fg_type_scope").insert(rows);
+        if (archiveInsertError) throw new Error("AC06_FG_TYPE_SCOPE_SAVE_FAILED");
+      }
+    }
+    return okResponse({ data: { sloc_group_id: slocGroupId, fg_types: fgTypes } }, ctx.request_id, req);
+  } catch (error) { return ac06ErrorFromCaught(req, ctx, error, "AC06_FG_TYPE_SCOPE_SAVE_FAILED", "Unable to save FG Type applicability."); }
 }
 
 export async function verifyAc06RatesHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
@@ -942,7 +1019,12 @@ export async function listAc06ApprovedMonthsHandler(req: Request, ctx: ProdHandl
   try {
     const url = new URL(req.url);
     const companyId = await companyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const lineMaterialType = toTrimmedString(url.searchParams.get("line_material_type")).toUpperCase();
+    const fgType = toTrimmedString(url.searchParams.get("fg_type")).toUpperCase();
     if (!companyId) return ac06Error(req, ctx, "AC06_APPROVED_MONTHS_INVALID", 400, "company_id is required.");
+    if ((lineMaterialType || fgType) && (!AC06_EXCLUDED_MATERIAL_TYPES.has(lineMaterialType) || !AC06_FG_TYPES.has(fgType))) {
+      return ac06Error(req, ctx, "AC06_APPROVED_MONTHS_INVALID", 400, "A valid FG/SFG material type and FG Type are required.");
+    }
     const accessError = await requireAc06Action(req, ctx, companyId, "PROC_SO_CREATE", "WRITE");
     if (accessError) return accessError;
 
@@ -954,14 +1036,21 @@ export async function listAc06ApprovedMonthsHandler(req: Request, ctx: ProdHandl
     const openMonths = ((months ?? []) as Row[]).filter((m) => m.status !== "CLOSED");
     const closedMonths = ((months ?? []) as Row[]).filter((m) => m.status === "CLOSED");
     const approvedRateMonths: string[] = [];
+    const scopedLookup = Boolean(lineMaterialType && fgType);
 
     if (openMonths.length) {
       const openIds = openMonths.map((m) => m.id as string);
-      const { data: openLines, error: openLinesError } = await db.from("ac06_month_line")
-        .select("month_id, verification_status").eq("excluded_from_rate_input", false).in("month_id", openIds);
-      if (openLinesError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+      const [{ data: openLines, error: openLinesError }, { data: scopes, error: scopesError }] = await Promise.all([
+        db.from("ac06_month_line").select("month_id, source_sloc_group_id, verification_status").eq("excluded_from_rate_input", false).in("month_id", openIds),
+        scopedLookup ? db.from("ac06_month_fg_type_scope").select("month_id, source_sloc_group_id").eq("line_material_type", lineMaterialType).eq("fg_type", fgType).in("month_id", openIds) : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (openLinesError || scopesError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+      const scopeByMonth = new Map(((scopes ?? []) as Row[]).map((scope) => [toTrimmedString(scope.month_id), toTrimmedString(scope.source_sloc_group_id)]));
       const pendingMonthIds = new Set(
-        ((openLines ?? []) as Row[]).filter((l) => l.verification_status !== "VERIFIED").map((l) => l.month_id as string),
+        ((openLines ?? []) as Row[]).filter((line) => {
+          const scopedGroupId = scopeByMonth.get(toTrimmedString(line.month_id));
+          return (!scopedGroupId || toTrimmedString(line.source_sloc_group_id) === scopedGroupId) && line.verification_status !== "VERIFIED";
+        }).map((line) => line.month_id as string),
       );
       for (const m of openMonths) if (!pendingMonthIds.has(m.id as string)) approvedRateMonths.push(m.rate_month as string);
     }
@@ -973,11 +1062,17 @@ export async function listAc06ApprovedMonthsHandler(req: Request, ctx: ProdHandl
       if (archiveError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
       const archiveIds = ((archives ?? []) as Row[]).map((a) => a.id as string);
       if (archiveIds.length) {
-        const { data: archiveLines, error: archiveLinesError } = await db.from("ac06_month_archive_line")
-          .select("archive_id, verification_status").eq("excluded_from_rate_input", false).in("archive_id", archiveIds);
-        if (archiveLinesError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+        const [{ data: archiveLines, error: archiveLinesError }, { data: archiveScopes, error: archiveScopesError }] = await Promise.all([
+          db.from("ac06_month_archive_line").select("archive_id, source_sloc_group_id_snapshot, verification_status").eq("excluded_from_rate_input", false).in("archive_id", archiveIds),
+          scopedLookup ? db.from("ac06_month_archive_fg_type_scope").select("archive_id, source_sloc_group_id_snapshot").eq("line_material_type", lineMaterialType).eq("fg_type", fgType).in("archive_id", archiveIds) : Promise.resolve({ data: [], error: null }),
+        ]);
+        if (archiveLinesError || archiveScopesError) throw new Error("AC06_APPROVED_MONTHS_FAILED");
+        const scopeByArchive = new Map(((archiveScopes ?? []) as Row[]).map((scope) => [toTrimmedString(scope.archive_id), toTrimmedString(scope.source_sloc_group_id_snapshot)]));
         const pendingArchiveIds = new Set(
-          ((archiveLines ?? []) as Row[]).filter((l) => l.verification_status !== "VERIFIED").map((l) => l.archive_id as string),
+          ((archiveLines ?? []) as Row[]).filter((line) => {
+            const scopedGroupId = scopeByArchive.get(toTrimmedString(line.archive_id));
+            return (!scopedGroupId || toTrimmedString(line.source_sloc_group_id_snapshot) === scopedGroupId) && line.verification_status !== "VERIFIED";
+          }).map((line) => line.archive_id as string),
         );
         for (const a of (archives ?? []) as Row[]) if (!pendingArchiveIds.has(a.id as string)) approvedRateMonths.push(a.rate_month as string);
       }

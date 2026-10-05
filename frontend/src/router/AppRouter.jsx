@@ -132,6 +132,7 @@ import GateReportPage from "../pages/dashboard/procurement/gate/GateReportPage.j
 import GRNListPage from "../pages/dashboard/procurement/grn/GRNListPage.jsx";
 import GRNDetailPage from "../pages/dashboard/procurement/grn/GRNDetailPage.jsx";
 import GRNPostFlow from "../pages/dashboard/procurement/grn/GRNPostFlow.jsx";
+import GRNInvoiceMappingPage from "../pages/dashboard/procurement/grn/GRNInvoiceMappingPage.jsx";
 import QAQueuePage from "../pages/dashboard/procurement/qa/QAQueuePage.jsx";
 import STOListPage from "../pages/dashboard/procurement/sto/STOListPage.jsx";
 import STOCreatePage from "../pages/dashboard/procurement/sto/STOCreatePage.jsx";
@@ -155,8 +156,10 @@ import IVCreatePage from "../pages/dashboard/procurement/accounts/IVCreatePage.j
 import IVDetailPage from "../pages/dashboard/procurement/accounts/IVDetailPage.jsx";
 import BlockedIVListPage from "../pages/dashboard/procurement/accounts/BlockedIVListPage.jsx";
 import ProcurementPlanningPage from "../pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx";
-import PlantTransferListPage from "../pages/dashboard/procurement/transfer/PlantTransferListPage.jsx";
+import PlantTransferPage from "../pages/dashboard/procurement/transfer/PlantTransferPage.jsx";
 import PlantTransferDetailPage from "../pages/dashboard/procurement/transfer/PlantTransferDetailPage.jsx";
+import SettlementInvoicePage from "../pages/dashboard/procurement/transfer/SettlementInvoicePage.jsx";
+import SettlementInvoicePrintPage from "../pages/dashboard/procurement/transfer/SettlementInvoicePrintPage.jsx";
 import PaymentTermsMasterPage from "../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx";
 import PortMasterPage from "../pages/dashboard/procurement/masters/PortMasterPage.jsx";
 import PortTransitMasterPage from "../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx";
@@ -638,6 +641,10 @@ export default function AppRouter() {
                     element={<GRNPostFlow />}
                   />
                   <Route
+                    path="procurement/grns/invoice-mapping"
+                    element={<GRNInvoiceMappingPage />}
+                  />
+                  <Route
                     path="procurement/grns/:id"
                     element={<GRNDetailPage />}
                   />
@@ -727,7 +734,15 @@ export default function AppRouter() {
                   />
                   <Route
                     path="procurement/transfer"
-                    element={<PlantTransferListPage />}
+                    element={<PlantTransferPage />}
+                  />
+                  <Route
+                    path="procurement/transfer/settlement"
+                    element={<SettlementInvoicePage />}
+                  />
+                  <Route
+                    path="procurement/settlements/:id/print"
+                    element={<SettlementInvoicePrintPage />}
                   />
                   <Route
                     path="procurement/transfer/:id"

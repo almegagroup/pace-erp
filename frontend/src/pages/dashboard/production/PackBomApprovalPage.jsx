@@ -76,12 +76,16 @@ export default function PackBomApprovalPage() {
     queryFn: () => listPackBoms({ status: statusFilter || undefined, company_id: effectiveCompanyFilter || undefined }),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
+  const groupsCompanyId = detail?.company_id || effectiveCompanyFilter;
+  // business owner, 2026-09-30: same cross-company material leak found across
+  // the SO create pages -- this never passed company_id, so a substitution
+  // candidate from another company showed up here too.
   const pmMaterialsQ = useQuery({
-    queryKey: ["om-materials", "PM"],
-    queryFn: () => listMaterials({ material_type: "PM", limit: 500 }),
+    queryKey: ["om-materials", "PM", groupsCompanyId],
+    queryFn: () => listMaterials({ material_type: "PM", limit: 500, company_id: groupsCompanyId || undefined }),
+    enabled: Boolean(groupsCompanyId),
     select: (d) => d?.data ?? [],
   });
-  const groupsCompanyId = detail?.company_id || effectiveCompanyFilter;
   const groupsQ = useQuery({
     queryKey: ["om-material-groups", groupsCompanyId],
     queryFn: () => listMaterialCategoryGroups(groupsCompanyId),

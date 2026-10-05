@@ -286,7 +286,7 @@ export default function SO01CreatePage() {
   const [freightTerm, setFreightTerm] = useState("FOR");
   const [parentCompanies, setParentCompanies] = useState([]);
   const [depotCodes, setDepotCodes] = useState([]);
-  const [ac06Months, setAc06Months] = useState([]);
+  const [ac06MonthsByType, setAc06MonthsByType] = useState({});
 
   const [lines, setLines] = useState([]);
 
@@ -294,7 +294,14 @@ export default function SO01CreatePage() {
     ? (noInboundSubType === "DIRECT" ? "DEPENDENT_DIRECT" : "DEPENDENT_DEPOT")
     : dispatchType;
 
-  const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" });
+  // business owner, 2026-09-30: same cross-company material leak found on
+  // SO05CreatePage.jsx (commit f58ee63) and SOCreatePage.jsx -- this query
+  // never passed company_id either, so a CMP003-only material showed up in
+  // another company's RM/PM/INT/FG dropdown here too.
+  const materialQuery = useMaterialOptionsQuery(
+    { company_id: companyId, limit: MASTER_PICKER_FETCH_LIMIT, offset: 0, status: "ACTIVE" },
+    { enabled: Boolean(companyId) }
+  );
   const materials = useMemo(() => materialQuery.materials ?? [], [materialQuery.materials]);
   const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);
   // Keep selected metadata independent of each row's current search results.
@@ -386,10 +393,14 @@ export default function SO01CreatePage() {
   // okResponse({ data: [...] }) carries no `pagination` key, so fetchProd
   // unwraps one level further and resolves to the bare array directly.
   useEffect(() => {
-    if (!companyId) { setAc06Months([]); return; }
-    listAc06ApprovedMonths({ company_id: companyId })
-      .then((result) => setAc06Months(Array.isArray(result) ? result : []))
-      .catch(() => setAc06Months([]));
+    if (!companyId) { setAc06MonthsByType({}); return; }
+    const scopes = ["FG", "SFG"].flatMap((lineMaterialType) => ["MTO", "HPS", "MTEST", "MTS"].map((fgType) => ({ lineMaterialType, fgType })));
+    Promise.all(scopes.map(async ({ lineMaterialType, fgType }) => ({
+      key: `${lineMaterialType}|${fgType}`,
+      months: await listAc06ApprovedMonths({ company_id: companyId, line_material_type: lineMaterialType, fg_type: fgType }),
+    })))
+      .then((results) => setAc06MonthsByType(Object.fromEntries(results.map(({ key, months }) => [key, Array.isArray(months) ? months : []]))))
+      .catch(() => setAc06MonthsByType({}));
   }, [companyId]);
   // §141 — Vendor Code options for this company. fetchProd unwraps this
   // handler's plain okResponse({ data: [...] }) (no pagination key) straight
@@ -474,6 +485,7 @@ export default function SO01CreatePage() {
         />
       );
     }
+    const ac06Months = ac06MonthsByType[`${line.line_material_type || "FG"}|${line.fg_type || ""}`] ?? [];
     return (
       <select
         value={line.costing_rate_month || ""}

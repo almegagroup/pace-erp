@@ -2582,6 +2582,7 @@ export async function finalizePackingOrderHandler(req: Request, ctx: ProdHandler
     // actively wrong, not just imprecise. line.batch_number is already the FINAL, post-SFG-
     // batch-link value by this point (the batch assignment above already ran).
     const packBlockedCombo = await findFirstPhysicalInventoryBlock(
+      String(poData.company_id),
       lineRows
         .filter((line) => Number(line.actual_qty ?? line.total_qty ?? 0) > 0 && !toTrimmedString(line.stock_ledger_id))
         .map((line) => {
@@ -2878,6 +2879,7 @@ export async function reversePackingOrderHandler(req: Request, ctx: ProdHandlerC
       // Batch-precise for SFG/FG, same reasoning as Final's own check above — PM lines
       // carry no batchNumber key (always blended in PID).
       const packReverseBlockedCombo = await findFirstPhysicalInventoryBlock(
+        String(poData.company_id),
         lineRows
           .filter((line) => Boolean(line.stock_ledger_id) && Number(line.actual_qty ?? line.total_qty ?? 0) > 0)
           .map((line) => {
@@ -3086,6 +3088,7 @@ export async function correctPackingOrderHandler(req: Request, ctx: ProdHandlerC
     // for existing SFG/FG lines (a brand-new line here is always PM per this handler's own
     // rule, so it never carries a batchNumber key).
     const packCorrectionBlockedCombo = await findFirstPhysicalInventoryBlock(
+      String(poData.company_id),
       corrections
         .filter((correction) => Math.abs(Number(correction.delta_qty ?? 0)) > 0)
         .map((correction) => {

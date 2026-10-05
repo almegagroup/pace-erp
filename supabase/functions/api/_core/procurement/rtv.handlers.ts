@@ -244,6 +244,7 @@ async function getSnapshot(companyId: string, materialId: string, storageLocatio
 }
 
 async function hasPhysicalInventoryBlock(
+  companyId: string,
   materialId: string,
   storageLocationId: string,
   stockType: string,
@@ -252,6 +253,7 @@ async function hasPhysicalInventoryBlock(
     .schema("erp_inventory")
     .from("physical_inventory_block")
     .select("id")
+    .eq("company_id", companyId)
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
     .eq("stock_type", stockType)
@@ -545,9 +547,9 @@ export async function postRTVHandler(
       const unitValue = parseNullableNumber(line.grn_rate) ?? 0;
       const isDirectPath = hasDirectOverride(line, directLineIds);
       const blockedSnapshot = await getSnapshot(companyId, materialId, storageLocationId, "BLOCKED");
-      const blockedStockPostingBlocked = await hasPhysicalInventoryBlock(materialId, storageLocationId, "BLOCKED");
+      const blockedStockPostingBlocked = await hasPhysicalInventoryBlock(companyId, materialId, storageLocationId, "BLOCKED");
       const unrestrictedPostingBlocked = isDirectPath
-        ? await hasPhysicalInventoryBlock(materialId, storageLocationId, "UNRESTRICTED")
+        ? await hasPhysicalInventoryBlock(companyId, materialId, storageLocationId, "UNRESTRICTED")
         : false;
       if (blockedStockPostingBlocked || unrestrictedPostingBlocked) {
         return rtvErrorResponse(

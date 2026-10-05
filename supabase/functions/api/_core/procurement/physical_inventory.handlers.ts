@@ -826,6 +826,7 @@ async function getManualWiseCandidates(
 }
 
 async function checkPostingBlock(
+  companyId: string,
   materialId: string,
   storageLocationId: string,
   stockType: string,
@@ -835,6 +836,7 @@ async function checkPostingBlock(
     .schema("erp_inventory")
     .from("physical_inventory_block")
     .select("pi_document_id")
+    .eq("company_id", companyId)
     .eq("material_id", materialId)
     .eq("storage_location_id", storageLocationId)
     .eq("stock_type", stockType);
@@ -899,14 +901,16 @@ function getPIBlockKey(candidate: { material_id: string; storage_location_id: st
 }
 
 function buildUniquePIBlockPayload(
+  companyId: string,
   candidates: Array<{ material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null }>,
   documentId: string,
-): Array<{ material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null; pi_document_id: string }> {
-  const unique = new Map<string, { material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null; pi_document_id: string }>();
+): Array<{ company_id: string; material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null; pi_document_id: string }> {
+  const unique = new Map<string, { company_id: string; material_id: string; storage_location_id: string; stock_type: string; batch_number: string | null; pi_document_id: string }>();
   for (const candidate of candidates) {
     const key = getPIBlockKey(candidate);
     if (!unique.has(key)) {
       unique.set(key, {
+        company_id: companyId,
         material_id: candidate.material_id,
         storage_location_id: candidate.storage_location_id,
         stock_type: candidate.stock_type,
@@ -1150,7 +1154,7 @@ export async function createPIDHandler(
 
     // §119.12 step 6 — check every staged combo's block BEFORE creating anything.
     for (const candidate of candidates) {
-      const block = await checkPostingBlock(candidate.material_id, candidate.storage_location_id, candidate.stock_type, candidate.batch_number);
+      const block = await checkPostingBlock(companyId, candidate.material_id, candidate.storage_location_id, candidate.stock_type, candidate.batch_number);
       if (block) return blockedResponse(req, ctx, block);
     }
 
@@ -1200,7 +1204,7 @@ export async function createPIDHandler(
         return piErrorResponse(req, ctx, "PI_ITEM_CREATE_FAILED", 500, "Unable to create physical inventory items.");
       }
 
-      const blockPayload = buildUniquePIBlockPayload(candidates, String(document.id));
+      const blockPayload = buildUniquePIBlockPayload(companyId, candidates, String(document.id));
       const { error: blockError } = await serviceRoleClient
         .schema("erp_inventory")
         .from("physical_inventory_block")
@@ -1619,7 +1623,7 @@ export async function addPIItemHandler(
     }
 
     for (const target of targets) {
-      const block = await checkPostingBlock(materialId, storageLocationId, stockType, target.batch_number);
+      const block = await checkPostingBlock(toTrimmedString(document.company_id), materialId, storageLocationId, stockType, target.batch_number);
       if (block) return blockedResponse(req, ctx, block);
     }
 
@@ -1657,6 +1661,7 @@ export async function addPIItemHandler(
         .schema("erp_inventory")
         .from("physical_inventory_block")
         .insert({
+          company_id: toTrimmedString(document.company_id),
           material_id: materialId,
           storage_location_id: storageLocationId,
           stock_type: stockType,
@@ -1665,7 +1670,7 @@ export async function addPIItemHandler(
         });
 
       if (blockError) {
-        const existingBlock = await checkPostingBlock(materialId, storageLocationId, stockType, target.batch_number ?? null);
+        const existingBlock = await checkPostingBlock(toTrimmedString(document.company_id), materialId, storageLocationId, stockType, target.batch_number ?? null);
         if (existingBlock?.pi_document_id === documentId) {
           insertedItems.push(item);
           continue;

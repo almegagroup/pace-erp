@@ -389,8 +389,8 @@ export async function postStockStatusChangeHandler(req: Request, ctx: SscHandler
       // immediate post — an approval later shouldn't be able to slip a change through against a
       // count that started in between (approveStockStatusChangePostingHandler re-checks too).
       if (
-        (await hasPhysicalInventoryBlock(line.materialId, line.storageLocationId, line.fromStockType)) ||
-        (await hasPhysicalInventoryBlock(line.materialId, line.storageLocationId, line.toStockType))
+        (await hasPhysicalInventoryBlock(companyId, line.materialId, line.storageLocationId, line.fromStockType)) ||
+        (await hasPhysicalInventoryBlock(companyId, line.materialId, line.storageLocationId, line.toStockType))
       ) {
         return sscError(req, ctx, "SSC_LINE_PI_BLOCKED", 409, `Line ${index + 1}: this material/location is under an active Physical Inventory count.`);
       }
@@ -549,8 +549,8 @@ export async function approveStockStatusChangePostingHandler(req: Request, ctx: 
     // §Q1-2026-09-29 — re-check the PID block at approval time too, not just at proposal time —
     // a PID could have started in the gap between the QA proposal and the manager's approval.
     if (
-      (await hasPhysicalInventoryBlock(materialId, toTrimmedString(row.storage_location_id), sourceStockType)) ||
-      (await hasPhysicalInventoryBlock(materialId, toTrimmedString(row.storage_location_id), toUpperTrimmedString(row.to_stock_type)))
+      (await hasPhysicalInventoryBlock(companyId, materialId, toTrimmedString(row.storage_location_id), sourceStockType)) ||
+      (await hasPhysicalInventoryBlock(companyId, materialId, toTrimmedString(row.storage_location_id), toUpperTrimmedString(row.to_stock_type)))
     ) {
       return sscError(req, ctx, "SSC_APPROVE_PI_BLOCKED", 409, "This material/location is now under an active Physical Inventory count — cannot approve.");
     }
