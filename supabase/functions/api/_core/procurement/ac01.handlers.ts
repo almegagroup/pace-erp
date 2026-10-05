@@ -413,9 +413,22 @@ function buildListRow(
   // Gated (locked 2026-10-04, found missing live 2026-10-05): visible only
   // when the viewing company IS this GRN's itc_owner_company_id -- the
   // Actual Receiver's own unrelated view of its own GRN must not see it.
+  //
+  // §5 design text: "Defaults to the GRN's own company_id for the ordinary,
+  // non-CRCP case ... zero behavior change." That default lives only on the
+  // landed_cost row itself (written at CRCP Cost Component Entry/AC01 save
+  // time) -- a GRN with no landed_cost row yet (no rate/cost entry done)
+  // has nowhere to read it from, so it fell through to NULL/blank instead
+  // of the GRN's own company. Found live 2026-10-05 (business owner,
+  // CMP003's own AC01): every row without a landed_cost row showed a blank
+  // "ITC To" cell instead of its own company code. Falling back to the
+  // GRN's own company_id here matches the locked default exactly and keeps
+  // isItcOwnerViewer/isEditableForViewer unchanged for the ordinary case
+  // (itcOwnerCompanyId === viewerCompanyId was already true for the GRN's
+  // own company either way).
   const itcOwnerCompanyId = landedCost?.itc_owner_company_id
     ? String(landedCost.itc_owner_company_id)
-    : null;
+    : String(grn.company_id);
   const isItcOwnerViewer = !viewerCompanyId || (itcOwnerCompanyId != null && itcOwnerCompanyId === viewerCompanyId);
   const settlementInvoice = isItcOwnerViewer && grn.settlement_invoice_id
     ? settlementInvoiceMap.get(String(grn.settlement_invoice_id))
@@ -835,7 +848,15 @@ export async function listAC01GRNsHandler(
     const verifierDisplayNames = await resolveUserDisplayNames(
       rows.map((row) => toTrimmedString(row.invoice_verified_by)).filter(Boolean),
     );
-    const items = rows.map((row) => ({
+    // Explicit return-type annotation is required here: buildListRow's return
+    // type (JsonRecord = Record<string, unknown>) has only an index signature,
+    // and TS drops a spread's index signature from an inline object literal's
+    // inferred type unless the literal itself is annotated -- without this,
+    // every `item.<field>` access below (and at every other call site of this
+    // handler's response) silently loses type information. Found via
+    // deno check while merging in the invoice_verified_by addition below,
+    // which never actually passed deno check on its own source branch.
+    const items = rows.map((row): JsonRecord => ({
       ...buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
