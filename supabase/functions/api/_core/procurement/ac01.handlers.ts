@@ -413,9 +413,22 @@ function buildListRow(
   // Gated (locked 2026-10-04, found missing live 2026-10-05): visible only
   // when the viewing company IS this GRN's itc_owner_company_id -- the
   // Actual Receiver's own unrelated view of its own GRN must not see it.
+  //
+  // §5 design text: "Defaults to the GRN's own company_id for the ordinary,
+  // non-CRCP case ... zero behavior change." That default lives only on the
+  // landed_cost row itself (written at CRCP Cost Component Entry/AC01 save
+  // time) -- a GRN with no landed_cost row yet (no rate/cost entry done)
+  // has nowhere to read it from, so it fell through to NULL/blank instead
+  // of the GRN's own company. Found live 2026-10-05 (business owner,
+  // CMP003's own AC01): every row without a landed_cost row showed a blank
+  // "ITC To" cell instead of its own company code. Falling back to the
+  // GRN's own company_id here matches the locked default exactly and keeps
+  // isItcOwnerViewer/isEditableForViewer unchanged for the ordinary case
+  // (itcOwnerCompanyId === viewerCompanyId was already true for the GRN's
+  // own company either way).
   const itcOwnerCompanyId = landedCost?.itc_owner_company_id
     ? String(landedCost.itc_owner_company_id)
-    : null;
+    : String(grn.company_id);
   const isItcOwnerViewer = !viewerCompanyId || (itcOwnerCompanyId != null && itcOwnerCompanyId === viewerCompanyId);
   const settlementInvoice = isItcOwnerViewer && grn.settlement_invoice_id
     ? settlementInvoiceMap.get(String(grn.settlement_invoice_id))
