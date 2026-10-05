@@ -135,7 +135,7 @@ function materialLabel(m) {
   // code, per §83.18's original "11-char FG SKU code" spec), paired with document_name
   // for the readable description (material_name mirrors external_code for FG, not a
   // real name -- verified live). pace_code never shown here.
-  return [m.external_code || m.pace_code, m.document_name || m.material_name].filter(Boolean).join(" - ");
+  return [m.external_code, m.document_name || m.material_name].filter(Boolean).join(" - ");
 }
 function customerLabel(c) {
   if (!c) return "--";

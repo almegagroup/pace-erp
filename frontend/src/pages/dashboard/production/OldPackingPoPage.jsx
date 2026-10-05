@@ -39,7 +39,7 @@ function friendly(code, fallback) { return ERRORS[code] ?? fallback ?? code; }
 
 function materialLabel(m) {
   if (!m) return "--";
-  return [m.pace_code || m.external_code, m.material_name].filter(Boolean).join(" - ");
+  return [m.material_name, m.document_name].filter(Boolean).join(" — ");
 }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function fmt(v) { return num(v).toFixed(3); }

@@ -16,7 +16,7 @@ import { listMaterials } from "../om/omApi.js";
 import { getFgStockBreakdown } from "./prodApi.js";
 
 function materialLabel(material) {
-  return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
+  return [material?.material_name, material?.document_name].filter(Boolean).join(" — ");
 }
 export function FgStockBreakdownTable({ batches }) {
   if (!batches?.length) {

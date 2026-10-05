@@ -40,7 +40,7 @@ const FG_CORRECTION_MOVEMENT_OPTIONS = [
 ];
 
 function materialLabelSimple(material) {
-  return [material?.pace_code || material?.external_code, material?.material_name].filter(Boolean).join(" - ");
+  return [material?.material_name, material?.document_name].filter(Boolean).join(" — ");
 }
 
 function machineLabelSimple(machine) {
@@ -943,7 +943,7 @@ function orderLabel(order) {
 }
 
 function materialLabel(material) {
-  return [material?.pace_code, material?.material_name].filter(Boolean).join(" - ");
+  return [material?.material_name, material?.document_name].filter(Boolean).join(" — ");
 }
 
 function buildActualMaterialOptions(line) {

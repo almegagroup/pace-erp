@@ -215,14 +215,11 @@ export default function StrokeMasterPage() {
   const strokeStorageLocationOptions = isMtestStroke && l003Location
     ? [{ value: l003Location.id, label: `${l003Location.code} — ${l003Location.name}` }]
     : storageLocationOptions;
-  // Label includes document_name (the human-recognizable product description,
-  // e.g. "TRUCARE WALL PUTTY WHITE") alongside pace_code/material_name -- the
-  // combobox's own search only matches against the label text, and
-  // material_name alone is often just an internal numeric code, not
-  // something a user would actually type to find a material.
+  // business owner, 2026-09-30: pace_code must never appear in a material
+  // label -- Item Name / Document Name only.
   const prodshadeOptions = (prodshadeMaterialsByType[form.material_type] ?? []).map((m) => ({
     value: m.id,
-    label: [m.pace_code ?? "—", m.material_name, m.document_name].filter(Boolean).join(" — "),
+    label: [m.material_name, m.document_name].filter(Boolean).join(" — "),
   }));
   // Existing Prodshade's Description is its own Material Master document_name --
   // pulled from the list, never re-typed, so a user picking an existing SFG/INT
@@ -264,7 +261,7 @@ export default function StrokeMasterPage() {
       if (!id || seen.has(id)) return [];
       seen.add(id);
       const material = stroke.material ?? {};
-      return [{ value: id, label: `${material.pace_code ?? ""} — ${material.material_name ?? `${stroke.prod_code ?? ""}${stroke.shade_code ?? ""}`}`.replace(/^\s*—\s*/, "") }];
+      return [{ value: id, label: [material.material_name, material.document_name].filter(Boolean).join(" — ") || `${stroke.prod_code ?? ""}${stroke.shade_code ?? ""}` }];
     });
   }, [shareSourceStrokes]);
   const shareStrokeOptions = useMemo(() => shareSourceStrokes
@@ -1249,7 +1246,7 @@ export default function StrokeMasterPage() {
         open={Boolean(memberModal)}
         memberMaterialId={memberMaterialId}
         setMemberMaterialId={setMemberMaterialId}
-        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: [m.pace_code ?? "—", m.material_name, m.document_name].filter(Boolean).join(" — ") }))}
+        materialOptions={[...(lineMaterialsByType.RM ?? []), ...(lineMaterialsByType.INT ?? [])].map((m) => ({ value: m.id, label: [m.material_name, m.document_name].filter(Boolean).join(" — ") }))}
         onCancel={() => setMemberModal(null)}
         onAdd={handleAddMember}
       />

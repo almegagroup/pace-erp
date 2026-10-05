@@ -308,7 +308,7 @@ export default function SOCreatePage() {
   const materialOptions = useMemo(
     () => materials
       .filter((entry) => SALES_MATERIAL_TYPES.has(String(entry.material_type || "").toUpperCase()))
-      .map((entry) => ({ value: entry.id, label: `${entry.pace_code || ""} ${entry.material_name || ""}`.trim() })),
+      .map((entry) => ({ value: entry.id, label: [entry.material_name, entry.document_name].filter(Boolean).join(" — ") })),
     [materials]
   );
   const materialMap = useMemo(() => new Map(materials.map((entry) => [entry.id, entry])), [materials]);

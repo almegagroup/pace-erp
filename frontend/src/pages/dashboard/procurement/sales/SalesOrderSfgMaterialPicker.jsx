@@ -11,7 +11,7 @@ import { listSalesOrderSfgMaterialOptions } from "../procurementApi.js";
 const MINIMUM_SEARCH_LENGTH = 3;
 
 const labelFor = (material) => material
-  ? [material.pace_code, material.external_code, material.document_name || material.material_name].filter(Boolean).join(" | ")
+  ? [material.material_name, material.document_name].filter(Boolean).join(" — ")
   : undefined;
 
 function rowsForPage(page) {

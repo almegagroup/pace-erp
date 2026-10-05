@@ -483,7 +483,7 @@ export default function SODetailPage() {
     for (const entry of materials) {
       const type = String(entry.material_type || "").toUpperCase();
       if (!byType.has(type)) byType.set(type, []);
-      byType.get(type).push({ value: entry.id, label: `${entry.pace_code || ""} ${entry.material_name || ""}`.trim() });
+      byType.get(type).push({ value: entry.id, label: [entry.material_name, entry.document_name].filter(Boolean).join(" — ") });
     }
     return byType;
   }, [materials]);
@@ -516,7 +516,7 @@ export default function SODetailPage() {
     if (line.line_material_type === "FG") {
       return (fgSkusByType[line.fg_type] ?? []).map((entry) => ({
         value: entry.id,
-        label: [entry.pace_code, entry.external_code, entry.document_name || entry.material_name].filter(Boolean).join(" | "),
+        label: [entry.material_name, entry.document_name].filter(Boolean).join(" — "),
       }));
     }
     return materialOptionsForType.get(line.line_material_type) ?? [];

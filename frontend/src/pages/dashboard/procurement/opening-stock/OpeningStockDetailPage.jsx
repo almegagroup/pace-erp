@@ -340,7 +340,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
     () =>
       materials.map((material) => ({
         value: material.id,
-        label: `${material.material_name ?? "Material"} (${material.pace_code ?? material.material_code ?? material.id})`,
+        label: [material.material_name, material.document_name].filter(Boolean).join(" — ") || "Material",
       })),
     [materials],
   );
@@ -895,7 +895,7 @@ export default function OpeningStockDetailPage({ documentId: documentIdProp = ""
                       render: (row) => {
                         const material = materialMap.get(row.material_id);
                         return material
-                          ? `${material.material_name ?? "Material"} (${material.pace_code ?? material.material_code ?? material.id})`
+                          ? [material.material_name, material.document_name].filter(Boolean).join(" — ") || "—"
                           : row.material_id;
                       },
                     },

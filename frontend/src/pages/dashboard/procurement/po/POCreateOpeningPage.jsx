@@ -317,7 +317,7 @@ export default function POCreateOpeningPage() {
     () =>
       filterOptions.materials.map((entry) => ({
         value: entry.id,
-        label: `${entry.pace_code || ""} ${entry.material_name || ""}`.trim(),
+        label: [entry.material_name, entry.document_name].filter(Boolean).join(" — "),
       })),
     [filterOptions.materials]
   );

@@ -112,7 +112,7 @@ export default function PlantTransferListPage() {
   );
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const materialOptions = useMemo(
-    () => materialQuery.materials.map((entry) => ({ value: entry.id, label: `${entry.pace_code || ""} - ${entry.material_name || ""}`.trim() })),
+    () => materialQuery.materials.map((entry) => ({ value: entry.id, label: [entry.material_name, entry.document_name].filter(Boolean).join(" — ") })),
     [materialQuery.materials]
   );
   const sourceSlocQuery = useStorageLocationOptionsQuery(

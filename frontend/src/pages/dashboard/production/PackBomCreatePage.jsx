@@ -44,7 +44,7 @@ function companyLabel(company) { return [company?.company_code, company?.company
 // intended convention for MTO/HPS, not a bug. Only skuLabel()'s own fallback below is
 // new, for the one real gap: MTEST sample SKUs have no Prodshade at all (§131.3), so
 // prodLabel is always empty and there was nothing to fall back to.
-function materialLabel(material) { return [material?.pace_code || material?.external_code, material?.material_name || material?.document_name].filter(Boolean).join(" - "); }
+function materialLabel(material) { return [material?.material_name, material?.document_name].filter(Boolean).join(" — "); }
 function skuLabel(sku) {
   const prod = sku?.prodshade ?? {};
   const prodLabel = prod?.material_name || prod?.document_name;
