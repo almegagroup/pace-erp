@@ -5,8 +5,9 @@
  * Domain: PRODUCTION
  * Purpose: PR25 "RM/PM Sale Report" — month-end report replicating the business's manual
  *          Excel "RMPM Sale" tab. Row = one (Material, Month). Direct RM/PM/INT sale qty
- *          plus MTEST-derived RM/PM/INT content on 3 independent bases (Standard/Actual/
- *          AP-Approved) and 3 combined grand totals — the downloader picks which to use.
+ *          plus Sample/MTEST-derived RM/PM/INT consumption on 3 independent bases
+ *          (Standard/Actual/AP-Approved). Direct sale and sample consumption are
+ *          intentionally never combined in a displayed or exported total.
  *          "Everyone Reports" (CAP_EVERYONE_REPORTS) — company-scoped, no per-row edit.
  * Authority: Frontend
  */
@@ -30,6 +31,13 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function formatMonth(value) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(value ?? "").trim());
+  if (!match) return String(value ?? "");
+  const label = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(match[2]) - 1];
+  return label ? `${label}-${match[1].slice(2)}` : String(value ?? "");
+}
+
 function formatQty(value) {
   const num = Number(value ?? 0);
   return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits: 3 }) : "";
@@ -48,18 +56,18 @@ function buildColumns() {
     numFmt: "#,##0.000",
   });
   return [
-    { key: "month", label: "Month", width: "90px" },
+    {
+      key: "month", label: "Tally Invoice Month", width: "130px",
+      render: (row) => formatMonth(row.month), copyValue: (row) => formatMonth(row.month),
+    },
     { key: "item_type", label: "Item Type", width: "90px" },
     { key: "item_name", label: "Item Name", width: "220px" },
     { key: "external_code", label: "External Code", width: "120px" },
     { key: "document_name", label: "Document Name", width: "220px" },
-    qtyCol("rm_pm_sale_qty", "RM/PM Sale (Direct)"),
-    qtyCol("mtest_std_qty", "MTEST — STD"),
-    qtyCol("mtest_actual_qty", "MTEST — Actual"),
-    qtyCol("mtest_apl_qty", "MTEST — APL Approved"),
-    qtyCol("total_std", "Total (RPS + MTEST STD)", "150px"),
-    qtyCol("total_actual", "Total (RPS + MTEST Actual)", "150px"),
-    qtyCol("total_apl", "Total (RPS + MTEST APL)", "150px"),
+    qtyCol("rm_pm_sale_qty", "Individual RM/PM Sale", "150px"),
+    qtyCol("mtest_std_qty", "Sample Consumption — STD", "170px"),
+    qtyCol("mtest_actual_qty", "Sample Consumption — Actual", "180px"),
+    qtyCol("mtest_apl_qty", "Sample Consumption — APL Approved", "205px"),
   ];
 }
 
@@ -169,11 +177,11 @@ export default function RmPmSaleReportPage() {
               />
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              From date
+              From date (Tally Invoice)
               <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
             </label>
             <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-              To date
+              To date (Tally Invoice)
               <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
             </label>
           </div>

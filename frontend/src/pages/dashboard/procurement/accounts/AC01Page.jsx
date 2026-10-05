@@ -323,6 +323,9 @@ function buildColumns(components) {
               className={`inline-block h-2 w-2 rounded-full ${paymentDotStatus(row) === "GREEN" ? "bg-emerald-500" : paymentDotStatus(row) === "YELLOW" ? "bg-amber-500" : paymentDotStatus(row) === "RED" ? "bg-rose-500" : "bg-slate-300"}`}
               title="Payment status (pending AC02 Vendor Ledger)"
             />
+            {row.invoice_verified_by ? (
+              <span className="text-sm font-bold leading-none text-emerald-600" title={`Invoice verified by ${row.invoice_verified_by_display || row.invoice_verified_by}`}>✓</span>
+            ) : null}
           </div>
         )
       ),
@@ -334,7 +337,7 @@ function buildColumns(components) {
       copyValue: (row) => (
         row.is_reversed
           ? `REVERSED${row.split_into_grn_numbers?.length ? ` (split into: ${row.split_into_grn_numbers.join(", ")})` : ""}`
-          : `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"}`
+          : `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"} Invoice verified:${row.invoice_verified_by ? "Yes" : "No"}`
       ),
       excelRichText: (row) => (
         row.is_reversed
@@ -342,6 +345,7 @@ function buildColumns(components) {
           : [
             { text: "●", fontArgb: dotFontArgb(row.ud_status) },
             { text: " ● ", fontArgb: dotFontArgb(paymentDotStatus(row)) },
+            ...(row.invoice_verified_by ? [{ text: " ✓", fontArgb: "FF16A34A", bold: true }] : []),
           ]
       ),
     },
@@ -434,6 +438,7 @@ function buildColumns(components) {
     { key: "lc_date", label: "LC Date", width: "90px", render: (row) => toDDMMYYYY(row.lc_date), copyValue: (row) => toDDMMYYYY(row.lc_date) },
     { key: "boe_number", label: "BOE Number", width: "100px" },
     { key: "boe_date", label: "BOE Date", width: "90px", render: (row) => toDDMMYYYY(row.boe_date), copyValue: (row) => toDDMMYYYY(row.boe_date) },
+    { key: "invoice_verified_by_display", label: "Invoice Verified By", width: "160px", copyValue: (row) => row.invoice_verified_by_display || "" },
   ];
 }
 
@@ -476,6 +481,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [draft, setDraft] = useState(null);
   const [costLines, setCostLines] = useState([]);
   const [deductionLines, setDeductionLines] = useState([]);
+  const [invoiceVerified, setInvoiceVerified] = useState(false);
+  const [invoiceVerificationSnapshot, setInvoiceVerificationSnapshot] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -652,6 +659,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         party_type: line.party_type ?? "VENDOR",
       })),
     );
+    // A green tick is evidence of an earlier save. Every new save needs a
+    // fresh acknowledgement from the currently signed-in user.
+    setInvoiceVerified(false);
+    setInvoiceVerificationSnapshot("");
   }, [grnDetailQuery.data]);
 
   function openDrawer(row) {
@@ -668,6 +679,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setDraft(null);
     setCostLines([]);
     setDeductionLines([]);
+    setInvoiceVerified(false);
+    setInvoiceVerificationSnapshot("");
     setError("");
     setLastMileTransporterName("");
     setLastMileTransporterSearch("");
@@ -688,6 +701,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         invoice_date: draft.invoice_date ? toISODate(draft.invoice_date) : null,
         gst_pct: draft.gst_pct === "" ? null : Number(draft.gst_pct),
         considered_qty: draft.considered_qty === "" ? null : Number(draft.considered_qty),
+        invoice_verified: invoiceVerified,
         revised_payment_date: draft.revised_payment_date ? toISODate(draft.revised_payment_date) : null,
         clear_revised_payment_date: !draft.revised_payment_date,
         vendor_payable_override: draft.vendor_payable_override === "" ? null : Number(draft.vendor_payable_override),
@@ -795,6 +809,18 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     () => computeLivePreview(grnDetailQuery.data, draft, costLines, deductionLines),
     [grnDetailQuery.data, draft, costLines, deductionLines],
   );
+  // The acknowledgement applies to the exact AC01 values on screen. If
+  // anything changes after ticking I Verify, require a fresh tick.
+  const invoiceVerificationPayload = useMemo(
+    () => JSON.stringify({ draft, costLines, deductionLines }),
+    [draft, costLines, deductionLines],
+  );
+  useEffect(() => {
+    if (invoiceVerified && invoiceVerificationSnapshot !== invoiceVerificationPayload) {
+      setInvoiceVerified(false);
+      setInvoiceVerificationSnapshot("");
+    }
+  }, [invoiceVerified, invoiceVerificationPayload, invoiceVerificationSnapshot]);
   return (
     <>
       <ErpMasterListTemplate
@@ -1330,6 +1356,27 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                 ))}
               </div>
             </DrawerSection>
+
+            {!readOnly ? (
+              <DrawerSection eyebrow="Invoice Verification" title="Confirm this invoice before saving">
+                <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={invoiceVerified}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setInvoiceVerified(checked);
+                      setInvoiceVerificationSnapshot(checked ? invoiceVerificationPayload : "");
+                    }}
+                    className="h-4 w-4"
+                  />
+                  I Verify
+                </label>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Save with this checked to record your user ID. Saving an AC01 update without it clears any earlier invoice verification.
+                </p>
+              </DrawerSection>
+            ) : null}
 
             <DrawerSection eyebrow="Summary" title="Live — recalculates as you edit, matches what Save will persist">
               <div className="grid grid-cols-4 gap-2">
