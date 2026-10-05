@@ -126,6 +126,16 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/accounts/invoice-verifications",        "/dashboard/procurement/accounts/invoice-verifications/:id"],
     ["/dashboard/procurement/accounts/invoice-verifications/create", "/dashboard/procurement/accounts/invoice-verifications/:id"],
     ["/dashboard/procurement/accounts/landed-costs",   "/dashboard/procurement/accounts/landed-costs/:id"],
+    // PO12 Tab 1's "Settlement" button (CrcpDiscrepancyPage.jsx) and AC01/AC03's
+    // "Settlement Invoice" Preview link (AC01Page.jsx) both navigate here via a
+    // bare navigate(), with no new tx_code/menu row for either -- same
+    // companion-route gap shape as every other one documented in this file.
+    // Without these, every click flickers and bounces straight back to the
+    // dashboard (found live 2026-10-05, business owner).
+    ["/dashboard/procurement/transfer",                           "/dashboard/procurement/transfer/settlement"],
+    ["/dashboard/procurement/transfer",                           "/dashboard/procurement/settlements/:id/print"],
+    ["/dashboard/procurement/accounts/invoice-verifications",     "/dashboard/procurement/settlements/:id/print"],
+    ["/dashboard/procurement/accounts/landed-costs",              "/dashboard/procurement/settlements/:id/print"],
     ["/dashboard/procurement/transfer",                "/dashboard/procurement/transfer/:id"],
     ["/dashboard/procurement/sales-orders",            "/dashboard/procurement/sales-orders/:id"],
     ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/:id"],
