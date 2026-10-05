@@ -18,6 +18,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -788,13 +789,27 @@ export async function listAC01GRNsHandler(
       : [];
     const settlementInvoiceMap = toMap(settlementInvoiceRows);
 
-    const items = rows.map((row) =>
-      buildListRow(
+    const verifierDisplayNames = await resolveUserDisplayNames(
+      rows.map((row) => toTrimmedString(row.invoice_verified_by)).filter(Boolean),
+    );
+    // Explicit return-type annotation is required here: buildListRow's return
+    // type (JsonRecord = Record<string, unknown>) has only an index signature,
+    // and TS drops a spread's index signature from an inline object literal's
+    // inferred type unless the literal itself is annotated -- without this,
+    // every `item.<field>` access below (and at every other call site of this
+    // handler's response) silently loses type information. Found via
+    // deno check while merging in the invoice_verified_by addition below,
+    // which never actually passed deno check on its own source branch.
+    const items = rows.map((row): JsonRecord => ({
+      ...buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
         splitIntoGrnNumbersMap, settlementInvoiceMap,
       ),
-    );
+      invoice_verified_by: toTrimmedString(row.invoice_verified_by) || null,
+      invoice_verified_by_display: verifierDisplayNames.get(toTrimmedString(row.invoice_verified_by)) || null,
+      invoice_verified_at: row.invoice_verified_at ?? null,
+    }));
 
     // "Smart" component columns (business owner, 2026-09-03) -- the set of
     // columns is derived from what's actually present in THIS (filtered)
@@ -1053,7 +1068,7 @@ export async function saveAC01GRNCostHandler(
     // separate goods_receipt/landed_cost/*_line writes from TypeScript.
     const { data, error } = await serviceRoleClient
       .schema("erp_procurement")
-      .rpc("save_ac01_grn_cost", {
+      .rpc("save_ac01_grn_cost_with_verification", {
         p_grn_id: grnId,
         p_actor: ctx.auth_user_id,
         p_confirmed_rate: body.confirmed_rate != null ? Number(body.confirmed_rate) : null,
@@ -1075,6 +1090,10 @@ export async function saveAC01GRNCostHandler(
         p_clear_last_mile_payable_override: body.clear_last_mile_payable_override === true,
         p_clear_cha_payable_override: body.clear_cha_payable_override === true,
         p_considered_qty: body.considered_qty != null ? Number(body.considered_qty) : null,
+        p_invoice_verified: body.invoice_verified === true,
+        // Each AC01 save is a fresh confirmation point. Unless the user ticks
+        // I Verify in this same save, an earlier acknowledgement is removed.
+        p_clear_invoice_verification: body.invoice_verified !== true,
       });
 
     if (error) {

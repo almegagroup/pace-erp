@@ -164,7 +164,7 @@ export default function SalesInvoiceListPage() {
               onChange={(nextValue) => { setCompanyId(nextValue); setPage(1); }}
               label="Company"
             />
-            <QuickFilterInput label="Search" value={search} onChange={(value) => { setSearch(value); setPage(1); }} primaryFocus placeholder="Search DO number" />
+            <QuickFilterInput label="Search" value={search} onChange={(value) => { setSearch(value); setPage(1); }} primaryFocus placeholder="Search every column: DO, SO/STO, customer, truck, invoice..." />
           </div>
         ),
       }}
