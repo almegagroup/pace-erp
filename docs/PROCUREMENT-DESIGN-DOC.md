@@ -1621,6 +1621,53 @@ in the same format already used for Sales Invoices.
     Invoice print, not as the invoice's own primary identity (that stays the Tally number
     throughout, both in this AC01 column and in "Invoice No." on the print itself).
 
+**AC01 "ITC To"/"Settlement Invoice" — implementation gap fix (2026-10-05).** Business
+owner asked about these two features the day after the §5/above locks were built, and a
+deliberate gap audit (not assuming "already built = already correct") against this doc's
+own locked text found 4 real gaps, all now fixed in `ac01.handlers.ts`/`AC01Page.jsx`:
+1. **`getAC01GRNHandler` (the drawer's own GET) never got the §5 broadened-visibility
+   fallback** — only `listAC01GRNsHandler` (the grid) had the `itc_owner_company_id` OR
+   check; the drawer's own `assertCompanyScope(ctx, grn.company_id)` call had no fallback
+   at all, so the ITC-owner company could see the row in the grid but got a 403 the moment
+   it tried to open it — the exact case this whole feature exists to serve was unusable
+   past the list view. Fixed: `landed_cost` is now fetched before the access check; access
+   is granted on direct ownership OR a matching `itc_owner_company_id`; a new
+   `is_editable_for_viewer` boolean (true only for direct ownership) is returned alongside.
+   Write access (`canWriteAC01`/`requireAC01WriteAccess`) is untouched — still strictly
+   GRN-company-scoped, per the already-locked rule.
+2. **No row-level "read-only"/"mirrored" marker existed anywhere in the frontend**, despite
+   the design saying the mirrored row must be read-only. Fixed: `buildListRow` now also
+   returns `is_editable_for_viewer` per row (`grn.company_id === viewerCompanyId`);
+   `AC01Page.jsx`'s grid greys these rows out via `getRowProps`, and the drawer derives
+   `effectiveReadOnly = readOnly || !rowEditable` (from the GET response's own
+   `is_editable_for_viewer`) and locks every input/action that already respected the
+   page-level `readOnly` prop — an amber banner names the mirrored-view reason. The 3
+   purely page-level (AC01-vs-AC03) occurrences — export filename/sheet-name and the list
+   page's own title — were deliberately left on the original `readOnly` prop, not this new
+   row-level flag.
+3. **No "ITC To" column existed at all** in the grid, even though §5 is the whole reason a
+   company can see a row it doesn't own. Fixed: `landed_cost.itc_owner_company_id` is now
+   in `buildListRow`'s bulk select, the `companies` bulk-fetch is extended to resolve any
+   ITC-owner company not already covered by the page's own `company_id` set, and a new
+   "ITC To" column (company_code, blank for the ordinary non-CRCP case) sits right after
+   "Company" — visible to every viewer, unlike Settlement Invoice below.
+4. **"Settlement Invoice" showed unconditionally whenever `settlement_invoice_id` was set**
+   — never actually gated to "viewing company = itc_owner_company_id" as §-above explicitly
+   locked, so the Actual Receiver's own unrelated view of its own GRN would have shown it
+   too. Fixed: `buildListRow` now only populates these fields when `viewerCompanyId` equals
+   the row's resolved ITC-owner company (or when no company filter is active at all, e.g.
+   SA/GA viewing across companies). Also split into two grid columns per business-owner
+   preference expressed this same day — a plain-text "Settlement Invoice" (Tally Invoice
+   Number) and a separate narrow "Preview" (View/Print link) — both still gated the same
+   way; the locked design's own wording ("clicking the number **or** a separate action")
+   explicitly sanctions either shape, so this is the "separate action" choice, not a
+   deviation from what was locked.
+Verified: `deno check`/`eslint` clean (zero new errors vs. `git stash` baseline on both
+touched files); all 8 relevant guard scripts (`company-scope-guard`,
+`company-scope-write-acl-guard`, `wrong-company-source-guard`, `jsx-no-undef-guard`,
+`route-acl-registry-guard`, `frontend-payload-guard`, `hardcoded-role-check-guard`,
+`resource-code-domain-guard`) pass with no new violations.
+
 **Correction to this doc's own CLAUDE.md note (2026-10-04) — Prod Supabase access.**
 CLAUDE.md states "আমার MCP শুধু dev-এ যুক্ত, prod আমি কখনো দেখিনি" (MCP is dev-only, Prod has
 never been seen). **This is now stale** — `mcp__Supabase__list_projects` returns both

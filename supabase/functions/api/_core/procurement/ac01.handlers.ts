@@ -391,15 +391,12 @@ function buildListRow(
   deductionTypeNameMap: Map<string, string>,
   splitIntoGrnNumbersMap: Map<string, string[]>,
   settlementInvoiceMap: Map<string, JsonRecord>,
+  // Viewer's own resolved company scope (listAC01GRNsHandler's companyId) --
+  // "" when no company filter is active (SA/GA viewing across companies).
+  // Drives both the "ITC To"/row-lock display and the Settlement Invoice
+  // visibility gate below, locked 2026-10-04.
+  viewerCompanyId: string,
 ): JsonRecord {
-  // PO12 "AC01 Settlement Invoice" column (locked 2026-10-04) -- shows the
-  // Tally Invoice Number (the primary user-facing identifier), never the
-  // internal SETTLEMENT series number -- only ever set for a genuine CRCP
-  // discrepancy GRN (settlement_invoice_id only gets set by
-  // create_settlement_invoice(), which itself refuses a same-company GRN).
-  const settlementInvoice = grn.settlement_invoice_id
-    ? settlementInvoiceMap.get(String(grn.settlement_invoice_id))
-    : null;
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
   const company = companyMap.get(String(grn.company_id));
@@ -407,6 +404,27 @@ function buildListRow(
   const paymentTerms = po?.payment_term_id ? paymentTermsMap.get(String(po.payment_term_id)) : null;
   const csn = grn.gate_entry_line_id ? csnMap.get(String(grn.gate_entry_line_id)) : null;
   const landedCost = landedCostMap.get(String(grn.id));
+  // PO12 "AC01 Settlement Invoice" column (locked 2026-10-04) -- shows the
+  // Tally Invoice Number (the primary user-facing identifier), never the
+  // internal SETTLEMENT series number -- only ever set for a genuine CRCP
+  // discrepancy GRN (settlement_invoice_id only gets set by
+  // create_settlement_invoice(), which itself refuses a same-company GRN).
+  // Gated (locked 2026-10-04, found missing live 2026-10-05): visible only
+  // when the viewing company IS this GRN's itc_owner_company_id -- the
+  // Actual Receiver's own unrelated view of its own GRN must not see it.
+  const itcOwnerCompanyId = landedCost?.itc_owner_company_id
+    ? String(landedCost.itc_owner_company_id)
+    : null;
+  const isItcOwnerViewer = !viewerCompanyId || (itcOwnerCompanyId != null && itcOwnerCompanyId === viewerCompanyId);
+  const settlementInvoice = isItcOwnerViewer && grn.settlement_invoice_id
+    ? settlementInvoiceMap.get(String(grn.settlement_invoice_id))
+    : null;
+  const itcOwnerCompany = itcOwnerCompanyId ? companyMap.get(itcOwnerCompanyId) : null;
+  // CRCP mirrored-row flag (locked 2026-10-04) -- false whenever this row is
+  // only visible because the viewer is the ITC owner of a GRN some OTHER
+  // company actually received (never direct ownership). Frontend uses this
+  // to grey the row out and lock its drawer read-only.
+  const isEditableForViewer = !viewerCompanyId || String(grn.company_id) === viewerCompanyId;
   const rowCostLines = landedCost ? (costLinesByLc.get(String(landedCost.id)) ?? []) : [];
   const rowDeductionLines = landedCost ? (deductionLinesByLc.get(String(landedCost.id)) ?? []) : [];
   const suggestedPayables = computeSuggestedPayables(grn, rowCostLines, rowDeductionLines);
@@ -530,10 +548,20 @@ function buildListRow(
     boe_date: grn.boe_date ?? null,
     ud_status: udStatusMap.get(String(grn.id)) ?? null,
     payment_status: null, // Same deferral as actual_payment_date above.
+    // AC01 "ITC To" column (locked 2026-10-04) -- who actually gets to claim
+    // this GRN's ITC. NULL for the ordinary (non-CRCP) case; a real company
+    // for a genuine CRCP discrepancy GRN. Shown to every viewer of the row
+    // (unlike Settlement Invoice below, which is viewer-gated) since knowing
+    // WHO owns the ITC is relevant to both the Actual Receiver and the owner.
+    itc_owner_company_id: itcOwnerCompanyId,
+    itc_owner_company_code: itcOwnerCompany?.company_code ?? null,
+    // CRCP mirrored-row flag -- see the comment on isEditableForViewer above.
+    is_editable_for_viewer: isEditableForViewer,
     // PO12 "AC01 Settlement Invoice" column -- Tally Invoice Number, never
     // the internal SETTLEMENT series number. View/Print reuses that
     // internal settlement_number separately (not surfaced in this column).
-    settlement_invoice_id: grn.settlement_invoice_id ?? null,
+    // Gated to isItcOwnerViewer -- see the comment on settlementInvoice above.
+    settlement_invoice_id: isItcOwnerViewer ? (grn.settlement_invoice_id ?? null) : null,
     settlement_invoice_tally_number: settlementInvoice?.tally_invoice_number ?? null,
     settlement_invoice_tally_date: settlementInvoice?.tally_invoice_date ?? null,
     settlement_document_number: settlementInvoice?.settlement_number ?? null,
@@ -659,7 +687,10 @@ export async function listAC01GRNsHandler(
           .select("id, payment_term_id, freight_term").in("id", chunk)),
       fetchInChunks<JsonRecord>(grnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("landed_cost")
-          .select("id, grn_id, total_cost, created_at").in("grn_id", chunk)),
+          // itc_owner_company_id added for the "ITC To" column + Settlement
+          // Invoice visibility gate (locked 2026-10-04, found missing live
+          // 2026-10-05) -- see buildListRow's own comment on itcOwnerCompanyId.
+          .select("id, grn_id, total_cost, created_at, itc_owner_company_id").in("grn_id", chunk)),
       fetchInChunks<JsonRecord>(grnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("inward_qa_document")
           .select("id, grn_id, qa_stock_qty").in("grn_id", chunk)),
@@ -745,6 +776,18 @@ export async function listAC01GRNsHandler(
         landedCostMap.set(String(lc.grn_id), lc);
       }
     }
+    // "ITC To" column (locked 2026-10-04) -- an ITC-owner company can differ
+    // from every company already covered by `companies` above (that fetch
+    // only covers rows' own company_id). Resolve any not already known.
+    const itcOwnerCompanyIds = [...new Set(
+      landedCosts.map((lc) => toTrimmedString(lc.itc_owner_company_id)).filter(Boolean),
+    )].filter((id) => !companyMap.has(id));
+    if (itcOwnerCompanyIds.length > 0) {
+      const extraCompanies = await fetchInChunks<JsonRecord>(itcOwnerCompanyIds, (chunk) =>
+        serviceRoleClient.schema("erp_master").from("companies")
+          .select("id, company_code").in("id", chunk));
+      for (const company of extraCompanies) companyMap.set(String(company.id), company);
+    }
     const qaDocByGrn = new Map(qaDocuments.map((doc) => [String(doc.id), doc]));
     const decisionsByQaDoc = new Map<string, JsonRecord[]>();
     for (const line of decisionLines) {
@@ -792,7 +835,7 @@ export async function listAC01GRNsHandler(
       buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
-        splitIntoGrnNumbersMap, settlementInvoiceMap,
+        splitIntoGrnNumbersMap, settlementInvoiceMap, companyId,
       ),
     );
 
@@ -844,6 +887,19 @@ export async function getAC01GRNHandler(
       return ac01ErrorResponse(req, ctx, "AC01_GRN_NOT_FOUND", 404, "GRN not found.");
     }
 
+    // Fetch landed_cost BEFORE the access check -- needed to resolve the CRCP
+    // ITC-owner fallback below (locked 2026-10-04, PROCUREMENT-DESIGN-DOC.md
+    // "AC01 'ITC To' + cross-company visibility"). Moved out of the
+    // materialResp/vendorResp Promise.all it used to share so the access
+    // check can run before any other per-GRN detail is fetched.
+    const { data: lcRows, error: lcError } = await serviceRoleClient
+      .schema("erp_procurement").from("landed_cost").select("*")
+      .eq("grn_id", grnId).order("created_at", { ascending: false }).limit(1);
+    if (lcError) {
+      return ac01ErrorResponse(req, ctx, "AC01_LC_FETCH_FAILED", 500, "Unable to fetch landed cost.");
+    }
+    const landedCost = (lcRows ?? [])[0] as JsonRecord | undefined;
+
     // Membership across ALL the caller's companies (erp_map.user_companies),
     // not just the session's currently-pinned company -- a multi-company user
     // viewing a GRN in a company other than their session's active one must
@@ -851,21 +907,43 @@ export async function getAC01GRNHandler(
     // saveAC01GRNCostHandler's own assertCompanyScope call below; this
     // handler previously compared directly against ctx.context.companyId,
     // which wrongly 403'd legitimate multi-company access.
+    //
+    // CRCP fallback (locked 2026-10-04): a company that is NOT this GRN's
+    // own owner can still open it read-only when it is this GRN's
+    // landed_cost.itc_owner_company_id -- the exact mirrored-view case the
+    // "ITC To"/"Settlement Invoice" features exist to serve. Without this,
+    // the ITC-owner company could see the row in the LIST (listAC01GRNsHandler
+    // already allows it via the same itc_owner_company_id OR-clause) but got
+    // a 403 the moment it tried to open the drawer -- found live 2026-10-05.
+    let isDirectOwner = true;
     try {
       await assertCompanyScope(ctx, String(grn.company_id));
     } catch {
+      isDirectOwner = false;
+    }
+    let isItcOwnerViewer = false;
+    if (!isDirectOwner && landedCost?.itc_owner_company_id) {
+      try {
+        await assertCompanyScope(ctx, String(landedCost.itc_owner_company_id));
+        isItcOwnerViewer = true;
+      } catch {
+        isItcOwnerViewer = false;
+      }
+    }
+    if (!isDirectOwner && !isItcOwnerViewer) {
       return ac01ErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    // Write access (canWriteAC01/requireAC01WriteAccess, saveAC01GRNCostHandler
+    // below) stays exactly as already locked -- strictly GRN-company-scoped,
+    // never widened to the ITC-owner mirror. This flag is read-only display
+    // metadata so the frontend can lock the drawer for a mirrored view.
+    const isEditableForViewer = isDirectOwner;
 
     // §8A Foundation Rule -- the drawer never showed material/vendor identity
     // at all (only raw material_id/vendor_id sat unused on `grn`), unlike the
     // list row which already resolves these via buildListRow. Found live
-    // 2026-08-26 (business owner): fetched INDEPENDENT of the Landed Cost
-    // query above (§8B), not sequentially after it.
-    const [lcResp, materialResp, vendorResp] = await Promise.all([
-      serviceRoleClient
-        .schema("erp_procurement").from("landed_cost").select("*")
-        .eq("grn_id", grnId).order("created_at", { ascending: false }).limit(1),
+    // 2026-08-26 (business owner): fetched INDEPENDENT of each other (§8B).
+    const [materialResp, vendorResp] = await Promise.all([
       grn.material_id
         ? serviceRoleClient.schema("erp_master").from("material_master")
           .select("material_name, external_code").eq("id", String(grn.material_id)).maybeSingle()
@@ -875,11 +953,6 @@ export async function getAC01GRNHandler(
           .select("vendor_name").eq("id", String(grn.vendor_id)).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
-    const { data: lcRows, error: lcError } = lcResp;
-    if (lcError) {
-      return ac01ErrorResponse(req, ctx, "AC01_LC_FETCH_FAILED", 500, "Unable to fetch landed cost.");
-    }
-    const landedCost = (lcRows ?? [])[0] as JsonRecord | undefined;
     const materialName = (materialResp.data as JsonRecord | null)?.material_name ?? null;
     const materialExternalCode = (materialResp.data as JsonRecord | null)?.external_code ?? null;
     const vendorName = (vendorResp.data as JsonRecord | null)?.vendor_name ?? null;
@@ -998,6 +1071,12 @@ export async function getAC01GRNHandler(
     return okResponse({
       ...grn,
       is_reversed: isReversed,
+      // CRCP mirrored-view flag (locked 2026-10-04) -- false only when this
+      // viewer reached the drawer via the itc_owner_company_id fallback
+      // above, never via direct GRN-company ownership. Frontend uses this to
+      // lock the whole drawer read-only for the mirrored view.
+      is_editable_for_viewer: isEditableForViewer,
+      itc_owner_company_id: landedCost?.itc_owner_company_id ?? null,
       split_into_grn_numbers: splitIntoGrnNumbers.length > 0 ? splitIntoGrnNumbers : null,
       item_name: materialName,
       external_code: materialExternalCode,
