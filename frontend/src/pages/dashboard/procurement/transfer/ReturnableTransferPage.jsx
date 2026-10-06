@@ -8,6 +8,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
@@ -19,10 +20,12 @@ import { pushToast } from "../../../../store/uiToast.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listMaterials, listStorageLocations } from "../../om/omApi.js";
 import {
+  createReturnableSettlement,
   createReturnableTransfer,
   getOutstandingReturnableBalance,
   getReturnableTransfer,
   listPendingReturnableTransfers,
+  listReturnableSettlements,
   listReturnableTransferLedger,
   listTransferGroupPartners,
   receiveReturnableTransfer,
@@ -134,11 +137,17 @@ function TransferLineRow({ line, companyId, onChange, onRemove }) {
 function TransferTab({ companyId }) {
   const qc = useQueryClient();
   const [toCompanyId, setToCompanyId] = useState("");
+  const navigate = useNavigate();
   const [isReturn, setIsReturn] = useState(false);
   const [remarks, setRemarks] = useState("");
   const [lines, setLines] = useState([createEmptyLine()]);
   const [error, setError] = useState("");
   const [posting, setPosting] = useState(false);
+  const [lastTransfer, setLastTransfer] = useState(null);
+  const [settleQty, setSettleQty] = useState("");
+  const [settleReference, setSettleReference] = useState("");
+  const [settling, setSettling] = useState(false);
+  const [settleNotice, setSettleNotice] = useState("");
 
   const partnersQuery = useQuery({
     queryKey: ["rt-partners", companyId],
@@ -183,6 +192,7 @@ function TransferTab({ companyId }) {
         from_company_id: companyId, to_company_id: toCompanyId, is_return: isReturn, remarks, lines: payloadLines,
       });
       pushToast({ tone: "success", message: `Transfer ${result?.transfer_number ?? ""} posted.` });
+      setLastTransfer(result);
       setLines([createEmptyLine()]);
       setRemarks("");
       await qc.invalidateQueries({ queryKey: ["rt-balance"] });
@@ -190,6 +200,31 @@ function TransferTab({ companyId }) {
       setError(friendly(postError?.code ?? postError?.message));
     } finally {
       setPosting(false);
+    }
+  }
+
+  async function handleSettleViaSale() {
+    setSettleNotice("");
+    setError("");
+    const qty = Number(settleQty);
+    if (!toCompanyId || !representativeMaterialId || !(qty > 0)) {
+      setError("Pick a To Company, a material on a line, and a settlement quantity to settle via sale.");
+      return;
+    }
+    setSettling(true);
+    try {
+      await createReturnableSettlement({
+        from_company_id: companyId, to_company_id: toCompanyId, material_id: representativeMaterialId,
+        quantity: qty, settlement_reference: settleReference,
+      });
+      setSettleNotice("Settlement recorded — outstanding balance adjusted.");
+      setSettleQty("");
+      setSettleReference("");
+      await qc.invalidateQueries({ queryKey: ["rt-balance"] });
+    } catch (settleError) {
+      setError(friendly(settleError?.code ?? settleError?.message));
+    } finally {
+      setSettling(false);
     }
   }
 
@@ -211,6 +246,48 @@ function TransferTab({ companyId }) {
           </div>
         ) : null}
       </div>
+      {isReturn && toCompanyId && representativeMaterialId ? (
+        <div className="mb-3 border border-amber-300 bg-amber-50 p-3">
+          <div className="mb-2 text-xs font-semibold text-amber-900">
+            Decided to settle via Sale instead of physically returning? Record it here — it adjusts the same Outstanding Balance pool.
+          </div>
+          {settleNotice ? <div className="mb-2 text-xs font-semibold text-emerald-700">{settleNotice}</div> : null}
+          <div className="grid gap-2 md:grid-cols-4">
+            <input
+              value={settleQty}
+              onChange={(event) => setSettleQty(event.target.value)}
+              placeholder="Settlement qty"
+              className="h-8 border border-slate-300 bg-white px-2 text-xs"
+            />
+            <input
+              value={settleReference}
+              onChange={(event) => setSettleReference(event.target.value)}
+              placeholder="Invoice / reference no."
+              className="h-8 border border-slate-300 bg-white px-2 text-xs md:col-span-2"
+            />
+            <button
+              type="button"
+              onClick={() => void handleSettleViaSale()}
+              disabled={settling}
+              className="h-8 border border-amber-600 bg-amber-100 text-xs font-semibold uppercase tracking-[0.1em] text-amber-900 disabled:opacity-50"
+            >
+              {settling ? "Recording..." : "Settle via Sale"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {lastTransfer ? (
+        <div className="mb-3 flex items-center gap-3 border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          <span>Posted {lastTransfer.transfer_number}.</span>
+          <button
+            type="button"
+            onClick={() => navigate(`/dashboard/procurement/returnable-transfers/${lastTransfer.id}/print`)}
+            className="border border-emerald-600 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-900"
+          >
+            Print Delivery Challan
+          </button>
+        </div>
+      ) : null}
       {partnerOptions.length === 0 ? (
         <div className="mb-3 border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           No Transfer Group partner found for this company — ask SA to add it to a "PTO Company" group first.
@@ -347,6 +424,7 @@ function ReceiveDetail({ transferId, companyId, onReceived }) {
 }
 
 function ReceiveTab({ companyId }) {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState(null);
   const pendingQuery = useQuery({
@@ -371,11 +449,16 @@ function ReceiveTab({ companyId }) {
           { key: "from_company_label", label: "From", width: "220px" },
           { key: "is_return", label: "Return?", width: "80px", render: (row) => (row.is_return ? "Yes" : "No") },
           {
-            key: "action", label: "Action", width: "100px",
+            key: "action", label: "Action", width: "180px",
             render: (row) => (
-              <button type="button" onClick={() => setExpandedId((current) => (current === row.id ? null : row.id))} className="border border-sky-300 px-2 py-1 text-[11px] font-semibold text-sky-700">
-                {expandedId === row.id ? "Hide" : "Open"}
-              </button>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setExpandedId((current) => (current === row.id ? null : row.id))} className="border border-sky-300 px-2 py-1 text-[11px] font-semibold text-sky-700">
+                  {expandedId === row.id ? "Hide" : "Open"}
+                </button>
+                <button type="button" onClick={() => navigate(`/dashboard/procurement/returnable-transfers/${row.id}/print`)} className="border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                  Print
+                </button>
+              </div>
             ),
           },
         ]}
@@ -412,30 +495,56 @@ function ReportTab({ companyId }) {
     { key: "status", label: "Status", width: "100px" },
   ];
 
+  const settlementsQuery = useQuery({
+    queryKey: ["rt-settlements", companyId],
+    queryFn: () => listReturnableSettlements(companyId),
+    enabled: Boolean(companyId),
+    select: (result) => (Array.isArray(result) ? result : result?.data ?? []),
+  });
+  const settlementRows = settlementsQuery.data ?? [];
+
   return (
-    <ErpSectionCard eyebrow="Report" title="Returnable Transfer Ledger">
-      <div className="mb-3 grid gap-3 md:grid-cols-4">
-        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search all columns..." className="h-8 border border-slate-300 bg-white px-2 text-sm md:col-span-2" />
-        <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm" />
-        <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm" />
-      </div>
-      <div className="mb-2 flex justify-end">
-        <button
-          type="button"
-          onClick={() => downloadCsvFile({ fileName: "returnable-transfer-ledger.csv", columns, rows })}
-          className="border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"
-        >
-          Export Excel
-        </button>
-      </div>
-      <ErpDenseGrid
-        columns={columns}
-        rows={rows}
-        rowKey={(row, index) => `${row.transfer_number}-${index}`}
-        emptyMessage={ledgerQuery.isLoading ? "Loading..." : "No transfer history."}
-        maxHeight="calc(100vh - 420px)"
-      />
-    </ErpSectionCard>
+    <div className="grid gap-3">
+      <ErpSectionCard eyebrow="Report" title="Returnable Transfer Ledger">
+        <div className="mb-3 grid gap-3 md:grid-cols-4">
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search all columns..." className="h-8 border border-slate-300 bg-white px-2 text-sm md:col-span-2" />
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm" />
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 text-sm" />
+        </div>
+        <div className="mb-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => downloadCsvFile({ fileName: "returnable-transfer-ledger.csv", columns, rows })}
+            className="border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700"
+          >
+            Export Excel
+          </button>
+        </div>
+        <ErpDenseGrid
+          columns={columns}
+          rows={rows}
+          rowKey={(row, index) => `${row.transfer_number}-${index}`}
+          emptyMessage={ledgerQuery.isLoading ? "Loading..." : "No transfer history."}
+          maxHeight="calc(100vh - 420px)"
+        />
+      </ErpSectionCard>
+      <ErpSectionCard eyebrow="Report" title="Settled via Sale (not physically returned)">
+        <ErpDenseGrid
+          columns={[
+            { key: "created_at", label: "Recorded", width: "150px", render: (row) => (row.created_at ? new Date(row.created_at).toLocaleDateString("en-GB") : "—") },
+            { key: "material_label", label: "Material", width: "220px" },
+            { key: "from_company_label", label: "Settled By", width: "180px" },
+            { key: "to_company_label", label: "Owed To", width: "180px" },
+            { key: "quantity", label: "Qty", width: "100px", render: (row) => formatNumber(row.quantity) },
+            { key: "settlement_reference", label: "Reference", width: "160px" },
+          ]}
+          rows={settlementRows}
+          rowKey={(row) => row.id}
+          emptyMessage={settlementsQuery.isLoading ? "Loading..." : "No settlement recorded."}
+          maxHeight="min(260px, 35vh)"
+        />
+      </ErpSectionCard>
+    </div>
   );
 }
 

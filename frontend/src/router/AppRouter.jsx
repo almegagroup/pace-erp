@@ -161,6 +161,7 @@ import PlantTransferPage from "../pages/dashboard/procurement/transfer/PlantTran
 import PlantTransferDetailPage from "../pages/dashboard/procurement/transfer/PlantTransferDetailPage.jsx";
 import SettlementInvoicePage from "../pages/dashboard/procurement/transfer/SettlementInvoicePage.jsx";
 import SettlementInvoicePrintPage from "../pages/dashboard/procurement/transfer/SettlementInvoicePrintPage.jsx";
+import ReturnableTransferPrintPage from "../pages/dashboard/procurement/transfer/ReturnableTransferPrintPage.jsx";
 import PaymentTermsMasterPage from "../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx";
 import PortMasterPage from "../pages/dashboard/procurement/masters/PortMasterPage.jsx";
 import PortTransitMasterPage from "../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx";
@@ -748,6 +749,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/settlements/:id/print"
                     element={<SettlementInvoicePrintPage />}
+                  />
+                  <Route
+                    path="procurement/returnable-transfers/:id/print"
+                    element={<ReturnableTransferPrintPage />}
                   />
                   <Route
                     path="procurement/transfer/:id"

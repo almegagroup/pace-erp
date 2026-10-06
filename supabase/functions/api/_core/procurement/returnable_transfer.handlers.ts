@@ -17,6 +17,12 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { hasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+// §Company-scope-write-ACL-guard (2026-10-06 run): assertCompanyScope only proves
+// company MEMBERSHIP, not that the caller's ACL grant at the body's target company is
+// actually WRITE/EDIT -- same gap already fixed for Tab 1 via requireCrcpWriteAccess(),
+// which already checks the exact resourceCode Tab 2 reuses (PROC_PLANT_TRANSFER_LIST),
+// so Tab 2's own write handlers call that same helper rather than duplicating it.
+import { requireCrcpWriteAccess } from "./crcp_discrepancy.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type HandlerContext = {
@@ -269,6 +275,8 @@ export async function createReturnableTransferHandler(req: Request, ctx: Handler
     } catch {
       return rtErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403);
     }
+    const aclDenied = await requireCrcpWriteAccess(req, ctx, fromCompanyId, "WRITE");
+    if (aclDenied) return aclDenied;
 
     const sharesGroup = await companiesShareActiveGroup(fromCompanyId, toCompanyId);
     if (!sharesGroup) {
@@ -592,9 +600,30 @@ export async function listReturnableTransferLedgerHandler(req: Request, ctx: Han
   }
 }
 
+// Material recode (design edge case #1/#3): a return against an old transfer may use the
+// successor/alternate material code, not the exact one originally sent. Resolve every
+// material in the SAME erp_master.material_category_group as materialId (plus itself) so
+// the balance nets correctly regardless of which group member each side used.
+async function resolveEquivalentMaterialIds(materialId: string): Promise<string[]> {
+  const { data: memberships, error: membershipError } = await serviceRoleClient
+    .schema("erp_master").from("material_category_group_member")
+    .select("group_id").eq("material_id", materialId).eq("active", true);
+  if (membershipError) throw new Error("RETURNABLE_BALANCE_GROUP_LOOKUP_FAILED");
+  const groupIds = uniqueTrimmedStrings(((memberships as JsonRecord[] | null) ?? []).map((row) => row.group_id));
+  if (groupIds.length === 0) return [materialId];
+
+  const { data: members, error: memberError } = await serviceRoleClient
+    .schema("erp_master").from("material_category_group_member")
+    .select("material_id").in("group_id", groupIds).eq("active", true);
+  if (memberError) throw new Error("RETURNABLE_BALANCE_GROUP_LOOKUP_FAILED");
+  return uniqueTrimmedStrings([materialId, ...((members as JsonRecord[] | null) ?? []).map((row) => row.material_id)]);
+}
+
 // Live Outstanding Returnable Balance helper for the Transfer page's "Return" checkbox —
 // deliberately NOT a materialized/summary table (design lock point 3): net = how much
-// company_b still owes back to company_a for this material, computed on the fly.
+// company_b still owes back to company_a for this material (or any recode-equivalent
+// material, same group), computed on the fly. Also nets out "Settle via Sale" rows
+// (design edge case #5) -- those share this exact same pool, no physical movement.
 export async function getOutstandingReturnableBalanceHandler(req: Request, ctx: HandlerContext): Promise<Response> {
   try {
     const params = new URL(req.url).searchParams;
@@ -603,10 +632,12 @@ export async function getOutstandingReturnableBalanceHandler(req: Request, ctx: 
     const materialId = toTrimmedString(params.get("material_id"));
     if (!companyA || !companyB || !materialId) return rtErrorResponse(req, ctx, "RETURNABLE_BALANCE_PARAMS_REQUIRED", 400);
 
+    const equivalentMaterialIds = await resolveEquivalentMaterialIds(materialId);
+
     const { data: forwardRows, error: forwardError } = await serviceRoleClient
       .schema("erp_procurement").from("returnable_transfer_line")
       .select("quantity, returnable_transfer!inner(from_company_id, to_company_id, is_return, status)")
-      .eq("material_id", materialId)
+      .in("material_id", equivalentMaterialIds)
       .eq("returnable_transfer.from_company_id", companyA)
       .eq("returnable_transfer.to_company_id", companyB)
       .eq("returnable_transfer.is_return", false)
@@ -616,18 +647,102 @@ export async function getOutstandingReturnableBalanceHandler(req: Request, ctx: 
     const { data: returnRows, error: returnError } = await serviceRoleClient
       .schema("erp_procurement").from("returnable_transfer_line")
       .select("quantity, returnable_transfer!inner(from_company_id, to_company_id, is_return, status)")
-      .eq("material_id", materialId)
+      .in("material_id", equivalentMaterialIds)
       .eq("returnable_transfer.from_company_id", companyB)
       .eq("returnable_transfer.to_company_id", companyA)
       .eq("returnable_transfer.is_return", true)
       .eq("returnable_transfer.status", "RECEIVED");
     if (returnError) return rtErrorResponse(req, ctx, "RETURNABLE_BALANCE_FAILED", 500, returnError.message);
 
+    const { data: settlementRows, error: settlementError } = await serviceRoleClient
+      .schema("erp_procurement").from("returnable_transfer_settlement")
+      .select("quantity")
+      .in("material_id", equivalentMaterialIds)
+      .eq("from_company_id", companyB).eq("to_company_id", companyA);
+    if (settlementError) return rtErrorResponse(req, ctx, "RETURNABLE_BALANCE_FAILED", 500, settlementError.message);
+
     const forwardTotal = ((forwardRows as JsonRecord[] | null) ?? []).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
     const returnTotal = ((returnRows as JsonRecord[] | null) ?? []).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
-    const outstanding = Number((forwardTotal - returnTotal).toFixed(6));
-    return okResponse({ outstanding_qty: outstanding, forward_qty: forwardTotal, returned_qty: returnTotal }, ctx.request_id, req);
+    const settledTotal = ((settlementRows as JsonRecord[] | null) ?? []).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
+    const outstanding = Number((forwardTotal - returnTotal - settledTotal).toFixed(6));
+    return okResponse({
+      outstanding_qty: outstanding, forward_qty: forwardTotal, returned_qty: returnTotal, settled_qty: settledTotal,
+    }, ctx.request_id, req);
   } catch (error) {
     return rtErrorResponse(req, ctx, "RETURNABLE_BALANCE_FAILED", 500, error instanceof Error ? error.message : undefined);
+  }
+}
+
+// "Settle via Sale" (design edge case #5) -- a receiving company decides to pay for what
+// it holds instead of physically returning it. Pure bookkeeping row, no stock_ledger/
+// stock_document posting at all (that already happened at Receive time and is correct as
+// physical stock); this only adjusts the Outstanding Returnable Balance pool.
+export async function createReturnableSettlementHandler(req: Request, ctx: HandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const fromCompanyId = toTrimmedString(body.from_company_id);
+    const toCompanyId = toTrimmedString(body.to_company_id);
+    const materialId = toTrimmedString(body.material_id);
+    const quantity = parsePositiveNumber(body.quantity);
+    const settlementReference = toTrimmedString(body.settlement_reference) || null;
+    const remarks = toTrimmedString(body.remarks) || null;
+
+    if (!fromCompanyId || !toCompanyId || fromCompanyId === toCompanyId || !materialId || !quantity) {
+      return rtErrorResponse(req, ctx, "RETURNABLE_SETTLEMENT_INVALID", 400);
+    }
+    try {
+      await assertCompanyScope(ctx, fromCompanyId);
+    } catch {
+      return rtErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403);
+    }
+    const aclDenied = await requireCrcpWriteAccess(req, ctx, fromCompanyId, "WRITE");
+    if (aclDenied) return aclDenied;
+
+    const sharesGroup = await companiesShareActiveGroup(fromCompanyId, toCompanyId);
+    if (!sharesGroup) {
+      return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_GROUP_REQUIRED", 403, "These two companies are not in a common active Transfer Group.");
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement").from("returnable_transfer_settlement")
+      .insert({
+        from_company_id: fromCompanyId, to_company_id: toCompanyId, material_id: materialId,
+        quantity, settlement_reference: settlementReference, remarks, created_by: ctx.auth_user_id,
+      })
+      .select("id").single();
+    if (error || !data) return rtErrorResponse(req, ctx, "RETURNABLE_SETTLEMENT_FAILED", 500, error?.message);
+
+    return okResponse({ id: (data as JsonRecord).id }, ctx.request_id, req);
+  } catch (error) {
+    return rtErrorResponse(req, ctx, "RETURNABLE_SETTLEMENT_FAILED", 500, error instanceof Error ? error.message : undefined);
+  }
+}
+
+export async function listReturnableSettlementsHandler(req: Request, ctx: HandlerContext): Promise<Response> {
+  try {
+    const companyId = toTrimmedString(new URL(req.url).searchParams.get("company_id"));
+    if (!companyId) return rtErrorResponse(req, ctx, "COMPANY_ID_REQUIRED", 400);
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement").from("returnable_transfer_settlement")
+      .select("id, from_company_id, to_company_id, material_id, quantity, settlement_reference, remarks, created_at")
+      .or(`from_company_id.eq.${companyId},to_company_id.eq.${companyId}`)
+      .order("created_at", { ascending: false }).limit(500);
+    if (error) return rtErrorResponse(req, ctx, "RETURNABLE_SETTLEMENT_LIST_FAILED", 500, error.message);
+
+    const rows = (data as JsonRecord[] | null) ?? [];
+    const [companyLabelById, materialLabelById] = await Promise.all([
+      resolveCompanyLabels(uniqueTrimmedStrings([...rows.map((row) => row.from_company_id), ...rows.map((row) => row.to_company_id)])),
+      resolveMaterialLabels(uniqueTrimmedStrings(rows.map((row) => row.material_id))),
+    ]);
+    const result = rows.map((row) => ({
+      ...row,
+      from_company_label: companyLabelById.get(toTrimmedString(row.from_company_id)) || toTrimmedString(row.from_company_id),
+      to_company_label: companyLabelById.get(toTrimmedString(row.to_company_id)) || toTrimmedString(row.to_company_id),
+      material_label: materialLabelById.get(toTrimmedString(row.material_id))?.label || toTrimmedString(row.material_id),
+    }));
+    return okResponse(result, ctx.request_id, req);
+  } catch (error) {
+    return rtErrorResponse(req, ctx, "RETURNABLE_SETTLEMENT_LIST_FAILED", 500, error instanceof Error ? error.message : undefined);
   }
 }

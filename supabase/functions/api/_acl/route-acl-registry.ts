@@ -161,6 +161,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/returnable-transfers/pending": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "GET:/api/procurement/returnable-transfers/ledger":  { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "GET:/api/procurement/returnable-transfers/balance": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "POST:/api/procurement/returnable-transfers/settlements": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
+  "GET:/api/procurement/returnable-transfers/settlements":  { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
 
   // ── Procurement: RTV / Debit Note / Exchange ──────────────────────────────
   "GET:/api/procurement/rtvs":                        { skipAcl: false, resourceCode: "PROC_RTV_LIST",   action: "VIEW"  },

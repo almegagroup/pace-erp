@@ -130,10 +130,12 @@ import {
   listCrcpDiscrepancyHandler,
 } from "../_core/procurement/crcp_discrepancy.handlers.ts";
 import {
+  createReturnableSettlementHandler,
   createReturnableTransferHandler,
   getOutstandingReturnableBalanceHandler,
   getReturnableTransferHandler,
   listPendingReturnableTransfersHandler,
+  listReturnableSettlementsHandler,
   listReturnableTransferLedgerHandler,
   listTransferGroupPartnersHandler,
   listTransferGroupsHandler,
@@ -751,6 +753,10 @@ export async function dispatchProcurementRoutes(
       return await listReturnableTransferLedgerHandler(req, ctx);
     case "GET:/api/procurement/returnable-transfers/balance":
       return await getOutstandingReturnableBalanceHandler(req, ctx);
+    case "POST:/api/procurement/returnable-transfers/settlements":
+      return await createReturnableSettlementHandler(req, ctx);
+    case "GET:/api/procurement/returnable-transfers/settlements":
+      return await listReturnableSettlementsHandler(req, ctx);
     // PO12 (PTO) Phase C — Tab 1 Discrepancy List + CRCP Cost Component
     // Entry + Settlement (Leg 2 Invoice). Design: PROCUREMENT-DESIGN-DOC.md
     // "PO12 (PTO) — Tab 1 Design" / "Settlement (Leg 2 Invoice)" sections.

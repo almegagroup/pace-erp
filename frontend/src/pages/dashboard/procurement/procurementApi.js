@@ -936,6 +936,14 @@ export function getOutstandingReturnableBalance(companyA, companyB, materialId) 
   });
 }
 
+export function createReturnableSettlement(data) {
+  return fetchProcurement("POST", "/api/procurement/returnable-transfers/settlements", data);
+}
+
+export function listReturnableSettlements(companyId) {
+  return fetchProcurement("GET", "/api/procurement/returnable-transfers/settlements", undefined, { company_id: companyId });
+}
+
 export function slocTransfer(data) {
   return fetchProcurement("POST", "/api/procurement/sloc-transfer", data);
 }
