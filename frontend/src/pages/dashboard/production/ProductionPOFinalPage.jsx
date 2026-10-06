@@ -997,7 +997,12 @@ function requiredFinalStatus(poType) {
 
 function validateFinalPoStatus(status, poType, mtsUsedCurrentStroke) {
   const required = requiredFinalStatus(poType, mtsUsedCurrentStroke);
-  if (required === null) return "MTS Process POs cannot be finalized here. Open MTS Verify to complete the entire MTS cycle.";
+  if (required === null) {
+    if (mtsUsedCurrentStroke === false && String(status || "").toUpperCase() === "STANDARD") {
+      return "This non-current-stroke MTS Process PO is waiting for Quality Approval. Open Production QA Queue (PR16); after Quality approves the Page-6 plan, it will be ready in MTS Verify (PR12).";
+    }
+    return "MTS Process POs cannot be finalized here. Complete the MTS cycle from MTS Verify (PR12).";
+  }
   return String(status || "").toUpperCase() === required
     ? ""
     : `This Process PO is not applicable for Final. Only \`${required}\` is allowed for this type.`;

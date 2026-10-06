@@ -4312,7 +4312,16 @@ export async function finalizeProcessOrderHandler(req: Request, ctx: ProdHandler
     // reaches FINAL at Page 6; non-current MTS reaches FINAL when QA approves
     // its Page-6 plan.  Both continue directly to common QA Verify.
     if (po.po_type === "MTS") {
-      return poErr(req, ctx, "PROD_PO_MTS_FINAL_NOT_APPLICABLE", 422, "MTS Process Orders move directly from Page 6 or QA Approval to Verify");
+      const awaitingNonCurrentQaApproval = po.mts_used_current_stroke === false && po.status === "STANDARD";
+      return poErr(
+        req,
+        ctx,
+        "PROD_PO_MTS_FINAL_NOT_APPLICABLE",
+        422,
+        awaitingNonCurrentQaApproval
+          ? "This non-current-stroke MTS Process PO is waiting for Quality Approval in Production QA Queue (PR16). After QA approves the Page-6 plan, it becomes FINAL and is ready for MTS Verify (PR12)."
+          : "MTS Process Orders have no standalone Production Final step. Complete the MTS cycle from MTS Verify (PR12).",
+      );
     }
     // Locked 2026-08-12: INT skips QA and Start Batch entirely (no batch number, per
     // §83.5) so it finalizes directly from STANDARD. MTO/HPS/MTEST still need

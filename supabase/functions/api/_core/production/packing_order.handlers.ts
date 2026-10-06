@@ -1302,7 +1302,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
         status, segment_code, created_by, created_at, batch_number, batch_number_from, batch_number_to,
         finalized_at, last_updated_at,
         pack_code:pack_code_master!pack_code_id(id, pack_code, pack_name, pack_type),
-        process_order:process_order!process_order_id(po_number, batch_number, batch_number_from, batch_number_to, number_of_batches, status)
+        process_order:process_order!process_order_id(po_number, batch_number, batch_number_from, batch_number_to, number_of_batches, machine_id, status)
       `, { count: "exact" })
       .order("created_at", { ascending: false });
 
@@ -1326,7 +1326,17 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
 
     const rows = (data ?? []) as JsonRecord[];
     const poIds = rows.map((row) => String(row.id));
-    const machineIds = [...new Set(rows.map((row) => String(row.machine_id ?? "")).filter(Boolean))];
+    // PMTS/MTS child Packing POs intentionally do not own a machine.  Their
+    // machine is the linked Process PO's machine, so collect both IDs and
+    // expose the parent machine as the Packing PO's operational context.
+    const parentProcessOrderFor = (row: JsonRecord): JsonRecord | null => {
+      const parent = row.process_order;
+      return parent && typeof parent === "object" && !Array.isArray(parent) ? parent as JsonRecord : null;
+    };
+    const machineIds = [...new Set(rows.flatMap((row) => [
+      String(row.machine_id ?? ""),
+      String(parentProcessOrderFor(row)?.machine_id ?? ""),
+    ]).filter(Boolean))];
 
     // §8B PERF: INDEPENDENT -- material lookup, machine lookup, and the FO
     // allocation sum each read only `rows`, never each other's result.
@@ -1380,10 +1390,13 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
       data: rows.map((row) => {
         const totalQty = Number(row.actual_qty_kg) || Number(row.planned_qty_kg) || 0;
         const allocatedQty = allocatedByPo.get(String(row.id)) ?? 0;
+        const parentProcessOrder = parentProcessOrderFor(row);
+        const effectiveMachineId = toTrimmedString(row.machine_id)
+          || toTrimmedString(parentProcessOrder?.machine_id);
         return {
           ...row,
           material: materialMap.get(String(row.material_id ?? "")) ?? null,
-          machine: machineById.get(String(row.machine_id ?? "")) ?? null,
+          machine: machineById.get(effectiveMachineId) ?? null,
           fo_allocated_qty_kg: allocatedQty,
           fo_available_qty_kg: Math.max(0, totalQty - allocatedQty),
         };

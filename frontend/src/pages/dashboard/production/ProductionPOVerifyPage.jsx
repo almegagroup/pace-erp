@@ -275,7 +275,14 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
   };
 
   if (po.status !== "FINAL") {
-    return <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">This MTS Process PO is not pending Verify. MTS documents cannot be edited or corrected from this page.</div>;
+    const isAwaitingNonCurrentApproval = po.mts_used_current_stroke === false && po.status === "STANDARD";
+    return (
+      <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        {isAwaitingNonCurrentApproval
+          ? "This non-current-stroke MTS Process PO is waiting for Quality Approval in Production QA Queue (PR16). Approve its Page-6 plan there first; it will then become FINAL and can be verified here."
+          : "This MTS Process PO is not pending Verify. MTS documents cannot be edited or corrected from this page."}
+      </div>
+    );
   }
 
   return (
