@@ -243,6 +243,7 @@ export default function POCreateOpeningPage() {
     po_number: "",
     po_date: new Date().toISOString().slice(0, 10),
     delivery_type: "STANDARD",
+    effective_start_date: "",
     incoterm: "",
     destination_port_id: "",
     shipment_mode: "",
@@ -539,6 +540,13 @@ export default function POCreateOpeningPage() {
       setError("Shipment mode, import trade type, and customs movement type are required for import purchase orders.");
       return;
     }
+    // Opening/legacy POs use the same Bulk Gate Entry validity window as a
+    // regular PO. The old form predates that rule, but the backend correctly
+    // enforces it for every BULK purchase order.
+    if (form.delivery_type === "BULK" && !form.effective_start_date) {
+      setError("Effective Start Date is required for BULK purchase orders.");
+      return;
+    }
     if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.payment_term_id || !line.freight_term)) {
       setError("Each PO line requires material, quantity, rate, payment term, and freight term.");
       return;
@@ -564,6 +572,7 @@ export default function POCreateOpeningPage() {
         is_opening_po: true,
         vendor_type: String(selectedVendor?.vendor_type || "DOMESTIC").toUpperCase(),
         delivery_type: form.delivery_type,
+        effective_start_date: form.delivery_type === "BULK" ? form.effective_start_date : null,
         incoterm: showIncoterm ? form.incoterm.trim() : null,
         destination_port_id: showIncoterm ? form.destination_port_id : null,
         shipment_mode: showIncoterm ? form.shipment_mode : null,
@@ -900,7 +909,11 @@ export default function POCreateOpeningPage() {
                   Delivery Type <span className="text-rose-500">*</span>
                   <select
                     value={form.delivery_type}
-                    onChange={(event) => updateHeaderField("delivery_type", event.target.value)}
+                    onChange={(event) => setForm((current) => ({
+                      ...current,
+                      delivery_type: event.target.value,
+                      effective_start_date: event.target.value === "BULK" ? current.effective_start_date : "",
+                    }))}
                     className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   >
                     {DELIVERY_TYPE_OPTIONS.map((entry) => (
@@ -908,6 +921,20 @@ export default function POCreateOpeningPage() {
                     ))}
                   </select>
                 </label>
+                {form.delivery_type === "BULK" ? (
+                  <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                    Effective Start Date <span className="text-rose-500">*</span>
+                    <input
+                      type="date"
+                      value={form.effective_start_date}
+                      onChange={(event) => updateHeaderField("effective_start_date", event.target.value)}
+                      className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                    <span className="text-[10px] font-normal text-slate-400">
+                      Window start for validating the vendor Challan/Invoice date at Gate Entry.
+                    </span>
+                  </label>
+                ) : null}
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Cost Center <span className="text-rose-500">*</span>
                   <ErpComboboxField
