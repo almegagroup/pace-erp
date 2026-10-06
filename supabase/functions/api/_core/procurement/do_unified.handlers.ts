@@ -165,6 +165,31 @@ async function computeReservedQtyByPackingOrder(packingOrderIds: string[], exclu
   return map;
 }
 
+// The dispatchable quantity is the actual FG output, not a planning value.
+// FINAL Packing POs normally mirror this on actual_qty_kg, but legacy POs can
+// have a stale zero header even though their FG line (and P101 posting) exists.
+// Using the persisted FG line keeps picker and submit-time validation aligned
+// with the physical production output and with later COR6 FG corrections.
+async function computeProducedFgQtyByPackingOrder(packingOrderIds: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (packingOrderIds.length === 0) return map;
+  const rows = await fetchInChunks<JsonRecord>(packingOrderIds, (chunk) =>
+    serviceRoleClient.schema("erp_production").from("packing_order_line")
+      .select("packing_order_id, actual_qty, total_qty")
+      .in("packing_order_id", chunk)
+      .eq("line_type", "FG"),
+  );
+  for (const row of rows) {
+    const packingOrderId = toTrimmedString(row.packing_order_id);
+    if (!packingOrderId) continue;
+    const quantity = row.actual_qty == null
+      ? Number(row.total_qty ?? 0)
+      : Number(row.actual_qty);
+    map.set(packingOrderId, (map.get(packingOrderId) ?? 0) + quantity);
+  }
+  return map;
+}
+
 async function attachMaterialDisplay(rows: JsonRecord[]): Promise<JsonRecord[]> {
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const { data } = materialIds.length
@@ -211,7 +236,10 @@ async function attachNonFoPackingPoOptions(lines: JsonRecord[]): Promise<JsonRec
   if (pkoRows.length === 0) return lines;
 
   const pkoIds = pkoRows.map((row) => String(row.id));
-  const reservedByPko = await computeReservedQtyByPackingOrder(pkoIds);
+  const [reservedByPko, producedFgQtyByPko] = await Promise.all([
+    computeReservedQtyByPackingOrder(pkoIds),
+    computeProducedFgQtyByPackingOrder(pkoIds),
+  ]);
 
   const pkoMaterialIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const { data: pkoMaterials } = pkoMaterialIds.length
@@ -244,7 +272,8 @@ async function attachNonFoPackingPoOptions(lines: JsonRecord[]): Promise<JsonRec
   const optionsByMaterialId = new Map<string, JsonRecord[]>();
   for (const pko of pkoRows) {
     const reserved = reservedByPko.get(String(pko.id)) ?? 0;
-    const remaining = Number((Number(pko.actual_qty_kg ?? 0) - reserved).toFixed(6));
+    const producedQty = producedFgQtyByPko.get(String(pko.id)) ?? Number(pko.actual_qty_kg ?? 0);
+    const remaining = Number((producedQty - reserved).toFixed(6));
     if (remaining <= QTY_TOL) continue;
     const materialId = toTrimmedString(pko.material_id);
     const processOrder = processOrderMap.get(toTrimmedString(pko.process_order_id));
@@ -464,13 +493,14 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
           .select("plan_feed_id, packing_order_id, allocated_qty_kg, plan_feed_item_id").in("plan_feed_id", chunk));
       const pkoIds = [...new Set(foAllocRows.map((row) => toTrimmedString(row.packing_order_id)).filter(Boolean))];
-      const [pkoRows, drawnByPko, drawnByFoPko] = await Promise.all([
+      const [pkoRows, drawnByPko, drawnByFoPko, producedFgQtyByPko] = await Promise.all([
         pkoIds.length
           ? fetchInChunks<JsonRecord>(pkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("packing_order")
               .select("id, po_number, process_order_id, pack_code_id, batch_number, material_id, actual_qty_kg, fill_qty_per_pack, status").in("id", chunk))
           : Promise.resolve([] as JsonRecord[]),
         computeReservedQtyByPackingOrder(pkoIds),
         computeDrawnQtyByFoPackingOrder(pkoIds),
+        computeProducedFgQtyByPackingOrder(pkoIds),
       ]);
       const pkoMap = new Map(pkoRows.map((row) => [String(row.id), row]));
       const pkoMaterialIds = [...new Set(pkoRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
@@ -506,7 +536,8 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         const drawn = drawnByPko.get(String(pko.id)) ?? 0;
         const foAllocated = Number(alloc.allocated_qty_kg ?? 0);
         const foDrawn = drawnByFoPko.get(`${toTrimmedString(alloc.plan_feed_id)}:${String(pko.id)}`) ?? 0;
-        const remaining = Number(Math.min(Number(pko.actual_qty_kg ?? 0) - drawn, foAllocated - foDrawn).toFixed(6));
+        const producedQty = producedFgQtyByPko.get(String(pko.id)) ?? Number(pko.actual_qty_kg ?? 0);
+        const remaining = Number(Math.min(producedQty - drawn, foAllocated - foDrawn).toFixed(6));
         if (remaining <= QTY_TOL) continue;
         const key = `${toTrimmedString(alloc.plan_feed_id)}:${toTrimmedString(pko.material_id)}`;
         if (!packingPoOptionsByFoAndMaterial.has(key)) packingPoOptionsByFoAndMaterial.set(key, []);
@@ -864,7 +895,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     // drawing from the same Packing PO's own multiple SKUs -- rare but not
     // disallowed).
     const submittedPkoIds = [...new Set(rawLines.map((l) => toTrimmedString(l.packing_order_id)).filter(Boolean))];
-    const [validFoPkoPairs, pkoRowsForValidation, drawnByPko, drawnByFoPko] = await Promise.all([
+    const [validFoPkoPairs, pkoRowsForValidation, drawnByPko, drawnByFoPko, producedFgQtyByPko] = await Promise.all([
       submittedPkoIds.length
         ? fetchInChunks<JsonRecord>(submittedPkoIds, (chunk) => serviceRoleClient.schema("erp_production").from("plan_feed_packing_order_allocation")
             .select("plan_feed_id, packing_order_id, allocated_qty_kg").in("packing_order_id", chunk))
@@ -875,6 +906,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         : Promise.resolve([] as JsonRecord[]),
       computeReservedQtyByPackingOrder(submittedPkoIds, excludeDcId),
       computeDrawnQtyByFoPackingOrder(submittedPkoIds, excludeDcId),
+      computeProducedFgQtyByPackingOrder(submittedPkoIds),
     ]);
 
     // §136 (2026-09-04) -- which of these Packing POs trace back to an
@@ -902,7 +934,9 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     ]));
     const pkoRemainingMap = new Map(pkoRowsForValidation.map((row) => [
       String(row.id),
-      toUpperTrimmedString(row.status) === "FINAL" ? Number(row.actual_qty_kg ?? 0) - (drawnByPko.get(String(row.id)) ?? 0) : 0,
+      toUpperTrimmedString(row.status) === "FINAL"
+        ? (producedFgQtyByPko.get(String(row.id)) ?? Number(row.actual_qty_kg ?? 0)) - (drawnByPko.get(String(row.id)) ?? 0)
+        : 0,
     ]));
     // §136 -- non-FO Packing PO picker's own material cross-check (no FO
     // involved, so validFoPkoPairSet doesn't apply here at all).
