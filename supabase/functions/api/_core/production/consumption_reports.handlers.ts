@@ -206,7 +206,7 @@ export async function listExcessConsumptionReportHandler(req: Request, ctx: Prod
 
     let recoQuery = serviceRoleClient
       .schema("erp_production").from("dispatch_reco")
-      .select("material_id, invoice_number, tally_invoice_date, process_order_number, batch_number, packing_order_id, so_number, fo_number, dispatch_qty_kg, standard_qty, actual_qty")
+      .select("material_id, tally_invoice_number, tally_invoice_date, process_order_number, batch_number, packing_order_id, so_id, so_number, fo_number, dispatch_qty_kg, standard_qty, actual_qty")
       .eq("company_id", companyId).eq("is_voided", false)
       .not("process_order_id", "is", null);
     // Reports are dispatched/invoiced by the Tally Invoice Date. `invoice_date`
@@ -256,6 +256,17 @@ export async function listExcessConsumptionReportHandler(req: Request, ctx: Prod
       : [];
     const skuMaterialIdByPko = new Map(packingRows.map((r) => [String(r.id), toTrimmedString(r.material_id)]));
 
+    // The business-facing Purchase Order reference is the customer's external
+    // SO number, not PACE's internal SO document number stored on dispatch_reco.
+    // Resolve it live so both historic and newly-posted dispatches read correctly.
+    const salesOrderIds = [...new Set(recos.map((r) => toTrimmedString(r.so_id)).filter(Boolean))];
+    const salesOrderRows = salesOrderIds.length > 0
+      ? await fetchInChunks<JsonRecord>(salesOrderIds, (chunk) =>
+          serviceRoleClient.schema("erp_procurement").from("sales_order")
+            .select("id, customer_po_number").in("id", chunk))
+      : [];
+    const externalSoNumberById = new Map(salesOrderRows.map((r) => [String(r.id), toTrimmedString(r.customer_po_number)]));
+
     const materialMap = await resolveMaterialMap([
       ...recos.map((r) => toTrimmedString(r.material_id)),
       ...packingRows.map((r) => toTrimmedString(r.material_id)),
@@ -284,10 +295,12 @@ export async function listExcessConsumptionReportHandler(req: Request, ctx: Prod
         rm_description: toTrimmedString(material?.material_name) || null,
         sku_code: toTrimmedString(skuMaterial?.external_code) || null,
         batch_qty: dispatchQty,
-        invoice_number: toTrimmedString(r.invoice_number) || null,
+        // PR26's Invoice No./Date are explicitly the Tally Invoice values;
+        // PACE's internal sales-invoice number is a separate identifier.
+        invoice_number: toTrimmedString(r.tally_invoice_number) || null,
         invoice_date: r.tally_invoice_date,
         asian_order_number: toTrimmedString(r.fo_number) || null,
-        purchase_order_number: toTrimmedString(r.so_number) || null,
+        purchase_order_number: externalSoNumberById.get(toTrimmedString(r.so_id)) || toTrimmedString(r.so_number) || null,
         standard_pct: Number(standardPct.toFixed(4)),
         standard_qty: Number(standardQty.toFixed(6)),
         actual_pct: Number(actualPct.toFixed(4)),
