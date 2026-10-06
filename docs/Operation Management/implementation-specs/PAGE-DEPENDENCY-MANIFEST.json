@@ -572,6 +572,44 @@
     ]
   },
   {
+    "page": "frontend/src/admin/sa/screens/SAProcTransferGroupPage.jsx",
+    "dependencyCount": 4,
+    "deps": [
+      {
+        "fn": "listCompaniesForOm",
+        "method": "GET",
+        "path": "/api/admin/companies",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      },
+      {
+        "fn": "listTransferGroups",
+        "method": "GET",
+        "path": "/api/procurement/transfer-groups",
+        "resourceCode": "SA_PROC_TRANSFER_GROUP",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "upsertTransferGroup",
+        "method": "POST",
+        "path": "/api/procurement/transfer-groups",
+        "resourceCode": "SA_PROC_TRANSFER_GROUP",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "toggleTransferGroup",
+        "method": "POST",
+        "path": "/api/procurement/transfer-groups/${encodeURIComponent(id)}/toggle",
+        "resourceCode": "SA_PROC_TRANSFER_GROUP",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/admin/sa/screens/SAProductionSegmentLocationPage.jsx",
     "dependencyCount": 2,
     "deps": [
@@ -6816,6 +6854,72 @@
         "resourceCode": "UNRESOLVED",
         "action": "?",
         "skipAcl": true
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/transfer/ReturnableTransferPrintPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "getReturnableTransfer",
+        "method": "GET",
+        "path": "/api/procurement/returnable-transfers/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/transfer/SettlementInvoicePage.jsx",
+    "dependencyCount": 4,
+    "deps": [
+      {
+        "fn": "listSettlementPending",
+        "method": "GET",
+        "path": "/api/procurement/settlements/pending",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "getSettlementByTallyInvoice",
+        "method": "GET",
+        "path": "/api/procurement/settlements/lookup",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "createSettlementInvoice",
+        "method": "POST",
+        "path": "/api/procurement/settlements",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "reverseSettlementInvoice",
+        "method": "POST",
+        "path": "/api/procurement/settlements/reverse",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/transfer/SettlementInvoicePrintPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "getSettlementPrintData",
+        "method": "GET",
+        "path": "/api/procurement/settlements/${encodeURIComponent(settlementInvoiceId)}/print",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
       }
     ]
   },
