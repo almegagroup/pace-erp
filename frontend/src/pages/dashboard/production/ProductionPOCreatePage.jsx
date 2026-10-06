@@ -61,7 +61,7 @@ const MTEST_SEGMENTS = ["ADMIX", "HPS", "IWC", "POWDER"];
 const PACKING_SOURCE_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
 const TABS = ["Process PO", "Packing PO"];
 const PROCESS_PO_DATE_BOUNDS = getManualPastDateBounds();
-// MTS Page 3 "Date" field (2026-09-17 lock) — current-3-days..current only,
+// MTS Page 3 "Date" field — current-7-days..current only,
 // never future. Deliberately narrower than PROCESS_PO_DATE_BOUNDS' 3-CALENDAR-
 // MONTH window above (that one is for backdated Planned Start Date generally;
 // this is "which of the last few days did this actually run"). Mirrors the
@@ -71,11 +71,11 @@ function toLocalIsoDateForBounds(date) {
 }
 function getProductionDateBounds(today = new Date()) {
   const lower = new Date(today);
-  lower.setDate(lower.getDate() - 3);
+  lower.setDate(lower.getDate() - 7);
   return { min: toLocalIsoDateForBounds(lower), max: toLocalIsoDateForBounds(today) };
 }
 const PRODUCTION_DATE_BOUNDS = getProductionDateBounds();
-const PRODUCTION_DATE_WINDOW_MESSAGE = "Date must be within the previous 3 days and cannot be in the future.";
+const PRODUCTION_DATE_WINDOW_MESSAGE = "Date must be within the previous 7 days and cannot be in the future.";
 function isProductionDateWithinWindow(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return false;
   return value >= PRODUCTION_DATE_BOUNDS.min && value <= PRODUCTION_DATE_BOUNDS.max;
@@ -1640,7 +1640,7 @@ export default function ProductionPOCreatePage() {
                           onChange={(event) => updateProcess("production_date", event.target.value)}
                           required
                         />
-                        <span className="text-xs text-slate-400">Declared physical production date — previous 3 days only, never future.</span>
+                        <span className="text-xs text-slate-400">Declared physical production date — previous 7 days only, never future.</span>
                       </div>
 
                       <div className="flex flex-col gap-1">
