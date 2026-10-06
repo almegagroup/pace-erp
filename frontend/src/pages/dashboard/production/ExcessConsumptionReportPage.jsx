@@ -73,13 +73,13 @@ const COLUMNS = [
     render: (row) => formatQty(row.batch_qty), copyValue: (row) => formatQty(row.batch_qty),
     excelValue: (row) => excelNum(row.batch_qty), numFmt: "#,##0.000",
   },
-  { key: "invoice_number", label: "Invoice No.", width: "110px" },
+  { key: "invoice_number", label: "Invoice No. (Tally)", width: "135px" },
   {
-    key: "invoice_date", label: "Invoice Date", width: "100px",
+    key: "invoice_date", label: "Invoice Date (Tally)", width: "130px",
     render: (row) => toDDMMYYYY(row.invoice_date), copyValue: (row) => toDDMMYYYY(row.invoice_date),
   },
   { key: "asian_order_number", label: "Asian Order No. (FO Number)", width: "165px" },
-  { key: "purchase_order_number", label: "Purchase Order No. (SO Number)", width: "185px" },
+  { key: "purchase_order_number", label: "Purchase Order No. (External SO No.)", width: "205px" },
   {
     key: "standard_pct", label: "Standard % Dosage (in %)", width: "145px", align: "right",
     render: (row) => formatPct(row.standard_pct), copyValue: (row) => formatPct(row.standard_pct),
