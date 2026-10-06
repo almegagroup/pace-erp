@@ -740,6 +740,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
   async function handleSave() {
     if (effectiveReadOnly || !selectedGrnId || !draft) return;
+    if (!invoiceVerified) {
+      setError('Check "I Verify" before saving.');
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -966,7 +970,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               <button
                 type="button"
                 onClick={() => void handleSave()}
-                disabled={saving}
+                disabled={saving || !invoiceVerified}
+                title={!invoiceVerified ? 'Check "I Verify" before saving.' : undefined}
                 className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
               >
                 {saving ? "Saving..." : "Save"}
