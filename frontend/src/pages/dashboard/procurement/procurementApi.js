@@ -958,6 +958,20 @@ export function createCrcpCostComponent(data) {
   return fetchProcurement("POST", "/api/procurement/crcp-cost-components", data);
 }
 
+// "Bulk Component Map" -- shared page reached from both AC01's and PO12
+// Tab 1's own button. Design: PROCUREMENT-DESIGN-DOC.md Point 3.5.8.
+export function previewBulkComponentMap(data) {
+  return fetchProcurement("POST", "/api/procurement/bulk-component-map/preview", data);
+}
+
+export function applyBulkComponentMap(data) {
+  return fetchProcurement("POST", "/api/procurement/bulk-component-map/apply", data);
+}
+
+export function listBulkComponentMapChaOptions(companyId) {
+  return fetchProcurement("GET", "/api/procurement/bulk-component-map/cha-options", undefined, { company_id: companyId });
+}
+
 export function listSettlementPending(params) {
   return fetchProcurement("GET", "/api/procurement/settlements/pending", undefined, params);
 }

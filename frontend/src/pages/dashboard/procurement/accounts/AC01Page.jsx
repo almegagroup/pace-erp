@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -508,6 +508,7 @@ function DrawerSection({ eyebrow, title, children }) {
 const inputCls = "h-[26px] w-full border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500";
 
 export default function AC01Page({ readOnly = false, initialGrnId = null }) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
   const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
@@ -881,6 +882,14 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         title={readOnly ? "AC03 · Landed Costs (View)" : "AC01 · Invoice Verifications"}
         notices={error ? [{ key: "ac01-error", tone: "error", message: error }] : []}
         actions={[
+          ...(!readOnly ? [{
+            key: "bulk-component-map",
+            label: "Bulk Component Map",
+            onClick: () => navigate("/dashboard/procurement/accounts/bulk-component-map", {
+              state: { origin: "AC01", companyId, ac01Filters: { search, date_field: dateField, date_from: dateFrom, date_to: dateTo, rate_status: rateStatus } },
+            }),
+            disabled: !companyId,
+          }] : []),
           {
             key: "export",
             label: exporting ? "Exporting..." : "Export Excel",

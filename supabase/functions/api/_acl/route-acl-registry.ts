@@ -148,6 +148,20 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/settlements":                { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
   "POST:/api/procurement/settlements/reverse":        { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "EDIT"  },
 
+  // "Bulk Component Map" -- reachable from both AC01 (PROC_IV_LIST) and
+  // PO12 Tab 1 (PROC_PLANT_TRANSFER_LIST), two different ACL universes. A
+  // single static resourceCode here would wrongly block whichever origin's
+  // own users lack a grant on the OTHER resource (same reasoning as this
+  // file's own "a static resource here would incorrectly evaluate only the
+  // session-selected company" notes above) -- the handler itself re-derives
+  // the real per-GRN authority (canWriteAC01() or canWriteCrcp()).
+  "POST:/api/procurement/bulk-component-map/preview": { skipAcl: true },
+  "POST:/api/procurement/bulk-component-map/apply":   { skipAcl: true },
+  // Plain CHA code/name dropdown lookup for this page's own cost-line
+  // editor, same sensitivity tier as this file's other skipAcl master-data
+  // lookups (GET /api/procurement/companies, GET /api/om/machines above).
+  "GET:/api/procurement/bulk-component-map/cha-options": { skipAcl: true },
+
   // ── PO12 Tab 2 — Returnable Material Transfer (2026-10-05 lock). Transfer
   //    Group master is an SA-only "PTO Company" page, own resource code
   //    (SA/GA bypass ACL anyway, but the resource is needed for ACL-MASTER

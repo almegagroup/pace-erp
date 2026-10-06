@@ -130,6 +130,11 @@ import {
   listCrcpDiscrepancyHandler,
 } from "../_core/procurement/crcp_discrepancy.handlers.ts";
 import {
+  applyBulkComponentMapHandler,
+  listBulkComponentMapChaOptionsHandler,
+  previewBulkComponentMapHandler,
+} from "../_core/procurement/bulk_component_map.handlers.ts";
+import {
   createReturnableSettlementHandler,
   createReturnableTransferHandler,
   getOutstandingReturnableBalanceHandler,
@@ -764,6 +769,15 @@ export async function dispatchProcurementRoutes(
       return await listCrcpDiscrepancyHandler(req, ctx);
     case "POST:/api/procurement/crcp-cost-components":
       return await createCrcpCostComponentHandler(req, ctx);
+    // "Bulk Component Map" — shared page, reached from both AC01's and
+    // PO12 Tab 1's own button. Design: PROCUREMENT-DESIGN-DOC.md Point
+    // 3.5.8's 2026-10-06 Page/UI Design addendum.
+    case "POST:/api/procurement/bulk-component-map/preview":
+      return await previewBulkComponentMapHandler(req, ctx);
+    case "POST:/api/procurement/bulk-component-map/apply":
+      return await applyBulkComponentMapHandler(req, ctx);
+    case "GET:/api/procurement/bulk-component-map/cha-options":
+      return await listBulkComponentMapChaOptionsHandler(req, ctx);
     case "GET:/api/procurement/settlements/pending":
       return await listSettlementPendingHandler(req, ctx);
     case "GET:/api/procurement/settlements/lookup":

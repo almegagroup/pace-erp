@@ -2136,6 +2136,146 @@ no-CSN reality.
     3.5.3, 3.5.7, and 3.5.8 together — see each point's own entry above/below for how it
     specifically applies there.
 
+**Point 3.5.8 — Bulk Cost Component Mapper — Page/UI Design (LOCKED 2026-10-06)**
+
+Business owner's own correction to the first-pass mockup: the entry point is a **"Bulk
+Component Map" button** on both AC01 and PO12 Tab 1 (not a drawer), opening one **dedicated,
+shared page** (not a per-feature mock). Everything on the page reuses AC01's own real
+drawer field vocabulary (`AC01Page.jsx`) verbatim — nothing on the entry side is invented.
+
+- **Button placement:** AC01Page.jsx's `ErpMasterListTemplate` `actions` array, next to
+  "Export Excel". PO12 Tab 1 (`CrcpDiscrepancyPage.jsx`) gets the same button in its own
+  `actions` array. Both navigate to the **same** page/route — the design doc's own text for
+  Point 3 ("no new mechanism — reuses the already-locked Bulk Cost Component Mapper as-is")
+  means one shared implementation, not two.
+- **Header — component builder, not a single-component form.** AC01's own Section 5
+  ("Landed cost") and Section 6 ("Deductions") row-by-row `+ Add` editors are reused
+  **exactly** — same 9-column cost-line grid (`cost_type` optgroup dropdown, Amount, Entry
+  Mode, Has GST?, GST Treatment, GST Rate, Party Type, CHA, Remove) and same 7-column
+  deduction-line grid (Deduction Type, Amount, %, Round off, Party Type, In landed, Remove),
+  same `+ Add cost line` / `+ Add deduction` / `+ New deduction type` actions, same
+  `inputCls` styling. The user adds one or more lines here exactly the way they would inside
+  AC01's own drawer — this page does not ask for "one component" in a separate form.
+- **Value-Application Mode (new control, directly under the component builder) — applies
+  per added line, no new per-line field:**
+  - **Same-to-Many** — each line's own Amount, interpreted by its own existing Entry Mode
+    (Ad hoc = same flat amount on every selected GRN; Per UoM = rate, multiplied by that
+    GRN's own Base-UoM Considered Qty, independently per GRN — exactly `save_ac01_grn_cost`'s
+    own existing PER_UOM math, unchanged).
+  - **Distributed** — each line's own Amount is instead treated as one lump-sum **total**,
+    with a visible sub-choice: `Equally` (total ÷ selected-GRN-count, same amount per GRN) or
+    `As-per-GRN-qty` (proportional to each GRN's own Base-UoM Considered Qty — weight-based,
+    not by GRN count). The last selected GRN absorbs the rounding remainder so the sum always
+    equals the typed total exactly. Every resulting line across the batch shares the same
+    `bill_reference` (existing column, no new one) — the tool's own duplicate-prevention
+    warning already anticipates this exact repeat-usage shape.
+- **I Verify + user name (directly under Mode) — AC01's own Section 8 reused verbatim,**
+  same checkbox, same "Save with this checked to record your user ID" copy. This data
+  ultimately lands in the same `landed_cost`/`landed_cost_line` rows AC01's and PO12's own
+  center drawers read — so recording verification here is the same acknowledgement AC01
+  itself now requires before Save (2026-10-06 lock, same session). Gates the page's own
+  "Component Map" action exactly like AC01's Save button is gated.
+- **GRN grid — context-aware, not a new list endpoint.** Whichever page the button was
+  clicked from decides what appears: opened from AC01, the page re-runs AC01's own
+  `listAC01GRNs` with that AC01 session's current filters (company/search/date
+  field/from/to/status) carried over via navigation state — same rows, same full column set
+  (`buildColumns`). Opened from PO12 Tab 1, the page re-runs `listCrcpDiscrepancy` with that
+  session's current company/search instead — PO12's own column set
+  (`CrcpDiscrepancyPage.jsx`'s `COLUMNS`). Table is `ErpDenseGrid` with the same
+  **`columnFilter`** Excel-style per-column AutoFilter PO12 Tab 1 already uses, plus a
+  leading checkbox column + header "Select All" — the exact `__select`/`toggleRow`/
+  `toggleAllVisible` pattern already built for `GRNInvoiceMappingPage.jsx` (§3.9.2), reused
+  here rather than invented fresh.
+- **Duplicate-prevention (business owner's own caution, §3.5.8 original lock):** before
+  commit, a preview step checks each selected GRN's existing `landed_cost_line`/
+  `landed_cost_deduction_line` rows for an exact `cost_type`/`deduction_type_id` + computed-
+  amount match and shows it as a soft, non-blocking amber warning per row.
+- **Write mechanism — append, never the delete-and-reinsert save RPC.** `save_ac01_grn_cost`
+  (the RPC AC01's own Save button calls) does `DELETE FROM landed_cost_line WHERE lc_id = …`
+  then reinserts the full line set it was given — calling it from this page with only the
+  newly-mapped lines would silently wipe every pre-existing line on that GRN. The already-
+  shipped CRCP Cost Component Entry path (`crcp_discrepancy.handlers.ts`'s
+  `createCrcpCostComponentHandler`) already solved this correctly for its own single-line
+  case: reuse the GRN's existing `landed_cost` header (create one only if none exists yet),
+  insert the new line(s) at the next `line_number`, recompute `landed_cost.total_cost` from
+  the full set. This page's own batch handler follows the exact same append pattern per
+  selected GRN — never AC01's delete+reinsert RPC. Per-GRN access is whichever of AC01's own
+  `canWriteAC01()` or PO12's own `canWriteCrcp()` actually applies to that specific GRN
+  (never a widening of either) — a GRN failing both is reported per-row, not as an opaque
+  whole-batch failure.
+- **Not yet decided, deferred with the rest of §3.5.8/Point 3:** per-vendor repeat-usage UX
+  efficiency (still the dedicated future session per Point 3's own deferral) and whether
+  Container Number joins the GRN grid's filter set (depends on Point 3.5.6/3.9.4 landing).
+
+**Bulk Component Map — Implementation Log (2026-10-06)**
+
+> Built directly (no subagent delegation) immediately after the Page/UI Design lock above,
+> same session. Verified statically (`deno check` on the new/changed backend files,
+> `eslint` + `jsx-no-undef-guard.mjs` on the new/changed frontend files, a full `vite build`,
+> and every relevant `.mjs` guard — `route-acl-registry-guard`, `company-scope-guard`,
+> `company-scope-write-acl-guard`, `wrong-company-source-guard`, `resource-code-domain-guard`,
+> `stock-posting-guard`, `hardcoded-role-check-guard`, `frontend-payload-guard` — all clean).
+> No migration needed (reuses existing `landed_cost`/`landed_cost_line`/
+> `landed_cost_deduction_line` tables). **Not yet applied to Prod, not yet click-tested live**
+> (no dev login in this environment).
+
+- **Backend — new `bulk_component_map.handlers.ts`:** `previewBulkComponentMapHandler`
+  (dry-run) and `applyBulkComponentMapHandler` (commit) share one `buildBulkComponentMapPlan()`
+  core: resolves per-GRN access independently (`canWriteAC01()`, exported from
+  `ac01.handlers.ts` for this reuse, OR `canWriteCrcp()` from `crcp_discrepancy.handlers.ts`,
+  already exported) via `fetchInChunks`-safe batch lookups (§8E), computes each GRN's own
+  resulting cost/deduction lines per the chosen mode (Same-to-Many copies the line unchanged;
+  Distributed splits that line's own `amount` as one lump-sum total — Equally or As-per-
+  GRN-qty, proportional to each GRN's own Base-UoM Considered Qty, last GRN absorbing the
+  rounding remainder so the sum always matches exactly), and flags duplicate `cost_type`/
+  `deduction_type_id` + amount matches against each GRN's existing lines as a soft warning.
+  `applyBulkComponentMapHandler` additionally requires `invoice_verified: true` (400 otherwise
+  — mirrors AC01's own 2026-10-06 Save-gating lock), then per allowed GRN: reuses/creates the
+  `landed_cost` header (same append pattern as `createCrcpCostComponentHandler`, `generate_doc_number('LC')`
+  for a fresh header rather than that handler's own ad-hoc string, matching §8's proper numbering
+  convention), inserts the new line(s) at the next `line_number`, recomputes `total_cost` from
+  the FULL current line set (mirrors `save_ac01_grn_cost`'s own net-amount math — PER_UOM ×
+  qty, `ADDITIONAL_DUTY_IGST` excluded, GST-inclusive treatment — so a later real AC01 Save
+  for the same GRN lands on the same total), and stamps `goods_receipt.invoice_verified_by`/
+  `_at`. Deliberately never calls AC01's own `save_ac01_grn_cost` RPC (that RPC DELETEs and
+  reinserts a GRN's full line set — would silently wipe pre-existing lines). Does not
+  recompute `landed_cost_per_unit` or call `recalculate_valuation_at_row` — same known scope
+  limit the existing CRCP append path already has; valuation catches up the next time someone
+  opens that GRN in AC01 and saves. A third handler, `listBulkComponentMapChaOptionsHandler`,
+  serves the page's own CHA dropdown (same `cha_company_map`→`cha_master` join
+  `getAC01GRNHandler` already does per-GRN, exposed here at plain company level) — caught live
+  by `company-scope-guard.mjs` for reading a caller-supplied `company_id` with no scope check;
+  fixed with `assertCompanyScope()`.
+- **Routes + ACL (`procurement.routes.ts` / `route-acl-registry.ts`):**
+  `POST /api/procurement/bulk-component-map/preview`, `POST .../apply`,
+  `GET .../cha-options`. Preview/apply are `skipAcl: true` by design — reachable from both
+  AC01 (`PROC_IV_LIST`) and PO12 Tab 1 (`PROC_PLANT_TRANSFER_LIST`), two different ACL
+  universes, so a single static route-level resource would wrongly block whichever origin's
+  users lack a grant on the other resource; the handler itself re-derives the real per-GRN
+  authority. `cha-options` is also `skipAcl: true`, same sensitivity tier as this file's other
+  plain master-data lookups (`GET /api/procurement/companies`, `GET /api/om/machines`).
+- **Frontend — new `BulkComponentMapPage.jsx`:** header reuses AC01's own Section 5/6 row
+  editors verbatim (cost-line 9-column grid with the same `optgroup` cost-type dropdown,
+  deduction-line 7-column grid, same `inputCls`, same `+ Add` actions — duplicated rather than
+  imported, since page components here are default-export-only), a Value-Application Mode
+  radio group (disables Entry Mode when Distributed, since a split total is always a flat
+  amount) with an Equally/As-per-GRN-qty sub-select, and the same "I Verify" section/copy as
+  AC01's own drawer (any line/mode change clears the tick, mirroring AC01's own snapshot
+  invalidation). GRN grid is context-aware via `useLocation().state` (`origin`/`companyId`/
+  `ac01Filters`/`po12Search`, set by the button that navigated here) — re-runs `listAC01GRNs`
+  or `listCrcpDiscrepancy` with that same page's own filters, so rows/columns always match
+  where the user came from. Table is `ErpDenseGrid` with `columnFilter` (PO12's own Excel-
+  style AutoFilter) plus the exact `__select`/`toggleRow`/`toggleAllVisible` checkbox-column +
+  header Select-All pattern already built for `GRNInvoiceMappingPage.jsx` (§3.9.2), reused
+  rather than reinvented. "Preview" calls the dry-run endpoint and shows forbidden-GRN/
+  duplicate-warning counts inline; "Component Map" (gated on I Verify, same `disabled`+`title`
+  pattern as AC01's own Save button) calls apply and reports the applied/skipped count.
+  New route `procurement/accounts/bulk-component-map` in `AppRouter.jsx` — route-only, no
+  `erp_menu.menu_master`/`acl.menu_master` row (companion screen, CLAUDE.md §8), reached only
+  via the new "Bulk Component Map" action added to `AC01Page.jsx`'s `ErpMasterListTemplate`
+  (hidden for the AC03 `readOnly` view, since this page only ever writes) and
+  `CrcpDiscrepancyPage.jsx`'s own action bar.
+
 **Point 3.6 — Phase 2 forward-compatibility (container list upload)**
 - Business: future (explicitly Phase 2) — transporter Excel container list upload, GE-time
   pick-from-list, cross-tally flag for unlisted containers.

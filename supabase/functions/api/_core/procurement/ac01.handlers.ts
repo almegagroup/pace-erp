@@ -315,7 +315,7 @@ function toMap<T extends JsonRecord>(rows: T[]): Map<string, T> {
 // PROC_IV_LIST:WRITE registry entries (reused from the pre-existing,
 // already-granted resource -- see route-acl-registry.ts's 2026-08-21 note
 // for why the originally-planned ACC_GRN_LANDED_COST resource was reverted).
-async function canWriteAC01(ctx: ProcurementHandlerContext, companyId: string): Promise<boolean> {
+export async function canWriteAC01(ctx: ProcurementHandlerContext, companyId: string): Promise<boolean> {
   if (ctx.context.isAdmin) return true;
   if (!companyId) return false;
 

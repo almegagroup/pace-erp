@@ -150,6 +150,7 @@ import DebitNoteListPage from "../pages/dashboard/procurement/rtv/DebitNoteListP
 import DebitNoteDetailPage from "../pages/dashboard/procurement/rtv/DebitNoteDetailPage.jsx";
 import ExchangeRefListPage from "../pages/dashboard/procurement/rtv/ExchangeRefListPage.jsx";
 import AC01Page from "../pages/dashboard/procurement/accounts/AC01Page.jsx";
+import BulkComponentMapPage from "../pages/dashboard/procurement/accounts/BulkComponentMapPage.jsx";
 import ManualCostingRatePage from "../pages/dashboard/procurement/accounts/ManualCostingRatePage.jsx";
 import BatchCostingReportPage from "../pages/dashboard/procurement/accounts/BatchCostingReportPage.jsx";
 import RecoDataPage from "../pages/dashboard/procurement/accounts/RecoDataPage.jsx";
@@ -717,6 +718,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/accounts/invoice-verifications"
                     element={<AC01Page />}
+                  />
+                  <Route
+                    path="procurement/accounts/bulk-component-map"
+                    element={<BulkComponentMapPage />}
                   />
                   <Route
                     path="procurement/accounts/invoice-verifications/create"
