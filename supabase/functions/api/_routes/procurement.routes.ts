@@ -130,6 +130,20 @@ import {
   listCrcpDiscrepancyHandler,
 } from "../_core/procurement/crcp_discrepancy.handlers.ts";
 import {
+  createReturnableSettlementHandler,
+  createReturnableTransferHandler,
+  getOutstandingReturnableBalanceHandler,
+  getReturnableTransferHandler,
+  listPendingReturnableTransfersHandler,
+  listReturnableSettlementsHandler,
+  listReturnableTransferLedgerHandler,
+  listTransferGroupPartnersHandler,
+  listTransferGroupsHandler,
+  receiveReturnableTransferHandler,
+  toggleTransferGroupHandler,
+  upsertTransferGroupHandler,
+} from "../_core/procurement/returnable_transfer.handlers.ts";
+import {
   createSettlementInvoiceHandler,
   getSettlementByTallyInvoiceHandler,
   getSettlementPrintDataHandler,
@@ -723,6 +737,26 @@ export async function dispatchProcurementRoutes(
       return await listPTOsHandler(req, ctx);
     case "POST:/api/procurement/sloc-transfer":
       return await storageLocationTransferHandler(req, ctx);
+    // PO12 Tab 2 — Returnable Material Transfer. Design: PROCUREMENT-DESIGN-DOC.md
+    // "PO12 (PTO) — Tab 1 Design" -> "Tab 2 ... FINAL DESIGN LOCKED" (2026-10-05).
+    case "GET:/api/procurement/transfer-groups":
+      return await listTransferGroupsHandler(req, ctx);
+    case "POST:/api/procurement/transfer-groups":
+      return await upsertTransferGroupHandler(req, ctx);
+    case "GET:/api/procurement/transfer-groups/partners":
+      return await listTransferGroupPartnersHandler(req, ctx);
+    case "POST:/api/procurement/returnable-transfers":
+      return await createReturnableTransferHandler(req, ctx);
+    case "GET:/api/procurement/returnable-transfers/pending":
+      return await listPendingReturnableTransfersHandler(req, ctx);
+    case "GET:/api/procurement/returnable-transfers/ledger":
+      return await listReturnableTransferLedgerHandler(req, ctx);
+    case "GET:/api/procurement/returnable-transfers/balance":
+      return await getOutstandingReturnableBalanceHandler(req, ctx);
+    case "POST:/api/procurement/returnable-transfers/settlements":
+      return await createReturnableSettlementHandler(req, ctx);
+    case "GET:/api/procurement/returnable-transfers/settlements":
+      return await listReturnableSettlementsHandler(req, ctx);
     // PO12 (PTO) Phase C — Tab 1 Discrepancy List + CRCP Cost Component
     // Entry + Settlement (Leg 2 Invoice). Design: PROCUREMENT-DESIGN-DOC.md
     // "PO12 (PTO) — Tab 1 Design" / "Settlement (Leg 2 Invoice)" sections.
@@ -1234,6 +1268,18 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/ptos\/[^/]+$/.test(pathname) && req.method === "GET") {
     return await getPTOHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/transfer-groups\/[^/]+\/toggle$/.test(pathname) && req.method === "POST") {
+    return await toggleTransferGroupHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/returnable-transfers\/[^/]+\/receive$/.test(pathname) && req.method === "POST") {
+    return await receiveReturnableTransferHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/returnable-transfers\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getReturnableTransferHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/settlements\/[^/]+\/print$/.test(pathname) && req.method === "GET") {

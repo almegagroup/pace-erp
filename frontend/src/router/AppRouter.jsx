@@ -70,6 +70,7 @@ import SAMachineMaster from "../admin/sa/screens/SAMachineMaster.jsx";
 import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
+import SAProcTransferGroupPage from "../admin/sa/screens/SAProcTransferGroupPage.jsx";
 import SAVendorCodeMasterPage from "../admin/sa/screens/SAVendorCodeMasterPage.jsx";
 import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
 import SAPackCodeMasterPage from "../admin/sa/screens/SAPackCodeMasterPage.jsx";
@@ -160,6 +161,7 @@ import PlantTransferPage from "../pages/dashboard/procurement/transfer/PlantTran
 import PlantTransferDetailPage from "../pages/dashboard/procurement/transfer/PlantTransferDetailPage.jsx";
 import SettlementInvoicePage from "../pages/dashboard/procurement/transfer/SettlementInvoicePage.jsx";
 import SettlementInvoicePrintPage from "../pages/dashboard/procurement/transfer/SettlementInvoicePrintPage.jsx";
+import ReturnableTransferPrintPage from "../pages/dashboard/procurement/transfer/ReturnableTransferPrintPage.jsx";
 import PaymentTermsMasterPage from "../pages/dashboard/procurement/masters/PaymentTermsMasterPage.jsx";
 import PortMasterPage from "../pages/dashboard/procurement/masters/PortMasterPage.jsx";
 import PortTransitMasterPage from "../pages/dashboard/procurement/masters/PortTransitMasterPage.jsx";
@@ -394,6 +396,10 @@ export default function AppRouter() {
                     <Route
                       path="production/batch-series"
                       element={<SAProductionBatchSeriesPage />}
+                    />
+                    <Route
+                      path="procurement/transfer-groups"
+                      element={<SAProcTransferGroupPage />}
                     />
                     <Route
                       path="production/vendor-code-master"
@@ -743,6 +749,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/settlements/:id/print"
                     element={<SettlementInvoicePrintPage />}
+                  />
+                  <Route
+                    path="procurement/returnable-transfers/:id/print"
+                    element={<ReturnableTransferPrintPage />}
                   />
                   <Route
                     path="procurement/transfer/:id"

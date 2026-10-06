@@ -148,6 +148,22 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/settlements":                { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
   "POST:/api/procurement/settlements/reverse":        { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "EDIT"  },
 
+  // ── PO12 Tab 2 — Returnable Material Transfer (2026-10-05 lock). Transfer
+  //    Group master is an SA-only "PTO Company" page, own resource code
+  //    (SA/GA bypass ACL anyway, but the resource is needed for ACL-MASTER
+  //    coverage + menu registration, matching SA_PROD_BATCH_SERIES's own
+  //    convention). Transfer/Receive/Report reuse PROC_PLANT_TRANSFER_LIST,
+  //    same as Tab 1 — one PO12 access grant governs every tab.
+  "GET:/api/procurement/transfer-groups":             { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP",   action: "VIEW"  },
+  "POST:/api/procurement/transfer-groups":            { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP",   action: "WRITE" },
+  "GET:/api/procurement/transfer-groups/partners":    { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "POST:/api/procurement/returnable-transfers":       { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
+  "GET:/api/procurement/returnable-transfers/pending": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "GET:/api/procurement/returnable-transfers/ledger":  { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "GET:/api/procurement/returnable-transfers/balance": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+  "POST:/api/procurement/returnable-transfers/settlements": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
+  "GET:/api/procurement/returnable-transfers/settlements":  { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
+
   // ── Procurement: RTV / Debit Note / Exchange ──────────────────────────────
   "GET:/api/procurement/rtvs":                        { skipAcl: false, resourceCode: "PROC_RTV_LIST",   action: "VIEW"  },
   "POST:/api/procurement/rtvs":                       { skipAcl: false, resourceCode: "PROC_RTV_CREATE", action: "WRITE" },
@@ -1101,6 +1117,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/ptos\/[^/]+$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/transfer-groups\/[^/]+\/toggle$/,
+    methods: { POST: { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/returnable-transfers\/[^/]+\/receive$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/returnable-transfers\/[^/]+$/,
     methods: { GET: { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW" } },
   },
   {

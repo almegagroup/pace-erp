@@ -136,6 +136,9 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/transfer",                           "/dashboard/procurement/settlements/:id/print"],
     ["/dashboard/procurement/accounts/invoice-verifications",     "/dashboard/procurement/settlements/:id/print"],
     ["/dashboard/procurement/accounts/landed-costs",              "/dashboard/procurement/settlements/:id/print"],
+    // PO12 Tab 2 Delivery Challan print — same companion-route need as Settlement's own
+    // print link above (2026-10-06, Returnable Material Transfer gap-fix pass).
+    ["/dashboard/procurement/transfer",                           "/dashboard/procurement/returnable-transfers/:id/print"],
     ["/dashboard/procurement/transfer",                "/dashboard/procurement/transfer/:id"],
     ["/dashboard/procurement/sales-orders",            "/dashboard/procurement/sales-orders/:id"],
     ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/:id"],
