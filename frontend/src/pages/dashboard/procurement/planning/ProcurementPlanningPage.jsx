@@ -1508,7 +1508,11 @@ export default function ProcurementPlanningPage() {
   }
 
   async function handleSaveLines() {
-    if (!effectiveCompanyId) return;
+    const draftLines = Object.values(lineDrafts);
+    if (!effectiveCompanyId || draftLines.length === 0) {
+      setError("No planning lines are available to save. Select a company with an active planning workspace first.");
+      return;
+    }
     setSaving(true);
     setError("");
     setMessage("");
@@ -1516,7 +1520,7 @@ export default function ProcurementPlanningPage() {
       const payload = {
         company_id: effectiveCompanyId,
         plan_month: `${planMonthValue}-01`,
-        lines: Object.values(lineDrafts),
+        lines: draftLines,
         group_configs: Object.values(groupConfigDrafts),
       };
       const result = await saveProcurementPlanningLines(payload);
@@ -1565,6 +1569,11 @@ export default function ProcurementPlanningPage() {
   async function handleSaveSlocGroup() {
     if (!effectiveCompanyId || !slocGroupForm.group_name || slocGroupForm.storage_location_ids.length === 0) {
       setError("Select company, group name, and at least one storage location.");
+      return;
+    }
+    const activeLocationIds = new Set(storageLocations.map((location) => String(location.id)));
+    if (slocGroupForm.storage_location_ids.some((id) => !activeLocationIds.has(String(id)))) {
+      setError("One or more selected storage locations are no longer active for this company. Refresh the locations and select them again.");
       return;
     }
     setSaving(true);

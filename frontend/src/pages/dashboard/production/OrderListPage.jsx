@@ -327,7 +327,6 @@ export default function OrderListPage() {
                 </thead>
                 <tbody>
                   {packingOrders.map((order) => {
-                    const isFinalized = order.status && order.status !== "STANDARD" && order.status !== "CANCELLED";
                     const totalQty = Number(order.actual_qty_kg) || Number(order.planned_qty_kg) || 0;
                     return (
                     <tr key={order.id} className="border-b border-slate-100 hover:bg-slate-50">
@@ -339,7 +338,7 @@ export default function OrderListPage() {
                       <td className="px-3 py-2 text-right font-mono">{order.fill_qty_per_pack != null ? Number(order.fill_qty_per_pack).toLocaleString() : "--"}</td>
                       <td className="px-3 py-2 text-right font-mono">{totalQty.toLocaleString()}</td>
                       <td className="px-3 py-2 font-mono text-slate-500">
-                        {isFinalized ? (order.source_po_type === "MTS" ? formatBatchRange(order.process_order) : (order.process_order?.batch_number || "--")) : ""}
+                        {order.source_po_type === "MTS" ? formatBatchRange(order.process_order) : (order.process_order?.batch_number || "--")}
                       </td>
                       <td className="px-3 py-2 text-right font-mono">{deriveBatchCount(order)}</td>
                       <td className="px-3 py-2 font-mono text-slate-500">{order.process_order?.po_number || "--"}</td>

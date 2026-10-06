@@ -248,14 +248,18 @@ export default function QAQueuePage() {
     pushToast({ message: msg, tone });
   }
 
-  async function handleApprove(orderId) {
+  async function handleApprove(order) {
     setSaving(true);
     try {
-      const priority = priorityByOrderId[orderId] || "NORMAL";
-      await qaApproveProcessOrder(orderId, { priority });
-      toast(priority === "URGENT" ? "Process Order approved by QA — Urgent, Manager Approval required before Start Batch." : "Process Order approved by QA.");
+      const priority = priorityByOrderId[order.id] || "NORMAL";
+      await qaApproveProcessOrder(order.id, { priority });
+      toast(order.po_type === "MTS"
+        ? "MTS Page-6 plan approved by Quality — it is now ready in MTS Verify (PR12)."
+        : priority === "URGENT"
+          ? "Process Order approved by QA — Urgent, Manager Approval required before Start Batch."
+          : "Process Order approved by QA.");
       qc.invalidateQueries({ queryKey: ["qa-queue"] });
-      qc.invalidateQueries({ queryKey: ["qa-queue-detail", orderId] });
+      qc.invalidateQueries({ queryKey: ["qa-queue-detail", order.id] });
     } catch (error) {
       toast(friendlyError(error), "error");
     } finally {
@@ -495,7 +499,7 @@ export default function QAQueuePage() {
                             {order.status === "STANDARD" && !skipsQaApproval(order) && order.po_type !== "MTS" && (
                               <>
                                 <button
-                                  onClick={() => handleApprove(order.id)}
+                                  onClick={() => handleApprove(order)}
                                   disabled={saving}
                                   className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
                                 >
@@ -627,7 +631,7 @@ export default function QAQueuePage() {
                                 key={order.id}
                                 detail={detailQ.data}
                                 saving={saving}
-                                onApprove={() => handleApprove(order.id)}
+                                onApprove={() => handleApprove(order)}
                                 onReject={() => {
                                   setRejectOrderId(order.id);
                                   setRejectReason("");

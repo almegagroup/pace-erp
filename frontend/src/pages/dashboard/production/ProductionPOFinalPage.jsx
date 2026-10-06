@@ -372,7 +372,10 @@ function PackingPoFinalTab() {
       toast("Packing PO finalized.");
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-final-detail", po.id] });
-      detailQ.refetch();
+      // Saving completes the current work item. Keep COR6 correction as an
+      // explicit PO-number lookup, rather than exposing it as the next screen
+      // merely because this PO is now FINAL.
+      resetSelection(effectiveCompanyId);
     } catch (error) {
       toast(PACKING_ERR(error), "error");
     } finally {
@@ -994,7 +997,12 @@ function requiredFinalStatus(poType) {
 
 function validateFinalPoStatus(status, poType, mtsUsedCurrentStroke) {
   const required = requiredFinalStatus(poType, mtsUsedCurrentStroke);
-  if (required === null) return "MTS Process POs cannot be finalized here. Open MTS Verify to complete the entire MTS cycle.";
+  if (required === null) {
+    if (mtsUsedCurrentStroke === false && String(status || "").toUpperCase() === "STANDARD") {
+      return "This non-current-stroke MTS Process PO is waiting for Quality Approval. Open Production QA Queue (PR16); after Quality approves the Page-6 plan, it will be ready in MTS Verify (PR12).";
+    }
+    return "MTS Process POs cannot be finalized here. Complete the MTS cycle from MTS Verify (PR12).";
+  }
   return String(status || "").toUpperCase() === required
     ? ""
     : `This Process PO is not applicable for Final. Only \`${required}\` is allowed for this type.`;
@@ -1305,6 +1313,7 @@ function ProcessPoFinalTab() {
       toast(completesInOneStep ? "Process PO completed and stock posted." : "Process PO saved as FINAL.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-final-detail", po.id] });
+      resetSelection(effectiveCompanyId);
     } catch (error) {
       toast(error.message || "Final save failed.", "error");
     } finally {

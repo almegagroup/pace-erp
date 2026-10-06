@@ -2415,6 +2415,18 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
   }
 
   function rowsForGroup(group) {
+    // A non-machine-tracked line is one physical issue.  The server keeps
+    // candidate rows so it can validate every permitted alternate, but Page
+    // 4 must display only the selected candidate (or the formulation item
+    // before a choice) rather than duplicate the same recipe line.
+    if (!group.auto_derive_applicable) {
+      const chosenMaterialId = manualPicks[group.stroke_line_id];
+      return [
+        group.rows.find((row) => row.actual_material_id === chosenMaterialId)
+          ?? group.rows.find((row) => row.is_formulation_line)
+          ?? group.rows[0],
+      ].filter(Boolean);
+    }
     const override = overrides[group.stroke_line_id];
     if (isEditable && override) return override;
     return group.rows;
@@ -2473,6 +2485,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
 
   const shortGroups = groups.filter((g) => g.short);
   const manualPickMissing = groups.some((g) => !g.auto_derive_applicable
+    && g.manual_material_selection_required !== false
     && !manualPicks[g.stroke_line_id]
     && !g.rows.some((r) => r.is_formulation_line && r.actual_qty > 0));
   const [deviationModal, setDeviationModal] = useState(null);
@@ -2492,6 +2505,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
             confirmed_deviation: confirmDeviation === true,
           };
         }
+        if (group.manual_material_selection_required === false) return null;
         const chosen = manualPicks[group.stroke_line_id];
         return chosen ? { stroke_line_id: group.stroke_line_id, actual_material_id: chosen } : null;
       }).filter(Boolean),
@@ -2641,6 +2655,11 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
                 const usedIds = new Set(rows.map((r) => r.actual_material_id));
                 return rows.map((row, rowIndex) => {
                   const rowKey = `${group.stroke_line_id}-${rowIndex}`;
+                  const manualMaterialSelectionRequired = !group.auto_derive_applicable
+                    && group.manual_material_selection_required !== false;
+                  const displayedActualQty = manualMaterialSelectionRequired
+                    ? (manualPicks[group.stroke_line_id] === row.actual_material_id ? group.standard_qty : 0)
+                    : row.actual_qty;
                   const materialOptions = group.group_member_ids.map((id) => ({
                     value: id,
                     label: materialLabel(id),
@@ -2660,7 +2679,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
                             onChange={(value) => handleSwapMaterial(group, rowIndex, value)}
                             options={materialOptions}
                           />
-                        ) : !group.auto_derive_applicable ? (
+                        ) : manualMaterialSelectionRequired ? (
                           <ErpComboboxField
                             value={manualPicks[group.stroke_line_id] || ""}
                             onChange={(value) => setManualPicks((current) => ({ ...current, [group.stroke_line_id]: value }))}
@@ -2683,13 +2702,13 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
                             onChange={(event) => handleQtyChange(group, rowIndex, event.target.value)}
                           />
                         ) : (
-                          formatPreciseNumber(row.actual_qty, "0.###")
+                          formatPreciseNumber(displayedActualQty, "0.###")
                         )}
                       </td>
                       <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.available_qty, "0.###")}</td>
                       <td className="border-b border-slate-100 px-3 py-2">P261</td>
                       <td className="border-b border-slate-100 px-3 py-2">Yes</td>
-                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.actual_qty, "0.###")}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(displayedActualQty, "0.###")}</td>
                       <td className="border-b border-slate-100 px-3 py-2">
                         {group.short ? <span className="text-rose-600">Short</span> : ""}
                         {group.auto_derive_applicable && isEditable && rows.length > 1 && (
