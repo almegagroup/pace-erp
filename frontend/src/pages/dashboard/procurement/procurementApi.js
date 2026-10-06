@@ -892,6 +892,50 @@ export function cancelPTO(id, data) {
   return fetchProcurement("POST", `/api/procurement/ptos/${encodeURIComponent(id)}/cancel`, data);
 }
 
+// ── PO12 Tab 2 — Returnable Material Transfer (2026-10-05 lock) ──────────────────────
+
+export function listTransferGroups() {
+  return fetchProcurement("GET", "/api/procurement/transfer-groups");
+}
+
+export function upsertTransferGroup(data) {
+  return fetchProcurement("POST", "/api/procurement/transfer-groups", data);
+}
+
+export function toggleTransferGroup(id, isActive) {
+  return fetchProcurement("POST", `/api/procurement/transfer-groups/${encodeURIComponent(id)}/toggle`, { is_active: isActive });
+}
+
+export function listTransferGroupPartners(companyId) {
+  return fetchProcurement("GET", "/api/procurement/transfer-groups/partners", undefined, { company_id: companyId });
+}
+
+export function createReturnableTransfer(data) {
+  return fetchProcurement("POST", "/api/procurement/returnable-transfers", data);
+}
+
+export function listPendingReturnableTransfers(companyId) {
+  return fetchProcurement("GET", "/api/procurement/returnable-transfers/pending", undefined, { company_id: companyId });
+}
+
+export function getReturnableTransfer(id) {
+  return fetchProcurement("GET", `/api/procurement/returnable-transfers/${encodeURIComponent(id)}`);
+}
+
+export function receiveReturnableTransfer(id, data) {
+  return fetchProcurement("POST", `/api/procurement/returnable-transfers/${encodeURIComponent(id)}/receive`, data);
+}
+
+export function listReturnableTransferLedger(params) {
+  return fetchProcurement("GET", "/api/procurement/returnable-transfers/ledger", undefined, params);
+}
+
+export function getOutstandingReturnableBalance(companyA, companyB, materialId) {
+  return fetchProcurement("GET", "/api/procurement/returnable-transfers/balance", undefined, {
+    company_a: companyA, company_b: companyB, material_id: materialId,
+  });
+}
+
 export function slocTransfer(data) {
   return fetchProcurement("POST", "/api/procurement/sloc-transfer", data);
 }

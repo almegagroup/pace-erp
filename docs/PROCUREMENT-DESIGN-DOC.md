@@ -1230,14 +1230,105 @@ that doc too, not just here — flagged, not yet written there.
 - **Tab 1 — CRCP discrepancy + settlement + tracking.** Open to every company with PO12
   access, including a pure Bill-To company (e.g. CMP003) that never physically touches the
   material. This is where today's design work below applies.
-- **Tab 2 — Transfer/Receive (physical movement).** The existing `plant_transfer_order`
-  mechanism (Gate-23, L6 — `pto.handlers.ts`, ONE_STEP/TWO_STEP, 0 real Prod rows today).
-  Access restricted to only the companies an SA-configured allow-list flags as
-  physical-transfer-capable (business owner's own example: Jayashree ↔ Coatings, 4km apart,
-  real Return/transfer physically feasible; companies far apart never get this tab at all,
-  they only ever go through the Invoice/Leg-2 path). **Not designed yet** — config shape
-  (per-pair vs flat company list), and the tab's own screen/flow, are open for a later
-  session.
+- **Tab 2 — Transfer/Receive (physical movement). ✅ FINAL DESIGN LOCKED 2026-10-05**
+  (business owner + design session). Supersedes the "Not designed yet" placeholder below —
+  this is a **new, separate mechanism**, not a retrofit of the old single-line
+  `plant_transfer_order` (Gate-23/L6, `pto.handlers.ts`) — that old ONE_STEP/TWO_STEP +
+  approval-gated table stays untouched (0 real Prod rows, left as-is). Reason for a new
+  table instead of reuse: Tab 2 needs multi-line (add-row) documents, no approval step, and
+  Transfer-Group gating — all three diverge from the old PTO's single-material,
+  DRAFM→APPROVED→ISSUED lifecycle. Movement **mechanics** are reused as-is though — same
+  P303 (Issue → source UNRESTRICTED out, source IN_TRANSIT in) / P305 (Receive → source
+  IN_TRANSIT out, target UNRESTRICTED in) codes the old PTO already uses, cross-company-legal,
+  already seeded in both Dev and Prod `movement_type_master`. No new movement type needed.
+
+  **1. Transfer Group (SA allow-list) — new page "PTO Company" under the SA Operation
+  menu.** Group-based (not pure pairwise), variable size (2..N companies), a company may
+  belong to multiple groups. **Member-set uniqueness (set-equality, size-independent):** no
+  two groups may have the exact same member company-set — checked both at create and at
+  edit (e.g. shrinking a 3-member group down to 2 that then exactly matches another existing
+  2-member group is blocked too). Enforced by a canonical `member_signature` (sorted,
+  comma-joined company-id list) with a **partial unique index** scoped to `is_active = true`
+  — deactivating a group frees its signature for reuse later. Group Name is **mandatory**
+  free text (no auto-generated fallback). Tab 2 access rule: two companies can transact with
+  each other in Tab 2 **iff they are both members of at least one common active group** —
+  no access outside that; non-member pairs must use ordinary STO.
+
+  **2. Tab 2 screen — 3 buttons/sub-tabs: Transfer | Receive | Report.**
+  - **Transfer:** header has a **To Company** dropdown (filtered to the sender's own active
+    Transfer Group membership) and a **"Return"** checkbox. Add-row grid below: per row —
+    Item Type (RM/PM/INT/SFG/FG, filters the Item dropdown) → Item (auto-suggest; External
+    Code auto-fills from Material Master, blank stays blank) → Storage Location (sender's
+    own) → Quantity (hard-blocks on insufficient Unrestricted availability at that location,
+    same severity convention as elsewhere). Same material allowed twice with different
+    storage locations. "Post Transfer" posts P303 for every line in one atomic action
+    (via `post_document`, §8D) — source Unrestricted → source In-Transit (still on the
+    *sender's* own books until Receive, matching old PTO's exact semantics). Checking
+    "Return" tags the header `is_return = true`, meaning this posting will **decrement**
+    the Outstanding Returnable Balance (point 4) instead of incrementing it — no separate
+    movement type, same P303/P305, just a header flag that changes which side of the
+    running balance this transaction nets against.
+  - **Receive:** button shows a **red dot** when the active company has any pending
+    (status = TRANSFERRED, to_company = this company) transfer. Inside: lists each pending
+    transfer's lines, **Material Type and the sender's own Storage Location columns are
+    dropped** (not the receiver's concern) — receiver enters **their own Storage Location**
+    per line, then **Received**. Posts P305 for every line in one atomic action — source
+    In-Transit out + target Unrestricted in, at the **same valuation rate captured at
+    Transfer time** (not re-fetched — identical to old PTO's `receiveTransferHandler`
+    pattern; this is also how the locked WAR rule falls out for free: each independent
+    transfer/return document fetches its OWN source company's current WAR at the moment
+    *it* is posted, so a later reverse-direction return naturally uses the returning
+    company's own current rate, never the original forward transfer's frozen rate — zero
+    special-casing, confirmed to already be the default engine behavior).
+  - **Report:** all-column searchbar + date-range filter + `ErpDenseGrid` (filter + Excel
+    export, IN02-style) — a **transaction-level ledger**, not a balance summary: Transfer
+    Date, Material, External Code, Item Name, From (sender), To (receiver), Quantity,
+    Is Return, Status — reads straight off `stock_ledger`/the header+line tables, always
+    live/current.
+
+  **3. Outstanding Returnable Balance — computed live, no separate summary table.**
+  Created conceptually at **Receive** time (not Issue/Transfer-post time — a cancelled-before-
+  receipt transfer therefore never touches it). Net balance for (Company A, Company B,
+  Material) = Σ(A→B forward transfers, RECEIVED) − Σ(B→A return transfers, is_return=true,
+  RECEIVED). Deliberately **not** surfaced as an IN03 (Current Stock) column — grain
+  mismatch (IN03 is single-company+location+batch physical stock; this is a location-less,
+  company-pair claim) and a real misread risk (a "-3000" in a physical-stock report would
+  read as a stock discrepancy, when the material already physically left and is correctly
+  counted as the receiver's own stock). Instead: shown live as an "Outstanding: X" helper
+  next to the Return checkbox on the Transfer page (on-the-fly sum, no materialized balance
+  row), and Tab 1's own Settlement Invoice path draws down the **same** pool when a
+  receiving company chooses to settle-by-sale instead of physically returning (shared
+  ledger between Tab 1 and Tab 2 — confirmed, not duplicated).
+
+  **4. Six edge cases, all resolved (no schema beyond what's above needed for any of
+  them):**
+  - *Material recode* (returned item's code changed since the original transfer) — reuses
+    the existing `erp_master.material_category_group`/`_member` mechanism; at Return time the
+    Item dropdown surfaces same-group materials (original code, successor code, or both
+    mixed across lines of the same return document) — qty must reconcile against the
+    outstanding balance, exact code match is not required.
+  - *Cancel before receipt* — balance untouched (it was never created, since balance only
+    materializes at Receive).
+  - *Partial return with mixed old/new code* — naturally covered by the material-recode
+    point above; one return document, multiple lines, codes mixed freely.
+  - *Split returns over several transactions* (e.g. 1000+1000+1000 instead of one 3000) —
+    naturally supported since the balance is a running ledger, no special handling.
+  - *Settle via Sale instead of physical return* — Tab 1 Settlement Invoice draws down the
+    same Outstanding Balance pool (point 3).
+  - *Commingling with an ordinary STO shipment* — business owner's own resolution: a Return
+    must always be its own separate Tab 2 document, never folded into a larger STO
+    shipment's quantity, even when physically moving together.
+
+  **5. GST/Invoice treatment** — Delivery Challan only for ordinary Tab 2 Transfer/Receive/
+  Return (CGST Rule 55 — not a "Supply" under Section 31); Tax Invoice is required only if
+  the material is later converted to a Tab 1 Settlement (that conversion is the actual
+  "Supply" event).
+
+  **Deliberately deferred, not part of this lock:** an explicit Cancel/Reversal action for
+  an in-transit (post-Transfer, pre-Receive) posting — the 3-button spec above (Transfer/
+  Receive/Report) did not include one; today a mis-posted Transfer has no UI undo path
+  (stock sits correctly in In-Transit, recoverable only via a manual correction). Flagged
+  for a follow-up pass, same shape as old PTO's own `cancelPTOHandler`/P304, if/when needed.
 - **Why Tab 1 alone can carry CMP003's visibility need (resolves this doc's own earlier "PTO
   has no PO/GRN reference, so a non-source/target company can never see it" concern):** Tab
   1 does not filter by `plant_transfer_order.source_company_id`/`target_company_id`
