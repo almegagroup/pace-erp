@@ -275,7 +275,7 @@ export async function createReturnableTransferHandler(req: Request, ctx: Handler
     } catch {
       return rtErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403);
     }
-    const aclDenied = await requireCrcpWriteAccess(req, ctx, fromCompanyId, "WRITE");
+    const aclDenied = await requireCrcpWriteAccess(req, ctx, fromCompanyId, "WRITE", "PROC_RETURNABLE_TRANSFER");
     if (aclDenied) return aclDenied;
 
     const sharesGroup = await companiesShareActiveGroup(fromCompanyId, toCompanyId);
@@ -463,6 +463,14 @@ export async function receiveReturnableTransferHandler(req: Request, ctx: Handle
     } catch {
       return rtErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403);
     }
+    // Real gap found 2026-10-06: this handler only ever proved company
+    // MEMBERSHIP above, never the caller's WRITE-tier ACL grant at that
+    // specific company -- same shape already fixed for create/settlement
+    // (see crcp_discrepancy.handlers.ts's own header comment).
+    const receiveAclDenied = await requireCrcpWriteAccess(
+      req, ctx, toTrimmedString(headerRow.to_company_id), "WRITE", "PROC_RETURNABLE_TRANSFER",
+    );
+    if (receiveAclDenied) return receiveAclDenied;
 
     const { data: lines, error: linesError } = await serviceRoleClient
       .schema("erp_procurement").from("returnable_transfer_line").select("*").eq("transfer_id", id);
@@ -695,7 +703,7 @@ export async function createReturnableSettlementHandler(req: Request, ctx: Handl
     } catch {
       return rtErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403);
     }
-    const aclDenied = await requireCrcpWriteAccess(req, ctx, fromCompanyId, "WRITE");
+    const aclDenied = await requireCrcpWriteAccess(req, ctx, fromCompanyId, "WRITE", "PROC_RETURNABLE_TRANSFER");
     if (aclDenied) return aclDenied;
 
     const sharesGroup = await companiesShareActiveGroup(fromCompanyId, toCompanyId);

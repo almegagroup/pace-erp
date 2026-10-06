@@ -152,16 +152,21 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   //    Group master is an SA-only "PTO Company" page, own resource code
   //    (SA/GA bypass ACL anyway, but the resource is needed for ACL-MASTER
   //    coverage + menu registration, matching SA_PROD_BATCH_SERIES's own
-  //    convention). Transfer/Receive/Report reuse PROC_PLANT_TRANSFER_LIST,
-  //    same as Tab 1 — one PO12 access grant governs every tab.
+  //    convention). VIEW-tier Transfer/Receive/Report reads reuse
+  //    PROC_PLANT_TRANSFER_LIST (same page as Tab 1, viewing isn't the risk).
+  //    WRITE-tier actions (create/receive/settle) use their OWN resource
+  //    PROC_RETURNABLE_TRANSFER instead -- found 2026-10-06, sharing
+  //    PROC_PLANT_TRANSFER_LIST:WRITE with Tab 1 meant a Logistics grant for
+  //    Tab 2 silently also unlocked Tab 1's Accounts-only Settlement Invoice/
+  //    Cost Component Entry actions (CLAUDE.md bug pattern #6).
   "GET:/api/procurement/transfer-groups":             { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP",   action: "VIEW"  },
   "POST:/api/procurement/transfer-groups":            { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP",   action: "WRITE" },
   "GET:/api/procurement/transfer-groups/partners":    { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
-  "POST:/api/procurement/returnable-transfers":       { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
+  "POST:/api/procurement/returnable-transfers":       { skipAcl: false, resourceCode: "PROC_RETURNABLE_TRANSFER", action: "WRITE" },
   "GET:/api/procurement/returnable-transfers/pending": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "GET:/api/procurement/returnable-transfers/ledger":  { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "GET:/api/procurement/returnable-transfers/balance": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
-  "POST:/api/procurement/returnable-transfers/settlements": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" },
+  "POST:/api/procurement/returnable-transfers/settlements": { skipAcl: false, resourceCode: "PROC_RETURNABLE_TRANSFER", action: "WRITE" },
   "GET:/api/procurement/returnable-transfers/settlements":  { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
 
   // ── Procurement: RTV / Debit Note / Exchange ──────────────────────────────
@@ -1125,7 +1130,7 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/returnable-transfers\/[^/]+\/receive$/,
-    methods: { POST: { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "WRITE" } },
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_RETURNABLE_TRANSFER", action: "WRITE" } },
   },
   {
     pattern: /^\/api\/procurement\/returnable-transfers\/[^/]+$/,
