@@ -76,10 +76,17 @@ function toMap<T extends JsonRecord>(rows: T[]): Map<string, T> {
 // WRITE/EDIT. Mirrors ac01.handlers.ts's own canWriteAC01()/
 // requireAC01WriteAccess() (same gap, same fix shape, found there
 // 2026-08-11) -- flagged live by scripts/company-scope-write-acl-guard.mjs.
+// resourceCode defaults to PROC_PLANT_TRANSFER_LIST (Tab 1's own resource).
+// PO12 Tab 2 (returnable_transfer.handlers.ts) passes "PROC_RETURNABLE_TRANSFER"
+// instead -- Tab 1 and Tab 2 used to share this one resource_code, which meant
+// granting a Logistics capability WRITE on Tab 2 silently also unlocked Tab 1's
+// Accounts-only Settlement/Cost-Component actions (CLAUDE.md bug pattern #6 --
+// "one resource code reused for two different actions"). Split 2026-10-06.
 export async function canWriteCrcp(
   ctx: ProcurementHandlerContext,
   companyId: string,
   actionCode: "WRITE" | "EDIT" = "WRITE",
+  resourceCode: string = "PROC_PLANT_TRANSFER_LIST",
 ): Promise<boolean> {
   if (ctx.context.isAdmin) return true;
   if (!companyId) return false;
@@ -125,7 +132,7 @@ export async function canWriteCrcp(
     authUserId: ctx.auth_user_id,
     companyId,
     workContextIds,
-    resourceCode: "PROC_PLANT_TRANSFER_LIST",
+    resourceCode,
     actionCode,
   });
   if (error || !data) return false;
@@ -137,8 +144,9 @@ export async function requireCrcpWriteAccess(
   ctx: ProcurementHandlerContext,
   companyId: string,
   actionCode: "WRITE" | "EDIT" = "WRITE",
+  resourceCode: string = "PROC_PLANT_TRANSFER_LIST",
 ): Promise<Response | null> {
-  const allowed = await canWriteCrcp(ctx, companyId, actionCode);
+  const allowed = await canWriteCrcp(ctx, companyId, actionCode, resourceCode);
   if (allowed) return null;
   return crcpErrorResponse(
     req, ctx, "CRCP_WRITE_FORBIDDEN", 403,
