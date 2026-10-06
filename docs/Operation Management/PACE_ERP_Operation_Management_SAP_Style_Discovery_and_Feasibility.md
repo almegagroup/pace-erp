@@ -24743,7 +24743,7 @@ not enough:
 | Attempted entry | Required English message / outcome |
 |---|---|
 | MTS Process PO on Production Edit | `MTS Process POs cannot be edited. Reject at QA Approval for a non-current stroke, or reject at Verify once the PO is Verify-ready.` |
-| MTS Process PO on Production Final | `MTS Process POs cannot be finalized here. Open MTS Verify to complete the entire MTS cycle.` |
+| MTS Process PO on Production Final | **Current stroke / already FINAL:** `MTS Process POs cannot be finalized here. Complete the MTS cycle from MTS Verify (PR12).` **Non-current stroke at STANDARD:** `This non-current-stroke MTS Process PO is waiting for Quality Approval. Open Production QA Queue (PR16); after Quality approves the Page-6 plan, it will be ready in MTS Verify (PR12).` |
 | Linked PMTS Packing PO on Production Edit | `This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be edited or cancelled separately. Complete the MTS cycle from the parent Process PO in Verify.` |
 | Linked PMTS Packing PO on Production Final/Correction | `This PMTS Packing PO is controlled by its parent MTS Process PO. It cannot be finalized or corrected separately. Complete the MTS cycle from the parent Process PO in Verify.` |
 
