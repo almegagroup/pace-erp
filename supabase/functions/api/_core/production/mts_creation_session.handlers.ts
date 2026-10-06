@@ -505,7 +505,13 @@ async function prepareRmLines(session: SessionHeader, clientGroups: unknown): Pr
       choices = rows.map((row) => ({ actual_material_id: toTrimmedString(row.actual_material_id), actual_qty: Number(parseNonNegativeNumber(row.actual_qty) ?? 0) }));
       if (choices.some((row) => !row.actual_material_id || !allowed.has(row.actual_material_id) || seen.has(row.actual_material_id) || !seen.add(row.actual_material_id))) throw new Error("PROD_MTS_RM_MATERIAL_INVALID");
     } else {
-      const selected = toTrimmedString(suppliedGroup?.actual_material_id);
+      // A location-level RM line with no registered alternate has exactly one
+      // possible issue material.  Do not force the client to submit a fake
+      // manual selection for it; the formulation material is authoritative.
+      const manualMaterialSelectionRequired = group.manual_material_selection_required !== false;
+      const selected = manualMaterialSelectionRequired
+        ? toTrimmedString(suppliedGroup?.actual_material_id)
+        : toTrimmedString(group.stroke_line_material_id);
       if (!selected || !(group.group_member_ids as string[]).includes(selected)) throw new Error("PROD_MTS_RM_MANUAL_PICK_REQUIRED");
       choices = [{ actual_material_id: selected, actual_qty: Number(group.standard_qty ?? 0) }];
     }

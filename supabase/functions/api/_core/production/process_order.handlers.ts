@@ -2767,6 +2767,10 @@ type MtsPlanGroup = {
   stroke_line_id: string;
   stroke_line_material_id: string;
   auto_derive_applicable: boolean;
+  // A non-machine-tracked (for example R001) line only needs an operator
+  // selection when there is a real alternate to choose from.  A plain
+  // formulation line with no alternate is deterministic: issue that item.
+  manual_material_selection_required: boolean;
   storage_location_id: string;
   dosage_pct: number | null;
   standard_qty: number;
@@ -2939,6 +2943,7 @@ export async function getMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerCo
           stroke_line_id: strokeLineId,
           stroke_line_material_id: formulationMaterialId,
           auto_derive_applicable: true,
+          manual_material_selection_required: false,
           storage_location_id: toTrimmedString(firstLine.issue_sloc_id) || "",
           dosage_pct: firstLine.dosage_pct === null || firstLine.dosage_pct === undefined ? null : Number(firstLine.dosage_pct),
           standard_qty: Number(firstLine.planned_qty ?? 0),
@@ -3075,6 +3080,7 @@ export async function buildMtsMaterialPlanGroupsForOrder(
       stroke_line_id: strokeLineId,
       stroke_line_material_id: formulationMaterialId,
       auto_derive_applicable: true,
+      manual_material_selection_required: false,
       storage_location_id: isForeignMachine ? String(machineStorageLocationId) : String(line.default_storage_location_id),
       dosage_pct: hasDosage ? dosagePct : null,
       standard_qty: standardQty,
@@ -3111,10 +3117,12 @@ export async function buildMtsMaterialPlanGroupsForOrder(
       const locationId = String(line.default_storage_location_id);
       const alternateIds = allowedAlternateMap.get(strokeLineId) ?? [];
       const candidateIds = [formulationMaterialId, ...alternateIds];
+      const manualMaterialSelectionRequired = alternateIds.length > 0;
       groups.push({
         stroke_line_id: strokeLineId,
         stroke_line_material_id: formulationMaterialId,
         auto_derive_applicable: false,
+        manual_material_selection_required: manualMaterialSelectionRequired,
         storage_location_id: locationId,
         dosage_pct: hasDosage ? dosagePct : null,
         standard_qty: standardQty,
@@ -3125,7 +3133,12 @@ export async function buildMtsMaterialPlanGroupsForOrder(
           is_formulation_line: candidateId === formulationMaterialId,
           dosage_pct: candidateId === formulationMaterialId ? (hasDosage ? dosagePct : null) : null,
           planned_qty: candidateId === formulationMaterialId ? standardQty : 0,
-          actual_qty: 0,
+          // R001/non-machine-tracked does not mean "zero issue".  If there
+          // is no alternate group, the only valid physical item is the
+          // formulation material and its whole Standard Qty is committed.
+          // Keep a zero preview solely while a genuine manual choice awaits
+          // the operator.
+          actual_qty: manualMaterialSelectionRequired ? 0 : standardQty,
           available_qty: availabilityByKey.get(buildAvailabilityKey(candidateId, locationId)) ?? 0,
         })),
         group_member_ids: candidateIds,
@@ -3257,9 +3270,13 @@ export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerC
           finalRows.push({ ...row, stroke_line_id: group.stroke_line_id, storage_location_id: group.storage_location_id });
         }
       } else {
-        // R001-style: client MUST supply exactly one manual pick.
+        // R001-style: a real alternate group requires exactly one manual
+        // pick. With no alternate there is nothing to decide, so the
+        // formulation material is selected server-side.
         const override = bodyGroupsByStrokeLine.get(group.stroke_line_id);
-        const chosenMaterialId = toTrimmedString(override?.actual_material_id);
+        const chosenMaterialId = group.manual_material_selection_required
+          ? toTrimmedString(override?.actual_material_id)
+          : group.stroke_line_material_id;
         if (!chosenMaterialId || !group.group_member_ids.includes(chosenMaterialId)) {
           return poErr(req, ctx, "PROD_PO_MTS_PLAN_MATERIAL_REQUIRED", 422, `An Actual Material must be selected for ${group.stroke_line_material_id}`);
         }
