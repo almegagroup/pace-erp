@@ -37,6 +37,21 @@ function toTrimmedString(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+// Database reads can contain a nullable relation FK (for example a direct GRN
+// with no gate-entry line). Never turn that missing UUID into the literal
+// string "null": PostgREST would pass it to `uuid = any(...)` and reject the
+// complete AC01 list request with 22P02.
+function toRelationId(value: unknown): string {
+  const id = toTrimmedString(value);
+  return id && id.toLowerCase() !== "null" && id.toLowerCase() !== "undefined"
+    ? id
+    : "";
+}
+
+function uniqueRelationIds(values: unknown[]): string[] {
+  return [...new Set(values.map(toRelationId).filter(Boolean))];
+}
+
 function parsePositiveInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -613,7 +628,9 @@ export async function listAC01GRNsHandler(
       const { data: itcOwnerLcRows } = await serviceRoleClient
         .schema("erp_procurement").from("landed_cost")
         .select("grn_id").eq("itc_owner_company_id", companyId).not("grn_id", "is", null);
-      itcOwnerGrnIds = [...new Set(((itcOwnerLcRows ?? []) as JsonRecord[]).map((row) => String(row.grn_id)))];
+      itcOwnerGrnIds = uniqueRelationIds(
+        ((itcOwnerLcRows ?? []) as JsonRecord[]).map((row) => row.grn_id),
+      );
       // §8E guard -- this list is inlined into a single .or() URL below, not
       // read via fetchInChunks' .in(), so cap it defensively. A company
       // being the CRCP ITC owner on hundreds of GRNs is not expected for
@@ -674,17 +691,15 @@ export async function listAC01GRNsHandler(
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    const materialIds = [...new Set(rows.map((row) => String(row.material_id)).filter(Boolean))];
-    const vendorIds = [...new Set(rows.map((row) => String(row.vendor_id)).filter(Boolean))];
-    const companyIds = [...new Set(rows.map((row) => String(row.company_id)).filter(Boolean))];
-    const poIds = [...new Set(rows.map((row) => String(row.po_id)).filter(Boolean))];
-    const grnIds = rows.map((row) => String(row.id));
-    const gateEntryLineIds = [...new Set(rows.map((row) => String(row.gate_entry_line_id)).filter(Boolean))];
-    const transporterIds = [...new Set(
-      rows.flatMap((row) => [row.transporter_id, row.last_mile_transporter_id])
-        .filter((id): id is string => Boolean(id))
-        .map((id) => String(id)),
-    )];
+    const materialIds = uniqueRelationIds(rows.map((row) => row.material_id));
+    const vendorIds = uniqueRelationIds(rows.map((row) => row.vendor_id));
+    const companyIds = uniqueRelationIds(rows.map((row) => row.company_id));
+    const poIds = uniqueRelationIds(rows.map((row) => row.po_id));
+    const grnIds = uniqueRelationIds(rows.map((row) => row.id));
+    const gateEntryLineIds = uniqueRelationIds(rows.map((row) => row.gate_entry_line_id));
+    const transporterIds = uniqueRelationIds(
+      rows.flatMap((row) => [row.transporter_id, row.last_mile_transporter_id]),
+    );
 
     const [materials, vendors, companies, purchaseOrders, landedCosts, qaDocuments, csnRows, transporters, splitIntoRows] = await Promise.all([
       fetchInChunks<JsonRecord>(materialIds, (chunk) =>
@@ -722,11 +737,11 @@ export async function listAC01GRNsHandler(
           .select("grn_number, split_source_grn_id").in("split_source_grn_id", chunk)),
     ]);
 
-    const paymentTermIds = [...new Set(purchaseOrders.map((po) => String(po.payment_term_id)).filter(Boolean))];
-    const csnIds = [...new Set(csnRows.map((row) => String(row.csn_id)).filter(Boolean))];
-    const qaDocumentIds = qaDocuments.map((doc) => String(doc.id));
+    const paymentTermIds = uniqueRelationIds(purchaseOrders.map((po) => po.payment_term_id));
+    const csnIds = uniqueRelationIds(csnRows.map((row) => row.csn_id));
+    const qaDocumentIds = uniqueRelationIds(qaDocuments.map((doc) => doc.id));
 
-    const lcIds = [...new Set(landedCosts.map((lc) => String(lc.id)).filter(Boolean))];
+    const lcIds = uniqueRelationIds(landedCosts.map((lc) => lc.id));
 
     const [paymentTerms, consignmentNotes, decisionLines, costLineRows, deductionLineRows] = await Promise.all([
       fetchInChunks<JsonRecord>(paymentTermIds, (chunk) =>
@@ -837,7 +852,7 @@ export async function listAC01GRNsHandler(
       splitIntoGrnNumbersMap.get(key)!.push(grnNumber);
     }
 
-    const settlementInvoiceIds = [...new Set(rows.map((row) => String(row.settlement_invoice_id ?? "")).filter(Boolean))];
+    const settlementInvoiceIds = uniqueRelationIds(rows.map((row) => row.settlement_invoice_id));
     const settlementInvoiceRows = settlementInvoiceIds.length > 0
       ? await fetchInChunks<JsonRecord>(settlementInvoiceIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("settlement_invoice")
