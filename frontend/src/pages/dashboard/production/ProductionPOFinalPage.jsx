@@ -372,7 +372,10 @@ function PackingPoFinalTab() {
       toast("Packing PO finalized.");
       qc.invalidateQueries({ queryKey: ["pack-orders"] });
       qc.invalidateQueries({ queryKey: ["packing-final-detail", po.id] });
-      detailQ.refetch();
+      // Saving completes the current work item. Keep COR6 correction as an
+      // explicit PO-number lookup, rather than exposing it as the next screen
+      // merely because this PO is now FINAL.
+      resetSelection(effectiveCompanyId);
     } catch (error) {
       toast(PACKING_ERR(error), "error");
     } finally {
@@ -1305,6 +1308,7 @@ function ProcessPoFinalTab() {
       toast(completesInOneStep ? "Process PO completed and stock posted." : "Process PO saved as FINAL.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-final-detail", po.id] });
+      resetSelection(effectiveCompanyId);
     } catch (error) {
       toast(error.message || "Final save failed.", "error");
     } finally {

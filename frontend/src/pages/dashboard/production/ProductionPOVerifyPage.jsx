@@ -605,6 +605,7 @@ export default function ProductionPOVerifyPage() {
       toast("Process PO verified and stock posted.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
+      resetSelection(effectiveCompanyId);
     } catch (error) {
       toast(error.message || "Verify failed.", "error");
     } finally {
@@ -628,7 +629,7 @@ export default function ProductionPOVerifyPage() {
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
-      detailQ.refetch();
+      resetSelection(effectiveCompanyId);
     } catch (error) {
       toast(error.message || "MTS Verify failed.", "error");
     } finally {
