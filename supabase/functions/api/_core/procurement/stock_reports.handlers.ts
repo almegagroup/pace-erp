@@ -2106,13 +2106,21 @@ export async function getCurrentStockMachineWiseHandler(
           .in("storage_location_id", effectiveStorageLocationIds)
           .order("id", { ascending: true })
           .range(from, to);
-        if (materialIds.length > 0) query = query.in("material_id", materialIds);
         if (batchNumbers.length > 0) query = query.in("batch_number", batchNumbers);
         return query;
       });
     } catch {
       return reportErrorResponse(req, ctx, "CURRENT_STOCK_MACHINE_WISE_FETCH_FAILED", 500, "Unable to fetch machine-wise current stock.");
     }
+
+    // machine_stock_log is MTS-location-only and deliberately small, whereas
+    // material_master may contain hundreds of allowed IDs. Sending the full
+    // material universe in PostgREST's `material_id=in.(...)` makes the GET
+    // URL exceed the gateway limit (observed on IN03 for CMP005), turning an
+    // otherwise valid empty/result query into a 400. Keep the location query
+    // bounded and apply the resolved material-type scope in memory instead.
+    const allowedMaterialIds = new Set(materialIds);
+    const scopedLogData = logData.filter((row) => allowedMaterialIds.has(toTrimmedString(row.material_id)));
 
     type BalanceAgg = {
       materialId: string;
@@ -2122,7 +2130,7 @@ export async function getCurrentStockMachineWiseHandler(
       qty: number;
     };
     const balances = new Map<string, BalanceAgg>();
-    for (const row of logData) {
+    for (const row of scopedLogData) {
       const materialId = toTrimmedString(row.material_id);
       const storageLocationId = toTrimmedString(row.storage_location_id);
       const machineId = toTrimmedString(row.machine_id) || null;
