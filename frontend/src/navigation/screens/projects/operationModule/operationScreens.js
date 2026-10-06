@@ -424,6 +424,36 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // PO12 Settlement + print, and PO12 Tab 2's own Delivery Challan print --
+  // same bug shape as PROC_DO_EDIT/PROC_SALES_RETURN_CREATE above. These
+  // buttons only called plain navigate(), never openScreen(), so the active
+  // screen stayed PROC_PLANT_TRANSFER_LIST while the URL moved -- and
+  // NavigationStackBridge kept snapping the URL straight back (flicker,
+  // no console error). Found live in Prod 2026-10-06 (business owner) --
+  // the routeIndex.js companion-route fix (commit 76b96f3) only handled the
+  // ACL-authorization layer, same miss as the SO05 incident.
+  PROC_PLANT_TRANSFER_SETTLEMENT: {
+    screen_code: "PROC_PLANT_TRANSFER_SETTLEMENT",
+    route: "/dashboard/procurement/transfer/settlement",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+  PROC_PLANT_TRANSFER_SETTLEMENT_PRINT: {
+    screen_code: "PROC_PLANT_TRANSFER_SETTLEMENT_PRINT",
+    route: "/dashboard/procurement/settlements/:id/print",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+  PROC_RETURNABLE_TRANSFER_PRINT: {
+    screen_code: "PROC_RETURNABLE_TRANSFER_PRINT",
+    route: "/dashboard/procurement/returnable-transfers/:id/print",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_STOCK_LEDGER: {
     screen_code: "PROC_STOCK_LEDGER",
     route: "/dashboard/procurement/reports/stock-ledger",

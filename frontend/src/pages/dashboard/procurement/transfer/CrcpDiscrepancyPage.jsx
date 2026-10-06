@@ -7,13 +7,15 @@
  */
 
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listCrcpDiscrepancy } from "../procurementApi.js";
 
 function formatQty(value) {
@@ -80,7 +82,6 @@ const SEARCH_FIELDS = [
 ];
 
 export default function CrcpDiscrepancyPage() {
-  const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
@@ -126,7 +127,7 @@ export default function CrcpDiscrepancyPage() {
         {
           key: "settlement",
           label: "Settlement",
-          onClick: () => navigate("/dashboard/procurement/transfer/settlement"),
+          onClick: () => openScreen(OPERATION_SCREENS.PROC_PLANT_TRANSFER_SETTLEMENT.screen_code),
         },
         {
           key: "export",

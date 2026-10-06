@@ -8,7 +8,6 @@
  */
 
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
@@ -16,6 +15,8 @@ import TransactionCompanySelector from "../../../../components/inputs/Transactio
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listMaterials, listStorageLocations } from "../../om/omApi.js";
@@ -137,7 +138,6 @@ function TransferLineRow({ line, companyId, onChange, onRemove }) {
 function TransferTab({ companyId }) {
   const qc = useQueryClient();
   const [toCompanyId, setToCompanyId] = useState("");
-  const navigate = useNavigate();
   const [isReturn, setIsReturn] = useState(false);
   const [remarks, setRemarks] = useState("");
   const [lines, setLines] = useState([createEmptyLine()]);
@@ -281,7 +281,7 @@ function TransferTab({ companyId }) {
           <span>Posted {lastTransfer.transfer_number}.</span>
           <button
             type="button"
-            onClick={() => navigate(`/dashboard/procurement/returnable-transfers/${lastTransfer.id}/print`)}
+            onClick={() => openScreen(OPERATION_SCREENS.PROC_RETURNABLE_TRANSFER_PRINT.screen_code, { context: { id: lastTransfer.id } })}
             className="border border-emerald-600 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-900"
           >
             Print Delivery Challan
@@ -424,7 +424,6 @@ function ReceiveDetail({ transferId, companyId, onReceived }) {
 }
 
 function ReceiveTab({ companyId }) {
-  const navigate = useNavigate();
   const qc = useQueryClient();
   const [expandedId, setExpandedId] = useState(null);
   const pendingQuery = useQuery({
@@ -455,7 +454,7 @@ function ReceiveTab({ companyId }) {
                 <button type="button" onClick={() => setExpandedId((current) => (current === row.id ? null : row.id))} className="border border-sky-300 px-2 py-1 text-[11px] font-semibold text-sky-700">
                   {expandedId === row.id ? "Hide" : "Open"}
                 </button>
-                <button type="button" onClick={() => navigate(`/dashboard/procurement/returnable-transfers/${row.id}/print`)} className="border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                <button type="button" onClick={() => openScreen(OPERATION_SCREENS.PROC_RETURNABLE_TRANSFER_PRINT.screen_code, { context: { id: row.id } })} className="border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700">
                   Print
                 </button>
               </div>
