@@ -217,6 +217,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [rateConfirmed, setRateConfirmed] = useState(_saved.rateConfirmed ?? true);
   const [invoiceRate, setInvoiceRate] = useState(_saved.invoiceRate ?? "");
   const [gstPct, setGstPct] = useState(_saved.gstPct ?? "");
+  const isBulk = geLine.delivery_type === "BULK";
   const [transporterId, setTransporterId] = useState(_saved.transporterId ?? (geLine.csn_transporter_id ?? ""));
   const [transporterSearch, setTransporterSearch] = useState("");
   const [transporterName, setTransporterName] = useState(_saved.transporterName ?? (geLine.csn_transporter_name ?? ""));
@@ -225,7 +226,14 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [lastMileTransporterSearch, setLastMileTransporterSearch] = useState("");
   const [lastMileTransporterName, setLastMileTransporterName] = useState(_saved.lastMileTransporterName ?? "");
   const [lastMileTransporterHighlight, setLastMileTransporterHighlight] = useState(-1);
-  const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number || geLine.bulk_lr_number || ""));
+  // Bulk has no CSN. Its delivery-document identifiers are captured by Stores
+  // on the GE line and must arrive here unchanged, while still allowing the
+  // GRN user to correct them before posting.
+  const [deliveryChallanNumber, setDeliveryChallanNumber] = useState(_saved.deliveryChallanNumber ?? (isBulk ? (geLine.bulk_challan_number ?? "") : ""));
+  const [deliveryChallanDate, setDeliveryChallanDate] = useState(_saved.deliveryChallanDate ?? (isBulk ? (geLine.bulk_challan_date ?? "") : ""));
+  const [containerNumber, setContainerNumber] = useState(_saved.containerNumber ?? (isBulk ? (geLine.bulk_container_number ?? "") : ""));
+  const [ewaybillNumber, setEwaybillNumber] = useState(_saved.ewaybillNumber ?? (isBulk ? (geLine.bulk_ewaybill_number ?? "") : ""));
+  const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (isBulk ? (geLine.bulk_lr_number ?? "") : (geLine.csn_lr_number ?? "")));
   const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
   const [hsnCode, setHsnCode] = useState(_saved.hsnCode ?? (geLine.hsn_code ?? ""));
   const [batchLotNumber, setBatchLotNumber] = useState(_saved.batchLotNumber ?? "");
@@ -347,6 +355,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         rateConfirmed, invoiceRate, gstPct,
         transporterId, transporterName,
         lastMileTransporterId, lastMileTransporterName,
+        deliveryChallanNumber, deliveryChallanDate, containerNumber, ewaybillNumber,
         lrNumber, lrDate,
         batchLotNumber, perPackQty,
         expiryType, expiryDate, shelfLifeMonths,
@@ -401,6 +410,12 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         last_mile_transporter_id: lastMileTransporterId || null,
         lr_number: lrNumber || null,
         lr_date: lrDate || null,
+        ...(isBulk ? {
+          bulk_challan_number: deliveryChallanNumber || null,
+          bulk_challan_date: deliveryChallanDate || null,
+          bulk_container_number: containerNumber || null,
+          bulk_ewaybill_number: ewaybillNumber || null,
+        } : {}),
         batch_lot_number: batchLotNumber || null,
         per_pack_qty: perPackQty ? Number(perPackQty) : null,
         expiry_type: expiryType,
@@ -736,7 +751,11 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         {/* Tab 5 — Transporter */}
         {activeTabName === "Transporter" && (
           <ErpSectionCard eyebrow="Transporter" title="Logistics">
-            <p className="mb-3 text-xs text-slate-500">Pre-filled from CSN. Changes here sync back to CSN on post.</p>
+            <p className="mb-3 text-xs text-slate-500">
+              {isBulk
+                ? "Pre-filled from the Bulk Gate Entry recorded by Stores. Review and edit before posting the GRN."
+                : "Pre-filled from CSN. Changes here sync back to CSN on post."}
+            </p>
             <div className="grid gap-3 md:grid-cols-3">
               <div className="md:col-span-3">
                 <ErpDenseFormRow label="Transporter">
@@ -868,6 +887,26 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                 <input type="date" value={lrDate} onChange={(e) => setLrDate(e.target.value)}
                   className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
               </ErpDenseFormRow>
+              {isBulk && (
+                <>
+                  <ErpDenseFormRow label="Delivery challan number">
+                    <input type="text" value={deliveryChallanNumber} onChange={(e) => setDeliveryChallanNumber(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="Delivery challan date">
+                    <input type="date" value={deliveryChallanDate} onChange={(e) => setDeliveryChallanDate(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="Container number">
+                    <input type="text" value={containerNumber} onChange={(e) => setContainerNumber(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="E-way bill number">
+                    <input type="text" value={ewaybillNumber} onChange={(e) => setEwaybillNumber(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                </>
+              )}
             </div>
           </ErpSectionCard>
         )}

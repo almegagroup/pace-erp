@@ -67,6 +67,44 @@ function addDays(input: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+// An invoice-later Bulk GRN can be commercially confirmed from Invoice
+// Mapping before an Accounts user opens AC01. The mapping stores both the
+// invoice rate and the confirmation flag. Prefer the explicit confirmed rate,
+// then this proven mapping value (which also repairs old mapped rows), then
+// the original GRN rate.
+function effectiveCommercialRate(grn: JsonRecord): number {
+  if (grn.confirmed_rate != null) return Number(grn.confirmed_rate);
+  if (grn.rate_confirmed === true && grn.invoice_rate != null) return Number(grn.invoice_rate);
+  return grn.grn_rate != null ? Number(grn.grn_rate) : 0;
+}
+
+function gstStateCode(gstNumber: unknown): string {
+  const code = toTrimmedString(gstNumber).slice(0, 2);
+  return /^\d{2}$/.test(code) ? code : "";
+}
+
+// Material GST must be visible separately from landed-cost GST. The split is
+// only derived where both registered GSTIN state codes are present; guessing
+// CGST/SGST versus IGST from an incomplete master would create a false tax
+// record, so such receipts retain the total GST with an UNDETERMINED split.
+function computeMaterialTaxBreakup(
+  taxableValue: number,
+  gstPct: number,
+  vendor: JsonRecord | undefined,
+  company: JsonRecord | undefined,
+): { gstType: "CGST_SGST" | "IGST" | "UNDETERMINED"; gstAmount: number; cgstAmount: number | null; sgstAmount: number | null; igstAmount: number | null } {
+  const gstAmount = Number((taxableValue * gstPct / 100).toFixed(4));
+  if (gstAmount === 0) return { gstType: "UNDETERMINED", gstAmount, cgstAmount: 0, sgstAmount: 0, igstAmount: 0 };
+  const vendorState = gstStateCode(vendor?.gst_number);
+  const companyState = gstStateCode(company?.gst_number);
+  if (!vendorState || !companyState) return { gstType: "UNDETERMINED", gstAmount, cgstAmount: null, sgstAmount: null, igstAmount: null };
+  if (vendorState === companyState) {
+    const cgstAmount = Number((gstAmount / 2).toFixed(4));
+    return { gstType: "CGST_SGST", gstAmount, cgstAmount, sgstAmount: Number((gstAmount - cgstAmount).toFixed(4)), igstAmount: 0 };
+  }
+  return { gstType: "IGST", gstAmount, cgstAmount: 0, sgstAmount: 0, igstAmount: gstAmount };
+}
+
 // Ported from csn.handlers.ts's enrichTrackerRows() -- same calculation, same
 // reference_date_type codes. Found live 2026-08-21: this was wrongly marked
 // "deferred until AC02's Vendor Ledger exists" -- that deferral only applies
@@ -124,11 +162,7 @@ function computeActualPaymentDate(
 // (ge_qty) at GRN creation and user-editable in the AC01 drawer thereafter;
 // received_qty (actual physical stock) is never touched by any of this.
 function computeLandedCostPerUnit(grn: JsonRecord, landedCostTotal: number): number {
-  const effectiveRate = grn.confirmed_rate != null
-    ? Number(grn.confirmed_rate)
-    : grn.grn_rate != null
-      ? Number(grn.grn_rate)
-      : 0;
+  const effectiveRate = effectiveCommercialRate(grn);
   const consideredQty = grn.considered_qty != null ? Number(grn.considered_qty) : Number(grn.received_qty ?? 0);
   const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
   const hasPackConversion = perPackQty != null && perPackQty > 0;
@@ -159,11 +193,7 @@ function computeSuggestedPayables(
   costLines: JsonRecord[],
   deductionLines: JsonRecord[],
 ): { vendor: number; transporter: number; lastMile: number; cha: number } {
-  const effectiveRate = grn.confirmed_rate != null
-    ? Number(grn.confirmed_rate)
-    : grn.grn_rate != null
-      ? Number(grn.grn_rate)
-      : 0;
+  const effectiveRate = effectiveCommercialRate(grn);
   // Considered Qty (business owner, 2026-08-26), not received_qty -- see
   // computeLandedCostPerUnit's comment above.
   const consideredQty = grn.considered_qty != null ? Number(grn.considered_qty) : Number(grn.received_qty ?? 0);
@@ -503,9 +533,7 @@ function buildListRow(
     ? transporterMap.get(String(grn.last_mile_transporter_id))
     : null;
 
-  const confirmedRate = grn.confirmed_rate != null ? Number(grn.confirmed_rate) : null;
-  const grnRate = grn.grn_rate != null ? Number(grn.grn_rate) : null;
-  const effectiveRate = confirmedRate ?? grnRate ?? 0;
+  const effectiveRate = effectiveCommercialRate(grn);
   const landedCostTotal = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
   const invoiceQty = grn.ge_qty != null ? Number(grn.ge_qty) : Number(grn.received_qty ?? 0);
   // GRN/GE quantities are stored in the transaction (PO) UOM, while AC01's
@@ -525,6 +553,12 @@ function buildListRow(
   const consideredQty = grn.considered_qty != null ? Number(grn.considered_qty) : invoiceQty;
   const costPerUnit = computeLandedCostPerUnit(grn, landedCostTotal);
   const vendorPayable = effectiveRate * consideredQty;
+  const materialTax = computeMaterialTaxBreakup(
+    vendorPayable,
+    Number(grn.gst_pct ?? 0),
+    vendor,
+    company,
+  );
   const referenceType = paymentTerms?.reference_date_type as JsonRecord | JsonRecord[] | undefined;
   const referenceTypeCode = Array.isArray(referenceType) ? referenceType[0]?.code : referenceType?.code;
 
@@ -575,6 +609,12 @@ function buildListRow(
     currency: "INR",
     gst_pct: grn.gst_pct,
     taxable_value: Number((effectiveRate * consideredQty).toFixed(4)),
+    material_gst_amount: materialTax.gstAmount,
+    material_gst_type: materialTax.gstType,
+    material_cgst_amount: materialTax.cgstAmount,
+    material_sgst_amount: materialTax.sgstAmount,
+    material_igst_amount: materialTax.igstAmount,
+    invoice_total_value: Number((vendorPayable + materialTax.gstAmount).toFixed(4)),
     landed_cost_total: landedCostTotal,
     // §126.x "smart" per-component breakdown -- keyed by cost_type (e.g.
     // "FREIGHT") or "deduction:<deduction_type_id>". Only components that
@@ -596,16 +636,17 @@ function buildListRow(
     cha_payable_override: grn.cha_payable_override != null ? Number(grn.cha_payable_override) : null,
     payment_days: paymentTerms?.credit_days ?? null,
     payment_type: paymentTerms?.name ?? null,
-    // Revised Payment Date (manual override) always wins when set; otherwise
-    // the calculated due-date from payment terms. TRUE "date actually paid"
-    // still needs AC02's Vendor Ledger — that's payment_status below, not this.
+    // This is the original contractual payment/due date from PO terms. A
+    // revised date is displayed separately; it must never overwrite history.
+    // TRUE "date actually paid" still needs AC02's Vendor Ledger — that's
+    // payment_status below, not this.
     // REVERSED (incl. §3.9.5 Split originals) is never payment-relevant —
     // the receipt itself no longer stands, so no due date applies.
-    actual_payment_date: isReversed ? null : (grn.revised_payment_date ?? computeActualPaymentDate(
+    actual_payment_date: isReversed ? null : computeActualPaymentDate(
       grn,
       toUpperTrimmedString(referenceTypeCode),
       Number(paymentTerms?.credit_days ?? 0),
-    )),
+    ),
     revised_payment_date: grn.revised_payment_date ?? null,
     freight_type: po?.freight_term ?? null,
     transporter_id: grn.transporter_id ?? null,
@@ -756,10 +797,10 @@ export async function listAC01GRNsHandler(
           .select("id, material_name, external_code, base_uom_code").in("id", chunk)),
       fetchInChunks<JsonRecord>(vendorIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("vendor_master")
-          .select("id, vendor_name").in("id", chunk)),
+          .select("id, vendor_name, gst_number").in("id", chunk)),
       fetchInChunks<JsonRecord>(companyIds, (chunk) =>
         serviceRoleClient.schema("erp_master").from("companies")
-          .select("id, company_code").in("id", chunk)),
+          .select("id, company_code, gst_number").in("id", chunk)),
       fetchInChunks<JsonRecord>(poIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("purchase_order")
           .select("id, payment_term_id, freight_term").in("id", chunk)),
@@ -1012,15 +1053,17 @@ export async function getAC01GRNHandler(
     // at all (only raw material_id/vendor_id sat unused on `grn`), unlike the
     // list row which already resolves these via buildListRow. Found live
     // 2026-08-26 (business owner): fetched INDEPENDENT of each other (§8B).
-    const [materialResp, vendorResp] = await Promise.all([
+    const [materialResp, vendorResp, companyResp] = await Promise.all([
       grn.material_id
         ? serviceRoleClient.schema("erp_master").from("material_master")
           .select("material_name, external_code").eq("id", String(grn.material_id)).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
       grn.vendor_id
         ? serviceRoleClient.schema("erp_master").from("vendor_master")
-          .select("vendor_name").eq("id", String(grn.vendor_id)).maybeSingle()
+          .select("vendor_name, gst_number").eq("id", String(grn.vendor_id)).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
+      serviceRoleClient.schema("erp_master").from("companies")
+        .select("gst_number").eq("id", String(grn.company_id)).maybeSingle(),
     ]);
     const materialName = (materialResp.data as JsonRecord | null)?.material_name ?? null;
     const materialExternalCode = (materialResp.data as JsonRecord | null)?.external_code ?? null;
@@ -1061,9 +1104,7 @@ export async function getAC01GRNHandler(
     // freight_type (for the FOR-aware party UI hint) + the payment-terms
     // reference date, same source buildListRow's list-row version uses.
     let freightType: string | null = null;
-    let actualPaymentDate: string | null = isReversed
-      ? null
-      : (grn.revised_payment_date ? String(grn.revised_payment_date) : null);
+    let actualPaymentDate: string | null = null;
     if (!isReversed && grn.po_id) {
       const { data: po } = await serviceRoleClient
         .schema("erp_procurement").from("purchase_order")
@@ -1071,7 +1112,7 @@ export async function getAC01GRNHandler(
         .eq("id", String(grn.po_id))
         .maybeSingle();
       freightType = (po?.freight_term as string | null) ?? null;
-      if (!actualPaymentDate && po?.payment_term_id) {
+      if (po?.payment_term_id) {
         const { data: paymentTerm } = await serviceRoleClient
           .schema("erp_master").from("payment_terms_master")
           .select("credit_days, reference_date_type:reference_date_type_id(code)")
@@ -1128,6 +1169,14 @@ export async function getAC01GRNHandler(
     // on SAVE, and viewing a GRN must not trigger a write.
     const suggestedPayables = computeSuggestedPayables(grn, costLines, deductionLines);
     const landedCostTotalForView = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
+    const detailTaxableValue = Number((effectiveCommercialRate(grn)
+      * Number(grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? 0)).toFixed(4));
+    const detailMaterialTax = computeMaterialTaxBreakup(
+      detailTaxableValue,
+      Number(grn.gst_pct ?? 0),
+      (vendorResp.data as JsonRecord | null) ?? undefined,
+      (companyResp.data as JsonRecord | null) ?? undefined,
+    );
 
     // §3.9.5 "GRN Split" — if this GRN was the original that got split, show
     // which new GRN(s) it became. Same reverse-lookup as the list endpoint.
@@ -1153,6 +1202,14 @@ export async function getAC01GRNHandler(
       last_mile_transporter_name: lastMileTransporterName,
       freight_type: freightType,
       actual_payment_date: actualPaymentDate,
+      revised_payment_date: grn.revised_payment_date ?? null,
+      taxable_value: detailTaxableValue,
+      material_gst_amount: detailMaterialTax.gstAmount,
+      material_gst_type: detailMaterialTax.gstType,
+      material_cgst_amount: detailMaterialTax.cgstAmount,
+      material_sgst_amount: detailMaterialTax.sgstAmount,
+      material_igst_amount: detailMaterialTax.igstAmount,
+      invoice_total_value: Number((detailTaxableValue + detailMaterialTax.gstAmount).toFixed(4)),
       cost_per_unit: Number(computeLandedCostPerUnit(grn, landedCostTotalForView).toFixed(4)),
       vendor_suggested_payable: suggestedPayables.vendor,
       transporter_suggested_payable: suggestedPayables.transporter,
