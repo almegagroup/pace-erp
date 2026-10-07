@@ -217,7 +217,7 @@ function computeSuggestedPayables(
 // FINANCE_LINE_TYPES (backend has no reason to import the frontend's label
 // strings, only needs a stable ordering for the same codes). Deduction
 // columns are appended after these, sorted by their own name.
-const COST_TYPE_CANONICAL_ORDER = [
+export const COST_TYPE_CANONICAL_ORDER = [
   "IMPORT_DUTY", "EXCISE_DUTY", "CST", "CUSTOMS_EDN_CESS", "DUTY_SETOFF", "ENTRY_TAX", "CUSTOMS_DUTY",
   "FREIGHT", "CLEARING_CHARGES_CHA", "CHA_CHARGES", "LOADING", "UNLOADING", "LAST_MILE_TRANSPORT",
   "TRANSPORTER_CHARGE_OTHER_THAN_BASIC", "INSURANCE", "PORT_CHARGES", "OTHER",
@@ -239,7 +239,11 @@ const COST_TYPE_CANONICAL_ORDER = [
 // figure). ADDITIONAL_DUTY_IGST is a GST/ITC line by definition (always
 // net=0 in that same frontend math) so it is never emitted as a component
 // at all, same as an un-ticked deduction.
-function computeComponentBreakdown(
+// Exported for reuse by crcp_discrepancy.handlers.ts -- PO12 Tab 1's own
+// Bulk Component Mapper grid shows the same "smart" per-component columns
+// AC01's own list already has (business owner, 2026-10-06), so the
+// breakdown math must be identical, not re-derived.
+export function computeComponentBreakdown(
   grn: JsonRecord,
   costLines: JsonRecord[],
   deductionLines: JsonRecord[],
@@ -277,6 +281,38 @@ function computeComponentBreakdown(
   }
 
   return { breakdown, deductionLabels };
+}
+
+// "Smart" component columns (business owner, 2026-09-03) -- the set of
+// columns is derived from what's actually present in THIS (filtered) result
+// set, never a fixed universe. Recomputed fresh per request, so changing a
+// filter naturally changes which columns come back. Exported for reuse by
+// crcp_discrepancy.handlers.ts (PO12 Tab 1's own Bulk Component Mapper grid,
+// 2026-10-06) -- same rule, same shape, must not drift independently.
+export function assembleSmartComponentsList(
+  items: JsonRecord[],
+  deductionTypeNameMap: Map<string, string>,
+): Array<{ key: string; kind: "cost" | "deduction"; label?: string }> {
+  const usedCostTypeKeys = new Set<string>();
+  const usedDeductionLabels = new Map<string, string>();
+  for (const item of items) {
+    const breakdown = (item.component_breakdown ?? {}) as Record<string, number>;
+    for (const key of Object.keys(breakdown)) {
+      if (key.startsWith("deduction:")) {
+        usedDeductionLabels.set(key, deductionTypeNameMap.get(key.slice("deduction:".length)) ?? "Deduction");
+      } else {
+        usedCostTypeKeys.add(key);
+      }
+    }
+  }
+  return [
+    ...COST_TYPE_CANONICAL_ORDER
+      .filter((key) => usedCostTypeKeys.has(key))
+      .map((key) => ({ key, kind: "cost" as const })),
+    ...[...usedDeductionLabels.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([key, label]) => ({ key, kind: "deduction" as const, label })),
+  ];
 }
 
 function ac01ErrorResponse(
@@ -882,30 +918,7 @@ export async function listAC01GRNsHandler(
       invoice_verified_at: row.invoice_verified_at ?? null,
     }));
 
-    // "Smart" component columns (business owner, 2026-09-03) -- the set of
-    // columns is derived from what's actually present in THIS (filtered)
-    // result set, never a fixed universe. Recomputed fresh per request, so
-    // changing a filter naturally changes which columns come back.
-    const usedCostTypeKeys = new Set<string>();
-    const usedDeductionLabels = new Map<string, string>();
-    for (const item of items) {
-      const breakdown = item.component_breakdown as Record<string, number>;
-      for (const key of Object.keys(breakdown)) {
-        if (key.startsWith("deduction:")) {
-          usedDeductionLabels.set(key, deductionTypeNameMap.get(key.slice("deduction:".length)) ?? "Deduction");
-        } else {
-          usedCostTypeKeys.add(key);
-        }
-      }
-    }
-    const components = [
-      ...COST_TYPE_CANONICAL_ORDER
-        .filter((key) => usedCostTypeKeys.has(key))
-        .map((key) => ({ key, kind: "cost" as const })),
-      ...[...usedDeductionLabels.entries()]
-        .sort((a, b) => a[1].localeCompare(b[1]))
-        .map(([key, label]) => ({ key, kind: "deduction" as const, label })),
-    ];
+    const components = assembleSmartComponentsList(items, deductionTypeNameMap);
 
     return okResponse({ items, total: count ?? items.length, components }, ctx.request_id, req);
   } catch (error) {
