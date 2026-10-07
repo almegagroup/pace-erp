@@ -18,8 +18,10 @@ import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useScreenBackInterceptor } from "../../../hooks/useScreenBackInterceptor.js";
-import { buildTransactionCompanyList } from "../../../components/inputs/transactionCompanyRuntime.js";
-import { getBatchCountsReport, getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { getBatchCountsReport, getMtsProductionRegister, getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
+import { MTS_REGISTER_COLUMNS } from "./mtsProductionRegisterColumns.jsx";
+import MtsRegisterModal from "./MtsRegisterModal.jsx";
 import { listMachines } from "../om/omApi.js";
 
 const PROCESS_ORDER_TYPES = ["MTO", "HPS", "MTS", "INT", "MTEST"];
@@ -263,6 +265,15 @@ export default function OrderInformationSystemPage() {
   const [batchCountsParams, setBatchCountsParams] = useState(null);
   const [batchCountsError, setBatchCountsError] = useState("");
 
+  // MTS Production Register sub-report (§143) — same shape as Batch Counts: its own
+  // modal (Company + Production Date range), then a full-page grid view.
+  const defaultRegisterCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+  const [mtsModalOpen, setMtsModalOpen] = useState(false);
+  const [mtsForm, setMtsForm] = useState({ companyId: "", dateFrom: daysAgoIso(30), dateTo: todayIso() });
+  const [mtsParams, setMtsParams] = useState(null);
+  const [mtsError, setMtsError] = useState("");
+  const [mtsSearch, setMtsSearch] = useState("");
+
   const singleCompanyId = filters.companyIds.length === 1 ? filters.companyIds[0] : companies[0]?.id;
 
   const machinesQ = useQuery({
@@ -339,6 +350,64 @@ export default function OrderInformationSystemPage() {
     setBatchCountsModalOpen(false);
     setBatchCountsParams({ date_from: batchCountsRange.dateFrom, date_to: batchCountsRange.dateTo });
     setPage("BATCH_COUNTS");
+  }
+
+  const mtsQ = useQuery({
+    queryKey: ["ois-mts-register", mtsParams],
+    queryFn: () => getMtsProductionRegister(mtsParams),
+    enabled: Boolean(mtsParams),
+    select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
+  });
+  const mtsRows = useMemo(() => mtsQ.data ?? [], [mtsQ.data]);
+
+  // Same single global search as the main grid: matches if ANY column's own plain-text
+  // value contains it (client-side — the whole register is already in the browser).
+  const mtsSearchOptions = useMemo(() => {
+    const values = new Set();
+    outer: for (const row of mtsRows) {
+      for (const column of MTS_REGISTER_COLUMNS) {
+        const text = getColumnFilterText(column, row);
+        if (text) values.add(text);
+        if (values.size >= 500) break outer;
+      }
+    }
+    return [...values].sort();
+  }, [mtsRows]);
+  const hasMtsSearch = mtsSearch.trim().length > 0;
+  const mtsFilteredRows = useMemo(() => {
+    const needle = mtsSearch.trim().toLowerCase();
+    if (!needle) return mtsRows;
+    return mtsRows.filter((row) => MTS_REGISTER_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+  }, [mtsRows, mtsSearch]);
+
+  function handleOpenMtsModal() {
+    setMtsError("");
+    setMtsForm((prev) => ({ ...prev, companyId: prev.companyId || defaultRegisterCompanyId || "" }));
+    setMtsModalOpen(true);
+  }
+  function handleSubmitMts() {
+    const companyId = mtsForm.companyId || defaultRegisterCompanyId;
+    if (!companyId) {
+      setMtsError("Company is required.");
+      return;
+    }
+    if (!mtsForm.dateFrom || !mtsForm.dateTo) {
+      setMtsError("Both dates are required.");
+      return;
+    }
+    if (new Date(mtsForm.dateTo) < new Date(mtsForm.dateFrom)) {
+      setMtsError("Date To cannot be before Date From.");
+      return;
+    }
+    if ((new Date(mtsForm.dateTo) - new Date(mtsForm.dateFrom)) / 86400000 > 365) {
+      setMtsError("Date range cannot exceed 365 days.");
+      return;
+    }
+    setMtsError("");
+    setMtsModalOpen(false);
+    setMtsSearch("");
+    setMtsParams({ company_id: companyId, date_from: mtsForm.dateFrom, date_to: mtsForm.dateTo });
+    setPage("MTS_REGISTER");
   }
 
   function updateFilter(key, value) {
@@ -450,6 +519,31 @@ export default function OrderInformationSystemPage() {
     }
   }
 
+  const [exportingMts, setExportingMts] = useState(false);
+  async function handleExportMts() {
+    if (mtsFilteredRows.length === 0) return;
+    setExportingMts(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `mts_production_register_${mtsParams?.date_from ?? "from"}_${mtsParams?.date_to ?? "to"}.xlsx`,
+        sheetName: "MTS Production Register",
+        columns: MTS_REGISTER_COLUMNS,
+        // Exports what the search currently shows, same "export what I see" rule as the main grid.
+        rows: mtsFilteredRows,
+        getCellValue: (row, column) =>
+          typeof column.excelValue === "function" ? column.excelValue(row)
+            : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
+        getCellColor: (row, column) =>
+          typeof column.excelColor === "function" ? column.excelColor(row) : null,
+      });
+    } catch (exportError) {
+      setMtsError(exportError instanceof Error ? exportError.message : "MTS_REGISTER_EXPORT_FAILED");
+    } finally {
+      setExportingMts(false);
+    }
+  }
+
   // Esc / shell Back returns to the filter page instead of leaving the screen entirely.
   useScreenBackInterceptor(() => {
     if (page === 1) return false;
@@ -461,7 +555,7 @@ export default function OrderInformationSystemPage() {
     focusPrimary: { perform: () => handleExecute() },
     refresh: {
       disabled: page === 1,
-      perform: () => (page === "BATCH_COUNTS" ? void batchCountsQ.refetch() : void reportQ.refetch()),
+      perform: () => (page === "BATCH_COUNTS" ? void batchCountsQ.refetch() : page === "MTS_REGISTER" ? void mtsQ.refetch() : void reportQ.refetch()),
     },
   });
 
@@ -469,6 +563,8 @@ export default function OrderInformationSystemPage() {
   const orderTypeOptions = filters.tab === "PROCESS" ? PROCESS_ORDER_TYPES : PACKING_ORDER_TYPES;
   const activeError = page === "BATCH_COUNTS"
     ? batchCountsError || (batchCountsQ.error instanceof Error ? batchCountsQ.error.message : "")
+    : page === "MTS_REGISTER"
+    ? mtsError || (mtsQ.error instanceof Error ? mtsQ.error.message : "")
     : error || (reportQ.error instanceof Error ? reportQ.error.message : "");
 
   return (
@@ -480,6 +576,7 @@ export default function OrderInformationSystemPage() {
         page === 1
           ? [
               { key: "batch-counts", label: "Batch Counts", onClick: handleOpenBatchCountsModal },
+              { key: "mts-register", label: "MTS Production Register", onClick: handleOpenMtsModal },
               { key: "reset", label: "Reset", onClick: handleReset },
               { key: "execute", label: "Execute", tone: "primary", onClick: handleExecute },
             ]
@@ -494,9 +591,21 @@ export default function OrderInformationSystemPage() {
                 disabled: exportingBatchCounts || batchCountsRows.length === 0,
               },
             ]
+          : page === "MTS_REGISTER"
+          ? [
+              { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
+              { key: "change-filters", label: "Change Company / Date Range", onClick: handleOpenMtsModal },
+              {
+                key: "export",
+                label: exportingMts ? "Exporting..." : "Export Excel",
+                onClick: () => void handleExportMts(),
+                disabled: exportingMts || mtsFilteredRows.length === 0,
+              },
+            ]
           : [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
               { key: "batch-counts", label: "Batch Counts", onClick: handleOpenBatchCountsModal },
+              { key: "mts-register", label: "MTS Production Register", onClick: handleOpenMtsModal },
               { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExport(), disabled: exporting || filteredRows.length === 0 },
               {
                 key: "execute",
@@ -666,6 +775,60 @@ export default function OrderInformationSystemPage() {
           />
         </ErpSectionCard>
       </div>
+      ) : page === "MTS_REGISTER" ? (
+      <div className="grid gap-4">
+        <ErpSectionCard eyebrow="MTS Production Register" title={`Verified MTS production, one line per pack row (${mtsParams?.date_from ?? ""} to ${mtsParams?.date_to ?? ""})`}>
+          <div className="mb-2 flex items-center justify-between">
+            <button type="button" onClick={() => setPage(1)} className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
+              Back to Filters
+            </button>
+            <span className="text-xs text-slate-500">
+              {mtsQ.isLoading
+                ? "Loading..."
+                : hasMtsSearch
+                  ? `${mtsFilteredRows.length} of ${mtsRows.length} pack row${mtsRows.length === 1 ? "" : "s"} (filtered)`
+                  : `${mtsRows.length} pack row${mtsRows.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+          <div className="mb-2 text-xs text-slate-500">
+            Only VERIFIED MTS Process POs with FINAL Packing POs appear. Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C
+            to copy — same as Excel. Use the funnel in any column header to filter that column.
+          </div>
+          <div className="mb-2 flex items-center gap-2">
+            <input
+              list="ois-mts-search-options"
+              value={mtsSearch}
+              onChange={(e) => setMtsSearch(e.target.value)}
+              placeholder="Search across every column..."
+              className="h-8 w-full max-w-md rounded border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none focus:border-sky-500"
+            />
+            <datalist id="ois-mts-search-options">
+              {mtsSearchOptions.map((option) => <option key={option} value={option} />)}
+            </datalist>
+            {hasMtsSearch ? (
+              <button type="button" onClick={() => setMtsSearch("")} className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                Clear
+              </button>
+            ) : null}
+          </div>
+          <ErpDenseGrid
+            columns={MTS_REGISTER_COLUMNS}
+            rows={mtsFilteredRows}
+            rowKey={(row) => row.id}
+            virtualize
+            rangeSelect
+            columnFilter
+            maxHeight="calc(100vh - 300px)"
+            emptyMessage={
+              mtsQ.isLoading
+                ? "Loading..."
+                : hasMtsSearch
+                  ? "No rows match this search."
+                  : "No verified MTS production with a final packing order in this date range."
+            }
+          />
+        </ErpSectionCard>
+      </div>
       ) : (
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="Page 2" title="Order Transaction Report">
@@ -726,6 +889,18 @@ export default function OrderInformationSystemPage() {
         </ErpSectionCard>
       </div>
       )}
+      {mtsModalOpen ? (
+        <MtsRegisterModal
+          runtimeContext={runtimeContext}
+          companyId={mtsForm.companyId || defaultRegisterCompanyId || ""}
+          dateFrom={mtsForm.dateFrom}
+          dateTo={mtsForm.dateTo}
+          error={mtsError}
+          onChange={(key, value) => setMtsForm((prev) => ({ ...prev, [key]: value }))}
+          onSubmit={handleSubmitMts}
+          onClose={() => setMtsModalOpen(false)}
+        />
+      ) : null}
       {batchCountsModalOpen ? (
         <BatchCountsModal
           dateFrom={batchCountsRange.dateFrom}

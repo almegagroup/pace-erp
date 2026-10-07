@@ -1174,6 +1174,19 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 
 **Next:** live-audit PR10 through PR18 one at a time against this now-confirmed-accurate doc spec (same rigor as PR09 — do not trust "Claude-verified" log entries without independent live confirmation), then write a Codex brief to rebuild PR09's frontend (add the Material Table, remove Segment/Notes fields) and fix the two ACL bugs above.
 
+**✅ PR24 "MTS Production Register" button — DESIGN LOCKED + IMPLEMENTED 2026-10-07 (feasibility §143).**
+Business owner wanted one flat register of verified MTS (IWC+Powder) production, one line per pack row,
+visible to everyone. Instead of a new Quality-menu page (new capability/ACL bump on every role + work
+context in every company), it is a **button on PR24** — same pattern as the existing "Batch Counts"
+button — so it reuses PR24's own resource `PROD_ORDER_INFO_SYSTEM`/VIEW (CAP_EVERYONE_REPORTS, verified
+live 2026-10-07: every user with a work context already has it). Zero menu/ACL/migration work; the only
+cost is that it cannot later be restricted separately from PR24. Row grain = FINAL Packing PO of a
+VERIFIED `po_type='MTS'` Process PO (multi-pack-size POs fan out into N lines, batch range/count/input/output
+all per pack row). Files: `mts_production_register.handlers.ts` (route `.../order-information-system/mts-register`),
+`mtsProductionRegisterColumns.jsx`, `MtsRegisterModal.jsx`, wired into `OrderInformationSystemPage.jsx`.
+Not yet done: live click-through in the deployed app (no login in this environment); IWC-litre display path
+(Stroke `conversion_uom_code`) is implemented but unexercised — prod has no IWC litre MTS PO yet.
+
 **✅ IN03 (Current Stock) — full MB52-style redesign DESIGN LOCKED 2026-08-04 (feasibility §116),
 IMPLEMENTATION NOT STARTED.** Came up while starting the Inventory ACL group session (§6 Inventory
 group work below) — business owner flagged the live IN03 page as buggy before deciding its ACL.

@@ -3705,6 +3705,12 @@ export async function managerApproveProcessOrderHandler(req: Request, ctx: ProdH
     if (po.priority !== "URGENT") {
       return poErr(req, ctx, "PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE", 422, "Manager Approval only applies to Urgent Process Orders.");
     }
+    // MTS has no Start Batch manager gate.  Its urgent manager decision is the
+    // final posting decision: parent MTS + every linked PMTS child are posted by
+    // the existing one-call document engine, never by a second loose update.
+    if (po.po_type === "MTS") {
+      return await completeMtsUrgentManagerDecision(req, ctx, po, id, "APPROVE_URGENT");
+    }
     // §136 follow-up (2026-09-08): MTEST never passes through QA_APPROVED (§131.1) —
     // its Priority is set at creation instead (createProcessOrderHandler), so an Urgent
     // MTEST PO is still at STANDARD when it reaches Manager Approval, not QA_APPROVED.
@@ -3761,6 +3767,15 @@ export async function managerRejectProcessOrderHandler(req: Request, ctx: ProdHa
     }
     if (po.priority !== "URGENT") {
       return poErr(req, ctx, "PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE", 422, "Manager Reject only applies to Urgent Process Orders.");
+    }
+    // For MTS, Reject means reject the urgency—not the production order.  The
+    // QA-confirmed snapshot is posted immediately at today's date, preserving
+    // the normal MTS process/PMTS atomic lifecycle.
+    if (po.po_type === "MTS") {
+      const body = await parseBody(req);
+      const reason = toTrimmedString(body.reason);
+      if (!reason) return poErr(req, ctx, "PROD_MANAGER_REJECT_REASON_MISSING", 400, "reason required");
+      return await completeMtsUrgentManagerDecision(req, ctx, po, id, "REJECT_URGENCY_POST_NORMAL", reason);
     }
     const requiredStatus = po.po_type === "MTEST" ? "STANDARD" : "QA_APPROVED";
     if (po.status !== requiredStatus) {
@@ -4596,6 +4611,9 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     // also make the MTS formulation editable. Keep this branch ahead of the
     // generic line-update routine so neither of those things can happen.
     if (po.po_type === "MTS") {
+      if (toUpperTrimmedString(body.mts_action) === "REQUEST_URGENT_MANAGER_APPROVAL") {
+        return await requestMtsUrgentManagerApproval(req, ctx, id, body);
+      }
       return await runMtsProcessOrderVerify(req, ctx, po, id, body);
     }
     const verifiedQty = parsePositiveNumber(body.verified_qty ?? body.verified_qty_kg) ?? Number(po.actual_qty ?? 0);
@@ -4665,6 +4683,31 @@ const MTS_VERIFY_CHECK_CODES = [
   "PACKING_DECLARATION",
   "GAIN_LOSS",
 ] as const;
+
+type MtsUrgentDecision = "APPROVE_URGENT" | "REJECT_URGENCY_POST_NORMAL";
+
+type MtsVerifyPostingOptions = {
+  // MTS urgent is decided after QA. The manager is the stock-poster while the
+  // original QA user remains the recorded verifier.
+  postingDate?: string;
+  verifiedBy?: string;
+  urgentPostingDate?: string | null;
+  managerDecision?: MtsUrgentDecision;
+  managerReason?: string | null;
+};
+
+function parseMtsChecklist(body: JsonRecord): { checks: string[]; errorCode?: string; errorMessage?: string } {
+  const submittedChecks = Array.isArray(body.checklist) ? body.checklist.map((item) => toUpperTrimmedString(item)).filter(Boolean) : [];
+  const checks = [...new Set(submittedChecks)];
+  const missingChecks = MTS_VERIFY_CHECK_CODES.filter((code) => !checks.includes(code));
+  if (missingChecks.length > 0) {
+    return { checks, errorCode: "PROD_MTS_VERIFY_CHECKLIST_INCOMPLETE", errorMessage: "Complete every MTS QA checklist item before approving." };
+  }
+  if (checks.some((code) => !MTS_VERIFY_CHECK_CODES.includes(code as typeof MTS_VERIFY_CHECK_CODES[number]))) {
+    return { checks, errorCode: "PROD_MTS_VERIFY_CHECKLIST_INVALID", errorMessage: "The MTS QA checklist contains an unsupported item." };
+  }
+  return { checks };
+}
 
 function mtsBatchSort(left: string, right: string): number {
   const leftMatch = left.match(/^(.*?)(\d+)$/);
@@ -4749,12 +4792,91 @@ async function computeMtsVerifyAvailabilityRows(
   });
 }
 
+async function requestMtsUrgentManagerApproval(
+  req: Request,
+  ctx: ProdHandlerContext,
+  id: string,
+  body: JsonRecord,
+): Promise<Response> {
+  const parsed = parseMtsChecklist(body);
+  if (parsed.errorCode) return poErr(req, ctx, parsed.errorCode, 422, parsed.errorMessage ?? "MTS QA checklist is invalid.");
+  if (!Array.isArray(body.holds)) {
+    return poErr(req, ctx, "PROD_MTS_VERIFY_HOLDS_INVALID", 400, "MTS QA holds must be a list.");
+  }
+
+  // Save exactly the declaration QA saw.  At the manager decision the normal
+  // MTS verifier revalidates stocks, batch declarations and holds against live
+  // data before its one atomic posting; the saved body is an audit snapshot,
+  // not a bypass around those controls.
+  const { error } = await serviceRoleClient.schema("erp_production").rpc("request_mts_urgent_manager_approval", {
+    p_process_order_id: id,
+    p_checklist: parsed.checks,
+    p_holds: body.holds,
+    p_confirmed_deviation: body.confirmed_deviation === true,
+    p_qa_verified_by: ctx.auth_user_id,
+  });
+  if (error) {
+    console.error("[process_order.requestMtsUrgentManagerApproval] rpc failed:", JSON.stringify(error));
+    const message = String((error as { message?: string }).message ?? "");
+    if (message.includes("ALREADY_PENDING")) {
+      return poErr(req, ctx, "PROD_MTS_URGENT_REQUEST_ALREADY_PENDING", 409, "This MTS Process PO is already waiting for Manager Approval.");
+    }
+    throw new Error("PROD_MTS_URGENT_REQUEST_FAILED");
+  }
+  return okResponse({ id, status: "FINAL", priority: "URGENT", pending_manager_approval: true }, ctx.request_id, req);
+}
+
+async function completeMtsUrgentManagerDecision(
+  req: Request,
+  ctx: ProdHandlerContext,
+  po: JsonRecord,
+  id: string,
+  decision: MtsUrgentDecision,
+  reason: string | null = null,
+): Promise<Response> {
+  if (po.status !== "FINAL") {
+    return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected FINAL, got ${String(po.status ?? "--")}`);
+  }
+  const { data: request, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("mts_urgent_verify_request")
+    .select("status, checklist, holds, confirmed_deviation, qa_verified_by")
+    .eq("process_order_id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[process_order.completeMtsUrgentManagerDecision] request fetch failed:", JSON.stringify(error));
+    throw new Error("PROD_MTS_URGENT_REQUEST_FETCH_FAILED");
+  }
+  const urgentRequest = request as JsonRecord | null;
+  if (!urgentRequest || String(urgentRequest.status) !== "PENDING_MANAGER") {
+    return poErr(req, ctx, "PROD_MTS_URGENT_REQUEST_NOT_PENDING", 422, "This MTS Process PO has no pending urgent QA verification.");
+  }
+
+  const managerToday = todayIso();
+  const effectivePostingDate = decision === "APPROVE_URGENT"
+    ? addDaysIso(managerToday, -1)
+    : managerToday;
+  return await runMtsProcessOrderVerify(req, ctx, po, id, {
+    mts_action: "APPROVE",
+    checklist: Array.isArray(urgentRequest.checklist) ? urgentRequest.checklist : [],
+    holds: Array.isArray(urgentRequest.holds) ? urgentRequest.holds : [],
+    confirmed_deviation: urgentRequest.confirmed_deviation === true,
+  }, {
+    postingDate: effectivePostingDate,
+    verifiedBy: String(urgentRequest.qa_verified_by),
+    urgentPostingDate: decision === "APPROVE_URGENT" ? effectivePostingDate : null,
+    managerDecision: decision,
+    managerReason: reason,
+  });
+}
+
 async function runMtsProcessOrderVerify(
   req: Request,
   ctx: ProdHandlerContext,
   po: JsonRecord,
   id: string,
   body: JsonRecord,
+  options: MtsVerifyPostingOptions = {},
 ): Promise<Response> {
   const action = toUpperTrimmedString(body.mts_action);
   if (action === "REJECT") {
@@ -4774,16 +4896,23 @@ async function runMtsProcessOrderVerify(
   if (action !== "APPROVE") {
     return poErr(req, ctx, "PROD_MTS_VERIFY_ACTION_REQUIRED", 400, "Choose Approve or Reject for this MTS Process PO.");
   }
+  if (!options.managerDecision && po.priority === "URGENT") {
+    const { data: pendingRequest, error: pendingRequestError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("mts_urgent_verify_request")
+      .select("process_order_id")
+      .eq("process_order_id", id)
+      .eq("status", "PENDING_MANAGER")
+      .maybeSingle();
+    if (pendingRequestError) throw new Error("PROD_MTS_URGENT_REQUEST_FETCH_FAILED");
+    if (pendingRequest) {
+      return poErr(req, ctx, "PROD_MTS_URGENT_REQUEST_PENDING", 422, "This MTS Process PO is waiting for Manager Approval. QA cannot post it directly.");
+    }
+  }
 
-  const submittedChecks = Array.isArray(body.checklist) ? body.checklist.map((item) => toUpperTrimmedString(item)).filter(Boolean) : [];
-  const checks = [...new Set(submittedChecks)];
-  const missingChecks = MTS_VERIFY_CHECK_CODES.filter((code) => !checks.includes(code));
-  if (missingChecks.length > 0) {
-    return poErr(req, ctx, "PROD_MTS_VERIFY_CHECKLIST_INCOMPLETE", 422, "Complete every MTS QA checklist item before approving.");
-  }
-  if (checks.some((code) => !MTS_VERIFY_CHECK_CODES.includes(code as typeof MTS_VERIFY_CHECK_CODES[number]))) {
-    return poErr(req, ctx, "PROD_MTS_VERIFY_CHECKLIST_INVALID", 400, "The MTS QA checklist contains an unsupported item.");
-  }
+  const parsedChecklist = parseMtsChecklist(body);
+  if (parsedChecklist.errorCode) return poErr(req, ctx, parsedChecklist.errorCode, 422, parsedChecklist.errorMessage ?? "MTS QA checklist is invalid.");
+  const checks = parsedChecklist.checks;
 
   const strokeMasterId = toTrimmedString(po.stroke_master_id) || null;
   const [processLines, packingResult, yieldResult] = await Promise.all([
@@ -4945,7 +5074,10 @@ async function runMtsProcessOrderVerify(
     if (leftToAllocate > EPSILON) return poErr(req, ctx, "PROD_MTS_HOLD_EXCEEDS_DECLARATION", 422, "MTS QA hold bags cannot exceed the declared SKU output for the selected batch range.");
   }
 
-  const today = todayIso();
+  // Manager-approved urgent MTS posts one day back.  A manager's rejection
+  // of urgency posts normally today.  All RM, PM, SKU and status movements
+  // below use this single effective date together.
+  const today = options.postingDate ?? todayIso();
   const docNumber = String(po.po_number);
   const matDoc = await generateMaterialDocNumber(String(po.company_id));
   const rateMap = await fetchUnrestrictedRates(String(po.company_id), Array.from(needs.values()).map((item) => ({ materialId: item.materialId, slocId: item.storageLocationId })));
@@ -5143,9 +5275,24 @@ async function runMtsProcessOrderVerify(
     movements,
     postedBy: ctx.auth_user_id,
     context: {
-      header: { actual_qty: declaredTotal, verified_by: ctx.auth_user_id, last_updated_by: ctx.auth_user_id, has_unapproved_deviation: false },
+      header: {
+        actual_qty: declaredTotal,
+        verified_by: options.verifiedBy ?? ctx.auth_user_id,
+        last_updated_by: ctx.auth_user_id,
+        has_unapproved_deviation: false,
+        urgent_posting_date: options.urgentPostingDate ?? null,
+        manager_decided_by: options.managerDecision ? ctx.auth_user_id : null,
+      },
       reservations: reservationUpdates,
       machine_stock_log_rows: machineStockLogRows,
+      ...(options.managerDecision ? {
+        mts_urgent_manager: {
+          decision: options.managerDecision,
+          manager_decided_by: ctx.auth_user_id,
+          reason: options.managerReason ?? null,
+          effective_posting_date: today,
+        },
+      } : {}),
       mts_verify: {
         checks: checks.map((code) => ({ check_code: code })),
         yield_ids: yields.map((item) => String(item.id)),

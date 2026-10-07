@@ -37,6 +37,9 @@ const ERROR_MESSAGES = {
   PROD_QA_REJECT_REASON_MISSING: "Rejection reason is required.",
   PROD_MANAGER_REJECT_REASON_MISSING: "Rejection reason is required.",
   PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE: "Manager decision only applies to Urgent Process Orders.",
+  PROD_MTS_URGENT_REQUEST_NOT_PENDING: "This MTS Process PO has no pending urgent QA verification.",
+  PROD_MTS_URGENT_REQUEST_ALREADY_PENDING: "This MTS Process PO is already waiting for Manager Approval.",
+  PROD_MTS_URGENT_REQUEST_PENDING: "This MTS Process PO is waiting for Manager Approval.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required.",
   PROD_BATCH_SERIES_NOT_FOUND: "Batch number series not configured for this company/type.",
   PROD_BATCH_RELEASED_AVAILABLE: "Released batch numbers are available. Pick one or skip to generate new.",
@@ -271,13 +274,15 @@ export default function QAQueuePage() {
   // Access is role-level ACL (CAP_QA_PLANTHEAD/CAP_QA_TIER_L3MGR), enforced
   // server-side — this button is always shown for an Urgent QA_APPROVED
   // order and the backend rejects if the caller lacks the capability.
-  async function handleManagerApprove(orderId) {
+  async function handleManagerApprove(order) {
     setSaving(true);
     try {
-      await managerApproveProcessOrder(orderId);
-      toast("Manager Approval recorded — Start Batch is now available.");
+      await managerApproveProcessOrder(order.id);
+      toast(order.po_type === "MTS"
+        ? "Urgent MTS verification approved — MTS and linked PMTS stock posted together."
+        : "Manager Approval recorded — Start Batch is now available.");
       qc.invalidateQueries({ queryKey: ["qa-queue"] });
-      qc.invalidateQueries({ queryKey: ["qa-queue-detail", orderId] });
+      qc.invalidateQueries({ queryKey: ["qa-queue-detail", order.id] });
     } catch (error) {
       toast(friendlyError(error), "error");
     } finally {
@@ -296,9 +301,11 @@ export default function QAQueuePage() {
     }
     setSaving(true);
     try {
-      const reject = rejectMode === "manager" ? managerRejectProcessOrder : qaRejectProcessOrder;
+      const reject = rejectMode === "qa" ? qaRejectProcessOrder : managerRejectProcessOrder;
       await reject(rejectOrderId, { reason: rejectReason.trim() });
-      toast(rejectMode === "manager" ? "Process Order rejected by Manager." : "Process Order rejected.");
+      toast(rejectMode === "mts-urgent"
+        ? "Urgency rejected — MTS and linked PMTS stock posted normally today."
+        : rejectMode === "manager" ? "Process Order rejected by Manager." : "Process Order rejected.");
       setRejectOrderId("");
       setRejectReason("");
       setRejectMode("qa");
@@ -526,7 +533,7 @@ export default function QAQueuePage() {
                             {order.status === "QA_APPROVED" && order.priority === "URGENT" && (
                               <>
                                 <button
-                                  onClick={() => handleManagerApprove(order.id)}
+                                  onClick={() => handleManagerApprove(order)}
                                   disabled={saving}
                                   className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
                                 >
@@ -552,7 +559,7 @@ export default function QAQueuePage() {
                             {order.status === "STANDARD" && order.po_type === "MTEST" && order.priority === "URGENT" ? (
                               <>
                                 <button
-                                  onClick={() => handleManagerApprove(order.id)}
+                                  onClick={() => handleManagerApprove(order)}
                                   disabled={saving}
                                   className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
                                 >
@@ -592,7 +599,29 @@ export default function QAQueuePage() {
                                 </button>
                               </>
                             )}
-                            {order.status === "FINAL" && order.po_type === "MTS" && (
+                            {order.status === "FINAL" && order.po_type === "MTS" && order.priority === "URGENT" && (
+                              <>
+                                <button
+                                  onClick={() => handleManagerApprove(order)}
+                                  disabled={saving}
+                                  className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                                >
+                                  Manager Approve & Post
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setRejectOrderId(order.id);
+                                    setRejectReason("");
+                                    setRejectMode("mts-urgent");
+                                  }}
+                                  disabled={saving}
+                                  className="rounded border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                                >
+                                  Reject Urgency & Post Normally
+                                </button>
+                              </>
+                            )}
+                            {order.status === "FINAL" && order.po_type === "MTS" && order.priority !== "URGENT" && (
                               <span className="text-xs font-medium text-emerald-600">Ready for Verify</span>
                             )}
                             {/* §136 -- Start Batch for QA_APPROVED only when NOT Urgent;
@@ -683,7 +712,7 @@ export default function QAQueuePage() {
 
       <ModalBase
         visible={Boolean(rejectOrderId)}
-        title={rejectMode === "manager" ? "Manager Reject Process PO" : "Reject Process PO"}
+        title={rejectMode === "mts-urgent" ? "Reject MTS Urgency and Post Normally" : rejectMode === "manager" ? "Manager Reject Process PO" : "Reject Process PO"}
         onEscape={() => {
           setRejectOrderId("");
           setRejectReason("");
@@ -706,7 +735,7 @@ export default function QAQueuePage() {
               disabled={saving || !rejectReason.trim()}
               className="rounded bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
             >
-              Confirm Reject
+              {rejectMode === "mts-urgent" ? "Reject Urgency & Post" : "Confirm Reject"}
             </button>
           </>
         )}
@@ -720,7 +749,7 @@ export default function QAQueuePage() {
             className="resize-none rounded border border-rose-300 px-3 py-2 text-sm"
             value={rejectReason}
             onChange={(event) => setRejectReason(event.target.value)}
-            placeholder="Explain why this Process PO is being rejected..."
+            placeholder={rejectMode === "mts-urgent" ? "Explain why urgency is being rejected..." : "Explain why this Process PO is being rejected..."}
           />
         </div>
       </ModalBase>

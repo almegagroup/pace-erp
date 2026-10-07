@@ -25722,3 +25722,87 @@ attempt any dispatch-wise breakdown.
 
 **Not yet done:** implementation (schema/backend/frontend) has not started — this section is a pure
 design lock. No migration, handler, or page exists for AC05 yet.
+
+---
+
+## Section 143 — PR24 "MTS Production Register" sub-report (✅ DESIGN LOCKED 2026-10-07, Claude direct-implemented)
+
+**Business ask:** Quality/Production teams need one flat register of finished MTS (IWC + Powder)
+production — one line per *pack row* — without opening PR24's movement ledger or the Process/Packing
+PO lists separately.
+
+**Delivery mechanism (business owner, 2026-10-07 — supersedes the earlier "separate Quality-menu page"
+idea):** a new **"MTS Production Register" button on PR24 (Order Information System)**, exactly like the
+existing "Batch Counts" button (§122): its own tiny Company + Date-Range modal, then a full-page grid view
+inside the same screen (`page === "MTS_REGISTER"`), never visible together with the other two views.
+- **No new menu, no new tx_code, no new capability, no ACL bump.** Backend route is
+  `GET /api/production/order-information-system/mts-register`, registered in `route-acl-registry.ts` against
+  the **same resource `PROD_ORDER_INFO_SYSTEM`/VIEW** as PR24 itself and its Batch Counts sibling.
+- **Access verified on live prod (2026-10-07):** PR24 is already granted to every user who has a work
+  context (CMP011 15/15, CMP003 48/48, CMP006 21/21) via every department work context except the
+  unused `GENERAL_OPS`. So "everyone sees it, company-scoped" holds with zero ACL work. Users with no
+  work context at all (e.g. CMP011 Maintenance) see nothing — same as every other page.
+- **Trade-off accepted:** the register cannot later be restricted independently of PR24 (same resource,
+  bug-pattern #6 consciously traded for zero ACL maintenance). If that ever matters, split it into its own
+  resource then.
+
+**Row grain = one FINAL Packing PO (pack row) of a VERIFIED MTS Process PO.** One MTS Process PO owns
+N Packing POs (one per pack row from the MTS creation session, §138.15.2); each Packing PO carries its
+own `batch_number_from/to`, `num_packs`, `fill_qty_per_pack`, `actual_qty_kg`. A Process PO therefore
+appears as N lines, and "Number of Batches / Total Input / Total Output / From-To batch" are all
+**per pack row**, never repeated at Process-PO level.
+
+**Filters (fixed, not user-selectable):** `process_order.po_type = 'MTS'` (this is the one po_type that
+covers both IWC and Powder — there is no separate IWC po_type) AND `process_order.status = 'VERIFIED'`
+AND `packing_order.status = 'FINAL'`. A Process PO with no FINAL packing row yet produces no line.
+User inputs (modal): **Company** (canonical transaction-company selector — single-company user = locked
+read-only, multi-company = dropdown of allowed companies only; never the admin company list) and
+**Production Date From/To** (mandatory, max 365 days, default last 30). "Date" = `process_order.production_date`.
+
+**Columns (in this order):**
+
+| # | Column | Source |
+|---|--------|--------|
+| 1 | Date | `process_order.production_date` |
+| 2 | Shift | `shift_master.shift_name` via `process_order.shift_id` |
+| 3 | Prodshade Code | `material_master.external_code` of the Process PO's SFG (`process_order.material_id`) |
+| 4 | Prodshade Document Name | that material's `document_name` (fallback `material_name`) |
+| 5 | Stroke | `stroke_master.stroke_number` |
+| 6 | Process PO | `process_order.po_number` |
+| 7 | SKU Code | `external_code` of the Packing PO's FG (`packing_order.material_id`) |
+| 8 | SKU Document Name | that FG's `document_name` (fallback `material_name`) |
+| 9 | Start Batch | `packing_order.batch_number_from` (this pack row) |
+| 10 | To Batch | `packing_order.batch_number_to` (this pack row) |
+| 11 | Number of Batches | length of this pack row's [From..To] batch range, by numeric suffix (ER3309..ER3335 = 27). Exact because a MTS Process PO's batch numbers are generated consecutively in one creation session, so a PO has no gaps inside a range; a legacy pack row with no range falls back to the Process PO's own `number_of_batches` only when it has exactly one pack row |
+| 12 | Batch Size | `process_order.planned_qty ÷ process_order.number_of_batches`, shown in **Prodshade UOM** |
+| 13 | Prodshade UOM | `stroke_master.conversion_uom_code` when set with a positive `conversion_factor` (IWC liquid, e.g. L), else the Prodshade's `base_uom_code` (KG) |
+| 14 | Total Input (Base UOM) | Batch Size(kg) × Number of Batches of this pack row |
+| 15 | Total Output (Base UOM) | `packing_order.actual_qty_kg` (fallback `num_packs × fill_qty_per_pack`) |
+| 16 | Pack Size | `packing_order.fill_qty_per_pack`, shown in Prodshade UOM (same conversion as Batch Size) |
+| 17 | Number of Bags | `packing_order.num_packs` |
+| 18 | Loss/Gain | Total Output − Total Input (negative = loss) |
+| 19 | Loss/Gain % | Loss/Gain ÷ Total Input × 100 (blank when input is 0) |
+| 20 | Posting Date | earliest `stock_ledger.posting_date` among the Process PO's Verify postings (`process_order_line.stock_ledger_id`) |
+| 21 | Standard By | `process_order.created_by`, shown as `P0004-Name` (`resolveUserDisplayNames`) |
+| 22 | Verify Done By | `process_order.verified_by`, same format |
+
+Base UOM = KG always (every quantity column in the schema is stored in kg). Batch Size / Pack Size are
+the only two columns shown in Prodshade UOM; if a liquid Prodshade has no conversion factor on its Stroke
+they simply stay in KG with the UOM column saying KG (graceful fallback, same spirit as §110's multi-UoM lock).
+
+**UI:** a single "Search across every column..." box above the grid (same as PR24 main grid / Dispatch
+Report: client-side, matches any column) **plus** `ErpDenseGrid` with `virtualize`, `rangeSelect`
+(Excel-style navigation/copy) and `columnFilter` (Excel-style per-column AutoFilter, added 2026-10-03).
+"Export Excel" exports exactly the rows currently shown (search + filters applied) via the shared
+`downloadColoredExcelFile`. Esc / "Back to Filters" returns to PR24's own Page 1.
+
+**Pre-code bug-pattern checklist (re-applied to each concrete technical choice, per the 2026-08-04 rule):**
+- **#1/#12 rank/role bypass:** no role array anywhere; `assertProdReadRole` is the existing no-op "ACL upstream" stub; frontend shows the button unconditionally (PR24 itself is the gate).
+- **#2/#11 company scope:** backend reuses PR24's own `resolveAllowedCompanyIds`/`scopeCompanyIds` (caller's `erp_map.user_companies`, SA/GA unfiltered, a denied company silently yields an empty result — the audited no-leak behavior of §122.5); frontend company options come from `buildTransactionCompanyList(runtimeContext)` only.
+- **#8 route/registry:** route key `GET:/api/production/order-information-system/mts-register` registered next to `.../batch-counts`.
+- **§8E unbounded `.in()`:** every id-list lookup (Packing POs, batch instances, ledger, materials, strokes, shifts, companies, users) goes through `fetchInChunks`; the Process PO fetch is paged with `.range()` so PostgREST's 1000-row default cannot silently truncate a wide date range.
+- **#15 double-unwrap:** the handler returns `okResponse({ data: rows })` with **no** `pagination` key (identical to Batch Counts), so the frontend `select` uses the same `Array.isArray(data) ? data : data?.data ?? []` already proven on that sibling.
+- **#13 payload completeness:** GET with query params only; `company_id`, `date_from`, `date_to` are all sent and all validated.
+
+**Out of scope / deferred:** IWC litre-entry at MTS creation (§108.2 item 3) is not part of this report;
+the report only *displays* in the Prodshade UOM using the Stroke's own conversion. Chart/summary footers are not requested.
