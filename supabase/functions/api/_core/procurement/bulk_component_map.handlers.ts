@@ -72,6 +72,11 @@ function round2(value: number): number {
 // computation applies — that duty is fully excluded from Landed Cost.
 const NET_EXCLUDED_COST_TYPES = new Set(["ADDITIONAL_DUTY_IGST"]);
 
+// Apply-As (formerly a single page-wide "Value-Application Mode") is now
+// per-line -- business owner, 2026-10-07: a real batch commonly mixes a
+// qty-proportional charge (Freight) with a flat same-everywhere charge
+// (a fixed admin fee) in one go, so one shared mode for every added line
+// was a real limitation, not just a UI simplification.
 type CostLineInput = {
   cost_type: string;
   amount: number;
@@ -84,6 +89,8 @@ type CostLineInput = {
   bill_reference: string | null;
   bill_date: string | null;
   description: string | null;
+  mode: "SAME_TO_MANY" | "DISTRIBUTED";
+  split_method: "EQUALLY" | "AS_PER_QTY";
 };
 
 type DeductionLineInput = {
@@ -93,6 +100,8 @@ type DeductionLineInput = {
   round_off: number | null;
   party_type: string;
   in_landed: boolean;
+  mode: "SAME_TO_MANY" | "DISTRIBUTED";
+  split_method: "EQUALLY" | "AS_PER_QTY";
 };
 
 type GrnPlanRow = {
@@ -127,6 +136,8 @@ function parseCostLines(raw: unknown): CostLineInput[] {
         bill_reference: toTrimmedString(line.bill_reference) || null,
         bill_date: toTrimmedString(line.bill_date) || null,
         description: toTrimmedString(line.description) || null,
+        mode: line.mode === "DISTRIBUTED" ? "DISTRIBUTED" : "SAME_TO_MANY",
+        split_method: line.split_method === "AS_PER_QTY" ? "AS_PER_QTY" : "EQUALLY",
       } as CostLineInput;
     })
     .filter((line): line is CostLineInput => line !== null);
@@ -147,6 +158,8 @@ function parseDeductionLines(raw: unknown): DeductionLineInput[] {
         round_off: line.round_off != null && line.round_off !== "" ? Number(line.round_off) : null,
         party_type: toTrimmedString(line.party_type) || "VENDOR",
         in_landed: line.in_landed === true,
+        mode: line.mode === "DISTRIBUTED" ? "DISTRIBUTED" : "SAME_TO_MANY",
+        split_method: line.split_method === "AS_PER_QTY" ? "AS_PER_QTY" : "EQUALLY",
       } as DeductionLineInput;
     })
     .filter((line): line is DeductionLineInput => line !== null);
@@ -214,9 +227,6 @@ async function buildBulkComponentMapPlan(
   if (costLineInputs.length === 0 && deductionLineInputs.length === 0) {
     throw new Error("BULK_MAP_NO_LINES_ENTERED");
   }
-
-  const mode = body.mode === "DISTRIBUTED" ? "DISTRIBUTED" : "SAME_TO_MANY";
-  const splitMethod = body.split_method === "AS_PER_QTY" ? "AS_PER_QTY" : "EQUALLY";
 
   const grnRows = await fetchInChunks<JsonRecord>(grnIds, (idChunk) =>
     serviceRoleClient.schema("erp_procurement").from("goods_receipt")
@@ -296,12 +306,15 @@ async function buildBulkComponentMapPlan(
   // the same way save_ac01_grn_cost already does it). DISTRIBUTED splits
   // that line's own `amount` as one lump-sum total across only the ALLOWED
   // GRNs (a forbidden GRN never silently absorbs part of the typed total).
+  // Each line carries its own mode/split_method now (2026-10-07) -- a batch
+  // can freely mix, e.g., a qty-proportional Freight line with a flat
+  // same-everywhere admin-fee line, in one Component Map action.
   for (const lineInput of costLineInputs) {
-    if (mode === "DISTRIBUTED") {
+    if (lineInput.mode === "DISTRIBUTED") {
       const perGrnAmount = distributeAmount(
         lineInput.amount,
         allowed.map((g) => ({ grn_id: g.grn_id, considered_qty_base: g.considered_qty_base })),
-        splitMethod,
+        lineInput.split_method,
       );
       for (const grn of allowed) {
         grn.cost_lines.push({ ...lineInput, amount: perGrnAmount.get(grn.grn_id) ?? 0, entry_mode: "AD_HOC" });
@@ -313,11 +326,11 @@ async function buildBulkComponentMapPlan(
     }
   }
   for (const lineInput of deductionLineInputs) {
-    if (mode === "DISTRIBUTED" && lineInput.amount != null) {
+    if (lineInput.mode === "DISTRIBUTED" && lineInput.amount != null) {
       const perGrnAmount = distributeAmount(
         lineInput.amount,
         allowed.map((g) => ({ grn_id: g.grn_id, considered_qty_base: g.considered_qty_base })),
-        splitMethod,
+        lineInput.split_method,
       );
       for (const grn of allowed) {
         grn.deduction_lines.push({ ...lineInput, amount: perGrnAmount.get(grn.grn_id) ?? 0 });

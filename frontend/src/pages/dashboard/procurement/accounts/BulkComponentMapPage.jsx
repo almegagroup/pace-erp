@@ -85,15 +85,41 @@ function nextEmptyCostLine() {
     key: `new-${Date.now()}-${Math.random()}`,
     cost_type: "FREIGHT", amount: "", entry_mode: "AD_HOC", has_gst: false, gst_treatment: "EXCLUSIVE", gst_rate: "",
     bill_reference: "", bill_date: "", description: "", party_type: "VENDOR", cha_id: "",
+    mode: "SAME_TO_MANY", split_method: "EQUALLY",
   };
 }
 function nextEmptyDeductionLine() {
-  return { key: `new-${Date.now()}-${Math.random()}`, deduction_type_id: "", amount: "", percentage: "", round_off: "", in_landed: false, party_type: "VENDOR" };
+  return {
+    key: `new-${Date.now()}-${Math.random()}`, deduction_type_id: "", amount: "", percentage: "", round_off: "", in_landed: false, party_type: "VENDOR",
+    mode: "SAME_TO_MANY", split_method: "EQUALLY",
+  };
 }
 function deriveDefaultsForCostType(costType, currentPartyType, defaultChaId) {
   if (DUTY_COST_TYPES.has(costType)) return { party_type: "NONE", cha_id: "" };
   if (CHA_COST_TYPES.has(costType)) return { party_type: "CHA", cha_id: defaultChaId || "" };
   return { party_type: currentPartyType, cha_id: "" };
+}
+
+// Apply-As -- how this ONE line's Amount applies across the selected GRNs.
+// Per-line, not page-wide (business owner, 2026-10-07): a real batch often
+// mixes a qty-proportional charge (Freight) with a flat same-everywhere
+// charge in one go, so a single shared mode for every line was a real
+// limitation. Mode + split-method collapse into one dropdown per row to
+// keep the already-dense line grid from growing a second, usually-empty
+// column.
+const APPLY_AS_OPTIONS = [
+  { value: "SAME_TO_MANY", label: "Same-to-Many" },
+  { value: "DISTRIBUTED_EQUALLY", label: "Distributed — Equally" },
+  { value: "DISTRIBUTED_AS_PER_QTY", label: "Distributed — As-per-qty" },
+];
+function applyAsValue(line) {
+  if (line.mode !== "DISTRIBUTED") return "SAME_TO_MANY";
+  return line.split_method === "AS_PER_QTY" ? "DISTRIBUTED_AS_PER_QTY" : "DISTRIBUTED_EQUALLY";
+}
+function applyAsPatch(value) {
+  if (value === "DISTRIBUTED_AS_PER_QTY") return { mode: "DISTRIBUTED", split_method: "AS_PER_QTY" };
+  if (value === "DISTRIBUTED_EQUALLY") return { mode: "DISTRIBUTED", split_method: "EQUALLY" };
+  return { mode: "SAME_TO_MANY", split_method: "EQUALLY" };
 }
 
 function DrawerField({ label, children }) {
@@ -116,6 +142,11 @@ function DrawerSection({ eyebrow, title, children }) {
   );
 }
 const inputCls = "h-[26px] w-full border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500";
+// Same column counts as AC01Page.jsx's own cost/deduction row grids, plus
+// one new "Apply As" column each (inserted right after Amount) -- shared
+// between the header row and the data rows so the two can never drift.
+const COST_LINE_GRID_COLUMNS = "1.3fr 0.6fr 1fr 0.55fr 0.55fr 0.55fr 0.45fr 0.8fr 0.9fr 0.5fr";
+const DEDUCTION_LINE_GRID_COLUMNS = "1.2fr 0.6fr 1fr 0.5fr 0.6fr 0.9fr 0.5fr 0.5fr";
 
 
 export default function BulkComponentMapPage() {
@@ -133,8 +164,6 @@ export default function BulkComponentMapPage() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [costLines, setCostLines] = useState([]);
   const [deductionLines, setDeductionLines] = useState([]);
-  const [mode, setMode] = useState("SAME_TO_MANY");
-  const [splitMethod, setSplitMethod] = useState("EQUALLY");
   const [invoiceVerified, setInvoiceVerified] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [previewing, setPreviewing] = useState(false);
@@ -223,6 +252,8 @@ export default function BulkComponentMapPage() {
           description: line.description || null,
           party_type: line.party_type || "VENDOR",
           cha_id: line.party_type === "CHA" && line.cha_id ? line.cha_id : null,
+          mode: line.mode,
+          split_method: line.split_method,
         })),
       deduction_lines: deductionLines
         .filter((line) => line.deduction_type_id && line.amount !== "")
@@ -233,9 +264,9 @@ export default function BulkComponentMapPage() {
           round_off: line.round_off === "" ? null : Number(line.round_off),
           party_type: line.party_type || "VENDOR",
           in_landed: line.in_landed,
+          mode: line.mode,
+          split_method: line.split_method,
         })),
-      mode,
-      split_method: splitMethod,
     };
   }
 
@@ -294,12 +325,24 @@ export default function BulkComponentMapPage() {
           </button>
         </ErpSectionCard>
 
-        <DrawerSection eyebrow="Landed cost" title="Duty stack + ad-hoc/per-UoM charges — add one or more lines, exactly like AC01">
+        <DrawerSection eyebrow="Landed cost" title="Duty stack + ad-hoc/per-UoM charges — add one or more lines, each can apply differently across the selected GRNs">
           <div className="grid gap-1">
+            <div className="grid gap-1.5 px-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-400" style={{ gridTemplateColumns: COST_LINE_GRID_COLUMNS }}>
+              <span>Cost Type</span>
+              <span>Amount</span>
+              <span>Apply As</span>
+              <span>Entry Mode</span>
+              <span>GST?</span>
+              <span>GST Treat.</span>
+              <span>GST %</span>
+              <span>Party</span>
+              <span>CHA</span>
+              <span />
+            </div>
             {costLines.map((line, index) => {
               const isDuty = DUTY_COST_TYPES.has(line.cost_type);
               return (
-                <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.3fr 0.6fr 0.55fr 0.55fr 0.55fr 0.45fr 0.8fr 0.9fr 0.5fr" }}>
+                <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: COST_LINE_GRID_COLUMNS }}>
                   <select
                     value={line.cost_type}
                     onChange={(event) => {
@@ -323,16 +366,28 @@ export default function BulkComponentMapPage() {
                   <input
                     value={line.amount}
                     onChange={(event) => { setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry))); invalidateVerification(); }}
-                    placeholder={mode === "DISTRIBUTED" ? "Total to split" : (line.entry_mode === "PER_UOM" ? "Rate / unit" : "Amount")}
+                    placeholder={line.mode === "DISTRIBUTED" ? "Total to split" : (line.entry_mode === "PER_UOM" ? "Rate / unit" : "Amount")}
                     className={inputCls}
                   />
+                  <select
+                    value={applyAsValue(line)}
+                    onChange={(event) => {
+                      const patch = applyAsPatch(event.target.value);
+                      setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, ...patch } : entry)));
+                      invalidateVerification();
+                    }}
+                    className={inputCls}
+                    title="How this line's Amount applies across the selected GRNs"
+                  >
+                    {APPLY_AS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
                   {!isDuty ? (
                     <select
                       value={line.entry_mode}
-                      disabled={mode === "DISTRIBUTED"}
+                      disabled={line.mode === "DISTRIBUTED"}
                       onChange={(event) => { setCostLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, entry_mode: event.target.value } : entry))); invalidateVerification(); }}
                       className={inputCls}
-                      title={mode === "DISTRIBUTED" ? "Distributed mode always splits as a flat amount" : undefined}
+                      title={line.mode === "DISTRIBUTED" ? "Distributed mode always splits as a flat amount" : undefined}
                     >
                       <option value="AD_HOC">Ad hoc</option>
                       <option value="PER_UOM">Per UoM</option>
@@ -403,8 +458,18 @@ export default function BulkComponentMapPage() {
 
         <DrawerSection eyebrow="Deductions" title='Reusable deduction types — tick "In landed?" to affect landed cost'>
           <div className="grid gap-1">
+            <div className="grid gap-1.5 px-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-400" style={{ gridTemplateColumns: DEDUCTION_LINE_GRID_COLUMNS }}>
+              <span>Deduction Type</span>
+              <span>Amount</span>
+              <span>Apply As</span>
+              <span>%</span>
+              <span>Round Off</span>
+              <span>Party</span>
+              <span>In Landed?</span>
+              <span />
+            </div>
             {deductionLines.map((line, index) => (
-              <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: "1.2fr 0.6fr 0.5fr 0.6fr 0.9fr 0.5fr 0.5fr" }}>
+              <div key={line.key} className="grid gap-1.5 items-end" style={{ gridTemplateColumns: DEDUCTION_LINE_GRID_COLUMNS }}>
                 <select
                   value={line.deduction_type_id}
                   onChange={(event) => { setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, deduction_type_id: event.target.value } : entry))); invalidateVerification(); }}
@@ -413,7 +478,19 @@ export default function BulkComponentMapPage() {
                   <option value="">Select type</option>
                   {deductionTypeOptions.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
                 </select>
-                <input value={line.amount} onChange={(event) => { setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry))); invalidateVerification(); }} placeholder={mode === "DISTRIBUTED" ? "Total to split" : "Amount"} className={inputCls} />
+                <input value={line.amount} onChange={(event) => { setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, amount: event.target.value } : entry))); invalidateVerification(); }} placeholder={line.mode === "DISTRIBUTED" ? "Total to split" : "Amount"} className={inputCls} />
+                <select
+                  value={applyAsValue(line)}
+                  onChange={(event) => {
+                    const patch = applyAsPatch(event.target.value);
+                    setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, ...patch } : entry)));
+                    invalidateVerification();
+                  }}
+                  className={inputCls}
+                  title="How this line's Amount applies across the selected GRNs"
+                >
+                  {APPLY_AS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
                 <input value={line.percentage} onChange={(event) => { setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, percentage: event.target.value } : entry))); invalidateVerification(); }} placeholder="%" className={inputCls} />
                 <input value={line.round_off} onChange={(event) => { setDeductionLines((current) => current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, round_off: event.target.value } : entry))); invalidateVerification(); }} placeholder="Round off" className={inputCls} />
                 <select
@@ -443,32 +520,13 @@ export default function BulkComponentMapPage() {
           </div>
         </DrawerSection>
 
-        <DrawerSection eyebrow="Value-Application Mode" title="How each line's Amount applies across the selected GRNs">
-          <div className="flex flex-wrap items-center gap-4">
-            <label className="flex items-center gap-1.5 text-[12px] font-medium text-slate-700">
-              <input type="radio" checked={mode === "SAME_TO_MANY"} onChange={() => { setMode("SAME_TO_MANY"); invalidateVerification(); }} />
-              Same-to-Many — same rate/amount on every selected GRN
-            </label>
-            <label className="flex items-center gap-1.5 text-[12px] font-medium text-slate-700">
-              <input type="radio" checked={mode === "DISTRIBUTED"} onChange={() => { setMode("DISTRIBUTED"); invalidateVerification(); }} />
-              Distributed — one lump-sum total split across the selected GRNs
-            </label>
-            {mode === "DISTRIBUTED" ? (
-              <select value={splitMethod} onChange={(event) => { setSplitMethod(event.target.value); invalidateVerification(); }} className={`${inputCls} w-auto`}>
-                <option value="EQUALLY">Equally</option>
-                <option value="AS_PER_QTY">As-per-GRN-qty</option>
-              </select>
-            ) : null}
-          </div>
-        </DrawerSection>
-
         <DrawerSection eyebrow="Invoice Verification" title="Confirm before applying">
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <input type="checkbox" checked={invoiceVerified} onChange={(event) => setInvoiceVerified(event.target.checked)} className="h-4 w-4" />
             I Verify
           </label>
           <p className="mt-1 text-[11px] text-slate-500">
-            Applying with this checked records your user ID as Invoice Verified By on every mapped GRN. Changing any line or mode above clears the tick.
+            Applying with this checked records your user ID as Invoice Verified By on every mapped GRN. Changing any line above (including its own Apply As) clears the tick.
           </p>
         </DrawerSection>
 
