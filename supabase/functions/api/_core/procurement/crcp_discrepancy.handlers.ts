@@ -26,6 +26,11 @@ import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
+// §PO12 Tab 1 "smart" component columns (2026-10-06) -- reuses AC01's own
+// per-component breakdown math + column-set assembly exactly, so the Bulk
+// Component Mapper's PO12-origin grid shows the same thing AC01's own grid
+// does, not an independently re-derived (and possibly drifting) copy.
+import { assembleSmartComponentsList, computeComponentBreakdown } from "./ac01.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -183,6 +188,9 @@ function buildDiscrepancyRow(
   stoMap: Map<string, JsonRecord>,
   landedCostMap: Map<string, JsonRecord>,
   transporterMap: Map<string, JsonRecord>,
+  costLinesByLc: Map<string, JsonRecord[]>,
+  deductionLinesByLc: Map<string, JsonRecord[]>,
+  deductionTypeNameMap: Map<string, string>,
 ): JsonRecord {
   const material = materialMap.get(String(grn.material_id));
   const vendor = vendorMap.get(String(grn.vendor_id));
@@ -193,6 +201,13 @@ function buildDiscrepancyRow(
   const billToCompany = companyMap.get(billToCompanyId);
   const shipToCompany = grn.ship_to_company_id ? companyMap.get(String(grn.ship_to_company_id)) : billToCompany;
   const actualReceiverCompany = companyMap.get(String(grn.company_id));
+  // §PO12 Tab 1 "smart" component columns (2026-10-06) -- same math as
+  // AC01's own list, see computeComponentBreakdown's own comment.
+  const rowCostLines = landedCost ? (costLinesByLc.get(String(landedCost.id)) ?? []) : [];
+  const rowDeductionLines = landedCost ? (deductionLinesByLc.get(String(landedCost.id)) ?? []) : [];
+  const { breakdown: componentBreakdown } = computeComponentBreakdown(
+    grn, rowCostLines, rowDeductionLines, deductionTypeNameMap,
+  );
 
   return {
     grn_id: grn.id,
@@ -229,6 +244,7 @@ function buildDiscrepancyRow(
     transporter_name: transporter ? `${transporter.transporter_code} — ${transporter.transporter_name}` : null,
     // 5. AC01 Relation
     landed_cost_total: landedCost ? Number(landedCost.total_cost ?? 0) : 0,
+    component_breakdown: componentBreakdown,
     rate_confirmed: Boolean(grn.rate_confirmed),
     settlement_status: grn.settlement_invoice_id ? "SETTLED" : "PENDING",
     settlement_invoice_id: grn.settlement_invoice_id ?? null,
@@ -333,11 +349,53 @@ export async function fetchCrcpDiscrepancyRows(
     }
   }
 
+  // §PO12 Tab 1 "smart" component columns (2026-10-06) -- fetch each GRN's
+  // own cost/deduction lines (only the latest landed_cost per GRN, same as
+  // landedCostMap above) so buildDiscrepancyRow can compute the same
+  // per-component breakdown AC01's own list already does.
+  const lcIds = [...landedCostMap.values()].map((lc) => String(lc.id));
+  const [costLineRows, deductionLineRows] = await Promise.all([
+    lcIds.length > 0
+      ? fetchInChunks<JsonRecord>(lcIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("landed_cost_line")
+          .select("lc_id, cost_type, amount, entry_mode, has_gst, gst_treatment, gst_rate").in("lc_id", chunk))
+      : Promise.resolve([] as JsonRecord[]),
+    lcIds.length > 0
+      ? fetchInChunks<JsonRecord>(lcIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("landed_cost_deduction_line")
+          .select("lc_id, deduction_type_id, amount, round_off, in_landed").in("lc_id", chunk))
+      : Promise.resolve([] as JsonRecord[]),
+  ]);
+  const deductionTypeIds = [...new Set(
+    deductionLineRows.map((row) => toTrimmedString(row.deduction_type_id)).filter(Boolean),
+  )];
+  const deductionTypeRows = deductionTypeIds.length > 0
+    ? await fetchInChunks<JsonRecord>(deductionTypeIds, (chunk) =>
+      serviceRoleClient.schema("erp_procurement").from("deduction_type_master")
+        .select("id, name").in("id", chunk))
+    : [];
+  const deductionTypeNameMap = new Map(
+    deductionTypeRows.map((row) => [String(row.id), toTrimmedString(row.name) || "Deduction"]),
+  );
+  const costLinesByLc = new Map<string, JsonRecord[]>();
+  for (const line of costLineRows) {
+    const key = String(line.lc_id);
+    if (!costLinesByLc.has(key)) costLinesByLc.set(key, []);
+    costLinesByLc.get(key)!.push(line);
+  }
+  const deductionLinesByLc = new Map<string, JsonRecord[]>();
+  for (const line of deductionLineRows) {
+    const key = String(line.lc_id);
+    if (!deductionLinesByLc.has(key)) deductionLinesByLc.set(key, []);
+    deductionLinesByLc.get(key)!.push(line);
+  }
+
   return grns.map((grn) =>
     buildDiscrepancyRow(
       grn,
       billToByGrnId.get(String(grn.id))!,
       materialMap, vendorMap, companyMap, poMap, stoMap, landedCostMap, transporterMap,
+      costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
     ),
   );
 }
@@ -359,7 +417,28 @@ export async function listCrcpDiscrepancyHandler(
     }
 
     const items = await fetchCrcpDiscrepancyRows(companyId);
-    return okResponse({ items, total: items.length }, ctx.request_id, req);
+
+    // §PO12 Tab 1 "smart" component columns (2026-10-06) -- assembleSmartComponentsList
+    // needs a deduction id -> name map for its label text; re-resolve just the
+    // ids that actually appear in this result set's own component_breakdown
+    // keys (fetchCrcpDiscrepancyRows already resolved these once internally
+    // to compute the breakdown itself, but doesn't expose that map back out).
+    const deductionIdsInUse = [...new Set(
+      items.flatMap((item) =>
+        Object.keys((item.component_breakdown ?? {}) as Record<string, number>)
+          .filter((key) => key.startsWith("deduction:"))
+          .map((key) => key.slice("deduction:".length))),
+    )];
+    const deductionTypeNameMap = new Map<string, string>();
+    if (deductionIdsInUse.length > 0) {
+      const deductionTypeRows = await fetchInChunks<JsonRecord>(deductionIdsInUse, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("deduction_type_master")
+          .select("id, name").in("id", chunk));
+      for (const row of deductionTypeRows) deductionTypeNameMap.set(String(row.id), toTrimmedString(row.name) || "Deduction");
+    }
+    const components = assembleSmartComponentsList(items, deductionTypeNameMap);
+
+    return okResponse({ items, total: items.length, components }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "CRCP_DISCREPANCY_LIST_FAILED";
     return crcpErrorResponse(req, ctx, code, 500, code);

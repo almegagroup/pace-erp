@@ -29,6 +29,13 @@ import {
   previewBulkComponentMap,
   applyBulkComponentMap,
 } from "../procurementApi.js";
+// Reuse the real column sets rather than an independently-trimmed copy
+// (2026-10-06, business owner) -- AC01's own full "smart" grid (dynamic
+// per-component columns included) for the AC01 origin, PO12 Tab 1's own
+// full column set + the same dynamic per-component columns for the PO12
+// origin.
+import { buildColumns, buildComponentColumns } from "./ac01GridColumns.jsx";
+import { COLUMNS as PO12_FULL_COLUMNS } from "../transfer/crcpDiscrepancyColumns.jsx";
 
 // Same vocabulary as AC01Page.jsx's own Section 5/6 editors -- deliberately
 // duplicated rather than imported, since page components here are
@@ -110,32 +117,6 @@ function DrawerSection({ eyebrow, title, children }) {
 }
 const inputCls = "h-[26px] w-full border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500";
 
-const AC01_COLUMNS = [
-  { key: "grn_number", label: "GRN Number", width: "120px" },
-  { key: "grn_date", label: "GRN Date", width: "100px" },
-  { key: "company_code", label: "Company", width: "90px" },
-  { key: "supplier_name", label: "Supplier", width: "160px" },
-  { key: "item_name", label: "Item Name", width: "160px" },
-  { key: "grn_qty", label: "GRN Qty", width: "90px", align: "right" },
-  { key: "invoice_qty", label: "Invoice Qty", width: "90px", align: "right" },
-  { key: "base_uom_code", label: "Base UoM", width: "80px" },
-  { key: "landed_cost_total", label: "Landed Cost", width: "110px", align: "right" },
-];
-const PO12_COLUMNS = [
-  { key: "grn_number", label: "GRN No.", width: "120px" },
-  { key: "grn_date", label: "GRN Date", width: "110px" },
-  { key: "bill_to_company_name", label: "Bill-To Company", width: "170px" },
-  { key: "actual_receiver_company_name", label: "Actual Receiver", width: "170px" },
-  { key: "vendor_name", label: "Vendor", width: "160px" },
-  { key: "material_name", label: "Material", width: "160px" },
-  { key: "grn_qty", label: "GRN Qty", width: "100px", align: "right" },
-  { key: "base_uom_code", label: "UOM", width: "70px" },
-  // Already carried by listCrcpDiscrepancy (buildDiscrepancyRow) -- just not
-  // surfaced here until now. AC01's own list has no equivalent field yet
-  // (separate, pre-existing AC01 gap, not fixed here).
-  { key: "container_number", label: "Container No.", width: "130px" },
-  { key: "landed_cost_total", label: "Landed Cost Total", width: "140px", align: "right" },
-];
 
 export default function BulkComponentMapPage() {
   const navigate = useNavigate();
@@ -166,8 +147,15 @@ export default function BulkComponentMapPage() {
         : listAC01GRNs({ company_id: companyId || undefined, ...ac01Filters, limit: 500 }),
     enabled: Boolean(companyId),
   });
-  const columns = origin === "PO12" ? PO12_COLUMNS : AC01_COLUMNS;
-  const rowKeyField = origin === "PO12" ? "grn_id" : "grn_id";
+  // "Smart" per-component columns (same mechanism as AC01's own list) ride
+  // on top of whichever origin's own full column set applies -- AC01's
+  // buildColumns already includes them; PO12's own static COLUMNS doesn't,
+  // so they're appended explicitly here.
+  const columns = useMemo(() => {
+    const components = Array.isArray(listQuery.data?.components) ? listQuery.data.components : [];
+    return origin === "PO12" ? [...PO12_FULL_COLUMNS, ...buildComponentColumns(components)] : buildColumns(components);
+  }, [origin, listQuery.data]);
+  const rowKeyField = "grn_id";
   const rows = useMemo(() => (Array.isArray(listQuery.data?.items) ? listQuery.data.items : []), [listQuery.data]);
   const filteredRows = useMemo(() => {
     if (origin !== "PO12" || !po12Search.trim()) return rows;
