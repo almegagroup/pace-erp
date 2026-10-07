@@ -79,14 +79,14 @@ function addDaysIso(input: string, days: number): string {
 }
 
 // MTS Page 3 "Date" field (2026-09-17 lock) — declared physical-production
-// date, current-3-days..current only, never future. Deliberately a separate,
+// date, current-7-days..current only, never future. Deliberately a separate,
 // narrower window from manualDocumentDateWindow.ts's 3-CALENDAR-MONTH window
 // (that one is for backdated documents generally; this is "which of the last
 // few days did this actually run"). Informational only — Verify's own
 // posting_date uses this value directly as a label, same pattern as the
 // existing URGENT Current-1 label above; no derivation happens here.
-const PRODUCTION_DATE_WINDOW_DAYS = 3;
-const PRODUCTION_DATE_WINDOW_MESSAGE = "Date must be within the previous 3 days and cannot be in the future.";
+const PRODUCTION_DATE_WINDOW_DAYS = 7;
+const PRODUCTION_DATE_WINDOW_MESSAGE = "Date must be within the previous 7 days and cannot be in the future.";
 function isProductionDateWithinWindow(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const today = todayIso();

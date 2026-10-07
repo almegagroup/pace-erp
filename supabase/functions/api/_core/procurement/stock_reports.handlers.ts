@@ -2802,7 +2802,7 @@ export async function getStockHistoryHandler(
           serviceRoleClient
             .schema("erp_master")
             .from("material_master")
-            .select("id, external_code, material_name, document_name, material_type, base_uom_code")
+            .select("id, external_code, material_name, document_name, material_type, base_uom_code, pack_code")
             .in("id", idChunk)),
         fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
           serviceRoleClient
@@ -2825,6 +2825,40 @@ export async function getStockHistoryHandler(
     const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
     const companyCode = toTrimmedString(companyRows[0]?.company_code) || "—";
 
+    // MTS FG is held as blended base stock, but users transact and plan it in
+    // the pack's outer UOM. Apply that display conversion only where the FG is
+    // actually a PMTS output for this company; MTO/HPS/MTEST remain base-unit
+    // history as designed.
+    const historyPackCodes = [...new Set(materialRows.map((m) => toTrimmedString(m.pack_code)).filter(Boolean))];
+    const [mtsPackingResp, packResp, uomResp] = await Promise.all([
+      materialIdsForLookup.length > 0
+        ? serviceRoleClient.schema("erp_production").from("packing_order")
+          .select("material_id").eq("company_id", companyId).eq("po_type", "PMTS").in("material_id", materialIdsForLookup)
+        : Promise.resolve({ data: [] }),
+      historyPackCodes.length > 0
+        ? serviceRoleClient.schema("erp_production").from("pack_code_master")
+          .select("pack_code, outer_uom_code").in("pack_code", historyPackCodes)
+        : Promise.resolve({ data: [] }),
+      materialIdsForLookup.length > 0
+        ? serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+          .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion").in("material_id", materialIdsForLookup)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const mtsMaterialIds = new Set((mtsPackingResp.data ?? []).map((row: JsonRecord) => toTrimmedString(row.material_id)));
+    const outerUomByPackCode = new Map((packResp.data ?? []).map((row: JsonRecord) => [toTrimmedString(row.pack_code), toTrimmedString(row.outer_uom_code)]));
+    const mtsDisplayByMaterialId = new Map<string, { uomCode: string; factor: number }>();
+    for (const conversion of (uomResp.data ?? []) as JsonRecord[]) {
+      const materialId = toTrimmedString(conversion.material_id);
+      const material = materialMap.get(materialId);
+      const outerUom = outerUomByPackCode.get(toTrimmedString(material?.pack_code));
+      const factor = Number(conversion.conversion_factor ?? 0);
+      if (!mtsMaterialIds.has(materialId) || toTrimmedString(material?.material_type) !== "FG"
+        || conversion.variable_conversion || !outerUom || toTrimmedString(conversion.from_uom_code) !== outerUom
+        || toTrimmedString(conversion.to_uom_code) !== toTrimmedString(material?.base_uom_code)
+        || !Number.isFinite(factor) || factor <= 0) continue;
+      mtsDisplayByMaterialId.set(materialId, { uomCode: outerUom, factor });
+    }
+
     // §130.12 — a bucket column that is zero on EVERY returned row for this
     // executed report is hidden entirely (not just shown as an all-zero
     // column); computed once across the whole result set below.
@@ -2839,12 +2873,14 @@ export async function getStockHistoryHandler(
 
     const detailRows = rpcRows.map((row) => {
       const material = materialMap.get(row.material_id);
+      const display = mtsDisplayByMaterialId.get(row.material_id);
+      const displayFactor = display?.factor ?? 1;
       const sloc = slocMap.get(row.storage_location_id);
       const materialLabel = resolveMaterialLabel(material) || "—";
       const stockTypeCode = toTrimmedString(row.stock_type_code).toUpperCase();
       const buckets: Record<string, number> = {};
       for (const bucketCode of STOCK_HISTORY_BUCKET_ORDER) {
-        buckets[bucketCode] = normalizeNumber(row.buckets?.[bucketCode] ?? 0);
+        buckets[bucketCode] = normalizeNumber(Number(row.buckets?.[bucketCode] ?? 0) / displayFactor);
       }
       return {
         row_key: `${row.material_id}__${stockTypeCode}__${row.storage_location_id}`,
@@ -2855,11 +2891,12 @@ export async function getStockHistoryHandler(
         material: materialLabel,
         external_code: toTrimmedString(material?.external_code) || "—",
         base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
+        uom_code: display?.uomCode || toTrimmedString(material?.base_uom_code) || "—",
         stock_status: STOCK_HISTORY_STOCK_TYPE_LABELS[stockTypeCode] || stockTypeCode || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
-        opening: normalizeNumber(row.opening),
+        opening: normalizeNumber(Number(row.opening ?? 0) / displayFactor),
         buckets,
-        closing: normalizeNumber(row.closing),
+        closing: normalizeNumber(Number(row.closing ?? 0) / displayFactor),
       };
     }).sort((left, right) =>
       left.material.localeCompare(right.material)
@@ -2882,6 +2919,7 @@ export async function getStockHistoryHandler(
           material: row.material,
           external_code: row.external_code,
           base_uom_code: row.base_uom_code,
+          uom_code: row.uom_code,
           stock_status: "Total",
           storage_location: "—",
           opening: 0,
@@ -3099,7 +3137,7 @@ export async function getStockHistoryMachineWiseHandler(
       [materialRows, slocRows, machineRows] = await Promise.all([
         fetchInChunks<JsonRecord>(materialIdsForLookup, (idChunk) =>
           serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code")
+            .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, pack_code")
             .in("id", idChunk)),
         fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
           serviceRoleClient.schema("erp_inventory").from("storage_location_master")
@@ -3115,6 +3153,31 @@ export async function getStockHistoryMachineWiseHandler(
     const slocMap = new Map(slocRows.map((row) => [toTrimmedString(row.id), row]));
     const machineMap = new Map(machineRows.map((row) => [toTrimmedString(row.id), row]));
 
+    const historyMachinePackCodes = [...new Set(materialRows.map((m) => toTrimmedString(m.pack_code)).filter(Boolean))];
+    const [historyMachineMtsResp, historyMachinePackResp, historyMachineUomResp] = await Promise.all([
+      serviceRoleClient.schema("erp_production").from("packing_order").select("material_id")
+        .eq("company_id", companyId).eq("po_type", "PMTS").in("material_id", materialIdsForLookup),
+      historyMachinePackCodes.length > 0
+        ? serviceRoleClient.schema("erp_production").from("pack_code_master").select("pack_code, outer_uom_code").in("pack_code", historyMachinePackCodes)
+        : Promise.resolve({ data: [] }),
+      serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+        .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion").in("material_id", materialIdsForLookup),
+    ]);
+    const historyMachineMtsIds = new Set((historyMachineMtsResp.data ?? []).map((row: JsonRecord) => toTrimmedString(row.material_id)));
+    const historyMachineOuterByPack = new Map((historyMachinePackResp.data ?? []).map((row: JsonRecord) => [toTrimmedString(row.pack_code), toTrimmedString(row.outer_uom_code)]));
+    const historyMachineDisplayByMaterialId = new Map<string, { uomCode: string; factor: number }>();
+    for (const conversion of (historyMachineUomResp.data ?? []) as JsonRecord[]) {
+      const materialId = toTrimmedString(conversion.material_id);
+      const material = materialMap.get(materialId);
+      const outerUom = historyMachineOuterByPack.get(toTrimmedString(material?.pack_code));
+      const factor = Number(conversion.conversion_factor ?? 0);
+      if (!historyMachineMtsIds.has(materialId) || toTrimmedString(material?.material_type) !== "FG"
+        || conversion.variable_conversion || !outerUom || toTrimmedString(conversion.from_uom_code) !== outerUom
+        || toTrimmedString(conversion.to_uom_code) !== toTrimmedString(material?.base_uom_code)
+        || !Number.isFinite(factor) || factor <= 0) continue;
+      historyMachineDisplayByMaterialId.set(materialId, { uomCode: outerUom, factor });
+    }
+
     const visibleBuckets = new Set<string>();
     for (const row of groupRows) {
       for (const code of MACHINE_HISTORY_BUCKET_ORDER) {
@@ -3124,6 +3187,8 @@ export async function getStockHistoryMachineWiseHandler(
 
     const detailRows = groupRows.map((row) => {
       const material = materialMap.get(row.materialId);
+      const display = historyMachineDisplayByMaterialId.get(row.materialId);
+      const displayFactor = display?.factor ?? 1;
       const sloc = slocMap.get(row.storageLocationId);
       const machine = row.machineId ? machineMap.get(row.machineId) : null;
       return {
@@ -3137,13 +3202,14 @@ export async function getStockHistoryMachineWiseHandler(
         material: [toTrimmedString(material?.material_name), toTrimmedString(material?.document_name)].filter(Boolean).join(" — ") || "—",
         external_code: toTrimmedString(material?.external_code) || "—",
         base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
+        uom_code: display?.uomCode || toTrimmedString(material?.base_uom_code) || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
         machine_label: machine
           ? [toTrimmedString(machine.machine_code), toTrimmedString(machine.machine_name)].filter(Boolean).join(" - ")
           : "Unassigned",
-        opening: row.opening,
-        buckets: row.buckets,
-        closing: row.closing,
+        opening: Number((row.opening / displayFactor).toFixed(6)),
+        buckets: Object.fromEntries(MACHINE_HISTORY_BUCKET_ORDER.map((code) => [code, Number(((row.buckets[code] ?? 0) / displayFactor).toFixed(6))])),
+        closing: Number((row.closing / displayFactor).toFixed(6)),
       };
     }).sort((left, right) =>
       left.material.localeCompare(right.material)
@@ -3163,6 +3229,7 @@ export async function getStockHistoryMachineWiseHandler(
           material: row.material,
           external_code: row.external_code,
           base_uom_code: row.base_uom_code,
+          uom_code: row.uom_code,
           storage_location: "—",
           machine_label: "Total",
           opening: 0,

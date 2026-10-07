@@ -2384,7 +2384,16 @@ async function prepareUnifiedSoLine(
       baseQty = parsePositiveNumber(line.base_qty);
       if (!baseQty) throw new Error("SO_LINE_BASE_QTY_REQUIRED");
       perPackQty = parsePositiveNumber(line.per_pack_qty);
-      packQty = perPackQty ? Number((baseQty / perPackQty).toFixed(6)) : null;
+      if (!perPackQty) throw new Error("SO_LINE_PACK_QTY_REQUIRED");
+      const exactPackQty = baseQty / perPackQty;
+      // MTEST's chosen SKU is the finished sample pack itself (for example,
+      // one 5 KG BBL).  Fractional packs would post a base-KG quantity that
+      // contradicts the actual physical sample and later corrupt both P601
+      // stock and PR25's dispatch reconciliation.
+      if (Math.abs(exactPackQty - Math.round(exactPackQty)) > 0.000001) {
+        throw new Error("SO_LINE_MTEST_FULL_PACK_QTY_REQUIRED");
+      }
+      packQty = Math.round(exactPackQty);
       packUomCode = toTrimmedString(line.pack_uom_code) || "BBL";
       // Corrected 2026-08-28 (business owner): MTEST used to hardcode this
       // to NULL (auto-derived from SO Date client-side instead) -- now a

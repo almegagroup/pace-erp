@@ -7,6 +7,7 @@
  */
 
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
@@ -19,6 +20,19 @@ import { fetchPackSizeOptions } from "./mts_packing_plan.handlers.ts";
 type JsonRecord = Record<string, unknown>;
 const EPSILON = 0.0001;
 const OPEN_RESERVATION_STATUSES = ["OPEN", "PARTIAL"];
+const MTS_PRODUCTION_DATE_WINDOW_DAYS = 7;
+
+function addDaysIso(input: string, days: number): string {
+  const date = new Date(`${input}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function isMtsProductionDateWithinWindow(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const today = todayIsoInKolkata();
+  return value >= addDaysIso(today, -MTS_PRODUCTION_DATE_WINDOW_DAYS) && value <= today;
+}
 
 function sessionError(req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
@@ -72,6 +86,9 @@ async function resolveSessionHeader(body: JsonRecord, ctx: ProdHandlerContext, a
   const batchStartSerial = parsePositiveInt(header.batch_start_serial);
   if (!companyId || !materialId || !strokeMasterId || !machineId || !segmentCode || !productionDate || !shiftId || !batchSize || !numberOfBatches || !batchStartSerial) {
     throw new Error("PROD_MTS_SESSION_HEADER_INVALID");
+  }
+  if (!isMtsProductionDateWithinWindow(productionDate)) {
+    throw new Error("PROD_PO_PRODUCTION_DATE_OUTSIDE_ALLOWED_WINDOW");
   }
   if (numberOfBatches > 500) throw new Error("PROD_BATCH_RANGE_INVALID");
   try {

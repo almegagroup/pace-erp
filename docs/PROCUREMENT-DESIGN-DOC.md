@@ -2520,6 +2520,24 @@ list. The create payload defaults `invoice_number=null`, `invoice_date=null`,
 posts immediately (at rate 0, per the existing fallback) — only the commercial/invoice side is
 deferred.
 
+**Amendment — commercial completeness and unit integrity (LOCKED 2026-10-06):**
+- If a PO UOM differs from the material base UOM, GRN posting requires a positive captured
+  conversion factor. The Save action remains unavailable until it is present, and the API
+  enforces the same rule; `1 MT = 1000 KG` can never silently become `1 KG` stock.
+- GST % is required for every invoice-known GRN; `0` is a valid explicit value. For an
+  invoice-later Bulk GRN it remains deferred with the other commercial values.
+- The invoice-later Bulk GRN also leaves **Ship-To blank** at physical receipt time: the vendor
+  invoice does not yet exist, so a Ship-To value cannot be inferred. Invoice Mapping captures
+  mandatory GST % and, for CRCP documents, a Ship-To company selected from that document's own
+  allow-list. PO12 shows blank until that mapping is complete.
+- Reports must never pair a base-UOM label with a transaction-UOM quantity. AC01 displays its
+  stated Base UOM quantities after applying the saved factor; Gate Entry continues to display
+  both its GE quantity and its matching transaction UOM together.
+- A Bulk Gate Entry's displayed PO quantity is the live available balance: PO line `open_qty`
+  less active, not-yet-GRN Gate Entries. Posted GRNs are already reflected in `open_qty`; a
+  pruned/cancelled GE releases its reservation automatically. The same balance is rechecked on
+  save to prevent a stale drawer from overbooking the PO.
+
 **The Invoice Mapping page** (a dedicated page, not a drawer — decided for column clarity: a
 drawer's left/right split would cramp the many-column table into half the screen width):
 reached via a new "Invoice Mapping" button on the GRN List page.

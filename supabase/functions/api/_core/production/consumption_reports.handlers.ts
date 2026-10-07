@@ -129,13 +129,30 @@ export async function listRmPmSaleReportHandler(req: Request, ctx: ProdHandlerCo
     // sitting there with po_type='PTEST', invisible to this report the whole time.
     let recoQuery = serviceRoleClient
       .schema("erp_production").from("dispatch_reco")
-      .select("material_id, tally_invoice_date, standard_qty, actual_qty, ap_approved_qty")
+      .select("id, reversal_of_id, material_id, tally_invoice_date, standard_qty, actual_qty, ap_approved_qty")
       .eq("company_id", companyId).eq("po_type", "PTEST").eq("is_voided", false);
     recoQuery = (recoQuery as unknown as { gte: (c: string, v: string) => typeof recoQuery }).gte("tally_invoice_date", dateFrom);
     recoQuery = (recoQuery as unknown as { lte: (c: string, v: string) => typeof recoQuery }).lte("tally_invoice_date", dateTo);
     const { data: recoRows, error: recoErr } = await recoQuery;
     if (recoErr) throw new Error("PROD_RMPM_SALE_RECO_LOOKUP_FAILED");
-    for (const row of (recoRows ?? []) as JsonRecord[]) {
+    // A cancelled dispatch leaves an append-only negative reconciliation row
+    // whose reversal_of_id points at the now-voided original.  This report
+    // intentionally excludes voided originals, so it must exclude that paired
+    // negative row as well; otherwise a corrected/reissued sample is short by
+    // the cancelled quantity (CMP006 September 2026 exposed this as 2 KG).
+    const activeRecoRows = (recoRows ?? []) as JsonRecord[];
+    const reversalSourceIds = [...new Set(activeRecoRows
+      .map((row) => toTrimmedString(row.reversal_of_id)).filter(Boolean))];
+    const reversalSourceRows = reversalSourceIds.length > 0
+      ? await fetchInChunks<JsonRecord>(reversalSourceIds, (chunk) =>
+          serviceRoleClient.schema("erp_production").from("dispatch_reco")
+            .select("id, is_voided").in("id", chunk))
+      : [];
+    const voidedReversalSourceIds = new Set(reversalSourceRows
+      .filter((row) => row.is_voided === true).map((row) => toTrimmedString(row.id)));
+
+    for (const row of activeRecoRows) {
+      if (voidedReversalSourceIds.has(toTrimmedString(row.reversal_of_id))) continue;
       const materialId = toTrimmedString(row.material_id);
       if (!materialId) continue;
       const month = monthOf(toTrimmedString(row.tally_invoice_date));

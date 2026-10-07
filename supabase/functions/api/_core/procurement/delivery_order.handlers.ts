@@ -42,6 +42,7 @@ type ProcurementHandlerContext = {
 
 const DO_SOURCE_TYPES = new Set(["SALES_ORDER", "STO"]);
 const RESERVATION_OPEN_STATUSES = ["OPEN", "PARTIAL"];
+const DELIVERY_ORDER_DATE_FILTER_FIELDS = new Set(["DC_DATE", "LR_DATE", "INVOICE_DATE", "TALLY_INVOICE_DATE"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -53,6 +54,10 @@ function toTrimmedString(value: unknown): string {
 
 function toUpperTrimmedString(value: unknown): string {
   return toTrimmedString(value).toUpperCase();
+}
+
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function parsePositiveNumber(value: unknown): number | null {
@@ -932,6 +937,21 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const status = toTrimmedString(url.searchParams.get("status")).toUpperCase();
     const { page, perPage: limit, offset, search } = parseListSearchPage(url);
     const createdFirst = toUpperTrimmedString(url.searchParams.get("priority")) === "CREATED_FIRST";
+    const dateField = toUpperTrimmedString(url.searchParams.get("date_field"));
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
+    const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+
+    // SO02/SO03 list data is server-paged, so a date range must be applied by
+    // the paging RPC against the same date header that the user selected.
+    // A partial or invalid range must never silently return an unfiltered list.
+    if (dateFrom || dateTo) {
+      if (!DELIVERY_ORDER_DATE_FILTER_FIELDS.has(dateField)) {
+        return doErrorResponse(req, ctx, "DO_LIST_DATE_FIELD_INVALID", 400, "Select a valid date column for the date range.");
+      }
+      if (!dateFrom || !dateTo || !isIsoDate(dateFrom) || !isIsoDate(dateTo) || dateFrom > dateTo) {
+        return doErrorResponse(req, ctx, "DO_LIST_DATE_RANGE_INVALID", 400, "Provide a valid From Date and To Date.");
+      }
+    }
 
     if (companyId) {
       try {
@@ -954,6 +974,9 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         p_limit: limit,
         p_offset: offset,
         p_created_first: createdFirst,
+        p_date_field: dateFrom && dateTo ? dateField : null,
+        p_date_from: dateFrom || null,
+        p_date_to: dateTo || null,
       });
     if (pageError) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
     const orderedIds = ((pageRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.delivery_order_id)).filter(Boolean);

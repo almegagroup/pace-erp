@@ -61,6 +61,8 @@ export default function GRNInvoiceMappingPage() {
   const [invoiceDate, setInvoiceDate] = useState("");
   const [invoiceQty, setInvoiceQty] = useState("");
   const [invoiceRate, setInvoiceRate] = useState("");
+  const [gstPct, setGstPct] = useState("");
+  const [shipToCompanyId, setShipToCompanyId] = useState("");
   const [mapToExisting, setMapToExisting] = useState(false);
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -91,8 +93,16 @@ export default function GRNInvoiceMappingPage() {
     return rows.filter((row) => columns.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
   }, [rows, search, columns]);
 
-  const selectedRows = filteredRows.filter((row) => selectedIds.includes(row.id));
+  // Keep validation bound to every selected GRN, even after the user narrows
+  // the search box and a selected CRCP row is no longer visible.
+  const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
   const selectedTotalQty = selectedRows.reduce((sum, row) => sum + Number(row.received_qty ?? 0), 0);
+  const selectedNeedsShipTo = selectedRows.some((row) => row.requires_ship_to);
+  const selectedShipToOptions = useMemo(() => {
+    const byId = new Map();
+    for (const row of selectedRows) for (const option of (row.ship_to_options ?? [])) byId.set(option.id, option);
+    return [...byId.values()];
+  }, [selectedRows]);
   const allVisibleSelected = filteredRows.length > 0 && filteredRows.every((row) => selectedIds.includes(row.id));
 
   function toggleRow(id) {
@@ -122,6 +132,8 @@ export default function GRNInvoiceMappingPage() {
       const existing = await checkExistingGrnInvoice(effectiveCompanyId, invoiceNumber.trim());
       setInvoiceDate(existing.invoice_date ?? "");
       setInvoiceRate(existing.invoice_rate != null ? String(existing.invoice_rate) : "");
+      setGstPct(existing.gst_pct != null ? String(existing.gst_pct) : "");
+      setShipToCompanyId(existing.ship_to_company_id ?? "");
     } catch (err) {
       const code = err instanceof Error ? err.message : "GRN_MAPPING_CHECK_FAILED";
       setActionError(code === "GRN_MAPPING_INVOICE_NOT_FOUND" ? "No existing GRN carries this invoice number yet." : code);
@@ -134,7 +146,8 @@ export default function GRNInvoiceMappingPage() {
     setActionError("");
     setActionNotice("");
     if (selectedIds.length === 0) { setActionError("Select at least one GRN to map."); return; }
-    if (!invoiceNumber.trim() || !invoiceDate || !invoiceRate) { setActionError("Invoice Number, Invoice Date, and Rate are all required."); return; }
+    if (!invoiceNumber.trim() || !invoiceDate || !invoiceRate || String(gstPct).trim() === "") { setActionError("Invoice Number, Invoice Date, Rate, and GST % are all required."); return; }
+    if (selectedNeedsShipTo && !shipToCompanyId) { setActionError("Ship To company is required for the selected CRCP invoice GRN(s)."); return; }
     setSaving(true);
     try {
       await mapGrnInvoice({
@@ -142,9 +155,11 @@ export default function GRNInvoiceMappingPage() {
         invoice_number: invoiceNumber.trim(),
         invoice_date: invoiceDate,
         invoice_rate: Number(invoiceRate),
+        gst_pct: Number(gstPct),
+        ship_to_company_id: shipToCompanyId || null,
       });
       setSelectedIds([]);
-      setInvoiceNumber(""); setInvoiceDate(""); setInvoiceQty(""); setInvoiceRate(""); setMapToExisting(false);
+      setInvoiceNumber(""); setInvoiceDate(""); setInvoiceQty(""); setInvoiceRate(""); setGstPct(""); setShipToCompanyId(""); setMapToExisting(false);
       setActionNotice(`${selectedIds.length} GRN${selectedIds.length === 1 ? "" : "s"} mapped to invoice successfully.`);
       await listQuery.refetch();
       queryClient.invalidateQueries({ queryKey: ["procurement", "grns"] });
@@ -273,7 +288,7 @@ export default function GRNInvoiceMappingPage() {
               Map to existing Invoice
             </label>
           </div>
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-3">
             <ErpDenseFormRow label={<>Invoice Number <span className="text-red-500">*</span></>}>
               <div className="flex gap-2">
                 <input
@@ -324,6 +339,28 @@ export default function GRNInvoiceMappingPage() {
                 className={`h-9 w-full border px-3 text-sm outline-none ${mapToExisting ? "border-slate-200 bg-slate-100 text-slate-600" : "border-slate-300 bg-white focus:border-sky-500"}`}
               />
             </ErpDenseFormRow>
+            <ErpDenseFormRow label={<>GST % <span className="text-red-500">*</span></>}>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={gstPct}
+                onChange={(e) => setGstPct(e.target.value)}
+                readOnly={mapToExisting}
+                className={`h-9 w-full border px-3 text-sm outline-none ${mapToExisting ? "border-slate-200 bg-slate-100 text-slate-600" : "border-slate-300 bg-white focus:border-sky-500"}`}
+              />
+            </ErpDenseFormRow>
+            {selectedNeedsShipTo && (
+              <ErpDenseFormRow label={<>Ship To company <span className="text-red-500">*</span></>}>
+                <select value={shipToCompanyId} onChange={(e) => setShipToCompanyId(e.target.value)} className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
+                  <option value="">— Select —</option>
+                  {selectedShipToOptions.map((company) => (
+                    <option key={company.id} value={company.id}>{company.company_code} — {company.company_name}</option>
+                  ))}
+                </select>
+              </ErpDenseFormRow>
+            )}
           </div>
           {invoiceQty && (
             <p className={`mt-2 text-xs ${Math.abs(Number(invoiceQty) - selectedTotalQty) < 0.0001 ? "text-emerald-700" : "text-amber-700"}`}>

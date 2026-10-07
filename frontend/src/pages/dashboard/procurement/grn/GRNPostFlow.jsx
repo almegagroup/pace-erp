@@ -342,14 +342,22 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     openScreen("PROC_TRANSPORTER_MASTER");
   }
 
-  // §3.2.7 "GRN-level Ship To Leg capture" -- mandatory, Save disabled until picked.
-  const shipToMissing = crcpEnabled && !shipToCompanyId;
+  // An invoice-later Bulk GRN has no trustworthy invoice Ship-To yet. That
+  // commercial leg is captured in Invoice Mapping; all other CRCP GRNs must
+  // still select it before posting.
+  const shipToMissing = crcpEnabled && !isBulkNoInvoice && !shipToCompanyId;
+  const conversionMissing = Boolean(uomMismatch && !(perPackQtyNum > 0));
+  // Empty and zero are intentionally different: 0 is valid GST, while an
+  // empty field means the invoice has not been fully captured.
+  const gstMissing = !isBulkNoInvoice && String(gstPct).trim() === "";
 
   async function handleSave() {
     setError("");
     if (!storageLocationId) { setError("Storage location is required. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
     if (discrepancy !== 0 && !discrepancyRemarks.trim()) { setError("Remarks are required when received qty differs from invoice qty. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
+    if (conversionMissing) { setError(`Enter a positive conversion factor: 1 ${geLine.uom_code} = how many ${geLine.base_uom_code}. (Tab: Receipt)`); setActiveTab(TABS.indexOf("Receipt")); return; }
     if (shipToMissing) { setError("Ship To Location Mentioned In Invoice is required for a CRCP-enabled document. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
+    if (gstMissing) { setError("GST % from the invoice is required. Enter 0 when the invoice is zero-rated. (Tab: Accounts)"); setActiveTab(TABS.indexOf("Accounts")); return; }
     if (geLine.batch_tracking_required && !batchLotNumber.trim()) { setError("Batch/lot number is required for this material. (Tab: Pack & shelf life)"); setActiveTab(TABS.indexOf("Pack & shelf life")); return; }
 
     setSaving(true);
@@ -374,7 +382,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         po_rate: geLine.po_rate ?? null,
         rate_confirmed: isBulkNoInvoice ? false : rateConfirmed,
         invoice_rate: isBulkNoInvoice ? null : (invoiceRate ? Number(invoiceRate) : null),
-        gst_pct: isBulkNoInvoice ? null : (gstPct ? Number(gstPct) : null),
+        gst_pct: isBulkNoInvoice ? null : (String(gstPct).trim() === "" ? null : Number(gstPct)),
         transporter_id: transporterId || null,
         last_mile_transporter_id: lastMileTransporterId || null,
         lr_number: lrNumber || null,
@@ -402,7 +410,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
       notices={error ? [{ key: "grn-form-err", tone: "error", message: error }] : []}
       actions={[
         { key: "cancel", label: "Cancel", tone: "neutral", onClick: onCancel },
-        { key: "save", label: saving ? "Posting…" : "Save & post GRN", tone: "primary", onClick: () => void handleSave(), disabled: saving || shipToMissing },
+        { key: "save", label: saving ? "Posting…" : "Save & post GRN", tone: "primary", onClick: () => void handleSave(), disabled: saving || shipToMissing || conversionMissing || gstMissing },
       ]}
     >
       {/* Tab bar */}
@@ -516,7 +524,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         )}
 
         {/* §3.2.7 "GRN-level Ship To Leg capture" -- CRCP-general, shown on Receipt tab */}
-        {activeTabName === "Receipt" && crcpEnabled && (
+        {activeTabName === "Receipt" && crcpEnabled && !isBulkNoInvoice && (
           <ErpSectionCard eyebrow="Ship To" title="Ship To Location Mentioned In Invoice">
             <ErpDenseFormRow label={<>Ship To company <span className="text-red-500">*</span></>}>
               <select
@@ -691,7 +699,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
               </p>
             )}
             <div className="mt-3 max-w-xs">
-              <ErpDenseFormRow label="GST % (from invoice)">
+              <ErpDenseFormRow label={<>GST % (from invoice) <span className="text-red-500">*</span></>}>
                 <input type="number" min="0" max="100" step="0.01" value={gstPct} onChange={(e) => setGstPct(e.target.value)}
                   className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
               </ErpDenseFormRow>

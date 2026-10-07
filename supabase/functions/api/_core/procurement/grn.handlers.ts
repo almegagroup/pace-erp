@@ -261,6 +261,7 @@ async function resolveShipToValidation(
   poData: PurchaseOrderRow | null,
   stoData: JsonRecord | null,
   shipToCompanyIdInput: string,
+  allowBlank = false,
 ): Promise<{ shipToCompanyId: string | null; error?: string }> {
   const crcpEnabled = Boolean(poData?.crcp_enabled ?? stoData?.crcp_enabled);
   if (!crcpEnabled) {
@@ -268,6 +269,10 @@ async function resolveShipToValidation(
   }
   const shipToCompanyId = toTrimmedString(shipToCompanyIdInput);
   if (!shipToCompanyId) {
+    // A bulk receipt can legitimately arrive before its commercial invoice.
+    // The invoice (and therefore its Ship-To leg) is captured later in AC/GRN
+    // Invoice Mapping; do not invent a Ship-To at physical receipt time.
+    if (allowBlank) return { shipToCompanyId: null };
     return { shipToCompanyId: null, error: "GRN_SHIP_TO_REQUIRED" };
   }
   const issuingCompanyId = poData
@@ -868,9 +873,14 @@ export async function createAndPostGRNFromLineHandler(
       vendorId = toTrimmedString(stoData.sending_company_id) || null;
     }
 
-    // §3.2.7 "GRN-level Ship To Leg capture" — mandatory whenever the source
-    // PO/STO has crcp_enabled=true, regardless of delivery_type.
-    const shipToResult = await resolveShipToValidation(poData, stoData, toTrimmedString(body.ship_to_company_id));
+    // For a Bulk receipt whose invoice is not with the vehicle, the commercial
+    // fields (including invoice Ship-To) are deliberately deferred to Invoice
+    // Mapping. Every invoice-known GRN still requires the CRCP Ship-To now.
+    const isBulkNoInvoice = toUpperTrimmedString(poData?.delivery_type ?? stoData?.delivery_type) === "BULK"
+      && !toTrimmedString(geLine.bulk_invoice_number);
+    const shipToResult = await resolveShipToValidation(
+      poData, stoData, toTrimmedString(body.ship_to_company_id), isBulkNoInvoice,
+    );
     if (shipToResult.error) {
       const message = shipToResult.error === "GRN_SHIP_TO_REQUIRED"
         ? "Ship To Location (as mentioned in the vendor's invoice) is required for a CRCP-enabled document."
@@ -895,6 +905,10 @@ export async function createAndPostGRNFromLineHandler(
     const poUomCode = toTrimmedString(geLine.uom_code) || baseUomCode;
     const uomMismatch = baseUomCode !== poUomCode;
     const perPackQty = parseNullableNumber(body.per_pack_qty);
+    if (uomMismatch && !(perPackQty && perPackQty > 0)) {
+      return procurementErrorResponse(req, ctx, "GRN_UOM_CONVERSION_REQUIRED", 400,
+        `A positive conversion factor is required: 1 ${poUomCode} = how many ${baseUomCode}.`);
+    }
     const stockQty = uomMismatch && perPackQty && perPackQty > 0
       ? Number((receivedQty * perPackQty).toFixed(6))
       : receivedQty;
@@ -920,6 +934,11 @@ export async function createAndPostGRNFromLineHandler(
     const rateConfirmed = body.rate_confirmed === true;
     const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate) ?? parseNullableNumber(stoLineData?.transfer_price);
     const invoiceRate = parseNullableNumber(body.invoice_rate);
+    const gstPct = parseNullableNumber(body.gst_pct);
+    if (!isBulkNoInvoice && gstPct === null) {
+      return procurementErrorResponse(req, ctx, "GRN_GST_REQUIRED", 400,
+        "GST % from the invoice is required. Enter 0 when the invoice is zero-rated.");
+    }
     const effectiveGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
     // grn_rate is quoted per the PO/transaction UOM (e.g. per PKT) — stock is
     // valued per base UOM (e.g. per NOS), so divide by the same pack factor
@@ -1793,10 +1812,10 @@ export async function listGrnInvoiceMappingCandidatesHandler(
         ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, pace_code").in("id", materialIds)
         : Promise.resolve({ data: [] }),
       poIds.length > 0
-        ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number").in("id", poIds)
+        ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, po_number, company_id, crcp_enabled").in("id", poIds)
         : Promise.resolve({ data: [] }),
       stoIds.length > 0
-        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number").in("id", stoIds)
+        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sending_company_id, crcp_enabled").in("id", stoIds)
         : Promise.resolve({ data: [] }),
       gateEntryIds.length > 0
         ? serviceRoleClient.schema("erp_procurement").from("gate_entry").select("id, vehicle_number").in("id", gateEntryIds)
@@ -1807,6 +1826,29 @@ export async function listGrnInvoiceMappingCandidatesHandler(
     const poMap = new Map<string, JsonRecord>((poResp.data ?? []).map((p: JsonRecord) => [String(p.id), p]));
     const stoMap = new Map<string, JsonRecord>((stoResp.data ?? []).map((s: JsonRecord) => [String(s.id), s]));
     const gateEntryMap = new Map<string, JsonRecord>((gateEntryResp.data ?? []).map((g: JsonRecord) => [String(g.id), g]));
+
+    const [poCrcpResp, stoCrcpResp] = await Promise.all([
+      poIds.length > 0 ? serviceRoleClient.schema("erp_procurement").from("purchase_order_crcp_company").select("po_id, company_id").in("po_id", poIds) : Promise.resolve({ data: [] }),
+      stoIds.length > 0 ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_crcp_company").select("sto_id, company_id").in("sto_id", stoIds) : Promise.resolve({ data: [] }),
+    ]);
+    const shipToIds = [...new Set([
+      ...(poResp.data ?? []).map((row: JsonRecord) => toTrimmedString(row.company_id)),
+      ...(stoResp.data ?? []).map((row: JsonRecord) => toTrimmedString(row.sending_company_id)),
+      ...(poCrcpResp.data ?? []).map((row: JsonRecord) => toTrimmedString(row.company_id)),
+      ...(stoCrcpResp.data ?? []).map((row: JsonRecord) => toTrimmedString(row.company_id)),
+    ].filter(Boolean))];
+    const { data: shipToCompanies } = shipToIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, state_name").in("id", shipToIds)
+      : { data: [] };
+    const shipToCompanyMap = new Map((shipToCompanies ?? []).map((row: JsonRecord) => [String(row.id), row]));
+    const poShipToIds = new Map<string, Set<string>>();
+    const stoShipToIds = new Map<string, Set<string>>();
+    for (const row of (poCrcpResp.data ?? []) as JsonRecord[]) {
+      const ids = poShipToIds.get(String(row.po_id)) ?? new Set<string>(); ids.add(String(row.company_id)); poShipToIds.set(String(row.po_id), ids);
+    }
+    for (const row of (stoCrcpResp.data ?? []) as JsonRecord[]) {
+      const ids = stoShipToIds.get(String(row.sto_id)) ?? new Set<string>(); ids.add(String(row.company_id)); stoShipToIds.set(String(row.sto_id), ids);
+    }
 
     // An STO-sourced GRN stores the sending company's id in `vendor_id`
     // (same convention hydrateGrn()'s resolveVendorName() already follows)
@@ -1827,6 +1869,11 @@ export async function listGrnInvoiceMappingCandidatesHandler(
       const po = g.po_id ? poMap.get(String(g.po_id)) : null;
       const sto = g.sto_id ? stoMap.get(String(g.sto_id)) : null;
       const gateEntry = gateEntryMap.get(String(g.gate_entry_id));
+      const requiresShipTo = Boolean(po?.crcp_enabled ?? sto?.crcp_enabled);
+      const allowedShipToIds = new Set<string>([
+        toTrimmedString(po?.company_id ?? sto?.sending_company_id),
+        ...(po ? [...(poShipToIds.get(String(po.id)) ?? [])] : [...(stoShipToIds.get(String(sto?.id)) ?? [])]),
+      ].filter(Boolean));
       return {
         id: g.id,
         grn_number: g.grn_number,
@@ -1842,6 +1889,10 @@ export async function listGrnInvoiceMappingCandidatesHandler(
         invoice_number: g.invoice_number ?? null,
         invoice_date: g.invoice_date ?? null,
         invoice_rate: g.invoice_rate ?? null,
+        gst_pct: g.gst_pct ?? null,
+        requires_ship_to: requiresShipTo,
+        ship_to_company_id: g.ship_to_company_id ?? null,
+        ship_to_options: [...allowedShipToIds].map((id) => shipToCompanyMap.get(id)).filter(Boolean),
       };
     });
 
@@ -1871,7 +1922,7 @@ export async function checkExistingGrnInvoiceHandler(
     }
     const { data: existing } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
-      .select("invoice_number, invoice_date, invoice_rate")
+      .select("invoice_number, invoice_date, invoice_rate, gst_pct, ship_to_company_id")
       .eq("company_id", companyId).eq("invoice_number", invoiceNumber)
       .limit(1).maybeSingle();
 
@@ -1882,6 +1933,8 @@ export async function checkExistingGrnInvoiceHandler(
       invoice_number: existing.invoice_number,
       invoice_date: existing.invoice_date,
       invoice_rate: existing.invoice_rate,
+      gst_pct: existing.gst_pct,
+      ship_to_company_id: existing.ship_to_company_id,
     }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_MAPPING_CHECK_FAILED";
@@ -1900,8 +1953,10 @@ export async function mapGrnInvoiceHandler(
     const invoiceNumber = toTrimmedString(body.invoice_number);
     const invoiceDate = toTrimmedString(body.invoice_date);
     const invoiceRate = parseNullableNumber(body.invoice_rate);
-    if (grnIds.length === 0 || !invoiceNumber || !invoiceDate || invoiceRate === null) {
-      return procurementErrorResponse(req, ctx, "GRN_MAPPING_MAP_INVALID", 400, "grn_ids, invoice_number, invoice_date, and invoice_rate are all required.");
+    const gstPct = parseNullableNumber(body.gst_pct);
+    const shipToCompanyId = toTrimmedString(body.ship_to_company_id);
+    if (grnIds.length === 0 || !invoiceNumber || !invoiceDate || invoiceRate === null || gstPct === null) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_MAP_INVALID", 400, "grn_ids, invoice number/date/rate, and GST % are all required.");
     }
 
     const grns = await fetchInChunks<JsonRecord>(grnIds, (idChunk) =>
@@ -1909,6 +1964,7 @@ export async function mapGrnInvoiceHandler(
     if (grns.length !== grnIds.length) {
       return procurementErrorResponse(req, ctx, "GRN_MAPPING_GRN_NOT_FOUND", 404, "One or more selected GRNs were not found.");
     }
+    const shipToByGrnId = new Map<string, string | null>();
     for (const grn of grns) {
       const grnCompanyId = String(grn.company_id);
       try {
@@ -1923,6 +1979,18 @@ export async function mapGrnInvoiceHandler(
       if (!canMap) {
         return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have EDIT access to GRNs at this company.");
       }
+      const [poResp, stoResp] = await Promise.all([
+        grn.po_id ? serviceRoleClient.schema("erp_procurement").from("purchase_order").select("*").eq("id", String(grn.po_id)).maybeSingle() : Promise.resolve({ data: null }),
+        grn.sto_id ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("*").eq("id", String(grn.sto_id)).maybeSingle() : Promise.resolve({ data: null }),
+      ]);
+      const shipTo = await resolveShipToValidation(
+        (poResp.data ?? null) as PurchaseOrderRow | null, (stoResp.data ?? null) as JsonRecord | null, shipToCompanyId,
+      );
+      if (shipTo.error) {
+        return procurementErrorResponse(req, ctx, shipTo.error, 400,
+          shipTo.error === "GRN_SHIP_TO_REQUIRED" ? "Ship To company is required for a CRCP invoice." : "Selected Ship To company is not valid for this CRCP document.");
+      }
+      shipToByGrnId.set(String(grn.id), shipTo.shipToCompanyId);
     }
 
     const results: JsonRecord[] = [];
@@ -1937,6 +2005,8 @@ export async function mapGrnInvoiceHandler(
           invoice_number: invoiceNumber,
           invoice_date: invoiceDate,
           invoice_rate: invoiceRate,
+          gst_pct: gstPct,
+          ship_to_company_id: shipToByGrnId.get(String(grn.id)) ?? null,
           rate_confirmed: true,
           last_updated_at: new Date().toISOString(),
         })
@@ -2006,6 +2076,8 @@ export async function unmapGrnInvoiceHandler(
           invoice_number: null,
           invoice_date: null,
           invoice_rate: null,
+          gst_pct: null,
+          ship_to_company_id: null,
           rate_confirmed: false,
           last_updated_at: new Date().toISOString(),
         })

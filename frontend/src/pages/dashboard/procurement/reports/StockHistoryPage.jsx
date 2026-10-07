@@ -140,7 +140,7 @@ function MachineWiseStockHistoryDrawer({ visible, onClose, params }) {
     },
     { key: "external_code", label: "External Code", width: "150px", render: (row) => row.external_code || "—" },
     { key: "material_type", label: "Type", width: "80px" },
-    { key: "base_uom_code", label: "UOM", width: "80px" },
+    { key: "uom_code", label: "UOM", width: "80px" },
     { key: "storage_location", label: "SLoc", width: "90px" },
     { key: "machine_label", label: "Machine", width: "150px" },
     {
@@ -328,7 +328,7 @@ export default function StockHistoryPage() {
       { key: "material_type", label: "Type", width: "80px" },
       { key: "material", label: "Material", width: "260px" },
       { key: "external_code", label: "External Code", width: "160px" },
-      { key: "base_uom_code", label: "UOM", width: "80px" },
+      { key: "uom_code", label: "UOM", width: "80px" },
       { key: "storage_location", label: "SLoc", width: "100px" },
       { key: "stock_status", label: "Status", width: "140px" },
       {
