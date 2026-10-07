@@ -9269,5 +9269,59 @@
         "skipAcl": false
       }
     ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/accounts/BulkComponentMapPage.jsx",
+    "dependencyCount": 6,
+    "deps": [
+      {
+        "fn": "listAC01GRNs",
+        "method": "GET",
+        "path": "/api/procurement/ac01/grns",
+        "resourceCode": "PROC_IV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listCrcpDiscrepancy",
+        "method": "GET",
+        "path": "/api/procurement/crcp-discrepancy",
+        "resourceCode": "PROC_PLANT_TRANSFER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listDeductionTypes",
+        "method": "GET",
+        "path": "/api/procurement/ac01/deduction-types",
+        "resourceCode": "PROC_IV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listBulkComponentMapChaOptions",
+        "method": "GET",
+        "path": "/api/procurement/bulk-component-map/cha-options",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      },
+      {
+        "fn": "previewBulkComponentMap",
+        "method": "POST",
+        "path": "/api/procurement/bulk-component-map/preview",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      },
+      {
+        "fn": "applyBulkComponentMap",
+        "method": "POST",
+        "path": "/api/procurement/bulk-component-map/apply",
+        "resourceCode": "UNRESOLVED",
+        "action": "?",
+        "skipAcl": true
+      }
+    ]
   }
 ]
