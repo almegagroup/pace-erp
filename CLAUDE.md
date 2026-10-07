@@ -1204,6 +1204,17 @@ Material / Document Name / External Code. (5) **Bug pattern #15 recurred twice**
 `{data:[...]}` with no `total`, so `fetchProcurement` already unwraps it to the bare array — no
 alternate-UoM dropdown ever appeared. Fixed by reading the array directly (same as IN05/PID).
 
+**✅ MTO/HPS/MTEST Process PO Standard — group-item split rows on Page 3 (2026-10-07, feasibility §144).**
+If a stroke line has a registered alternate / material group and the chosen item's balance does not cover its
+Standard Qty, a blank row appears directly under it: the user picks an item **from that line's own group only** and
+a storage location, and the system fills `min(balance, still-uncovered Standard)`; repeats until covered. Qty is
+**derived, never stored in state** (`processPoSplitRows.js`). No new page (MTS's Page 4 is NOT reused). Rows use MTS's
+`process_order_line` convention (first row `planned_qty` = full Standard, others 0, every split row carries `actual_qty`
+= its share, `stroke_line_id` set only on split rows because the FK is ON DELETE RESTRICT).
+`reserve_process_order_materials()` now reserves `COALESCE(actual_qty, planned_qty)` (migration `20261007120000`).
+**PR10 Edit is blocked on a PO that has split rows** (prune + re-create) — split-aware PR10 is deferred.
+Whole group short = still a hard block (§83.5), no MTS-style confirm modal. Live click-through not yet done.
+
 **✅ IN03 (Current Stock) — full MB52-style redesign DESIGN LOCKED 2026-08-04 (feasibility §116),
 IMPLEMENTATION NOT STARTED.** Came up while starting the Inventory ACL group session (§6 Inventory
 group work below) — business owner flagged the live IN03 page as buggy before deciding its ACL.
