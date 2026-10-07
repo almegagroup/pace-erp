@@ -524,18 +524,24 @@ export async function createCrcpCostComponentHandler(
 
     // Reuse the GRN's existing landed_cost header if one already exists
     // (created by the Actual Receiver's own AC01, or by an earlier CRCP
-    // entry) -- never a second header per GRN. itc_owner_company_id is set
-    // to this caller's (Bill-To's) own company on first creation of the
-    // header for a CRCP GRN; an already-existing header's itc_owner is left
-    // untouched (it was already correctly set, either by this same path
-    // earlier, or defaults to the GRN company for an ordinary purchase --
-    // which this path can only ever reach for a CRCP-enabled document, so
-    // that default case does not apply here in practice).
+    // entry) -- never a second header per GRN.  A pre-existing AC01 header
+    // may predate the ITC-owner invariant, so explicitly repair its owner to
+    // Bill-To here as well.  The database trigger is the final authority;
+    // this update makes the intent visible at this CRCP-specific write path.
     const { data: existingLc } = await serviceRoleClient
       .schema("erp_procurement").from("landed_cost")
       .select("id").eq("grn_id", grnId).order("created_at", { ascending: false }).limit(1).maybeSingle();
 
     let lcId = existingLc?.id as string | undefined;
+    if (lcId) {
+      const { error: ownershipError } = await serviceRoleClient
+        .schema("erp_procurement").from("landed_cost")
+        .update({ itc_owner_company_id: billToCompanyId })
+        .eq("id", lcId);
+      if (ownershipError) {
+        return crcpErrorResponse(req, ctx, "CRCP_COST_COMPONENT_OWNER_UPDATE_FAILED", 500, "Unable to assign the CRCP ITC owner.");
+      }
+    }
     if (!lcId) {
       const { data: newLc, error: lcInsertError } = await serviceRoleClient
         .schema("erp_procurement").from("landed_cost")
