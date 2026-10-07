@@ -132,6 +132,7 @@ export const listOldPackingPoBatches = (p) => fetchProd("GET", "/api/production/
 // ── PR24 Order Information System (§122) ──────────────────────────────────────
 export const getOrderInformationReport = (p) => fetchProd("GET", "/api/production/order-information-system", undefined, p);
 export const getBatchCountsReport = (p) => fetchProd("GET", "/api/production/order-information-system/batch-counts", undefined, p);
+export const getMtsProductionRegister = (p) => fetchProd("GET", "/api/production/order-information-system/mts-register", undefined, p);
 
 // ── PR14 Batch Variance Report (§123) ──────────────────────────────────────────
 export const searchBatchVarianceReport = (p) => fetchProd("GET", "/api/production/batch-variance-report", undefined, p);
