@@ -55,12 +55,17 @@ function RequestedQtyCell({ row, isShort, onChange }) {
     queryKey: ["procurement", "ltr-material-uom-conversions", row.material_id],
     queryFn: () => listMaterialUomConversionsForProcurement(row.material_id),
     enabled: Boolean(row.material_id),
+    // The endpoint's response has no `pagination` key, so fetchProcurement already
+    // unwraps it to the bare array -- reading `.data` off it was always undefined,
+    // which is why no alternate-unit dropdown ever appeared (bug pattern #15; the
+    // IN05 Opening Stock/PID callers of this same endpoint read the array directly).
+    select: (response) => (Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : []),
   });
   return (
     <UomQuantityInput
       key={row.material_id}
       baseUomCode={row.uom_code || "KG"}
-      conversions={Array.isArray(conversionsQuery.data?.data) ? conversionsQuery.data.data : []}
+      conversions={conversionsQuery.data ?? []}
       value={row.requested_qty !== "" ? Number(row.requested_qty) : undefined}
       onChange={(baseQty) => onChange(baseQty != null ? String(baseQty) : "")}
       className={isShort ? "border border-rose-400 bg-rose-50 px-1" : ""}

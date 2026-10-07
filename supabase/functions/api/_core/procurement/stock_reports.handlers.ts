@@ -288,6 +288,48 @@ async function buildOpeningStockPoTypeMap(docs: JsonRecord[]): Promise<Map<strin
   );
 }
 
+// Which of these FG materials are MTS SKUs for this company: every SKU a PMTS
+// Packing PO has produced, plus every SKU on an MTS Opening Stock document.
+// Decided per MATERIAL, never per ledger row -- an MTS FG receipt is posted by
+// the Process PO Verify under a Material Document number (e.g. 00000550), not a
+// Packing PO number, so resolving a row's own lot ref to a Packing PO fails and
+// the row used to leak out as a batch/Packing-PO line (found live 2026-10-07,
+// CMP003 54250607320). An SKU is made by exactly one production type, so the
+// material-level answer is the same for every one of its ledger rows.
+async function loadMtsFgMaterialIds(companyId: string, materialIds: string[]): Promise<Set<string>> {
+  const result = new Set<string>();
+  if (materialIds.length === 0) return result;
+  const { data: mtsOpeningDocs, error: openingDocError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("opening_stock_document")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("po_type", "MTS");
+  if (openingDocError) throw new Error("MTS_FG_MATERIAL_LOOKUP_FAILED");
+  const openingDocIds = ((mtsOpeningDocs ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean);
+  const [packingRows, openingLineRows] = await Promise.all([
+    fetchInChunks<JsonRecord>(materialIds, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_production")
+        .from("packing_order")
+        .select("material_id")
+        .eq("company_id", companyId)
+        .eq("po_type", "PMTS")
+        .in("material_id", idChunk)),
+    fetchInChunks<JsonRecord>(openingDocIds, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_procurement")
+        .from("opening_stock_line")
+        .select("material_id")
+        .in("document_id", idChunk)),
+  ]);
+  for (const row of [...packingRows, ...openingLineRows]) {
+    const id = toTrimmedString(row.material_id);
+    if (id) result.add(id);
+  }
+  return result;
+}
+
 // Sales Return P651 documents point directly at a sales_return_item. PR23 can
 // backfill that item's packing_order_id after the immutable stock rows exist,
 // so IN02/IN03 resolve the live relation instead of rewriting ledger history.
@@ -1425,6 +1467,12 @@ export async function getCurrentStockHandler(
         return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
       }
       const poMap = new Map(poRows.map((row) => [toTrimmedString(row.po_number), row]));
+      let mtsFgMaterialIds: Set<string>;
+      try {
+        mtsFgMaterialIds = await loadMtsFgMaterialIds(companyId, ledgerMaterialIds);
+      } catch {
+        return reportErrorResponse(req, ctx, "CURRENT_STOCK_FETCH_FAILED", 500, "Unable to fetch current stock.");
+      }
 
       for (const ledger of typedLedgerRows) {
         const materialId = toTrimmedString(ledger.material_id);
@@ -1467,9 +1515,12 @@ export async function getCurrentStockHandler(
           continue;
         }
 
-        if (sourcePoType === "MTS" || isMtsOpeningStock) {
+        if (mtsFgMaterialIds.has(materialId) || sourcePoType === "MTS" || isMtsOpeningStock) {
           // MTS FG is blended stock. Its stock position is not attributable to
           // an individual batch or Packing PO, including MTS Opening Stock.
+          // Material-level check first (mtsFgMaterialIds): an MTS FG receipt
+          // posted by Process PO Verify carries a Material Document number, so
+          // its row-level Packing PO lookup (sourcePoType) cannot see it.
           if (batchNumbers.length > 0 || packingPoNumbers.length > 0) continue;
           const row = getOrCreateRow(initializeCurrentStockDraftRow({
             company_id: toTrimmedString(ledger.company_id),
@@ -1837,7 +1888,9 @@ export async function getCurrentStockHandler(
       const displayFactor = row.path_kind === "C"
         ? 1
         : (mtsFgDisplay?.factor ?? nosDisplayFactorByMaterialId.get(row.material_id) ?? 1);
-      const uomCode = displayFactor === 1 ? nativeUomCode : "NOS";
+      // User-facing unit is always the pack's outer UoM (BAG/JAR/...), never the base
+      // KG. "NOS" is only the MTR-material alternate-unit label (ribbons etc.).
+      const uomCode = mtsFgDisplay ? mtsFgDisplay.uomCode : (displayFactor === 1 ? nativeUomCode : "NOS");
       const toDisplayQty = (quantity: number) => normalizeNumber(quantity / displayFactor);
       const unrestrictedBaseQty = row.path_kind === "C"
         ? convertFgQtyToPrimary(row.unrestricted_qty, row.fill_qty_per_pack)
@@ -2068,9 +2121,16 @@ export async function getCurrentStockMachineWiseHandler(
     // Limit the report to explicit MTS-mapped locations, then resolve the
     // selected material types because machine_stock_log has no material_type
     // column. This keeps the drawer aligned with IN03's MTS scope and filters.
+    // SFG and INT are never machine-wise stock here (business owner, 2026-10-07):
+    // only the RM/PM staged at a machine (and FG) belong in this drawer, so those
+    // two types are not even selectable -- a filter asking for them returns nothing.
+    const MACHINE_WISE_MATERIAL_TYPES = ["RM", "PM", "FG"];
     const requestedMaterialTypes = materialTypes.length
-      ? materialTypes.filter((value) => ["RM", "PM", "INT", "SFG", "FG"].includes(value))
-      : ["RM", "PM", "INT", "SFG", "FG"];
+      ? materialTypes.filter((value) => MACHINE_WISE_MATERIAL_TYPES.includes(value))
+      : MACHINE_WISE_MATERIAL_TYPES;
+    if (requestedMaterialTypes.length === 0) {
+      return okResponse({ data: [], total: 0 }, ctx.request_id, req);
+    }
     let materialIds = requestedMaterialIds;
     try {
       let typeMaterialQuery = serviceRoleClient
@@ -2827,36 +2887,52 @@ export async function getStockHistoryHandler(
 
     // MTS FG is held as blended base stock, but users transact and plan it in
     // the pack's outer UOM. Apply that display conversion only where the FG is
-    // actually a PMTS output for this company; MTO/HPS/MTEST remain base-unit
-    // history as designed.
+    // an MTS SKU for this company (a PMTS Packing PO output OR an MTS Opening
+    // Stock SKU -- an opening-only SKU has no Packing PO yet and used to fall
+    // back to KG); MTO/HPS/MTEST remain base-unit history as designed.
     const historyPackCodes = [...new Set(materialRows.map((m) => toTrimmedString(m.pack_code)).filter(Boolean))];
-    const [mtsPackingResp, packResp, uomResp] = await Promise.all([
-      materialIdsForLookup.length > 0
-        ? serviceRoleClient.schema("erp_production").from("packing_order")
-          .select("material_id").eq("company_id", companyId).eq("po_type", "PMTS").in("material_id", materialIdsForLookup)
-        : Promise.resolve({ data: [] }),
+    let mtsMaterialIds: Set<string>;
+    try {
+      mtsMaterialIds = await loadMtsFgMaterialIds(companyId, materialIdsForLookup);
+    } catch {
+      return reportErrorResponse(req, ctx, "STOCK_HISTORY_FETCH_FAILED", 500, "Unable to fetch stock history.");
+    }
+    const [packResp, uomResp] = await Promise.all([
       historyPackCodes.length > 0
         ? serviceRoleClient.schema("erp_production").from("pack_code_master")
           .select("pack_code, outer_uom_code").in("pack_code", historyPackCodes)
         : Promise.resolve({ data: [] }),
       materialIdsForLookup.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_uom_conversion")
-          .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion").in("material_id", materialIdsForLookup)
+          .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion").in("material_id", materialIdsForLookup).eq("active", true)
         : Promise.resolve({ data: [] }),
     ]);
-    const mtsMaterialIds = new Set((mtsPackingResp.data ?? []).map((row: JsonRecord) => toTrimmedString(row.material_id)));
-    const outerUomByPackCode = new Map((packResp.data ?? []).map((row: JsonRecord) => [toTrimmedString(row.pack_code), toTrimmedString(row.outer_uom_code)]));
+    // A pack_code can have several pack_code_master rows with different outer UOMs
+    // (e.g. 320 = JAR and BAG) -- keep ALL of them per pack_code, then match the
+    // material's own conversion row against that set. A single-value Map kept only
+    // the last row and could miss the SKU's real outer UOM entirely.
+    const outerUomsByPackCode = new Map<string, Set<string>>();
+    for (const row of (packResp.data ?? []) as JsonRecord[]) {
+      const packCode = toTrimmedString(row.pack_code);
+      const outerUomCode = toTrimmedString(row.outer_uom_code);
+      if (!packCode || !outerUomCode) continue;
+      const set = outerUomsByPackCode.get(packCode) ?? new Set<string>();
+      set.add(outerUomCode);
+      outerUomsByPackCode.set(packCode, set);
+    }
     const mtsDisplayByMaterialId = new Map<string, { uomCode: string; factor: number }>();
     for (const conversion of (uomResp.data ?? []) as JsonRecord[]) {
       const materialId = toTrimmedString(conversion.material_id);
       const material = materialMap.get(materialId);
-      const outerUom = outerUomByPackCode.get(toTrimmedString(material?.pack_code));
+      const outerUoms = outerUomsByPackCode.get(toTrimmedString(material?.pack_code));
+      const fromUomCode = toTrimmedString(conversion.from_uom_code);
       const factor = Number(conversion.conversion_factor ?? 0);
       if (!mtsMaterialIds.has(materialId) || toTrimmedString(material?.material_type) !== "FG"
-        || conversion.variable_conversion || !outerUom || toTrimmedString(conversion.from_uom_code) !== outerUom
+        || conversion.variable_conversion || !outerUoms || !outerUoms.has(fromUomCode)
         || toTrimmedString(conversion.to_uom_code) !== toTrimmedString(material?.base_uom_code)
-        || !Number.isFinite(factor) || factor <= 0) continue;
-      mtsDisplayByMaterialId.set(materialId, { uomCode: outerUom, factor });
+        || !Number.isFinite(factor) || factor <= 0
+        || mtsDisplayByMaterialId.has(materialId)) continue;
+      mtsDisplayByMaterialId.set(materialId, { uomCode: fromUomCode, factor });
     }
 
     // §130.12 — a bucket column that is zero on EVERY returned row for this

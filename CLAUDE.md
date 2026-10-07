@@ -1187,6 +1187,23 @@ all per pack row). Files: `mts_production_register.handlers.ts` (route `.../orde
 Not yet done: live click-through in the deployed app (no login in this environment); IWC-litre display path
 (Stroke `conversion_uom_code`) is implemented but unexercised — prod has no IWC litre MTS PO yet.
 
+**✅ IN03/IN14/IN10 live-test fixes — 2026-10-07 (business owner screenshots, prod CMP003).**
+(1) **MTS FG is now decided per MATERIAL, never per ledger row** (`loadMtsFgMaterialIds()` in
+`stock_reports.handlers.ts` = SKUs of any PMTS Packing PO ∪ SKUs on an MTS Opening Stock doc). Root
+cause of IN03 showing MTS FG as batch + Packing-PO rows: an MTS FG receipt is posted by Process PO
+Verify under a **Material Document number** (e.g. `00000550`), not a Packing PO number, so
+`resolveLotRef()` → `packing_order.source_po_type` could never see it. Same helper now drives IN14's
+outer-UoM display (an opening-only MTS SKU with no PMTS Packing PO yet used to fall back to KG).
+(2) User-facing unit for MTS FG is always the pack's **outer UoM** (BAG...), never "NOS"/KG; IN14's
+`pack_code_master` lookup now keeps ALL outer UoMs per pack_code (320 has both JAR and BAG rows).
+(3) IN03 "Machine wise stock" never shows SFG/INT (RM/PM/FG only) — IN02/IN14's machine-wise drawers
+were NOT changed, same filter can be applied there if wanted. (4) IN03 default columns are now
+Material / Document Name / External Code. (5) **Bug pattern #15 recurred twice** — IN10 Location Transfer
+(`LocationTransferRequestWorkspacePage.jsx`) and SO01 (`SOCreatePage.jsx`) both read
+`listMaterialUomConversionsForProcurement()`'s result via `.data`, but that endpoint returns
+`{data:[...]}` with no `total`, so `fetchProcurement` already unwraps it to the bare array — no
+alternate-UoM dropdown ever appeared. Fixed by reading the array directly (same as IN05/PID).
+
 **✅ IN03 (Current Stock) — full MB52-style redesign DESIGN LOCKED 2026-08-04 (feasibility §116),
 IMPLEMENTATION NOT STARTED.** Came up while starting the Inventory ACL group session (§6 Inventory
 group work below) — business owner flagged the live IN03 page as buggy before deciding its ACL.

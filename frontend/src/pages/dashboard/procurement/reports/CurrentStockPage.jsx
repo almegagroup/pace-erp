@@ -46,6 +46,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
   "company_code",
   "material_type",
   "material_label",
+  "document_name",
   "external_code",
   "uom_code",
   "storage_location_code",
@@ -157,12 +158,8 @@ const NUMERIC_COLUMN_KEYS = new Set([
 ]);
 
 const MACHINE_WISE_COLUMNS = [
-  {
-    key: "material",
-    label: "Material",
-    width: "260px",
-    render: (row) => [row.material_name, row.document_name].filter(Boolean).join(" — ") || "—",
-  },
+  { key: "material_name", label: "Material", width: "170px", render: (row) => row.material_name || "—" },
+  { key: "document_name", label: "Document Name", width: "230px", render: (row) => row.document_name || "—" },
   { key: "external_code", label: "External Code", width: "150px", render: (row) => row.external_code || "—" },
   { key: "material_type", label: "Type", width: "80px", render: (row) => row.material_type || "—" },
   { key: "storage_location_code", label: "SLoc", width: "90px", render: (row) => row.storage_location_code || "—" },
@@ -394,8 +391,8 @@ export default function CurrentStockPage() {
           );
         },
       },
-      { key: "external_code", label: "External Code", width: "180px", render: (row) => row.external_code || "—" },
       { key: "document_name", label: "Document Name", width: "240px", render: (row) => row.document_name || "—" },
+      { key: "external_code", label: "External Code", width: "180px", render: (row) => row.external_code || "—" },
       { key: "uom_code", label: "UOM", width: "90px" },
       { key: "storage_location_code", label: "SLoc", width: "100px" },
       { key: "batch_number", label: "Batch Number", width: "160px", render: (row) => row.batch_number || "—" },

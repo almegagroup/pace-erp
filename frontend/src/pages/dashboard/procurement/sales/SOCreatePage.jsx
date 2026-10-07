@@ -362,7 +362,8 @@ export default function SOCreatePage() {
     if (!materialId) return;
     try {
       const result = await listMaterialUomConversionsForProcurement(materialId);
-      const conversions = Array.isArray(result?.data) ? result.data : [];
+      // fetchProcurement already unwraps this endpoint to the bare array (no `total` key).
+      const conversions = Array.isArray(result) ? result : Array.isArray(result?.data) ? result.data : [];
       const baseUom = material?.base_uom_code || "";
       const codes = new Set([baseUom]);
       for (const row of conversions) {
