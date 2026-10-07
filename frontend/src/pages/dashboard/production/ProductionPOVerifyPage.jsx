@@ -1083,7 +1083,11 @@ export default function ProductionPOVerifyPage() {
                               ) : "P261"}
                             </td>
                             <td className="px-3 py-2 text-center">
-                              {!isCorrectionMode && !row.is_formulation_line && (
+                              {/* Only a row that was never saved can be dropped here: the server posts
+                                  every line stored on the PO, so hiding a saved row on screen would just
+                                  under-count the output while its RM still issues. To remove a saved row
+                                  (e.g. a split-material row), set its Actual Qty to 0. */}
+                              {!isCorrectionMode && !row.is_formulation_line && !row.id && (
                                 <button
                                   onClick={() => setRows((current) => current.filter((entry) => entry.key !== row.key))}
                                   className="text-sm font-medium text-rose-600 hover:underline"

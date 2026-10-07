@@ -374,7 +374,13 @@ async function fetchOrderLines(orderId: string, strokeMasterId: string | null = 
     const allowedAlternateIds = allowedAlternateMap.get(String(line.material_id ?? "")) ?? [];
     return {
       ...line,
-      dosage_pct: line.dosage_pct ?? alternate?.dosage_pct ?? null,
+      // The stroke's dosage is only a fallback for a real formulation line that predates the
+      // stored dosage_pct. An added / split-material row (is_formulation_line=false) shares its
+      // formulation material_id, so without this guard it would borrow that line's dosage and
+      // show (and be written to Reco) as a second full-dosage row. Its own stored value stands.
+      dosage_pct: line.is_formulation_line === false
+        ? (line.dosage_pct ?? null)
+        : (line.dosage_pct ?? alternate?.dosage_pct ?? null),
       material: materialMap.get(String(line.material_id ?? "")) ?? null,
       actual_material: materialMap.get(String(line.actual_material_id ?? "")) ?? null,
       registered_alternate_material_id: alternateMaterialId || null,
