@@ -394,6 +394,33 @@ company), and CMP003 settles it via a **Sales Invoice issued weekly**, not per-t
    be checked for cross-month/cross-FY-boundary backdating tolerance before assuming this
    "just works" the way it does in Tally. **Flagged as a real risk, not yet verified.**
 
+**✅ Checked against the actual build 2026-10-06 — this scenario's need was resolved not by
+extending `sales_invoice` (the mechanism this section originally expected to check), but by
+PO12 Phase C's own dedicated `erp_procurement.settlement_invoice` table (§3.2.7/"Settlement
+(Leg 2 Invoice)", locked+implemented 2026-10-04/05) — a different, narrower, purpose-built
+mechanism. Re-verified all 4 points against that actual mechanism, not the originally-assumed
+one:**
+1. **Resolved.** AC01's "ITC To" + cross-company mirrored-view (2026-10-06 lock, same session
+   as the Bulk Component Mapper Page/UI Design) gives the issuing/Bill-To company read-only
+   visibility into the Actual Receiver's own GRN directly in AC01 — no separate cross-company
+   grant mechanism was needed.
+2. **Already fully supported, verified against live code.** `create_settlement_invoice(
+   p_grn_ids uuid[], ...)` (migration `20261004100000`) already takes an array and requires
+   every checked GRN to share one Bill-To/Actual-Receiver pair — not a 1:1 design.
+   `SettlementInvoicePage.jsx` already has full checkbox multi-select (`toggleRow`/
+   `checkedGrnIds`) wired straight to it. A consolidated invoice spanning many GRNs (weekly
+   or any other grouping the user picks) already works today, no further build needed.
+3. Not re-verified in this pass — `landed_cost`'s own charge-component model is the likely
+   carrier per the original note; revisit if this specific point is ever challenged live.
+4. **Verified NOT a risk for this mechanism**, re-checking the actual table/function rather
+   than the originally-assumed `sales_invoice`/§106 path: `settlement_invoice.tally_invoice_
+   date`/`posting_date` are plain `date NOT NULL` columns with zero CHECK constraint or
+   trigger restricting them to any period/FY window, and `create_settlement_invoice()` itself
+   generates `settlement_number` via `generate_doc_number('SETTLEMENT')` — the **continuous**
+   (never-FY-resetting) numbering family per §8's own table, not the year-scoped Material
+   Document system §106 built. Any date, including one crossing a month or FY boundary, can
+   already be typed freely with no numbering collision or validation block.
+
 ### 3.5 Scenario 5 — Bulk vendor-side invoicing has no structural match today (8 confirmed points)
 
 **Business:** Bulk PO's vendor-side commercial documentation is fundamentally different from
@@ -1329,6 +1356,31 @@ that doc too, not just here — flagged, not yet written there.
   Receive/Report) did not include one; today a mis-posted Transfer has no UI undo path
   (stock sits correctly in In-Transit, recoverable only via a manual correction). Flagged
   for a follow-up pass, same shape as old PTO's own `cancelPTOHandler`/P304, if/when needed.
+
+  **✅ Follow-up built 2026-10-06 (that "if/when needed" pass).** Posts P304 ("P303
+  Reversal", seeded `movement_type_master`, `reverses_movement_type_code = P303`) at the
+  FROM company only — the TO company was never touched by Transfer, so there is nothing to
+  undo there: OUT from `IN_TRANSIT`, IN to `UNRESTRICTED`, same storage location/material/
+  qty/rate as the original line. Only a `TRANSFERRED` (not yet `RECEIVED`) document can be
+  reversed this way. No schema change needed — `returnable_transfer.status`'s own CHECK
+  already allowed `'REVERSED'` and `reversed_by`/`reversed_at`/`reversal_reason` already
+  existed, unused until now (migration `20261006140000`, a new `REVERSE` branch in
+  `complete_returnable_transfer_action()`, re-checking `status = 'TRANSFERRED'` inside the
+  same transaction before flipping it). Backend: `returnable_transfer.handlers.ts`'s
+  `reverseReturnableTransferHandler` (`POST /api/procurement/returnable-transfers/:id/
+  reverse`, gated `PROC_RETURNABLE_TRANSFER:EDIT` — correction tier, mirroring Settlement's
+  own create-vs-correct action-tier split) + `listOutgoingReturnableTransfersHandler`
+  (`GET .../outgoing`, the FROM company's own still-outstanding list this button hangs off,
+  mirroring `listPendingReturnableTransfersHandler`'s shape but filtered by `from_company_id`
+  instead of `to_company_id`). Frontend: new "My outgoing transfers awaiting receipt"
+  section in `ReturnableTransferPage.jsx`'s Transfer tab, a Cancel/Reverse button per row
+  with an optional typed reason (`openActionPrompt`). Verified: `deno check`/`eslint` zero
+  new errors (git-stash baseline diff), `route-acl-registry-guard`/`company-scope-guard`/
+  `company-scope-write-acl-guard`/`stock-posting-guard`/`resource-code-domain-guard`/
+  `jsx-no-undef-guard` all clean, full `vite build` succeeds. Migration applied to Dev,
+  reconciled (`20261006140000`, renamed from an initial `20261006120000` pick that collided
+  with a concurrent session's own same-timestamp file — see CLAUDE.md §8A). **Not yet
+  applied to Prod, not yet click-tested live** (no dev login in this environment).
 - **Why Tab 1 alone can carry CMP003's visibility need (resolves this doc's own earlier "PTO
   has no PO/GRN reference, so a non-source/target company can never see it" concern):** Tab
   1 does not filter by `plant_transfer_order.source_company_id`/`target_company_id`
@@ -2204,8 +2256,15 @@ drawer field vocabulary (`AC01Page.jsx`) verbatim — nothing on the entry side 
   (never a widening of either) — a GRN failing both is reported per-row, not as an opaque
   whole-batch failure.
 - **Not yet decided, deferred with the rest of §3.5.8/Point 3:** per-vendor repeat-usage UX
-  efficiency (still the dedicated future session per Point 3's own deferral) and whether
-  Container Number joins the GRN grid's filter set (depends on Point 3.5.6/3.9.4 landing).
+  efficiency — still the dedicated future session per Point 3's own deferral, unchanged as
+  of the 2026-10-06 re-check.
+- **✅ Container Number — checked 2026-10-06, added for the PO12-origin half only.** Point
+  3.5.6/3.9.4 already landed (GE Bulk-specific fields, 2026-10-02) and PO12 Tab 1's own
+  `listCrcpDiscrepancy` already carries `container_number` (`buildDiscrepancyRow`) — just
+  not previously surfaced as a column here. Added to the page's `PO12_COLUMNS`. AC01's own
+  list has no equivalent field at all yet (`listAC01GRNs` never selects it) — a separate,
+  pre-existing AC01 gap, not fixed in this pass; the AC01-origin half of this page's grid
+  still has no Container Number column until that's addressed.
 
 **Bulk Component Map — Implementation Log (2026-10-06)**
 
@@ -2329,8 +2388,33 @@ drawer field vocabulary (`AC01Page.jsx`) verbatim — nothing on the entry side 
 - Gap: Point 3.4.1 needs to be scoped broadly enough at design time to cover this use case
   too, not just weekly-settlement-tracking; write-authority for the mapping action itself
   (one designated company vs. any CRCP-linked company, duplicate-map risk) is undecided.
-- Final Design: ⏳ NOT YET LOCKED — read-visibility reuse is conceptually agreed; write-
-  authority question open, needs explicit business-owner decision.
+- Final Design: ✅ **LOCKED 2026-10-06 (business owner) — simpler than originally scoped,
+  no cross-company grant at all.** Both visibility and write-authority are scoped purely to
+  the company where unloading physically happened — `goods_receipt.company_id`, the Actual
+  Receiver. Whoever holds ordinary GRN access at that one company sees and maps its own GRNs;
+  no other company (including a CRCP Bill-To that differs from the Actual Receiver) is
+  involved. This **descopes** the original "Business" framing above — Point 3.4.1's broader
+  cross-company read-visibility grant (built for Scenario 4's own weekly-settlement-tracking
+  need) is NOT reused here. A 1-Invoice-covers-many-GRNs-across-sibling-companies case (e.g.
+  CMP011 and CMP005 both receiving against one shared vendor PO) is handled without any
+  shared screen: each company independently maps its own GRN subset, typing the same
+  `invoice_number` text it was physically handed — the string ties the records together for
+  later reporting, no live cross-company visibility needed to achieve that tie.
+  **Verified already correctly implemented** (`mapGrnInvoiceHandler`/`unmapGrnInvoiceHandler`
+  both already resolve authority via `assertCompanyScope(ctx, grn.company_id)` +
+  `canMaintainCompanyResource(ctx, grn.company_id, "PROC_GRN_LIST", "EDIT")` — exactly this
+  rule, pre-existing, no handler change needed).
+  **Real bug found and fixed in the same pass:** `resolveBulkGrnCandidates()` (the
+  list/discovery query behind this action) additionally required the underlying PO's own
+  `company_id` to equal the caller's `companyId` before treating a GRN as a Bulk candidate —
+  correct for the ordinary (non-CRCP) case where PO company = GRN company, but for a genuine
+  CRCP Bulk GRN the PO's own `company_id` (Bill-To) deliberately differs from the GRN's own
+  `company_id` (Actual Receiver), so a real cross-company Bulk GRN could never have surfaced
+  in either company's own mapping list under the old query — not in the Actual Receiver's
+  (PO lookup never matched), and not in the Bill-To's either (this rule excludes it by
+  design). Fixed: candidates are now resolved purely from `goods_receipt.company_id`, then
+  checked for BULK `delivery_type` on whichever PO/STO each GRN already points to, never
+  re-filtering that PO/STO lookup by company. `grn.handlers.ts`'s `resolveBulkGrnCandidates()`.
 
 **Point 3.9.4 — GE needs a Bulk-specific multi-reference design (broadens Point 3.5.6)**
 - Business: Bulk's real reference documents vary (Delivery Challan, Container, Weighment
@@ -2856,11 +2940,12 @@ calculation is incomplete. **This reuses Point 3.4.1's cross-company READ-visibi
 weekly-settlement-tracking use case *and* this GRN-to-invoice-mapping use case, as one
 mechanism, not two.
 
-**Open question (not yet answered):** is the mapping *action* itself (a write, not just a
-read) restricted to **one designated company** (e.g. whoever the PO's issuer/vendor-relation
-owner is), or can **any** CRCP-linked company attempt it — with a real risk of duplicate or
-conflicting maps if both act independently? Needs an explicit business-owner decision before
-this point can be locked.
+**✅ RESOLVED 2026-10-06 (business owner) — see Point 3.9.3's own `Final Design:` entry
+above for the full lock.** The cross-company visibility this subsection opens with is not
+how it was actually built — business owner chose the simpler path: no designated company,
+no cross-company grant at all, both visibility and write-authority scoped purely to the
+Actual Receiver (`goods_receipt.company_id`). A real bug in the candidate-discovery query
+(wrongly also requiring the PO's own company to match) was found and fixed in the same pass.
 
 #### 3.9.4 — GE needs its own Bulk-specific multi-reference design (broadens Point 3.5.6)
 
@@ -2964,7 +3049,7 @@ A→B→C→D→(validation)→E ordering (reordered 2026-09-27 — PTO moved af
 3.9.4 (folded into Track 2 Step 1) are locked. Point 3.9.2 (PO↔Invoice sequential
 balance-fill mapping — a new mechanism, not the same as the Bulk Cost Component Mapper) is
 mostly locked, pending explicit sign-off on the `invoice_date`/`invoice_number` sequencing
-anchor. Point 3.9.3 (mapping visibility + write-authority) is open. Build order: after Track
+anchor. Point 3.9.3 (mapping visibility + write-authority) is ✅ locked 2026-10-06 (see its own entry) and already correctly implemented. Build order: after Track
 2 Step 1, depends on pieces of both Track 1 (Point 3.4.1) and Track 2 (Bulk GE shape).
 
 ---

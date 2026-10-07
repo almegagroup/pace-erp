@@ -918,6 +918,14 @@ export function listPendingReturnableTransfers(companyId) {
   return fetchProcurement("GET", "/api/procurement/returnable-transfers/pending", undefined, { company_id: companyId });
 }
 
+export function listOutgoingReturnableTransfers(companyId) {
+  return fetchProcurement("GET", "/api/procurement/returnable-transfers/outgoing", undefined, { company_id: companyId });
+}
+
+export function reverseReturnableTransfer(id, data) {
+  return fetchProcurement("POST", `/api/procurement/returnable-transfers/${encodeURIComponent(id)}/reverse`, data);
+}
+
 export function getReturnableTransfer(id) {
   return fetchProcurement("GET", `/api/procurement/returnable-transfers/${encodeURIComponent(id)}`);
 }
