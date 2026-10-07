@@ -25806,3 +25806,115 @@ Report: client-side, matches any column) **plus** `ErpDenseGrid` with `virtualiz
 
 **Out of scope / deferred:** IWC litre-entry at MTS creation (§108.2 item 3) is not part of this report;
 the report only *displays* in the Prodshade UOM using the Stroke's own conversion. Chart/summary footers are not requested.
+
+---
+
+## Section 144 — MTO / HPS / MTEST Process PO Standard: group-item split rows on Page 3 (✅ DESIGN LOCKED — 2026-10-07)
+
+**পটভূমি:** Business owner প্রশ্ন তোলেন — MTO/HPS/MTEST-এ কোনো RM line-এর stock কম থাকলে Standard Process PO
+create-ই হয় না (`PROD_PO_INSUFFICIENT_STOCK`, §83.5 hard block)। MTS-এ (§138.12/§138.15) group-alternate
+দিয়ে row ভাগ হয়ে যায়। একই সুবিধা MTO/HPS/MTEST-এও চাওয়া হলো — **নতুন Page 4 ছাড়া, বিদ্যমান Page 3 Material
+Table-এই**, Batch Size বসালেই system derive করবে।
+
+**আজকের অবস্থা (code-verified):** Page 3-এ প্রতি stroke line = ঠিক একটা row। user একটা registered alternate/group
+member বাছতে পারে ও location বদলাতে পারে, কিন্তু row ভাগ হয় না। Available < Standard হলে row লাল + Save বন্ধ।
+`createProcessOrderHandler` PO ও line একসাথে লেখে, তারপর `erp_production.reserve_process_order_materials()` RPC
+(`planned_qty`-ভিত্তিক) দিয়ে atomic check+reserve করে।
+
+### 144.1 — Locked rules (business owner, 2026-10-07)
+
+1. **Page 3-ই, নতুন page নেই।** Batch Size দিলেই system Material Table derive করে (প্রতি stroke line-এর প্রথম row:
+   formulation item + stroke-এর default location, qty = ওই (item, location)-এর available balance ও Standard-এর কম যেটা)।
+2. **Shortage হলে row তৈরি হয়, block না।** যে group line-এর item-এ Standard পূরণ হয়নি, ঠিক তার নিচেই একটা নতুন খালি row
+   নিজে থেকে আসে। user ওই row-তে **item** ও **storage location** বাছে → system ওই (item, location)-এর balance বসায় =
+   `min(balance, বাকি Standard)`। তাতেও না কুলালে আবার নতুন row — Standard পূর্ণ না হওয়া পর্যন্ত।
+3. **Item ও location সবসময় user-ই বাছবে** (system কখনো নিজে item বাছে না — MTS থেকে এটাই পার্থক্য)। Qty system বসায়,
+   user টাইপ করে না।
+4. **Auto-row শুধু group (বা registered-alternate) থাকা line-এ।** নতুন row-এর item dropdown-এ **শুধু ওই stroke line-এর
+   নিজের group/alternate member** আসবে, group-এর বাইরের কোনো item নয়। যে line-এ group/alternate নেই, সেখানে একটাই row
+   (item = formulation item, শুধু location বাছা যায়); কম পড়লে আগের মতোই লাল + block।
+5. Group-এর সব member মিলিয়েও Standard না কুললে (শেষ row পূরণ করা যাচ্ছে না) → Create block (§83.5 hard-block অপরিবর্তিত;
+   MTS-এর "under-qty confirm modal" এখানে **নেই**)।
+6. একই stroke line-এ একই (item, location) জোড়া দুইবার নয়। একই item ভিন্ন location-এ আবার বসানো যাবে।
+
+### 144.2 — Data convention (MTS-এর `process_order_line` convention হুবহু reuse)
+
+| Row | `material_id` | `actual_material_id` | `planned_qty` | `actual_qty` | `dosage_pct` | `is_formulation_line` | `stroke_line_id` |
+|---|---|---|---|---|---|---|---|
+| ১ম row | formulation item | বাছা item (formulation হলে NULL) | **পুরো Standard** (dosage × batch) | row-এর নিজের share | stroke-এর dosage | true | stroke line id |
+| পরের row | formulation item | বাছা item | **0** | row-এর share | NULL | false | stroke line id |
+
+- যে line ভাগ হয়নি (একটাই row) সেখানে আজকের মতোই `actual_qty = NULL`, `planned_qty = Standard` — **কোনো পরিবর্তন নেই**।
+- Reco/Verify/Final/reports আগে থেকেই এই convention বোঝে (MTS ও Final-এর "Standard=0 added row" একই): `standard_qty =
+  planned_qty`, `actual ?? planned`, group-এর Σ standard = পুরো Standard।
+- ভাগ হওয়া group-এর প্রতি row-এ `actual_qty` সেট থাকে (Σ = Standard) এবং `approved_status = 'YES'`, `ap_approved_qty =
+  actual_qty` (MTS-এর §138.15 default-এর মতোই) — নাহলে Final-এর `computeApprovalValues` প্রতিটা split row-এ আলাদা Approved
+  সিদ্ধান্ত চাইত (planned ≠ actual)। ভাগ-না-হওয়া line-এ `approved_status`/`ap_approved_qty` NULL (MTO/HPS-এর আজকের আচরণ)।
+
+### 144.3 — Reservation (গুরুত্বপূর্ণ বদল)
+
+`reserve_process_order_materials()` আগে `planned_qty > 0` লাইনে `planned_qty` reserve করত — ভাগ হওয়া row-এ planned 0
+(আর ১ম row-এ পুরো Standard) তাই ভুল হতো। বদল: qty = `COALESCE(actual_qty, planned_qty)`, filter-ও তাই। ভাগ না হওয়া line-এ
+`actual_qty` NULL ⇒ আচরণ বিন্দুমাত্র বদলায় না। Advisory-lock + availability recompute আগের মতোই (MTS Page-4 save-এর জানা
+race gap এখানে নেই — RPC লক রাখে)। Migration: `20261007120000_process_po_reservation_uses_split_qty.sql`।
+
+### 144.4 — API
+
+- **Create body:** নতুন `line_splits: [{ material_id (formulation), rows: [{ actual_material_id?, storage_location_id, qty }] }]`।
+  পুরনো `line_location_overrides` ভাগ-না-হওয়া line-এর জন্য অপরিবর্তিত। Server ভাগ হওয়া line-এ যাচাই করে: line
+  stroke-এর নিজের, member শুধু ওই line-এর allowed alternate/group, `Σqty == Standard` (±ε), প্রতি qty > 0, (item,location)
+  জোড়া unique, এবং ভাগ কেবল সেই line-এ যেখানে allowed alternate আছে। Server কখনো client-এর Standard trust করে না
+  (dosage × batch নিজে হিসাব করে)।
+- **Up-front fast-fail check** এখন ভাগ হওয়া rows-এর qty ধরে চলে; চূড়ান্ত authority আগের মতোই RPC।
+- **Availability preview:** `GET .../process-orders/availability-preview?company_id=&needs=[{material_id,storage_location_id,qty}]`
+  — নতুন `needs` mode, যেকোনো (item, location)-এর available দেয় (`computeAvailabilityRows`: UNRESTRICTED − open reservation
+  + INT in-flight credit)। Frontend-এর derived-qty এই থেকেই।
+
+### 144.5 — Frontend (Page 3 `ProductionPOCreatePage.jsx`)
+
+Row qty **stored নয়, derived**: state-এ শুধু user-এর বাছাই (item, location) থাকে; qty ক্রমানুসারে হিসাব হয় — একই (item,
+location) আগের line/row যতটা নিয়েছে তা বাদ দিয়ে। কাজেই stale qty/effect-race সম্ভব নয়। খালি "pending" row তখনই দেখায়
+যখন group line-এ Standard বাকি ও শেষ row সম্পূর্ণ। ১ম-এর বাইরের row-তে "remove" আছে। Create তখনই enabled যখন প্রতি line
+পূর্ণ, কোনো pending row নেই, availability লোড হয়েছে।
+
+### 144.6 — PR10 (Edit) — এই pass-এ **ভাগ হওয়া PO-তে বন্ধ** (জানা সীমা)
+
+PR10 batch qty বদলালে প্রতি line `dosage × qty` দিয়ে পুনর্গণনা করে ও reservation `planned_qty` দিয়ে লেখে — ভাগ হওয়া
+group-এ এটা share ভেঙে দেবে। তাই ভাগ হওয়া row (`is_formulation_line=false`) থাকলে PR10 backend ও frontend উভয়ই বলে:
+"এই PO-তে split material row আছে — Prune করে নতুন করে create করুন।" (Prune STANDARD-এ আগে থেকেই আছে ও reservation ছাড়ে।)
+ভাগ-না-হওয়া PO-র PR10 সম্পূর্ণ অপরিবর্তিত। **Deferred:** split-aware PR10 (পরের pass, প্রয়োজন হলে)।
+
+### 144.7 — Scope
+
+MTO, HPS, MTEST (stroke থাকলে; stroke ছাড়া MTEST-এর manual line-এ group নেই)। INT-ও একই create path ব্যবহার করে — যে
+INT stroke line-এ group আছে সেও একই আচরণ পাবে (INT Process PO-র lifecycle অপরিবর্তিত)। MTS অপরিবর্তিত (Page 1–6
+atomic create + machine-bucket auto-derive)।
+
+### 144.8 — Pre-code bug-pattern checklist (প্রতিটা concrete choice-এ)
+
+- **#1/#12:** কোনো role array নেই; ACL আগের মতো `PROD_PO_CREATE` / `PROD_MTEST_PO_CREATE` (create), `PROD_ORDER_LIST:VIEW` (preview)।
+- **#2/#11:** `assertCompanyScope` create ও preview দুটোতেই আগে থেকে আছে; নতুন কোনো company source নেই।
+- **#8:** নতুন route নেই (বিদ্যমান preview route-এ query param); registry অপরিবর্তিত।
+- **#13:** frontend যা পাঠায় (`line_splits`) backend তার প্রতিটা field যাচাই করে; `qty` server-side re-validated।
+- **#15:** preview handler আগের মতো `okResponse({ data: rows })` (no `pagination`) ⇒ frontend `select` bare/`.data` দুটোই সামলায়।
+- **§8E:** `needs` mode-এ id-list `computeAvailabilityRows`-এর ভিতরেই; request-এ line সংখ্যা stroke-line সংখ্যায় bounded (<~50)।
+- **§8B:** line insert এক bulk insert; reservation এক RPC।
+
+### 144.9 — Implementation status (2026-10-07) — ✅ code-complete, verified; ⏳ live click-through pending
+
+- **Migration** `20261007120000_process_po_reservation_uses_split_qty.sql` (dev-এ applied + `schema_migrations` row যোগ করা;
+  **prod deploy-এর সাথে travel করবে — prod-এ হাতে apply করার দরকার নেই, deploy-এর আগে/পরে integrity check চালাও**)।
+- **Backend** `process_order.handlers.ts`: `buildLineSplitMap` + `expandStrokeLinesToPlannedRows` (create-এর fast-fail ও
+  line-insert-এর একমাত্র উৎস), `line_splits` body field, availability-preview `needs` mode, PR10 split guard
+  (`PROD_PO_EDIT_SPLIT_NOT_SUPPORTED`)। Stroke-line select-এ `id` যোগ (split key)।
+- **Frontend** `processPoSplitRows.js` (নতুন, pure derivation), `ProductionPOCreatePage.jsx` (Material Table, state =
+  `lineRowChoices` শুধু item+location), `prodApi.js` (`needs` stringify), `ProductionPOEditPage.jsx` (split PO block message)।
+- **Verification:** (১) frontend derive logic — ৯টা দৃশ্য node test (এক item-এ কম, group-এর বাইরের item না আসা, একই pair-এর
+  double-count না হওয়া, group পুরো short, availability loading, payload shape); (২) backend expand logic — ৮টা দৃশ্য deno test
+  (plain lines অপরিবর্তিত, valid split, Σ mismatch, group-বহির্ভূত item, group-ছাড়া line split, duplicate pair, অজানা line,
+  এক-row = override); (৩) dev DB-তে rolled-back transaction-এ আসল `reserve_process_order_materials`: split → 60 + 40 reserve
+  (100/0 নয়), শর্ট হলে `ok=false`, ordinary line 25 অপরিবর্তিত; (৪) `deno check` — নতুন error 0 (আগে/পরে ৬টা, সবই
+  অসম্পর্কিত MTS Verify অংশে), `eslint` — 0 error, warning ৪→৩, সব CI guard পাস।
+- **এখনো বাকি:** deployed app-এ real click-through (এই environment-এ login নেই); split-aware PR10 (§144.6); প্রয়োজনে MTO/HPS-এর
+  QA Queue expanded grid-এ split row-এর "Planned Qty" 0 দেখায় (Standard=0 repeat row convention, MTS-এর মতোই) — চাইলে
+  সেখানে `actual_qty` দেখানো যায়।

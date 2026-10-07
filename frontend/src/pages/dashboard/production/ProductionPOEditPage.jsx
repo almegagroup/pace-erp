@@ -89,6 +89,11 @@ function validateEditablePo(po) {
   if (String(po.status || "").toUpperCase() !== "STANDARD") {
     return "PR10 edit is available only at STANDARD status.";
   }
+  // §144: a split material row (one stroke line spread across several group items /
+  // locations) cannot be re-derived by this page -- the server rejects it too.
+  if ((po.lines ?? []).some((line) => line.is_formulation_line === false)) {
+    return "This Process PO has split material rows (items spread across storage locations) and cannot be edited. Prune it and create a new one.";
+  }
   return "";
 }
 

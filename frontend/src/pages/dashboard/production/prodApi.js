@@ -196,9 +196,11 @@ export const availabilityPreviewProcessOrder = (params = {}) => fetchProd(
   {
     ...params,
     overrides: Array.isArray(params.overrides) ? JSON.stringify(params.overrides) : params.overrides,
+    // §144: [{ material_id, storage_location_id, qty }] — "what is available for these (item, location) pairs?"
+    needs: Array.isArray(params.needs) ? JSON.stringify(params.needs) : params.needs,
   },
 );
-export const getProcessOrder = (id) => fetchProd("GET", `/api/production/process-orders/${id}`);
+export const getProcessOrder =(id) => fetchProd("GET", `/api/production/process-orders/${id}`);
 // §131.2 (2026-08-26): { standard, mtest } — which po_type family this user can
 // actually create at this company, so PR09 can disable options it can't use.
 export const getProcessOrderCreateCapability = (companyId) => fetchProd(
