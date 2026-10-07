@@ -532,7 +532,7 @@ export async function getGELinesForGRNHandler(
     const poIds = [...new Set((poLineResp.data ?? []).map((pl: JsonRecord) => String(pl.po_id ?? "")).filter(Boolean))];
     const poResp = poIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("purchase_order")
-          .select("id, po_number, vendor_id, vendor_type, delivery_type, crcp_enabled, company_id").in("id", poIds)
+          .select("id, po_number, vendor_id, vendor_type, delivery_type, gst_terms, crcp_enabled, company_id").in("id", poIds)
       : { data: [] };
 
     // §3.7 "Bulk GE-Creation Drawer" / §3.2.7 "Ship To Leg" -- an STO-sourced
@@ -702,6 +702,7 @@ export async function getGELinesForGRNHandler(
         po_number: po?.po_number ?? null,
         sto_number: sto?.sto_number ?? null,
         po_rate: poLine?.unit_rate ?? null,
+        po_gst_terms: po?.gst_terms ?? null,
         vendor_id: po?.vendor_id ?? null,
         vendor_type: po?.vendor_type ?? "DOMESTIC",
         // §3.7/§3.2.7 -- drives GRNPostFlow's tab-hiding (Bulk, invoice not

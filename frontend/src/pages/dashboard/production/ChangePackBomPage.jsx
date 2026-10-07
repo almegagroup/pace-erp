@@ -9,12 +9,17 @@
  *          Master RM lines, but free-form CRUD instead of fixed substitution.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
 import { getPackBom, listPackBoms, createPackBomChangeRequest } from "./prodApi.js";
+import { listPackBomEligibleSkus } from "./prodApi.js";
+import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 import { listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
 import { PackBomChangeLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
@@ -26,8 +31,30 @@ const ERRORS = {
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
+const PO_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
+const COMPANY_STORAGE_KEY = "pace.production.changePackBom.companyId";
+const TYPE_STORAGE_KEY = "pace.production.changePackBom.poType";
+
+function readStoredCompanyId() {
+  if (typeof window === "undefined") return "";
+  return String(window.localStorage.getItem(COMPANY_STORAGE_KEY) ?? "").trim();
+}
+function readStoredPoType() {
+  if (typeof window === "undefined") return "MTO";
+  const value = String(window.localStorage.getItem(TYPE_STORAGE_KEY) ?? "").trim();
+  return PO_TYPES.includes(value) ? value : "MTO";
+}
+function skuDocumentLabel(sku) {
+  return [sku?.pace_code || sku?.external_code, sku?.document_name || sku?.material_name]
+    .filter(Boolean)
+    .join(" — ");
+}
+
 export default function ChangePackBomPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
+  const [companyId, setCompanyId] = useState(readStoredCompanyId);
+  const [poType, setPoType] = useState(readStoredPoType);
   const [selectedBomId, setSelectedBomId] = useState("");
   const [bom, setBom] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -42,9 +69,37 @@ export default function ChangePackBomPage() {
     pushToast({ message: msg, tone });
   }
 
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
+  function resetSelectedBom() {
+    setSelectedBomId("");
+    setBom(null);
+    setChanges([]);
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (companyId) {
+      window.localStorage.setItem(COMPANY_STORAGE_KEY, companyId);
+      return;
+    }
+    const fallbackCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (fallbackCompanyId) setCompanyId(fallbackCompanyId);
+  }, [companyId, runtimeContext]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem(TYPE_STORAGE_KEY, poType);
+  }, [poType]);
+
   const activeBomsQ = useQuery({
-    queryKey: ["pack-boms-active-for-change"],
-    queryFn: () => listPackBoms({ status: "ACTIVE" }),
+    queryKey: ["pack-boms-active-for-change", effectiveCompanyId],
+    queryFn: () => listPackBoms({ status: "ACTIVE", company_id: effectiveCompanyId }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
+  });
+  const eligibleSkusQ = useQuery({
+    queryKey: ["pack-bom-eligible-skus-for-change", effectiveCompanyId, poType],
+    queryFn: () => listPackBomEligibleSkus({ company_id: effectiveCompanyId, po_type: poType, include_existing: true }),
+    enabled: Boolean(effectiveCompanyId && poType),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
   // business owner, 2026-09-30: same cross-company material leak found across
@@ -58,12 +113,13 @@ export default function ChangePackBomPage() {
     enabled: Boolean(bom?.company_id),
   });
 
-  const activeBoms = activeBomsQ.data ?? [];
+  const eligibleSkuIds = new Set((eligibleSkusQ.data ?? []).map((sku) => sku.id));
+  const activeBoms = (activeBomsQ.data ?? []).filter((item) => eligibleSkuIds.has(item.sku_material_id));
   const pmMaterials = pmMaterialsQ.data ?? [];
   const groups = groupsQ.data ?? [];
   const bomOptions = activeBoms.map((b) => ({
     value: b.id,
-    label: `${[b.sku?.material_name, b.sku?.document_name].filter(Boolean).join(" — ")}${b.sku?.pack_code ? ` (${b.sku.pack_code})` : ""}`,
+    label: `${skuDocumentLabel(b.sku)}${b.sku?.pack_code ? ` (${b.sku.pack_code})` : ""}`,
   }));
 
   async function handleBomChange(id) {
@@ -199,17 +255,37 @@ export default function ChangePackBomPage() {
       subtitle="Propose PM line changes to an ACTIVE Pack BOM — creates a change request for L1 Manager approval"
     >
       <ErpSectionCard title="Select Active Pack BOM">
-        <div className="max-w-md">
-          <label className="text-xs text-slate-500 block mb-1">FG SKU</label>
-          <ErpComboboxField
-            value={selectedBomId}
-            onChange={handleBomChange}
-            options={bomOptions}
-            placeholder="-- Select ACTIVE Pack BOM --"
-            emptyStateLabel="No ACTIVE Pack BOMs found"
-          />
-          {loading && <p className="text-xs text-slate-400 mt-1">Loading…</p>}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={effectiveCompanyId}
+              onChange={(value) => { setCompanyId(value); resetSelectedBom(); }}
+              label="Company"
+            />
+          </div>
+          <label className="flex flex-col gap-1 text-xs text-slate-500">
+            PO Type
+            <select
+              className="h-9 w-full border border-slate-300 rounded px-2 text-sm"
+              value={poType}
+              onChange={(event) => { setPoType(event.target.value); resetSelectedBom(); }}
+            >
+              {PO_TYPES.map((type) => <option key={type} value={type}>{type} / {packingPoTypeForProcessType(type)}</option>)}
+            </select>
+          </label>
+          <div>
+            <label className="text-xs text-slate-500 block mb-1">FG SKU</label>
+            <ErpComboboxField
+              value={selectedBomId}
+              onChange={handleBomChange}
+              options={bomOptions}
+              placeholder={eligibleSkusQ.isFetching ? "Loading eligible SKUs..." : "-- Select ACTIVE Pack BOM --"}
+              emptyStateLabel="No ACTIVE Pack BOM found for this Company and PO Type"
+            />
+          </div>
         </div>
+        {loading && <p className="text-xs text-slate-400 mt-1">Loading…</p>}
       </ErpSectionCard>
 
       {bom && (
