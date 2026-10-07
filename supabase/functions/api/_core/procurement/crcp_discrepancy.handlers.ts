@@ -199,7 +199,10 @@ function buildDiscrepancyRow(
   const landedCost = landedCostMap.get(String(grn.id));
   const transporter = grn.transporter_id ? transporterMap.get(String(grn.transporter_id)) : null;
   const billToCompany = companyMap.get(billToCompanyId);
-  const shipToCompany = grn.ship_to_company_id ? companyMap.get(String(grn.ship_to_company_id)) : billToCompany;
+  // Invoice-later Bulk GRNs genuinely have no invoice Ship-To until AC/GRN
+  // Invoice Mapping is completed. Keep PO12 blank rather than silently
+  // presenting Bill-To as a value the vendor never supplied.
+  const shipToCompany = grn.ship_to_company_id ? companyMap.get(String(grn.ship_to_company_id)) : null;
   const actualReceiverCompany = companyMap.get(String(grn.company_id));
   // §PO12 Tab 1 "smart" component columns (2026-10-06) -- same math as
   // AC01's own list, see computeComponentBreakdown's own comment.
@@ -208,20 +211,30 @@ function buildDiscrepancyRow(
   const { breakdown: componentBreakdown } = computeComponentBreakdown(
     grn, rowCostLines, rowDeductionLines, deductionTypeNameMap,
   );
+  // PO12 labels this quantity with the material base UOM. A GRN stores
+  // received_qty in its transaction/PO UOM, so a 32.5 MT receipt with the
+  // saved factor 1 MT = 1000 KG must display as 32,500 KG here — never 32.5
+  // KG. Historic rows without a conversion retain their native quantity.
+  const transactionUom = toTrimmedString(grn.uom_code);
+  const baseUom = toTrimmedString(material?.base_uom_code);
+  const conversionFactor = transactionUom && baseUom && transactionUom !== baseUom && Number(grn.per_pack_qty) > 0
+    ? Number(grn.per_pack_qty)
+    : 1;
+  const grnQtyBase = Number((Number(grn.received_qty ?? 0) * conversionFactor).toFixed(6));
 
   return {
     grn_id: grn.id,
     // 1. CRCP Triangle — §8A, never a raw UUID.
     bill_to_company_id: billToCompanyId,
     bill_to_company_name: billToCompany ? `${billToCompany.company_code} — ${billToCompany.company_name}` : null,
-    ship_to_company_id: grn.ship_to_company_id ?? billToCompanyId,
+    ship_to_company_id: grn.ship_to_company_id ?? null,
     ship_to_company_name: shipToCompany ? `${shipToCompany.company_code} — ${shipToCompany.company_name}` : null,
     actual_receiver_company_id: grn.company_id,
     actual_receiver_company_name: actualReceiverCompany
       ? `${actualReceiverCompany.company_code} — ${actualReceiverCompany.company_name}`
       : null,
     // 2. Quantity
-    grn_qty: grn.received_qty,
+    grn_qty: grnQtyBase,
     base_uom_code: material?.base_uom_code ?? null,
     // 3. Identification
     grn_number: grn.grn_number,
