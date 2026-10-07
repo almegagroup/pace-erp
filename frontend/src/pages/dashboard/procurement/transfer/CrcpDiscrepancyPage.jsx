@@ -7,14 +7,14 @@
  */
 
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreen, openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { listCrcpDiscrepancy } from "../procurementApi.js";
 import { COLUMNS } from "./crcpDiscrepancyColumns.jsx";
@@ -26,7 +26,6 @@ const SEARCH_FIELDS = [
 ];
 
 export default function CrcpDiscrepancyPage() {
-  const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
@@ -77,8 +76,8 @@ export default function CrcpDiscrepancyPage() {
         {
           key: "bulk-component-map",
           label: "Bulk Component Map",
-          onClick: () => navigate("/dashboard/procurement/accounts/bulk-component-map", {
-            state: { origin: "PO12", companyId: effectiveCompanyId, po12Search: search },
+          onClick: () => openScreenWithContext(OPERATION_SCREENS.PROC_BULK_COMPONENT_MAP.screen_code, {
+            origin: "PO12", companyId: effectiveCompanyId, po12Search: search,
           }),
           disabled: !effectiveCompanyId,
         },

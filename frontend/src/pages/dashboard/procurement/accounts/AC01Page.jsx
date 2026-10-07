@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -20,6 +20,8 @@ import ErpMasterListTemplate from "../../../../components/templates/ErpMasterLis
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../../context/useMenu.js";
+import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
   getAC01GRN,
   listAC01GRNs,
@@ -441,7 +443,6 @@ function DrawerSection({ eyebrow, title, children }) {
 const inputCls = "h-[26px] w-full border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500 disabled:bg-slate-100 disabled:text-slate-500";
 
 export default function AC01Page({ readOnly = false, initialGrnId = null }) {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
   const defaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
@@ -818,8 +819,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           ...(!readOnly ? [{
             key: "bulk-component-map",
             label: "Bulk Component Map",
-            onClick: () => navigate("/dashboard/procurement/accounts/bulk-component-map", {
-              state: { origin: "AC01", companyId, ac01Filters: { search, date_field: dateField, date_from: dateFrom, date_to: dateTo, rate_status: rateStatus } },
+            onClick: () => openScreenWithContext(OPERATION_SCREENS.PROC_BULK_COMPONENT_MAP.screen_code, {
+              origin: "AC01", companyId, ac01Filters: { search, date_field: dateField, date_from: dateFrom, date_to: dateTo, rate_status: rateStatus },
             }),
             disabled: !companyId,
           }] : []),

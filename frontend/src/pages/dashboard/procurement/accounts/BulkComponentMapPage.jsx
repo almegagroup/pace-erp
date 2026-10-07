@@ -17,10 +17,10 @@
  */
 
 import { useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
+import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   listAC01GRNs,
   listCrcpDiscrepancy,
@@ -119,12 +119,15 @@ const inputCls = "h-[26px] w-full border border-slate-300 bg-white px-2 text-[11
 
 
 export default function BulkComponentMapPage() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const origin = location.state?.origin === "PO12" ? "PO12" : "AC01";
-  const companyId = location.state?.companyId || "";
-  const ac01Filters = location.state?.ac01Filters || {};
-  const po12Search = location.state?.po12Search || "";
+  // Context arrives via the screen stack (openScreenWithContext from AC01Page.jsx
+  // / CrcpDiscrepancyPage.jsx), not router location.state -- this page is reached
+  // through openScreen, not a plain navigate(), so NavigationStackBridge's active
+  // screen matches the URL and doesn't bounce the click back (found live 2026-10-07).
+  const screenContext = useMemo(() => getActiveScreenContext() ?? {}, []);
+  const origin = screenContext.origin === "PO12" ? "PO12" : "AC01";
+  const companyId = screenContext.companyId || "";
+  const ac01Filters = screenContext.ac01Filters || {};
+  const po12Search = screenContext.po12Search || "";
 
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
@@ -286,7 +289,7 @@ export default function BulkComponentMapPage() {
     >
       <div className="grid gap-4">
         <ErpSectionCard eyebrow="" title="">
-          <button type="button" onClick={() => navigate(-1)} className="text-[11px] font-semibold text-sky-700 underline">
+          <button type="button" onClick={() => popScreen()} className="text-[11px] font-semibold text-sky-700 underline">
             ← Back
           </button>
         </ErpSectionCard>

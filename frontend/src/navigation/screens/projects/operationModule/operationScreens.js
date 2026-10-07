@@ -424,6 +424,21 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // Bulk Component Map -- reachable from both AC01 (PROC_IV_LIST) and PO12
+  // Tab 1 (PROC_PLANT_TRANSFER_LIST), no own tx_code/menu row (shared tool,
+  // same pattern as Settlement below). Same bug shape as
+  // PROC_PLANT_TRANSFER_SETTLEMENT: the button only called plain navigate(),
+  // never openScreen(), so the active screen stayed on AC01/PO12 while the
+  // URL moved, and NavigationStackBridge kept snapping the URL straight back
+  // (flicker, no console error). Found live 2026-10-07 (business owner).
+  PROC_BULK_COMPONENT_MAP: {
+    screen_code: "PROC_BULK_COMPONENT_MAP",
+    route: "/dashboard/procurement/accounts/bulk-component-map",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // PO12 Settlement + print, and PO12 Tab 2's own Delivery Challan print --
   // same bug shape as PROC_DO_EDIT/PROC_SALES_RETURN_CREATE above. These
   // buttons only called plain navigate(), never openScreen(), so the active
