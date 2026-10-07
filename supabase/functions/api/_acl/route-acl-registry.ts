@@ -177,6 +177,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/transfer-groups":            { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP",   action: "WRITE" },
   "GET:/api/procurement/transfer-groups/partners":    { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "POST:/api/procurement/returnable-transfers":       { skipAcl: false, resourceCode: "PROC_RETURNABLE_TRANSFER", action: "WRITE" },
+  "GET:/api/procurement/returnable-transfers/outgoing": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "GET:/api/procurement/returnable-transfers/pending": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "GET:/api/procurement/returnable-transfers/ledger":  { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
   "GET:/api/procurement/returnable-transfers/balance": { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },
@@ -1145,6 +1146,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/returnable-transfers\/[^/]+\/receive$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_RETURNABLE_TRANSFER", action: "WRITE" } },
+  },
+  // Cancel/Reversal follow-up (2026-10-06) -- EDIT, not WRITE, mirroring
+  // Settlement's own create-vs-correct action-tier split (see this file's
+  // own note at the PO12 Tab 2 block above).
+  {
+    pattern: /^\/api\/procurement\/returnable-transfers\/[^/]+\/reverse$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_RETURNABLE_TRANSFER", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/returnable-transfers\/[^/]+$/,

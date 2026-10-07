@@ -130,6 +130,10 @@ const PO12_COLUMNS = [
   { key: "material_name", label: "Material", width: "160px" },
   { key: "grn_qty", label: "GRN Qty", width: "100px", align: "right" },
   { key: "base_uom_code", label: "UOM", width: "70px" },
+  // Already carried by listCrcpDiscrepancy (buildDiscrepancyRow) -- just not
+  // surfaced here until now. AC01's own list has no equivalent field yet
+  // (separate, pre-existing AC01 gap, not fixed here).
+  { key: "container_number", label: "Container No.", width: "130px" },
   { key: "landed_cost_total", label: "Landed Cost Total", width: "140px", align: "right" },
 ];
 

@@ -139,12 +139,14 @@ import {
   createReturnableTransferHandler,
   getOutstandingReturnableBalanceHandler,
   getReturnableTransferHandler,
+  listOutgoingReturnableTransfersHandler,
   listPendingReturnableTransfersHandler,
   listReturnableSettlementsHandler,
   listReturnableTransferLedgerHandler,
   listTransferGroupPartnersHandler,
   listTransferGroupsHandler,
   receiveReturnableTransferHandler,
+  reverseReturnableTransferHandler,
   toggleTransferGroupHandler,
   upsertTransferGroupHandler,
 } from "../_core/procurement/returnable_transfer.handlers.ts";
@@ -752,6 +754,8 @@ export async function dispatchProcurementRoutes(
       return await listTransferGroupPartnersHandler(req, ctx);
     case "POST:/api/procurement/returnable-transfers":
       return await createReturnableTransferHandler(req, ctx);
+    case "GET:/api/procurement/returnable-transfers/outgoing":
+      return await listOutgoingReturnableTransfersHandler(req, ctx);
     case "GET:/api/procurement/returnable-transfers/pending":
       return await listPendingReturnableTransfersHandler(req, ctx);
     case "GET:/api/procurement/returnable-transfers/ledger":
@@ -1290,6 +1294,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/returnable-transfers\/[^/]+\/receive$/.test(pathname) && req.method === "POST") {
     return await receiveReturnableTransferHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/returnable-transfers\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
+    return await reverseReturnableTransferHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/returnable-transfers\/[^/]+$/.test(pathname) && req.method === "GET") {

@@ -18,6 +18,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { pushToast } from "../../../../store/uiToast.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listMaterials, listStorageLocations } from "../../om/omApi.js";
 import {
@@ -25,11 +26,13 @@ import {
   createReturnableTransfer,
   getOutstandingReturnableBalance,
   getReturnableTransfer,
+  listOutgoingReturnableTransfers,
   listPendingReturnableTransfers,
   listReturnableSettlements,
   listReturnableTransferLedger,
   listTransferGroupPartners,
   receiveReturnableTransfer,
+  reverseReturnableTransfer,
 } from "../procurementApi.js";
 
 const MATERIAL_TYPES = [
@@ -135,6 +138,79 @@ function TransferLineRow({ line, companyId, onChange, onRemove }) {
   );
 }
 
+// §PO12 Tab 2 Cancel/Reversal follow-up (2026-10-06) -- the FROM company's
+// own outstanding (TRANSFERRED, not yet received) outgoing transfers, with
+// a Cancel/Reverse action per row. Previously there was no UI surface for
+// this at all once the Transfer tab's own "Posted X" banner scrolled away.
+function OutgoingTransfersSection({ companyId }) {
+  const qc = useQueryClient();
+  const [reversingId, setReversingId] = useState(null);
+  const [error, setError] = useState("");
+  const outgoingQuery = useQuery({
+    queryKey: ["rt-outgoing", companyId],
+    queryFn: () => listOutgoingReturnableTransfers(companyId),
+    enabled: Boolean(companyId),
+    select: (result) => (Array.isArray(result) ? result : result?.data ?? []),
+  });
+  const rows = outgoingQuery.data ?? [];
+
+  async function handleReverse(row) {
+    setError("");
+    const reason = await openActionPrompt({
+      eyebrow: "Cancel / Reverse Transfer",
+      title: `Reverse ${row.transfer_number}?`,
+      message: "This returns the in-transit stock back to Unrestricted at your own location. Only possible before the receiving company accepts it.",
+      label: "Reason (optional)",
+      placeholder: "e.g. wrong material / wrong quantity",
+      confirmLabel: "Reverse",
+    });
+    if (reason === null) return;
+    setReversingId(row.id);
+    try {
+      await reverseReturnableTransfer(row.id, { reversal_reason: reason || null });
+      pushToast({ tone: "success", message: `${row.transfer_number} reversed.` });
+      await qc.invalidateQueries({ queryKey: ["rt-outgoing", companyId] });
+    } catch (reverseError) {
+      setError(friendly(reverseError?.code ?? reverseError?.message));
+    } finally {
+      setReversingId(null);
+    }
+  }
+
+  if (!companyId || (rows.length === 0 && !outgoingQuery.isLoading)) return null;
+
+  return (
+    <ErpSectionCard eyebrow="Transfer" title={`My outgoing transfers awaiting receipt (${rows.length})`}>
+      {error ? <div className="mb-2 text-xs font-semibold text-rose-700">{error}</div> : null}
+      <ErpDenseGrid
+        columns={[
+          { key: "transfer_number", label: "Transfer #", width: "160px" },
+          { key: "transfer_date", label: "Date", width: "110px" },
+          { key: "to_company_label", label: "To", width: "220px" },
+          { key: "is_return", label: "Return?", width: "80px", render: (row) => (row.is_return ? "Yes" : "No") },
+          {
+            key: "action", label: "Action", width: "160px",
+            render: (row) => (
+              <button
+                type="button"
+                onClick={() => void handleReverse(row)}
+                disabled={reversingId === row.id}
+                className="border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50"
+              >
+                {reversingId === row.id ? "Reversing..." : "Cancel / Reverse"}
+              </button>
+            ),
+          },
+        ]}
+        rows={rows}
+        rowKey={(row) => row.id}
+        emptyMessage={outgoingQuery.isLoading ? "Loading..." : "No outstanding outgoing transfer."}
+        maxHeight="min(260px, 35vh)"
+      />
+    </ErpSectionCard>
+  );
+}
+
 function TransferTab({ companyId }) {
   const qc = useQueryClient();
   const [toCompanyId, setToCompanyId] = useState("");
@@ -229,6 +305,7 @@ function TransferTab({ companyId }) {
   }
 
   return (
+    <div className="grid gap-3">
     <ErpSectionCard eyebrow="Transfer" title="Post a returnable transfer">
       {error ? <div className="mb-3 text-xs font-semibold text-rose-700">{error}</div> : null}
       <div className="mb-3 grid gap-3 md:grid-cols-3">
@@ -337,6 +414,8 @@ function TransferTab({ companyId }) {
         </button>
       </div>
     </ErpSectionCard>
+    <OutgoingTransfersSection companyId={companyId} />
+    </div>
   );
 }
 

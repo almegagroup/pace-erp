@@ -548,6 +548,130 @@ export async function receiveReturnableTransferHandler(req: Request, ctx: Handle
   }
 }
 
+// §PO12 Tab 2 Cancel/Reversal follow-up (2026-10-06) -- the FROM company's own
+// view of its still-outstanding (TRANSFERRED, not yet RECEIVED) outgoing
+// transfers, mirroring listPendingReturnableTransfersHandler's shape exactly
+// but filtered by from_company_id instead of to_company_id. This is the list
+// the Cancel/Reverse button hangs off -- today a mis-posted Transfer has no
+// UI surface at all on the FROM side once the Transfer tab's own success
+// banner scrolls away.
+export async function listOutgoingReturnableTransfersHandler(req: Request, ctx: HandlerContext): Promise<Response> {
+  try {
+    const companyId = toTrimmedString(new URL(req.url).searchParams.get("company_id"));
+    if (!companyId) return rtErrorResponse(req, ctx, "COMPANY_ID_REQUIRED", 400);
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return rtErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403);
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement").from("returnable_transfer")
+      .select("id, transfer_number, from_company_id, to_company_id, is_return, status, transfer_date, remarks, created_at")
+      .eq("from_company_id", companyId).eq("status", "TRANSFERRED")
+      .order("transfer_date", { ascending: true });
+    if (error) return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_OUTGOING_LIST_FAILED", 500, error.message);
+
+    const rows = await enrichTransferRows((data as JsonRecord[] | null) ?? []);
+    return okResponse(rows, ctx.request_id, req);
+  } catch (error) {
+    return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_OUTGOING_LIST_FAILED", 500, error instanceof Error ? error.message : undefined);
+  }
+}
+
+// §PO12 Tab 2 Cancel/Reversal follow-up (2026-10-06) -- undoes an in-transit
+// (TRANSFERRED, pre-Receive) posting. Posts P304 ("P303 Reversal") at the
+// FROM company only (the TO company was never touched by Transfer): OUT from
+// IN_TRANSIT, IN to UNRESTRICTED, same storage location/material/qty/rate as
+// the original line. A RECEIVED transfer cannot be undone this way -- its
+// stock already left IN_TRANSIT into the TO company's own UNRESTRICTED,
+// which this action never touches.
+export async function reverseReturnableTransferHandler(req: Request, ctx: HandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req, /^\/api\/procurement\/returnable-transfers\/([^/]+)\/reverse$/);
+    const body = await parseBody(req);
+
+    const { data: header, error: headerError } = await serviceRoleClient
+      .schema("erp_procurement").from("returnable_transfer").select("*").eq("id", id).maybeSingle();
+    if (headerError) return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_FETCH_FAILED", 500, headerError.message);
+    if (!header) return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_NOT_FOUND", 404);
+    const headerRow = header as JsonRecord;
+    if (toTrimmedString(headerRow.status) !== "TRANSFERRED") {
+      return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_INVALID_STATUS", 400, "Only a TRANSFERRED document (not yet received) can be reversed.");
+    }
+    const fromCompanyId = toTrimmedString(headerRow.from_company_id);
+    try {
+      await assertCompanyScope(ctx, fromCompanyId);
+    } catch {
+      return rtErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403);
+    }
+    const reverseAclDenied = await requireCrcpWriteAccess(req, ctx, fromCompanyId, "EDIT", "PROC_RETURNABLE_TRANSFER");
+    if (reverseAclDenied) return reverseAclDenied;
+
+    const { data: lines, error: linesError } = await serviceRoleClient
+      .schema("erp_procurement").from("returnable_transfer_line").select("*").eq("transfer_id", id);
+    if (linesError) return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_LINES_FAILED", 500, linesError.message);
+    const lineRows = (lines as JsonRecord[] | null) ?? [];
+    if (lineRows.length === 0) return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_NO_LINES", 400);
+
+    for (const line of lineRows) {
+      if (await hasPhysicalInventoryBlock(fromCompanyId, toTrimmedString(line.material_id), toTrimmedString(line.source_storage_location_id), "UNRESTRICTED")) {
+        return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_PI_BLOCKED", 409, "Source location is under an active Physical Inventory count.");
+      }
+    }
+
+    const matDoc = await generateMaterialDocNumber(fromCompanyId);
+    const postingDate = todayIsoDate();
+    const transferNumber = toTrimmedString(headerRow.transfer_number);
+
+    const movements: JsonRecord[] = [];
+    lineRows.forEach((line) => {
+      const lineNumber = Number(line.line_number);
+      const slocId = toTrimmedString(line.source_storage_location_id);
+      const materialId = toTrimmedString(line.material_id);
+      const quantity = Number(line.quantity ?? 0);
+      const uomCode = toTrimmedString(line.uom_code);
+      const valuationRate = Number(line.valuation_rate ?? 0);
+      movements.push({
+        line_ref: `${lineNumber}_reversal_out`,
+        document_number: transferNumber, document_date: postingDate, posting_date: postingDate,
+        movement_type_code: "P304", company_id: fromCompanyId, storage_location_id: slocId,
+        material_id: materialId, quantity, base_uom_code: uomCode,
+        unit_value: valuationRate, stock_type_code: "IN_TRANSIT", direction: "OUT",
+        material_doc_number: matDoc.docNumber, material_doc_year: matDoc.docYear, reference_document_number: transferNumber,
+      });
+      movements.push({
+        line_ref: `${lineNumber}_reversal_in`,
+        document_number: transferNumber, document_date: postingDate, posting_date: postingDate,
+        movement_type_code: "P304", company_id: fromCompanyId, storage_location_id: slocId,
+        material_id: materialId, quantity, base_uom_code: uomCode,
+        unit_value: valuationRate, stock_type_code: "UNRESTRICTED", direction: "IN",
+        material_doc_number: matDoc.docNumber, material_doc_year: matDoc.docYear, reference_document_number: transferNumber,
+      });
+    });
+
+    const context = {
+      action: "REVERSE",
+      reversed_by: ctx.auth_user_id,
+      reversal_reason: toTrimmedString(body.reversal_reason) || null,
+    };
+
+    const { error: postError } = await serviceRoleClient
+      .schema("erp_inventory").rpc("post_document", {
+        p_reference_document_type: "RETURNABLE_TRANSFER",
+        p_reference_document_id: id,
+        p_movements: movements,
+        p_posted_by: ctx.auth_user_id,
+        p_context: context,
+      });
+    if (postError) return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_REVERSE_FAILED", 500, postError.message);
+
+    return okResponse({ id, status: "REVERSED" }, ctx.request_id, req);
+  } catch (error) {
+    return rtErrorResponse(req, ctx, "RETURNABLE_TRANSFER_REVERSE_FAILED", 500, error instanceof Error ? error.message : undefined);
+  }
+}
+
 // Report tab — transaction-level ledger (not a balance summary; see design lock).
 export async function listReturnableTransferLedgerHandler(req: Request, ctx: HandlerContext): Promise<Response> {
   try {

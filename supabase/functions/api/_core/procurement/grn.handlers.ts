@@ -1713,35 +1713,50 @@ export async function postGRNHandler(
 // many GRNs) both map through the same "Map" action below -- the only
 // difference is how many grn_ids the caller selects.
 
+// §3.9.3 write-authority/visibility rule (locked 2026-10-06, business owner):
+// scoped PURELY to the company where unloading happens -- goods_receipt.
+// company_id, the Actual Receiver -- whoever has GRN access there sees and
+// maps these candidates. No other company (including a CRCP Bill-To that
+// differs from the Actual Receiver) is involved in this list at all.
+//
+// Real bug fixed 2026-10-06 (found while locking the above rule): the PO
+// branch used to ALSO require purchase_order.company_id = companyId before
+// treating a GRN as a Bulk candidate. That's correct for the ordinary
+// (non-CRCP) case where PO company = GRN company, but for a genuine CRCP
+// Bulk GRN the PO's own company_id (Bill-To) deliberately differs from the
+// GRN's own company_id (Actual Receiver) -- so a real cross-company Bulk GRN
+// could never surface in EITHER company's own mapping list under the old
+// query (the Actual Receiver's companyId never matched the PO's Bill-To
+// company, and the Bill-To company was never even in scope per the rule
+// above). Fixed by scoping candidates to goods_receipt.company_id alone,
+// then checking BULK delivery_type on whichever PO/STO each GRN already
+// points to -- never re-filtering that PO/STO lookup by company.
 async function resolveBulkGrnCandidates(companyId: string, tab: "pending" | "mapped"): Promise<JsonRecord[]> {
-  const [bulkPoResp, bulkStoResp] = await Promise.all([
-    serviceRoleClient.schema("erp_procurement").from("purchase_order")
-      .select("id").eq("company_id", companyId).eq("delivery_type", "BULK"),
-    serviceRoleClient.schema("erp_procurement").from("stock_transfer_order")
-      .select("id").eq("receiving_company_id", companyId).eq("delivery_type", "BULK"),
-  ]);
-  const bulkPoIds = (bulkPoResp.data ?? []).map((p: JsonRecord) => String(p.id));
-  const bulkStoIds = (bulkStoResp.data ?? []).map((s: JsonRecord) => String(s.id));
-  if (bulkPoIds.length === 0 && bulkStoIds.length === 0) return [];
-
   const isPending = tab === "pending";
-  const [poGrns, stoGrns] = await Promise.all([
-    bulkPoIds.length > 0
-      ? fetchInChunks<JsonRecord>(bulkPoIds, (idChunk) => {
-          const query = serviceRoleClient.schema("erp_procurement").from("goods_receipt")
-            .select("*").eq("company_id", companyId).eq("status", "POSTED").in("po_id", idChunk);
-          return isPending ? query.is("invoice_number", null) : query.not("invoice_number", "is", null);
-        })
+  const baseQuery = serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+    .select("*").eq("company_id", companyId).eq("status", "POSTED");
+  const { data: grnRows } = await (isPending
+    ? baseQuery.is("invoice_number", null)
+    : baseQuery.not("invoice_number", "is", null));
+  const grns = (grnRows ?? []) as JsonRecord[];
+  if (grns.length === 0) return [];
+
+  const poIds = [...new Set(grns.map((g) => toTrimmedString(g.po_id)).filter(Boolean))];
+  const stoIds = [...new Set(grns.map((g) => toTrimmedString(g.sto_id)).filter(Boolean))];
+  const [poRows, stoRows] = await Promise.all([
+    poIds.length > 0
+      ? fetchInChunks<JsonRecord>(poIds, (idChunk) =>
+        serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id, delivery_type").in("id", idChunk))
       : Promise.resolve([] as JsonRecord[]),
-    bulkStoIds.length > 0
-      ? fetchInChunks<JsonRecord>(bulkStoIds, (idChunk) => {
-          const query = serviceRoleClient.schema("erp_procurement").from("goods_receipt")
-            .select("*").eq("company_id", companyId).eq("status", "POSTED").in("sto_id", idChunk);
-          return isPending ? query.is("invoice_number", null) : query.not("invoice_number", "is", null);
-        })
+    stoIds.length > 0
+      ? fetchInChunks<JsonRecord>(stoIds, (idChunk) =>
+        serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, delivery_type").in("id", idChunk))
       : Promise.resolve([] as JsonRecord[]),
   ]);
-  return [...poGrns, ...stoGrns];
+  const bulkPoIds = new Set(poRows.filter((p) => p.delivery_type === "BULK").map((p) => String(p.id)));
+  const bulkStoIds = new Set(stoRows.filter((s) => s.delivery_type === "BULK").map((s) => String(s.id)));
+  return grns.filter((g) =>
+    (g.po_id && bulkPoIds.has(toTrimmedString(g.po_id))) || (g.sto_id && bulkStoIds.has(toTrimmedString(g.sto_id))));
 }
 
 export async function listGrnInvoiceMappingCandidatesHandler(
