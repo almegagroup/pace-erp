@@ -31,7 +31,13 @@ const PENDING_COLUMNS = [
   { key: "material_name", label: "Material Name", width: "220px", render: (row) => row.material_name || "—" },
   { key: "received_qty", label: "Quantity", width: "100px", align: "right", render: (row) => Number(row.received_qty ?? 0).toFixed(3) },
   { key: "grn_number", label: "GRN Number", width: "130px", render: (row) => row.grn_number || "—" },
-  { key: "po_number", label: "PO Number", width: "130px", render: (row) => row.po_number || row.sto_number || "—" },
+  {
+    key: "po_number",
+    label: "PO Number",
+    width: "130px",
+    render: (row) => row.po_number || row.sto_number || "—",
+    filterValue: (row) => row.po_number || row.sto_number || "—",
+  },
   { key: "vehicle_number", label: "Truck Number", width: "130px", render: (row) => row.vehicle_number || "—" },
   { key: "bulk_container_number", label: "Container Number", width: "150px", render: (row) => row.bulk_container_number || "—" },
   { key: "bulk_challan_number", label: "Delivery Challan Number", width: "180px", render: (row) => row.bulk_challan_number || "—" },
@@ -40,7 +46,7 @@ const PENDING_COLUMNS = [
 const MAPPED_COLUMNS = [
   ...PENDING_COLUMNS,
   { key: "invoice_number", label: "Invoice Number", width: "150px", render: (row) => row.invoice_number || "—" },
-  { key: "invoice_date", label: "Invoice Date", width: "110px", render: (row) => row.invoice_date || "—" },
+  { key: "invoice_date", label: "Invoice Date", width: "110px", filterType: "date", render: (row) => row.invoice_date || "—" },
 ];
 
 function getColumnFilterText(column, row) {
@@ -410,6 +416,7 @@ export default function GRNInvoiceMappingPage() {
                 key: "__select",
                 label: <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />,
                 width: "40px",
+                filterable: false,
                 render: (row) => (
                   <input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleRow(row.id)} />
                 ),
@@ -419,6 +426,7 @@ export default function GRNInvoiceMappingPage() {
                 key: "__split",
                 label: "",
                 width: "80px",
+                filterable: false,
                 render: (row) => (
                   <button
                     onClick={() => openSplit(row)}
@@ -431,6 +439,7 @@ export default function GRNInvoiceMappingPage() {
             ]}
             rows={filteredRows}
             rowKey={(row) => row.id}
+            columnFilter
             emptyMessage={loading ? "Loading…" : effectiveCompanyId ? `No ${tab} GRNs found.` : "No company resolved for this session."}
           />
 
