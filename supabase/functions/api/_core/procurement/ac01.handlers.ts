@@ -508,6 +508,17 @@ function buildListRow(
   const effectiveRate = confirmedRate ?? grnRate ?? 0;
   const landedCostTotal = landedCost ? Number(landedCost.total_cost ?? 0) : 0;
   const invoiceQty = grn.ge_qty != null ? Number(grn.ge_qty) : Number(grn.received_qty ?? 0);
+  // GRN/GE quantities are stored in the transaction (PO) UOM, while AC01's
+  // displayed unit is explicitly the material base UOM. Never label an MT
+  // amount as KG: convert the two displayed quantities with the receipt's
+  // captured factor and preserve the raw transaction values separately.
+  const transactionUom = toTrimmedString(grn.uom_code);
+  const baseUom = toTrimmedString(material?.base_uom_code);
+  const conversionFactor = transactionUom && baseUom && transactionUom !== baseUom
+    ? (Number(grn.per_pack_qty) > 0 ? Number(grn.per_pack_qty) : 1)
+    : 1;
+  const grnQtyBase = Number((Number(grn.received_qty ?? 0) * conversionFactor).toFixed(6));
+  const invoiceQtyBase = Number((invoiceQty * conversionFactor).toFixed(6));
   // Considered Qty (business owner, 2026-08-26) -- always prefilled from
   // Invoice Qty at GRN creation; drives Payable + Landed Cost/unit, never
   // received_qty. See computeSuggestedPayables/computeLandedCostPerUnit.
@@ -541,8 +552,10 @@ function buildListRow(
     item_name: material?.material_name ?? null,
     external_code: material?.external_code ?? null,
     grn_qty: grn.received_qty,
+    grn_qty_base: grnQtyBase,
     // Invoice quantity is captured at Gate Entry; GRN quantity is what was actually received.
     invoice_qty: grn.ge_qty ?? grn.received_qty,
+    invoice_qty_base: invoiceQtyBase,
     // Considered Qty (business owner, 2026-08-26): what Payable/Landed Cost
     // actually get computed against. discrepancy_qty (= ge_qty - received_qty,
     // grn.handlers.ts's own create-time formula) is the raw Invoice-vs-GRN

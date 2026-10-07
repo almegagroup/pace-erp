@@ -11,8 +11,9 @@
  * Authority: Frontend
  */
 
-import { useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
@@ -27,6 +28,13 @@ import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
 
 const LIMIT = 100;
+
+const DATE_FILTER_OPTIONS = [
+  { value: "DC_DATE", label: "DO Date" },
+  { value: "LR_DATE", label: "LR Date" },
+  { value: "INVOICE_DATE", label: "Invoice Date" },
+  { value: "TALLY_INVOICE_DATE", label: "Tally Invoice Date" },
+];
 
 // §133.16-A UI standard.
 const DO_QUEUE_EXPORT_COLUMNS = [
@@ -63,60 +71,45 @@ function getStatusTone(status) {
 export default function SalesInvoiceListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [rows, setRows] = useState([]);
-  const [total, setTotal] = useState(0);
   const [companyId, setCompanyId] = useState("");
   const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const deferredSearch = useDeferredValue(search.trim().toLowerCase());
+  const [dateField, setDateField] = useState("DC_DATE");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [reloadTick, setReloadTick] = useState(0);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useErpScreenHotkeys({
-    refresh: { disabled: loading, perform: () => setReloadTick((tick) => tick + 1) },
+    refresh: { perform: () => setRefreshNonce((value) => value + 1) },
   });
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      setDebouncedSearch(search.trim().toLowerCase());
-    }, 250);
-    return () => window.clearTimeout(timeoutId);
-  }, [search]);
-
-  useEffect(() => {
-    let active = true;
-    async function load() {
-      setLoading(true);
-      setError("");
-      try {
-        const data = await listDeliveryOrders({
-          company_id: effectiveCompanyId || undefined,
-          search: debouncedSearch || undefined,
-          limit: LIMIT,
-          offset: (page - 1) * LIMIT,
-          priority: "CREATED_FIRST",
-        });
-        if (!active) return;
-        const items = Array.isArray(data?.items) ? data.items : [];
-        setRows(items);
-        setTotal(Number(data?.total ?? 0));
-      } catch (loadError) {
-        if (!active) return;
-        setRows([]);
-        setTotal(0);
-        setError(loadError instanceof Error ? loadError.message : "PROCUREMENT_DO_QUEUE_LIST_FAILED");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-    void load();
-    return () => { active = false; };
-  }, [debouncedSearch, effectiveCompanyId, page, reloadTick]);
-
-  const pagedRows = rows;
-  const pageTotal = total;
+  const dateRangeError = (dateFrom || dateTo)
+    ? !dateFrom || !dateTo
+      ? "Select both From Date and To Date."
+      : dateFrom > dateTo
+        ? "To Date cannot be before From Date."
+        : ""
+    : "";
+  const listQuery = useQuery({
+    queryKey: ["so02-delivery-order-page", effectiveCompanyId, deferredSearch, dateField, dateFrom, dateTo, page, refreshNonce],
+    queryFn: () => listDeliveryOrders({
+      company_id: effectiveCompanyId,
+      search: deferredSearch || undefined,
+      date_field: dateFrom && dateTo ? dateField : undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      limit: LIMIT,
+      offset: (page - 1) * LIMIT,
+      priority: "CREATED_FIRST",
+    }),
+    enabled: Boolean(effectiveCompanyId) && !dateRangeError,
+  });
+  const pagedRows = Array.isArray(listQuery.data?.items) ? listQuery.data.items : [];
+  const pageTotal = Number(listQuery.data?.total ?? 0);
+  const loading = listQuery.isLoading || listQuery.isFetching;
+  const error = dateRangeError || (listQuery.error instanceof Error ? listQuery.error.message : "");
   const totalPages = Math.max(1, Math.ceil(pageTotal / LIMIT));
   const startIndex = pageTotal === 0 ? 0 : (page - 1) * LIMIT + 1;
   const endIndex = pageTotal === 0 ? 0 : Math.min(page * LIMIT, pageTotal);
@@ -157,14 +150,32 @@ export default function SalesInvoiceListPage() {
         eyebrow: "Search And Filter",
         title: "Select a completed Delivery Order; invoice rows are calculated next",
         children: (
-          <div className="grid gap-3 xl:grid-cols-[220px_minmax(0,1fr)]">
+          <div className="grid gap-3 xl:grid-cols-[220px_minmax(280px,1fr)_190px_165px_165px]">
             <TransactionCompanySelector
               runtimeContext={runtimeContext}
               value={companyId}
               onChange={(nextValue) => { setCompanyId(nextValue); setPage(1); }}
               label="Company"
             />
-            <QuickFilterInput label="Search" value={search} onChange={(value) => { setSearch(value); setPage(1); }} primaryFocus placeholder="Search every column: DO, SO/STO, customer, truck, invoice..." />
+            <QuickFilterInput label="Search (all columns)" value={search} onChange={(value) => { setSearch(value); setPage(1); }} primaryFocus placeholder="DO, SO/STO, customer, truck, invoice, batch..." />
+            <label className="flex flex-col gap-1 text-xs text-slate-500">
+              Date column
+              <select
+                value={dateField}
+                onChange={(event) => { setDateField(event.target.value); setPage(1); }}
+                className="h-8 rounded border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-sky-500"
+              >
+                {DATE_FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-slate-500">
+              From date
+              <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setPage(1); }} className="h-8 rounded border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-sky-500" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-slate-500">
+              To date
+              <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setPage(1); }} className="h-8 rounded border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none focus:border-sky-500" />
+            </label>
           </div>
         ),
       }}

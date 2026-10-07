@@ -13,6 +13,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { isSameOrHigher } from "../../_shared/role_ladder.ts";
 import { enrichTrackerRows, generateProcurementDocNumber, getCsnById } from "./csn.handlers.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
@@ -750,6 +751,38 @@ export async function createGateEntryHandler(
         // §3.7 "Bulk GE-Creation Drawer" + "Effective Date + Cutoff mechanism"
         // — BULK only (not TANKER, which stays on the CSN-based path).
         if (deliveryType === "BULK") {
+          // Re-read the live balance on save. The picker is only a preview;
+          // another Gate Entry may have reserved the PO while this drawer was
+          // open. Posted GRNs are already reflected in po_line.open_qty, so
+          // only active GE lines without a DRAFT/POSTED GRN are reserved here.
+          const { data: activeGeLines } = await serviceRoleClient
+            .schema("erp_procurement").from("gate_entry_line")
+            .select("id, ge_qty, gate_entry_id").eq("po_line_id", poLineId);
+          const activeHeaderIds = [...new Set((activeGeLines ?? []).map((entry: JsonRecord) => toTrimmedString(entry.gate_entry_id)).filter(Boolean))];
+          const { data: activeHeaders } = activeHeaderIds.length > 0
+            ? await serviceRoleClient.schema("erp_procurement").from("gate_entry").select("id, status").in("id", activeHeaderIds)
+            : { data: [] };
+          const liveHeaderIds = new Set((activeHeaders ?? [])
+            .filter((header: JsonRecord) => !["CANCELLED", "PRUNED"].includes(toUpperTrimmedString(header.status)))
+            .map((header: JsonRecord) => String(header.id)));
+          const activeGeLineIds = (activeGeLines ?? [])
+            .filter((entry: JsonRecord) => liveHeaderIds.has(toTrimmedString(entry.gate_entry_id)))
+            .map((entry: JsonRecord) => String(entry.id));
+          const { data: linkedGrns } = activeGeLineIds.length > 0
+            ? await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+              .select("gate_entry_line_id, status").in("gate_entry_line_id", activeGeLineIds)
+            : { data: [] };
+          const grnLineIds = new Set((linkedGrns ?? [])
+            .filter((grn: JsonRecord) => ["DRAFT", "POSTED"].includes(toUpperTrimmedString(grn.status)))
+            .map((grn: JsonRecord) => toTrimmedString(grn.gate_entry_line_id)));
+          const reservedQty = (activeGeLines ?? [])
+            .filter((entry: JsonRecord) => liveHeaderIds.has(toTrimmedString(entry.gate_entry_id)) && !grnLineIds.has(toTrimmedString(entry.id)))
+            .reduce((sum: number, entry: JsonRecord) => sum + Number(entry.ge_qty ?? 0), 0);
+          const availableQty = Math.max(0, Number(poLine.open_qty ?? poLine.ordered_qty ?? 0) - reservedQty);
+          if (geQty > availableQty + 0.000001) {
+            return procurementErrorResponse(req, ctx, "GE_PO_BALANCE_EXCEEDED", 400,
+              `Line ${index + 1} exceeds the PO's live balance (${availableQty.toFixed(6)} ${uomCode}).`);
+          }
           const bulkError = await validateAndPrepareBulkLineFields(
             line, index, "purchase_order", String(po.id),
             { vendor_id: toTrimmedString(po.vendor_id), company_id: toTrimmedString(po.company_id) },
@@ -1323,7 +1356,7 @@ export async function listOpenPOsForGEHandler(
       const { data: lineData, error: lineError } = await serviceRoleClient
         .schema("erp_procurement")
         .from("purchase_order_line")
-        .select("id, po_id, material_id, po_uom_code, line_status, ordered_qty")
+        .select("id, po_id, material_id, po_uom_code, line_status, ordered_qty, open_qty")
         .in("po_id", poIds)
         .in("line_status", ["OPEN", "PARTIALLY_RECEIVED"]);
 
@@ -1343,14 +1376,55 @@ export async function listOpenPOsForGEHandler(
       for (const m of mats ?? []) lineMatMap.set(String(m.id), String(m.material_name ?? ""));
     }
 
+    // `open_qty` already excludes successfully posted GRNs. Reserve only
+    // active Gate Entries that have not reached a GRN yet, otherwise a PO
+    // would be double-subtracted. Pruned/cancelled GEs are deliberately not
+    // reserved, so their balance returns automatically.
+    const poLineIds = lines.map((line) => String(line.id));
+    const [existingGeLineResp, existingGrnResp] = await Promise.all([
+      poLineIds.length > 0
+        ? fetchInChunks<JsonRecord>(poLineIds, (idChunk) => serviceRoleClient
+            .schema("erp_procurement").from("gate_entry_line")
+            .select("id, po_line_id, ge_qty, gate_entry_id").in("po_line_id", idChunk))
+        : Promise.resolve([] as JsonRecord[]),
+      poLineIds.length > 0
+        ? fetchInChunks<JsonRecord>(poLineIds, (idChunk) => serviceRoleClient
+            .schema("erp_procurement").from("goods_receipt")
+            .select("gate_entry_line_id, status").in("po_line_id", idChunk))
+        : Promise.resolve([] as JsonRecord[]),
+    ]);
+    const existingGeLines = existingGeLineResp as JsonRecord[];
+    const existingGeHeaderIds = [...new Set(existingGeLines.map((line) => toTrimmedString(line.gate_entry_id)).filter(Boolean))];
+    const { data: existingGeHeaders } = existingGeHeaderIds.length > 0
+      ? await serviceRoleClient.schema("erp_procurement").from("gate_entry").select("id, status").in("id", existingGeHeaderIds)
+      : { data: [] };
+    const activeGeIds = new Set((existingGeHeaders ?? [])
+      .filter((header: JsonRecord) => !["CANCELLED", "PRUNED"].includes(toUpperTrimmedString(header.status)))
+      .map((header: JsonRecord) => String(header.id)));
+    const grnByGeLine = new Set((existingGrnResp as JsonRecord[])
+      .filter((grn) => ["DRAFT", "POSTED"].includes(toUpperTrimmedString(grn.status)))
+      .map((grn) => toTrimmedString(grn.gate_entry_line_id)));
+    const reservedByPoLine = new Map<string, number>();
+    for (const geLine of existingGeLines) {
+      if (!activeGeIds.has(toTrimmedString(geLine.gate_entry_id)) || grnByGeLine.has(toTrimmedString(geLine.id))) continue;
+      const poLineId = toTrimmedString(geLine.po_line_id);
+      reservedByPoLine.set(poLineId, (reservedByPoLine.get(poLineId) ?? 0) + Number(geLine.ge_qty ?? 0));
+    }
+
     const linesMap = new Map<string, JsonRecord[]>();
     for (const line of lines) {
       const poId = String(line.po_id);
       if (!linesMap.has(poId)) linesMap.set(poId, []);
+      const openQty = Number(line.open_qty ?? line.ordered_qty ?? 0);
+      const reservedQty = Number((reservedByPoLine.get(String(line.id)) ?? 0).toFixed(6));
+      const availableQty = Number(Math.max(0, openQty - reservedQty).toFixed(6));
       linesMap.get(poId)!.push({
         ...line,
         material_name: lineMatMap.get(String(line.material_id)) ?? null,
-        expected_qty: Number(line.ordered_qty ?? 0),
+        open_qty: openQty,
+        pending_ge_qty: reservedQty,
+        available_ge_qty: availableQty,
+        expected_qty: availableQty,
       });
     }
 
