@@ -81,7 +81,7 @@ function GENumberEntryScreen({ onLoad }) {
 }
 
 // ── Screen 2: GE lines list ──────────────────────────────────────────────────
-function GELinesScreen({ geData, onSelectLine, onBack, successNotice, onDismissNotice }) {
+function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
   const { gate_entry: ge, lines } = geData;
   const pendingCount = lines.filter((l) => l.line_grn_status === "PENDING").length;
 
@@ -238,6 +238,20 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const geQty = Number(geLine.ge_qty ?? 0);
   const receivedQtyNum = Number(receivedQty) || 0;
   const discrepancy = Number((geQty - receivedQtyNum).toFixed(6));
+  const isPoGstInclusive = String(geLine.po_gst_terms ?? "").toUpperCase() === "INCLUSIVE";
+  const gstPctNum = Number(gstPct);
+  const displayedRateValue = rateConfirmed ? geLine.po_rate : invoiceRate;
+  const displayedRate = displayedRateValue === null || displayedRateValue === undefined || displayedRateValue === ""
+    ? Number.NaN
+    : Number(displayedRateValue);
+  const basicRate = isPoGstInclusive
+    && Number.isFinite(displayedRate)
+    && displayedRate >= 0
+    && Number.isFinite(gstPctNum)
+    && gstPct !== ""
+    && gstPctNum >= 0
+    ? displayedRate / (1 + (gstPctNum / 100))
+    : null;
   const uomMismatch = geLine.base_uom_code && geLine.uom_code && geLine.base_uom_code !== geLine.uom_code;
   const perPackQtyNum = Number(perPackQty) || 0;
   const stockQtyPreview = uomMismatch && perPackQtyNum > 0 ? Number((receivedQtyNum * perPackQtyNum).toFixed(6)) : null;
@@ -665,10 +679,22 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         {activeTabName === "Accounts" && (
           <ErpSectionCard eyebrow="Accounts" title="Rate & GST">
             <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3 inline-block">
-              <p className="text-[11px] text-slate-500">PO rate</p>
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] text-slate-500">PO rate</p>
+                {isPoGstInclusive && (
+                  <span className="rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">GST Inclusive</span>
+                )}
+              </div>
               <p className="mt-1 text-base font-medium text-slate-900">
                 {geLine.po_rate != null ? `₹ ${Number(geLine.po_rate).toFixed(4)} / ${geLine.uom_code}` : "—"}
               </p>
+              {isPoGstInclusive && (
+                <p className="mt-1 text-xs text-slate-600">
+                  {basicRate !== null
+                    ? `Basic rate (ex GST): ₹ ${basicRate.toFixed(4)} / ${geLine.uom_code}`
+                    : "Enter GST % below to calculate the basic rate."}
+                </p>
+              )}
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="flex items-center gap-3 rounded border border-slate-200 bg-slate-50 p-3 cursor-pointer">
@@ -954,7 +980,6 @@ export default function GRNPostFlow() {
         onSelectLine={handleLineSelected}
         onBack={() => { setScreen("ge-entry"); updateActiveScreenContext({ grnScreen: "ge-entry", grnGeData: null, grnSelectedLine: null }); scrollTop(); }}
         successNotice={successNotice}
-        onDismissNotice={() => setSuccessNotice("")}
       />
     );
   }

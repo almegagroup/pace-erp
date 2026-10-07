@@ -245,7 +245,7 @@ function buildColumnDefs() {
     { key: "material_name", label: "Material", width: "180px" },
     { key: "material_group_name", label: "Material Group", width: "150px" },
     { key: "po_date", label: "PO Date", width: "120px" },
-    { key: "po_qty", label: "Order Qty", width: "110px" },
+    { key: "order_qty", label: "Order Qty", width: "110px" },
     { key: "balance_qty", label: "Balance Qty", width: "110px" },
     { key: "dispatch_qty", label: "Dispatch Qty", width: "110px" },
     { key: "base_uom_code", label: "Base UOM", width: "100px" },
