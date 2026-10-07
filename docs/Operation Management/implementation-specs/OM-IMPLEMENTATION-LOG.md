@@ -5960,3 +5960,35 @@ non-current-stroke MTS becomes eligible from `QA_APPROVED`.
 **Changes 1-5:** introduced `erp_production.ac05_mts_sku_rate`; vendor-code keyed, effective-dated manual AC05 rates; frozen reverse Stroke resolution; RATED immutability; pending cascade-row fill/delete; pending count; and the future SO as-of resolver. Verification costs are read-time-only in a separate `verification` object and never accepted as write input or used as the commercial rate. The AC06 split hook is explicitly best-effort and cannot fail or roll back its source split. The new frontend page is `/dashboard/production/ac05-mts-sku-costing`, with company scope, dense grid, muted calculated values, pending indicator, multi-row create drawer, and pending Fill Rate flow.
 
 **Verification:** applied Dev migration and reloaded PostgREST schema; migration ledger is in sync (`601`, MD5 `6cb16f7344abdbef3da4e11aabef29fb`). A reverted Dev fixture exercised un-overridden Primary and overridden non-Primary Stroke freezes, 422 no-match, real AC06 cascade with carried wastage, pending-to-RATED, immutable RATED 409, Fixed-BOM calculated values, variable-fill nulls, and between-dates SO resolution. Targeted Deno and frontend ESLint pass; all 18 repository guards pass including strict dependency provisioning and route/ACL 0-missing; the five retired routes resolve to pipeline-equivalent 404s. Dev Edge deployment could not complete because the existing monolithic `api` source exceeds Supabase's 5 MB deployment limit; no workaround was applied.
+
+## 2026-10-07 — GRN Invoice Mapping → AC01 Commercial Values and Payment-Date History — DONE
+
+**Scope:** Invoice-later Bulk GRNs were receiving invoice rate/GST in GRN Invoice Mapping, but
+AC01 only used `confirmed_rate` or the original `grn_rate`; invoice-mapped Bulk receipts have an
+original rate of zero. The same page also replaced the original PO-term payment date with the
+manual revised date in its `Actual Payment Date` display.
+
+**Implemented:**
+- Invoice Mapping now stores the mapped invoice rate as the auditable `confirmed_rate`, with actor
+  and timestamp; unmapping clears that mapping-owned confirmation.
+- AC01 has a backward-compatible effective-rate fallback (`rate_confirmed` + `invoice_rate`) so
+  already mapped receipts calculate correctly without an operational-data migration. The fallback
+  is used consistently for payable, landed-price and grid values.
+- One-GRN-to-many-invoices Split now requires and persists each invoice slice's own GST %, invoice
+  rate and confirmed rate.
+- AC01 exposes taxable value, material GST, invoice total and CGST/SGST/IGST split. The tax split
+  is derived only when both vendor and company GSTIN state codes exist; otherwise total GST stays
+  visible while the split is explicitly `UNDETERMINED` rather than guessed.
+- `Actual Payment Date` now remains the original date calculated from the PO payment terms, while
+  `Revised Payment Date` stays a separate manual override in both list and drawer.
+
+**R-04:** no schema, DDL or migration is needed. Existing mapped GRNs are corrected read-side by
+the compatibility fallback; no business data was changed in Dev or Prod.
+
+**Verification:** frontend ESLint and production Vite build pass. Both updated backend handlers
+pass esbuild syntax bundling. A normal Node import cannot reach handler evaluation because this
+workspace runs Node 20 without native WebSocket support for the installed Supabase Realtime
+client. Read-only Prod inspection of CMP003 Apex GRN `2000000160` confirmed the repaired formula:
+35,000 × 3.20 = 112,000 taxable and 5% GST = 5,600; the row has `rate_confirmed=true`,
+`invoice_rate=3.20`, `confirmed_rate=NULL` and `grn_rate=0`, exactly the legacy shape covered by
+the fallback.
