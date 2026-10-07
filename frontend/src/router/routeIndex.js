@@ -140,6 +140,12 @@ export function buildRouteIndex(menuSnapshot) {
     // print link above (2026-10-06, Returnable Material Transfer gap-fix pass).
     ["/dashboard/procurement/transfer",                           "/dashboard/procurement/returnable-transfers/:id/print"],
     ["/dashboard/procurement/transfer",                "/dashboard/procurement/transfer/:id"],
+    // "Bulk Component Map" button — reachable from both AC01 and PO12 Tab 1
+    // (BulkComponentMapPage.jsx), no new tx_code/menu row either (same shared-tool
+    // pattern as Settlement above). Without these, the button bounces straight back
+    // to the dashboard (found live 2026-10-07, business owner).
+    ["/dashboard/procurement/accounts/invoice-verifications",     "/dashboard/procurement/accounts/bulk-component-map"],
+    ["/dashboard/procurement/transfer",                           "/dashboard/procurement/accounts/bulk-component-map"],
     ["/dashboard/procurement/sales-orders",            "/dashboard/procurement/sales-orders/:id"],
     ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/:id"],
     ["/dashboard/procurement/delivery-orders",         "/dashboard/procurement/delivery-orders/:id"],
