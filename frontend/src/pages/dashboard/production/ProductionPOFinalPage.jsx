@@ -1541,7 +1541,10 @@ function ProcessPoFinalTab() {
                             <td className="px-3 py-2 text-right font-mono">{formatSum(values.variance, "0")}</td>
                             <td className="px-3 py-2">P261</td>
                             <td className="px-3 py-2 text-center">
-                              {!row.is_formulation_line && (
+                              {/* Same rule as Verify: only a never-saved row can be dropped. A saved
+                                  non-formulation row (a split-material row, §144) still lives on the PO
+                                  and would still issue; set its Actual Qty to 0 instead. */}
+                              {!row.is_formulation_line && !row.id && (
                                 <button
                                   type="button"
                                   onClick={() => removeRow(row.key)}
