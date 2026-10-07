@@ -340,6 +340,21 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // "PTO Company" page (PO12 Tab 2 Transfer Group allow-list master) -- had
+  // an AppRouter.jsx route but no SCREEN_REGISTRY entry at all.
+  // MenuShell.jsx's handleMenuRoute() no-ops silently when
+  // getScreenForRoute() returns null, so the sidebar click did nothing --
+  // no flicker, no error, same root cause class as the Bulk Component Map
+  // navigation gap, one step earlier (never even reaches
+  // NavigationStackBridge). Found live 2026-10-07 (business owner).
+  SA_PROC_TRANSFER_GROUP: {
+    screen_code: "SA_PROC_TRANSFER_GROUP",
+    route: "/sa/procurement/transfer-groups",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_PROD_SEGMENT_LOCATIONS: {
     screen_code: "SA_PROD_SEGMENT_LOCATIONS",
     route: "/sa/production/segment-locations",
