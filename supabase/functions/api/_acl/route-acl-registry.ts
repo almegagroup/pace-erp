@@ -57,6 +57,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/print-groups":                { skipAcl: false, resourceCode: "PROC_PO_STO_PRINT", action: "VIEW" },
   "POST:/api/procurement/print-groups/log":           { skipAcl: false, resourceCode: "PROC_PO_STO_PRINT", action: "WRITE" },
   "GET:/api/procurement/po-filter-options":           { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW"  },
+  // Section 145 -- Lot Amend list: same authority as amending a PO (EDIT), not mere list access.
+  "GET:/api/procurement/po-lot-orders":               { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT"  },
   // Generic material_uom_conversion lookup (no PO reference, no company scope in the handler) --
   // was mis-gated under PROC_PO_LIST, which silently 403'd it for any non-PO page that also uses
   // it (Opening Stock, PID) whenever that user lacked PO List access. Found live in prod 2026-08-14
@@ -899,6 +901,12 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     // ordinary-EDIT-access pattern as CRCP above.
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/effective-date$/,
     methods: { PATCH: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
+  },
+  {
+    // Section 145 -- Bulk "Order in LOT": Lot Amend. Same authority as amend (EDIT); the lot then
+    // goes through the ordinary PO approval (APPROVE) before it counts.
+    pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/lots$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
   },
 
   // ── PO Order Group (internal batch-approval wrapper, 87.12A) ──────────────

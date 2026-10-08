@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import {
@@ -16,6 +16,7 @@ import { getActiveScreenContext, popScreen } from "../../../../navigation/screen
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import {
+  addPoLots,
   amendPurchaseOrder,
   cancelPurchaseOrder,
   confirmPurchaseOrder,
@@ -165,6 +166,12 @@ export default function PODetailPage() {
   const [effectiveDateModalOpen, setEffectiveDateModalOpen] = useState(false);
   const [effectiveDateSaving, setEffectiveDateSaving] = useState(false);
   const [effectiveDateError, setEffectiveDateError] = useState("");
+  // Section 145 -- Bulk "Order in LOT". Lot Amend mode is entered from the Lot Amend list (the flag
+  // also travels in the screen-stack context because the stack can replay the route without its query).
+  const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const lotAmendMode = searchParams.get("lotAmend") === "1" || screenContext.lotAmend === true;
+  const [lotDrafts, setLotDrafts] = useState([]);
   const vendorQuery = useVendorOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const paymentTermQuery = usePaymentTermOptionsQuery({ is_active: true });
   const poDetailQuery = useQuery({
@@ -326,6 +333,36 @@ export default function PODetailPage() {
     }
     setAmendmentForm(buildAmendmentState(po?.lines, po));
   }, [po]);
+
+  function addLotDraft() {
+    setLotDrafts((current) => [...current, { key: `lot-draft-${Date.now()}-${current.length}`, qty: "", delivery_date: "" }]);
+  }
+
+  function updateLotDraft(key, patch) {
+    setLotDrafts((current) => current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)));
+  }
+
+  function removeLotDraft(key) {
+    setLotDrafts((current) => current.filter((draft) => draft.key !== key));
+  }
+
+  async function handleSaveLots() {
+    if (lotDrafts.length === 0) {
+      setError("Add at least one lot first.");
+      return;
+    }
+    if (lotDrafts.some((draft) => !(Number(draft.qty) > 0) || !draft.delivery_date)) {
+      setError("Every new lot needs a quantity greater than zero and a delivery date.");
+      return;
+    }
+    await runAction(async () => {
+      await addPoLots(id, {
+        lots: lotDrafts.map((draft) => ({ qty: Number(draft.qty), delivery_date: draft.delivery_date })),
+      });
+      setLotDrafts([]);
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "po-lot-orders"] });
+    }, "Lot sent for approval. It counts only after the purchase order is approved.");
+  }
 
   async function refreshDetailQueries() {
     await Promise.all([
@@ -692,6 +729,7 @@ export default function PODetailPage() {
               <ErpFieldPreview label="PO Date" value={po.po_date} />
               <ErpFieldPreview label="Company" value={po.company_name || po.company_id} />
               <ErpFieldPreview label="Delivery Type" value={po.delivery_type} />
+              {po.order_in_lot ? <ErpFieldPreview label="Order in LOT" value="Yes" /> : null}
               <ErpFieldPreview label="GST Terms" value={po.gst_terms || "Not specified"} />
               <ErpFieldPreview label={deliveryDateLabel} value={po.expected_delivery_date || "—"} />
               {po.delivery_type === "IMPORT" ? (
@@ -773,6 +811,133 @@ export default function PODetailPage() {
               emptyMessage="No PO lines found."
             />
           </ErpSectionCard>
+
+          {po.order_in_lot ? (
+            <ErpSectionCard
+              eyebrow="Order in LOT"
+              title={lotAmendMode ? "Lots — add the next lot" : "Lots"}
+            >
+              <div className="grid gap-3">
+                {lotAmendMode && po.status !== "CONFIRMED" ? (
+                  <div className="border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                    {po.status === "PENDING_APPROVAL"
+                      ? "A lot is already waiting for approval on this purchase order. Approve or reject it before adding another."
+                      : `This purchase order is ${po.status} and cannot take a new lot.`}
+                  </div>
+                ) : null}
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[820px] border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-2 text-left">Lot No.</th>
+                        <th className="border-b px-3 py-2 text-left">Material</th>
+                        <th className="border-b px-3 py-2 text-left">UOM</th>
+                        <th className="border-b px-3 py-2 text-right">Rate</th>
+                        <th className="border-b px-3 py-2 text-right">Lot Qty</th>
+                        <th className="border-b px-3 py-2 text-left">Delivery Date</th>
+                        <th className="border-b px-3 py-2 text-left">Status</th>
+                        <th className="border-b px-3 py-2 text-right">Received</th>
+                        <th className="border-b px-3 py-2 text-right">Balance</th>
+                        <th className="border-b px-3 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(po.lots ?? []).map((lot) => {
+                        const line = (po.lines ?? []).find((entry) => entry.id === lot.po_line_id) ?? (po.lines ?? [])[0] ?? {};
+                        const pending = String(lot.status || "").toUpperCase() === "PENDING";
+                        return (
+                          <tr key={lot.id} className={pending ? "bg-amber-50" : "bg-slate-50/60 text-slate-500"}>
+                            <td className="border-b border-slate-100 px-3 py-2 font-mono">{lot.lot_number}</td>
+                            <td className="border-b border-slate-100 px-3 py-2">{line.material_display || "—"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2">{line.po_uom_code || "—"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{line.unit_rate ?? "—"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{Number(lot.lot_qty ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</td>
+                            <td className="border-b border-slate-100 px-3 py-2">{lot.delivery_date || "—"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2">
+                              <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${pending ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>
+                                {pending ? "Awaiting approval" : "Active"}
+                              </span>
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{pending ? "—" : Number(lot.received_qty ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{pending ? "—" : Number(lot.balance_qty ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</td>
+                            <td className="border-b border-slate-100 px-3 py-2" />
+                          </tr>
+                        );
+                      })}
+                      {lotAmendMode && po.status === "CONFIRMED" ? lotDrafts.map((draft) => {
+                        const line = (po.lines ?? [])[0] ?? {};
+                        return (
+                          <tr key={draft.key} className="bg-sky-50">
+                            <td className="border-b border-slate-100 px-3 py-2 font-mono text-slate-400">auto</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-slate-500">{line.material_display || "—"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-slate-500">{line.po_uom_code || "—"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right font-mono text-slate-500">{line.unit_rate ?? "—"}</td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.001"
+                                value={draft.qty}
+                                onChange={(event) => updateLotDraft(draft.key, { qty: event.target.value })}
+                                className="h-8 w-28 border border-slate-300 bg-white px-2 text-right text-sm outline-none focus:border-sky-500"
+                              />
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-2">
+                              <input
+                                type="date"
+                                value={draft.delivery_date}
+                                onChange={(event) => updateLotDraft(draft.key, { delivery_date: event.target.value })}
+                                className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
+                              />
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-2 text-xs font-semibold text-sky-700">New</td>
+                            <td className="border-b border-slate-100 px-3 py-2" />
+                            <td className="border-b border-slate-100 px-3 py-2" />
+                            <td className="border-b border-slate-100 px-3 py-2 text-right">
+                              <button
+                                type="button"
+                                onClick={() => removeLotDraft(draft.key)}
+                                className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      }) : null}
+                      {(po.lots ?? []).length === 0 && lotDrafts.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="px-3 py-6 text-center text-sm text-slate-400">No lots yet.</td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+                {lotAmendMode && po.status === "CONFIRMED" ? (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={addLotDraft}
+                      disabled={saving}
+                      className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-slate-700"
+                    >
+                      + Add Lot
+                    </button>
+                    {lotDrafts.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveLots()}
+                        disabled={saving}
+                        className="border border-sky-700 bg-sky-600 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-white disabled:opacity-60"
+                      >
+                        {saving ? "Saving..." : "Save & Send for Approval"}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </ErpSectionCard>
+          ) : null}
 
           <ErpSectionCard eyebrow="CSNs" title="CSN links">
             <div className="grid gap-2">

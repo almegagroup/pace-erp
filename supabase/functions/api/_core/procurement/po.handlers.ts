@@ -20,6 +20,7 @@ import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 import { gstStateCodeFromGstNumber, gstStateCodeFromState } from "../../_shared/gstStateCodes.ts";
 import { recalculateAndBuildUpdates } from "./csn.handlers.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 
 type JsonRecord = Record<string, unknown>;
 type PurchaseOrderRow = Record<string, unknown>;
@@ -721,6 +722,87 @@ async function getPOLines(poId: string): Promise<PurchaseOrderLineRow[]> {
   return (data as PurchaseOrderLineRow[] | null) ?? [];
 }
 
+// ── Section 145 — Bulk "Order in LOT" ──────────────────────────────────────
+// Lots (never REJECTED ones) for a set of POs, each with its live balance
+// (lot_qty − posted GRNs − Gate Entries not yet GRN'd), keyed by po_id.
+async function loadLotsByPoId(poIds: string[]): Promise<Map<string, JsonRecord[]>> {
+  const ids = uniqueTrimmedStrings(poIds);
+  const result = new Map<string, JsonRecord[]>();
+  if (ids.length === 0) return result;
+
+  let lots: JsonRecord[];
+  try {
+    lots = await fetchInChunks<JsonRecord>(ids, (idChunk) =>
+      serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order_lot")
+        .select("id, po_id, po_line_id, lot_number, lot_qty, delivery_date, status, amendment_number")
+        .in("po_id", idChunk)
+        .neq("status", "REJECTED"));
+  } catch {
+    throw new Error("PROCUREMENT_LOT_LOOKUP_FAILED");
+  }
+  if (lots.length === 0) return result;
+
+  const lineIds = uniqueTrimmedStrings(lots.map((lot) => lot.po_line_id));
+  const balanceByLotId = new Map<string, JsonRecord>();
+  const chunks: string[][] = [];
+  for (let i = 0; i < lineIds.length; i += 100) chunks.push(lineIds.slice(i, i + 100));
+  const responses = await Promise.all(chunks.map((chunk) =>
+    serviceRoleClient.schema("erp_procurement").rpc("po_lot_balances", { p_po_line_ids: chunk })));
+  for (const response of responses) {
+    if (response.error) throw new Error("PROCUREMENT_LOT_BALANCE_LOOKUP_FAILED");
+    for (const row of ((response.data as JsonRecord[] | null) ?? [])) {
+      balanceByLotId.set(toTrimmedString(row.lot_id), row);
+    }
+  }
+
+  for (const lot of lots) {
+    const balance = balanceByLotId.get(toTrimmedString(lot.id));
+    const poId = toTrimmedString(lot.po_id);
+    const list = result.get(poId) ?? [];
+    list.push({
+      ...lot,
+      received_qty: Number(balance?.received_qty ?? 0),
+      reserved_qty: Number(balance?.reserved_qty ?? 0),
+      balance_qty: Number(balance?.balance_qty ?? 0),
+    });
+    result.set(poId, list);
+  }
+  for (const list of result.values()) {
+    list.sort((a, b) => toTrimmedString(a.lot_number).localeCompare(toTrimmedString(b.lot_number)));
+  }
+  return result;
+}
+
+// Approval paths call this for the POs they approve. A PO with no PENDING lot is a no-op.
+async function activatePendingPoLots(poIds: string[], actorId: string): Promise<void> {
+  const ids = uniqueTrimmedStrings(poIds);
+  if (ids.length === 0) return;
+  const { error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .rpc("activate_pending_po_lots", { p_po_ids: ids, p_actor: actorId });
+  if (error) {
+    console.error("PO_LOT_ACTIVATE_ERROR", JSON.stringify(error));
+    throw new Error("PROCUREMENT_LOT_ACTIVATE_FAILED");
+  }
+}
+
+// Rejection paths call this first. Returns the POs that had a pending lot-amend: those go back
+// to CONFIRMED (a live Bulk PO must stay live), every other PO keeps the normal DRAFT rejection.
+async function rejectPendingPoLots(poIds: string[], actorId: string, remarks: string): Promise<Set<string>> {
+  const ids = uniqueTrimmedStrings(poIds);
+  if (ids.length === 0) return new Set();
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .rpc("reject_pending_po_lots", { p_po_ids: ids, p_actor: actorId, p_remarks: remarks });
+  if (error) {
+    console.error("PO_LOT_REJECT_ERROR", JSON.stringify(error));
+    throw new Error("PROCUREMENT_LOT_REJECT_FAILED");
+  }
+  return new Set(uniqueTrimmedStrings((data as unknown[] | null) ?? []));
+}
+
 async function getNextAmendmentNumber(poId: string): Promise<number> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -1374,6 +1456,9 @@ export async function createPOHandler(
     const openingPoNumber = toTrimmedString(body.po_number);
     const costCenterId = toTrimmedString(body.cost_center_id);
     const extraFields = parseStringArray(body.extra_fields);
+    // Section 145 -- Bulk "Order in LOT": set at create only, BULK only. The PO's first lot
+    // (0001) is created below with the ordered qty and delivery date entered here.
+    const orderInLot = body.order_in_lot === true;
 
     if (!companyId) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_REQUIRED", 400, "Company is required");
@@ -1389,6 +1474,9 @@ export async function createPOHandler(
     }
     if (!DELIVERY_TYPES.has(deliveryType)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_DELIVERY_TYPE", 400, "Invalid delivery type");
+    }
+    if (orderInLot && deliveryType !== "BULK") {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_LOT_ORDER_BULK_ONLY", 400, "Order in LOT is available for Bulk delivery type only.");
     }
     // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — mandatory only for BULK.
     // Vendor Challan/Invoice dates at GE are validated against this PO's window (see
@@ -1540,6 +1628,10 @@ export async function createPOHandler(
       if (rebateRateUomBasis && !REBATE_RATE_UOM_BASIS.has(rebateRateUomBasis)) {
         throw new Error("PROCUREMENT_INVALID_REBATE_RATE_UOM_BASIS");
       }
+      // Lot 0001 carries the material's delivery date, so it cannot be blank on an LOT order.
+      if (orderInLot && !toTrimmedString(materialRecord.delivery_date || materialRecord.expected_delivery_date)) {
+        throw new Error("PROCUREMENT_LOT_DELIVERY_DATE_REQUIRED");
+      }
 
       return {
         materialRecord,
@@ -1577,6 +1669,7 @@ export async function createPOHandler(
             payment_term_id: paymentTermId,
             lc_required: lcRequired,
             delivery_type: deliveryType,
+            order_in_lot: orderInLot,
             effective_start_date: effectiveStartDate,
             gst_terms: gstTerms || null,
             has_rebate: materialRecord.has_rebate === true,
@@ -1609,6 +1702,27 @@ export async function createPOHandler(
 
         if (lineError || !lineData) {
           throw new Error("PROCUREMENT_PO_LINES_CREATE_FAILED");
+        }
+
+        if (orderInLot) {
+          const { error: lotError } = await serviceRoleClient
+            .schema("erp_procurement")
+            .from("purchase_order_lot")
+            .insert({
+              po_id: poId,
+              po_line_id: toTrimmedString(lineData.id),
+              lot_number: "0001",
+              lot_qty: Number(lineData.ordered_qty),
+              delivery_date: toTrimmedString(poData.expected_delivery_date),
+              status: "ACTIVE",
+              created_by: ctx.auth_user_id,
+              approved_by: ctx.auth_user_id,
+              approved_at: new Date().toISOString(),
+            });
+          if (lotError) {
+            console.error("PO_LOT_ONE_INSERT_ERROR", JSON.stringify(lotError));
+            throw new Error("PROCUREMENT_LOT_CREATE_FAILED");
+          }
         }
 
         return { ...poData, lines: [lineData] };
@@ -1942,6 +2056,9 @@ export async function getPOHandler(
       .eq("po_id", poId);
     const crcpCompanyIds = uniqueTrimmedStrings((crcpRows ?? []).map((row) => (row as JsonRecord).company_id));
 
+    // Section 145 -- lots (PENDING ones included, REJECTED never) with live balances.
+    const lots = po.order_in_lot === true ? ((await loadLotsByPoId([poId])).get(poId) ?? []) : [];
+
     return okResponse({
       data: await enrichProcurementUserDisplays({
         ...(enrichedDetail.po ?? po),
@@ -1950,6 +2067,7 @@ export async function getPOHandler(
         amendment_log: amendmentLogResult.data ?? [],
         can_edit_pending_approval: canEditPendingApproval,
         crcp_company_ids: crcpCompanyIds,
+        lots,
       }),
     }, ctx.request_id, req);
   } catch (err) {
@@ -1981,6 +2099,21 @@ export async function updatePOHandler(
     if (currentStatus !== "DRAFT" && currentStatus !== "PENDING_APPROVAL") {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_DRAFT", 422, "Only DRAFT or PENDING_APPROVAL PO can be updated");
     }
+    // Section 145 -- this handler deletes and re-creates the PO line, which would take every lot
+    // with it. A PO whose lot-amend is awaiting approval is therefore not editable here at all
+    // (approve or reject it); a not-yet-approved original is re-created with a fresh lot 0001 below.
+    const poOrderInLot = po.order_in_lot === true;
+    let previousLotOneDate = "";
+    if (poOrderInLot) {
+      const existingLots = (await loadLotsByPoId([poId])).get(poId) ?? [];
+      if (existingLots.some((lot) => toUpperTrimmedString(lot.status) === "PENDING")) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_LOT_EDIT_BLOCKED", 422, "This PO has a lot waiting for approval. Approve or reject it instead of editing.");
+      }
+      if (existingLots.some((lot) => toUpperTrimmedString(lot.status) === "ACTIVE" && toTrimmedString(lot.lot_number) !== "0001")) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_LOT_EDIT_BLOCKED", 422, "This PO already has additional lots and cannot be edited.");
+      }
+      previousLotOneDate = toTrimmedString(existingLots[0]?.delivery_date);
+    }
     if (currentStatus === "PENDING_APPROVAL") {
       // While pending approval, editing is restricted to this PO's own
       // approver (same authority as approvePOHandler/rejectPOHandler) --
@@ -2007,6 +2140,9 @@ export async function updatePOHandler(
 
     if (!DELIVERY_TYPES.has(deliveryType) || !PO_VENDOR_TYPES.has(vendorType) || !FREIGHT_TERMS.has(freightTerm)) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INVALID_PO_VALUES", 400, "Invalid PO header values");
+    }
+    if (poOrderInLot && deliveryType !== "BULK") {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_LOT_ORDER_BULK_ONLY", 400, "An Order in LOT PO must stay Bulk.");
     }
     if (vendorType === "IMPORT" && !incoterm) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_INCOTERM_REQUIRED", 400, "Incoterm required for import PO");
@@ -2080,6 +2216,32 @@ export async function updatePOHandler(
 
     if (lineError) {
       throw new Error("PROCUREMENT_PO_LINES_CREATE_FAILED");
+    }
+
+    if (poOrderInLot) {
+      // The line (and its lots, by cascade) was just re-created: put lot 0001 back on it.
+      const lotOneDate = toTrimmedString((updatedPo as JsonRecord).expected_delivery_date) || previousLotOneDate;
+      if (!lotOneDate) {
+        throw new Error("PROCUREMENT_LOT_DELIVERY_DATE_REQUIRED");
+      }
+      const { error: lotError } = await serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order_lot")
+        .insert((lineData ?? []).map((line: JsonRecord) => ({
+          po_id: poId,
+          po_line_id: toTrimmedString(line.id),
+          lot_number: "0001",
+          lot_qty: Number(line.ordered_qty),
+          delivery_date: lotOneDate,
+          status: "ACTIVE",
+          created_by: ctx.auth_user_id,
+          approved_by: ctx.auth_user_id,
+          approved_at: new Date().toISOString(),
+        })));
+      if (lotError) {
+        console.error("PO_LOT_ONE_REINSERT_ERROR", JSON.stringify(lotError));
+        throw new Error("PROCUREMENT_LOT_CREATE_FAILED");
+      }
     }
 
     return okResponse({
@@ -2302,6 +2464,9 @@ export async function approvePOHandler(
       actionedBy: ctx.auth_user_id,
     });
 
+    // Section 145 -- a pending Lot Amend becomes real only now.
+    await activatePendingPoLots([poId], ctx.auth_user_id);
+
     if (pendingAmendmentRows.length > 0) {
       await markAmendmentRowsApproved(pendingAmendmentRows.map((row) => row.id), ctx.auth_user_id);
       if (qtyIncreaseRows.length > 0 && body.create_csn_for_qty_increase === true) {
@@ -2354,6 +2519,19 @@ export async function rejectPOHandler(
     await assertProcurementHeadRole(ctx, toTrimmedString(po.company_id), toTrimmedString(po.created_by));
     if (toUpperTrimmedString(po.status) !== "PENDING_APPROVAL") {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_APPROVAL_STATE_INVALID", 422, "PO is not pending approval");
+    }
+
+    // Section 145 -- rejecting a Lot Amend drops the pending lot and leaves a live PO CONFIRMED
+    // (the normal rejection below would send it to DRAFT, i.e. stop receiving against it).
+    if ((await rejectPendingPoLots([poId], ctx.auth_user_id, remarks)).has(poId)) {
+      const restoredPo = await getPOById(poId);
+      const restoredGroupId = toTrimmedString((restoredPo as PurchaseOrderRow | null)?.order_group_id);
+      if (restoredGroupId) {
+        await syncOrderGroupStatus(restoredGroupId, ctx.auth_user_id);
+      }
+      return okResponse({
+        data: await enrichProcurementUserDisplays(restoredPo ?? po),
+      }, ctx.request_id, req);
     }
 
     const { data: updatedPo, error } = await serviceRoleClient
@@ -2438,6 +2616,18 @@ export async function amendPOHandler(
 
     const poLineId = toTrimmedString(body.po_line_id);
     const existingLines = await getPOLines(poId);
+    // Section 145 -- on an Order in LOT PO the ordered qty only ever grows through Lot Amend. Only a
+    // real change is refused: the Amend form re-sends the unchanged qty/type with every save.
+    if (po.order_in_lot === true) {
+      const qtyLine = existingLines.find((line) => toTrimmedString(line.id) === poLineId) ?? null;
+      const qtyChanged = body.ordered_qty !== undefined
+        && Number(body.ordered_qty) !== Number(qtyLine?.ordered_qty ?? Number.NaN);
+      const typeChanged = body.delivery_type !== undefined
+        && toUpperTrimmedString(body.delivery_type) !== toUpperTrimmedString(po.delivery_type);
+      if (qtyChanged || typeChanged) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_LOT_QTY_VIA_LOT_AMEND", 422, "This PO is ordered in lots. Add a lot with Lot Amend instead of changing the quantity or delivery type.");
+      }
+    }
     const targetLine = poLineId
       ? existingLines.find((line) => toTrimmedString(line.id) === poLineId) ?? null
       : null;
@@ -2781,6 +2971,9 @@ export async function approveAmendmentHandler(
       remarks: toTrimmedString(body.remarks) || null,
       actionedBy: ctx.auth_user_id,
     });
+
+    // Section 145 -- a pending Lot Amend becomes real only now.
+    await activatePendingPoLots([poId], ctx.auth_user_id);
 
     await markAmendmentRowsApproved(pendingLogs.map((row) => row.id), ctx.auth_user_id);
     if (qtyIncreaseRows.length > 0 && body.create_csn_for_qty_increase === true) {
@@ -3648,9 +3841,14 @@ export async function getPOOrderGroupHandler(
     const enrichedLineById = new Map(
       (enrichedLines ?? []).map((line) => [toTrimmedString(line.id), line]),
     );
+    // Section 145 -- lots per PO, so the approver sees exactly which lot is awaiting approval.
+    const lotsByPoId = await loadLotsByPoId(
+      (posWithLines as unknown as JsonRecord[]).filter((po) => po.order_in_lot === true).map((po) => toTrimmedString(po.id)),
+    );
     const posWithEnrichedLines = posWithLines.map((po) => ({
       ...po,
       lines: po.lines.map((line) => enrichedLineById.get(toTrimmedString(line.id)) ?? line),
+      lots: lotsByPoId.get(toTrimmedString((po as unknown as JsonRecord).id)) ?? [],
     }));
 
     const groupVendorId = toTrimmedString(group.vendor_id);
@@ -3688,12 +3886,25 @@ export async function getPOOrderGroupHandler(
         delta_qty: Number((Number(row.new_value ?? 0) - Number(row.old_value ?? 0)).toFixed(6)),
       }));
 
+    const pendingLotAmendments = (posWithEnrichedLines as unknown as JsonRecord[]).flatMap((po) =>
+      (po.lots as JsonRecord[])
+        .filter((lot) => toUpperTrimmedString(lot.status) === "PENDING")
+        .map((lot) => ({
+          po_id: toTrimmedString(po.id),
+          po_number: toTrimmedString(po.po_number),
+          material_display: lineDisplayById.get(toTrimmedString(lot.po_line_id)) ?? null,
+          lot_number: lot.lot_number,
+          lot_qty: lot.lot_qty,
+          delivery_date: lot.delivery_date,
+        })));
+
     return okResponse({
       data: await enrichProcurementUserDisplays({
         ...group,
         vendor_display: vendorDisplay,
         purchase_orders: posWithEnrichedLines,
         pending_qty_increase_amendments: pendingQtyIncreaseAmendments,
+        pending_lot_amendments: pendingLotAmendments,
       }),
     }, ctx.request_id, req);
   } catch (err) {
@@ -3882,6 +4093,9 @@ export async function approvePOOrderGroupHandler(
         actionedBy: ctx.auth_user_id,
       });
 
+      // Section 145 -- a pending Lot Amend becomes real only now.
+      await activatePendingPoLots([poId], ctx.auth_user_id);
+
       const poAmendmentRows = amendmentRowsByPoId.get(poId) ?? [];
       if (poAmendmentRows.length > 0) {
         await markAmendmentRowsApproved(poAmendmentRows.map((row) => row.id), ctx.auth_user_id);
@@ -3959,8 +4173,16 @@ export async function rejectPOOrderGroupHandler(
     const pendingPos = pos.filter((po) => toUpperTrimmedString(po.status) === "PENDING_APPROVAL");
     const nowIso = new Date().toISOString();
 
+    // Section 145 -- a PO whose pending item is a Lot Amend returns to CONFIRMED, not DRAFT.
+    const lotRejectedPoIds = await rejectPendingPoLots(
+      pendingPos.map((po) => toTrimmedString(po.id)),
+      ctx.auth_user_id,
+      remarks,
+    );
+
     for (const po of pendingPos) {
       const poId = toTrimmedString(po.id);
+      if (lotRejectedPoIds.has(poId)) continue;
       const { error } = await serviceRoleClient
         .schema("erp_procurement")
         .from("purchase_order")
@@ -3983,6 +4205,16 @@ export async function rejectPOOrderGroupHandler(
         remarks,
         actionedBy: ctx.auth_user_id,
       });
+    }
+
+    if (lotRejectedPoIds.size > 0) {
+      await syncOrderGroupStatus(groupId, ctx.auth_user_id);
+      return okResponse({
+        data: await enrichProcurementUserDisplays({
+          ...((await getOrderGroupById(groupId)) ?? group),
+          purchase_orders: await getOrderGroupPOs(groupId),
+        }),
+      }, ctx.request_id, req);
     }
 
     const { data: updatedGroup, error: groupError } = await serviceRoleClient
@@ -4016,6 +4248,205 @@ export async function rejectPOOrderGroupHandler(
         : code.includes("INVALID") ? 422
         : 500;
     return procurementErrorResponse(req, ctx, code, status, "Purchase order group rejection failed");
+  }
+}
+
+// ── Section 145 — Lot Amend ──────────────────────────────────────────────────
+// POST /api/procurement/purchase-orders/:id/lots
+// Body: { lots: [{ po_line_id?, qty, delivery_date }], remarks? }  (po_line_id optional when the PO has one line)
+// Adds PENDING lots and sends the PO for approval in one transaction (erp_procurement.add_po_lots).
+// Nothing about the PO line changes until approval (activate_pending_po_lots).
+const LOT_AMEND_ERROR_STATUS: Record<string, number> = {
+  PROCUREMENT_PO_NOT_FOUND: 404,
+  PROCUREMENT_PO_LINE_NOT_FOUND: 404,
+  PROCUREMENT_PO_NOT_LOT_ORDER: 422,
+  PROCUREMENT_PO_LOT_AMEND_BLOCKED: 422,
+  PROCUREMENT_LOT_AMEND_PENDING: 422,
+  PROCUREMENT_LOT_NUMBER_EXHAUSTED: 422,
+  PROCUREMENT_LOT_REQUIRED: 400,
+  PROCUREMENT_LOT_QTY_INVALID: 400,
+  PROCUREMENT_LOT_DELIVERY_DATE_REQUIRED: 400,
+  COMPANY_SCOPE_VIOLATION: 403,
+};
+
+export async function addPoLotsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+
+    const poId = getPoIdFromPath(req);
+    const body = await parseBody(req);
+    const po = await getPOById(poId);
+    if (!po) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_NOT_FOUND", 404, "Purchase order not found");
+    }
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(po.company_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+
+    const rawLots = Array.isArray(body.lots) ? (body.lots as JsonRecord[]) : [];
+    if (rawLots.length === 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_LOT_REQUIRED", 400, "Add at least one lot.");
+    }
+    const lines = await getPOLines(poId);
+    const lots: JsonRecord[] = [];
+    for (const raw of rawLots) {
+      const poLineId = toTrimmedString(raw.po_line_id) || (lines.length === 1 ? toTrimmedString(lines[0].id) : "");
+      const qty = parsePositiveNumber(raw.qty);
+      const deliveryDate = toTrimmedString(raw.delivery_date);
+      if (!poLineId) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_LINE_NOT_FOUND", 404, "PO line is required for a lot.");
+      }
+      if (!qty) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_LOT_QTY_INVALID", 400, "Every lot needs a quantity greater than zero.");
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_LOT_DELIVERY_DATE_REQUIRED", 400, "Every lot needs a delivery date.");
+      }
+      lots.push({ po_line_id: poLineId, qty, delivery_date: deliveryDate });
+    }
+
+    const { data, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .rpc("add_po_lots", {
+        p_po_id: poId,
+        p_actor: ctx.auth_user_id,
+        p_lots: lots,
+        p_remarks: toTrimmedString(body.remarks) || null,
+      });
+    if (error) {
+      const code = toTrimmedString(error.message);
+      if (code in LOT_AMEND_ERROR_STATUS) {
+        return procurementErrorResponse(req, ctx, code, LOT_AMEND_ERROR_STATUS[code], "Lot amend failed");
+      }
+      console.error("PO_LOT_ADD_ERROR", JSON.stringify(error));
+      throw new Error("PROCUREMENT_LOT_ADD_FAILED");
+    }
+
+    const orderGroupId = toTrimmedString(po.order_group_id);
+    if (orderGroupId) {
+      await syncOrderGroupStatus(orderGroupId, ctx.auth_user_id);
+    }
+
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_LOT_ADD_FAILED";
+    const status = code in LOT_AMEND_ERROR_STATUS ? LOT_AMEND_ERROR_STATUS[code] : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Lot amend failed");
+  }
+}
+
+// GET /api/procurement/po-lot-orders?company_id=&is_opening=true|false
+// The Lot Amend list: every Order in LOT PO of the company that is live (CONFIRMED, or waiting for
+// approval) and not knocked off / cancelled. is_opening splits PO from Legacy PO (is_opening_po).
+// Response has NO pagination key (bug pattern #15): fetchProcurement hands the caller the bare array.
+export async function listLotOrdersHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(url.searchParams.get("company_id")));
+    if (!companyId) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_REQUIRED", 400, "Company is required");
+    }
+    const isOpening = toTrimmedString(url.searchParams.get("is_opening")).toLowerCase();
+
+    let query = serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order")
+      .select("id, po_number, po_date, status, vendor_id, is_opening_po, order_group_id, effective_start_date, cutoff_date")
+      .eq("company_id", companyId)
+      .eq("order_in_lot", true)
+      .in("status", ["CONFIRMED", "PENDING_APPROVAL"])
+      .order("po_date", { ascending: false })
+      .limit(1000);
+    if (isOpening === "true" || isOpening === "false") {
+      query = query.eq("is_opening_po", isOpening === "true");
+    }
+    const { data: poData, error: poError } = await query;
+    if (poError) {
+      throw new Error("PROCUREMENT_LOT_ORDER_LIST_FAILED");
+    }
+    const pos = (poData as JsonRecord[] | null) ?? [];
+    const poIds = pos.map((po) => toTrimmedString(po.id));
+    if (poIds.length === 0) {
+      return okResponse({ data: [] }, ctx.request_id, req);
+    }
+
+    let lineRows: JsonRecord[];
+    let vendorRows: JsonRecord[];
+    try {
+      lineRows = await fetchInChunks<JsonRecord>(poIds, (idChunk) =>
+        serviceRoleClient
+          .schema("erp_procurement")
+          .from("purchase_order_line")
+          .select("id, po_id, material_id, po_uom_code, unit_rate, ordered_qty, open_qty, line_status")
+          .in("po_id", idChunk));
+      vendorRows = await fetchInChunks<JsonRecord>(
+        uniqueTrimmedStrings(pos.map((po) => po.vendor_id)),
+        (idChunk) =>
+          serviceRoleClient
+            .schema("erp_master")
+            .from("vendor_master")
+            .select("id, vendor_code, vendor_name")
+            .in("id", idChunk));
+    } catch {
+      throw new Error("PROCUREMENT_LOT_ORDER_LIST_FAILED");
+    }
+    const { lines: displayLines } = await enrichPoReferenceDisplays({ lines: lineRows });
+    const lineByPoId = new Map<string, JsonRecord>();
+    for (const line of (displayLines ?? lineRows)) {
+      const status = toUpperTrimmedString(line.line_status);
+      if (status === "KNOCKED_OFF" || status === "CANCELLED") continue;
+      lineByPoId.set(toTrimmedString(line.po_id), line);
+    }
+    const vendorById = new Map(vendorRows.map((row) => [toTrimmedString(row.id), row]));
+    const lotsByPoId = await loadLotsByPoId(poIds);
+
+    const rows = pos
+      .filter((po) => lineByPoId.has(toTrimmedString(po.id)))
+      .map((po) => {
+        const poId = toTrimmedString(po.id);
+        const line = lineByPoId.get(poId) as JsonRecord;
+        const lots = lotsByPoId.get(poId) ?? [];
+        const activeLots = lots.filter((lot) => toUpperTrimmedString(lot.status) === "ACTIVE");
+        const vendor = vendorById.get(toTrimmedString(po.vendor_id));
+        const orderedQty = Number(line.ordered_qty ?? 0);
+        const openQty = Number(line.open_qty ?? 0);
+        return {
+          id: poId,
+          po_number: po.po_number,
+          po_date: po.po_date,
+          status: po.status,
+          is_opening_po: po.is_opening_po === true,
+          order_group_id: po.order_group_id,
+          vendor_display: vendor ? formatCodeNameDisplay(vendor.vendor_code, vendor.vendor_name) : null,
+          material_display: line.material_display ?? null,
+          po_uom_code: line.po_uom_code,
+          unit_rate: line.unit_rate,
+          ordered_qty: orderedQty,
+          received_qty: Number(Math.max(orderedQty - openQty, 0).toFixed(6)),
+          balance_qty: openQty,
+          line_status: line.line_status,
+          lot_count: activeLots.length,
+          last_lot_number: activeLots.length > 0 ? activeLots[activeLots.length - 1].lot_number : null,
+          has_pending_lot: lots.some((lot) => toUpperTrimmedString(lot.status) === "PENDING"),
+          effective_start_date: po.effective_start_date,
+          cutoff_date: po.cutoff_date,
+        };
+      });
+
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_LOT_ORDER_LIST_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "Lot order list failed");
   }
 }
 

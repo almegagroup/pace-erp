@@ -168,6 +168,16 @@ function POCopy({ po, from, to, portsById }) {
   const portName = isImport ? portsById?.[po?.destination_port_id] : null;
   const materialLabel = stripLeadingCode(line?.material_display) || "--";
   const paymentTermLabel = stripLeadingCode(line?.payment_term_display) || "--";
+  // Section 145 -- Bulk "Order in LOT": every APPROVED lot is listed under the item, and the lots
+  // added by the latest amendment carry NEW. A lot still awaiting approval is not printed yet.
+  const isLotOrder = po?.order_in_lot === true;
+  const printLots = isLotOrder
+    ? (Array.isArray(po?.lots) ? po.lots : []).filter((lot) => String(lot.status || "").toUpperCase() === "ACTIVE")
+    : [];
+  const latestLotAmendment = printLots.reduce(
+    (max, lot) => (lot.amendment_number != null ? Math.max(max, Number(lot.amendment_number)) : max),
+    0,
+  );
   // Found live 2026-08-19 (business owner): Rate/Amount had no currency
   // indicator at all -- an Import PO's USD rate looked identical to a
   // Domestic PO's INR rate. currency_code lives per-line (purchase_order_line),
@@ -229,8 +239,42 @@ function POCopy({ po, from, to, portsById }) {
             <td className="num">{fmtNumber(line?.unit_rate)}</td>
             <td className="num">{fmtNumber(line?.total_value)}</td>
           </tr>
+          {printLots.length > 0 ? (
+            <tr className="lot-row">
+              <td />
+              <td colSpan={5}>
+                <table className="lots">
+                  <thead>
+                    <tr>
+                      <th>Lot No.</th>
+                      <th className="num">Qty</th>
+                      <th>Delivery Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {printLots.map((lot) => (
+                      <tr key={lot.id || lot.lot_number}>
+                        <td>
+                          {latestLotAmendment > 0 && Number(lot.amendment_number) === latestLotAmendment ? <span className="new-tag">NEW</span> : null}
+                          {lot.lot_number}
+                        </td>
+                        <td className="num">{fmtNumber(lot.lot_qty)}</td>
+                        <td>{lot.delivery_date ? fmtDate(lot.delivery_date) : "--"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </td>
+            </tr>
+          ) : null}
         </tbody>
       </table>
+
+      {isLotOrder ? (
+        <p className="lot-invoice-note">
+          Please mention Purchase Order Number &amp; &quot;/&quot; &amp; Lot number in invoice (e.g. {po?.po_number}/0001).
+        </p>
+      ) : null}
 
       <div className="foot-grid">
         <div className="terms">
@@ -540,6 +584,13 @@ const PREVIEW_CSS = `
   table.items th.num, table.items td.num { text-align:right; }
   table.items td { padding:8px 10px; border-bottom:1px solid #ddd5d1; vertical-align:top; }
   table.items tr { break-inside:avoid; page-break-inside:avoid; }
+  table.items tr.lot-row td { border-bottom:1px solid #ddd5d1; padding-top:2px; }
+  table.lots { width:100%; border-collapse:collapse; font-size:11px; margin:0 0 4px; }
+  table.lots th { background:transparent; font-size:9.5px; font-weight:700; text-transform:uppercase; text-align:left; padding:3px 8px; border-top:0; border-bottom:1px solid #ddd5d1; color:#6d625b; }
+  table.lots th.num, table.lots td.num { text-align:right; }
+  table.lots td { padding:3px 8px; border-bottom:1px dotted #ddd5d1; }
+  .new-tag { font-size:8.5px; font-weight:700; letter-spacing:.06em; color:#7a2a2a; border:1px solid #7a2a2a; padding:0 3px; margin-right:6px; vertical-align:middle; }
+  .lot-invoice-note { font-family:Arial, sans-serif; font-size:11px; font-weight:700; color:#22201e; border:1px solid #22201e; padding:6px 10px; margin:0 0 12px; }
 
   .foot-grid { display:grid; grid-template-columns:1.3fr 1fr; gap:28px; margin-top:14px; break-inside:avoid; page-break-inside:avoid; }
   .terms { font-family:Arial, sans-serif; font-size:10.5px; line-height:1.75; color:#8a8078; }

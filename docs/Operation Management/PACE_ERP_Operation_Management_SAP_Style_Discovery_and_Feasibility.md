@@ -26034,3 +26034,26 @@ vendor invoice-এ `PO/0001` লিখবে (print-এর note), পরে Invo
 2. Lot Amend কারা করতে পারবে (create/amend অধিকার) ও কে approve করবে — default: PO create করার অধিকারই, approve আজকের PO approver chain; ACL data আলাদা
    session-এ (4-ধাপ versioned sequence)।
 3. Lot-ভিত্তিক receive report (কোন lot-এ কত এলো/বাকি) — এই pass-এ শুধু GE drawer-এ balance; আলাদা report চাইলে পরে।
+
+### 145.10 — Implementation status (2026-10-08) — ✅ CODE COMPLETE, dev DB verified, live click-through বাকি
+
+**Migrations (dev-এ applied):** `20261008074116_bulk_po_order_in_lot.sql` (`purchase_order.order_in_lot`, `purchase_order_lot`, `gate_entry_line.lot_number`,
+`normalize_lot_number`, `po_lot_balances`, `add_po_lots`, `activate_pending_po_lots`, `reject_pending_po_lots`) ও `20261008080000_po_line_available_qty.sql`
+(`po_line_available_qty`)। ⚠️ Prod-এ deploy-এর আগে-পরে `migration-integrity-check` চালাতে হবে।
+
+**Backend:** `po.handlers.ts` (create/update/amend guard, approve/reject hook, `addPoLotsHandler`, `listLotOrdersHandler`), `gate_entry.handlers.ts`
+(lot validation + balance), `grn.handlers.ts` (lot/PO balance per GE line), `ac01.handlers.ts` (3 নতুন column)।
+**Frontend:** PO Create + Legacy PO Create (checkbox), `POLotAmendListPage.jsx`, PO Detail (Lots section / Lot Amend mode), Order-group detail, Gate Entry drawer,
+GRN Post flow, AC01, PO print (lots + NEW tag + vendor note)।
+
+**§145.8 থেকে সচেতন বিচ্যুতি (#6):** Lot Amend list (`GET /po-lot-orders`) ও `POST /purchase-orders/:id/lots` আলাদা resource code পায়নি — দুটোই
+`PROC_PO_CREATE:EDIT` ব্যবহার করে (PO amend-এর একই অধিকার), কোনো নতুন menu row/capability নেই। ফলে নতুন ACL data session লাগছে না; পরে আলাদা
+করতে চাইলে নতুন resource code + 4-ধাপ versioned sequence লাগবে।
+
+**Design decisions implemented as defaults (§145.9):** Lot balance পেরোলে GE hard block; lot-wise receive report এই pass-এ নেই। Pending lot approval-এর সময়
+PO `PENDING_APPROVAL` থাকে (existing amend-এর মতোই Gate Entry list থেকে বাদ); reject করলে PO `CONFIRMED`-এ ফেরে (existing amend-এর DRAFT-এ নয়)।
+AC01-এর Lot/PO balance live (GRN-এর সময়ের as-of নয়)।
+
+**Verification:** সব CI guard exit 0, strict manifest check, eslint, `vite build`, `deno check` (নতুন error নেই), dev DB rolled-back test:
+lot 1000 → GE 300 (cancelled GE 200 উপেক্ষিত) = 700 → নিজের GE বাদে = 1000 → POSTED GRN 280 = 720 → reverse = 700 → split GRN 150 = 850; ভুল lot format
+(`'1'` DB-তে) CHECK-এ reject। `po_line_available_qty` `open_qty` ব্যবহার করে — GRN post-এ app handler `open_qty` কমায়, তাই test-এ সরাসরি insert করলে সেটা অপরিবর্তিত।
