@@ -242,6 +242,8 @@ export default function POCreatePage() {
     vendor_id: "",
     delivery_type: "STANDARD",
     effective_start_date: "",
+    // Section 145 -- Bulk "Order in LOT" (set at create only).
+    order_in_lot: false,
     incoterm: "",
     destination_port_id: "",
     shipment_mode: "",
@@ -548,6 +550,11 @@ export default function POCreatePage() {
       setError("Effective Start Date is required for BULK purchase orders.");
       return;
     }
+    // Lot 0001 takes the line's delivery date, so an Order in LOT cannot leave it blank.
+    if (form.delivery_type === "BULK" && form.order_in_lot && lines.some((line) => !line.delivery_date)) {
+      setError("Delivery date is required on every line of an Order in LOT purchase order (it becomes the date of Lot 0001).");
+      return;
+    }
     if (lines.some((line) => !line.material_id || !line.quantity || !line.rate || !line.payment_term_id || !line.freight_term)) {
       setError("Each PO line requires material, quantity, rate, payment term, and freight term.");
       return;
@@ -571,6 +578,7 @@ export default function POCreatePage() {
         vendor_type: String(selectedVendor?.vendor_type || "DOMESTIC").toUpperCase(),
         delivery_type: form.delivery_type,
         effective_start_date: form.delivery_type === "BULK" ? form.effective_start_date : null,
+        order_in_lot: form.delivery_type === "BULK" && form.order_in_lot,
         incoterm: showIncoterm ? form.incoterm.trim() : null,
         destination_port_id: showIncoterm ? form.destination_port_id : null,
         shipment_mode: showIncoterm ? form.shipment_mode : null,
@@ -873,7 +881,11 @@ export default function POCreatePage() {
                   Delivery Type <span className="text-rose-500">*</span>
                   <select
                     value={form.delivery_type}
-                    onChange={(event) => updateHeaderField("delivery_type", event.target.value)}
+                    onChange={(event) => setForm((current) => ({
+                      ...current,
+                      delivery_type: event.target.value,
+                      order_in_lot: event.target.value === "BULK" ? current.order_in_lot : false,
+                    }))}
                     className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                   >
                     {DELIVERY_TYPE_OPTIONS.map((entry) => (
@@ -892,6 +904,22 @@ export default function POCreatePage() {
                     />
                     <span className="text-[10px] font-normal text-slate-400">
                       Window start for validating a vendor Challan/Invoice date at Gate Entry.
+                    </span>
+                  </label>
+                )}
+                {form.delivery_type === "BULK" && (
+                  <label className="flex items-start gap-2 text-xs font-semibold text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={form.order_in_lot}
+                      onChange={(event) => updateHeaderField("order_in_lot", event.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      Order in LOT
+                      <span className="block text-[10px] font-normal text-slate-400">
+                        The quantity and delivery date entered below become Lot 0001. Further lots are added later with Lot Amend.
+                      </span>
                     </span>
                   </label>
                 )}

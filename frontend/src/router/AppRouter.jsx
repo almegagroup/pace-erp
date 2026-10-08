@@ -119,6 +119,7 @@ import POListPage from "../pages/dashboard/procurement/po/POListPage.jsx";
 import POCreatePage from "../pages/dashboard/procurement/po/POCreatePage.jsx";
 import POCreateOpeningPage from "../pages/dashboard/procurement/po/POCreateOpeningPage.jsx";
 import PODetailPage from "../pages/dashboard/procurement/po/PODetailPage.jsx";
+import POLotAmendListPage from "../pages/dashboard/procurement/po/POLotAmendListPage.jsx";
 import POOrderGroupListPage from "../pages/dashboard/procurement/po/POOrderGroupListPage.jsx";
 import POOrderGroupDetailPage from "../pages/dashboard/procurement/po/POOrderGroupDetailPage.jsx";
 import CSNTrackerPage from "../pages/dashboard/procurement/csn/CSNTrackerPage.jsx";
@@ -591,6 +592,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/purchase-orders/create-opening"
                     element={<POCreateOpeningPage />}
+                  />
+                  <Route
+                    path="procurement/purchase-orders/lot-amend"
+                    element={<POLotAmendListPage />}
                   />
                   <Route
                     path="procurement/purchase-orders/:id"

@@ -137,6 +137,8 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
                 ),
               },
               { key: "po_number", label: "PO", width: "120px", render: (row) => row.po_number || "—" },
+              // Section 145 -- Order in LOT: the lot this Gate Entry line was received against.
+              { key: "lot_number", label: "Lot", width: "70px", render: (row) => row.lot_number || "—" },
               { key: "ge_qty", label: "Invoice qty", width: "110px", render: (row) => `${row.ge_qty} ${row.uom_code || ""}` },
               {
                 key: "line_grn_status",
@@ -538,6 +540,21 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                 </ErpDenseFormRow>
               )}
             </div>
+            {geLine.lot_number ? (
+              <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                <div className="grid grid-cols-[110px_1fr_1fr] gap-x-4 gap-y-1">
+                  <span />
+                  <span className="font-semibold uppercase tracking-wide text-slate-500">Balance before this GRN</span>
+                  <span className="font-semibold uppercase tracking-wide text-slate-500">Balance after receiving {receivedQtyNum} {geLine.uom_code}</span>
+                  <span className="font-semibold">Lot {geLine.lot_number}</span>
+                  <span className="font-mono">{Number(geLine.lot_balance_qty ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>
+                  <span className="font-mono">{Math.max(Number(geLine.lot_balance_qty ?? 0) - receivedQtyNum, 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>
+                  <span className="font-semibold">PO {geLine.po_number || ""}</span>
+                  <span className="font-mono">{Number(geLine.po_balance_qty ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>
+                  <span className="font-mono">{Math.max(Number(geLine.po_balance_qty ?? 0) - receivedQtyNum, 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</span>
+                </div>
+              </div>
+            ) : null}
             {uomMismatch && stockQtyPreview != null && (
               <div className="mt-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
                 Stock qty: <strong>{receivedQtyNum} {geLine.uom_code} × {perPackQtyNum} = {stockQtyPreview} {geLine.base_uom_code}</strong>

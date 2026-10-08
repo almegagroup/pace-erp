@@ -656,6 +656,34 @@ export async function getGELinesForGRNHandler(
       : { data: [] };
     const shipToCompanyMap = new Map<string, JsonRecord>((shipToCompanyResp.data ?? []).map((c: JsonRecord) => [String(c.id), c]));
 
+    // Section 145 -- Order in LOT: for a Gate Entry line received against a lot, the lot's balance
+    // and the PO's balance, both with THIS Gate Entry line left out of what is already "reserved"
+    // (the GRN being posted is what consumes it). INDEPENDENT per line (§8B), fetched in parallel.
+    const lotInfoByGeLineId = new Map<string, JsonRecord>();
+    await Promise.all(linesList
+      .filter((l) => toTrimmedString(l.lot_number) && toTrimmedString(l.po_line_id))
+      .map(async (l) => {
+        const poLineId = String(l.po_line_id);
+        const geLineId = String(l.id);
+        const lotNumber = toTrimmedString(l.lot_number);
+        const [lotResp, poBalanceResp] = await Promise.all([
+          serviceRoleClient.schema("erp_procurement")
+            .rpc("po_lot_balances", { p_po_line_ids: [poLineId], p_exclude_ge_line_id: geLineId }),
+          serviceRoleClient.schema("erp_procurement")
+            .rpc("po_line_available_qty", { p_po_line_id: poLineId, p_exclude_ge_line_id: geLineId }),
+        ]);
+        if (lotResp.error || poBalanceResp.error) {
+          throw new Error("GRN_LOT_BALANCE_LOOKUP_FAILED");
+        }
+        const lot = ((lotResp.data as JsonRecord[] | null) ?? []).find((row) => toTrimmedString(row.lot_number) === lotNumber);
+        lotInfoByGeLineId.set(geLineId, {
+          lot_number: lotNumber,
+          lot_qty: Number(lot?.lot_qty ?? 0),
+          lot_balance_qty: Number(lot?.balance_qty ?? 0),
+          po_balance_qty: Number(poBalanceResp.data ?? 0),
+        });
+      }));
+
     const resolvedLines = linesList.map((l) => {
       const mat = matMap.get(String(l.material_id));
       const poLine = l.po_line_id ? poLineMap.get(String(l.po_line_id)) : null;
@@ -724,6 +752,11 @@ export async function getGELinesForGRNHandler(
         existing_grn_id: existingGrn?.id ?? null,
         uom_conversion_factor: conv ? Number(conv.conversion_factor) : null,
         uom_variable_conversion: conv ? Boolean(conv.variable_conversion) : null,
+        // Section 145 -- null/absent for every PO that is not ordered in lots.
+        lot_number: lotInfoByGeLineId.get(String(l.id))?.lot_number ?? null,
+        lot_qty: lotInfoByGeLineId.get(String(l.id))?.lot_qty ?? null,
+        lot_balance_qty: lotInfoByGeLineId.get(String(l.id))?.lot_balance_qty ?? null,
+        po_balance_qty: lotInfoByGeLineId.get(String(l.id))?.po_balance_qty ?? null,
       };
     });
 

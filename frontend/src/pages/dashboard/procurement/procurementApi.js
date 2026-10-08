@@ -386,6 +386,17 @@ export function setPoEffectiveDate(id, data) {
   return fetchProcurement("PATCH", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/effective-date`, data);
 }
 
+// Section 145 -- Bulk "Order in LOT". The list handler returns okResponse({ data: rows }) with no
+// total/next_cursor, so fetchProcurement already hands back the BARE ARRAY (bug pattern #15).
+export function listPoLotOrders(params) {
+  return fetchProcurement("GET", "/api/procurement/po-lot-orders", undefined, params);
+}
+
+// Lot Amend: add one or more lots ({ qty, delivery_date }) to an Order in LOT PO and send it for approval.
+export function addPoLots(id, data) {
+  return fetchProcurement("POST", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/lots`, data);
+}
+
 export function setStoEffectiveDate(id, data) {
   return fetchProcurement("PATCH", `/api/procurement/stos/${encodeURIComponent(id)}/effective-date`, data);
 }

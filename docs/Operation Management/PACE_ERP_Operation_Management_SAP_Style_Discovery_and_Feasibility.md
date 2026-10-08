@@ -25918,3 +25918,142 @@ atomic create + machine-bucket auto-derive)।
 - **এখনো বাকি:** deployed app-এ real click-through (এই environment-এ login নেই); split-aware PR10 (§144.6); প্রয়োজনে MTO/HPS-এর
   QA Queue expanded grid-এ split row-এর "Planned Qty" 0 দেখায় (Standard=0 repeat row convention, MTS-এর মতোই) — চাইলে
   সেখানে `actual_qty` দেখানো যায়।
+
+---
+
+## Section 145 — Bulk PO "Order in LOT" (PO + Legacy PO + Gate Entry + Print) (✅ DESIGN LOCKED by business owner conversation 2026-10-08; ⏳ open points §145.9; IMPLEMENTATION NOT STARTED)
+
+**পটভূমি:** JK White Cement-এর মতো Bulk PO-তে vendor-কে বলা হয় "এই তারিখে এতগুলো container লোড করতে হবে"। একই PO-তে
+বারবার ordered qty amend না করে business owner সিদ্ধান্ত নিলেন: Bulk PO-তে একটা **"Order in LOT"** flag থাকবে; প্রথমবার যত
+lot অর্ডার করা হচ্ছে সেই qty দিয়ে PO হবে, পরের lot-গুলো একই PO-তে **Lot Amend** দিয়ে যোগ হবে। Rate, CRCP, cutoff date,
+effective date, GST/terms — কিছুই বদলায় না (§3.7 অপরিবর্তিত)।
+
+### 145.1 — আজকের অবস্থা (code-verified, 2026-10-08)
+
+- `purchase_order.delivery_type` = STANDARD/BULK/TANKER; Bulk-এর জন্য `effective_start_date` বাধ্যতামূলক, `cutoff_date` + CRCP আছে।
+- **Legacy PO = `purchase_order.is_opening_po = true`** (`POCreateOpeningPage.jsx`); একই table, একই handler (`createPOHandler`)।
+- একটা PO-তে একটাই material line (বহু-material অর্ডার = `order_group_id` দিয়ে জোড়া একাধিক PO)। Print (`PrintPreviewPage.jsx`) `po.lines[0]` ছাপে;
+  `amendment_log` খালি না হলে "REVISED" watermark।
+- `createCsnsForPo` Bulk-এ কিছুই করে না (Bulk CSN-এ tracking নেই, §91)। Bulk Gate Entry আলাদা **Bulk GE-Creation Drawer** দিয়ে হয়;
+  PO-line-এর live balance = `open_qty` (posted GRN বাদ) − active GE line-এর `ge_qty` যার GRN এখনো হয়নি (`gate_entry.handlers.ts`, hard block
+  `GE_PO_BALANCE_EXCEEDED`)।
+- আজকের `amendPOHandler` (`CONFIRMED`/`PENDING_APPROVAL` only): `ordered_qty` বদল **approval-এর আগেই line-এ লিখে ফেলে** আর PO-কে
+  `PENDING_APPROVAL`-এ নামায় (তাই GE-র PO list-এ তখন দেখা যায় না); `po_amendment_log` (`PENDING` → approve)।
+
+### 145.2 — Flag ও Lot data model
+
+- `purchase_order.order_in_lot boolean NOT NULL DEFAULT false`। **শুধু PO create-এর সময়**, **শুধু `delivery_type = 'BULK'`** (Tanker নয়) — PO ও
+  Legacy PO দুটো create page-এই। পরে চালু/বন্ধ করা যায় না।
+- নতুন table `erp_procurement.purchase_order_lot`: `id`, `po_id`, `po_line_id`, `lot_number` (canonical 4-অঙ্কের `'0001'`), `lot_qty`,
+  `delivery_date`, `status` (`PENDING`/`ACTIVE`/`REJECTED`), `amendment_number` (NULL = প্রথম/মূল lot), `created_by/at`, `approved_by/at`।
+  `UNIQUE(po_line_id, lot_number)`। Lot নম্বর **প্রতি item line-এ** 1,2,3… নিজে থেকে (system দেয়, user দেয় না)।
+- Create-এ flag চালু থাকলে প্রথম lot **0001** নিজে বসে: `lot_qty` = PO line-এর `ordered_qty`, `delivery_date` = PO-র expected delivery date।
+- **PO line `ordered_qty` = ACTIVE lot-গুলোর `lot_qty`-র যোগফল।** `PENDING` lot এতে ধরা হয় না।
+
+### 145.3 — Lot Amend flow
+
+1. PO page ও Legacy PO page-এ **"Lot Amend"** বোতাম → নতুন list page: `ErpDenseGrid` (Excel navigation + column filter), সব `order_in_lot` PO, `KNOCKED_OFF`/`CANCELLED`
+   বাদে। (সম্পূর্ণ received PO-ও থাকবে — নতুন lot যোগ হলে সেটা আবার খোলে, §145.4)।
+2. Row-এ ক্লিক → সেই PO-র সাধারণ PO page (header সব একই)। Line-এর নিচে আগের সব lot **inactive** (edit/remove নেই)।
+3. **Add Lot** → আগের row-র হুবহু কপি, শুধু **qty + delivery date** editable, বাকি (rate, GST, terms) uneditable। এই নতুন row remove করা যায়।
+4. Save → PO approval-এ; approve হলে lot `ACTIVE`, line `ordered_qty`/`open_qty`/`total_value` বাড়ে।
+5. একটা lot-amendment pending থাকলে ওই PO-তে আরেকটা Add Lot হয় না। Approved lot-এর qty/date পরে বদলানো বা মোছা যায় না (শুধু যোগ)।
+
+**আজকের qty-amend থেকে ইচ্ছাকৃত ব্যতিক্রম:** আজকের `amendPOHandler` approval-এর আগেই line-এ qty লেখে। Lot-এ তা হবে না — নতুন lot `PENDING` থাকে, line অপরিবর্তিত,
+approve হলেই line বাড়ে (reject হলে কিছুই ফেরাতে হয় না)। Approval আজকের `po_amendment_log` + একই approver chain ব্যবহার করবে (নতুন chain নয়);
+log-এ `ordered_qty` entry (`old → new` যোগফল) যাবে, যাতে "REVISED", planning, report সব আগের মতো কাজ করে।
+
+### 145.4 — PO status পুনরায় খোলা
+
+Lot-1 পুরো receive হয়ে line `FULLY_RECEIVED` / PO `CLOSED`-এর মতো অবস্থায় থাকলেও lot-amend approve হলে `open_qty` বাড়ে, line status আবার
+`OPEN`/`PARTIALLY_RECEIVED` (আজকের `amendPOHandler`-এর একই derivation), PO আবার Gate Entry-র list-এ আসে। `KNOCKED_OFF`/`CANCELLED` কখনো খোলা হয় না।
+Bulk-এ CSN তৈরি হয় না (§91), তাই "CSN বানাবেন?" প্রশ্ন আসে না।
+
+### 145.5 — Gate Entry (Bulk GE-Creation Drawer)
+
+- GE-তে PO number বসালে system `order_in_lot` চেনে; হলে drawer-এ **Lot Number** field আসে — **বাধ্যতামূলক**।
+- User lot number টাইপ করে; system সেই lot-এর **balance** নিচে দেখায়।
+- **Lot DB-তে না থাকলে system নিজে বানায় না** — error। শুধু `ACTIVE` lot গ্রহণযোগ্য (`PENDING` নয়)।
+- **Normalisation:** `1`, `01`, `0001` একই — শুধু অঙ্ক (১–৪ অঙ্ক) গ্রহণযোগ্য, system canonical `0001`-এ নেয়; অঙ্ক-বহির্ভূত input reject।
+- **Lot balance** = `lot_qty` − (posted GRN-এর received qty, যে GE line-এর `lot_number` সেটা) − (active GE line-এর `ge_qty` যার GRN এখনো হয়নি) — আজকের PO-level
+  balance-এর হুবহু একই পদ্ধতি, শুধু lot-scoped। Save-এ live re-read (আজকের মতো), আর **PO-level balance check অপরিবর্তিত** থাকবে।
+- `gate_entry_line.lot_number` (নতুন nullable column, flag-PO-তে বাধ্যতামূলক validation)। GRN `gate_entry_line_id`-এর মাধ্যমে lot উত্তরাধিকার পায় (GRN split-ও)।
+- Cancelled/Pruned GE-র qty lot balance-এ ফিরে আসে (আজকের মতো)।
+
+**Drawer layout (LOCKED 2026-10-08, business owner):** শুধু `order_in_lot` PO-র জন্য, drawer-এর নিচের সারিতে (আজকের "Ordered/Expected Qty" + "GE Quantity"-এর জায়গায়) দুটো field-সারি —
+`LOT` ও `PO`:
+
+```
+Lot Number  [ 0002 ]  (mandatory)
+
+LOT   balance 40.000  | Qty [ 15.000 ]  -> বাকি 25.000      <- user শুধু এখানে qty বসায় (এটাই GE qty)
+PO    balance 90.000  | (read-only)       -> বাকি 75.000      <- PO-র বাকি নিজে থেকে বদলায়, uneditable
+```
+
+- Editable শুধু **Lot-এর Qty** (সেটাই `gate_entry_line.ge_qty`)। **PO-র field read-only** — Lot Qty বসালে "বাকি" নিজে থেকে হিসাব হয় (PO balance − Lot Qty)।
+- Lot Balance = §145.5-এর lot-scoped balance; PO Balance = আজকের PO-level live balance (`open_qty` − GRN-না-হওয়া active GE)। দুটো একই সাথে চেক হয়
+  (Lot Qty দুটোর কোনোটার balance-এর বেশি হলে block)। Lot-flagged নয় এমন PO-র drawer **অপরিবর্তিত**।
+
+### 145.5a — GRN (GRNPostFlow) ও AC01-এ lot carry-forward (LOCKED 2026-10-08, business owner)
+
+**GRN:** Lot data GRN-এ carry forward হয় — GRN line `gate_entry_line_id`-এর মাধ্যমে `lot_number` পায় (GRN split-ও)। "Received qty" field আজকের মতোই GE qty দিয়ে prefill হয়
+(`GRNPostFlow.jsx`: `receivedQty` ← `geLine.ge_qty`); তার পাশে (শুধু lot-flagged PO-তে) **Lot balance** ও **PO balance** দেখায় — GE drawer-এর মতো "balance → receive qty
+বসানোর পর বাকি"। এই GRN-এর নিজের GE reservation balance থেকে বাদ রেখে গণনা (নইলে নিজেকে নিজে দুবার কাটত — pattern: নিজের reservation exclude)।
+Lines grid-এ (`GRNPostFlow` Lines table) lot-flagged line-এর জন্য Lot Number column যোগ হয়।
+
+**AC01 (`AC01Page.jsx`, resource `PROC_IV_LIST`):** আরও **৩টা column** — **Lot Number**, **Lot Balance**, **PO Balance** (GRN row-প্রতি; lot-flagged নয় এমন row-তে ফাঁকা `—`)।
+Balance এখানে **live (এই মুহূর্তের)** — Lot Balance = ACTIVE `lot_qty` − ওই lot-এ posted GRN-এর `received_qty`-র যোগফল; PO Balance = PO line `open_qty`।
+(প্রতি GRN-এর "ওই সময়কার" snapshot নয় — default; চাইলে পরে snapshot column আলাদা।) List endpoint-এ lot/balance bulk-resolve (`fetchInChunks`), per-row call নয়।
+
+### 145.6 — Print (PO + Legacy PO)
+
+- Item row-এর নিচে lot তালিকা: **Lot No | Qty | Delivery Date**। প্রতিটা revised PO-তে আগের সব lot + নতুনগুলো।
+- যে lot-গুলো **সর্বশেষ amendment-এ যোগ হয়েছে** তাদের নম্বরের আগে ছোট করে **NEW**।
+- Vendor note (শুধু `order_in_lot` PO): **"Please mention Purchase Order Number & "/" & Lot number in invoice"** — উদাহরণ সহ `PO-Number/0001`।
+
+### 145.7 — যা বদলাবে না
+
+Rate, GST, terms, CRCP, cutoff, effective start date, Bulk weighment/RST rules, Bulk CSN (থাকে না), PO number। Lot-ভিত্তিক invoice-matching (AC01) এই pass-এ নয় —
+vendor invoice-এ `PO/0001` লিখবে (print-এর note), পরে Invoice Verification-এ কাজে লাগানো যাবে।
+
+### 145.8 — Pre-code bug-pattern checklist (প্রতিটা concrete choice-এ)
+
+- **#2/#11:** নতুন list page ও handler কোম্পানি-scoped — `assertCompanyScope`, session company selector (page-local custom picker নয়)।
+- **#6:** Lot Amend-এর নিজস্ব ACL resource code (PO create/approve-এর সাথে এক নয়); registry-তে আলাদা route; Page companion route (menu row নেই)
+  কিন্তু capability grant লাগবে — ACL data decision আলাদাভাবে (§145.9)।
+- **#8:** নতুন প্রতিটা route `route-acl-registry.ts`-এ যোগ + guard।
+- **#13:** frontend payload (`lot_additions[{qty, delivery_date}]`, GE-তে `lot_number`) ↔ handler required-field মিলিয়ে `frontend-payload-guard`।
+- **#15:** নতুন list/get endpoint-এর response shape (`pagination` আছে কিনা) আগে পড়ে তবে call site লেখা।
+- **§8B/§8E:** lot/GE/GRN id-list `fetchInChunks`; সব per-row lookup batch।
+- **§8D:** lot approval (lot ACTIVE + line qty বৃদ্ধি + log) এক transaction-এ (plpgsql) — আধা-অবস্থা রাখা যাবে না।
+- **Migration:** schema change ⇒ migration file + dev-এ apply + `schema_migrations` reconcile + `NOTIFY pgrst` + integrity check।
+
+### 145.9 — খোলা বিষয় (default ধরে এগোনো হবে, business owner বদলাতে পারেন)
+
+1. Lot balance পেরোলে Gate Entry **hard block** (আজকের PO-level `GE_PO_BALANCE_EXCEEDED`-এর মতো) — default।
+2. Lot Amend কারা করতে পারবে (create/amend অধিকার) ও কে approve করবে — default: PO create করার অধিকারই, approve আজকের PO approver chain; ACL data আলাদা
+   session-এ (4-ধাপ versioned sequence)।
+3. Lot-ভিত্তিক receive report (কোন lot-এ কত এলো/বাকি) — এই pass-এ শুধু GE drawer-এ balance; আলাদা report চাইলে পরে।
+
+### 145.10 — Implementation status (2026-10-08) — ✅ CODE COMPLETE, dev DB verified, live click-through বাকি
+
+**Migrations (dev-এ applied):** `20261008074116_bulk_po_order_in_lot.sql` (`purchase_order.order_in_lot`, `purchase_order_lot`, `gate_entry_line.lot_number`,
+`normalize_lot_number`, `po_lot_balances`, `add_po_lots`, `activate_pending_po_lots`, `reject_pending_po_lots`) ও `20261008080000_po_line_available_qty.sql`
+(`po_line_available_qty`)। ⚠️ Prod-এ deploy-এর আগে-পরে `migration-integrity-check` চালাতে হবে।
+
+**Backend:** `po.handlers.ts` (create/update/amend guard, approve/reject hook, `addPoLotsHandler`, `listLotOrdersHandler`), `gate_entry.handlers.ts`
+(lot validation + balance), `grn.handlers.ts` (lot/PO balance per GE line), `ac01.handlers.ts` (3 নতুন column)।
+**Frontend:** PO Create + Legacy PO Create (checkbox), `POLotAmendListPage.jsx`, PO Detail (Lots section / Lot Amend mode), Order-group detail, Gate Entry drawer,
+GRN Post flow, AC01, PO print (lots + NEW tag + vendor note)।
+
+**§145.8 থেকে সচেতন বিচ্যুতি (#6):** Lot Amend list (`GET /po-lot-orders`) ও `POST /purchase-orders/:id/lots` আলাদা resource code পায়নি — দুটোই
+`PROC_PO_CREATE:EDIT` ব্যবহার করে (PO amend-এর একই অধিকার), কোনো নতুন menu row/capability নেই। ফলে নতুন ACL data session লাগছে না; পরে আলাদা
+করতে চাইলে নতুন resource code + 4-ধাপ versioned sequence লাগবে।
+
+**Design decisions implemented as defaults (§145.9):** Lot balance পেরোলে GE hard block; lot-wise receive report এই pass-এ নেই। Pending lot approval-এর সময়
+PO `PENDING_APPROVAL` থাকে (existing amend-এর মতোই Gate Entry list থেকে বাদ); reject করলে PO `CONFIRMED`-এ ফেরে (existing amend-এর DRAFT-এ নয়)।
+AC01-এর Lot/PO balance live (GRN-এর সময়ের as-of নয়)।
+
+**Verification:** সব CI guard exit 0, strict manifest check, eslint, `vite build`, `deno check` (নতুন error নেই), dev DB rolled-back test:
+lot 1000 → GE 300 (cancelled GE 200 উপেক্ষিত) = 700 → নিজের GE বাদে = 1000 → POSTED GRN 280 = 720 → reverse = 700 → split GRN 150 = 850; ভুল lot format
+(`'1'` DB-তে) CHECK-এ reject। `po_line_available_qty` `open_qty` ব্যবহার করে — GRN post-এ app handler `open_qty` কমায়, তাই test-এ সরাসরি insert করলে সেটা অপরিবর্তিত।
