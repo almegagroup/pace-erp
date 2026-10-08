@@ -9323,5 +9323,35 @@
         "skipAcl": true
       }
     ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/DraftSoExcelUploadPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
+      {
+        "fn": "listDraftExcelUploadSalesOrders",
+        "method": "GET",
+        "path": "/api/procurement/sales-orders/draft-excel-upload",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "reviewSoExcelUploadBatch",
+        "method": "POST",
+        "path": "/api/procurement/sales-orders/excel-upload/review",
+        "resourceCode": "PROC_SO_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "submitSoExcelUploadBatch",
+        "method": "POST",
+        "path": "/api/procurement/sales-orders/excel-upload/submit",
+        "resourceCode": "PROC_SO_CREATE",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
   }
 ]

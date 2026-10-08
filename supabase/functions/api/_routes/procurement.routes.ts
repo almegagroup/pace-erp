@@ -381,6 +381,9 @@ import {
   cancelSalesOrderUnifiedHandler,
   closeSalesOrderUnifiedHandler,
   updateSalesOrderUnifiedHandler,
+  listDraftExcelUploadSalesOrdersHandler,
+  reviewExcelUploadBatchHandler,
+  submitExcelUploadBatchHandler,
 } from "../_core/procurement/sales_order.handlers.ts";
 import {
   createSalesReturnReceiptHandler,
@@ -844,6 +847,13 @@ export async function dispatchProcurementRoutes(
       return await listSalesOrderStrokeCheckOptionsHandler(req, ctx);
     case "GET:/api/procurement/sales-orders/address-options":
       return await listSalesOrderAddressOptionsHandler(req, ctx);
+    // §4 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — SO01 MTS Excel Upload.
+    case "GET:/api/procurement/sales-orders/draft-excel-upload":
+      return await listDraftExcelUploadSalesOrdersHandler(req, ctx);
+    case "POST:/api/procurement/sales-orders/excel-upload/review":
+      return await reviewExcelUploadBatchHandler(req, ctx);
+    case "POST:/api/procurement/sales-orders/excel-upload/submit":
+      return await submitExcelUploadBatchHandler(req, ctx);
 
     // ── SO Map (SO01 Tab 2) — feasibility §133.9 ────────────────────────────
     case "GET:/api/procurement/so-map/so-list":

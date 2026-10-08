@@ -228,6 +228,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/sales-orders/stroke-check-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
   "GET:/api/procurement/sales-orders/address-options": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
 
+  // §4 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — SO01 MTS Excel Upload. Reuses
+  // the same two resources above, no new ACL resource/capability.
+  "GET:/api/procurement/sales-orders/draft-excel-upload": { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" },
+  "POST:/api/procurement/sales-orders/excel-upload/review": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
+  "POST:/api/procurement/sales-orders/excel-upload/submit": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "WRITE" },
+
   // ── SO Map (SO01 Tab 2, feasibility §133.9) — same PROC_SO_LIST resource,
   // EDIT action so Create-SO's WRITE grant (Accounts-only) stays separate
   // from Map's broader Stores/Accounts/Logistics access.

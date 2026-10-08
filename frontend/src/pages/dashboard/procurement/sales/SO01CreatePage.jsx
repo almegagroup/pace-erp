@@ -20,7 +20,7 @@ import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { popScreen, getActiveScreenContext } from "../../../../navigation/screenStackEngine.js";
 import {
   MASTER_PICKER_FETCH_LIMIT,
   useCustomerOptionsQuery,
@@ -31,7 +31,7 @@ import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
 import { listAc06ApprovedMonths, listCompanyVendorCodesForSalesOrder } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
-import { createSalesOrderUnified, listSalesOrderAddressOptions, listSalesOrderStrokeCheckOptions } from "../procurementApi.js";
+import { createSalesOrderUnified, getSalesOrder, listSalesOrderAddressOptions, listSalesOrderStrokeCheckOptions, updateSalesOrderUnified } from "../procurementApi.js";
 
 // §133.7 — 5 fixed dispatch types.
 const DISPATCH_TYPE_OPTIONS = [
@@ -116,6 +116,40 @@ function makeLine(lineMaterialType) {
     declared_stroke_number: "",
     round_off_amount: "",
     remarks: "",
+  };
+}
+
+// §4.5 — "Enter SO" rehydration: maps a hydrated server line (GET sales
+// order) back into this page's own line shape, keeping the real `id` so the
+// existing "existing, unmapped lines" edit path (updateSalesOrderUnifiedHandler)
+// applies instead of the "new line" insert path.
+function lineFromServer(serverLine) {
+  return {
+    __key: serverLine.id,
+    id: serverLine.id,
+    __manualSku: !serverLine.material_id,
+    line_material_type: serverLine.line_material_type,
+    material_id: serverLine.material_id || "",
+    manual_sku_name: serverLine.manual_sku_name || "",
+    fg_type: serverLine.fg_type || (serverLine.line_material_type === "FG" || serverLine.line_material_type === "SFG" ? "" : null),
+    quantity: serverLine.quantity ?? "",
+    base_qty: serverLine.base_qty ?? "",
+    pack_uom_code: serverLine.pack_uom_code || "",
+    pack_qty: serverLine.pack_qty ?? "",
+    per_pack_qty: serverLine.per_pack_qty ?? "",
+    rate_basis: serverLine.rate_basis || "",
+    uom_code: serverLine.uom_code || "",
+    rate: serverLine.rate ?? "",
+    currency_code: serverLine.currency_code || "INR",
+    gst_treatment: serverLine.gst_treatment || "EXCLUSIVE",
+    gst_rate: serverLine.gst_rate ?? "",
+    hsn_code: serverLine.hsn_code || "",
+    batch_number: serverLine.batch_number || "",
+    expiry_date: serverLine.expiry_date || "",
+    costing_rate_month: serverLine.costing_rate_month || "",
+    declared_stroke_number: serverLine.declared_stroke_number || "",
+    round_off_amount: serverLine.round_off_amount ?? "",
+    remarks: serverLine.remarks || "",
   };
 }
 
@@ -230,6 +264,13 @@ export default function SO01CreatePage() {
   const isMultiCompany = String(runtimeContext?.workspaceMode ?? "").toUpperCase() === "MULTI" && availableCompanies.length > 1;
   const defaultCompanyId = availableCompanies[0]?.id ?? "";
 
+  // §4.5 — "Enter SO": Draft SO List opens this same page via
+  // openScreenWithContext(..., { enterDraftSoId, refreshOnReturn: true }).
+  // Read once at mount — this page never switches in/out of this mode.
+  const [enterDraftSoId] = useState(() => getActiveScreenContext()?.enterDraftSoId || "");
+  const isEnterSoMode = Boolean(enterDraftSoId);
+  const [enterSoLoading, setEnterSoLoading] = useState(isEnterSoMode);
+
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -289,6 +330,13 @@ export default function SO01CreatePage() {
   const [ac06MonthsByType, setAc06MonthsByType] = useState({});
 
   const [lines, setLines] = useState([]);
+  // §4.1 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — independent Page-2 checkboxes,
+  // default unchecked. Excel Upload hides the Item Line area entirely and
+  // creates the SO with zero lines, straight to DRAFT, to be bulk-filled
+  // later via the Draft SO List. DD Dispatch is a pure flag, no SO01-side
+  // behavior change — consumed by the future DO/PGI design.
+  const [isExcelUpload, setIsExcelUpload] = useState(false);
+  const [isDdDispatch, setIsDdDispatch] = useState(false);
 
   const effectiveNoInboundType = dispatchType === "DEPENDENT_NO_INBOUND"
     ? (noInboundSubType === "DIRECT" ? "DEPENDENT_DIRECT" : "DEPENDENT_DEPOT")
@@ -452,9 +500,81 @@ export default function SO01CreatePage() {
     const message = computePage1ValidationMessage();
     if (message) { setError(message); return; }
     setError("");
-    setLines(materialTypes.map((materialType) => makeLine(materialType)));
+    // §4.1 — Excel Upload never gets the normal one-row-per-material-type
+    // prepopulation; the whole Item Line area stays hidden/empty.
+    setLines(isExcelUpload ? [] : materialTypes.map((materialType) => makeLine(materialType)));
     setPage(2);
   }
+
+  // §4.1 — the checkbox itself lives on Page 2, so this reacts to it being
+  // toggled there: checking it clears every line (area "vanishes");
+  // unchecking it (only relevant if lines is currently empty) restores the
+  // normal one-row-per-material-type starting point.
+  useEffect(() => {
+    if (isEnterSoMode || page !== 2) return;
+    if (isExcelUpload) {
+      setLines([]);
+    } else if (lines.length === 0) {
+      setLines(materialTypes.map((materialType) => makeLine(materialType)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExcelUpload, page]);
+
+  // §4.5 — fetch the existing Draft SO and seed every Page-1/Page-2 field
+  // from it. Header fields render read-only below (isEnterSoMode), so this
+  // only needs to be accurate for display + GST-preview derivation, not for
+  // re-feeding the interactive Bill-To/Ship-To dropdowns.
+  useEffect(() => {
+    if (!isEnterSoMode) return;
+    let cancelled = false;
+    getSalesOrder(enterDraftSoId).then((so) => {
+      if (cancelled || !so) return;
+      setCompanyId(so.company_id || "");
+      setSoDate(so.so_date || soDate);
+      setMaterialTypes(Array.isArray(so.material_types) ? so.material_types : []);
+      setDispatchType(so.dispatch_type || "");
+      setVendorCodeId(so.vendor_code_id || "");
+      setIsExcelUpload(Boolean(so.is_excel_upload));
+      setIsDdDispatch(Boolean(so.is_dd_dispatch));
+      setExternalSoNumber(so.customer_po_number || "");
+      setExternalSoDate(so.customer_po_date || "");
+      setPaymentTermId(so.payment_term_id || "");
+      setFreightTerm(so.freight_term || "FOR");
+      setLines(Array.isArray(so.lines) ? so.lines.map(lineFromServer) : []);
+      setPage(2);
+      setEnterSoLoading(false);
+    }).catch((fetchError) => {
+      if (cancelled) return;
+      setError(fetchError instanceof Error ? fetchError.message : "SO_FETCH_FAILED");
+      setEnterSoLoading(false);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEnterSoMode, enterDraftSoId]);
+
+  // §4.5 — once the company's materials load, backfill selectedFgSkus for
+  // every FG/SFG line from materialMap so SalesOrderFgSkuPicker/
+  // SalesOrderSfgMaterialPicker show the real SKU label instead of a blank
+  // "Select SKU" placeholder (the underlying material_id is already correct
+  // either way — this is display-only).
+  useEffect(() => {
+    if (!isEnterSoMode || materials.length === 0 || lines.length === 0) return;
+    setSelectedFgSkus((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const line of lines) {
+        if (!["FG", "SFG"].includes(line.line_material_type) || !line.material_id) continue;
+        const key = `${companyId}|${line.material_id}`;
+        if (next[key]) continue;
+        const material = materialMap.get(line.material_id);
+        if (!material) continue;
+        next[key] = { ...material, pack_uom_code: line.pack_uom_code, per_pack_qty: line.per_pack_qty, __companyId: companyId };
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEnterSoMode, materials, lines, companyId]);
 
   function addLine(materialType) {
     setLines((current) => [...current, makeLine(materialType)]);
@@ -802,44 +922,52 @@ export default function SO01CreatePage() {
   // below) so the button itself goes disabled the moment something
   // required is blank, not just on click.
   function computePage2ValidationMessage() {
-    if (lines.length === 0) return "At least one item line is required.";
-    if (!externalSoNumber.trim()) return "External SO Number is required.";
-    if (!isManualDocumentDateWithinWindow(soDate) || (externalSoDate && !isManualDocumentDateWithinWindow(externalSoDate))) {
-      return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
-    }
-    // business owner, 2026-09-26: these Bill-To/Ship-To fields were all
-    // marked `required` (red asterisk) in the JSX below but nothing ever
-    // enforced it -- a blank Customer/VDC/Parent Company only ever
-    // surfaced as whatever generic error buildBillToShipToPayload()'s
-    // resulting incomplete payload happened to trigger server-side, if it
-    // was caught at all. Mirrors the exact same dispatchType/
-    // effectiveNoInboundType/noInboundSubType/asianBilledChoice branches
-    // the JSX below renders -- keep both in sync if a branch changes.
-    if (effectiveNoInboundType === "DEPENDENT_DIRECT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
-      if (!parentCompanyId) return "Parent Company is required.";
-      if (!vdcId) return "VDC is required.";
-      if (!billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
-    } else if (effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
-      if (!parentCompanyId) return "Parent Company is required.";
-      if (!depotCodeId) return "Depot Code is required.";
-    } else if (dispatchType === "INDEPENDENT_PARTY") {
-      if (!customerId) return "Customer is required.";
-      if (!shipToCustomerAddressId) return "Bill-To / Ship-To Address is required.";
-    } else if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
-      if (!customerId) return "Customer is required.";
-      if (!shipToCustomerAddressId) return "Ship-To Address is required.";
-      if (!parentCompanyId) return "Asian Parent Company is required.";
-      if (!asianBilledChoice) return "Choose Bill-To — VDC, DC, or none (Parent Company).";
-      if ((asianBilledChoice === "VDC" || asianBilledChoice === "DC") && !asianBilledVdcDcId) {
-        return `${asianBilledChoice === "DC" ? "DC" : "VDC"} is required.`;
+    // §4.1 — Excel Upload creates the SO with zero lines by design; every
+    // other check below (Bill-To/Ship-To, External SO Number, dates) still
+    // applies since only the Item Line area is skipped, not the rest of Page 2.
+    if (!isExcelUpload && lines.length === 0) return "At least one item line is required.";
+    // §4.5 — "Enter SO": header (incl. Bill-To/Ship-To, External SO Number,
+    // dates) is read-only here, already valid from Create — only the lines
+    // below (editable: rate, Round Off) need re-checking.
+    if (!isEnterSoMode) {
+      if (!externalSoNumber.trim()) return "External SO Number is required.";
+      if (!isManualDocumentDateWithinWindow(soDate) || (externalSoDate && !isManualDocumentDateWithinWindow(externalSoDate))) {
+        return MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE;
       }
-      if (asianBilledChoice === "VDC" && !billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
-    } else if (dispatchType === "DEPENDENT_NO_INBOUND") {
-      if (!parentCompanyId) return "Parent Company is required.";
-      if (noInboundSubType === "DIRECT") {
+      // business owner, 2026-09-26: these Bill-To/Ship-To fields were all
+      // marked `required` (red asterisk) in the JSX below but nothing ever
+      // enforced it -- a blank Customer/VDC/Parent Company only ever
+      // surfaced as whatever generic error buildBillToShipToPayload()'s
+      // resulting incomplete payload happened to trigger server-side, if it
+      // was caught at all. Mirrors the exact same dispatchType/
+      // effectiveNoInboundType/noInboundSubType/asianBilledChoice branches
+      // the JSX below renders -- keep both in sync if a branch changes.
+      if (effectiveNoInboundType === "DEPENDENT_DIRECT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
+        if (!parentCompanyId) return "Parent Company is required.";
         if (!vdcId) return "VDC is required.";
         if (!billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
-      } else if (!depotCodeId) return "Depot Code is required.";
+      } else if (effectiveNoInboundType === "DEPENDENT_DEPOT" && dispatchType !== "DEPENDENT_NO_INBOUND") {
+        if (!parentCompanyId) return "Parent Company is required.";
+        if (!depotCodeId) return "Depot Code is required.";
+      } else if (dispatchType === "INDEPENDENT_PARTY") {
+        if (!customerId) return "Customer is required.";
+        if (!shipToCustomerAddressId) return "Bill-To / Ship-To Address is required.";
+      } else if (dispatchType === "INDEPENDENT_PARTY_ASIAN_BILLED") {
+        if (!customerId) return "Customer is required.";
+        if (!shipToCustomerAddressId) return "Ship-To Address is required.";
+        if (!parentCompanyId) return "Asian Parent Company is required.";
+        if (!asianBilledChoice) return "Choose Bill-To — VDC, DC, or none (Parent Company).";
+        if ((asianBilledChoice === "VDC" || asianBilledChoice === "DC") && !asianBilledVdcDcId) {
+          return `${asianBilledChoice === "DC" ? "DC" : "VDC"} is required.`;
+        }
+        if (asianBilledChoice === "VDC" && !billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+      } else if (dispatchType === "DEPENDENT_NO_INBOUND") {
+        if (!parentCompanyId) return "Parent Company is required.";
+        if (noInboundSubType === "DIRECT") {
+          if (!vdcId) return "VDC is required.";
+          if (!billToParty) return "Bill-To Party (Parent Company or VDC) is required.";
+        } else if (!depotCodeId) return "Depot Code is required.";
+      }
     }
     // §133.9-G — a manual-SKU FG line has no material_id by design; it must
     // carry a manual_sku_name instead. Every other line always needs a real item.
@@ -868,6 +996,41 @@ export default function SO01CreatePage() {
     return "";
   }
 
+  // Shared by Create and the §4.5 "Enter SO" confirm — the Enter-SO branch
+  // below additionally carries `id` so each line goes through the "existing
+  // line" edit path instead of being inserted as a new one.
+  function buildLinePayload(line) {
+    return {
+      line_material_type: line.line_material_type,
+      material_id: line.__manualSku ? null : (line.material_id || null),
+      manual_sku_name: line.__manualSku ? line.manual_sku_name.trim() : null,
+      fg_type: line.fg_type || null,
+      quantity: line.quantity === "" ? null : Number(line.quantity),
+      base_qty: line.line_material_type === "FG" && line.fg_type !== "MTEST"
+        ? getLineBaseQty(line)
+        : (line.base_qty === "" ? null : Number(line.base_qty)),
+      pack_uom_code: line.pack_uom_code || null,
+      pack_qty: line.pack_qty === "" ? null : Number(line.pack_qty),
+      per_pack_qty: line.per_pack_qty === "" ? null : Number(line.per_pack_qty),
+      rate_basis: line.rate_basis || null,
+      uom_code: line.uom_code || null,
+      rate: line.rate === "" ? null : Number(line.rate),
+      currency_code: line.currency_code || "INR",
+      gst_treatment: line.gst_treatment,
+      gst_rate: line.gst_rate === "" ? null : Number(line.gst_rate),
+      hsn_code: line.hsn_code || null,
+      batch_number: line.batch_number || null,
+      expiry_date: line.expiry_date || null,
+      round_off_amount: line.round_off_amount === "" ? 0 : Number(line.round_off_amount),
+      // §133.8-E: MTS is deferred/spec-only and must never carry a real
+      // value yet; MTO/HPS/MTEST send whatever the dropdown/Manual holds
+      // (MTEST corrected 2026-08-28 — user-chosen now, not auto-derived).
+      costing_rate_month: line.fg_type === "MTS" ? null : (line.costing_rate_month || null),
+      declared_stroke_number: line.declared_stroke_number?.trim() || null,
+      remarks: line.remarks || null,
+    };
+  }
+
   async function handleSubmit() {
     const message = computePage2ValidationMessage();
     if (message) { setError(message); return; }
@@ -875,6 +1038,25 @@ export default function SO01CreatePage() {
     setError("");
     setNotice("");
     try {
+      // §4.5 — "Enter SO" confirm: reuses the normal PUT (header/Bill-To/
+      // Ship-To untouched, since they're locked here), applies any line
+      // edits (Round Off, a resolved rate), and flips DRAFT -> CREATED.
+      if (isEnterSoMode) {
+        await updateSalesOrderUnified(enterDraftSoId, {
+          round_off_amount: roundOff,
+          lines: lines.map((line) => ({ id: line.id || undefined, ...buildLinePayload(line) })),
+          confirm_draft: true,
+        });
+        setNotice("Sales order confirmed.");
+        const activeContext = getActiveScreenContext();
+        if (activeContext?.contextKind === "DRILL_THROUGH") {
+          popScreen();
+        } else {
+          navigate(`/dashboard/procurement/sales-orders/${encodeURIComponent(enterDraftSoId)}`);
+        }
+        return;
+      }
+
       const created = await createSalesOrderUnified({
         company_id: companyId,
         so_date: soDate,
@@ -887,36 +1069,10 @@ export default function SO01CreatePage() {
         payment_term_id: paymentTermId || null,
         freight_term: freightTerm || null,
         round_off_amount: roundOff,
+        is_excel_upload: isExcelUpload,
+        is_dd_dispatch: isDdDispatch,
         ...buildBillToShipToPayload(),
-        lines: lines.map((line) => ({
-          line_material_type: line.line_material_type,
-          material_id: line.__manualSku ? null : (line.material_id || null),
-          manual_sku_name: line.__manualSku ? line.manual_sku_name.trim() : null,
-          fg_type: line.fg_type || null,
-          quantity: line.quantity === "" ? null : Number(line.quantity),
-          base_qty: line.line_material_type === "FG" && line.fg_type !== "MTEST"
-            ? getLineBaseQty(line)
-            : (line.base_qty === "" ? null : Number(line.base_qty)),
-          pack_uom_code: line.pack_uom_code || null,
-          pack_qty: line.pack_qty === "" ? null : Number(line.pack_qty),
-          per_pack_qty: line.per_pack_qty === "" ? null : Number(line.per_pack_qty),
-          rate_basis: line.rate_basis || null,
-          uom_code: line.uom_code || null,
-          rate: line.rate === "" ? null : Number(line.rate),
-          currency_code: line.currency_code || "INR",
-          gst_treatment: line.gst_treatment,
-          gst_rate: line.gst_rate === "" ? null : Number(line.gst_rate),
-          hsn_code: line.hsn_code || null,
-          batch_number: line.batch_number || null,
-          expiry_date: line.expiry_date || null,
-          round_off_amount: line.round_off_amount === "" ? 0 : Number(line.round_off_amount),
-          // §133.8-E: MTS is deferred/spec-only and must never carry a real
-          // value yet; MTO/HPS/MTEST send whatever the dropdown/Manual holds
-          // (MTEST corrected 2026-08-28 — user-chosen now, not auto-derived).
-          costing_rate_month: line.fg_type === "MTS" ? null : (line.costing_rate_month || null),
-          declared_stroke_number: line.declared_stroke_number?.trim() || null,
-          remarks: line.remarks || null,
-        })),
+        lines: lines.map(buildLinePayload),
       });
       setNotice("Sales order created.");
       navigate(`/dashboard/procurement/sales-orders/${encodeURIComponent(created?.id)}`);
@@ -947,17 +1103,18 @@ export default function SO01CreatePage() {
   return (
     <ErpScreenScaffold
       eyebrow="Sales (SO01)"
-      title={page === 1 ? "Create SO — Page 1: Criteria" : "Create SO — Page 2: Details & Items"}
+      title={isEnterSoMode ? "Enter SO — Confirm Draft" : (page === 1 ? "Create SO — Page 1: Criteria" : "Create SO — Page 2: Details & Items")}
       actions={[
-        { key: "back", label: page === 1 ? "Back" : "Previous", tone: "neutral", onClick: () => (page === 1 ? popScreen() : setPage(1)) },
+        { key: "back", label: isEnterSoMode ? "Back" : (page === 1 ? "Back" : "Previous"), tone: "neutral", onClick: () => (isEnterSoMode || page === 1 ? popScreen() : setPage(1)) },
         page === 2
-          ? { key: "save", label: saving ? "Saving..." : "Create SO", tone: "primary", onClick: () => void handleSubmit(), disabled: saving || Boolean(page2ValidationMessage) }
+          ? { key: "save", label: saving ? "Saving..." : (isEnterSoMode ? "Save" : "Create SO"), tone: "primary", onClick: () => void handleSubmit(), disabled: saving || enterSoLoading || Boolean(page2ValidationMessage) }
           : { key: "next", label: "Next", tone: "primary", onClick: goToPage2, disabled: Boolean(page1ValidationMessage) },
       ]}
       notices={[
         ...(error ? [{ key: "so01-error", tone: "error", message: error }] : []),
+        ...(enterSoLoading ? [{ key: "so01-enter-loading", tone: "info", message: "Loading Draft SO…" }] : []),
         ...(page === 1 && page1ValidationMessage ? [{ key: "so01-page1-required", tone: "warning", message: `Next is unavailable: ${page1ValidationMessage}` }] : []),
-        ...(page === 2 && page2ValidationMessage ? [{ key: "so01-page2-required", tone: "warning", message: `Create SO is unavailable: ${page2ValidationMessage}` }] : []),
+        ...(page === 2 && page2ValidationMessage ? [{ key: "so01-page2-required", tone: "warning", message: `${isEnterSoMode ? "Save" : "Create SO"} is unavailable: ${page2ValidationMessage}` }] : []),
         ...(notice ? [{ key: "so01-notice", tone: "success", message: notice }] : []),
       ]}
     >
@@ -1031,6 +1188,42 @@ export default function SO01CreatePage() {
         </ErpSectionCard>
       ) : (
         <div className="grid gap-4">
+          {/* §4.1 — two independent checkboxes, default unchecked. §4.5 —
+              locked (disabled, not hidden) in Enter-SO mode so the user can
+              still see which mode this Draft SO was created under. */}
+          <ErpSectionCard eyebrow="Page 2" title="Dispatch Mode">
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800">
+                <input type="checkbox" checked={isExcelUpload} disabled={isEnterSoMode} onChange={(event) => setIsExcelUpload(event.target.checked)} />
+                Excel Upload
+              </label>
+              <label className="flex items-center gap-2 border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800">
+                <input type="checkbox" checked={isDdDispatch} disabled={isEnterSoMode} onChange={(event) => setIsDdDispatch(event.target.checked)} />
+                DD Dispatch
+              </label>
+            </div>
+            {isExcelUpload && !isEnterSoMode ? (
+              <p className="mt-2 text-xs text-slate-500">
+                This SO will be created with no item lines (DRAFT status). Add items later from the
+                &quot;Draft SO and Excel Upload&quot; page on SO01.
+              </p>
+            ) : null}
+          </ErpSectionCard>
+
+          {isEnterSoMode ? (
+            // §4.5 — header fields are locked at this step; show what was
+            // already resolved at Create instead of the interactive pickers.
+            <ErpSectionCard eyebrow="Page 2" title="Header (locked)">
+              <div className="grid gap-3 text-sm text-slate-700 md:grid-cols-4">
+                <div><span className="block text-xs text-slate-500">Dispatch Type</span>{DISPATCH_TYPE_OPTIONS.find((option) => option.value === dispatchType)?.label || dispatchType || "—"}</div>
+                <div><span className="block text-xs text-slate-500">External SO Number</span>{externalSoNumber || "—"}</div>
+                <div><span className="block text-xs text-slate-500">External SO Date</span>{externalSoDate || "—"}</div>
+                <div><span className="block text-xs text-slate-500">Payment Terms</span>{paymentTermOptions.find((option) => option.value === paymentTermId)?.label || "—"}</div>
+                <div><span className="block text-xs text-slate-500">Freight Term</span>{FREIGHT_TERM_OPTIONS.find((option) => option.value === freightTerm)?.label || freightTerm || "—"}</div>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Bill-To/Ship-To and these header fields were set when this Draft SO was created and cannot be changed here — cancel and re-create the SO if any of them are wrong.</p>
+            </ErpSectionCard>
+          ) : (
           <ErpSectionCard eyebrow="Page 2" title="Bill-To / Ship-To">
             {effectiveNoInboundType === "DEPENDENT_DIRECT" && dispatchType !== "DEPENDENT_NO_INBOUND" ? (
               <div className="grid gap-3 md:grid-cols-2">
@@ -1114,7 +1307,9 @@ export default function SO01CreatePage() {
               </div>
             ) : null}
           </ErpSectionCard>
+          )}
 
+          {isEnterSoMode ? null : (
           <ErpSectionCard eyebrow="Page 2" title="Payment Terms & Freight">
             <div className="grid gap-3 md:grid-cols-4">
               <ErpDenseFormRow label="External SO Number" required>
@@ -1133,8 +1328,9 @@ export default function SO01CreatePage() {
               </ErpDenseFormRow>
             </div>
           </ErpSectionCard>
+          )}
 
-          {materialTypes.map((materialType) => (
+          {(isExcelUpload && !isEnterSoMode) ? null : materialTypes.map((materialType) => (
             <ErpSectionCard key={materialType} eyebrow="Item Line" title={materialType}>
               <div className="mb-2 flex justify-end">
                 <button type="button" onClick={() => addLine(materialType)} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-sky-950">
@@ -1152,6 +1348,7 @@ export default function SO01CreatePage() {
             </ErpSectionCard>
           ))}
 
+          {(isExcelUpload && !isEnterSoMode) ? null : (
           <ErpSectionCard eyebrow="Totals" title="Order Summary (§133.8-I) — GST split is a live preview only, the actual save always recomputes it server-side from the resolved Ship-To">
             <div className="grid gap-1 text-sm text-slate-800 md:max-w-sm md:justify-self-end">
               <div className="flex justify-between"><span className="text-slate-500">Total Nett Value</span><span className="font-mono">{netTotal.toFixed(2)}</span></div>
@@ -1164,6 +1361,7 @@ export default function SO01CreatePage() {
               <div className="mt-1 text-xs italic text-slate-500">{amountToWordsIndian(soValue)}</div>
             </div>
           </ErpSectionCard>
+          )}
         </div>
       )}
     </ErpScreenScaffold>
