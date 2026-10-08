@@ -322,7 +322,9 @@ export default function DraftSoExcelUploadPage() {
             { key: "status", label: "Status", width: "190px", render: (row) => (
               row.skip_reason
                 ? <span className="text-[11px] font-semibold text-slate-500">{row.skip_reason}</span>
-                : row.is_duplicate ? <span className="text-[11px] font-semibold text-rose-700">Duplicate</span> : null
+                : row.is_duplicate
+                  ? <span className="text-[11px] font-semibold text-rose-700">Duplicate</span>
+                  : <span className="text-[11px] font-semibold text-emerald-700">Ready</span>
             ) },
             { key: "actions", label: "", width: "80px", render: (row) => (
               <button type="button" onClick={() => removeReviewRow(row.row_key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>

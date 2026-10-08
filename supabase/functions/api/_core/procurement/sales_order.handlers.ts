@@ -3532,6 +3532,17 @@ export async function submitExcelUploadBatchHandler(req: Request, ctx: Procureme
         fg_type: fgType,
         pack_qty: row.pack_qty,
         per_pack_qty: resolvedMaterial.per_pack_qty,
+        // sales_order_line.uom_code is NOT NULL; prepareUnifiedSoLine() has no
+        // fallback of its own (unlike the older direct-create path, which
+        // falls back to material.base_uom_code) -- it was always the
+        // caller's job to supply this. The Excel-upload path never did,
+        // so every bulk insert hit the NOT NULL constraint and the whole
+        // batch 500'd with no visible cause (lineInsertError is never
+        // logged). resolvedMaterial.base_uom_code is the same field the
+        // review preview (buildExcelUploadRowPreview) already resolves and
+        // displays -- just never carried through to the actual insert.
+        // Found live 2026-10-08.
+        uom_code: toTrimmedString(resolvedMaterial.base_uom_code) || null,
         rate: row.rate,
         rate_basis: row.rate_basis,
         gst_treatment: row.gst_treatment,
@@ -3556,7 +3567,10 @@ export async function submitExcelUploadBatchHandler(req: Request, ctx: Procureme
       if (payload.length === 0) continue;
       const { error: lineInsertError } = await serviceRoleClient
         .schema("erp_procurement").from("sales_order_line").insert(payload);
-      if (lineInsertError) return salesErrorResponse(req, ctx, "SO_EXCEL_LINE_INSERT_FAILED", 500, "Unable to save sales order lines.");
+      if (lineInsertError) {
+        console.error("SO_EXCEL_LINE_INSERT_FAILED", { request_id: ctx.request_id, so_id: soId, error: lineInsertError });
+        return salesErrorResponse(req, ctx, "SO_EXCEL_LINE_INSERT_FAILED", 500, "Unable to save sales order lines.");
+      }
     }
     await persistMissingMaterialHsns(hsnWriteBacks);
 
