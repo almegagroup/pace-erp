@@ -1459,7 +1459,7 @@ export async function listGRNsHandler(
 
     let query = serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
-      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, material_id, received_qty, uom_code, po_id, invoice_number, invoice_date, transporter_id, lr_number, lr_date")
+      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, source_gate_entry_line_id, material_id, received_qty, uom_code, po_id, invoice_number, invoice_date, transporter_id, lr_number, lr_date")
       .order("grn_date", { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -1502,8 +1502,14 @@ export async function listGRNsHandler(
         : { data: [], error: null },
     ]);
 
-    // For old-style GRNs, fetch total_qty from lines
-    const oldStyleIds = rows.filter((r) => !r.gate_entry_line_id).map((r) => String(r.id));
+    // For old-style GRNs, fetch total_qty from lines. A GRN created by the
+    // Bulk Invoice Split intentionally has no gate_entry_line_id (the legacy
+    // unique index still protects that column), but has source_gate_entry_line_id
+    // and its own header received_qty. It is therefore new-style for quantity
+    // display, not an old-style header with missing goods_receipt_line rows.
+    const oldStyleIds = rows
+      .filter((r) => !r.gate_entry_line_id && !r.source_gate_entry_line_id)
+      .map((r) => String(r.id));
     let lineQtyMap = new Map<string, number>();
     if (oldStyleIds.length > 0) {
       const { data: lineQtyRows } = await serviceRoleClient
@@ -1525,7 +1531,7 @@ export async function listGRNsHandler(
       const mat = matMap.get(String(r.material_id));
       const ge = geMap.get(String(r.gate_entry_id));
       const transporter = transporterMap.get(String(r.transporter_id));
-      const isNewStyle = Boolean(r.gate_entry_line_id);
+      const isNewStyle = Boolean(r.gate_entry_line_id || r.source_gate_entry_line_id);
       const totalQty = isNewStyle
         ? (parseNullableNumber(r.received_qty) ?? 0)
         : (lineQtyMap.get(String(r.id)) ?? 0);
