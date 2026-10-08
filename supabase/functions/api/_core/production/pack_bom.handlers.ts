@@ -467,6 +467,7 @@ export async function listPackBomEligibleSkusHandler(
     if (!companyId || !PACK_PO_TYPES.has(poType)) {
       return bomError(req, ctx, "PROD_BOM_ELIGIBLE_INVALID", 400, "company_id and valid po_type required");
     }
+    await assertPackBomCompanyScope(ctx, companyId);
 
     const { data: companyRows, error: companyErr } = await serviceRoleClient
       .schema("erp_master")
@@ -476,21 +477,28 @@ export async function listPackBomEligibleSkusHandler(
       .eq("status", "ACTIVE");
     if (companyErr) throw new Error("PROD_BOM_ELIGIBLE_LOOKUP_FAILED");
 
+    const includeExisting = url.searchParams.get("include_existing") === "true";
     const skuIds = [...new Set(((companyRows ?? []) as JsonRecord[]).map((row) => String(row.material_id ?? "")).filter(Boolean))];
     if (skuIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
-    const { data: existingBoms, error: existingErr } = await serviceRoleClient
-      .schema("erp_production")
-      .from("pack_bom")
-      .select("sku_material_id")
-      .eq("company_id", companyId)
-      .in("status", BOM_OPEN_STATUSES);
-    if (existingErr) throw new Error("PROD_BOM_ELIGIBLE_LOOKUP_FAILED");
+    // PR05 creation must hide existing open BOMs. PR07/PR08 use the same
+    // company + PO-type eligibility rule to filter their already-existing BOMs,
+    // so they explicitly opt in to retaining those SKUs.
+    let availableSkuIds = skuIds;
+    if (!includeExisting) {
+      const { data: existingBoms, error: existingErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("pack_bom")
+        .select("sku_material_id")
+        .eq("company_id", companyId)
+        .in("status", BOM_OPEN_STATUSES);
+      if (existingErr) throw new Error("PROD_BOM_ELIGIBLE_LOOKUP_FAILED");
 
-    const existingSkuIds = new Set(((existingBoms ?? []) as JsonRecord[])
-      .map((row) => toTrimmedString(row.sku_material_id))
-      .filter(Boolean));
-    const availableSkuIds = skuIds.filter((id) => !existingSkuIds.has(id));
+      const existingSkuIds = new Set(((existingBoms ?? []) as JsonRecord[])
+        .map((row) => toTrimmedString(row.sku_material_id))
+        .filter(Boolean));
+      availableSkuIds = skuIds.filter((id) => !existingSkuIds.has(id));
+    }
     if (availableSkuIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     // Found live 2026-09-16 (CMP003, MTS): a plain .in("id", availableSkuIds) here
@@ -686,7 +694,9 @@ export async function listPackBomsHandler(
     const url = new URL(req.url);
     const status = toTrimmedString(url.searchParams.get("status") ?? "");
     const skuMaterialId = toTrimmedString(url.searchParams.get("sku_material_id") ?? "");
-    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "");
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "") || toTrimmedString(ctx.context.companyId);
+    if (!companyId) return bomError(req, ctx, "PROD_BOM_SCOPE_VIOLATION", 403, "Company scope is required");
+    await assertPackBomCompanyScope(ctx, companyId);
 
     let query = serviceRoleClient
       .schema("erp_production")
@@ -698,7 +708,7 @@ export async function listPackBomsHandler(
 
     if (status) query = query.eq("status", status);
     if (skuMaterialId) query = query.eq("sku_material_id", skuMaterialId);
-    if (companyId) query = query.eq("company_id", companyId);
+    query = query.eq("company_id", companyId);
 
     const { data, error } = await query;
     if (error) {
@@ -711,7 +721,7 @@ export async function listPackBomsHandler(
       rows.map((row) => String(row.sku_material_id ?? "")),
       "[pack_bom.listPackBoms]",
       "PROD_BOM_LIST_FAILED",
-      "id, pace_code, material_name, material_type, pack_code, shade_code",
+      "id, pace_code, material_name, document_name, material_type, pack_code, shade_code",
     );
     const [companyMap, userDisplayMap] = await Promise.all([
       getCompanyMapByIds(rows.map((row) => String(row.company_id ?? ""))),
@@ -764,6 +774,7 @@ export async function getPackBomHandler(
     if (!data) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
 
     const bom = data as JsonRecord;
+    await assertPackBomCompanyScope(ctx, String(bom.company_id ?? ""));
     const lines = ((bom.lines ?? []) as JsonRecord[]);
     const [companyMap, skuMap, lineMaterialMap, groupMap, slocMap, userDisplayMap] = await Promise.all([
       getCompanyMapByIds([String(bom.company_id ?? "")]),
@@ -1436,6 +1447,22 @@ export async function listPackBomChangeRequestsHandler(
     const url = new URL(req.url);
     const status = toTrimmedString(url.searchParams.get("status") ?? "");
     const packBomId = toTrimmedString(url.searchParams.get("pack_bom_id") ?? "");
+    const companyId = toTrimmedString(url.searchParams.get("company_id") ?? "") || toTrimmedString(ctx.context.companyId);
+    const skuMaterialId = toTrimmedString(url.searchParams.get("sku_material_id") ?? "");
+    if (!companyId) return bomError(req, ctx, "PROD_BOM_SCOPE_VIOLATION", 403, "Company scope is required");
+    await assertPackBomCompanyScope(ctx, companyId);
+
+    let bomQuery = serviceRoleClient
+      .schema("erp_production")
+      .from("pack_bom")
+      .select("id")
+      .eq("company_id", companyId);
+    if (skuMaterialId) bomQuery = bomQuery.eq("sku_material_id", skuMaterialId);
+    if (packBomId) bomQuery = bomQuery.eq("id", packBomId);
+    const { data: scopedBoms, error: scopedBomsError } = await bomQuery;
+    if (scopedBomsError) throw new Error("PROD_BCR_LIST_FAILED");
+    const scopedBomIds = ((scopedBoms ?? []) as JsonRecord[]).map((bom) => toTrimmedString(bom.id)).filter(Boolean);
+    if (scopedBomIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     let query = serviceRoleClient
       .schema("erp_production")
@@ -1449,7 +1476,7 @@ export async function listPackBomChangeRequestsHandler(
       .order("created_at", { ascending: false });
 
     if (status) query = query.eq("status", status);
-    if (packBomId) query = query.eq("pack_bom_id", packBomId);
+    query = query.in("pack_bom_id", scopedBomIds);
 
     const { data, error } = await query;
     if (error) {
@@ -1519,10 +1546,18 @@ export async function getPackBomChangeRequestHandler(
     const row = data as JsonRecord;
     const packBomId = String(row.pack_bom_id ?? "");
 
-    const [bomRes, lineRes, changeLineRes] = await Promise.all([
-      serviceRoleClient.schema("erp_production").from("pack_bom")
-        .select("id, company_id, sku_material_id, status")
-        .eq("id", packBomId).maybeSingle(),
+    const { data: fetchedBom, error: fetchedBomError } = await serviceRoleClient
+      .schema("erp_production").from("pack_bom")
+      .select("id, company_id, sku_material_id, status")
+      .eq("id", packBomId).maybeSingle();
+    if (fetchedBomError) {
+      console.error("[pack_bom.getPackBomChangeRequest] bom query failed:", JSON.stringify(fetchedBomError));
+      throw new Error("PROD_BCR_FETCH_FAILED");
+    }
+    if (!fetchedBom) return bomError(req, ctx, "PROD_BOM_NOT_FOUND", 404, "Pack BOM not found");
+    await assertPackBomCompanyScope(ctx, String((fetchedBom as JsonRecord).company_id ?? ""));
+
+    const [lineRes, changeLineRes] = await Promise.all([
       serviceRoleClient.schema("erp_production").from("pack_bom_line")
         .select("id, line_type, material_id, qty, uom_code, has_alternate, material_group_id, is_primary_container, display_order")
         .eq("pack_bom_id", packBomId).order("display_order"),
@@ -1531,10 +1566,6 @@ export async function getPackBomChangeRequestHandler(
         .eq("change_request_id", id).order("display_order"),
     ]);
 
-    if (bomRes.error) {
-      console.error("[pack_bom.getPackBomChangeRequest] bom query failed:", JSON.stringify(bomRes.error));
-      throw new Error("PROD_BCR_FETCH_FAILED");
-    }
     if (lineRes.error) {
       console.error("[pack_bom.getPackBomChangeRequest] bom line query failed:", JSON.stringify(lineRes.error));
       throw new Error("PROD_BCR_FETCH_FAILED");
@@ -1544,7 +1575,7 @@ export async function getPackBomChangeRequestHandler(
       throw new Error("PROD_BCR_LINES_FAILED");
     }
 
-    const bom = bomRes.data as JsonRecord | null;
+    const bom = fetchedBom as JsonRecord;
     const bomLines = ((lineRes.data ?? []) as JsonRecord[]).filter((l) => l.line_type === "INPUT");
     const changeLines = (changeLineRes.data ?? []) as JsonRecord[];
     const bomLineMap = new Map(bomLines.map((l) => [String(l.id), l]));

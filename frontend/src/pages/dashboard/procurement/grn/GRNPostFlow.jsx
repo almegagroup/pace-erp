@@ -81,7 +81,7 @@ function GENumberEntryScreen({ onLoad }) {
 }
 
 // ── Screen 2: GE lines list ──────────────────────────────────────────────────
-function GELinesScreen({ geData, onSelectLine, onBack, successNotice, onDismissNotice }) {
+function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
   const { gate_entry: ge, lines } = geData;
   const pendingCount = lines.filter((l) => l.line_grn_status === "PENDING").length;
 
@@ -217,6 +217,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [rateConfirmed, setRateConfirmed] = useState(_saved.rateConfirmed ?? true);
   const [invoiceRate, setInvoiceRate] = useState(_saved.invoiceRate ?? "");
   const [gstPct, setGstPct] = useState(_saved.gstPct ?? "");
+  const isBulk = geLine.delivery_type === "BULK";
   const [transporterId, setTransporterId] = useState(_saved.transporterId ?? (geLine.csn_transporter_id ?? ""));
   const [transporterSearch, setTransporterSearch] = useState("");
   const [transporterName, setTransporterName] = useState(_saved.transporterName ?? (geLine.csn_transporter_name ?? ""));
@@ -225,7 +226,14 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [lastMileTransporterSearch, setLastMileTransporterSearch] = useState("");
   const [lastMileTransporterName, setLastMileTransporterName] = useState(_saved.lastMileTransporterName ?? "");
   const [lastMileTransporterHighlight, setLastMileTransporterHighlight] = useState(-1);
-  const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (geLine.csn_lr_number || geLine.bulk_lr_number || ""));
+  // Bulk has no CSN. Its delivery-document identifiers are captured by Stores
+  // on the GE line and must arrive here unchanged, while still allowing the
+  // GRN user to correct them before posting.
+  const [deliveryChallanNumber, setDeliveryChallanNumber] = useState(_saved.deliveryChallanNumber ?? (isBulk ? (geLine.bulk_challan_number ?? "") : ""));
+  const [deliveryChallanDate, setDeliveryChallanDate] = useState(_saved.deliveryChallanDate ?? (isBulk ? (geLine.bulk_challan_date ?? "") : ""));
+  const [containerNumber, setContainerNumber] = useState(_saved.containerNumber ?? (isBulk ? (geLine.bulk_container_number ?? "") : ""));
+  const [ewaybillNumber, setEwaybillNumber] = useState(_saved.ewaybillNumber ?? (isBulk ? (geLine.bulk_ewaybill_number ?? "") : ""));
+  const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (isBulk ? (geLine.bulk_lr_number ?? "") : (geLine.csn_lr_number ?? "")));
   const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
   const [hsnCode, setHsnCode] = useState(_saved.hsnCode ?? (geLine.hsn_code ?? ""));
   const [batchLotNumber, setBatchLotNumber] = useState(_saved.batchLotNumber ?? "");
@@ -238,6 +246,20 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const geQty = Number(geLine.ge_qty ?? 0);
   const receivedQtyNum = Number(receivedQty) || 0;
   const discrepancy = Number((geQty - receivedQtyNum).toFixed(6));
+  const isPoGstInclusive = String(geLine.po_gst_terms ?? "").toUpperCase() === "INCLUSIVE";
+  const gstPctNum = Number(gstPct);
+  const displayedRateValue = rateConfirmed ? geLine.po_rate : invoiceRate;
+  const displayedRate = displayedRateValue === null || displayedRateValue === undefined || displayedRateValue === ""
+    ? Number.NaN
+    : Number(displayedRateValue);
+  const basicRate = isPoGstInclusive
+    && Number.isFinite(displayedRate)
+    && displayedRate >= 0
+    && Number.isFinite(gstPctNum)
+    && gstPct !== ""
+    && gstPctNum >= 0
+    ? displayedRate / (1 + (gstPctNum / 100))
+    : null;
   const uomMismatch = geLine.base_uom_code && geLine.uom_code && geLine.base_uom_code !== geLine.uom_code;
   const perPackQtyNum = Number(perPackQty) || 0;
   const stockQtyPreview = uomMismatch && perPackQtyNum > 0 ? Number((receivedQtyNum * perPackQtyNum).toFixed(6)) : null;
@@ -333,6 +355,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         rateConfirmed, invoiceRate, gstPct,
         transporterId, transporterName,
         lastMileTransporterId, lastMileTransporterName,
+        deliveryChallanNumber, deliveryChallanDate, containerNumber, ewaybillNumber,
         lrNumber, lrDate,
         batchLotNumber, perPackQty,
         expiryType, expiryDate, shelfLifeMonths,
@@ -387,6 +410,12 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         last_mile_transporter_id: lastMileTransporterId || null,
         lr_number: lrNumber || null,
         lr_date: lrDate || null,
+        ...(isBulk ? {
+          bulk_challan_number: deliveryChallanNumber || null,
+          bulk_challan_date: deliveryChallanDate || null,
+          bulk_container_number: containerNumber || null,
+          bulk_ewaybill_number: ewaybillNumber || null,
+        } : {}),
         batch_lot_number: batchLotNumber || null,
         per_pack_qty: perPackQty ? Number(perPackQty) : null,
         expiry_type: expiryType,
@@ -665,10 +694,22 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         {activeTabName === "Accounts" && (
           <ErpSectionCard eyebrow="Accounts" title="Rate & GST">
             <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3 inline-block">
-              <p className="text-[11px] text-slate-500">PO rate</p>
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] text-slate-500">PO rate</p>
+                {isPoGstInclusive && (
+                  <span className="rounded border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">GST Inclusive</span>
+                )}
+              </div>
               <p className="mt-1 text-base font-medium text-slate-900">
                 {geLine.po_rate != null ? `₹ ${Number(geLine.po_rate).toFixed(4)} / ${geLine.uom_code}` : "—"}
               </p>
+              {isPoGstInclusive && (
+                <p className="mt-1 text-xs text-slate-600">
+                  {basicRate !== null
+                    ? `Basic rate (ex GST): ₹ ${basicRate.toFixed(4)} / ${geLine.uom_code}`
+                    : "Enter GST % below to calculate the basic rate."}
+                </p>
+              )}
             </div>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="flex items-center gap-3 rounded border border-slate-200 bg-slate-50 p-3 cursor-pointer">
@@ -710,7 +751,11 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         {/* Tab 5 — Transporter */}
         {activeTabName === "Transporter" && (
           <ErpSectionCard eyebrow="Transporter" title="Logistics">
-            <p className="mb-3 text-xs text-slate-500">Pre-filled from CSN. Changes here sync back to CSN on post.</p>
+            <p className="mb-3 text-xs text-slate-500">
+              {isBulk
+                ? "Pre-filled from the Bulk Gate Entry recorded by Stores. Review and edit before posting the GRN."
+                : "Pre-filled from CSN. Changes here sync back to CSN on post."}
+            </p>
             <div className="grid gap-3 md:grid-cols-3">
               <div className="md:col-span-3">
                 <ErpDenseFormRow label="Transporter">
@@ -842,6 +887,26 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                 <input type="date" value={lrDate} onChange={(e) => setLrDate(e.target.value)}
                   className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
               </ErpDenseFormRow>
+              {isBulk && (
+                <>
+                  <ErpDenseFormRow label="Delivery challan number">
+                    <input type="text" value={deliveryChallanNumber} onChange={(e) => setDeliveryChallanNumber(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="Delivery challan date">
+                    <input type="date" value={deliveryChallanDate} onChange={(e) => setDeliveryChallanDate(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="Container number">
+                    <input type="text" value={containerNumber} onChange={(e) => setContainerNumber(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label="E-way bill number">
+                    <input type="text" value={ewaybillNumber} onChange={(e) => setEwaybillNumber(e.target.value)}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                  </ErpDenseFormRow>
+                </>
+              )}
             </div>
           </ErpSectionCard>
         )}
@@ -954,7 +1019,6 @@ export default function GRNPostFlow() {
         onSelectLine={handleLineSelected}
         onBack={() => { setScreen("ge-entry"); updateActiveScreenContext({ grnScreen: "ge-entry", grnGeData: null, grnSelectedLine: null }); scrollTop(); }}
         successNotice={successNotice}
-        onDismissNotice={() => setSuccessNotice("")}
       />
     );
   }

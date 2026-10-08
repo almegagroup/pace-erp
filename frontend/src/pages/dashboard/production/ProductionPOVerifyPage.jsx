@@ -146,6 +146,7 @@ function mtsBatchSort(left, right) {
 
 function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
   const [step, setStep] = useState(2);
+  const [priority, setPriority] = useState("NORMAL");
   const [checks, setChecks] = useState({});
   const [expandedPacking, setExpandedPacking] = useState(false);
   const [holdRows, setHoldRows] = useState([]);
@@ -267,11 +268,11 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
       setDeviationModal(true);
       return;
     }
-    onApprove(MTS_CHECKLIST.map(([code]) => code), holdPayload(), false);
+    onApprove(MTS_CHECKLIST.map(([code]) => code), holdPayload(), false, priority);
   };
   const confirmDeviationAndApprove = () => {
     setDeviationModal(false);
-    onApprove(MTS_CHECKLIST.map(([code]) => code), holdPayload(), true);
+    onApprove(MTS_CHECKLIST.map(([code]) => code), holdPayload(), true, priority);
   };
 
   if (po.status !== "FINAL") {
@@ -281,6 +282,15 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
         {isAwaitingNonCurrentApproval
           ? "This non-current-stroke MTS Process PO is waiting for Quality Approval in Production QA Queue (PR16). Approve its Page-6 plan there first; it will then become FINAL and can be verified here."
           : "This MTS Process PO is not pending Verify. MTS documents cannot be edited or corrected from this page."}
+      </div>
+    );
+  }
+
+  if (po.priority === "URGENT") {
+    return (
+      <div className="rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p className="font-semibold">Urgent MTS QA verification is waiting for Manager Approval.</p>
+        <p className="mt-1">The QA checklist and hold declaration were saved without posting stock. Manager approval will post the MTS Process PO and all linked PMTS Packing POs together; rejecting urgency will post them normally today.</p>
       </div>
     );
   }
@@ -304,6 +314,14 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
               <thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="border-b px-3 py-2 text-left">Process PO Number</th><th className="border-b px-3 py-2 text-left">Company</th><th className="border-b px-3 py-2 text-left">PO Type</th><th className="border-b px-3 py-2 text-left">Segment</th></tr></thead>
               <tbody><tr className="border-b border-slate-100"><td className="px-3 py-2 font-mono font-semibold text-sky-700">{po.po_number}</td><td className="px-3 py-2">{po.company?.company_name || po.company_name || "Selected company"}</td><td className="px-3 py-2">{po.po_type}</td><td className="px-3 py-2">{po.segment_code || "--"}</td></tr></tbody>
             </table>
+          </div>
+          <div className="flex max-w-sm flex-col gap-1">
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">Posting priority</label>
+            <select value={priority} onChange={(event) => setPriority(event.target.value)} className="rounded border border-slate-300 px-2 py-1.5 text-sm">
+              <option value="NORMAL">Normal — QA Verify posts stock now</option>
+              <option value="URGENT">Urgent — Manager Approval required before posting</option>
+            </select>
+            <span className="text-xs text-slate-500">Urgent saves this QA verification for manager decision; it does not post stock from PR12.</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px] border-collapse text-sm">
@@ -348,7 +366,7 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
           <div><h3 className="mb-2 text-sm font-semibold text-slate-800">RM Material Table — Page 4</h3><div className="overflow-x-auto"><table className="w-full min-w-[900px] border-collapse text-sm"><thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="border-b px-3 py-2 text-left">Material</th><th className="border-b px-3 py-2 text-right">Dosage %</th><th className="border-b px-3 py-2 text-left">Actual material</th><th className="border-b px-3 py-2 text-left">Issue location</th><th className="border-b px-3 py-2 text-right">Standard KG</th><th className="border-b px-3 py-2 text-right">Actual KG</th><th className="border-b px-3 py-2 text-left">Movement</th></tr></thead><tbody>{(po.lines ?? []).map((line) => <tr key={line.id} className="border-b border-slate-100"><td className="px-3 py-2">{materialLabel(line.material) || "--"}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.dosage_pct, "0")}</td><td className="px-3 py-2">{materialLabel(line.actual_material) || materialLabel(line.material) || "--"}</td><td className="px-3 py-2">{storageLocationLabel(line.issue_storage_location) || "--"}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.planned_qty, "0")}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.actual_qty, "0")}</td><td className="px-3 py-2 font-mono">P261</td></tr>)}</tbody></table></div></div>
           <div><h3 className="mb-2 text-sm font-semibold text-slate-800">PM Material Table — Page 6</h3><div className="overflow-x-auto"><table className="w-full min-w-[980px] border-collapse text-sm"><thead><tr className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><th className="border-b px-3 py-2 text-left">Packing PO</th><th className="border-b px-3 py-2 text-left">SKU</th><th className="border-b px-3 py-2 text-left">PM Material</th><th className="border-b px-3 py-2 text-left">Issue location</th><th className="border-b px-3 py-2 text-right">Qty / Bag</th><th className="border-b px-3 py-2 text-right">Planned KG</th><th className="border-b px-3 py-2 text-left">Movement</th></tr></thead><tbody>{packingOrders.flatMap((order) => (order.lines ?? []).filter((line) => line.line_type === "PM").map((line) => <tr key={line.id} className="border-b border-slate-100"><td className="px-3 py-2 font-mono">{order.po_number}</td><td className="px-3 py-2">{materialLabel((order.lines ?? []).find((entry) => entry.line_type === "FG")?.material) || "--"}</td><td className="px-3 py-2">{materialLabel(line.actual_material) || materialLabel(line.material) || "--"}</td><td className="px-3 py-2">{storageLocationLabel(line.issue_storage_location) || "--"}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.qty_per_pack, "0")}</td><td className="px-3 py-2 text-right font-mono">{formatSum(line.total_qty, "0")}</td><td className="px-3 py-2 font-mono">P261</td></tr>))}</tbody></table></div></div>
           <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">Declared SKU output: <span className="font-mono font-semibold">{formatSum(totalDeclaredOutput, "0")} KG</span>. Gain / Loss: <span className="font-mono font-semibold">{formatSum(totalGainLoss, "0")} KG</span>. {holdPayload().length > 0 ? `${holdPayload().length} QA stock allocation line(s) will be posted.` : "No QA stock hold: all SKU output remains unrestricted."}</div>
-          <div className="flex flex-wrap justify-between gap-3 border-t border-slate-200 pt-3"><div className="flex gap-2"><button type="button" onClick={() => setStep(3)} className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back</button><button type="button" onClick={beginReject} disabled={saving} className="rounded border border-rose-300 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50">Reject & Release</button></div><button type="button" onClick={attemptApprove} disabled={saving} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">{saving ? "Posting..." : "Approve & Post"}</button></div>
+          <div className="flex flex-wrap justify-between gap-3 border-t border-slate-200 pt-3"><div className="flex gap-2"><button type="button" onClick={() => setStep(3)} className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back</button><button type="button" onClick={beginReject} disabled={saving} className="rounded border border-rose-300 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50">Reject & Release</button></div><button type="button" onClick={attemptApprove} disabled={saving} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">{saving ? (priority === "URGENT" ? "Submitting..." : "Posting...") : (priority === "URGENT" ? "Submit for Manager Approval" : "Approve & Post")}</button></div>
         </div>
       ) : null}
 
@@ -620,19 +638,29 @@ export default function ProductionPOVerifyPage() {
     }
   }
 
-  async function handleMtsApprove(checklist, holds, confirmedDeviation) {
+  async function handleMtsApprove(checklist, holds, confirmedDeviation, priority = "NORMAL") {
     if (!po || po.po_type !== "MTS" || po.status !== "FINAL") return;
+    const isUrgent = priority === "URGENT";
     const confirmed = await openActionConfirm({
       eyebrow: "MTS QA Verify",
-      title: "Approve and post MTS stock?",
-      message: "RM and PM will be issued, declared SKU output will be posted, and selected QA holds will be transferred in one atomic transaction.",
-      confirmLabel: "Approve & Post",
+      title: isUrgent ? "Submit urgent MTS verification for Manager Approval?" : "Approve and post MTS stock?",
+      message: isUrgent
+        ? "Your QA checklist and selected holds will be saved without any stock posting. The manager will either approve urgent posting (effective date: manager date minus one) or reject urgency and post normally that day."
+        : "RM and PM will be issued, declared SKU output will be posted, and selected QA holds will be transferred in one atomic transaction.",
+      confirmLabel: isUrgent ? "Submit for Manager Approval" : "Approve & Post",
     });
     if (!confirmed) return;
     setSaving(true);
     try {
-      await verifyProcessOrder(po.id, { mts_action: "APPROVE", checklist, holds, confirmed_deviation: confirmedDeviation === true });
-      toast("MTS Process PO verified and stock posted.");
+      await verifyProcessOrder(po.id, {
+        mts_action: isUrgent ? "REQUEST_URGENT_MANAGER_APPROVAL" : "APPROVE",
+        checklist,
+        holds,
+        confirmed_deviation: confirmedDeviation === true,
+      });
+      toast(isUrgent
+        ? "Urgent MTS QA verification saved. Stock will post only after the Manager decision."
+        : "MTS Process PO verified and stock posted.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
@@ -1055,7 +1083,11 @@ export default function ProductionPOVerifyPage() {
                               ) : "P261"}
                             </td>
                             <td className="px-3 py-2 text-center">
-                              {!isCorrectionMode && !row.is_formulation_line && (
+                              {/* Only a row that was never saved can be dropped here: the server posts
+                                  every line stored on the PO, so hiding a saved row on screen would just
+                                  under-count the output while its RM still issues. To remove a saved row
+                                  (e.g. a split-material row), set its Actual Qty to 0. */}
+                              {!isCorrectionMode && !row.is_formulation_line && !row.id && (
                                 <button
                                   onClick={() => setRows((current) => current.filter((entry) => entry.key !== row.key))}
                                   className="text-sm font-medium text-rose-600 hover:underline"

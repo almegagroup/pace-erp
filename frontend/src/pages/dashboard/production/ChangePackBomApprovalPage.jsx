@@ -12,16 +12,23 @@
  *          prop crashes with React error #31.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { pushToast } from "../../../store/uiToast.js";
+import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
+import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
+import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useMenu } from "../../../context/useMenu.js";
 import {
+  listPackBoms,
+  listPackBomEligibleSkus,
   listPackBomChangeRequests,
   getPackBomChangeRequest,
   approvePackBomChangeRequest,
   rejectPackBomChangeRequest,
 } from "./prodApi.js";
+import { packingPoTypeForProcessType } from "./productionTypeLabels.js";
 import { listMaterials, listMaterialCategoryGroups, createMaterialCategoryGroup, addMaterialCategoryMember } from "../om/omApi.js";
 import { PackBomChangeLinesTable, GroupCreateModal, MemberAddModal } from "./strokeShared.jsx";
 
@@ -38,8 +45,30 @@ const ERRORS = {
 };
 function friendly(code) { return ERRORS[code] ?? code; }
 
+const PO_TYPES = ["MTO", "HPS", "MTS", "MTEST"];
+const COMPANY_STORAGE_KEY = "pace.production.changePackBomApproval.companyId";
+const TYPE_STORAGE_KEY = "pace.production.changePackBomApproval.poType";
+function readStoredCompanyId() {
+  if (typeof window === "undefined") return "";
+  return String(window.localStorage.getItem(COMPANY_STORAGE_KEY) ?? "").trim();
+}
+function readStoredPoType() {
+  if (typeof window === "undefined") return "MTO";
+  const value = String(window.localStorage.getItem(TYPE_STORAGE_KEY) ?? "").trim();
+  return PO_TYPES.includes(value) ? value : "MTO";
+}
+function skuDocumentLabel(sku) {
+  return [sku?.pace_code || sku?.external_code, sku?.document_name || sku?.material_name]
+    .filter(Boolean)
+    .join(" — ");
+}
+
 export default function ChangePackBomApprovalPage() {
   const qc = useQueryClient();
+  const { runtimeContext } = useMenu();
+  const [companyId, setCompanyId] = useState(readStoredCompanyId);
+  const [poType, setPoType] = useState(readStoredPoType);
+  const [skuMaterialId, setSkuMaterialId] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [saving, setSaving] = useState(false);
   const [expandedId, setExpandedId] = useState("");
@@ -58,9 +87,49 @@ export default function ChangePackBomApprovalPage() {
     pushToast({ message: msg, tone });
   }
 
+  const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
+  function resetFilters() {
+    setSkuMaterialId("");
+    setExpandedId("");
+    setDetail(null);
+    setEditLines(null);
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (companyId) {
+      window.localStorage.setItem(COMPANY_STORAGE_KEY, companyId);
+      return;
+    }
+    const fallbackCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
+    if (fallbackCompanyId) setCompanyId(fallbackCompanyId);
+  }, [companyId, runtimeContext]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem(TYPE_STORAGE_KEY, poType);
+  }, [poType]);
+
+  const bomsQ = useQuery({
+    queryKey: ["pack-boms-for-change-approval", effectiveCompanyId],
+    queryFn: () => listPackBoms({ company_id: effectiveCompanyId }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
+  });
+  const eligibleSkusQ = useQuery({
+    queryKey: ["pack-bom-eligible-skus-for-change-approval", effectiveCompanyId, poType],
+    queryFn: () => listPackBomEligibleSkus({ company_id: effectiveCompanyId, po_type: poType, include_existing: true }),
+    enabled: Boolean(effectiveCompanyId && poType),
+    select: (d) => Array.isArray(d) ? d : d?.data ?? [],
+  });
+
   const crQ = useQuery({
-    queryKey: ["pack-bom-change-requests", statusFilter],
-    queryFn: () => listPackBomChangeRequests({ status: statusFilter || undefined }),
+    queryKey: ["pack-bom-change-requests", effectiveCompanyId, poType, skuMaterialId, statusFilter],
+    queryFn: () => listPackBomChangeRequests({
+      company_id: effectiveCompanyId,
+      sku_material_id: skuMaterialId || undefined,
+      status: statusFilter || undefined,
+    }),
+    enabled: Boolean(effectiveCompanyId),
     select: (d) => Array.isArray(d) ? d : d?.data ?? [],
   });
 
@@ -77,7 +146,13 @@ export default function ChangePackBomApprovalPage() {
   const pmMaterials = pmMaterialsQ.data ?? [];
   const groups = groupsQ.data ?? [];
 
-  const requests = crQ.data ?? [];
+  const eligibleSkuIds = new Set((eligibleSkusQ.data ?? []).map((sku) => sku.id));
+  const skuOptions = [...new Map(
+    (bomsQ.data ?? [])
+      .filter((bom) => eligibleSkuIds.has(bom.sku_material_id))
+      .map((bom) => [bom.sku_material_id, { value: bom.sku_material_id, label: skuDocumentLabel(bom.sku) }]),
+  ).values()];
+  const requests = (crQ.data ?? []).filter((request) => eligibleSkuIds.has(request.bom?.sku_material_id));
 
   async function toggleExpand(row) {
     if (expandedId === row.id) {
@@ -196,10 +271,39 @@ export default function ChangePackBomApprovalPage() {
       subtitle="L1 Manager reviews DRAFT change requests, may edit the proposed lines, then approves or rejects."
     >
       <ErpSectionCard title="Filters">
-        <div className="flex flex-col gap-1 w-40">
-          <label className="text-xs text-slate-500">Status</label>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div>
+            <TransactionCompanySelector
+              runtimeContext={runtimeContext}
+              value={effectiveCompanyId}
+              onChange={(value) => { setCompanyId(value); resetFilters(); }}
+              label="Company"
+            />
+          </div>
+          <label className="flex flex-col gap-1 text-xs text-slate-500">
+            PO Type
+            <select
+              className="h-9 border border-slate-300 rounded px-2 text-sm"
+              value={poType}
+              onChange={(event) => { setPoType(event.target.value); resetFilters(); }}
+            >
+              {PO_TYPES.map((type) => <option key={type} value={type}>{type} / {packingPoTypeForProcessType(type)}</option>)}
+            </select>
+          </label>
+          <div>
+            <label className="text-xs text-slate-500 block mb-1">FG SKU</label>
+            <ErpComboboxField
+              value={skuMaterialId}
+              onChange={(value) => { setSkuMaterialId(value); setExpandedId(""); setDetail(null); setEditLines(null); }}
+              options={skuOptions}
+              placeholder={eligibleSkusQ.isFetching ? "Loading eligible SKUs..." : "All eligible SKUs"}
+              emptyStateLabel="No Pack BOM SKU found for this Company and PO Type"
+            />
+          </div>
+          <label className="flex flex-col gap-1 text-xs text-slate-500">
+            Status
           <select
-            className="border border-slate-300 rounded px-2 py-1 text-sm"
+            className="h-9 border border-slate-300 rounded px-2 text-sm"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
           >
@@ -208,6 +312,7 @@ export default function ChangePackBomApprovalPage() {
             <option value="APPROVED">Approved</option>
             <option value="REJECTED">Rejected</option>
           </select>
+          </label>
         </div>
       </ErpSectionCard>
 

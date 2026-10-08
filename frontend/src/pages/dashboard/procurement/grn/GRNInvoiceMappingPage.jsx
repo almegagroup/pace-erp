@@ -31,7 +31,13 @@ const PENDING_COLUMNS = [
   { key: "material_name", label: "Material Name", width: "220px", render: (row) => row.material_name || "—" },
   { key: "received_qty", label: "Quantity", width: "100px", align: "right", render: (row) => Number(row.received_qty ?? 0).toFixed(3) },
   { key: "grn_number", label: "GRN Number", width: "130px", render: (row) => row.grn_number || "—" },
-  { key: "po_number", label: "PO Number", width: "130px", render: (row) => row.po_number || row.sto_number || "—" },
+  {
+    key: "po_number",
+    label: "PO Number",
+    width: "130px",
+    render: (row) => row.po_number || row.sto_number || "—",
+    filterValue: (row) => row.po_number || row.sto_number || "—",
+  },
   { key: "vehicle_number", label: "Truck Number", width: "130px", render: (row) => row.vehicle_number || "—" },
   { key: "bulk_container_number", label: "Container Number", width: "150px", render: (row) => row.bulk_container_number || "—" },
   { key: "bulk_challan_number", label: "Delivery Challan Number", width: "180px", render: (row) => row.bulk_challan_number || "—" },
@@ -40,7 +46,7 @@ const PENDING_COLUMNS = [
 const MAPPED_COLUMNS = [
   ...PENDING_COLUMNS,
   { key: "invoice_number", label: "Invoice Number", width: "150px", render: (row) => row.invoice_number || "—" },
-  { key: "invoice_date", label: "Invoice Date", width: "110px", render: (row) => row.invoice_date || "—" },
+  { key: "invoice_date", label: "Invoice Date", width: "110px", filterType: "date", render: (row) => row.invoice_date || "—" },
 ];
 
 function getColumnFilterText(column, row) {
@@ -72,7 +78,7 @@ export default function GRNInvoiceMappingPage() {
   // §3.9.5 "GRN Split" (1 GRN : many Invoices) — Bulk-only.
   const [splitTarget, setSplitTarget] = useState(null);
   const [splitSlices, setSplitSlices] = useState([]);
-  const [sliceDraft, setSliceDraft] = useState({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", quantity: "" });
+  const [sliceDraft, setSliceDraft] = useState({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", quantity: "" });
   const [splitSaving, setSplitSaving] = useState(false);
   const [splitError, setSplitError] = useState("");
 
@@ -202,7 +208,7 @@ export default function GRNInvoiceMappingPage() {
   function openSplit(row) {
     setSplitTarget(row);
     setSplitSlices([]);
-    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", quantity: "" });
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", quantity: "" });
     setSplitError("");
   }
   function closeSplit() {
@@ -212,12 +218,12 @@ export default function GRNInvoiceMappingPage() {
   }
   function addSlice() {
     const qty = Number(sliceDraft.quantity);
-    if (!sliceDraft.invoiceNumber.trim() || !sliceDraft.invoiceDate || !sliceDraft.invoiceRate || !qty || qty <= 0) {
-      setSplitError("Every slice needs an Invoice Number, Date, Rate, and a positive Quantity.");
+    if (!sliceDraft.invoiceNumber.trim() || !sliceDraft.invoiceDate || !sliceDraft.invoiceRate || String(sliceDraft.gstPct).trim() === "" || !qty || qty <= 0) {
+      setSplitError("Every slice needs an Invoice Number, Date, Rate, GST %, and a positive Quantity.");
       return;
     }
     setSplitSlices((current) => [...current, { ...sliceDraft, invoiceNumber: sliceDraft.invoiceNumber.trim(), quantity: qty }]);
-    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", quantity: "" });
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", quantity: "" });
     setSplitError("");
   }
   function removeSlice(index) {
@@ -238,6 +244,7 @@ export default function GRNInvoiceMappingPage() {
           invoice_number: s.invoiceNumber,
           invoice_date: s.invoiceDate,
           invoice_rate: Number(s.invoiceRate),
+          gst_pct: Number(s.gstPct),
           quantity: Number(s.quantity),
         })),
       });
@@ -410,6 +417,7 @@ export default function GRNInvoiceMappingPage() {
                 key: "__select",
                 label: <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />,
                 width: "40px",
+                filterable: false,
                 render: (row) => (
                   <input type="checkbox" checked={selectedIds.includes(row.id)} onChange={() => toggleRow(row.id)} />
                 ),
@@ -419,6 +427,7 @@ export default function GRNInvoiceMappingPage() {
                 key: "__split",
                 label: "",
                 width: "80px",
+                filterable: false,
                 render: (row) => (
                   <button
                     onClick={() => openSplit(row)}
@@ -431,6 +440,7 @@ export default function GRNInvoiceMappingPage() {
             ]}
             rows={filteredRows}
             rowKey={(row) => row.id}
+            columnFilter
             emptyMessage={loading ? "Loading…" : effectiveCompanyId ? `No ${tab} GRNs found.` : "No company resolved for this session."}
           />
 
@@ -464,7 +474,7 @@ export default function GRNInvoiceMappingPage() {
               <div className="mb-3 border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800">{splitError}</div>
             )}
             <p className="mb-3 text-xs text-slate-500">
-              Vendor split this one truck's material across multiple invoices. Add each invoice's own Number/Date/Rate/Quantity below — the quantities must sum exactly to this GRN's own received quantity ({Number(splitTarget.received_qty ?? 0).toFixed(4)}) before Split is enabled. Same Truck Number, Delivery Challan Number, and RST Number carry over automatically to every new GRN.
+              Vendor split this one truck's material across multiple invoices. Add each invoice's own Number/Date/Rate/GST %/Quantity below — the quantities must sum exactly to this GRN's own received quantity ({Number(splitTarget.received_qty ?? 0).toFixed(4)}) before Split is enabled. Same Truck Number, Delivery Challan Number, and RST Number carry over automatically to every new GRN.
             </p>
 
             <div className="overflow-x-auto border border-slate-200">
@@ -474,6 +484,7 @@ export default function GRNInvoiceMappingPage() {
                     <th className="px-3 py-2 text-left">Invoice Number</th>
                     <th className="px-3 py-2 text-left">Invoice Date</th>
                     <th className="px-3 py-2 text-right">Rate</th>
+                    <th className="px-3 py-2 text-right">GST %</th>
                     <th className="px-3 py-2 text-right">Quantity</th>
                     <th className="px-3 py-2 w-16"></th>
                   </tr>
@@ -484,6 +495,7 @@ export default function GRNInvoiceMappingPage() {
                       <td className="px-3 py-2">{s.invoiceNumber}</td>
                       <td className="px-3 py-2">{s.invoiceDate}</td>
                       <td className="px-3 py-2 text-right">{Number(s.invoiceRate).toFixed(4)}</td>
+                      <td className="px-3 py-2 text-right">{Number(s.gstPct).toFixed(2)}</td>
                       <td className="px-3 py-2 text-right">{Number(s.quantity).toFixed(4)}</td>
                       <td className="px-3 py-2 text-center">
                         <button onClick={() => removeSlice(i)} className="text-xs text-rose-600 hover:underline">Remove</button>
@@ -515,6 +527,18 @@ export default function GRNInvoiceMappingPage() {
                         step="0.0001"
                         value={sliceDraft.invoiceRate}
                         onChange={(e) => setSliceDraft((d) => ({ ...d, invoiceRate: e.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-right outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        placeholder="GST %"
+                        value={sliceDraft.gstPct}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, gstPct: e.target.value }))}
                         className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-right outline-none focus:border-sky-500"
                       />
                     </td>

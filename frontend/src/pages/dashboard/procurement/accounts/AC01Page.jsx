@@ -143,7 +143,9 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
     ? Number(draft.confirmed_rate)
     : grn.confirmed_rate != null
       ? Number(grn.confirmed_rate)
-      : grn.grn_rate != null
+      : grn.rate_confirmed === true && grn.invoice_rate != null
+        ? Number(grn.invoice_rate)
+        : grn.grn_rate != null
         ? Number(grn.grn_rate)
         : 0;
   const materialGstPct = draft.gst_pct !== "" && draft.gst_pct != null ? Number(draft.gst_pct) : (grn.gst_pct != null ? Number(grn.gst_pct) : 0);
@@ -323,6 +325,12 @@ function buildColumns(components) {
     { key: "currency", label: "Currency", width: "70px" },
     { key: "gst_pct", label: "GST %", width: "70px", align: "right", render: (row) => formatNumberOrBlank(row.gst_pct) },
     { key: "taxable_value", label: "Taxable Value", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.taxable_value) },
+    { key: "material_gst_type", label: "GST Type", width: "100px" },
+    { key: "material_gst_amount", label: "Material GST", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.material_gst_amount) },
+    { key: "material_cgst_amount", label: "CGST", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.material_cgst_amount) },
+    { key: "material_sgst_amount", label: "SGST", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.material_sgst_amount) },
+    { key: "material_igst_amount", label: "IGST", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.material_igst_amount) },
+    { key: "invoice_total_value", label: "Invoice Total", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.invoice_total_value) },
     ...buildComponentColumns(components),
     { key: "landed_cost_total", label: "Landed Cost", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.landed_cost_total) },
     { key: "cost_per_unit", label: "Cost / Unit", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.cost_per_unit) },
@@ -1007,7 +1015,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
             <DrawerSection eyebrow="Payment" title="Terms and payment dates">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="Actual payment date (calculated from PO payment terms)">
+                <DrawerField label="Original payment date (calculated from PO payment terms)">
                   <input
                     disabled
                     value={grnDetailQuery.data?.actual_payment_date ? toDDMMYYYY(grnDetailQuery.data.actual_payment_date) : "-"}

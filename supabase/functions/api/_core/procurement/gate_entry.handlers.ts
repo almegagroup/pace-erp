@@ -1351,6 +1351,7 @@ export async function listOpenPOsForGEHandler(
     }
 
     const poIds = (pos ?? []).map((p) => String(p.id));
+    const vendorIds = [...new Set((pos ?? []).map((p: JsonRecord) => toTrimmedString(p.vendor_id)).filter(Boolean))];
     let lines: JsonRecord[] = [];
     if (poIds.length > 0) {
       const { data: lineData, error: lineError } = await serviceRoleClient
@@ -1364,6 +1365,21 @@ export async function listOpenPOsForGEHandler(
         lines = (lineData ?? []) as JsonRecord[];
       }
     }
+
+    // The Bulk GE drawer identifies the selected PO by both document number
+    // and vendor.  POs only carry vendor_id, so resolve the display values
+    // here rather than leaving a valid Bulk PO drawer looking incomplete.
+    const { data: vendorRows, error: vendorError } = vendorIds.length > 0
+      ? await serviceRoleClient
+        .schema("erp_master")
+        .from("vendor_master")
+        .select("id, vendor_code, vendor_name")
+        .in("id", vendorIds)
+      : { data: [], error: null };
+    if (vendorError) {
+      return procurementErrorResponse(req, ctx, "PO_OPEN_VENDOR_LOOKUP_FAILED", 500, "Unable to resolve PO vendors.");
+    }
+    const vendorMap = new Map((vendorRows ?? []).map((vendor: JsonRecord) => [String(vendor.id), vendor]));
 
     const lineMatIds = [...new Set(lines.map((l) => l.material_id).filter(Boolean))] as string[];
     const lineMatMap = new Map<string, string>();
@@ -1428,10 +1444,15 @@ export async function listOpenPOsForGEHandler(
       });
     }
 
-    const result = (pos ?? []).map((po) => ({
-      ...po,
-      lines: linesMap.get(String(po.id)) ?? [],
-    }));
+    const result = (pos ?? []).map((po: JsonRecord) => {
+      const vendor = vendorMap.get(toTrimmedString(po.vendor_id));
+      return {
+        ...po,
+        vendor_code: vendor?.vendor_code ?? null,
+        vendor_name: vendor?.vendor_name ?? null,
+        lines: linesMap.get(String(po.id)) ?? [],
+      };
+    });
 
     // §3.7 "Bulk GE-Creation Drawer" — surface each BULK PO's own Effective
     // Date window upper bound so the drawer can validate Challan/Invoice

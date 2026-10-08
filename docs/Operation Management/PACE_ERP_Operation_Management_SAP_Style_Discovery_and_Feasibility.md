@@ -25722,3 +25722,199 @@ attempt any dispatch-wise breakdown.
 
 **Not yet done:** implementation (schema/backend/frontend) has not started — this section is a pure
 design lock. No migration, handler, or page exists for AC05 yet.
+
+---
+
+## Section 143 — PR24 "MTS Production Register" sub-report (✅ DESIGN LOCKED 2026-10-07, Claude direct-implemented)
+
+**Business ask:** Quality/Production teams need one flat register of finished MTS (IWC + Powder)
+production — one line per *pack row* — without opening PR24's movement ledger or the Process/Packing
+PO lists separately.
+
+**Delivery mechanism (business owner, 2026-10-07 — supersedes the earlier "separate Quality-menu page"
+idea):** a new **"MTS Production Register" button on PR24 (Order Information System)**, exactly like the
+existing "Batch Counts" button (§122): its own tiny Company + Date-Range modal, then a full-page grid view
+inside the same screen (`page === "MTS_REGISTER"`), never visible together with the other two views.
+- **No new menu, no new tx_code, no new capability, no ACL bump.** Backend route is
+  `GET /api/production/order-information-system/mts-register`, registered in `route-acl-registry.ts` against
+  the **same resource `PROD_ORDER_INFO_SYSTEM`/VIEW** as PR24 itself and its Batch Counts sibling.
+- **Access verified on live prod (2026-10-07):** PR24 is already granted to every user who has a work
+  context (CMP011 15/15, CMP003 48/48, CMP006 21/21) via every department work context except the
+  unused `GENERAL_OPS`. So "everyone sees it, company-scoped" holds with zero ACL work. Users with no
+  work context at all (e.g. CMP011 Maintenance) see nothing — same as every other page.
+- **Trade-off accepted:** the register cannot later be restricted independently of PR24 (same resource,
+  bug-pattern #6 consciously traded for zero ACL maintenance). If that ever matters, split it into its own
+  resource then.
+
+**Row grain = one FINAL Packing PO (pack row) of a VERIFIED MTS Process PO.** One MTS Process PO owns
+N Packing POs (one per pack row from the MTS creation session, §138.15.2); each Packing PO carries its
+own `batch_number_from/to`, `num_packs`, `fill_qty_per_pack`, `actual_qty_kg`. A Process PO therefore
+appears as N lines, and "Number of Batches / Total Input / Total Output / From-To batch" are all
+**per pack row**, never repeated at Process-PO level.
+
+**Filters (fixed, not user-selectable):** `process_order.po_type = 'MTS'` (this is the one po_type that
+covers both IWC and Powder — there is no separate IWC po_type) AND `process_order.status = 'VERIFIED'`
+AND `packing_order.status = 'FINAL'`. A Process PO with no FINAL packing row yet produces no line.
+User inputs (modal): **Company** (canonical transaction-company selector — single-company user = locked
+read-only, multi-company = dropdown of allowed companies only; never the admin company list) and
+**Production Date From/To** (mandatory, max 365 days, default last 30). "Date" = `process_order.production_date`.
+
+**Columns (in this order):**
+
+| # | Column | Source |
+|---|--------|--------|
+| 1 | Date | `process_order.production_date` |
+| 2 | Shift | `shift_master.shift_name` via `process_order.shift_id` |
+| 3 | Prodshade Code | `material_master.external_code` of the Process PO's SFG (`process_order.material_id`) |
+| 4 | Prodshade Document Name | that material's `document_name` (fallback `material_name`) |
+| 5 | Stroke | `stroke_master.stroke_number` |
+| 6 | Process PO | `process_order.po_number` |
+| 7 | SKU Code | `external_code` of the Packing PO's FG (`packing_order.material_id`) |
+| 8 | SKU Document Name | that FG's `document_name` (fallback `material_name`) |
+| 9 | Start Batch | `packing_order.batch_number_from` (this pack row) |
+| 10 | To Batch | `packing_order.batch_number_to` (this pack row) |
+| 11 | Number of Batches | length of this pack row's [From..To] batch range, by numeric suffix (ER3309..ER3335 = 27). Exact because a MTS Process PO's batch numbers are generated consecutively in one creation session, so a PO has no gaps inside a range; a legacy pack row with no range falls back to the Process PO's own `number_of_batches` only when it has exactly one pack row |
+| 12 | Batch Size | `process_order.planned_qty ÷ process_order.number_of_batches`, shown in **Prodshade UOM** |
+| 13 | Prodshade UOM | `stroke_master.conversion_uom_code` when set with a positive `conversion_factor` (IWC liquid, e.g. L), else the Prodshade's `base_uom_code` (KG) |
+| 14 | Total Input (Base UOM) | Batch Size(kg) × Number of Batches of this pack row |
+| 15 | Total Output (Base UOM) | `packing_order.actual_qty_kg` (fallback `num_packs × fill_qty_per_pack`) |
+| 16 | Pack Size | `packing_order.fill_qty_per_pack`, shown in Prodshade UOM (same conversion as Batch Size) |
+| 17 | Number of Bags | `packing_order.num_packs` |
+| 18 | Loss/Gain | Total Output − Total Input (negative = loss) |
+| 19 | Loss/Gain % | Loss/Gain ÷ Total Input × 100 (blank when input is 0) |
+| 20 | Posting Date | earliest `stock_ledger.posting_date` among the Process PO's Verify postings (`process_order_line.stock_ledger_id`) |
+| 21 | Standard By | `process_order.created_by`, shown as `P0004-Name` (`resolveUserDisplayNames`) |
+| 22 | Verify Done By | `process_order.verified_by`, same format |
+
+Base UOM = KG always (every quantity column in the schema is stored in kg). Batch Size / Pack Size are
+the only two columns shown in Prodshade UOM; if a liquid Prodshade has no conversion factor on its Stroke
+they simply stay in KG with the UOM column saying KG (graceful fallback, same spirit as §110's multi-UoM lock).
+
+**UI:** a single "Search across every column..." box above the grid (same as PR24 main grid / Dispatch
+Report: client-side, matches any column) **plus** `ErpDenseGrid` with `virtualize`, `rangeSelect`
+(Excel-style navigation/copy) and `columnFilter` (Excel-style per-column AutoFilter, added 2026-10-03).
+"Export Excel" exports exactly the rows currently shown (search + filters applied) via the shared
+`downloadColoredExcelFile`. Esc / "Back to Filters" returns to PR24's own Page 1.
+
+**Pre-code bug-pattern checklist (re-applied to each concrete technical choice, per the 2026-08-04 rule):**
+- **#1/#12 rank/role bypass:** no role array anywhere; `assertProdReadRole` is the existing no-op "ACL upstream" stub; frontend shows the button unconditionally (PR24 itself is the gate).
+- **#2/#11 company scope:** backend reuses PR24's own `resolveAllowedCompanyIds`/`scopeCompanyIds` (caller's `erp_map.user_companies`, SA/GA unfiltered, a denied company silently yields an empty result — the audited no-leak behavior of §122.5); frontend company options come from `buildTransactionCompanyList(runtimeContext)` only.
+- **#8 route/registry:** route key `GET:/api/production/order-information-system/mts-register` registered next to `.../batch-counts`.
+- **§8E unbounded `.in()`:** every id-list lookup (Packing POs, batch instances, ledger, materials, strokes, shifts, companies, users) goes through `fetchInChunks`; the Process PO fetch is paged with `.range()` so PostgREST's 1000-row default cannot silently truncate a wide date range.
+- **#15 double-unwrap:** the handler returns `okResponse({ data: rows })` with **no** `pagination` key (identical to Batch Counts), so the frontend `select` uses the same `Array.isArray(data) ? data : data?.data ?? []` already proven on that sibling.
+- **#13 payload completeness:** GET with query params only; `company_id`, `date_from`, `date_to` are all sent and all validated.
+
+**Out of scope / deferred:** IWC litre-entry at MTS creation (§108.2 item 3) is not part of this report;
+the report only *displays* in the Prodshade UOM using the Stroke's own conversion. Chart/summary footers are not requested.
+
+---
+
+## Section 144 — MTO / HPS / MTEST Process PO Standard: group-item split rows on Page 3 (✅ DESIGN LOCKED — 2026-10-07)
+
+**পটভূমি:** Business owner প্রশ্ন তোলেন — MTO/HPS/MTEST-এ কোনো RM line-এর stock কম থাকলে Standard Process PO
+create-ই হয় না (`PROD_PO_INSUFFICIENT_STOCK`, §83.5 hard block)। MTS-এ (§138.12/§138.15) group-alternate
+দিয়ে row ভাগ হয়ে যায়। একই সুবিধা MTO/HPS/MTEST-এও চাওয়া হলো — **নতুন Page 4 ছাড়া, বিদ্যমান Page 3 Material
+Table-এই**, Batch Size বসালেই system derive করবে।
+
+**আজকের অবস্থা (code-verified):** Page 3-এ প্রতি stroke line = ঠিক একটা row। user একটা registered alternate/group
+member বাছতে পারে ও location বদলাতে পারে, কিন্তু row ভাগ হয় না। Available < Standard হলে row লাল + Save বন্ধ।
+`createProcessOrderHandler` PO ও line একসাথে লেখে, তারপর `erp_production.reserve_process_order_materials()` RPC
+(`planned_qty`-ভিত্তিক) দিয়ে atomic check+reserve করে।
+
+### 144.1 — Locked rules (business owner, 2026-10-07)
+
+1. **Page 3-ই, নতুন page নেই।** Batch Size দিলেই system Material Table derive করে (প্রতি stroke line-এর প্রথম row:
+   formulation item + stroke-এর default location, qty = ওই (item, location)-এর available balance ও Standard-এর কম যেটা)।
+2. **Shortage হলে row তৈরি হয়, block না।** যে group line-এর item-এ Standard পূরণ হয়নি, ঠিক তার নিচেই একটা নতুন খালি row
+   নিজে থেকে আসে। user ওই row-তে **item** ও **storage location** বাছে → system ওই (item, location)-এর balance বসায় =
+   `min(balance, বাকি Standard)`। তাতেও না কুলালে আবার নতুন row — Standard পূর্ণ না হওয়া পর্যন্ত।
+3. **Item ও location সবসময় user-ই বাছবে** (system কখনো নিজে item বাছে না — MTS থেকে এটাই পার্থক্য)। Qty system বসায়,
+   user টাইপ করে না।
+4. **Auto-row শুধু group (বা registered-alternate) থাকা line-এ।** নতুন row-এর item dropdown-এ **শুধু ওই stroke line-এর
+   নিজের group/alternate member** আসবে, group-এর বাইরের কোনো item নয়। যে line-এ group/alternate নেই, সেখানে একটাই row
+   (item = formulation item, শুধু location বাছা যায়); কম পড়লে আগের মতোই লাল + block।
+5. Group-এর সব member মিলিয়েও Standard না কুললে (শেষ row পূরণ করা যাচ্ছে না) → Create block (§83.5 hard-block অপরিবর্তিত;
+   MTS-এর "under-qty confirm modal" এখানে **নেই**)।
+6. একই stroke line-এ একই (item, location) জোড়া দুইবার নয়। একই item ভিন্ন location-এ আবার বসানো যাবে।
+
+### 144.2 — Data convention (MTS-এর `process_order_line` convention হুবহু reuse)
+
+| Row | `material_id` | `actual_material_id` | `planned_qty` | `actual_qty` | `dosage_pct` | `is_formulation_line` | `stroke_line_id` |
+|---|---|---|---|---|---|---|---|
+| ১ম row | formulation item | বাছা item (formulation হলে NULL) | **পুরো Standard** (dosage × batch) | row-এর নিজের share | stroke-এর dosage | true | stroke line id |
+| পরের row | formulation item | বাছা item | **0** | row-এর share | NULL | false | stroke line id |
+
+- যে line ভাগ হয়নি (একটাই row) সেখানে আজকের মতোই `actual_qty = NULL`, `planned_qty = Standard` — **কোনো পরিবর্তন নেই**।
+- Reco/Verify/Final/reports আগে থেকেই এই convention বোঝে (MTS ও Final-এর "Standard=0 added row" একই): `standard_qty =
+  planned_qty`, `actual ?? planned`, group-এর Σ standard = পুরো Standard।
+- ভাগ হওয়া group-এর প্রতি row-এ `actual_qty` সেট থাকে (Σ = Standard) এবং `approved_status = 'YES'`, `ap_approved_qty =
+  actual_qty` (MTS-এর §138.15 default-এর মতোই) — নাহলে Final-এর `computeApprovalValues` প্রতিটা split row-এ আলাদা Approved
+  সিদ্ধান্ত চাইত (planned ≠ actual)। ভাগ-না-হওয়া line-এ `approved_status`/`ap_approved_qty` NULL (MTO/HPS-এর আজকের আচরণ)।
+
+### 144.3 — Reservation (গুরুত্বপূর্ণ বদল)
+
+`reserve_process_order_materials()` আগে `planned_qty > 0` লাইনে `planned_qty` reserve করত — ভাগ হওয়া row-এ planned 0
+(আর ১ম row-এ পুরো Standard) তাই ভুল হতো। বদল: qty = `COALESCE(actual_qty, planned_qty)`, filter-ও তাই। ভাগ না হওয়া line-এ
+`actual_qty` NULL ⇒ আচরণ বিন্দুমাত্র বদলায় না। Advisory-lock + availability recompute আগের মতোই (MTS Page-4 save-এর জানা
+race gap এখানে নেই — RPC লক রাখে)। Migration: `20261007120000_process_po_reservation_uses_split_qty.sql`।
+
+### 144.4 — API
+
+- **Create body:** নতুন `line_splits: [{ material_id (formulation), rows: [{ actual_material_id?, storage_location_id, qty }] }]`।
+  পুরনো `line_location_overrides` ভাগ-না-হওয়া line-এর জন্য অপরিবর্তিত। Server ভাগ হওয়া line-এ যাচাই করে: line
+  stroke-এর নিজের, member শুধু ওই line-এর allowed alternate/group, `Σqty == Standard` (±ε), প্রতি qty > 0, (item,location)
+  জোড়া unique, এবং ভাগ কেবল সেই line-এ যেখানে allowed alternate আছে। Server কখনো client-এর Standard trust করে না
+  (dosage × batch নিজে হিসাব করে)।
+- **Up-front fast-fail check** এখন ভাগ হওয়া rows-এর qty ধরে চলে; চূড়ান্ত authority আগের মতোই RPC।
+- **Availability preview:** `GET .../process-orders/availability-preview?company_id=&needs=[{material_id,storage_location_id,qty}]`
+  — নতুন `needs` mode, যেকোনো (item, location)-এর available দেয় (`computeAvailabilityRows`: UNRESTRICTED − open reservation
+  + INT in-flight credit)। Frontend-এর derived-qty এই থেকেই।
+
+### 144.5 — Frontend (Page 3 `ProductionPOCreatePage.jsx`)
+
+Row qty **stored নয়, derived**: state-এ শুধু user-এর বাছাই (item, location) থাকে; qty ক্রমানুসারে হিসাব হয় — একই (item,
+location) আগের line/row যতটা নিয়েছে তা বাদ দিয়ে। কাজেই stale qty/effect-race সম্ভব নয়। খালি "pending" row তখনই দেখায়
+যখন group line-এ Standard বাকি ও শেষ row সম্পূর্ণ। ১ম-এর বাইরের row-তে "remove" আছে। Create তখনই enabled যখন প্রতি line
+পূর্ণ, কোনো pending row নেই, availability লোড হয়েছে।
+
+### 144.6 — PR10 (Edit) — এই pass-এ **ভাগ হওয়া PO-তে বন্ধ** (জানা সীমা)
+
+PR10 batch qty বদলালে প্রতি line `dosage × qty` দিয়ে পুনর্গণনা করে ও reservation `planned_qty` দিয়ে লেখে — ভাগ হওয়া
+group-এ এটা share ভেঙে দেবে। তাই ভাগ হওয়া row (`is_formulation_line=false`) থাকলে PR10 backend ও frontend উভয়ই বলে:
+"এই PO-তে split material row আছে — Prune করে নতুন করে create করুন।" (Prune STANDARD-এ আগে থেকেই আছে ও reservation ছাড়ে।)
+ভাগ-না-হওয়া PO-র PR10 সম্পূর্ণ অপরিবর্তিত। **Deferred:** split-aware PR10 (পরের pass, প্রয়োজন হলে)।
+
+### 144.7 — Scope
+
+MTO, HPS, MTEST (stroke থাকলে; stroke ছাড়া MTEST-এর manual line-এ group নেই)। INT-ও একই create path ব্যবহার করে — যে
+INT stroke line-এ group আছে সেও একই আচরণ পাবে (INT Process PO-র lifecycle অপরিবর্তিত)। MTS অপরিবর্তিত (Page 1–6
+atomic create + machine-bucket auto-derive)।
+
+### 144.8 — Pre-code bug-pattern checklist (প্রতিটা concrete choice-এ)
+
+- **#1/#12:** কোনো role array নেই; ACL আগের মতো `PROD_PO_CREATE` / `PROD_MTEST_PO_CREATE` (create), `PROD_ORDER_LIST:VIEW` (preview)।
+- **#2/#11:** `assertCompanyScope` create ও preview দুটোতেই আগে থেকে আছে; নতুন কোনো company source নেই।
+- **#8:** নতুন route নেই (বিদ্যমান preview route-এ query param); registry অপরিবর্তিত।
+- **#13:** frontend যা পাঠায় (`line_splits`) backend তার প্রতিটা field যাচাই করে; `qty` server-side re-validated।
+- **#15:** preview handler আগের মতো `okResponse({ data: rows })` (no `pagination`) ⇒ frontend `select` bare/`.data` দুটোই সামলায়।
+- **§8E:** `needs` mode-এ id-list `computeAvailabilityRows`-এর ভিতরেই; request-এ line সংখ্যা stroke-line সংখ্যায় bounded (<~50)।
+- **§8B:** line insert এক bulk insert; reservation এক RPC।
+
+### 144.9 — Implementation status (2026-10-07) — ✅ code-complete, verified; ⏳ live click-through pending
+
+- **Migration** `20261007120000_process_po_reservation_uses_split_qty.sql` (dev-এ applied + `schema_migrations` row যোগ করা;
+  **prod deploy-এর সাথে travel করবে — prod-এ হাতে apply করার দরকার নেই, deploy-এর আগে/পরে integrity check চালাও**)।
+- **Backend** `process_order.handlers.ts`: `buildLineSplitMap` + `expandStrokeLinesToPlannedRows` (create-এর fast-fail ও
+  line-insert-এর একমাত্র উৎস), `line_splits` body field, availability-preview `needs` mode, PR10 split guard
+  (`PROD_PO_EDIT_SPLIT_NOT_SUPPORTED`)। Stroke-line select-এ `id` যোগ (split key)।
+- **Frontend** `processPoSplitRows.js` (নতুন, pure derivation), `ProductionPOCreatePage.jsx` (Material Table, state =
+  `lineRowChoices` শুধু item+location), `prodApi.js` (`needs` stringify), `ProductionPOEditPage.jsx` (split PO block message)।
+- **Verification:** (১) frontend derive logic — ৯টা দৃশ্য node test (এক item-এ কম, group-এর বাইরের item না আসা, একই pair-এর
+  double-count না হওয়া, group পুরো short, availability loading, payload shape); (২) backend expand logic — ৮টা দৃশ্য deno test
+  (plain lines অপরিবর্তিত, valid split, Σ mismatch, group-বহির্ভূত item, group-ছাড়া line split, duplicate pair, অজানা line,
+  এক-row = override); (৩) dev DB-তে rolled-back transaction-এ আসল `reserve_process_order_materials`: split → 60 + 40 reserve
+  (100/0 নয়), শর্ট হলে `ok=false`, ordinary line 25 অপরিবর্তিত; (৪) `deno check` — নতুন error 0 (আগে/পরে ৬টা, সবই
+  অসম্পর্কিত MTS Verify অংশে), `eslint` — 0 error, warning ৪→৩, সব CI guard পাস।
+- **এখনো বাকি:** deployed app-এ real click-through (এই environment-এ login নেই); split-aware PR10 (§144.6); প্রয়োজনে MTO/HPS-এর
+  QA Queue expanded grid-এ split row-এর "Planned Qty" 0 দেখায় (Standard=0 repeat row convention, MTS-এর মতোই) — চাইলে
+  সেখানে `actual_qty` দেখানো যায়।

@@ -532,7 +532,7 @@ export async function getGELinesForGRNHandler(
     const poIds = [...new Set((poLineResp.data ?? []).map((pl: JsonRecord) => String(pl.po_id ?? "")).filter(Boolean))];
     const poResp = poIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("purchase_order")
-          .select("id, po_number, vendor_id, vendor_type, delivery_type, crcp_enabled, company_id").in("id", poIds)
+          .select("id, po_number, vendor_id, vendor_type, delivery_type, gst_terms, crcp_enabled, company_id").in("id", poIds)
       : { data: [] };
 
     // §3.7 "Bulk GE-Creation Drawer" / §3.2.7 "Ship To Leg" -- an STO-sourced
@@ -702,6 +702,7 @@ export async function getGELinesForGRNHandler(
         po_number: po?.po_number ?? null,
         sto_number: sto?.sto_number ?? null,
         po_rate: poLine?.unit_rate ?? null,
+        po_gst_terms: po?.gst_terms ?? null,
         vendor_id: po?.vendor_id ?? null,
         vendor_type: po?.vendor_type ?? "DOMESTIC",
         // §3.7/§3.2.7 -- drives GRNPostFlow's tab-hiding (Bulk, invoice not
@@ -876,7 +877,8 @@ export async function createAndPostGRNFromLineHandler(
     // For a Bulk receipt whose invoice is not with the vehicle, the commercial
     // fields (including invoice Ship-To) are deliberately deferred to Invoice
     // Mapping. Every invoice-known GRN still requires the CRCP Ship-To now.
-    const isBulkNoInvoice = toUpperTrimmedString(poData?.delivery_type ?? stoData?.delivery_type) === "BULK"
+    const isBulkReceipt = toUpperTrimmedString(poData?.delivery_type ?? stoData?.delivery_type) === "BULK";
+    const isBulkNoInvoice = isBulkReceipt
       && !toTrimmedString(geLine.bulk_invoice_number);
     const shipToResult = await resolveShipToValidation(
       poData, stoData, toTrimmedString(body.ship_to_company_id), isBulkNoInvoice,
@@ -887,6 +889,25 @@ export async function createAndPostGRNFromLineHandler(
         : "Selected Ship To company is not in this document's CRCP allow-list.";
       return procurementErrorResponse(req, ctx, shipToResult.error, 400, message);
     }
+
+    // A Bulk GE is the source of its own transport documents because it has
+    // no CSN. The GRN form receives those values pre-filled, but Stores may
+    // correct them before post. Test property presence (rather than truthiness)
+    // so an intentional clear remains blank instead of reviving the old GE
+    // value.
+    const bodyHas = (key: string) => Object.prototype.hasOwnProperty.call(body, key);
+    const bulkText = (key: string, gateEntryValue: unknown): string | null => (
+      isBulkReceipt && bodyHas(key)
+        ? toTrimmedString(body[key]) || null
+        : toTrimmedString(gateEntryValue) || null
+    );
+    const bulkChallanNumber = bulkText("bulk_challan_number", geLine.bulk_challan_number);
+    const bulkChallanDate = bulkText("bulk_challan_date", geLine.bulk_challan_date);
+    const bulkContainerNumber = bulkText("bulk_container_number", geLine.bulk_container_number);
+    const bulkEwaybillNumber = bulkText("bulk_ewaybill_number", geLine.bulk_ewaybill_number);
+    const grnLrNumber = isBulkReceipt && bodyHas("lr_number")
+      ? toTrimmedString(body.lr_number) || null
+      : toTrimmedString(body.lr_number) || toTrimmedString(geLine.bulk_lr_number) || null;
 
     // Receipt calculations
     const geQty = parsePositiveNumber(geLine.ge_qty) ?? 0;
@@ -1045,18 +1066,17 @@ export async function createAndPostGRNFromLineHandler(
         bl_date: toTrimmedString(body.bl_date) || null,
         boe_number: toTrimmedString(body.boe_number) || null,
         boe_date: toTrimmedString(body.boe_date) || null,
-        // §3.7 "Bulk GE-Creation Drawer" GRN carry-forward -- Bulk-only, no
-        // re-entry. Invoice/LR reuse the existing columns above/below; these
-        // four have no pre-existing GRN equivalent.
-        bulk_challan_number: toTrimmedString(geLine.bulk_challan_number) || null,
-        bulk_challan_date: toTrimmedString(geLine.bulk_challan_date) || null,
-        bulk_container_number: toTrimmedString(geLine.bulk_container_number) || null,
-        bulk_ewaybill_number: toTrimmedString(geLine.bulk_ewaybill_number) || null,
+        // §3.7 Bulk Gate Entry logistics -- persisted GE values pre-fill the
+        // Transporter tab; any Stores correction is persisted on this GRN.
+        bulk_challan_number: bulkChallanNumber,
+        bulk_challan_date: bulkChallanDate,
+        bulk_container_number: bulkContainerNumber,
+        bulk_ewaybill_number: bulkEwaybillNumber,
         rst_number: toTrimmedString(geLine.rst_number) || null,
         // Transporter
         transporter_id: toTrimmedString(body.transporter_id) || null,
         last_mile_transporter_id: toTrimmedString(body.last_mile_transporter_id) || null,
-        lr_number: toTrimmedString(body.lr_number) || toTrimmedString(geLine.bulk_lr_number) || null,
+        lr_number: grnLrNumber,
         lr_date: toTrimmedString(body.lr_date) || null,
         // Material
         invoice_name: toTrimmedString(body.invoice_name) || null,
@@ -2005,6 +2025,12 @@ export async function mapGrnInvoiceHandler(
           invoice_number: invoiceNumber,
           invoice_date: invoiceDate,
           invoice_rate: invoiceRate,
+          // Invoice Mapping is the commercial confirmation point for an
+          // invoice-later Bulk GRN. AC01 payable/landed-cost math reads the
+          // confirmed rate, not merely the recorded invoice rate.
+          confirmed_rate: invoiceRate,
+          confirmed_rate_by: ctx.auth_user_id,
+          confirmed_rate_at: new Date().toISOString(),
           gst_pct: gstPct,
           ship_to_company_id: shipToByGrnId.get(String(grn.id)) ?? null,
           rate_confirmed: true,
@@ -2076,6 +2102,9 @@ export async function unmapGrnInvoiceHandler(
           invoice_number: null,
           invoice_date: null,
           invoice_rate: null,
+          confirmed_rate: null,
+          confirmed_rate_by: null,
+          confirmed_rate_at: null,
           gst_pct: null,
           ship_to_company_id: null,
           rate_confirmed: false,
@@ -2141,6 +2170,7 @@ export async function splitGrnHandler(
       invoiceNumber: toTrimmedString((s as JsonRecord).invoice_number),
       invoiceDate: toTrimmedString((s as JsonRecord).invoice_date),
       invoiceRate: parseNullableNumber((s as JsonRecord).invoice_rate),
+      gstPct: parseNullableNumber((s as JsonRecord).gst_pct),
       quantity: parseNullableNumber((s as JsonRecord).quantity),
     }));
     if (!grnId || rawSlicesParsed.length < 2) {
@@ -2148,13 +2178,13 @@ export async function splitGrnHandler(
     }
     for (let i = 0; i < rawSlicesParsed.length; i += 1) {
       const s = rawSlicesParsed[i];
-      if (!s.invoiceNumber || !s.invoiceDate || s.invoiceRate === null || s.quantity === null || s.quantity <= 0) {
-        return procurementErrorResponse(req, ctx, "GRN_SPLIT_SLICE_INVALID", 400, `Slice ${i + 1} is missing invoice number, date, rate, or a positive quantity.`);
+      if (!s.invoiceNumber || !s.invoiceDate || s.invoiceRate === null || s.gstPct === null || s.quantity === null || s.quantity <= 0) {
+        return procurementErrorResponse(req, ctx, "GRN_SPLIT_SLICE_INVALID", 400, `Slice ${i + 1} is missing invoice number, date, rate, GST %, or a positive quantity.`);
       }
     }
     // Re-typed with non-null quantity/invoiceRate -- every element already
     // passed the validation loop above, so this narrowing is safe.
-    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; quantity: number }[];
+    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; gstPct: number; quantity: number }[];
 
     const { data: grn, error: grnError } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
@@ -2269,6 +2299,7 @@ export async function splitGrnHandler(
         invoice_number: slice.invoiceNumber,
         invoice_date: slice.invoiceDate,
         invoice_rate: slice.invoiceRate,
+        gst_pct: slice.gstPct,
         rate_confirmed: true,
         status: "POSTED",
         // §DEVIATION note in the migration -- gate_entry_line_id must stay
@@ -2284,9 +2315,9 @@ export async function splitGrnHandler(
         reversal_approved_by: null,
         reversal_approved_at: null,
         reversal_reason: null,
-        confirmed_rate: null,
-        confirmed_rate_by: null,
-        confirmed_rate_at: null,
+        confirmed_rate: slice.invoiceRate,
+        confirmed_rate_by: ctx.auth_user_id,
+        confirmed_rate_at: nowIso,
         vendor_payable_override: null,
         transporter_payable_override: null,
         last_mile_payable_override: null,

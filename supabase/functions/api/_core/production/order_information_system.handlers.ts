@@ -20,11 +20,11 @@ type JsonRecord = Record<string, unknown>;
 const MAX_DATE_RANGE_DAYS = 365;
 const MAX_ORDERS_MATCHED = 200;
 
-function oisErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
+export function oisErr(req: Request, ctx: ProdHandlerContext, code: string, status: number, msg: string): Response {
   return errorResponse(code, msg, ctx.request_id, "NONE", status, {}, req);
 }
 
-function parseMultiValueParams(url: URL, pluralKey: string, singularKey?: string): string[] {
+export function parseMultiValueParams(url: URL, pluralKey: string, singularKey?: string): string[] {
   const collected = [
     ...url.searchParams.getAll(pluralKey),
     singularKey ? url.searchParams.get(singularKey) ?? "" : "",
@@ -37,7 +37,7 @@ function parseMultiValueParams(url: URL, pluralKey: string, singularKey?: string
   )];
 }
 
-function parseIsoDate(value: string): Date | null {
+export function parseIsoDate(value: string): Date | null {
   if (!value) return null;
   const d = new Date(`${value}T00:00:00Z`);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -48,7 +48,7 @@ function parseIsoDate(value: string): Date | null {
 // caller's real erp_map.user_companies list. A requested company outside that list is
 // silently dropped, never a 403 here — the caller-facing "no leak" behavior for PO Number
 // lookups depends on this never revealing which companies exist vs which the user can see.
-async function resolveAllowedCompanyIds(ctx: ProdHandlerContext): Promise<string[] | null> {
+export async function resolveAllowedCompanyIds(ctx: ProdHandlerContext): Promise<string[] | null> {
   if (ctx.context.isAdmin === true || ctx.roleCode === "SA" || ctx.roleCode === "GA") {
     return null;
   }
@@ -64,7 +64,7 @@ async function resolveAllowedCompanyIds(ctx: ProdHandlerContext): Promise<string
   return [...new Set(((data ?? []) as JsonRecord[]).map((row) => String(row.company_id ?? "")).filter(Boolean))];
 }
 
-function scopeCompanyIds(allowed: string[] | null, requested: string[]): string[] | null {
+export function scopeCompanyIds(allowed: string[] | null, requested: string[]): string[] | null {
   if (!allowed) return requested.length > 0 ? requested : null; // SA/GA: unfiltered unless caller narrowed it themselves
   if (requested.length === 0) return allowed;
   const scoped = requested.filter((id) => allowed.includes(id));

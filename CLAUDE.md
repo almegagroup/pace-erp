@@ -1174,6 +1174,47 @@ Deep-dive into how HPS/MTO's batch-level costing/dispatch/salvage actually works
 
 **Next:** live-audit PR10 through PR18 one at a time against this now-confirmed-accurate doc spec (same rigor as PR09 — do not trust "Claude-verified" log entries without independent live confirmation), then write a Codex brief to rebuild PR09's frontend (add the Material Table, remove Segment/Notes fields) and fix the two ACL bugs above.
 
+**✅ PR24 "MTS Production Register" button — DESIGN LOCKED + IMPLEMENTED 2026-10-07 (feasibility §143).**
+Business owner wanted one flat register of verified MTS (IWC+Powder) production, one line per pack row,
+visible to everyone. Instead of a new Quality-menu page (new capability/ACL bump on every role + work
+context in every company), it is a **button on PR24** — same pattern as the existing "Batch Counts"
+button — so it reuses PR24's own resource `PROD_ORDER_INFO_SYSTEM`/VIEW (CAP_EVERYONE_REPORTS, verified
+live 2026-10-07: every user with a work context already has it). Zero menu/ACL/migration work; the only
+cost is that it cannot later be restricted separately from PR24. Row grain = FINAL Packing PO of a
+VERIFIED `po_type='MTS'` Process PO (multi-pack-size POs fan out into N lines, batch range/count/input/output
+all per pack row). Files: `mts_production_register.handlers.ts` (route `.../order-information-system/mts-register`),
+`mtsProductionRegisterColumns.jsx`, `MtsRegisterModal.jsx`, wired into `OrderInformationSystemPage.jsx`.
+Not yet done: live click-through in the deployed app (no login in this environment); IWC-litre display path
+(Stroke `conversion_uom_code`) is implemented but unexercised — prod has no IWC litre MTS PO yet.
+
+**✅ IN03/IN14/IN10 live-test fixes — 2026-10-07 (business owner screenshots, prod CMP003).**
+(1) **MTS FG is now decided per MATERIAL, never per ledger row** (`loadMtsFgMaterialIds()` in
+`stock_reports.handlers.ts` = SKUs of any PMTS Packing PO ∪ SKUs on an MTS Opening Stock doc). Root
+cause of IN03 showing MTS FG as batch + Packing-PO rows: an MTS FG receipt is posted by Process PO
+Verify under a **Material Document number** (e.g. `00000550`), not a Packing PO number, so
+`resolveLotRef()` → `packing_order.source_po_type` could never see it. Same helper now drives IN14's
+outer-UoM display (an opening-only MTS SKU with no PMTS Packing PO yet used to fall back to KG).
+(2) User-facing unit for MTS FG is always the pack's **outer UoM** (BAG...), never "NOS"/KG; IN14's
+`pack_code_master` lookup now keeps ALL outer UoMs per pack_code (320 has both JAR and BAG rows).
+(3) IN03 "Machine wise stock" never shows SFG/INT (RM/PM/FG only) — IN02/IN14's machine-wise drawers
+were NOT changed, same filter can be applied there if wanted. (4) IN03 default columns are now
+Material / Document Name / External Code. (5) **Bug pattern #15 recurred twice** — IN10 Location Transfer
+(`LocationTransferRequestWorkspacePage.jsx`) and SO01 (`SOCreatePage.jsx`) both read
+`listMaterialUomConversionsForProcurement()`'s result via `.data`, but that endpoint returns
+`{data:[...]}` with no `total`, so `fetchProcurement` already unwraps it to the bare array — no
+alternate-UoM dropdown ever appeared. Fixed by reading the array directly (same as IN05/PID).
+
+**✅ MTO/HPS/MTEST Process PO Standard — group-item split rows on Page 3 (2026-10-07, feasibility §144).**
+If a stroke line has a registered alternate / material group and the chosen item's balance does not cover its
+Standard Qty, a blank row appears directly under it: the user picks an item **from that line's own group only** and
+a storage location, and the system fills `min(balance, still-uncovered Standard)`; repeats until covered. Qty is
+**derived, never stored in state** (`processPoSplitRows.js`). No new page (MTS's Page 4 is NOT reused). Rows use MTS's
+`process_order_line` convention (first row `planned_qty` = full Standard, others 0, every split row carries `actual_qty`
+= its share, `stroke_line_id` set only on split rows because the FK is ON DELETE RESTRICT).
+`reserve_process_order_materials()` now reserves `COALESCE(actual_qty, planned_qty)` (migration `20261007120000`).
+**PR10 Edit is blocked on a PO that has split rows** (prune + re-create) — split-aware PR10 is deferred.
+Whole group short = still a hard block (§83.5), no MTS-style confirm modal. Live click-through not yet done.
+
 **✅ IN03 (Current Stock) — full MB52-style redesign DESIGN LOCKED 2026-08-04 (feasibility §116),
 IMPLEMENTATION NOT STARTED.** Came up while starting the Inventory ACL group session (§6 Inventory
 group work below) — business owner flagged the live IN03 page as buggy before deciding its ACL.

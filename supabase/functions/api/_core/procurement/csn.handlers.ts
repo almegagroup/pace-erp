@@ -1181,6 +1181,13 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       material_name: material?.material_name ?? null,
       material_code: material?.pace_code ?? null,
       base_uom_code: material?.base_uom_code ?? null,
+      // `consignment_note.po_qty` is the quantity allocated to this CSN at
+      // its creation.  It intentionally remains immutable so the dispatch
+      // audit trail is intact.  The Tracker's "Order Qty" is different: it
+      // must always show the PO line's current ordered quantity after an
+      // approved amendment, while `balance_qty` continues to be computed
+      // from that same live line quantity.
+      order_qty: row.po_line_id ? orderedQty : row.po_qty,
       po_rate: row.sto_id ? (stoLine?.transfer_price ?? null) : (poLine?.unit_rate ?? row.transfer_price ?? null),
       currency_code: row.sto_id ? (toTrimmedString(stoLine?.currency_code) || toTrimmedString(stoLine?.transfer_price_currency) || null) : (toTrimmedString(poLine?.currency_code) || null),
       balance_qty: balanceQty,
