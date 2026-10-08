@@ -252,6 +252,20 @@ date-এর আগে/সমান সবচেয়ে latest row) একট�
 **red highlight**, পাশে Remove বাটন। Resolve (remove) না করা পর্যন্ত **Save বাটন
 inactive**।
 
+**Stale SO-Number validation (LOCKED 2026-10-08):** প্রতি row-এর **SO Number** আগে
+Draft-list-এর বিরুদ্ধে check হবে — user পুরনো download করা template re-use করতে পারে, এর
+মধ্যে সেই SO-গুলো অন্য কেউ ইতিমধ্যে confirm করে ফেলতে পারে।
+- SO Number আর **Draft status-এ নেই** (already confirmed হয়ে গেছে) → row **skip**, add
+  হবে না। **grey/orange highlight**, message: **"SO already confirmed — skipped"**।
+  Duplicate-এর মতো Remove বাটন লাগবে না (resolve করার কিছু নেই, এমনিই submit-এ ধরা হবে
+  না) — শুধু read-only flag, user দেখবে কেন ওই row বাদ গেল।
+- SO Number **ভুল/অস্তিত্বহীন** (typo, কখনো create হয়নি) → একই grey/orange highlight,
+  message: **"SO not found — skipped"**।
+- এই দুই ধরনের skip **hard block না** — বাকি valid row-গুলো normal-ভাবে submit হবে, user
+  চাইলে ঠিক SO Number দিয়ে আলাদাভাবে Add Row করে সেই আইটেম যোগ করতে পারে (batch-এর ভেতরের
+  অন্য কোনো valid SO-তে, §4.4-এর "Add Row" নিয়ম মতোই — নতুন SO batch-এর বাইরে যোগ করা
+  যাবে না)।
+
 **Row actions:** প্রতি row-এ Remove। **Add Row** দিয়ে নতুন line যোগ করা যায় (manual SO01
 item-line-এর সব সুবিধা সহ — §4.9 দেখো), কিন্তু শুধু **এই upload batch-এ already থাকা
 SO-গুলোর মধ্যেই** — batch-এর বাইরের নতুন SO যোগ করা যাবে না।
