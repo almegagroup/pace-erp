@@ -533,6 +533,14 @@ export default function SO01CreatePage() {
       setSoDate(so.so_date || soDate);
       setMaterialTypes(Array.isArray(so.material_types) ? so.material_types : []);
       setDispatchType(so.dispatch_type || "");
+      // Without these, resolvedShipToStateName's DEPENDENT_DIRECT/DEPENDENT_DEPOT
+      // branches (which key off parentCompanyId/depotCodeId, not the raw
+      // dispatch_type) can never resolve a state, so gstTypePreview stays null
+      // and every line's CGST/SGST/IGST silently renders "—" even though the
+      // DB row was already saved with the correct split. Found live 2026-10-08.
+      setParentCompanyId(so.bill_to_parent_company_id || "");
+      setVdcId(so.bill_to_vdc_id || "");
+      setDepotCodeId(so.bill_to_depot_code_id || "");
       setVendorCodeId(so.vendor_code_id || "");
       setIsExcelUpload(Boolean(so.is_excel_upload));
       setIsDdDispatch(Boolean(so.is_dd_dispatch));

@@ -3532,6 +3532,10 @@ export async function submitExcelUploadBatchHandler(req: Request, ctx: Procureme
         fg_type: fgType,
         pack_qty: row.pack_qty,
         per_pack_qty: resolvedMaterial.per_pack_qty,
+        // Same gap as uom_code just above (and same fix): resolvedMaterial
+        // already carries this (used by the review preview), it just never
+        // made it into the actual insert payload. Found live 2026-10-08.
+        pack_uom_code: toTrimmedString(resolvedMaterial.pack_uom_code) || null,
         rate: row.rate,
         rate_basis: row.rate_basis,
         gst_treatment: row.gst_treatment,
