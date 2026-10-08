@@ -69,11 +69,22 @@ export async function materialMap(materialIds: string[]): Promise<Map<string, Ro
 // case; a Fixed-BOM code like 450 is the one that genuinely has PM lines).
 export async function packCodeRow(packCode: string): Promise<Row | null> {
   if (!packCode) return null;
+  // `pack_code` has no unique constraint and live prod data already has two
+  // real collisions -- "207" (one inactive legacy row + one active) and
+  // "320" (two ACTIVE rows, "20 BAG" vs "320 Jar": same ambiguity already
+  // flagged for IN14, §"320 has both JAR and BAG rows"). .maybeSingle()
+  // throws the instant more than one row matches, which killed every
+  // Promise.all batch that touches a "207"/"320" SKU (AC05's rate list
+  // included -- the whole list 500'd, not just that one row). Found live
+  // 2026-10-08. Prefer an active row, then the most recently created one,
+  // instead of crashing -- this doesn't resolve which pack_type is the
+  // "right" one for pack_code 320 (that's a data/business question, same
+  // one IN14 already surfaced), it only guarantees the lookup never throws.
   const { data, error } = await serviceRoleClient.schema("erp_production").from("pack_code_master")
     .select("pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code")
-    .eq("pack_code", packCode).maybeSingle();
+    .eq("pack_code", packCode).order("active", { ascending: false }).order("created_at", { ascending: false }).limit(1);
   if (error) throw new Error("AC07_PACK_CODE_LOOKUP_FAILED");
-  return (data as Row) ?? null;
+  return (data?.[0] as Row) ?? null;
 }
 
 // Exported for AC05 MTS SKU Costing. SKU-to-Prodshade identity is always
