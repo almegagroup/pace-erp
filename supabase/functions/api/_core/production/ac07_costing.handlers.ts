@@ -76,15 +76,37 @@ export async function packCodeRow(packCode: string): Promise<Row | null> {
   // throws the instant more than one row matches, which killed every
   // Promise.all batch that touches a "207"/"320" SKU (AC05's rate list
   // included -- the whole list 500'd, not just that one row). Found live
-  // 2026-10-08. Prefer an active row, then the most recently created one,
-  // instead of crashing -- this doesn't resolve which pack_type is the
-  // "right" one for pack_code 320 (that's a data/business question, same
-  // one IN14 already surfaced), it only guarantees the lookup never throws.
+  // 2026-10-08.
   const { data, error } = await serviceRoleClient.schema("erp_production").from("pack_code_master")
-    .select("pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code")
-    .eq("pack_code", packCode).order("active", { ascending: false }).order("created_at", { ascending: false }).limit(1);
+    .select("id, pack_code, pack_name, pack_type, billing_uom, bom_required, outer_uom_code, active, created_at")
+    .eq("pack_code", packCode);
   if (error) throw new Error("AC07_PACK_CODE_LOOKUP_FAILED");
-  return (data?.[0] as Row) ?? null;
+  const rows = (data ?? []) as Row[];
+  if (rows.length <= 1) return (rows[0] as Row) ?? null;
+  // Business-owner-confirmed, data-verified 2026-10-08: a bare "most recent"
+  // or "most recently created" guess is WRONG here -- for pack_code "320",
+  // prodshade_pack_config links every real SKU (10 rows) to the OLDER "20
+  // BAG" row; the newer "320 Jar" row has zero references, it's an unused
+  // orphan duplicate, not the intended one. The real ground truth for which
+  // duplicate a pack_code actually means is whichever row Prodshade Pack
+  // Config was built against, not row age. Resolve the tie that way; fall
+  // back to active-then-oldest only if NEITHER duplicate is actually wired
+  // to any Prodshade (so there's no real signal to prefer one over another).
+  const ids = rows.map((row) => toTrimmedString(row.id));
+  const { data: links, error: linkError } = await serviceRoleClient.schema("erp_production")
+    .from("prodshade_pack_config").select("pack_code_id").in("pack_code_id", ids).eq("active", true);
+  if (linkError) throw new Error("AC07_PACK_CODE_LOOKUP_FAILED");
+  const referencedIds = new Set(((links ?? []) as Row[]).map((row) => toTrimmedString(row.pack_code_id)));
+  const ranked = [...rows].sort((a, b) => {
+    const aReferenced = referencedIds.has(toTrimmedString(a.id)) ? 0 : 1;
+    const bReferenced = referencedIds.has(toTrimmedString(b.id)) ? 0 : 1;
+    if (aReferenced !== bReferenced) return aReferenced - bReferenced;
+    const aActive = a.active ? 0 : 1;
+    const bActive = b.active ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    return String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
+  });
+  return (ranked[0] as Row) ?? null;
 }
 
 // Exported for AC05 MTS SKU Costing. SKU-to-Prodshade identity is always
