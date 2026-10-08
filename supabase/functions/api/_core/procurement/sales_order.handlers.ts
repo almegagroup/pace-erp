@@ -2805,6 +2805,49 @@ export async function listSalesOrderFgSkuOptionsHandler(
   }
 }
 
+// §4.4 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — Excel Upload's SKU column is
+// plain text (no dropdown), so a batch-upload row's SKU text must resolve to
+// a real material_id the same way the normal manual-entry dropdown does
+// (prodshade/stroke eligibility, pack-code/UOM derivation, vendor-code
+// eligibility) — not a separate, lighter lookup that could silently disagree
+// with what the dropdown would have shown. Reused by calling
+// listSalesOrderFgSkuOptionsHandler in-process as a black box (same request
+// shape it already validates/serves over HTTP) rather than duplicating its
+// ~160-line eligibility pipeline — zero risk to that already-shipped path.
+// Substring search narrows candidates; exact (case-insensitive) equality on
+// pace_code/external_code/material_name/document_name picks the real match.
+// 0 or 2+ candidates = unresolved (caller falls back to manual_sku_name).
+async function resolveFgSkuExactMatch(
+  ctx: ProcurementHandlerContext,
+  companyId: string,
+  fgType: string,
+  skuText: string,
+  vendorCodeId: string,
+): Promise<JsonRecord | null> {
+  const trimmedSku = toTrimmedString(skuText);
+  if (!trimmedSku || !FG_TYPES.has(fgType) || trimmedSku.length < SO_FG_SKU_MIN_SEARCH_LENGTH || trimmedSku.length > 100) {
+    return null;
+  }
+  const target = trimmedSku.toUpperCase();
+  const fetchPhase = async (cursor: string): Promise<JsonRecord[]> => {
+    const qs = new URLSearchParams({ company_id: companyId, fg_type: fgType, q: trimmedSku, cursor });
+    if (vendorCodeId) qs.set("vendor_code_id", vendorCodeId);
+    const fakeReq = new Request(`http://internal/api/procurement/sales-orders/fg-sku-options?${qs.toString()}`);
+    const resp = await listSalesOrderFgSkuOptionsHandler(fakeReq, ctx);
+    if (!resp.ok) return [];
+    const body = await resp.json().catch(() => null) as { data?: { data?: JsonRecord[] } } | null;
+    return body?.data?.data ?? [];
+  };
+  const exactMatchesIn = (rows: JsonRecord[]): JsonRecord[] => rows.filter((row) =>
+    [row.pace_code, row.external_code, row.material_name, row.document_name]
+      .some((field) => toUpperTrimmedString(field) === target));
+
+  const ownMatches = exactMatchesIn(await fetchPhase("own:0"));
+  if (ownMatches.length > 0) return ownMatches.length === 1 ? ownMatches[0] : null;
+  const otherMatches = exactMatchesIn(await fetchPhase("other:0"));
+  return otherMatches.length === 1 ? otherMatches[0] : null;
+}
+
 // §141 (2026-09-24) — SFG's own dedicated, company-scoped, vendor-code-aware
 // material list. Deliberately NOT a reuse of the shared `useMaterialOptionsQuery`
 // generic materials list that SO01's RM/PM/INT/SFG sections currently share
@@ -2945,6 +2988,14 @@ export async function createSalesOrderUnifiedHandler(
       ? Array.from(new Set((body.material_types as unknown[]).map((v) => toUpperTrimmedString(v))))
       : [];
     const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    // §4.1 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — Excel Upload checkbox: this
+    // SO is created with zero lines, straight to DRAFT, to be bulk-filled
+    // later via the Draft SO List's Excel upload flow. DD Dispatch is an
+    // independent pure flag (deferred Invoice-then-PGI, consumed by the
+    // future DO/PGI design) — stored unconditionally, no applicability check
+    // here (that belongs to the DO/PGI mechanism, not SO01's scope).
+    const isExcelUpload = Boolean(body.is_excel_upload);
+    const isDdDispatch = Boolean(body.is_dd_dispatch);
 
     if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
     if (!customerPoNumber) return salesErrorResponse(req, ctx, "SO_CUSTOMER_PO_REQUIRED", 400, "External SO Number is required.");
@@ -2955,7 +3006,9 @@ export async function createSalesOrderUnifiedHandler(
     if (materialTypes.length === 0 || materialTypes.some((t) => !LINE_MATERIAL_TYPES.has(t))) {
       return salesErrorResponse(req, ctx, "SO_MATERIAL_TYPES_INVALID", 400, "At least one valid Material Type must be selected.");
     }
-    if (lines.length === 0) return salesErrorResponse(req, ctx, "SO_LINES_REQUIRED", 400, "At least one item line is required.");
+    if (!isExcelUpload && lines.length === 0) {
+      return salesErrorResponse(req, ctx, "SO_LINES_REQUIRED", 400, "At least one item line is required.");
+    }
 
     try {
       await assertCompanyScope(ctx, companyId);
@@ -3059,6 +3112,10 @@ export async function createSalesOrderUnifiedHandler(
         vendor_code_id: vendorCodeId,
         freight_term: freightTerm,
         round_off_amount: roundOffAmount,
+        status: isExcelUpload ? "DRAFT" : "CREATED",
+        is_excel_upload: isExcelUpload,
+        is_dd_dispatch: isDdDispatch,
+        excel_uploaded: false,
         payment_term_id: toTrimmedString(body.payment_term_id) || null,
         bill_to_type: resolved.billToType,
         bill_to_parent_company_id: resolved.billToParentCompanyId,
@@ -3093,10 +3150,13 @@ export async function createSalesOrderUnifiedHandler(
     }
 
     const lineInsertPayload = linePayload.map((line) => ({ ...line, so_id: so.id }));
-    const { error: lineError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("sales_order_line")
-      .insert(lineInsertPayload);
+    // Excel Upload creates the SO with zero lines by design — nothing to insert yet.
+    const { error: lineError } = lineInsertPayload.length === 0
+      ? { error: null }
+      : await serviceRoleClient
+        .schema("erp_procurement")
+        .from("sales_order_line")
+        .insert(lineInsertPayload);
 
     if (lineError) {
       console.error("[createSalesOrderUnifiedHandler] sales order line insert failed", {
@@ -3115,6 +3175,401 @@ export async function createSalesOrderUnifiedHandler(
       : code.startsWith("SO_") ? 400
       : 500;
     return salesErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §4.2 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Draft SO and Excel Upload" list:
+// every is_excel_upload=true SO still in DRAFT. Reuses PROC_SO_LIST/VIEW (no
+// new ACL resource) — same company-scope + display-enrichment conventions as
+// listSOsHandler above, trimmed to just this list's own columns.
+export async function listDraftExcelUploadSalesOrdersHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+
+    let query = serviceRoleClient
+      .schema("erp_procurement")
+      .from("sales_order")
+      .select("*")
+      .eq("is_excel_upload", true)
+      .eq("status", "DRAFT")
+      .order("created_at", { ascending: false });
+    if (companyId) query = query.eq("company_id", companyId);
+
+    const { data, error } = await query;
+    if (error) return salesErrorResponse(req, ctx, "SO_DRAFT_LIST_FAILED", 500, "Unable to list draft sales orders.");
+
+    const rows = (data ?? []) as JsonRecord[];
+    const soIds = rows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+    const vendorCodeIds = [...new Set(rows.map((row) => toTrimmedString(row.vendor_code_id)).filter(Boolean))];
+    const parentCompanyIds = [...new Set(rows.map((row) => toTrimmedString(row.bill_to_parent_company_id)).filter(Boolean))];
+    const depotCodeIds = [...new Set(rows.flatMap((row) => [
+      toTrimmedString(row.bill_to_vdc_id),
+      toTrimmedString(row.bill_to_depot_code_id),
+    ]).filter(Boolean))];
+
+    const [lineAggResp, vendorResp, parentResp, depotResp] = await Promise.all([
+      soIds.length
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order_line")
+          .select("so_id, pack_qty").in("so_id", soIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      vendorCodeIds.length
+        ? serviceRoleClient.schema("erp_production").from("vendor_code_master")
+          .select("id, vendor_code, description").in("id", vendorCodeIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      parentCompanyIds.length
+        ? serviceRoleClient.schema("erp_master").from("fg_parent_company").select("id, company_name").in("id", parentCompanyIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      depotCodeIds.length
+        ? serviceRoleClient.schema("erp_master").from("fg_depot_code").select("id, code, description, dispatch_type").in("id", depotCodeIds)
+        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    ]);
+    if (lineAggResp.error) return salesErrorResponse(req, ctx, "SO_DRAFT_LIST_LINE_LOOKUP_FAILED", 500, "Unable to load draft SO item counts.");
+    if (vendorResp.error || parentResp.error || depotResp.error) {
+      return salesErrorResponse(req, ctx, "SO_DRAFT_LIST_DISPLAY_LOOKUP_FAILED", 500, "Unable to load draft SO register details.");
+    }
+
+    const itemCountBySoId = new Map<string, number>();
+    const packQtyBySoId = new Map<string, number>();
+    for (const line of (lineAggResp.data ?? []) as JsonRecord[]) {
+      const soId = toTrimmedString(line.so_id);
+      if (!soId) continue;
+      itemCountBySoId.set(soId, (itemCountBySoId.get(soId) ?? 0) + 1);
+      packQtyBySoId.set(soId, (packQtyBySoId.get(soId) ?? 0) + (parseNullableNumber(line.pack_qty) ?? 0));
+    }
+    const vendorMap = new Map(((vendorResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const parentMap = new Map(((parentResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const depotMap = new Map(((depotResp.data ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+
+    const items = rows.map((row) => {
+      const vendor = vendorMap.get(toTrimmedString(row.vendor_code_id));
+      const parent = parentMap.get(toTrimmedString(row.bill_to_parent_company_id));
+      const depot = depotMap.get(toTrimmedString(row.bill_to_vdc_id)) ?? depotMap.get(toTrimmedString(row.bill_to_depot_code_id));
+      const soId = toTrimmedString(row.id);
+      return {
+        ...row,
+        vendor_code_display: vendor ? `${toTrimmedString(vendor.vendor_code)}${vendor.description ? ` — ${toTrimmedString(vendor.description)}` : ""}` : null,
+        parent_company_display: toTrimmedString(parent?.company_name) || toTrimmedString(row.bill_to_name) || null,
+        depot_code_display: depot ? [toTrimmedString(depot.code), toTrimmedString(depot.description)].filter(Boolean).join(" - ") : null,
+        total_items: itemCountBySoId.get(soId) ?? 0,
+        total_packs: Number((packQtyBySoId.get(soId) ?? 0).toFixed(4)),
+      };
+    });
+
+    return okResponse({ items, total: items.length }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_DRAFT_LIST_FAILED";
+    return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
+  }
+}
+
+type ExcelUploadRowInput = {
+  row_key: string;
+  so_number: string;
+  external_so_number: string;
+  fg_type: string;
+  sku: string;
+  hsn_code: string;
+  pack_qty: unknown;
+  rate: unknown;
+  rate_basis: string;
+  gst_treatment: string;
+  gst_rate: unknown;
+};
+
+// §4.4 — resolves a raw uploaded row against its target SO (stale-SO-number
+// check) and, when the SO is still valid, against the FG SKU master (via
+// resolveFgSkuExactMatch), then computes the exact same taxable/GST preview
+// prepareUnifiedSoLine() uses so this drawer's numbers never disagree with
+// what Submit will actually save. Pure computation — no DB reads of its own
+// beyond what the caller already loaded; never writes anything.
+function buildExcelUploadRowPreview(
+  row: ExcelUploadRowInput,
+  so: JsonRecord | undefined,
+  skipReason: string | null,
+  resolvedMaterial: JsonRecord | null,
+  ac05Rate: number | null,
+  companyStateName: string | null,
+): JsonRecord {
+  const fgType = toUpperTrimmedString(row.fg_type);
+  const rate = parseNullableNumber(row.rate) ?? 0;
+  const packQty = parseNullableNumber(row.pack_qty) ?? 0;
+  const gstTreatment = toUpperTrimmedString(row.gst_treatment) || "EXCLUSIVE";
+  const gstRate = parseNullableNumber(row.gst_rate) ?? 0;
+  const rateBasis = toUpperTrimmedString(row.rate_basis) || "BASE_UOM";
+
+  const perPackQty = resolvedMaterial ? parseNullableNumber(resolvedMaterial.per_pack_qty) : null;
+  const baseQty = perPackQty ? Number((packQty * perPackQty).toFixed(6)) : 0;
+  const hsnCode = resolvedMaterial ? (toTrimmedString(resolvedMaterial.hsn_code) || toTrimmedString(row.hsn_code) || null)
+    : (toTrimmedString(row.hsn_code) || null);
+  const documentName = resolvedMaterial
+    ? (toTrimmedString(resolvedMaterial.document_name) || toTrimmedString(resolvedMaterial.material_name) || null)
+    : (toTrimmedString(row.sku) || null);
+
+  const soShipOrBillState = so ? (toTrimmedString(so.ship_to_state) || toTrimmedString(so.bill_to_state) || null) : null;
+  const gstType = skipReason ? null : deriveSalesInvoiceGstType(companyStateName, soShipOrBillState);
+  const qtyForAmount = rateBasis === "PACK_UOM" ? packQty : baseQty;
+  const grossOrNetValue = resolvedMaterial ? Number((rate * qtyForAmount).toFixed(4)) : 0;
+  const taxableValue = gstTreatment === "INCLUSIVE" ? Number((grossOrNetValue / (1 + gstRate / 100)).toFixed(4)) : grossOrNetValue;
+  const gstAmount = Number((taxableValue * gstRate / 100).toFixed(4));
+  const cgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
+  const sgstAmount = gstType === "CGST_SGST" ? Number((gstAmount / 2).toFixed(4)) : 0;
+  const igstAmount = gstType === "IGST" ? gstAmount : 0;
+
+  return {
+    row_key: row.row_key,
+    so_id: so ? toTrimmedString(so.id) : null,
+    so_number: toTrimmedString(row.so_number),
+    external_so_number: toTrimmedString(row.external_so_number),
+    fg_type: fgType,
+    sku: toTrimmedString(row.sku),
+    material_id: resolvedMaterial ? toTrimmedString(resolvedMaterial.id) : null,
+    manual_sku_name: resolvedMaterial ? null : (toTrimmedString(row.sku) || null),
+    document_name: documentName,
+    pack_uom_code: resolvedMaterial ? (toTrimmedString(resolvedMaterial.pack_uom_code) || null) : null,
+    base_uom_code: resolvedMaterial ? (toTrimmedString(resolvedMaterial.base_uom_code) || null) : null,
+    pack_qty: packQty,
+    per_pack_qty: perPackQty,
+    base_qty: baseQty,
+    hsn_code: hsnCode,
+    rate,
+    rate_basis: rateBasis,
+    gst_treatment: gstTreatment,
+    gst_rate: gstRate,
+    ac05_rate: ac05Rate,
+    ac05_rate_match: ac05Rate == null ? null : Math.abs(ac05Rate - rate) < 0.0001,
+    taxable_value: taxableValue,
+    gst_amount: gstAmount,
+    cgst_amount: cgstAmount,
+    sgst_amount: sgstAmount,
+    igst_amount: igstAmount,
+    total_value: Number((taxableValue + gstAmount).toFixed(4)),
+    skip_reason: skipReason,
+    is_duplicate: false,
+  };
+}
+
+async function resolveAc05RateForMaterial(
+  companyId: string,
+  vendorCodeId: string | null,
+  materialId: string,
+  soDate: string,
+): Promise<number | null> {
+  if (!vendorCodeId) return null;
+  const { data: map, error: mapError } = await serviceRoleClient
+    .schema("erp_production").from("company_vendor_code_map")
+    .select("id").eq("company_id", companyId).eq("vendor_code_id", vendorCodeId).eq("active", true).maybeSingle();
+  if (mapError || !map?.id) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production").from("ac05_mts_sku_rate")
+    .select("rate_per_outer_uom, effective_date")
+    .eq("company_id", companyId).eq("company_vendor_code_map_id", toTrimmedString(map.id)).eq("sku_material_id", materialId)
+    .lte("effective_date", soDate).order("effective_date", { ascending: false }).limit(1).maybeSingle();
+  if (error || !data) return null;
+  return parseNullableNumber(data.rate_per_outer_uom);
+}
+
+// §4.4 — stateless preview/validate, no writes. Resolves each row's SO
+// (stale-SO-number check per the locked rule), SKU (exact-match resolver),
+// AC05 rate cross-check, and the same GST/amount math Submit will use, then
+// flags duplicates (Vendor Code + SKU + Qty + Rate) across the whole batch.
+export async function reviewExcelUploadBatchHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+    const rows = Array.isArray(body.rows) ? (body.rows as ExcelUploadRowInput[]) : [];
+    if (rows.length === 0) return salesErrorResponse(req, ctx, "SO_EXCEL_ROWS_REQUIRED", 400, "At least one row is required.");
+
+    const { data: company, error: companyError } = await serviceRoleClient
+      .schema("erp_master").from("companies").select("state_name").eq("id", companyId).maybeSingle();
+    if (companyError || !company) return salesErrorResponse(req, ctx, "SO_COMPANY_LOOKUP_FAILED", 500, "Unable to load company for GST derivation.");
+    const companyStateName = toTrimmedString((company as JsonRecord).state_name) || null;
+
+    const soNumbers = [...new Set(rows.map((row) => toTrimmedString(row.so_number)).filter(Boolean))];
+    const { data: soRows, error: soError } = soNumbers.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order")
+        .select("id, so_number, so_date, status, is_excel_upload, company_id, vendor_code_id, ship_to_state, bill_to_state")
+        .eq("company_id", companyId).in("so_number", soNumbers)
+      : { data: [], error: null };
+    if (soError) return salesErrorResponse(req, ctx, "SO_EXCEL_SO_LOOKUP_FAILED", 500, "Unable to look up SO numbers.");
+    const soByNumber = new Map(((soRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.so_number), row]));
+
+    const previews: JsonRecord[] = [];
+    for (const row of rows) {
+      const so = soByNumber.get(toTrimmedString(row.so_number));
+      let skipReason: string | null = null;
+      if (!so) {
+        skipReason = "SO not found — skipped";
+      } else if (toUpperTrimmedString(so.status) !== "DRAFT" || !so.is_excel_upload) {
+        skipReason = "SO already confirmed — skipped";
+      }
+
+      let resolvedMaterial: JsonRecord | null = null;
+      let ac05Rate: number | null = null;
+      if (!skipReason && so) {
+        resolvedMaterial = await resolveFgSkuExactMatch(
+          ctx, companyId, toUpperTrimmedString(row.fg_type), toTrimmedString(row.sku), toTrimmedString(so.vendor_code_id),
+        );
+        if (resolvedMaterial) {
+          ac05Rate = await resolveAc05RateForMaterial(
+            companyId, toTrimmedString(so.vendor_code_id) || null, toTrimmedString(resolvedMaterial.id), toTrimmedString(so.so_date),
+          );
+        }
+      }
+
+      previews.push(buildExcelUploadRowPreview(row, so, skipReason, resolvedMaterial, ac05Rate, companyStateName));
+    }
+
+    // Duplicate detection: Vendor Code (from the row's own resolved SO) + SKU + Qty + Rate.
+    const dupCounts = new Map<string, number>();
+    for (const preview of previews) {
+      if (preview.skip_reason) continue;
+      const so = soByNumber.get(toTrimmedString(preview.so_number));
+      const key = [toTrimmedString(so?.vendor_code_id), toTrimmedString(preview.sku).toUpperCase(),
+        preview.pack_qty, preview.rate].join("|");
+      dupCounts.set(key, (dupCounts.get(key) ?? 0) + 1);
+    }
+    for (const preview of previews) {
+      if (preview.skip_reason) continue;
+      const so = soByNumber.get(toTrimmedString(preview.so_number));
+      const key = [toTrimmedString(so?.vendor_code_id), toTrimmedString(preview.sku).toUpperCase(),
+        preview.pack_qty, preview.rate].join("|");
+      preview.is_duplicate = (dupCounts.get(key) ?? 0) > 1;
+    }
+
+    return okResponse({ rows: previews }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_EXCEL_REVIEW_FAILED";
+    return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
+  }
+}
+
+// §4.4 — Submit. Re-resolves everything server-side (never trusts the
+// client's review snapshot as-is — SO status, SKU match, and AC05 rate can
+// all have changed between Review and Submit), groups surviving rows by
+// their SO, and inserts them the same way updateSalesOrderUnifiedHandler's
+// own "new lines" branch does (prepareUnifiedSoLine + continuing
+// line_number) — so a submitted Excel line is indistinguishable from one
+// added by hand. A row that fails prepareUnifiedSoLine's own validation
+// (e.g. MTO/HPS needing a Costing Rate Month the template never collects)
+// is skipped with its reason rather than failing the whole SO — §4.4's
+// "skip, don't block the rest" principle extended to this edge case.
+export async function submitExcelUploadBatchHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (!companyId) return salesErrorResponse(req, ctx, "SO_CREATE_INVALID", 400, "company_id is required.");
+    const rows = Array.isArray(body.rows) ? (body.rows as ExcelUploadRowInput[]) : [];
+    if (rows.length === 0) return salesErrorResponse(req, ctx, "SO_EXCEL_ROWS_REQUIRED", 400, "At least one row is required.");
+
+    if (!(await canMaintainSo01Create(ctx, companyId, "WRITE"))) {
+      return salesErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Create-SO access at this company.");
+    }
+
+    const soNumbers = [...new Set(rows.map((row) => toTrimmedString(row.so_number)).filter(Boolean))];
+    const { data: soRows, error: soError } = soNumbers.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order")
+        .select("id, so_number, so_date, status, is_excel_upload, company_id, material_types, vendor_code_id, ship_to_state, bill_to_state")
+        .eq("company_id", companyId).in("so_number", soNumbers)
+      : { data: [], error: null };
+    if (soError) return salesErrorResponse(req, ctx, "SO_EXCEL_SO_LOOKUP_FAILED", 500, "Unable to look up SO numbers.");
+    const soByNumber = new Map(((soRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.so_number), row]));
+    const soIds = [...new Set(((soRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean))];
+
+    const { data: existingLines, error: existingLinesError } = soIds.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_line")
+        .select("so_id, line_number").in("so_id", soIds)
+      : { data: [], error: null };
+    if (existingLinesError) return salesErrorResponse(req, ctx, "SO_EXCEL_LINE_LOOKUP_FAILED", 500, "Unable to load existing SO lines.");
+    const maxLineNumberBySoId = new Map<string, number>();
+    for (const line of (existingLines ?? []) as JsonRecord[]) {
+      const soId = toTrimmedString(line.so_id);
+      maxLineNumberBySoId.set(soId, Math.max(maxLineNumberBySoId.get(soId) ?? 0, Number(line.line_number ?? 0)));
+    }
+
+    const { data: company, error: companyError } = await serviceRoleClient
+      .schema("erp_master").from("companies").select("state_name").eq("id", companyId).maybeSingle();
+    if (companyError || !company) return salesErrorResponse(req, ctx, "SO_COMPANY_LOOKUP_FAILED", 500, "Unable to load company for GST derivation.");
+    const companyStateName = toTrimmedString((company as JsonRecord).state_name) || null;
+
+    const rowResults: JsonRecord[] = [];
+    const hsnWriteBacks: Array<{ materialId: string; hsnCode: string }> = [];
+    const insertPayloadBySoId = new Map<string, JsonRecord[]>();
+    const touchedSoIds = new Set<string>();
+
+    for (const row of rows) {
+      const so = soByNumber.get(toTrimmedString(row.so_number));
+      if (!so) {
+        rowResults.push({ row_key: row.row_key, skipped: true, reason: "SO not found — skipped" });
+        continue;
+      }
+      if (toUpperTrimmedString(so.status) !== "DRAFT" || !so.is_excel_upload) {
+        rowResults.push({ row_key: row.row_key, skipped: true, reason: "SO already confirmed — skipped" });
+        continue;
+      }
+      const soId = toTrimmedString(so.id);
+      const fgType = toUpperTrimmedString(row.fg_type);
+      const resolvedMaterial = await resolveFgSkuExactMatch(
+        ctx, companyId, fgType, toTrimmedString(row.sku), toTrimmedString(so.vendor_code_id),
+      );
+      if (!resolvedMaterial) {
+        rowResults.push({ row_key: row.row_key, so_id: soId, skipped: true, reason: "SKU not resolved — add manually in Enter SO" });
+        continue;
+      }
+
+      const materialTypes = Array.isArray(so.material_types) ? (so.material_types as string[]) : ["FG"];
+      const resolvedShipToOrBillState = toTrimmedString(so.ship_to_state) || toTrimmedString(so.bill_to_state) || null;
+      const lineInput: JsonRecord = {
+        line_material_type: "FG",
+        material_id: toTrimmedString(resolvedMaterial.id),
+        fg_type: fgType,
+        pack_qty: row.pack_qty,
+        per_pack_qty: resolvedMaterial.per_pack_qty,
+        rate: row.rate,
+        rate_basis: row.rate_basis,
+        gst_treatment: row.gst_treatment,
+        gst_rate: row.gst_rate,
+        hsn_code: toTrimmedString(row.hsn_code) || toTrimmedString(resolvedMaterial.hsn_code) || null,
+      };
+      const nextLineNumber = (maxLineNumberBySoId.get(soId) ?? 0) + 1;
+      try {
+        const prepared = await prepareUnifiedSoLine(lineInput, nextLineNumber - 1, materialTypes, companyStateName, resolvedShipToOrBillState);
+        insertPayloadBySoId.set(soId, [...(insertPayloadBySoId.get(soId) ?? []), { ...prepared.payload, so_id: soId }]);
+        if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
+        maxLineNumberBySoId.set(soId, nextLineNumber);
+        touchedSoIds.add(soId);
+        rowResults.push({ row_key: row.row_key, so_id: soId, skipped: false });
+      } catch (lineError) {
+        const code = lineError instanceof Error ? lineError.message : "SO_LINE_INVALID";
+        rowResults.push({ row_key: row.row_key, so_id: soId, skipped: true, reason: `${code} — add manually in Enter SO` });
+      }
+    }
+
+    for (const [soId, payload] of insertPayloadBySoId) {
+      if (payload.length === 0) continue;
+      const { error: lineInsertError } = await serviceRoleClient
+        .schema("erp_procurement").from("sales_order_line").insert(payload);
+      if (lineInsertError) return salesErrorResponse(req, ctx, "SO_EXCEL_LINE_INSERT_FAILED", 500, "Unable to save sales order lines.");
+    }
+    await persistMissingMaterialHsns(hsnWriteBacks);
+
+    if (touchedSoIds.size > 0) {
+      const { error: flagError } = await serviceRoleClient
+        .schema("erp_procurement").from("sales_order").update({ excel_uploaded: true }).in("id", [...touchedSoIds]);
+      if (flagError) return salesErrorResponse(req, ctx, "SO_EXCEL_FLAG_UPDATE_FAILED", 500, "Lines saved, but unable to mark Excel Uploaded.");
+    }
+
+    return okResponse({ rows: rowResults, updated_so_ids: [...touchedSoIds] }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_EXCEL_SUBMIT_FAILED";
+    return salesErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
   }
 }
 
@@ -3440,6 +3895,22 @@ export async function updateSalesOrderUnifiedHandler(req: Request, ctx: Procurem
       headerUpdate.round_off_amount = roundOffAmount;
     }
     if (body.remarks !== undefined) headerUpdate.remarks = toTrimmedString(body.remarks) || null;
+
+    // §4.5 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Enter SO" confirm step.
+    // Reuses this same PUT (no new route/ACL) — the normal header/line edits
+    // above (e.g. Round Off, an AC05-mismatch rate resolve) apply first in
+    // this same request, then this flips a still-DRAFT SO to CREATED. Blocked
+    // if the SO would end up with zero lines.
+    if (body.confirm_draft === true) {
+      if (toUpperTrimmedString(so.status) !== "DRAFT") {
+        return salesErrorResponse(req, ctx, "SO_CONFIRM_DRAFT_NOT_DRAFT", 409, "This SO is not a Draft — nothing to confirm.");
+      }
+      const finalLineCount = lines.length - removableLineIds.length + newLines.length;
+      if (finalLineCount <= 0) {
+        return salesErrorResponse(req, ctx, "SO_CONFIRM_DRAFT_NO_LINES", 400, "At least one item line is required to confirm this SO.");
+      }
+      headerUpdate.status = "CREATED";
+    }
 
     const { error: headerError } = await serviceRoleClient
       .schema("erp_procurement").from("sales_order").update(headerUpdate).eq("id", soId);

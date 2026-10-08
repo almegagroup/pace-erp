@@ -181,6 +181,7 @@ import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
 // SOCreatePage.jsx superseded by SO01Page's 3-tab shell (§133.7/§133.16) — kept
 // on disk as the pre-redesign reference until the old backend path is fully retired.
 import SO01Page from "../pages/dashboard/procurement/sales/SO01Page.jsx";
+import DraftSoExcelUploadPage from "../pages/dashboard/procurement/sales/DraftSoExcelUploadPage.jsx";
 import SODetailPage from "../pages/dashboard/procurement/sales/SODetailPage.jsx";
 import SO05ListPage from "../pages/dashboard/procurement/sales/SO05ListPage.jsx";
 import SO05CreatePage from "../pages/dashboard/procurement/sales/SO05CreatePage.jsx";
@@ -846,6 +847,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-orders/map"
                     element={<SO01Page initialTab="map" />}
+                  />
+                  <Route
+                    path="procurement/sales-orders/draft-excel-upload"
+                    element={<DraftSoExcelUploadPage />}
                   />
                   <Route
                     path="procurement/sales-orders/:id"

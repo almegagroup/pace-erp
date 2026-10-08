@@ -596,6 +596,16 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // §4.2 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — SO01's "Draft SO and Excel
+  // Upload" button. Same PROC_SO_LIST resource as the rest of SO01's lists.
+  PROC_SO_DRAFT_EXCEL_UPLOAD: {
+    screen_code: "PROC_SO_DRAFT_EXCEL_UPLOAD",
+    route: "/dashboard/procurement/sales-orders/draft-excel-upload",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_DO_LIST: {
     screen_code: "PROC_DO_LIST",
     route: "/dashboard/procurement/delivery-orders",

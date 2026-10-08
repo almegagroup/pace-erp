@@ -173,8 +173,8 @@ feasibility doc §114.23 এবং §139 (AC06 Intra-Month Rate Split)।
 5. **Costing/AP-Reco derivation report** — §113.15-addendum অনুযায়ী Dispatch design-এর
    সাথেই একসাথে করতে হবে (আলাদা না) — এখনো build হয়নি।
 
-## 4. SO01 — MTS Excel Upload Design (✅ DESIGN LOCKED — 2026-10-08, business owner,
-IMPLEMENTATION NOT STARTED)
+## 4. SO01 — MTS Excel Upload Design (✅ DESIGN LOCKED + ✅ IMPLEMENTATION COMPLETE —
+2026-10-08, business owner)
 
 **Business context:** MTS dispatch-এ এক SO-তে ৪০০-৫০০টা item line আসে — manual row-entry
 অবাস্তব। তাই SO01-এ MTS-এর জন্য normal manual entry-র পাশাপাশি একটা **bulk Excel upload
@@ -317,28 +317,100 @@ pattern-এর সাথেই মেলে, নতুন mechanism লাগব
 - কোনো approval/draft workflow নেই — Save করলেই সরাসরি live (AC06-এর per-row verification
   flow-এর মতো না)।
 
-### 4.8 — DB gap (prod schema সরাসরি verify করা, `erp_procurement.sales_order`)
+### 4.8 — DB gap (prod schema সরাসরি verify করা, `erp_procurement.sales_order`) — ✅ FIXED
 
 - `status` CHECK constraint এখন শুধু CREATED/ISSUED/INVOICED/CLOSED/CANCELLED allow করে —
-  **`DRAFT` নেই**, migration লাগবে widen করতে।
-- **Excel Upload flag** column নেই — নতুন column লাগবে।
-- **DD Dispatch flag** column নেই — নতুন column লাগবে।
+  **`DRAFT` নেই**, migration লাগবে widen করতে। ~~migration লাগবে~~ — **✅ migration
+  `20261008100000_so01_excel_upload_draft_flags.sql` দিয়ে `DRAFT` যোগ করা হয়েছে, dev-এ
+  apply+reconcile+`NOTIFY pgrst` করা হয়েছে।**
+- **Excel Upload flag** column নেই — নতুন column লাগবে। ✅ `is_excel_upload boolean
+  NOT NULL DEFAULT false` যোগ করা হয়েছে (একই migration)।
+- **DD Dispatch flag** column নেই — নতুন column লাগবে। ✅ `is_dd_dispatch boolean
+  NOT NULL DEFAULT false` যোগ করা হয়েছে।
 - **Excel Uploaded** tracking (list-এ YES/NO দেখানোর জন্য) — নতুন column/mechanism লাগবে।
+  ✅ `excel_uploaded boolean NOT NULL DEFAULT false` যোগ করা হয়েছে — Submit-এ প্রথম সফল
+  line allocation-এর পর `true` হয়, status আলাদাভাবে DRAFT-ই থাকে।
 
 ### 4.9 — এখনো design হয়নি (পরের ধাপ, এই doc-এর §3-এর সাথে মিলিয়ে)
 
 - **DD Dispatch-এর আসল mechanism** — DO/PGI stage-এ deferred Invoice, post-invoice
   transporter/vehicle change। এটা §3-এর MTS Dispatch open items-এর সাথেই যুক্ত হবে।
-- MTS-এর Per Pack-কে সত্যিই Pack BOM থেকে auto-derive করার backend logic (§4.6-এর gap)।
-- Excel upload-এর ঠিক backend validation/error-reporting mechanism (ভুল SKU হলে সম্পূর্ণ
-  block, নাকি শুধু সেই row flag — এখনো আলোচনা হয়নি)।
+  (এই implementation pass-এ শুধু SO01-এ flag store করা হয়েছে, mechanism-টা deliberately
+  deferred রাখা হয়েছে, design-এ যেমন ছিল।)
+- MTS-এর Per Pack-কে সত্যিই Pack BOM থেকে auto-derive করার backend logic (§4.6-এর gap) —
+  এখনো খোলা, এই pass-এর scope-এর বাইরে (Excel Upload template-এ Per Pack নেই বলে, resolved
+  SKU-এর material_uom_conversion থেকেই derive হয়, কিন্তু Pack BOM নিজে touch করা হয়নি)।
+- Excel upload-এর backend validation/error-reporting granularity — **✅ resolved এই
+  implementation-এ**: per-row graceful skip (hard block না) — stale/not-found SO, SKU
+  resolve না হওয়া, আর prepareUnifiedSoLine-এর নিজের validation fail (যেমন MTO/HPS-এর
+  Costing Rate Month, যা template-এ নেই) — তিনটাই সেই নির্দিষ্ট row skip করে, বাকি batch
+  save হয়, user পরে Enter SO/manual entry-তে ঠিক করতে পারে।
+
+### 4.10 — Implementation summary (✅ COMPLETE, 2026-10-08)
+
+**Migration:** `supabase/migrations/20261008100000_so01_excel_upload_draft_flags.sql` —
+`sales_order_status_check` widen (DRAFT যোগ) + `is_excel_upload`/`is_dd_dispatch`/
+`excel_uploaded` তিনটা boolean column। Dev-এ apply+reconcile (`migration-integrity-check.mjs`
+→ `in_sync=true`) + `NOTIFY pgrst, 'reload schema'` করা হয়েছে।
+
+**Backend** (`supabase/functions/api/_core/procurement/sales_order.handlers.ts`):
+- `createSalesOrderUnifiedHandler` — `is_excel_upload`/`is_dd_dispatch` body flag; true হলে
+  lines-required check skip, status=DRAFT, lines=[] insert skip।
+- নতুন `listDraftExcelUploadSalesOrdersHandler` — Draft SO List (§4.2 columns, bulk-resolved
+  Vendor Code/Parent Company/VDC-Depot, Total Items/Packs aggregate)।
+- নতুন `resolveFgSkuExactMatch()` — Excel row-এর raw SKU text-কে material_id-তে resolve করে,
+  `listSalesOrderFgSkuOptionsHandler`-কে in-process black-box হিসেবে reuse করে (duplicate
+  না করে) — exact-match ফিল্টার substring-search-এর উপরে বসানো।
+- নতুন `reviewExcelUploadBatchHandler` — stateless preview: stale-SO check, SKU resolve,
+  AC05 rate cross-check (`resolveAc05RateForMaterial`), GST/amount preview
+  (`buildExcelUploadRowPreview`), duplicate detection — কোনো write নেই।
+- নতুন `submitExcelUploadBatchHandler` — re-validates সবকিছু server-side, per-SO group করে
+  `prepareUnifiedSoLine()`+insert (updateSalesOrderUnifiedHandler-এর "new lines" path-এর
+  মতোই), per-row graceful skip, `excel_uploaded=true` flip।
+- `updateSalesOrderUnifiedHandler` — নতুন `confirm_draft` body flag (Enter SO Save):
+  DRAFT-ই আছে কিনা + ≥1 line আছে কিনা check করে status=CREATED করে। **নতুন route/ACL লাগেনি**
+  — existing PUT reuse।
+- Routes (`procurement.routes.ts`) + ACL registry (`route-acl-registry.ts`) — ৩টা নতুন route
+  (`GET .../draft-excel-upload`, `POST .../excel-upload/review`, `POST .../excel-upload/submit`),
+  **প্রতিটাই existing resourceCode/action reuse করে** (`PROC_SO_LIST`/VIEW,
+  `PROC_SO_CREATE`/WRITE) — কোনো নতুন ACL resource/capability লাগেনি, business owner-এর
+  নির্দেশ অনুযায়ী।
+
+**Frontend:**
+- `procurementApi.js` — ৩টা নতুন wrapper (`listDraftExcelUploadSalesOrders`,
+  `reviewSoExcelUploadBatch`, `submitSoExcelUploadBatch`)।
+- `SO01CreatePage.jsx` — Page 2-এ দুটো checkbox (Excel Upload/DD Dispatch); Excel Upload
+  checked হলে Item Line + Totals card গায়েব, zero-line create। নতুন **Enter SO rehydration
+  mode** (`getActiveScreenContext()?.enterDraftSoId`) — existing Draft SO হাইড্রেট করে Page 2-এ
+  সরাসরি খোলে, header+checkbox লক (disabled/read-only summary), lines real data দিয়ে populate
+  (রিয়াল `id` সহ, existing-line edit path দিয়ে), Save → `confirm_draft:true` দিয়ে PUT, origin-aware
+  return (DRILL_THROUGH context হলে `popScreen()`)।
+- নতুন `DraftSoExcelUploadPage.jsx` — list (ErpDenseGrid, §4.2 columns + Enter SO action),
+  Template Download (client-side ExcelJS, dropdown data validation FG Type/Rate Basis/GST
+  Treatment), Upload (client-side ExcelJS parse → review API call), Review Drawer
+  (center, AC05-rate resolve link, duplicate/stale-SO row highlight, Add Row, Submit)।
+- Screen registry (`operationScreens.js`) + route (`AppRouter.jsx`) নতুন
+  `PROC_SO_DRAFT_EXCEL_UPLOAD` + SO01Page-এ "Draft SO and Excel Upload" button।
+
+**Verification:** সব ১৬টা `scripts/*-guard.mjs` + `dependency-provisioning-check.mjs
+--strict-manifest` (SU24, নতুন page-এর জন্য `PAGE-DEPENDENCY-MANIFEST.json`-এ entry যোগ করা
+হয়েছে) + `migration-integrity-check.mjs` (dev, `in_sync=true`) — সব pass। প্রতিটা touched
+backend file `deno check` (git-stash before/after zero-new-error প্রমাণ করা হয়েছে), প্রতিটা
+touched frontend file `eslint` clean, পুরো frontend `npm run build` সফল।
+
+**এখনো বাকি (deliberately deferred, flagged above):** DD Dispatch-এর আসল DO/PGI mechanism,
+MTS Per-Pack-কে Pack BOM থেকে formally auto-derive করা, আর deployed app-এ live click-through
+(এই environment-এ dev login নেই)। নতুন gap পাওয়া গেছে, সেটাও pre-existing (এই session-এর নয়):
+dev DB-তে `single_machine_auto_allocation`/`mts_urgent_manager_posting` migration file দুটো
+remote-এ কখনো apply হয়নি (আগের কোনো concurrent session-এর কাজ) — এই implementation-এর scope-এর
+বাইরে, touch করা হয়নি, business owner-কে জানিয়ে দেওয়া হলো।
 
 ## 5. Next steps
 
 - [ ] `docs/PROCUREMENT-DESIGN-DOC.md`-এর সব item close হওয়া পর্যন্ত wait — **✅ business
       owner অনুযায়ী এখন সম্পন্ন (2026-10-08), SO01 design এখান থেকেই শুরু হয়েছে**।
-- [x] SO01 — MTS Excel Upload Design (§4) — ✅ LOCKED 2026-10-08, implementation বাকি।
-- [ ] SO01 Excel Upload — implementation (migration + backend + frontend)।
+- [x] SO01 — MTS Excel Upload Design (§4) — ✅ LOCKED + ✅ IMPLEMENTED 2026-10-08 (§4.10)।
+- [x] SO01 Excel Upload — implementation (migration + backend + frontend) — ✅ DONE, §4.10।
 - [ ] তারপর: FG STO mechanism decision (§2) confirm করা।
 - [ ] তারপর: IWC dispatch-এর real-data verification (§3.1)।
 - [ ] তারপর: DD Dispatch-এর আসল DO/PGI mechanism design (§4.9)।

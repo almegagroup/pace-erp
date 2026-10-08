@@ -1100,6 +1100,17 @@ export function closeSalesOrderUnified(id, data) {
   return fetchProcurement("POST", `/api/procurement/sales-orders-v2/${encodeURIComponent(id)}/close`, data);
 }
 
+// §4 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — SO01 MTS Excel Upload.
+export function listDraftExcelUploadSalesOrders(params) {
+  return fetchProcurement("GET", "/api/procurement/sales-orders/draft-excel-upload", undefined, params);
+}
+export function reviewSoExcelUploadBatch(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-orders/excel-upload/review", data);
+}
+export function submitSoExcelUploadBatch(data) {
+  return fetchProcurement("POST", "/api/procurement/sales-orders/excel-upload/submit", data);
+}
+
 // SO Map (SO01 Tab 2) — feasibility §133.9.
 export function listSoForMap(params) {
   return fetchProcurement("GET", "/api/procurement/so-map/so-list", undefined, params);
