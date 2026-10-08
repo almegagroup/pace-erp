@@ -750,68 +750,7 @@ export default function PODetailPage() {
             </ErpSectionCard>
           ) : null}
 
-          <ErpSectionCard eyebrow="Lines" title="PO lines">
-            <ErpDenseGrid
-              columns={[
-                { key: "line_number", label: "Line", width: "70px" },
-                {
-                  key: "material_id",
-                  label: "Material",
-                  render: (row) => row.material_display || row.material_id || "—",
-                },
-                { key: "ordered_qty", label: "Qty", width: "90px" },
-                { key: "po_uom_code", label: "UOM", width: "90px" },
-                { key: "unit_rate", label: "Rate", width: "90px" },
-                {
-                  key: "cost_center_id",
-                  label: "Cost Center",
-                  render: (row) =>
-                    row.cost_center_display ||
-                    costCenterMap.get(row.cost_center_id) ||
-                    row.cost_center_id ||
-                    "—",
-                },
-                {
-                  key: "payment_term_id",
-                  label: "Payment Term",
-                  render: (row) =>
-                    row.payment_term_display ||
-                    paymentTermMap.get(row.payment_term_id) ||
-                    row.payment_term_id ||
-                    "—",
-                },
-                {
-                  key: "line_status",
-                  label: "Status",
-                  width: "140px",
-                  render: (row) => (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getLineStatusTone(row.line_status)}`}>
-                      {row.line_status}
-                    </span>
-                  ),
-                },
-                {
-                  key: "actions",
-                  label: "Actions",
-                  width: "120px",
-                  render: (row) =>
-                    po.status === "CONFIRMED" ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleKnockOffLine(row.id)}
-                        className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
-                      >
-                        Knock-off
-                      </button>
-                    ) : "—",
-                },
-              ]}
-              rows={po.lines ?? []}
-              rowKey={(row) => row.id}
-              emptyMessage="No PO lines found."
-            />
-          </ErpSectionCard>
-
+          {/* Section 145 -- Lots sit above the lines grid: the grid reserves a tall empty area that pushed this below the fold. */}
           {po.order_in_lot ? (
             <ErpSectionCard
               eyebrow="Order in LOT"
@@ -938,6 +877,68 @@ export default function PODetailPage() {
               </div>
             </ErpSectionCard>
           ) : null}
+
+          <ErpSectionCard eyebrow="Lines" title="PO lines">
+            <ErpDenseGrid
+              columns={[
+                { key: "line_number", label: "Line", width: "70px" },
+                {
+                  key: "material_id",
+                  label: "Material",
+                  render: (row) => row.material_display || row.material_id || "—",
+                },
+                { key: "ordered_qty", label: "Qty", width: "90px" },
+                { key: "po_uom_code", label: "UOM", width: "90px" },
+                { key: "unit_rate", label: "Rate", width: "90px" },
+                {
+                  key: "cost_center_id",
+                  label: "Cost Center",
+                  render: (row) =>
+                    row.cost_center_display ||
+                    costCenterMap.get(row.cost_center_id) ||
+                    row.cost_center_id ||
+                    "—",
+                },
+                {
+                  key: "payment_term_id",
+                  label: "Payment Term",
+                  render: (row) =>
+                    row.payment_term_display ||
+                    paymentTermMap.get(row.payment_term_id) ||
+                    row.payment_term_id ||
+                    "—",
+                },
+                {
+                  key: "line_status",
+                  label: "Status",
+                  width: "140px",
+                  render: (row) => (
+                    <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${getLineStatusTone(row.line_status)}`}>
+                      {row.line_status}
+                    </span>
+                  ),
+                },
+                {
+                  key: "actions",
+                  label: "Actions",
+                  width: "120px",
+                  render: (row) =>
+                    po.status === "CONFIRMED" ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleKnockOffLine(row.id)}
+                        className="border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700"
+                      >
+                        Knock-off
+                      </button>
+                    ) : "—",
+                },
+              ]}
+              rows={po.lines ?? []}
+              rowKey={(row) => row.id}
+              emptyMessage="No PO lines found."
+            />
+          </ErpSectionCard>
 
           <ErpSectionCard eyebrow="CSNs" title="CSN links">
             <div className="grid gap-2">
