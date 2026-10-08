@@ -173,9 +173,159 @@ feasibility doc §114.23 এবং §139 (AC06 Intra-Month Rate Split)।
 5. **Costing/AP-Reco derivation report** — §113.15-addendum অনুযায়ী Dispatch design-এর
    সাথেই একসাথে করতে হবে (আলাদা না) — এখনো build হয়নি।
 
-## 4. Next steps
+## 4. SO01 — MTS Excel Upload Design (✅ DESIGN LOCKED — 2026-10-08, business owner,
+IMPLEMENTATION NOT STARTED)
 
-- [ ] `docs/PROCUREMENT-DESIGN-DOC.md`-এর সব item close হওয়া পর্যন্ত wait।
-- [ ] তারপর প্রথমে: FG STO mechanism decision (§2) confirm করা।
+**Business context:** MTS dispatch-এ এক SO-তে ৪০০-৫০০টা item line আসে — manual row-entry
+অবাস্তব। তাই SO01-এ MTS-এর জন্য normal manual entry-র পাশাপাশি একটা **bulk Excel upload
+path** যোগ হচ্ছে (RM/PM/INT/অন্য FG type-এর normal manual flow অপরিবর্তিত থাকবে)।
+
+### 4.1 — SO01 Page 2: দুটো নতুন checkbox
+
+Default unchecked, **independent** (একসাথে check করা যায়, কারণ দুজনে দুটো আলাদা অর্থ বহন
+করে):
+
+- **Excel Upload** — check করলে নিচের Item Line area সম্পূর্ণ গায়েব হয়ে যায়; SO Create
+  করলে সেটা সরাসরি **DRAFT** status-এ তৈরি হবে (কোনো line ছাড়াই, value শূন্য)। Header +
+  Bill-To/Ship-To + Payment Terms/Freight অংশ অপরিবর্তিত, শুধু item area বাদ।
+- **DD Dispatch** — SO-stage-এ শুধু একটা **flag/marker**, নিজের কোনো কাজ SO-তে নেই। এই
+  flag না থাকলে MTS dispatch-এর পরের step (DO/PGI) গুলো করা যাবে না। আসল mechanism
+  (deferred Invoice-then-PGI, post-invoice transporter/vehicle change-এর সুযোগ) **পরে
+  DO/PGI design session-এ** আসবে, SO01-এর scope-এ শুধু flag store করা। প্রযোজ্য শুধু
+  **Dependent(Direct) + MTS** combination-এ — Depot-এ বা MTO/HPS/MTEST-এ (Direct হলেও)
+  পুরনো atomic PGI+Invoice rule-ই (§113.15) থাকবে, বদলাবে না। এই matrix-টা আসলে §1.5
+  (§114.5)-এর "Direct dispatch-এর দুই আলাদা method" insight-এরই নতুন terminology-তে
+  পুনর্নিশ্চিতকরণ:
+
+  | Dispatch Type | Production Type | Behavior |
+  |---|---|---|
+  | Depot | যেকোনো | অপরিবর্তিত — DO→PGI+Invoice atomic |
+  | Direct | MTO/HPS/MTEST | অপরিবর্তিত — atomic, একসাথে |
+  | Direct | **MTS** | **নতুন** — Invoice আগে, PGI পরে (truck আসার দিন) |
+
+### 4.2 — "Draft SO and Excel Upload" page (নতুন, SO01-এর বাটন থেকে)
+
+**List scope:** শুধু সেই SO যাদের **Excel Upload flag = true এবং status = DRAFT**।
+
+**Columns (ক্রমানুসারে):** Vendor Code → SO Number → External SO Number → SO Date →
+Parent Company → VDC/DC + details → Status (সবসময় DRAFT) → Excel Uploaded (YES/NO) →
+Total Number of Items (SKU count) → Total Number of Packs (Pack Qty sum) → Enter SO
+(action)।
+
+পুরো list Excel export করা যায়। একই page-এ আলাদা **"Template Download"** বাটন আছে।
+
+### 4.3 — Excel Template (generic/blank, per-SO না)
+
+একটা single template file-এ user একাধিক ভিন্ন SO-র item মিশিয়ে দিতে পারে — Draft SO List
+থেকে SO Number/External SO Number cross-reference করে user নিজে প্রতিটা row-এ বসায়।
+
+| Column | Entry type |
+|---|---|
+| SO Number | manual |
+| External SO Number | manual |
+| FG Type | dropdown (MTO/HPS/MTEST/MTS) |
+| SKU | manual text (dropdown না) |
+| HSN | manual যদি Master-এ না থাকে; থাকলে auto-derive হয়ে যায় |
+| Pack Qty | manual |
+| Rate | manual |
+| Rate Basis | dropdown (Pack UoM/Base UoM) |
+| GST Treatment | dropdown (Exclusive/Inclusive) |
+| GST % | manual |
+
+**বাদ পড়েছে ইচ্ছাকৃতভাবে:** Per Pack (MTS-এ Pack BOM থেকে auto-derive হওয়ার কথা, manual
+দেওয়ার দরকার নেই), Stroke Number (MTS-এ প্রযোজ্য না — §83.7/§108-এর batch-blind lock-এর
+সাথে সঙ্গতিপূর্ণ), Round Off (template-এ নেই, confirm ধাপে বসে)।
+
+### 4.4 — Upload → কেন্দ্রীয় Review Drawer
+
+**দেখাবে:** uploaded raw data + auto-derived সব column — Document Name, Pack UoM, **real
+Base UoM** (hardcoded "KG" না, material-এর আসল base UoM), Base Qty, Amount, CGST/SGST/IGST,
+Total Value। **Round Off দেখাবে না।**
+
+**AC05 Rate cross-check (§4.7-এ verify করা AC05 mechanism reuse করে):** Vendor Code + SKU
+দিয়ে `erp_production.ac05_mts_sku_rate`-এ lookup করে Outer UoM Rate (effective-dated, SO
+date-এর আগে/সমান সবচেয়ে latest row) একটা আলাদা **"AC05 Rate"** column-এ আসবে। Template-এ
+টাইপ করা Rate-এর সাথে মিললে green tick; না মিললে দুই rate-এর ঘরেই checkbox, user বেছে
+নেবে final rate কোনটা হবে।
+
+**Duplicate detection:** key = **Vendor Code + SKU + Qty + Rate**। মিললে সেই row-জোড়া
+**red highlight**, পাশে Remove বাটন। Resolve (remove) না করা পর্যন্ত **Save বাটন
+inactive**।
+
+**Row actions:** প্রতি row-এ Remove। **Add Row** দিয়ে নতুন line যোগ করা যায় (manual SO01
+item-line-এর সব সুবিধা সহ — §4.9 দেখো), কিন্তু শুধু **এই upload batch-এ already থাকা
+SO-গুলোর মধ্যেই** — batch-এর বাইরের নতুন SO যোগ করা যাবে না।
+
+**Submit:** প্রতি row তার নিজের SO-তে allocate হয়; সেই SO-গুলোর **Excel Uploaded = Yes**;
+কিন্তু **status তখনো DRAFT-ই থাকে** (auto-confirm হয় না)।
+
+### 4.5 — "Enter SO" → SO01 Page 2 (confirm ধাপ)
+
+Draft SO List থেকে **"Enter SO"**-তে ঢুকলে SO01 Page 2 খোলে — Header fields + দুই checkbox
+সব **read-only/locked**। পুরো item list + value/footer area real data দিয়ে populate। User
+দরকারে Round Off বসায়, rate review/resolve করে। Save বাটন active হয়, ক্লিক করলে SO
+**confirm** হয় (status আর DRAFT থাকে না), Draft SO List থেকে চিরতরে গায়েব।
+
+**Navigation — origin-aware (এই codebase-এর established drill-through/return-to-caller
+pattern-এর সাথেই মেলে, নতুন mechanism লাগবে না):**
+- Draft SO List → Enter SO → Page 2 → Save → **Draft SO List-এ ফিরে আসে** (পরের SO confirm
+  করার জন্য)।
+- Normal path দিয়ে (Draft List হয়ে না এসে) Page 2-তে Save করলে → আগের মতোই (SO Detail-এ
+  navigate), অপরিবর্তিত।
+
+### 4.6 — FG line: manually enter vs auto-derive (বর্তমান `SO01CreatePage.jsx` থেকে বেসলাইন)
+
+| Manually choose/enter | Auto-derived (readonly) |
+|---|---|
+| FG Type, SKU, Rate, Rate Basis, GST Treatment, GST %, Round Off | Document Name, Pack UoM, Base Qty (=Pack Qty×Per Pack), Base UoM, Amount, CGST/SGST/IGST, Total Value |
+| Stroke Number — শুধু MTO/HPS, **MTS-এ প্রযোজ্য না** | |
+| HSN — শুধু manual যদি Master-এ না থাকে, একবার বসালে Master-এ সেভ হয়ে পরে auto-derive হয় | |
+| Pack Qty — manual (MTO/HPS/MTS); Per Pack — generic code-এ manual, কিন্তু **MTS-এর জন্য Pack BOM থেকে auto-derive হওয়া উচিত** (বর্তমান কোডে এই special-case শুধু MTEST-এর জন্য আছে, MTS-এর জন্য না — এটা একটা real build-time gap, §4.3-এর template থেকে Per Pack বাদ দেওয়ার কারণও এটাই) | |
+| Costing Rate Month — MTS-এ সবসময় hardcoded "Deferred (MTS)", user input না | |
+
+### 4.7 — AC05 (MTS SKU Costing) — verified real/built (২০২৬-১০-০৮, prod DB + code সরাসরি
+যাচাই করা, §1.11-এর claim-এর বিপরীতে কিছুটা সংশোধন)
+
+- **Table:** `erp_production.ac05_mts_sku_rate` — prod-এ বাস্তবেই আছে (code: 
+  `ac05_mts_sku_rate.handlers.ts`, page: `MtsSkuCostingPage.jsx`)। feasibility doc §142.1-এর
+  header "IMPLEMENTATION NOT STARTED" লেখা আছে, এটা **stale** — কোড+DB প্রমাণ দেখাচ্ছে এটা
+  build হয়ে গেছে (prod-এ এই মুহূর্তে মাত্র ১টা row — built কিন্তু বাস্তব data-entry প্রায়
+  শুরু হয়নি)।
+- **Key:** Vendor Code + SKU + Effective Date। তিনটা rate column সম্পূর্ণ independent manual
+  entry: `rate_per_base_uom`, `rate_per_inner_pack`, **`rate_per_outer_uom`** (এটাই আমাদের
+  "AC05 Rate")।
+- **Locked rule (§142.1):** AC05-এর নিজের list page-এ একটা পাশাপাশি calculated/verification
+  value-ও দেখায় (AC04 conversion + AC06 RMC/PMC দিয়ে), কিন্তু এটা শুধু sanity-check —
+  **SO সবসময় manually-entered Rate per Outer Unit-ই নেয়, calculated value কখনো পড়ে না**।
+- **Resolution at SO time:** (Vendor Code, SKU)-এর একাধিক effective-dated row থাকতে পারে
+  (append-only, নতুন rate revision = নতুন row)। যে row-এর Effective Date **SO Date-এর আগে
+  বা সমান তার মধ্যে সবচেয়ে latest-টাই** ব্যবহার হয়।
+- কোনো approval/draft workflow নেই — Save করলেই সরাসরি live (AC06-এর per-row verification
+  flow-এর মতো না)।
+
+### 4.8 — DB gap (prod schema সরাসরি verify করা, `erp_procurement.sales_order`)
+
+- `status` CHECK constraint এখন শুধু CREATED/ISSUED/INVOICED/CLOSED/CANCELLED allow করে —
+  **`DRAFT` নেই**, migration লাগবে widen করতে।
+- **Excel Upload flag** column নেই — নতুন column লাগবে।
+- **DD Dispatch flag** column নেই — নতুন column লাগবে।
+- **Excel Uploaded** tracking (list-এ YES/NO দেখানোর জন্য) — নতুন column/mechanism লাগবে।
+
+### 4.9 — এখনো design হয়নি (পরের ধাপ, এই doc-এর §3-এর সাথে মিলিয়ে)
+
+- **DD Dispatch-এর আসল mechanism** — DO/PGI stage-এ deferred Invoice, post-invoice
+  transporter/vehicle change। এটা §3-এর MTS Dispatch open items-এর সাথেই যুক্ত হবে।
+- MTS-এর Per Pack-কে সত্যিই Pack BOM থেকে auto-derive করার backend logic (§4.6-এর gap)।
+- Excel upload-এর ঠিক backend validation/error-reporting mechanism (ভুল SKU হলে সম্পূর্ণ
+  block, নাকি শুধু সেই row flag — এখনো আলোচনা হয়নি)।
+
+## 5. Next steps
+
+- [ ] `docs/PROCUREMENT-DESIGN-DOC.md`-এর সব item close হওয়া পর্যন্ত wait — **✅ business
+      owner অনুযায়ী এখন সম্পন্ন (2026-10-08), SO01 design এখান থেকেই শুরু হয়েছে**।
+- [x] SO01 — MTS Excel Upload Design (§4) — ✅ LOCKED 2026-10-08, implementation বাকি।
+- [ ] SO01 Excel Upload — implementation (migration + backend + frontend)।
+- [ ] তারপর: FG STO mechanism decision (§2) confirm করা।
 - [ ] তারপর: IWC dispatch-এর real-data verification (§3.1)।
+- [ ] তারপর: DD Dispatch-এর আসল DO/PGI mechanism design (§4.9)।
 - [ ] তারপর: Powder Advance Billing fresh discovery session (§3.4)।
