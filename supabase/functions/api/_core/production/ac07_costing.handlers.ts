@@ -93,11 +93,19 @@ export async function resolveProdshade(sku: Row): Promise<Row | null> {
 // fall back to real Packing PO history: this exact SKU's own most recent
 // batch first, and only if this SKU has never been packed, a different SKU
 // sharing the same material_category + pack_code.
-export async function resolvePmComposition(skuMaterialId: string, sku: Row): Promise<{ source: string; sourceSkuPaceCode: string | null; lines: Row[]; perPackQtyFixed: number | null }> {
+export async function resolvePmComposition(skuMaterialId: string, sku: Row, companyId: string): Promise<{ source: string; sourceSkuPaceCode: string | null; lines: Row[]; perPackQtyFixed: number | null }> {
   const db = serviceRoleClient.schema("erp_production");
 
+  // Pack BOM is company-wise (§83.15) -- the same SKU legitimately carries
+  // one ACTIVE pack_bom row PER COMPANY. Without the company_id filter here,
+  // .maybeSingle() throws the instant a second company's row exists for this
+  // SKU (verified live: every multi-company FG SKU in prod already has 2-3
+  // ACTIVE rows), which silently killed every caller that batches this call
+  // across several SKUs (e.g. AC05's eligible-SKU list) -- one throw voids
+  // the whole Promise.all, so the entire list came back empty with no error
+  // surfaced to the user. Found live 2026-10-08.
   const { data: ownBom, error: bomErr } = await db.from("pack_bom")
-    .select("id").eq("sku_material_id", skuMaterialId).eq("status", "ACTIVE").maybeSingle();
+    .select("id").eq("sku_material_id", skuMaterialId).eq("company_id", companyId).eq("status", "ACTIVE").maybeSingle();
   if (bomErr) throw new Error("AC07_PACK_BOM_LOOKUP_FAILED");
   if (ownBom?.id) {
     const { data: allLines, error: lineErr } = await db.from("pack_bom_line")
@@ -314,7 +322,7 @@ export async function getAc07CostingHandler(req: Request, ctx: ProdHandlerContex
     const strokeLines = (strokeLineRows ?? []) as Row[];
 
     const rmIntMaterialIds = ids(strokeLines.map((l) => l.material_id));
-    const pm = await resolvePmComposition(skuMaterialId, sku);
+    const pm = await resolvePmComposition(skuMaterialId, sku, companyId);
     const pmMaterialIds = ids(pm.lines.map((l) => l.material_id));
 
     const materials = await materialMap([...rmIntMaterialIds, ...pmMaterialIds]);

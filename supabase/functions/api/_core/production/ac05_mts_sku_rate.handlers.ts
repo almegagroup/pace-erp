@@ -87,8 +87,8 @@ async function getSku(companyId: string, skuMaterialId: string): Promise<Row | n
   return extension ? sku as Row : null;
 }
 
-async function hasInnerPack(skuMaterialId: string, sku: Row): Promise<boolean> {
-  const composition = await resolvePmComposition(skuMaterialId, sku);
+async function hasInnerPack(skuMaterialId: string, sku: Row, companyId: string): Promise<boolean> {
+  const composition = await resolvePmComposition(skuMaterialId, sku, companyId);
   return composition.lines.some((line) => Boolean(line.is_primary_container));
 }
 
@@ -215,7 +215,7 @@ async function verificationForRate(row: Row, sku: Row, companyId: string): Promi
   const [strokeLinesResult, pm, prodshade, packCode] = await Promise.all([
     serviceRoleClient.schema("erp_production").from("stroke_line").select("material_id, dosage_pct, line_material_type")
       .eq("stroke_master_id", strokeId).in("line_material_type", ["RM", "INT"]),
-    resolvePmComposition(toTrimmedString(sku.id), sku),
+    resolvePmComposition(toTrimmedString(sku.id), sku, companyId),
     deriveProdshadeForSku(sku),
     packCodeRow(toTrimmedString(sku.pack_code)),
   ]);
@@ -332,7 +332,7 @@ export async function listAc05EligibleSkusHandler(req: Request, ctx: ProdHandler
     }
     const data = await Promise.all(skus.map(async (sku) => ({
       material_id: sku.id, pace_code: sku.pace_code, material_name: sku.material_name, document_name: sku.document_name,
-      has_inner_pack: await hasInnerPack(toTrimmedString(sku.id), sku),
+      has_inner_pack: await hasInnerPack(toTrimmedString(sku.id), sku, companyId),
     })));
     data.sort((a, b) => toTrimmedString(a.pace_code).localeCompare(toTrimmedString(b.pace_code)));
     return okResponse({ data }, ctx.request_id, req);
@@ -347,7 +347,7 @@ export async function createAc05RateRowHandler(req: Request, ctx: ProdHandlerCon
     const [mapping, sku] = await Promise.all([mappedVendorCode(companyId, vendorCodeId), getSku(companyId, skuId)]);
     if (!mapping) return ac05Error(req, ctx, "AC05_VENDOR_CODE_INVALID", 422, "Vendor Code is not active for this company.");
     if (!sku) return ac05Error(req, ctx, "AC05_SKU_INVALID", 422, "SKU is not an active company-mapped FG SKU.");
-    const [prodshade, inner] = await Promise.all([deriveProdshadeForSku(sku), hasInnerPack(skuId, sku)]);
+    const [prodshade, inner] = await Promise.all([deriveProdshadeForSku(sku), hasInnerPack(skuId, sku, companyId)]);
     if (!prodshade) return ac05Error(req, ctx, "AC05_PRODSHADE_NOT_FOUND", 422, "No Prodshade could be resolved for this SKU.");
     const stroke = await resolveStrokeForProdshadeAndVendorCode(companyId, toTrimmedString(prodshade.id), toTrimmedString(mapping.id));
     if (!stroke) return ac05Error(req, ctx, "AC05_STROKE_NOT_FOUND", 422, "No approved MTS Stroke found for this Prodshade + Vendor Code combination.");
@@ -370,7 +370,7 @@ export async function updateAc05PendingRowHandler(req: Request, ctx: ProdHandler
     if (rowError) throw new Error("AC05_UPDATE_FAILED"); if (!row) return ac05Error(req, ctx, "AC05_NOT_FOUND", 404, "Rate row not found for this company.");
     if (row.status === "RATED") return ac05Error(req, ctx, "AC05_RATED_IMMUTABLE", 409, "A rated row is immutable; create a new effective-dated row for a correction.");
     const sku = await getSku(companyId, toTrimmedString(row.sku_material_id)); if (!sku) return ac05Error(req, ctx, "AC05_SKU_INVALID", 422, "The pending row's SKU is no longer valid for this company.");
-    const validation = validateRateFields(body, await hasInnerPack(toTrimmedString(row.sku_material_id), sku)); if ("code" in validation) return ac05Error(req, ctx, validation.code, 422, validation.message);
+    const validation = validateRateFields(body, await hasInnerPack(toTrimmedString(row.sku_material_id), sku, companyId)); if ("code" in validation) return ac05Error(req, ctx, validation.code, 422, validation.message);
     const { data, error } = await db.from("ac05_mts_sku_rate").update({ ...validation.values, status: "RATED", last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString() }).eq("id", id).eq("status", "PENDING").select("id, status, effective_date, rate_per_outer_uom").maybeSingle();
     if (error) throw new Error("AC05_UPDATE_FAILED"); if (!data) return ac05Error(req, ctx, "AC05_RATED_IMMUTABLE", 409, "A rated row is immutable; create a new effective-dated row for a correction.");
     return okResponse({ data }, ctx.request_id, req);

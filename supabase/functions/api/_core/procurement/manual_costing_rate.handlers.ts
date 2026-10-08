@@ -322,7 +322,7 @@ export async function getManualCostingRowHandler(req: Request, ctx: ManualCostin
     let pmSource: string | null = null;
     if (includePm) {
       if (isFixedBom) {
-        const pmComposition = await resolvePmComposition(textValue(candidate.soLine.material_id), candidate.material);
+        const pmComposition = await resolvePmComposition(textValue(candidate.soLine.material_id), candidate.material, companyId);
         pmLinesRaw = pmComposition.lines;
         pmSource = pmComposition.source;
       } else if (candidate.packingOrder) {
