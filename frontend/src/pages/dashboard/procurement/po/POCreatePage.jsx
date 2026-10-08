@@ -796,6 +796,16 @@ export default function POCreatePage() {
         />
       ),
     },
+    // Section 145 -- the first lot is created automatically with this line; shown read-only so the
+    // user can see the lot number the vendor must quote (further lots come from Lot Amend).
+    ...(form.delivery_type === "BULK" && form.order_in_lot
+      ? [{
+          key: "lot_number",
+          label: "Lot No.",
+          width: "80px",
+          render: () => <span className="font-mono text-xs font-semibold text-slate-700">0001</span>,
+        }]
+      : []),
     {
       key: "net_value",
       label: "Net Value",
