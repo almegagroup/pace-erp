@@ -905,6 +905,24 @@ export async function createAndPostGRNFromLineHandler(
     const bulkChallanDate = bulkText("bulk_challan_date", geLine.bulk_challan_date);
     const bulkContainerNumber = bulkText("bulk_container_number", geLine.bulk_container_number);
     const bulkEwaybillNumber = bulkText("bulk_ewaybill_number", geLine.bulk_ewaybill_number);
+    // A Bulk GRN must record the number observed on the physical container.
+    // The checkbox is a convenience only: server-side resolution prevents a
+    // crafted request from claiming a GE match while storing a different value.
+    const physicalContainerMatchesGe = isBulkReceipt && body.physical_container_matches_ge === true;
+    const physicalContainerNumber = isBulkReceipt
+      ? (physicalContainerMatchesGe
+        ? bulkContainerNumber
+        : toTrimmedString(body.physical_container_number) || null)
+      : null;
+    if (isBulkReceipt && !physicalContainerNumber) {
+      return procurementErrorResponse(
+        req,
+        ctx,
+        "GRN_PHYSICAL_CONTAINER_REQUIRED",
+        400,
+        "Physical container number is required for a Bulk GRN.",
+      );
+    }
     const grnLrNumber = isBulkReceipt && bodyHas("lr_number")
       ? toTrimmedString(body.lr_number) || null
       : toTrimmedString(body.lr_number) || toTrimmedString(geLine.bulk_lr_number) || null;
@@ -1072,6 +1090,8 @@ export async function createAndPostGRNFromLineHandler(
         bulk_challan_date: bulkChallanDate,
         bulk_container_number: bulkContainerNumber,
         bulk_ewaybill_number: bulkEwaybillNumber,
+        physical_container_number: physicalContainerNumber,
+        physical_container_matches_ge: physicalContainerMatchesGe,
         rst_number: toTrimmedString(geLine.rst_number) || null,
         // Transporter
         transporter_id: toTrimmedString(body.transporter_id) || null,
@@ -1906,6 +1926,8 @@ export async function listGrnInvoiceMappingCandidatesHandler(
         bulk_challan_number: g.bulk_challan_number ?? null,
         bulk_container_number: g.bulk_container_number ?? null,
         bulk_ewaybill_number: g.bulk_ewaybill_number ?? null,
+        physical_container_number: g.physical_container_number ?? null,
+        physical_container_matches_ge: g.physical_container_matches_ge === true,
         invoice_number: g.invoice_number ?? null,
         invoice_date: g.invoice_date ?? null,
         invoice_rate: g.invoice_rate ?? null,

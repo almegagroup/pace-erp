@@ -232,6 +232,8 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   const [deliveryChallanNumber, setDeliveryChallanNumber] = useState(_saved.deliveryChallanNumber ?? (isBulk ? (geLine.bulk_challan_number ?? "") : ""));
   const [deliveryChallanDate, setDeliveryChallanDate] = useState(_saved.deliveryChallanDate ?? (isBulk ? (geLine.bulk_challan_date ?? "") : ""));
   const [containerNumber, setContainerNumber] = useState(_saved.containerNumber ?? (isBulk ? (geLine.bulk_container_number ?? "") : ""));
+  const [physicalContainerMatchesGe, setPhysicalContainerMatchesGe] = useState(_saved.physicalContainerMatchesGe ?? false);
+  const [physicalContainerNumber, setPhysicalContainerNumber] = useState(_saved.physicalContainerNumber ?? "");
   const [ewaybillNumber, setEwaybillNumber] = useState(_saved.ewaybillNumber ?? (isBulk ? (geLine.bulk_ewaybill_number ?? "") : ""));
   const [lrNumber, setLrNumber] = useState(_saved.lrNumber ?? (isBulk ? (geLine.bulk_lr_number ?? "") : (geLine.csn_lr_number ?? "")));
   const [lrDate, setLrDate] = useState(_saved.lrDate ?? (geLine.csn_lr_date ?? ""));
@@ -355,7 +357,8 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
         rateConfirmed, invoiceRate, gstPct,
         transporterId, transporterName,
         lastMileTransporterId, lastMileTransporterName,
-        deliveryChallanNumber, deliveryChallanDate, containerNumber, ewaybillNumber,
+        deliveryChallanNumber, deliveryChallanDate, containerNumber,
+        physicalContainerMatchesGe, physicalContainerNumber, ewaybillNumber,
         lrNumber, lrDate,
         batchLotNumber, perPackQty,
         expiryType, expiryDate, shelfLifeMonths,
@@ -382,6 +385,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     if (shipToMissing) { setError("Ship To Location Mentioned In Invoice is required for a CRCP-enabled document. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
     if (gstMissing) { setError("GST % from the invoice is required. Enter 0 when the invoice is zero-rated. (Tab: Accounts)"); setActiveTab(TABS.indexOf("Accounts")); return; }
     if (geLine.batch_tracking_required && !batchLotNumber.trim()) { setError("Batch/lot number is required for this material. (Tab: Pack & shelf life)"); setActiveTab(TABS.indexOf("Pack & shelf life")); return; }
+    if (isBulk && !physicalContainerNumber.trim()) { setError("Physical Container Number is required for a Bulk GRN. (Tab: Transporter)"); setActiveTab(TABS.indexOf("Transporter")); return; }
 
     setSaving(true);
     try {
@@ -414,6 +418,8 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
           bulk_challan_number: deliveryChallanNumber || null,
           bulk_challan_date: deliveryChallanDate || null,
           bulk_container_number: containerNumber || null,
+          physical_container_matches_ge: physicalContainerMatchesGe,
+          physical_container_number: physicalContainerMatchesGe ? (containerNumber || null) : (physicalContainerNumber || null),
           bulk_ewaybill_number: ewaybillNumber || null,
         } : {}),
         batch_lot_number: batchLotNumber || null,
@@ -898,8 +904,40 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                       className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label="Container number">
-                    <input type="text" value={containerNumber} onChange={(e) => setContainerNumber(e.target.value)}
-                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                      <input
+                        type="text"
+                        value={containerNumber}
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          setContainerNumber(nextValue);
+                          if (physicalContainerMatchesGe) setPhysicalContainerNumber(nextValue);
+                        }}
+                        className="h-9 min-w-0 flex-1 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                      />
+                      <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={physicalContainerMatchesGe}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setPhysicalContainerMatchesGe(checked);
+                            if (checked) setPhysicalContainerNumber(containerNumber);
+                          }}
+                        />
+                        Matched with Physical Container Number?
+                      </label>
+                    </div>
+                  </ErpDenseFormRow>
+                  <ErpDenseFormRow label={<><span>Physical Container Number</span> <span className="text-red-500">*</span></>}>
+                    <input
+                      type="text"
+                      value={physicalContainerNumber}
+                      disabled={physicalContainerMatchesGe}
+                      onChange={(e) => setPhysicalContainerNumber(e.target.value)}
+                      placeholder={physicalContainerMatchesGe ? "Copied from Container Number" : "Enter physical container number"}
+                      className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-600"
+                    />
                   </ErpDenseFormRow>
                   <ErpDenseFormRow label="E-way bill number">
                     <input type="text" value={ewaybillNumber} onChange={(e) => setEwaybillNumber(e.target.value)}
