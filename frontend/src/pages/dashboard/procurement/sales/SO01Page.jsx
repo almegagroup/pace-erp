@@ -10,11 +10,8 @@
  */
 
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import SO01CreatePage from "./SO01CreatePage.jsx";
 import SO01MapPage from "./SO01MapPage.jsx";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
-import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 
 const TABS = [
   { key: "create", label: "Create SO" },
@@ -23,41 +20,25 @@ const TABS = [
 ];
 
 export default function SO01Page({ initialTab = "create" }) {
-  const navigate = useNavigate();
   const [tab, setTab] = useState(TABS.some((entry) => entry.key === initialTab) ? initialTab : "create");
-
-  function openDraftExcelUploadList() {
-    openScreen(OPERATION_SCREENS.PROC_SO_DRAFT_EXCEL_UPLOAD.screen_code);
-    navigate("/dashboard/procurement/sales-orders/draft-excel-upload");
-  }
 
   return (
     <div className="grid gap-3">
-      <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-1">
-        <div className="flex gap-1">
-          {TABS.map((entry) => (
-            <button
-              key={entry.key}
-              type="button"
-              onClick={() => setTab(entry.key)}
-              className={`px-4 py-2 text-sm font-semibold transition-colors ${
-                tab === entry.key
-                  ? "border-b-2 border-sky-700 text-sky-950"
-                  : "border-b-2 border-transparent text-slate-500 hover:text-slate-800"
-              }`}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
-        {/* §4.2 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) */}
-        <button
-          type="button"
-          onClick={openDraftExcelUploadList}
-          className="mb-1 border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-sky-950"
-        >
-          Draft SO and Excel Upload
-        </button>
+      <div className="flex items-center gap-1 border-b border-slate-200 px-1">
+        {TABS.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            onClick={() => setTab(entry.key)}
+            className={`px-4 py-2 text-sm font-semibold transition-colors ${
+              tab === entry.key
+                ? "border-b-2 border-sky-700 text-sky-950"
+                : "border-b-2 border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            {entry.label}
+          </button>
+        ))}
       </div>
 
       {tab === "create" ? <SO01CreatePage /> : null}
