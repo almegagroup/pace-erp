@@ -25746,15 +25746,22 @@ inside the same screen (`page === "MTS_REGISTER"`), never visible together with 
   bug-pattern #6 consciously traded for zero ACL maintenance). If that ever matters, split it into its own
   resource then.
 
-**Row grain = one FINAL Packing PO (pack row) of a VERIFIED MTS Process PO.** One MTS Process PO owns
-N Packing POs (one per pack row from the MTS creation session, §138.15.2); each Packing PO carries its
-own `batch_number_from/to`, `num_packs`, `fill_qty_per_pack`, `actual_qty_kg`. A Process PO therefore
-appears as N lines, and "Number of Batches / Total Input / Total Output / From-To batch" are all
-**per pack row**, never repeated at Process-PO level.
+**Lifecycle history — updated by business owner 2026-10-08:** the register includes MTS Process POs at
+`STANDARD`, `VERIFIED`, and `CANCELLED` status, with **Status as the leftmost column**. `CANCELLED` rows
+remain in the history but use a muted/inactive presentation. A Process PO with no Packing PO still appears
+once at Process-PO grain so that a newly Standardized or cancelled batch cannot disappear from history.
+
+For a Process PO with Packing POs, row grain remains one pack row. A MTS Process PO owns N Packing POs
+(one per pack row from the MTS creation session, §138.15.2); each Packing PO carries its own
+`batch_number_from/to`, `num_packs`, `fill_qty_per_pack`, `actual_qty_kg`. The batch range falls back to
+the Process PO header where a non-final pack row has not yet received its own range. **Actual Output,
+Loss/Gain, Posting Date and Verify Done By are populated only at `VERIFIED`;** they remain blank at
+`STANDARD`/`CANCELLED` so planned pack values are never presented as actual production.
 
 **Filters (fixed, not user-selectable):** `process_order.po_type = 'MTS'` (this is the one po_type that
-covers both IWC and Powder — there is no separate IWC po_type) AND `process_order.status = 'VERIFIED'`
-AND `packing_order.status = 'FINAL'`. A Process PO with no FINAL packing row yet produces no line.
+covers both IWC and Powder — there is no separate IWC po_type) AND
+`process_order.status IN ('STANDARD', 'VERIFIED', 'CANCELLED')`. Packing POs at any status can supply
+their planning/batch identity; a Process PO with no packing row still produces one history line.
 User inputs (modal): **Company** (canonical transaction-company selector — single-company user = locked
 read-only, multi-company = dropdown of allowed companies only; never the admin company list) and
 **Production Date From/To** (mandatory, max 365 days, default last 30). "Date" = `process_order.production_date`.
@@ -25763,28 +25770,29 @@ read-only, multi-company = dropdown of allowed companies only; never the admin c
 
 | # | Column | Source |
 |---|--------|--------|
-| 1 | Date | `process_order.production_date` |
-| 2 | Shift | `shift_master.shift_name` via `process_order.shift_id` |
-| 3 | Prodshade Code | `material_master.external_code` of the Process PO's SFG (`process_order.material_id`) |
-| 4 | Prodshade Document Name | that material's `document_name` (fallback `material_name`) |
-| 5 | Stroke | `stroke_master.stroke_number` |
-| 6 | Process PO | `process_order.po_number` |
-| 7 | SKU Code | `external_code` of the Packing PO's FG (`packing_order.material_id`) |
-| 8 | SKU Document Name | that FG's `document_name` (fallback `material_name`) |
-| 9 | Start Batch | `packing_order.batch_number_from` (this pack row) |
-| 10 | To Batch | `packing_order.batch_number_to` (this pack row) |
-| 11 | Number of Batches | length of this pack row's [From..To] batch range, by numeric suffix (ER3309..ER3335 = 27). Exact because a MTS Process PO's batch numbers are generated consecutively in one creation session, so a PO has no gaps inside a range; a legacy pack row with no range falls back to the Process PO's own `number_of_batches` only when it has exactly one pack row |
-| 12 | Batch Size | `process_order.planned_qty ÷ process_order.number_of_batches`, shown in **Prodshade UOM** |
-| 13 | Prodshade UOM | `stroke_master.conversion_uom_code` when set with a positive `conversion_factor` (IWC liquid, e.g. L), else the Prodshade's `base_uom_code` (KG) |
-| 14 | Total Input (Base UOM) | Batch Size(kg) × Number of Batches of this pack row |
-| 15 | Total Output (Base UOM) | `packing_order.actual_qty_kg` (fallback `num_packs × fill_qty_per_pack`) |
-| 16 | Pack Size | `packing_order.fill_qty_per_pack`, shown in Prodshade UOM (same conversion as Batch Size) |
-| 17 | Number of Bags | `packing_order.num_packs` |
-| 18 | Loss/Gain | Total Output − Total Input (negative = loss) |
-| 19 | Loss/Gain % | Loss/Gain ÷ Total Input × 100 (blank when input is 0) |
-| 20 | Posting Date | earliest `stock_ledger.posting_date` among the Process PO's Verify postings (`process_order_line.stock_ledger_id`) |
-| 21 | Standard By | `process_order.created_by`, shown as `P0004-Name` (`resolveUserDisplayNames`) |
-| 22 | Verify Done By | `process_order.verified_by`, same format |
+| 1 | Status | `process_order.status`: STANDARD / VERIFIED / CANCELLED; Cancelled is muted/inactive |
+| 2 | Date | `process_order.production_date` |
+| 3 | Shift | `shift_master.shift_name` via `process_order.shift_id` |
+| 4 | Prodshade Code | `material_master.external_code` of the Process PO's SFG (`process_order.material_id`) |
+| 5 | Prodshade Document Name | that material's `document_name` (fallback `material_name`) |
+| 6 | Stroke | `stroke_master.stroke_number` |
+| 7 | Process PO | `process_order.po_number` |
+| 8 | SKU Code | `external_code` of the Packing PO's FG (`packing_order.material_id`), blank when no pack row exists |
+| 9 | SKU Document Name | that FG's `document_name` (fallback `material_name`) |
+| 10 | Start Batch | Packing PO range, falling back to `process_order.batch_number_from` |
+| 11 | To Batch | Packing PO range, falling back to `process_order.batch_number_to` |
+| 12 | Number of Batches | length of this row's [From..To] range, falling back to Process PO `number_of_batches` for a header-only row |
+| 13 | Batch Size | `process_order.planned_qty ÷ process_order.number_of_batches`, shown in **Prodshade UOM** |
+| 14 | Prodshade UOM | `stroke_master.conversion_uom_code` when set with a positive `conversion_factor` (IWC liquid, e.g. L), else the Prodshade's `base_uom_code` (KG) |
+| 15 | Total Input (Base UOM) | Batch Size(kg) × Number of Batches of this row |
+| 16 | Total Output (Base UOM) | `packing_order.actual_qty_kg` (fallback `num_packs × fill_qty_per_pack`) at VERIFIED only |
+| 17 | Pack Size | `packing_order.fill_qty_per_pack`, shown in Prodshade UOM (same conversion as Batch Size) |
+| 18 | Number of Bags | `packing_order.num_packs` |
+| 19 | Loss/Gain | Total Output − Total Input (negative = loss), VERIFIED only |
+| 20 | Loss/Gain % | Loss/Gain ÷ Total Input × 100 (blank when input is 0), VERIFIED only |
+| 21 | Posting Date | earliest `stock_ledger.posting_date` among the Process PO's Verify postings, VERIFIED only |
+| 22 | Standard By | `process_order.created_by`, shown as `P0004-Name` (`resolveUserDisplayNames`) |
+| 23 | Verify Done By | `process_order.verified_by`, VERIFIED only |
 
 Base UOM = KG always (every quantity column in the schema is stored in kg). Batch Size / Pack Size are
 the only two columns shown in Prodshade UOM; if a liquid Prodshade has no conversion factor on its Stroke
