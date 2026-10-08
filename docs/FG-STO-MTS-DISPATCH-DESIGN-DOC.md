@@ -415,3 +415,66 @@ remote-এ কখনো apply হয়নি (আগের কোনো concurr
 - [ ] তারপর: IWC dispatch-এর real-data verification (§3.1)।
 - [ ] তারপর: DD Dispatch-এর আসল DO/PGI mechanism design (§4.9)।
 - [ ] তারপর: Powder Advance Billing fresh discovery session (§3.4)।
+
+## 6. SO Map (MTS) — business model discovery session (2026-10-08) —
+🔶 আলোচনা চলছে, এখনো LOCKED না
+
+**Context:** SO01 MTS Excel Upload (§4) সম্পূর্ণ হওয়ার পর business owner বললেন "SO MAP-এই
+আসল সমস্যা" (real dispatch-mapping mechanism এখনো design-ই হয়নি — §4.9/§5-এর "DD
+Dispatch-এর আসল DO/PGI mechanism design" ধাপটাই এখন শুরু হচ্ছে)। এই section সেই আলোচনার
+live transcript, ধাপে ধাপে confirm করা হচ্ছে — নিচের প্রতিটা পয়েন্ট ব্যবসার মালিক নিজে
+বলেছেন, Claude শুধু restate করে confirm নিয়েছে।
+
+**সূত্র হিসেবে ব্যবহৃত আসল ডেটা:**
+- Prod SO `9000000484` (CMP003, External SO Number `0011419953`, `is_excel_upload=true`,
+  `is_dd_dispatch=true`, `dispatch_type=DEPENDENT_DIRECT`, bill_to VDC "1661-Asian Paints
+  Limited-Kolkatta SO") — ৬টা FG/MTS line, প্রতিটার Pack Qty অনেক বড় (৫০,০০০+ bags)।
+- Business owner-এর আপলোড করা আসল Tally sales-register export (`b2ce5fb2-somap.xlsx`,
+  4 sheet): **Sheet1** — ৫৪টা real Tax Invoice row, প্রতিটার Buyer সবসময় একই
+  ("Asian Paints Limited - Kolkatta SO") কিন্তু Consignee আলাদা আলাদা ছোট dealer/retailer
+  (ঠিকানা/transporter/vehicle/bag-count/rate/GST breakup-সহ), সবগুলোরই "Order No." একই
+  (`0011419953`) — অর্থাৎ একই SO-র আওতায়। **Sheet4** — সংক্ষিপ্ত রূপ (Invoice No./Date/SKU/
+  Qty), মোট ~৮,৩৫০ bags, ৩টা SKU জুড়ে। **Sheet2/Sheet3** — pure SKU name↔code lookup।
+
+**যা এখন পর্যন্ত confirm হয়েছে:**
+
+1. **SO = পুরো মাসের bulk allocation, একবারের dispatch না।** একটা SO তৈরি হলে তার প্রতিটা
+   item-এর যে qty থাকে, সেটা পুরো মাস জুড়ে ব্যবহারের জন্য — মাস জুড়ে একই SO থেকে বিভিন্ন
+   জায়গায় অল্প অল্প করে dispatch হতে থাকে। এটাই SO-র বড় Pack Qty (৫০,০০০+ bags) বনাম Tally
+   Excel-এর ছোট প্রতি-invoice qty (১২৫/২২৫ bags)-এর মধ্যে ফারাকের ব্যাখ্যা — ওটা মাসের
+   প্রথম কয়েক দিনের actual dispatch-ই, ভুল data না।
+
+2. **Tally Sheet1-এর "Other References" column (S column)-এর নাম্বারগুলো (সব `5005...` দিয়ে
+   শুরু, প্রতি invoice-এ আলাদা) — এটা IBN না, এটা হলো সেই SO-র FO Number।** একটা SO-র
+   অধীনে অসংখ্য FO Number থাকতে পারে — প্রতিটা individual dispatch (একটা নির্দিষ্ট dealer-কে
+   যাওয়া একটা specific চালান) তার নিজের FO Number বহন করে।
+   > ⚠️ **নাম-সংঘর্ষ সতর্কতা:** এই "FO Number" Production module-এর Plan Feed-এর
+   > `fo_number` (§83.18, MTO/HPS Admix/Liquid-এর জন্য আলাদা মেকানিজম, `plan_feed` টেবিল)
+   > থেকে **সম্পূর্ণ আলাদা জিনিস** — শুধু নামটাই এক। এই নতুন "SO Map FO Number" Sales/
+   > Dispatch domain-এর, VDC-scoped, এখনো কোনো নির্দিষ্ট column/টেবিলে map করা হয়নি।
+
+3. **VDC vs DC (Dependent Depot) — দুই আলাদা dispatch mechanism, একই SO থেকেই:**
+   - **VDC (Dependent Direct):** প্রতিটা dispatch তার নিজের FO Number বহন করে। এটাই
+     **DD Flag**-এর (`sales_order.is_dd_dispatch`) আসল মানে — DD Flag ON থাকলে **Deferred
+     PGI flow**: DO + Sales Invoice আগেই তৈরি হয়ে যায়, কিন্তু **PGI (আসল stock movement/
+     P601 posting) হয় শুধু physically truck এলে/গেলে** — অর্থাৎ invoice আগেই কাটা যেতে
+     পারে, stock posting পরে।
+   - **DC (Dependent Depot):** এখানে কোনো FO Number লাগে না। DD Flag এখানে OFF/প্রযোজ্য
+     না — **Atomic flow**: DO, PGI, Invoice **তিনটেই একসাথে** হয়ে যায়, কোনো deferred ধাপ
+     নেই (এই অংশটা RM/PM/INT-এর জন্য আগে থেকেই তৈরি §113.15-এর
+     `createPgiInvoiceHandler`-এর মতোই এক-ধাপ mechanism, নতুন প্যাটার্ন না)।
+
+4. **সিদ্ধান্তকারী switch: `sales_order.is_dd_dispatch` (DD Flag)-ই ঠিক করে দেবে কোন SO
+   কোন flow-এ যাবে** — Flag ON = VDC-style Deferred-PGI (FO-number-keyed), Flag OFF =
+   DC-style Atomic (FO ছাড়া)।
+
+**এখনো খোলা (পরের point-এ আলোচনা চলবে):**
+- FO Number আসলে কোথায় capture/store হবে (নতুন column? কোন table — SO line-level না
+  DO-level?), আর SO Map UI-তে কীভাবে ঢোকানো হবে।
+- VDC-এর Deferred PGI-এর জন্য "truck এলো" confirm করার UI/trigger mechanism কী হবে (§3.4-এর
+  Powder Advance Billing-এর "Deferred PGI trigger (Vehicle Number+Date, বা আলাদা button)"
+  open item-এর সাথে সরাসরি যুক্ত, একই প্রশ্ন দুই জায়গায়)।
+- একই SO-র একাধিক FO-dispatch কীভাবে SO-র বাকি/অবশিষ্ট qty-র সাথে reconcile হবে (partial
+  consumption tracking)।
+- Tally Excel-এর বাকি column-গুলোর (Vehicle No., Transporter, Port/Destination ইত্যাদি)
+  PACE-এ কোথায় bosbe সেটা এখনো আলোচনা হয়নি।
