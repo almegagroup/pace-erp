@@ -185,7 +185,14 @@ export default function MtsSkuCostingPage() {
     try {
       const entry = entryRows.find((row) => row.__key === key);
       const ok = entry ? await saveEntry(effectiveCompanyId, entry) : false;
-      if (ok) void invalidate();
+      // A saved row must leave the entry grid -- otherwise it sits there
+      // unchanged and the next Save/Save All click re-submits the exact same
+      // (vendor_code, sku, effective_date) combo the server just accepted,
+      // which the unique constraint always rejects with 409
+      // AC05_EFFECTIVE_DATE_EXISTS. Each repeat click then fires another
+      // request and another "Last Sync Failed" toast, stacking up without
+      // the row ever being removable. Found live 2026-10-08.
+      if (ok) { removeEntry(key); void invalidate(); }
     } finally {
       setSavingKeys((current) => { const next = new Set(current); next.delete(key); return next; });
     }
@@ -200,7 +207,11 @@ export default function MtsSkuCostingPage() {
         const entry = entryRows.find((row) => row.__key === key);
         return entry ? saveEntry(effectiveCompanyId, entry) : Promise.resolve(false);
       }));
-      if (results.some(Boolean)) void invalidate();
+      const savedKeys = pendingKeys.filter((_, index) => results[index]);
+      if (savedKeys.length) {
+        setEntryRows((rows) => rows.filter((row) => !savedKeys.includes(row.__key)));
+        void invalidate();
+      }
     } finally {
       setSavingKeys((current) => { const next = new Set(current); pendingKeys.forEach((key) => next.delete(key)); return next; });
       setSavingAll(false);
