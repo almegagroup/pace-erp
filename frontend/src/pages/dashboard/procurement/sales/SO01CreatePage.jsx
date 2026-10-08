@@ -28,7 +28,7 @@ import {
 } from "../../../../hooks/queries/useOmMasterQueries.js";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { listFgParentCompanies, listFgDepotCodes } from "../../om/omApi.js";
-import { listAc06ApprovedMonths, listCompanyVendorCodesForSalesOrder } from "../../production/prodApi.js";
+import { listAc06ApprovedMonths, listCompanyVendorCodesForSalesOrder, resolveAc05MtsSkuRateForSo } from "../../production/prodApi.js";
 import { amountToWordsIndian } from "../../../../utils/numberToWordsIndian.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 import { createSalesOrderUnified, getSalesOrder, listSalesOrderAddressOptions, listSalesOrderStrokeCheckOptions, updateSalesOrderUnified } from "../procurementApi.js";
@@ -254,6 +254,49 @@ function textInput(value, onChange, extra = {}) {
       className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
       {...extra}
     />
+  );
+}
+
+// §4 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) follow-up, 2026-10-08 — an FG MTS
+// line's Rate must come from AC05 (Vendor Code + SKU + Effective Date,
+// resolved as of SO Date, outer-pack rate) — previously this lookup only
+// ran inside the Excel-Upload Review step; manually adding/editing an MTS
+// line on Create SO or Enter SO never consulted AC05 at all. A row's own
+// hook (not a plain closure like costingMonthCell) since it needs its own
+// useQuery — ErpDenseGrid's render() is a plain function call, not a
+// mounted component, same reasoning AC05's own SkuCell documents.
+// Auto-fills only while the line's own Rate is still blank (a fresh row);
+// once a rate exists (typed, or rehydrated from a saved line) this never
+// silently overwrites it, matching AC05's own "never derives or replaces a
+// manual rate" rule -- a mismatch instead shows a "Use AC05: X" link, the
+// same pattern the Excel-Upload review grid already uses.
+function FgRateCell({ line, companyId, vendorCodeId, soDate, onChange }) {
+  const enabled = Boolean(line.fg_type === "MTS" && line.material_id && companyId && vendorCodeId && soDate);
+  const ac05Query = useQuery({
+    queryKey: ["so01-fg-ac05-rate", companyId, vendorCodeId, line.material_id, soDate],
+    queryFn: () => resolveAc05MtsSkuRateForSo({ company_id: companyId, vendor_code_id: vendorCodeId, sku_material_id: line.material_id, as_of_date: soDate }),
+    enabled,
+    retry: false,
+  });
+  const ac05Rate = ac05Query.data?.rate_per_outer_uom != null ? Number(ac05Query.data.rate_per_outer_uom) : null;
+  useEffect(() => {
+    if (enabled && ac05Rate != null && !line.rate) onChange({ rate: String(ac05Rate) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, ac05Rate]);
+  const currentRate = line.rate === "" || line.rate === null || line.rate === undefined ? null : Number(line.rate);
+  const mismatch = enabled && ac05Rate != null && currentRate != null && Math.abs(currentRate - ac05Rate) > 0.0001;
+  return (
+    <div className="grid gap-0.5">
+      {numberInput(line.rate, (value) => onChange({ rate: value }))}
+      {mismatch ? (
+        <button type="button" className="text-left text-[10px] font-semibold text-sky-700 underline" onClick={() => onChange({ rate: String(ac05Rate) })} title={`AC05 outer-pack rate as of ${soDate}`}>
+          Use AC05: {ac05Rate}
+        </button>
+      ) : null}
+      {enabled && !ac05Query.isLoading && ac05Rate == null ? (
+        <span className="text-[10px] text-amber-700" title="No rated AC05 MTS SKU row for this Vendor Code + SKU, effective on or before SO Date">No AC05 rate found</span>
+      ) : null}
+    </div>
   );
 }
 
@@ -854,7 +897,9 @@ export default function SO01CreatePage() {
       { key: "base_uom", label: "Base UoM", width: "80px", render: (line) => (
         <input value={line.uom_code || "KG"} readOnly className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500 outline-none" />
       ) },
-      { key: "rate", label: "Rate", width: "90px", render: (line) => numberInput(line.rate, (value) => updateLine(line.__key, { rate: value })) },
+      { key: "rate", label: "Rate", width: "110px", render: (line) => (
+        <FgRateCell line={line} companyId={companyId} vendorCodeId={vendorCodeId} soDate={soDate} onChange={(patch) => updateLine(line.__key, patch)} />
+      ) },
       { key: "rate_basis", label: "Rate Basis / Type", width: "100px", render: (line) => (
         <select value={line.rate_basis || ""} onChange={(event) => updateLine(line.__key, { rate_basis: event.target.value })} className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
           {(line.fg_type === "MTEST" ? MTEST_RATE_TYPE_OPTIONS : RATE_BASIS_OPTIONS).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
