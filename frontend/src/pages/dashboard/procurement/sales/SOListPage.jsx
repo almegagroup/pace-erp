@@ -137,6 +137,14 @@ export default function SOListPage() {
     navigate("/dashboard/procurement/sales-orders/map");
   }
 
+  // §4.2 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — lives on the list page, not
+  // buried inside the Create flow, so it's reachable without first starting
+  // a new SO (business owner ask, 2026-10-08).
+  function openDraftExcelUpload() {
+    openScreen(OPERATION_SCREENS.PROC_SO_DRAFT_EXCEL_UPLOAD.screen_code);
+    navigate("/dashboard/procurement/sales-orders/draft-excel-upload");
+  }
+
   function openSODetail(row) {
     openScreen(OPERATION_SCREENS.PROC_SO_DETAIL.screen_code, { context: { id: row.id } });
     navigate(`/dashboard/procurement/sales-orders/${encodeURIComponent(row.id)}`);
@@ -159,6 +167,7 @@ export default function SOListPage() {
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => soQuery.refetch() },
         { key: "create", label: "Create SO", tone: "primary", onClick: openCreateSO },
         { key: "so-map", label: "SO Map", tone: "neutral", onClick: openSoMap },
+        { key: "draft-excel-upload", label: "Draft SO & Excel Upload", tone: "neutral", onClick: openDraftExcelUpload },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}
       notices={soQuery.error ? [{ key: "so-list-error", tone: "error", message: soQuery.error instanceof Error ? soQuery.error.message : "PROCUREMENT_SO_LIST_FAILED" }] : []}
