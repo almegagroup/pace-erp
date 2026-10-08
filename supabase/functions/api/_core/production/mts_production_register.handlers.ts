@@ -4,8 +4,8 @@
  * Gate: 27
  * Phase: 27
  * Domain: PRODUCTION
- * Purpose: PR24 "MTS Production Register" sub-report -- one line per FINAL Packing PO
- *          (pack row) of a VERIFIED MTS Process PO. See feasibility doc §143.
+ * Purpose: PR24 "MTS Production Register" sub-report -- MTS batch history at
+ *          STANDARD, VERIFIED, and CANCELLED status. See feasibility doc §143.
  * Authority: Backend
  */
 
@@ -56,13 +56,13 @@ function countBatchesInRange(from: string, to: string): number | null {
   return toParsed.serial - fromParsed.serial + 1;
 }
 
-async function fetchVerifiedMtsProcessOrders(companyIds: string[] | null, dateFrom: string, dateTo: string): Promise<JsonRecord[]> {
+async function fetchMtsProcessOrders(companyIds: string[] | null, dateFrom: string, dateTo: string): Promise<JsonRecord[]> {
   const rows: JsonRecord[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     let query = serviceRoleClient.schema("erp_production").from("process_order")
-      .select("id, company_id, po_number, material_id, stroke_master_id, shift_id, production_date, planned_qty, number_of_batches, batch_number_from, batch_number_to, created_by, verified_by")
+      .select("id, company_id, po_number, material_id, stroke_master_id, shift_id, production_date, planned_qty, number_of_batches, batch_number_from, batch_number_to, status, created_by, verified_by")
       .eq("po_type", "MTS")
-      .eq("status", "VERIFIED")
+      .in("status", ["STANDARD", "VERIFIED", "CANCELLED"])
       .gte("production_date", dateFrom)
       .lte("production_date", dateTo)
       .order("production_date", { ascending: true })
@@ -108,7 +108,7 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
       return okResponse({ data: [] }, ctx.request_id, req);
     }
 
-    const processOrders = await fetchVerifiedMtsProcessOrders(companyIds, dateFrom, dateTo);
+    const processOrders = await fetchMtsProcessOrders(companyIds, dateFrom, dateTo);
     if (processOrders.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
     const processOrderIds = processOrders.map((row) => String(row.id));
 
@@ -118,8 +118,8 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
       [packingRows, lineRows] = await Promise.all([
         fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
           serviceRoleClient.schema("erp_production").from("packing_order")
-            .select("id, process_order_id, po_number, material_id, num_packs, fill_qty_per_pack, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to")
-            .eq("status", "FINAL").in("process_order_id", idChunk)),
+            .select("id, process_order_id, po_number, material_id, num_packs, fill_qty_per_pack, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to, status")
+            .in("process_order_id", idChunk)),
         fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
           serviceRoleClient.schema("erp_production").from("process_order_line")
             .select("process_order_id, stock_ledger_id").not("stock_ledger_id", "is", null).in("process_order_id", idChunk),
@@ -136,9 +136,9 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
       list.push(row);
       packingByProcess.set(key, list);
     }
-    // Only Process POs that actually have a FINAL pack row appear in the register.
-    const registerProcessOrders = processOrders.filter((row) => packingByProcess.has(String(row.id)));
-    if (registerProcessOrders.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    // A newly Standardized or cancelled MTS PO may have no pack row. It still belongs
+    // in batch history as a header-level row, with pack/actual-only cells left blank.
+    const registerProcessOrders = processOrders;
 
     const ledgerIdsByProcess = new Map<string, string[]>();
     for (const row of lineRows) {
@@ -194,6 +194,9 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
       const packs = (packingByProcess.get(poId) ?? []).slice().sort((a, b) =>
         toTrimmedString(a.batch_number_from).localeCompare(toTrimmedString(b.batch_number_from), undefined, { numeric: true })
         || toTrimmedString(a.po_number).localeCompare(toTrimmedString(b.po_number)));
+      const reportPacks = packs.length > 0 ? packs : [null];
+      const processStatus = toTrimmedString(po.status) || "STANDARD";
+      const isVerified = processStatus === "VERIFIED";
 
       const processBatches = toNumber(po.number_of_batches);
       const batchSizeKg = processBatches > 0 ? toNumber(po.planned_qty) / processBatches : 0;
@@ -212,30 +215,35 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
         .filter(Boolean)
         .sort();
 
-      for (const pack of packs) {
-        const sku = materialMap.get(String(pack.material_id));
-        const fillKg = toNumber(pack.fill_qty_per_pack);
-        const numPacks = toNumber(pack.num_packs);
-        const batchFrom = toTrimmedString(pack.batch_number_from);
-        const batchTo = toTrimmedString(pack.batch_number_to);
+      for (const pack of reportPacks) {
+        const sku = pack ? materialMap.get(String(pack.material_id)) : null;
+        const fillKg = pack ? toNumber(pack.fill_qty_per_pack) : 0;
+        const numPacks = pack ? toNumber(pack.num_packs) : 0;
+        const batchFrom = toTrimmedString(pack?.batch_number_from) || toTrimmedString(po.batch_number_from);
+        const batchTo = toTrimmedString(pack?.batch_number_to) || toTrimmedString(po.batch_number_to);
         let numberOfBatches = batchFrom && batchTo ? countBatchesInRange(batchFrom, batchTo) : null;
         // A legacy pack row with no batch range: only unambiguous when the Process PO has exactly one pack row.
-        if (numberOfBatches === null && packs.length === 1) numberOfBatches = processBatches;
+        if (numberOfBatches === null && packs.length <= 1) numberOfBatches = processBatches;
 
         const totalInput = numberOfBatches === null ? null : round6(batchSizeKg * numberOfBatches);
-        const totalOutput = round6(pack.actual_qty_kg != null ? toNumber(pack.actual_qty_kg) : numPacks * fillKg);
-        const lossGain = totalInput === null ? null : round6(totalOutput - totalInput);
+        // Before Verify there is no actual output or stock posting. Do not fall
+        // back to planned pack values here: they must never look like actuals.
+        const totalOutput = isVerified && pack
+          ? round6(pack.actual_qty_kg != null ? toNumber(pack.actual_qty_kg) : numPacks * fillKg)
+          : null;
+        const lossGain = totalInput === null || totalOutput === null ? null : round6(totalOutput - totalInput);
         const lossGainPct = totalInput && totalInput > 0 && lossGain !== null ? round6((lossGain / totalInput) * 100) : null;
 
         result.push({
-          id: String(pack.id),
+          id: pack ? String(pack.id) : `process:${poId}`,
+          status: processStatus,
           production_date: toTrimmedString(po.production_date),
           shift_name: shiftMap.get(toTrimmedString(po.shift_id)) ?? null,
           prodshade_code: prodshade?.external_code ?? null,
           prodshade_document_name: prodshade?.document_name || prodshade?.material_name || null,
           stroke_number: stroke?.stroke_number ?? null,
           process_po_number: po.po_number,
-          packing_po_number: pack.po_number,
+          packing_po_number: pack?.po_number ?? null,
           sku_code: sku?.external_code ?? null,
           sku_document_name: sku?.document_name || sku?.material_name || null,
           start_batch: batchFrom || null,
@@ -249,9 +257,9 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
           number_of_bags: numPacks,
           loss_gain: lossGain,
           loss_gain_pct: lossGainPct,
-          posting_date: postingDates[0] ?? null,
+          posting_date: isVerified ? (postingDates[0] ?? null) : null,
           standard_by: userDisplayMap.get(toTrimmedString(po.created_by)) ?? null,
-          verified_by: userDisplayMap.get(toTrimmedString(po.verified_by)) ?? null,
+          verified_by: isVerified ? (userDisplayMap.get(toTrimmedString(po.verified_by)) ?? null) : null,
         });
       }
     }

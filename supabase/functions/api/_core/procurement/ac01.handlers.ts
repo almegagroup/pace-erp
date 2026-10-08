@@ -950,6 +950,44 @@ export async function listAC01GRNsHandler(
       : [];
     const settlementInvoiceMap = toMap(settlementInvoiceRows);
 
+    // Section 145 -- Bulk "Order in LOT": Lot Number / Lot Balance / PO Balance columns. A GRN's
+    // lot is the one on the Gate Entry line it was received against (a split GRN carries that
+    // line in source_gate_entry_line_id). Balances are LIVE (this moment), not as of the GRN.
+    const lotGeLineIds = uniqueRelationIds(
+      rows.map((row) => toRelationId(row.gate_entry_line_id) || toRelationId(row.source_gate_entry_line_id)),
+    );
+    const lotGeLines = lotGeLineIds.length > 0
+      ? await fetchInChunks<JsonRecord>(lotGeLineIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
+          .select("id, lot_number, po_line_id").in("id", chunk).not("lot_number", "is", null))
+      : [];
+    const lotLineByGeLineId = toMap(lotGeLines);
+    const lotPoLineIds = uniqueRelationIds(lotGeLines.map((line) => line.po_line_id));
+    const lotBalanceByKey = new Map<string, number>();
+    const poLineOpenQty = new Map<string, number>();
+    if (lotPoLineIds.length > 0) {
+      const balanceChunks: string[][] = [];
+      for (let i = 0; i < lotPoLineIds.length; i += 100) balanceChunks.push(lotPoLineIds.slice(i, i + 100));
+      const [balanceResponses, poLineRows] = await Promise.all([
+        Promise.all(balanceChunks.map((chunk) =>
+          serviceRoleClient.schema("erp_procurement").rpc("po_lot_balances", { p_po_line_ids: chunk, p_exclude_ge_line_id: null }))),
+        fetchInChunks<JsonRecord>(lotPoLineIds, (chunk) =>
+          serviceRoleClient.schema("erp_procurement").from("purchase_order_line")
+            .select("id, open_qty, ordered_qty").in("id", chunk)),
+      ]);
+      for (const response of balanceResponses) {
+        if (response.error) {
+          return ac01ErrorResponse(req, ctx, "AC01_LIST_FAILED", 500, "Unable to resolve lot balances.");
+        }
+        for (const lot of ((response.data as JsonRecord[] | null) ?? [])) {
+          lotBalanceByKey.set(`${toTrimmedString(lot.po_line_id)}::${toTrimmedString(lot.lot_number)}`, Number(lot.balance_qty ?? 0));
+        }
+      }
+      for (const line of poLineRows) {
+        poLineOpenQty.set(String(line.id), Number(line.open_qty ?? line.ordered_qty ?? 0));
+      }
+    }
+
     const verifierDisplayNames = await resolveUserDisplayNames(
       rows.map((row) => toTrimmedString(row.invoice_verified_by)).filter(Boolean),
     );
@@ -970,6 +1008,17 @@ export async function listAC01GRNsHandler(
       invoice_verified_by: toTrimmedString(row.invoice_verified_by) || null,
       invoice_verified_by_display: verifierDisplayNames.get(toTrimmedString(row.invoice_verified_by)) || null,
       invoice_verified_at: row.invoice_verified_at ?? null,
+      ...(() => {
+        const lotLine = lotLineByGeLineId.get(toRelationId(row.gate_entry_line_id) || toRelationId(row.source_gate_entry_line_id));
+        if (!lotLine) return { lot_number: null, lot_balance_qty: null, po_balance_qty: null };
+        const poLineId = toTrimmedString(lotLine.po_line_id);
+        const lotNumber = toTrimmedString(lotLine.lot_number);
+        return {
+          lot_number: lotNumber,
+          lot_balance_qty: lotBalanceByKey.get(`${poLineId}::${lotNumber}`) ?? null,
+          po_balance_qty: poLineOpenQty.get(poLineId) ?? null,
+        };
+      })(),
     }));
 
     const components = assembleSmartComponentsList(items, deductionTypeNameMap);

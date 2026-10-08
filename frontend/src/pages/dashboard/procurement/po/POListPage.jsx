@@ -125,6 +125,16 @@ export default function POListPage() {
             void vendorQuery.refetch();
           },
         },
+        // Section 145 -- add the next lot to an existing Order in LOT purchase order.
+        {
+          key: "lot-amend",
+          label: "Lot Amend",
+          tone: "neutral",
+          onClick: () => {
+            openScreen(OPERATION_SCREENS.PROC_PO_LOT_AMEND.screen_code);
+            navigate("/dashboard/procurement/purchase-orders/lot-amend?kind=po");
+          },
+        },
         { key: "create", label: "Create PO", tone: "primary", onClick: openCreate },
       ]}
       notices={error ? [{ key: "po-list-error", tone: "error", message: error }] : []}

@@ -305,6 +305,11 @@ function buildColumns(components) {
     { key: "external_code", label: "External Code", width: "110px" },
     { key: "grn_qty_base", label: "GRN Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty_base) },
     { key: "invoice_qty_base", label: "Invoice Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.invoice_qty_base) },
+    // Section 145 -- Bulk "Order in LOT": the lot this GRN was received against, plus the live balance
+    // left on that lot and on the PO. Blank for any GRN that is not against an Order in LOT PO.
+    { key: "lot_number", label: "Lot Number", width: "90px", render: (row) => row.lot_number || "—" },
+    { key: "lot_balance_qty", label: "Lot Balance", width: "100px", align: "right", render: (row) => (row.lot_number ? formatNumberOrBlank(row.lot_balance_qty) : "—"), copyValue: (row) => (row.lot_number ? String(row.lot_balance_qty ?? "") : "") },
+    { key: "po_balance_qty", label: "PO Balance", width: "100px", align: "right", render: (row) => (row.lot_number ? formatNumberOrBlank(row.po_balance_qty) : "—"), copyValue: (row) => (row.lot_number ? String(row.po_balance_qty ?? "") : "") },
     { key: "base_uom_code", label: "Base UoM", width: "80px" },
     { key: "pack_uom_code", label: "Pack UoM", width: "80px" },
     { key: "purchase_rate", label: "Purchase Rate", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.purchase_rate) },

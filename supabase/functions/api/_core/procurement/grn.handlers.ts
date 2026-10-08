@@ -656,6 +656,34 @@ export async function getGELinesForGRNHandler(
       : { data: [] };
     const shipToCompanyMap = new Map<string, JsonRecord>((shipToCompanyResp.data ?? []).map((c: JsonRecord) => [String(c.id), c]));
 
+    // Section 145 -- Order in LOT: for a Gate Entry line received against a lot, the lot's balance
+    // and the PO's balance, both with THIS Gate Entry line left out of what is already "reserved"
+    // (the GRN being posted is what consumes it). INDEPENDENT per line (§8B), fetched in parallel.
+    const lotInfoByGeLineId = new Map<string, JsonRecord>();
+    await Promise.all(linesList
+      .filter((l) => toTrimmedString(l.lot_number) && toTrimmedString(l.po_line_id))
+      .map(async (l) => {
+        const poLineId = String(l.po_line_id);
+        const geLineId = String(l.id);
+        const lotNumber = toTrimmedString(l.lot_number);
+        const [lotResp, poBalanceResp] = await Promise.all([
+          serviceRoleClient.schema("erp_procurement")
+            .rpc("po_lot_balances", { p_po_line_ids: [poLineId], p_exclude_ge_line_id: geLineId }),
+          serviceRoleClient.schema("erp_procurement")
+            .rpc("po_line_available_qty", { p_po_line_id: poLineId, p_exclude_ge_line_id: geLineId }),
+        ]);
+        if (lotResp.error || poBalanceResp.error) {
+          throw new Error("GRN_LOT_BALANCE_LOOKUP_FAILED");
+        }
+        const lot = ((lotResp.data as JsonRecord[] | null) ?? []).find((row) => toTrimmedString(row.lot_number) === lotNumber);
+        lotInfoByGeLineId.set(geLineId, {
+          lot_number: lotNumber,
+          lot_qty: Number(lot?.lot_qty ?? 0),
+          lot_balance_qty: Number(lot?.balance_qty ?? 0),
+          po_balance_qty: Number(poBalanceResp.data ?? 0),
+        });
+      }));
+
     const resolvedLines = linesList.map((l) => {
       const mat = matMap.get(String(l.material_id));
       const poLine = l.po_line_id ? poLineMap.get(String(l.po_line_id)) : null;
@@ -724,6 +752,11 @@ export async function getGELinesForGRNHandler(
         existing_grn_id: existingGrn?.id ?? null,
         uom_conversion_factor: conv ? Number(conv.conversion_factor) : null,
         uom_variable_conversion: conv ? Boolean(conv.variable_conversion) : null,
+        // Section 145 -- null/absent for every PO that is not ordered in lots.
+        lot_number: lotInfoByGeLineId.get(String(l.id))?.lot_number ?? null,
+        lot_qty: lotInfoByGeLineId.get(String(l.id))?.lot_qty ?? null,
+        lot_balance_qty: lotInfoByGeLineId.get(String(l.id))?.lot_balance_qty ?? null,
+        po_balance_qty: lotInfoByGeLineId.get(String(l.id))?.po_balance_qty ?? null,
       };
     });
 
@@ -905,6 +938,24 @@ export async function createAndPostGRNFromLineHandler(
     const bulkChallanDate = bulkText("bulk_challan_date", geLine.bulk_challan_date);
     const bulkContainerNumber = bulkText("bulk_container_number", geLine.bulk_container_number);
     const bulkEwaybillNumber = bulkText("bulk_ewaybill_number", geLine.bulk_ewaybill_number);
+    // A Bulk GRN must record the number observed on the physical container.
+    // The checkbox is a convenience only: server-side resolution prevents a
+    // crafted request from claiming a GE match while storing a different value.
+    const physicalContainerMatchesGe = isBulkReceipt && body.physical_container_matches_ge === true;
+    const physicalContainerNumber = isBulkReceipt
+      ? (physicalContainerMatchesGe
+        ? bulkContainerNumber
+        : toTrimmedString(body.physical_container_number) || null)
+      : null;
+    if (isBulkReceipt && !physicalContainerNumber) {
+      return procurementErrorResponse(
+        req,
+        ctx,
+        "GRN_PHYSICAL_CONTAINER_REQUIRED",
+        400,
+        "Physical container number is required for a Bulk GRN.",
+      );
+    }
     const grnLrNumber = isBulkReceipt && bodyHas("lr_number")
       ? toTrimmedString(body.lr_number) || null
       : toTrimmedString(body.lr_number) || toTrimmedString(geLine.bulk_lr_number) || null;
@@ -1072,6 +1123,8 @@ export async function createAndPostGRNFromLineHandler(
         bulk_challan_date: bulkChallanDate,
         bulk_container_number: bulkContainerNumber,
         bulk_ewaybill_number: bulkEwaybillNumber,
+        physical_container_number: physicalContainerNumber,
+        physical_container_matches_ge: physicalContainerMatchesGe,
         rst_number: toTrimmedString(geLine.rst_number) || null,
         // Transporter
         transporter_id: toTrimmedString(body.transporter_id) || null,
@@ -1406,7 +1459,7 @@ export async function listGRNsHandler(
 
     let query = serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
-      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, material_id, received_qty, uom_code, po_id, invoice_number, invoice_date, transporter_id, lr_number, lr_date")
+      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, source_gate_entry_line_id, material_id, received_qty, uom_code, po_id, invoice_number, invoice_date, transporter_id, lr_number, lr_date")
       .order("grn_date", { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -1449,8 +1502,14 @@ export async function listGRNsHandler(
         : { data: [], error: null },
     ]);
 
-    // For old-style GRNs, fetch total_qty from lines
-    const oldStyleIds = rows.filter((r) => !r.gate_entry_line_id).map((r) => String(r.id));
+    // For old-style GRNs, fetch total_qty from lines. A GRN created by the
+    // Bulk Invoice Split intentionally has no gate_entry_line_id (the legacy
+    // unique index still protects that column), but has source_gate_entry_line_id
+    // and its own header received_qty. It is therefore new-style for quantity
+    // display, not an old-style header with missing goods_receipt_line rows.
+    const oldStyleIds = rows
+      .filter((r) => !r.gate_entry_line_id && !r.source_gate_entry_line_id)
+      .map((r) => String(r.id));
     let lineQtyMap = new Map<string, number>();
     if (oldStyleIds.length > 0) {
       const { data: lineQtyRows } = await serviceRoleClient
@@ -1472,7 +1531,7 @@ export async function listGRNsHandler(
       const mat = matMap.get(String(r.material_id));
       const ge = geMap.get(String(r.gate_entry_id));
       const transporter = transporterMap.get(String(r.transporter_id));
-      const isNewStyle = Boolean(r.gate_entry_line_id);
+      const isNewStyle = Boolean(r.gate_entry_line_id || r.source_gate_entry_line_id);
       const totalQty = isNewStyle
         ? (parseNullableNumber(r.received_qty) ?? 0)
         : (lineQtyMap.get(String(r.id)) ?? 0);
@@ -1906,6 +1965,8 @@ export async function listGrnInvoiceMappingCandidatesHandler(
         bulk_challan_number: g.bulk_challan_number ?? null,
         bulk_container_number: g.bulk_container_number ?? null,
         bulk_ewaybill_number: g.bulk_ewaybill_number ?? null,
+        physical_container_number: g.physical_container_number ?? null,
+        physical_container_matches_ge: g.physical_container_matches_ge === true,
         invoice_number: g.invoice_number ?? null,
         invoice_date: g.invoice_date ?? null,
         invoice_rate: g.invoice_rate ?? null,

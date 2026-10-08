@@ -317,6 +317,7 @@ import {
   upsertTransporterEmailsHandler,
 } from "../_core/procurement/l2_masters.handlers.ts";
 import {
+  addPoLotsHandler,
   amendPOHandler,
   approveAmendmentHandler,
   approvePOHandler,
@@ -331,6 +332,7 @@ import {
   getPoFilterOptionsHandler,
   knockOffPOLineHandler,
   knockOffPOHandler,
+  listLotOrdersHandler,
   setPoCrcpHandler,
   setPoEffectiveDateHandler,
   listMaterialUomConversionsForProcurementHandler,
@@ -914,6 +916,8 @@ export async function dispatchProcurementRoutes(
       return await listPOsHandler(req, ctx);
     case "GET:/api/procurement/po-order-groups":
       return await listPOOrderGroupsHandler(req, ctx);
+    case "GET:/api/procurement/po-lot-orders":
+      return await listLotOrdersHandler(req, ctx);
     case "GET:/api/procurement/print-groups":
       return await lookupPrintGroupHandler(req, ctx);
     case "POST:/api/procurement/print-groups/log":
@@ -1626,6 +1630,11 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/effective-date$/.test(pathname) && req.method === "PATCH") {
     return await setPoEffectiveDateHandler(req, ctx);
+  }
+
+  // Section 145 -- Bulk "Order in LOT": Lot Amend (add lots, goes to approval).
+  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/lots$/.test(pathname) && req.method === "POST") {
+    return await addPoLotsHandler(req, ctx);
   }
 
   return null;

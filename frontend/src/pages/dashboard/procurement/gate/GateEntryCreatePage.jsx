@@ -43,6 +43,19 @@ function time12to24(time, ampm) {
   return `${String(h24).padStart(2, "0")}:${String(mm || 0).padStart(2, "0")}:00`;
 }
 
+// Section 145 -- "1", "01" and "0001" are the same lot: 1 to 4 digits, canonicalised to 4.
+// Mirrors normalizeLotNumber() in gate_entry.handlers.ts.
+function normalizeLotNumber(value) {
+  const text = String(value ?? "").trim();
+  if (!/^[0-9]{1,4}$/.test(text) || Number(text) <= 0) return "";
+  return text.padStart(4, "0");
+}
+
+function formatLotQty(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString(undefined, { maximumFractionDigits: 6 }) : "—";
+}
+
 const EMPTY_BULK_DRAWER = () => ({
   open: false,
   rowIndex: null,
@@ -58,6 +71,8 @@ const EMPTY_BULK_DRAWER = () => ({
   lrNumber: "",
   geQty: "",
   rstNumber: "",
+  // Section 145 -- Order in LOT: the lot this truck is received against.
+  lotNumber: "",
 });
 
 const EMPTY_LINE = () => ({
@@ -78,6 +93,7 @@ const EMPTY_LINE = () => ({
   bulkEwaybillNumber: "",
   bulkLrNumber: "",
   bulkRstNumber: "",
+  lotNumber: "",
 });
 
 function isBulkLine(l) {
@@ -449,7 +465,9 @@ export default function GateEntryCreatePage() {
       isSto,
       item,
       line,
-      geQty: existingLine?.rcvQty || (line?.expected_qty != null ? String(line.expected_qty) : ""),
+      // An Order in LOT PO is received lot by lot: prefilling the whole PO balance would only
+      // trip the lot-balance check, so the Lot Qty starts blank there.
+      geQty: existingLine?.rcvQty || (!isSto && item?.order_in_lot ? "" : (line?.expected_qty != null ? String(line.expected_qty) : "")),
       challanNumber: existingLine?.bulkChallanNumber || "",
       challanDate: existingLine?.bulkChallanDate || "",
       invoiceNumber: existingLine?.bulkInvoiceNumber || "",
@@ -458,6 +476,7 @@ export default function GateEntryCreatePage() {
       ewaybillNumber: existingLine?.bulkEwaybillNumber || "",
       lrNumber: existingLine?.bulkLrNumber || "",
       rstNumber: existingLine?.bulkRstNumber || "",
+      lotNumber: existingLine?.lotNumber || "",
     });
   }
 
@@ -505,11 +524,30 @@ export default function GateEntryCreatePage() {
     if (!geQty || Number(geQty) <= 0) {
       errors.geQty = "GE Quantity is required.";
     }
+    // Section 145 -- an Order in LOT PO is received against a lot that must already exist on it.
+    if (!d.isSto && item?.order_in_lot) {
+      const lotNumber = normalizeLotNumber(d.lotNumber);
+      if (!String(d.lotNumber ?? "").trim()) {
+        errors.lotNumber = "Lot Number is required for this PO.";
+      } else if (!lotNumber) {
+        errors.lotNumber = "Lot Number must be 1 to 4 digits, e.g. 1 or 0001.";
+      } else {
+        const lot = (d.line?.lots ?? []).find((entry) => entry.lot_number === lotNumber);
+        if (!lot) {
+          errors.lotNumber = `Lot ${lotNumber} does not exist on this PO.`;
+        } else if (Number(geQty) > Number(lot.balance_qty) + 0.000001) {
+          errors.geQty = `Exceeds Lot ${lotNumber}'s balance (${formatLotQty(lot.balance_qty)}).`;
+        }
+      }
+      if (!errors.geQty && Number(geQty) > Number(d.line?.expected_qty ?? 0) + 0.000001) {
+        errors.geQty = `Exceeds the PO's balance (${formatLotQty(d.line?.expected_qty)}).`;
+      }
+    }
     return errors;
   }
 
   function confirmBulkDrawer() {
-    const { rowIndex, isSto, item, line, challanNumber, challanDate, invoiceNumber, invoiceDate, containerNumber, ewaybillNumber, lrNumber, geQty, rstNumber } = bulkDrawer;
+    const { rowIndex, isSto, item, line, challanNumber, challanDate, invoiceNumber, invoiceDate, containerNumber, ewaybillNumber, lrNumber, geQty, rstNumber, lotNumber } = bulkDrawer;
     if (rowIndex === null || !line) { closeBulkDrawer(); return; }
     updateLine(rowIndex, {
       refQuery: isSto ? item.sto_number : item.po_number,
@@ -527,6 +565,7 @@ export default function GateEntryCreatePage() {
       bulkEwaybillNumber: ewaybillNumber.trim(),
       bulkLrNumber: lrNumber.trim(),
       bulkRstNumber: rstNumber.trim(),
+      lotNumber: !isSto && item?.order_in_lot ? normalizeLotNumber(lotNumber) : "",
     });
     closeBulkDrawer();
   }
@@ -655,6 +694,7 @@ export default function GateEntryCreatePage() {
               bulk_ewaybill_number: l.bulkEwaybillNumber.trim() || null,
               bulk_lr_number: l.bulkLrNumber.trim() || null,
               rst_number: l.bulkRstNumber.trim() || null,
+              lot_number: l.lotNumber || null,
             };
           }
           return {
@@ -1522,6 +1562,80 @@ export default function GateEntryCreatePage() {
                   Gross weight is captured once at the vehicle header; Tare/Net weight are captured at Gate Exit.
                 </p>
 
+                {!bd.isSto && bd.item?.order_in_lot ? (() => {
+                  // Section 145 -- Order in LOT: Lot Number, then a LOT row and a PO row.
+                  // Only the Lot Qty is typed; the PO row follows it and is read-only.
+                  const lotNumber = normalizeLotNumber(bd.lotNumber);
+                  const lot = lotNumber ? (bd.line?.lots ?? []).find((entry) => entry.lot_number === lotNumber) : null;
+                  const qty = Number(bd.geQty) > 0 ? Number(bd.geQty) : 0;
+                  const lotBalance = lot ? Number(lot.balance_qty) : null;
+                  const poBalance = bd.line?.expected_qty != null ? Number(bd.line.expected_qty) : null;
+                  return (
+                    <div className="grid gap-3 border-t border-slate-200 pt-3">
+                      <div className="grid grid-cols-4 gap-3">
+                        <label className="col-span-2 grid gap-1 text-xs font-semibold text-slate-700">
+                          Material
+                          <input readOnly className="h-9 border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700" value={bd.line?.material_name || bd.line?.material_id || "—"} />
+                        </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                          UOM
+                          <input readOnly className="h-9 border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700" value={bd.line?.uom_code || bd.line?.po_uom_code || "—"} />
+                        </label>
+                        <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                          Lot Number <span className="font-normal text-red-500">*</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            maxLength={4}
+                            placeholder="0001"
+                            className={["h-9 border bg-white px-3 font-mono text-sm outline-none focus:border-sky-500", bulkErrors.lotNumber ? "border-red-400" : "border-slate-300"].join(" ")}
+                            value={bd.lotNumber}
+                            onChange={(e) => updateBulkDrawer({ lotNumber: e.target.value.replace(/[^0-9]/g, "") })}
+                          />
+                          {bulkErrors.lotNumber && <span className="text-[10px] font-semibold text-red-600">{bulkErrors.lotNumber}</span>}
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-[70px_1fr_1fr_1fr] items-end gap-3 text-xs font-semibold text-slate-700">
+                        <span className="pb-2 text-slate-500">LOT</span>
+                        <label className="grid gap-1">
+                          Balance
+                          <input readOnly className="h-9 border border-slate-200 bg-slate-50 px-3 text-right text-sm text-slate-700" value={lotBalance != null ? formatLotQty(lotBalance) : "—"} />
+                        </label>
+                        <label className="grid gap-1">
+                          Lot Qty (GE Quantity) <span className="font-normal text-red-500">*</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.001"
+                            className={["h-9 border bg-white px-3 text-right text-sm outline-none focus:border-sky-500", bulkErrors.geQty ? "border-red-400" : "border-slate-300"].join(" ")}
+                            value={bd.geQty}
+                            onChange={(e) => updateBulkDrawer({ geQty: e.target.value })}
+                          />
+                        </label>
+                        <label className="grid gap-1">
+                          Lot balance after
+                          <input readOnly className="h-9 border border-slate-200 bg-slate-50 px-3 text-right text-sm text-slate-700" value={lotBalance != null ? formatLotQty(Math.max(lotBalance - qty, 0)) : "—"} />
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-[70px_1fr_1fr_1fr] items-end gap-3 text-xs font-semibold text-slate-700">
+                        <span className="pb-2 text-slate-500">PO</span>
+                        <label className="grid gap-1">
+                          Balance
+                          <input readOnly className="h-9 border border-slate-200 bg-slate-50 px-3 text-right text-sm text-slate-700" value={poBalance != null ? formatLotQty(poBalance) : "—"} />
+                        </label>
+                        <label className="grid gap-1">
+                          PO Qty
+                          <input readOnly className="h-9 border border-slate-200 bg-slate-50 px-3 text-right text-sm text-slate-700" value={qty ? formatLotQty(qty) : "—"} />
+                        </label>
+                        <label className="grid gap-1">
+                          PO balance after
+                          <input readOnly className="h-9 border border-slate-200 bg-slate-50 px-3 text-right text-sm text-slate-700" value={poBalance != null ? formatLotQty(Math.max(poBalance - qty, 0)) : "—"} />
+                        </label>
+                      </div>
+                      {bulkErrors.geQty && <span className="text-[11px] font-semibold text-red-600">{bulkErrors.geQty}</span>}
+                    </div>
+                  );
+                })() : (
                 <div className="grid grid-cols-4 gap-3 border-t border-slate-200 pt-3">
                   <label className="col-span-2 grid gap-1 text-xs font-semibold text-slate-700">
                     Material
@@ -1548,6 +1662,7 @@ export default function GateEntryCreatePage() {
                     {bulkErrors.geQty && <span className="text-[10px] font-semibold text-red-600">{bulkErrors.geQty}</span>}
                   </label>
                 </div>
+                )}
               </div>
             )}
           </DrawerBase>

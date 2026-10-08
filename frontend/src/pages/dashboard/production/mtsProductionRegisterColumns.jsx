@@ -32,6 +32,12 @@ function qtyColumn(key, label, width, digits = 3) {
   };
 }
 
+function statusBadge(status) {
+  if (status === "VERIFIED") return "bg-emerald-100 text-emerald-800";
+  if (status === "CANCELLED") return "bg-slate-100 text-slate-500";
+  return "bg-amber-100 text-amber-800";
+}
+
 // Loss (negative) red, gain (positive) green -- on screen and in the Excel export.
 function signedColumn(key, label, width, suffix = "") {
   const text = (row) => (isNum(row[key]) ? `${formatQty(row[key], 3)}${suffix}` : "");
@@ -54,6 +60,12 @@ function signedColumn(key, label, width, suffix = "") {
 }
 
 export const MTS_REGISTER_COLUMNS = [
+  {
+    key: "status",
+    label: "Status",
+    width: "105px",
+    render: (r) => <span className={`rounded px-2 py-0.5 text-xs font-semibold ${statusBadge(r.status)}`}>{r.status || "--"}</span>,
+  },
   { key: "production_date", label: "Date", width: "96px", filterType: "date" },
   { key: "shift_name", label: "Shift", width: "70px", render: (r) => r.shift_name || "--" },
   { key: "prodshade_code", label: "Prodshade Code", width: "120px", render: (r) => r.prodshade_code || "--" },

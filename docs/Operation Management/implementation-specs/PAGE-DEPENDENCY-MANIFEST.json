@@ -4743,7 +4743,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/po/PODetailPage.jsx",
-    "dependencyCount": 11,
+    "dependencyCount": 12,
     "deps": [
       {
         "fn": "getPurchaseOrder",
@@ -4831,6 +4831,14 @@
         "path": "/api/procurement/payment-terms",
         "resourceCode": "PROC_PAYMENT_TERMS_MASTER",
         "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "addPoLots",
+        "method": "POST",
+        "path": "/api/procurement/purchase-orders/${encodeURIComponent(id)}/lots",
+        "resourceCode": "PROC_PO_CREATE",
+        "action": "EDIT",
         "skipAcl": false
       }
     ]
@@ -9350,6 +9358,20 @@
         "path": "/api/procurement/sales-orders/excel-upload/submit",
         "resourceCode": "PROC_SO_CREATE",
         "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/po/POLotAmendListPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "listPoLotOrders",
+        "method": "GET",
+        "path": "/api/procurement/po-lot-orders",
+        "resourceCode": "PROC_PO_CREATE",
+        "action": "EDIT",
         "skipAcl": false
       }
     ]

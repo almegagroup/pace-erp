@@ -630,6 +630,32 @@ function distributeNetWeight(lines: GateEntryLineRow[], totalNetWeight: number):
   });
 }
 
+// ── Section 145 — Bulk "Order in LOT" ──────────────────────────────────────────
+// "1", "01" and "0001" are the same lot: digits only, 1-4 of them, canonicalised to 4.
+// Mirrors erp_procurement.normalize_lot_number().
+function normalizeLotNumber(input: unknown): string | null {
+  const text = String(input ?? "").trim();
+  if (!/^[0-9]{1,4}$/.test(text)) return null;
+  return Number(text) > 0 ? text.padStart(4, "0") : null;
+}
+
+// Live balance of one lot (lot_qty − posted GRNs − Gate Entries not yet GRN'd). Null when the PO
+// line has no such lot. excludeGeLineId leaves one GE line out (a GRN must not subtract its own GE).
+async function fetchLotBalance(
+  poLineId: string,
+  lotNumber: string,
+  excludeGeLineId?: string,
+): Promise<JsonRecord | null> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .rpc("po_lot_balances", { p_po_line_ids: [poLineId], p_exclude_ge_line_id: excludeGeLineId ?? null });
+  if (error) {
+    console.error("GE_LOT_BALANCE_ERROR", JSON.stringify(error));
+    throw new Error("GE_LOT_BALANCE_LOOKUP_FAILED");
+  }
+  return ((data as JsonRecord[] | null) ?? []).find((row) => toTrimmedString(row.lot_number) === lotNumber) ?? null;
+}
+
 export async function createGateEntryHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -685,9 +711,12 @@ export async function createGateEntryHandler(
 
     const preparedLines: JsonRecord[] = [];
     let geType = "INBOUND_PO";
+    // Two lines of one Gate Entry against the same lot must fit the lot's balance together.
+    const lotQtyInThisRequest = new Map<string, number>();
 
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
+      let resolvedLotNumber: string | null = null;
       const poLineId = toTrimmedString(line.po_line_id);
       const csnId = toTrimmedString(line.csn_id);
       const stoId = toTrimmedString(line.sto_id);
@@ -782,6 +811,32 @@ export async function createGateEntryHandler(
           if (geQty > availableQty + 0.000001) {
             return procurementErrorResponse(req, ctx, "GE_PO_BALANCE_EXCEEDED", 400,
               `Line ${index + 1} exceeds the PO's live balance (${availableQty.toFixed(6)} ${uomCode}).`);
+          }
+          // Section 145 -- an Order in LOT PO is received against a lot: the lot number is mandatory,
+          // must be an ACTIVE lot of this PO line (the system never creates one here), and the
+          // quantity must fit that lot's own balance as well as the PO's (checked above).
+          if (po.order_in_lot === true) {
+            const rawLot = toTrimmedString(line.lot_number);
+            if (!rawLot) {
+              return procurementErrorResponse(req, ctx, "GE_LOT_NUMBER_REQUIRED", 400, `Line ${index + 1} needs a Lot Number (this PO is ordered in lots).`);
+            }
+            const lotNumber = normalizeLotNumber(rawLot);
+            if (!lotNumber) {
+              return procurementErrorResponse(req, ctx, "GE_LOT_NUMBER_INVALID", 400, `Line ${index + 1}: Lot Number must be 1 to 4 digits, e.g. 1 or 0001.`);
+            }
+            const lot = await fetchLotBalance(poLineId, lotNumber);
+            if (!lot || toUpperTrimmedString(lot.status) !== "ACTIVE") {
+              return procurementErrorResponse(req, ctx, "GE_LOT_NOT_FOUND", 404, `Line ${index + 1}: Lot ${lotNumber} does not exist on this PO.`);
+            }
+            const lotKey = `${poLineId}::${lotNumber}`;
+            const alreadyInRequest = lotQtyInThisRequest.get(lotKey) ?? 0;
+            const lotBalance = Number(lot.balance_qty ?? 0);
+            if (geQty + alreadyInRequest > lotBalance + 0.000001) {
+              return procurementErrorResponse(req, ctx, "GE_LOT_BALANCE_EXCEEDED", 400,
+                `Line ${index + 1} exceeds Lot ${lotNumber}'s live balance (${lotBalance.toFixed(6)} ${uomCode}).`);
+            }
+            lotQtyInThisRequest.set(lotKey, alreadyInRequest + geQty);
+            resolvedLotNumber = lotNumber;
           }
           const bulkError = await validateAndPrepareBulkLineFields(
             line, index, "purchase_order", String(po.id),
@@ -909,6 +964,7 @@ export async function createGateEntryHandler(
         bulk_container_number: toTrimmedString(line.bulk_container_number) || null,
         bulk_ewaybill_number: toTrimmedString(line.bulk_ewaybill_number) || null,
         bulk_lr_number: toTrimmedString(line.bulk_lr_number) || null,
+        lot_number: resolvedLotNumber,
       });
     }
 
@@ -1219,6 +1275,16 @@ export async function updateGateEntryHandler(
               tare_weight: line.tare_weight,
               net_weight: line.net_weight,
               net_weight_is_manual: line.net_weight_is_manual,
+              // Section 145 -- the lot a truck is received against must survive an edit; the Bulk
+              // document fields (re-validated by the create call above) were being dropped here too.
+              lot_number: line.lot_number ?? null,
+              bulk_challan_number: line.bulk_challan_number ?? null,
+              bulk_challan_date: line.bulk_challan_date ?? null,
+              bulk_invoice_number: line.bulk_invoice_number ?? null,
+              bulk_invoice_date: line.bulk_invoice_date ?? null,
+              bulk_container_number: line.bulk_container_number ?? null,
+              bulk_ewaybill_number: line.bulk_ewaybill_number ?? null,
+              bulk_lr_number: line.bulk_lr_number ?? null,
             })),
           );
         if (insertError) {
@@ -1338,7 +1404,7 @@ export async function listOpenPOsForGEHandler(
     let poQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("purchase_order")
-      .select("id, po_number, delivery_type, vendor_id, status, company_id, crcp_enabled, effective_start_date, cutoff_date")
+      .select("id, po_number, delivery_type, vendor_id, status, company_id, crcp_enabled, effective_start_date, cutoff_date, order_in_lot")
       .in("status", ["CONFIRMED", "PARTIALLY_RECEIVED"])
       .order("created_at", { ascending: false });
     poQuery = crcpPoIds.length > 0
@@ -1427,6 +1493,38 @@ export async function listOpenPOsForGEHandler(
       reservedByPoLine.set(poLineId, (reservedByPoLine.get(poLineId) ?? 0) + Number(geLine.ge_qty ?? 0));
     }
 
+    // Section 145 -- lots (ACTIVE only) with live balances, for the Order in LOT drawer, fetched
+    // only for the lines of POs that actually carry the flag.
+    const lotPoIds = new Set((pos ?? []).filter((po: JsonRecord) => po.order_in_lot === true).map((po: JsonRecord) => String(po.id)));
+    const lotLineIds = lines.filter((line) => lotPoIds.has(String(line.po_id))).map((line) => String(line.id));
+    const lotsByPoLine = new Map<string, JsonRecord[]>();
+    if (lotLineIds.length > 0) {
+      const lotChunks: string[][] = [];
+      for (let i = 0; i < lotLineIds.length; i += 100) lotChunks.push(lotLineIds.slice(i, i + 100));
+      const lotResponses = await Promise.all(lotChunks.map((chunk) =>
+        serviceRoleClient.schema("erp_procurement").rpc("po_lot_balances", { p_po_line_ids: chunk, p_exclude_ge_line_id: null })));
+      for (const response of lotResponses) {
+        if (response.error) {
+          return procurementErrorResponse(req, ctx, "PO_OPEN_LOT_LOOKUP_FAILED", 500, "Unable to load PO lots.");
+        }
+        for (const lot of ((response.data as JsonRecord[] | null) ?? [])) {
+          if (toUpperTrimmedString(lot.status) !== "ACTIVE") continue;
+          const key = toTrimmedString(lot.po_line_id);
+          const list = lotsByPoLine.get(key) ?? [];
+          list.push({
+            lot_number: lot.lot_number,
+            lot_qty: Number(lot.lot_qty ?? 0),
+            delivery_date: lot.delivery_date,
+            balance_qty: Number(lot.balance_qty ?? 0),
+          });
+          lotsByPoLine.set(key, list);
+        }
+      }
+      for (const list of lotsByPoLine.values()) {
+        list.sort((a, b) => toTrimmedString(a.lot_number).localeCompare(toTrimmedString(b.lot_number)));
+      }
+    }
+
     const linesMap = new Map<string, JsonRecord[]>();
     for (const line of lines) {
       const poId = String(line.po_id);
@@ -1441,6 +1539,7 @@ export async function listOpenPOsForGEHandler(
         pending_ge_qty: reservedQty,
         available_ge_qty: availableQty,
         expected_qty: availableQty,
+        lots: lotsByPoLine.get(String(line.id)) ?? [],
       });
     }
 

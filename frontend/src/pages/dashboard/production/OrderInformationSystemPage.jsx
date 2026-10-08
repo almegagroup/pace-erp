@@ -777,7 +777,7 @@ export default function OrderInformationSystemPage() {
       </div>
       ) : page === "MTS_REGISTER" ? (
       <div className="grid gap-4">
-        <ErpSectionCard eyebrow="MTS Production Register" title={`Verified MTS production, one line per pack row (${mtsParams?.date_from ?? ""} to ${mtsParams?.date_to ?? ""})`}>
+        <ErpSectionCard eyebrow="MTS Production Register" title={`MTS batch history — Standard, Verified and Cancelled (${mtsParams?.date_from ?? ""} to ${mtsParams?.date_to ?? ""})`}>
           <div className="mb-2 flex items-center justify-between">
             <button type="button" onClick={() => setPage(1)} className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
               Back to Filters
@@ -791,7 +791,7 @@ export default function OrderInformationSystemPage() {
             </span>
           </div>
           <div className="mb-2 text-xs text-slate-500">
-            Only VERIFIED MTS Process POs with FINAL Packing POs appear. Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C
+            STANDARD, VERIFIED and CANCELLED MTS Process POs appear. Cancelled rows are inactive; actual output, loss/gain and posting information are shown only after Verify. Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C
             to copy — same as Excel. Use the funnel in any column header to filter that column.
           </div>
           <div className="mb-2 flex items-center gap-2">
@@ -818,13 +818,14 @@ export default function OrderInformationSystemPage() {
             virtualize
             rangeSelect
             columnFilter
+            getRowProps={(row) => row.status === "CANCELLED" ? { className: "bg-slate-50 opacity-60" } : {}}
             maxHeight="calc(100vh - 300px)"
             emptyMessage={
               mtsQ.isLoading
                 ? "Loading..."
                 : hasMtsSearch
                   ? "No rows match this search."
-                  : "No verified MTS production with a final packing order in this date range."
+                  : "No Standard, Verified or Cancelled MTS production in this date range."
             }
           />
         </ErpSectionCard>

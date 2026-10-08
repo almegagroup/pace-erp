@@ -109,9 +109,12 @@ export default function POOrderGroupDetailPage() {
   async function handleReject() {
     const remarks = await openActionPrompt({ eyebrow: "Purchase Order Order", title: "Reject this order?", label: "Reject reason", required: true });
     if (!remarks) return;
+    const rejectingLotAmend = (group?.pending_lot_amendments ?? []).length > 0;
     await runAction(
       () => rejectPOOrderGroup(id, { remarks }),
-      "Order rejected — purchase orders sent back to draft."
+      rejectingLotAmend
+        ? "Rejected — the lot is dropped and the purchase order stays confirmed."
+        : "Order rejected — purchase orders sent back to draft."
     );
   }
 
@@ -184,6 +187,26 @@ export default function POOrderGroupDetailPage() {
               This "Order" is an internal grouping for approval only — the vendor never sees it, only the individual PO numbers below.
             </p>
           </ErpSectionCard>
+
+          {(group.pending_lot_amendments ?? []).length > 0 ? (
+            <ErpSectionCard eyebrow="Order in LOT" title="Lot waiting for approval">
+              <ErpDenseGrid
+                columns={[
+                  { key: "po_number", label: "PO Number", width: "150px" },
+                  { key: "material_display", label: "Material", render: (row) => row.material_display || "—" },
+                  { key: "lot_number", label: "New Lot", width: "90px" },
+                  { key: "lot_qty", label: "Lot Qty", width: "110px", align: "right" },
+                  { key: "delivery_date", label: "Delivery Date", width: "130px" },
+                ]}
+                rows={group.pending_lot_amendments}
+                rowKey={(row) => `${row.po_id}-${row.lot_number}`}
+                emptyMessage="No lot is waiting for approval."
+              />
+              <p className="mt-2 text-xs text-slate-500">
+                The lot is added to the purchase order quantity only after approval. Rejecting drops the lot and leaves the purchase order confirmed.
+              </p>
+            </ErpSectionCard>
+          ) : null}
 
           <ErpSectionCard eyebrow="Purchase Orders" title="Click a row to open and edit that PO">
             <ErpDenseGrid

@@ -127,6 +127,17 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // Section 145 -- Bulk "Order in LOT": the Lot Amend list, reached by the "Lot Amend" button on
+  // the PO page and the Legacy PO page. Authority is the same as amending a PO (PROC_PO_CREATE:EDIT
+  // at the API); no menu row of its own.
+  PROC_PO_LOT_AMEND: {
+    screen_code: "PROC_PO_LOT_AMEND",
+    route: "/dashboard/procurement/purchase-orders/lot-amend",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PO_DETAIL: {
     screen_code: "PROC_PO_DETAIL",
     route: "/dashboard/procurement/purchase-orders/:id",
