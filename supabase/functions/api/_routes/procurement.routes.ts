@@ -414,6 +414,9 @@ import {
   unmapSoAllocationHandler,
 } from "../_core/procurement/so_map.handlers.ts";
 import {
+  previewSoMapBulkUploadHandler,
+} from "../_core/procurement/so_map_bulk.handlers.ts";
+import {
   cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
   createPgiInvoiceHandler,
@@ -872,6 +875,12 @@ export async function dispatchProcurementRoutes(
       return await mapSoLineToDepotHandler(req, ctx);
     case "POST:/api/procurement/so-map/save-group":
       return await saveSoMapGroupHandler(req, ctx);
+
+    // §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Bulk DD SO Map", additive to
+    // the SO Map block above, VDC-only. Shares PROC_SO_LIST/EDIT (same
+    // resource as map-fo/map-address/save-group) -- no ACL change needed.
+    case "POST:/api/procurement/so-map/bulk/preview":
+      return await previewSoMapBulkUploadHandler(req, ctx);
 
     case "GET:/api/procurement/delivery-orders":
       return await listDeliveryOrdersHandler(req, ctx);

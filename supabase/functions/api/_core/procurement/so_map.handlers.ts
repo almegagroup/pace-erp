@@ -791,6 +791,12 @@ export async function saveSoMapGroupHandler(req: Request, ctx: ProcurementHandle
     if (source === "fo") groupPayload.fo_id = toTrimmedString(body.fo_id);
     if (source === "address") groupPayload.customer_address_id = toTrimmedString(body.customer_address_id);
     if (source === "depot") groupPayload.depot_code_id = toTrimmedString(so.bill_to_depot_code_id);
+    // §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — the new Bulk DD SO Map flow's
+    // own Sales/Dispatch FO Number (Asian Paints' per-dispatch number,
+    // distinct from plan_feed.fo_number). Purely additive: optional, absent
+    // for every existing caller (manual SO01 Map UI never sends it).
+    const externalFoNumber = toTrimmedString(body.external_fo_number);
+    if (externalFoNumber) groupPayload.external_fo_number = externalFoNumber;
     if (!Object.values(groupPayload).some((value) => value === "")) {
       const allocations: JsonRecord[] = [];
       for (const item of items) {

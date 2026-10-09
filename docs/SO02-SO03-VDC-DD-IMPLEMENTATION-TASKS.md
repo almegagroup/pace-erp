@@ -206,3 +206,31 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   Invoice-only endpoint (Phase 4) copies them into the real
   `sales_invoice.tally_invoice_number/tally_invoice_date/inbound_number`
   columns at posting time. Applied + reconciled, no new drift.
+- **2026-10-09 T6 ✅ (partial — preview only, create/save next)** New
+  `erp_master.find_similar_customer_names_in_vdc()` (migration
+  `20261009130000_find_similar_customer_names_in_vdc.sql`, pg_trgm,
+  VDC-scoped, mirrors the existing `find_similar_vendor_names` pattern) +
+  new `supabase/functions/api/_core/procurement/so_map_bulk.handlers.ts`
+  (`previewSoMapBulkUploadHandler`) — resolves External SO Number → VDC,
+  GST-based customer resolve (FOUND/FOUND_DIFFERENT_VDC/NOT_FOUND), name-based
+  resolve (MATCHED/AMBIGUOUS/NOT_FOUND via the new similarity function),
+  Site Address resolve (count/status), SKU match against the SO's own lines
+  only, Qty-vs-balance check, and FO-number duplicate detection against
+  `sales_order_map_group.external_fo_number`. Additively extended existing
+  `saveSoMapGroupHandler` (so_map.handlers.ts) to accept optional
+  `external_fo_number` — zero behavior change for any existing caller.
+  Route `POST /api/procurement/so-map/bulk/preview` wired, ACL reuses
+  `PROC_SO_LIST`/EDIT (same resource as the rest of SO Map, no ACL change).
+  **Verified:** `deno check` before/after on every touched file = 97/97
+  pre-existing errors (zero new), new file itself = 0 errors;
+  `route-acl-registry-guard.mjs`/`hardcoded-role-check-guard.mjs`/
+  `wrong-company-source-guard.mjs`/`stock-posting-guard.mjs` all pass.
+  **Not yet verified against real data** — dev's `customer_address` table
+  currently has zero `depot_code_id`-mapped rows (the real VDC-mapped
+  customer data the earlier audit found lives in prod, not dev); the
+  similarity RPC was smoke-tested (runs without SQL error, returns empty on
+  empty data, as expected). **Still TODO for T6-T8:** the create/save
+  endpoint that turns a resolved preview row into a real
+  `sales_order_map_group` (calling the now-extended `saveSoMapGroupHandler`)
+  and the full upload-validation rules (duplicate-with-changed-qty
+  Confirm/Remove, Transporter bulk-resolve belongs to Phase 2 not here).
