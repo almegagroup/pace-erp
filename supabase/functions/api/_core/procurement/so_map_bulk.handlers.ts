@@ -41,6 +41,7 @@ type RawUploadRow = {
   customer_gst?: string;
   customer_name?: string;
   customer_address?: string;
+  site_address?: string;
   has_site: boolean;
   has_site_valid?: boolean;
   sku: string;
@@ -55,6 +56,19 @@ function toTrimmedString(value: unknown): string {
 }
 function toUpperTrimmedString(value: unknown): string {
   return toTrimmedString(value).toUpperCase();
+}
+function canonicalExternalSoNumber(value: unknown): string {
+  const normalized = toUpperTrimmedString(value);
+  return /^\d+$/.test(normalized) ? normalized.replace(/^0+(?=\d)/, "") : normalized;
+}
+function externalSoLookupValues(value: unknown): string[] {
+  const normalized = toTrimmedString(value);
+  if (!/^\d+$/.test(normalized)) return normalized ? [normalized] : [];
+  // Excel frequently converts 0011419951 to the number 11419951. The live
+  // customer PO convention is ten digits, so look up that lossless padding
+  // variant as well while keeping non-numeric keys exact.
+  const paddedTenDigit = normalized.padStart(10, "0");
+  return [...new Set([normalized, paddedTenDigit])];
 }
 function soMapBulkErrorResponse(req: Request, ctx: ProcurementHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
@@ -140,6 +154,25 @@ async function resolveSiteAddresses(customerId: string, vdcId: string): Promise<
   return (data ?? []) as JsonRecord[];
 }
 
+function normalizeSiteAddress(value: unknown): string {
+  return toTrimmedString(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function buildSiteResolution(addresses: JsonRecord[], uploadedSiteAddress: unknown): JsonRecord {
+  const normalizedUploadedAddress = normalizeSiteAddress(uploadedSiteAddress);
+  const exactMatches = normalizedUploadedAddress
+    ? addresses.filter((address) => normalizeSiteAddress(address.address_line) === normalizedUploadedAddress)
+    : [];
+  if (exactMatches.length === 1) {
+    return { count: addresses.length, status: "MATCHED", candidates: exactMatches, all_candidates: addresses };
+  }
+  return {
+    count: addresses.length,
+    status: addresses.length === 0 ? "NONE" : addresses.length === 1 ? "SINGLE" : "CHOOSE",
+    candidates: addresses,
+  };
+}
+
 export async function previewSoMapBulkUploadHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const body = await parseBody(req);
@@ -157,14 +190,21 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     // The Excel value is the customer's external SO/PO reference, not PACE's
     // internally generated so_number. Preserve the latter on the resolved row
     // for display and downstream allocation.
-    const soNumbers = [...new Set(rows.map((row) => toTrimmedString(row.external_so_number)).filter(Boolean))];
+    const soNumbers = [...new Set(rows.flatMap((row) => externalSoLookupValues(row.external_so_number)))];
     const { data: soRows, error: soError } = soNumbers.length
       ? await serviceRoleClient.schema("erp_procurement").from("sales_order")
           .select("id, so_number, customer_po_number, company_id, dispatch_type, is_dd_dispatch, bill_to_vdc_id, bill_to_state, status")
           .in("customer_po_number", soNumbers)
       : { data: [] as JsonRecord[], error: null };
     if (soError) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_SO_LOOKUP_FAILED", 500, "Unable to resolve External SO Numbers.");
-    const soByNumber = new Map(((soRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.customer_po_number), row]));
+    const soByNumber = new Map<string, JsonRecord>();
+    for (const soRow of (soRows ?? []) as JsonRecord[]) {
+      soByNumber.set(toUpperTrimmedString(soRow.customer_po_number), soRow);
+      soByNumber.set(canonicalExternalSoNumber(soRow.customer_po_number), soRow);
+    }
+    const resolveExternalSo = (value: unknown): JsonRecord | undefined => (
+      soByNumber.get(toUpperTrimmedString(value)) ?? soByNumber.get(canonicalExternalSoNumber(value))
+    );
 
     const soIds = [...new Set(((soRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)))];
     const [lineRowsResult, existingGroupsResult, existingAllocationsResult] = await Promise.all([
@@ -223,7 +263,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     const batchRequestedByLine = new Map<string, number>();
     const batchReplacingByLine = new Map<string, number>();
     for (const row of rows) {
-      const so = soByNumber.get(toTrimmedString(row.external_so_number)) as JsonRecord | undefined;
+      const so = resolveExternalSo(row.external_so_number);
       if (!so || toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)
         || toUpperTrimmedString(so.dispatch_type) !== "DEPENDENT_DIRECT" || so.is_dd_dispatch !== true) continue;
       const soId = toTrimmedString(so.id);
@@ -260,7 +300,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         continue;
       }
       const soNumber = toTrimmedString(row.external_so_number);
-      const so = soByNumber.get(soNumber) as JsonRecord | undefined;
+      const so = resolveExternalSo(soNumber);
       if (!so) {
         results.push({ row_index: row.row_index, status: "ERROR", error_code: "SO_NOT_FOUND" });
         continue;
@@ -353,11 +393,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         const resolvedCustomerId = toTrimmedString((customerResolution as JsonRecord).customer_id);
         if (resolvedCustomerId) {
           const addresses = await resolveSiteAddresses(resolvedCustomerId, vdcId);
-          siteResolution = {
-            count: addresses.length,
-            status: addresses.length === 0 ? "NONE" : addresses.length === 1 ? "SINGLE" : "CHOOSE",
-            candidates: addresses,
-          };
+          siteResolution = buildSiteResolution(addresses, row.site_address);
         } else {
           siteResolution = { count: 0, status: "PENDING_CUSTOMER", candidates: [] };
         }

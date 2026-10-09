@@ -20,7 +20,7 @@ import { previewSoMapBulkUpload, saveSoMapGroup } from "../procurementApi.js";
 
 const TEMPLATE_HEADERS = [
   "External SO Number", "FO Number", "Customer GST", "Customer Name",
-  "Customer Address", "Has Site", "SKU", "Pack Qty",
+  "Customer Address", "Has Site", "Site Address", "SKU", "Pack Qty",
 ];
 
 async function buildTemplateWorkbook() {
@@ -56,31 +56,71 @@ async function parseUploadedWorkbook(file) {
   const buffer = await file.arrayBuffer();
   await workbook.xlsx.load(buffer);
   const sheet = workbook.worksheets[0];
+  const normalizedHeader = (value) => String(value ?? "").replace(/\u00a0/g, " ").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const cellText = (row, index) => {
+    const excelCell = row.getCell(index);
+    // `.text` preserves Excel display formatting, including a leading zero in
+    // an External SO/FO number stored as a numeric cell.
+    const displayValue = String(excelCell.text ?? "").trim();
+    if (displayValue) return displayValue;
+    const value = excelCell.value;
+    if (value == null) return "";
+    if (typeof value === "object" && "text" in value) return String(value.text ?? "").trim();
+    if (typeof value === "object" && "result" in value) return String(value.result ?? "").trim();
+    return String(value).trim();
+  };
+  const aliases = {
+    external_so_number: ["externalsonumber"],
+    fo_number: ["fonumber"],
+    customer_gst: ["customergst", "gstnumber"],
+    customer_name: ["customername"],
+    customer_address: ["customeraddress"],
+    has_site: ["hassite"],
+    // Accept the legacy `Site adress` spelling used in the operations feed.
+    site_address: ["siteaddress", "siteadress"],
+    sku: ["sku"],
+    pack_qty: ["packqty", "packquantity"],
+  };
+  let headerRowNumber = 0;
+  let columnByField = {};
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (headerRowNumber || rowNumber > 25) return;
+    const candidateColumns = {};
+    row.eachCell({ includeEmpty: false }, (excelCell, columnNumber) => {
+      const header = normalizedHeader(excelCell.text || excelCell.value);
+      for (const [field, accepted] of Object.entries(aliases)) {
+        if (accepted.includes(header)) candidateColumns[field] = columnNumber;
+      }
+    });
+    if (candidateColumns.external_so_number && candidateColumns.fo_number && candidateColumns.sku && candidateColumns.pack_qty) {
+      headerRowNumber = rowNumber;
+      columnByField = candidateColumns;
+    }
+  });
+  if (!headerRowNumber) {
+    throw new Error("Template header not found. Required columns: External SO Number, FO Number, SKU, Pack Qty.");
+  }
   const rows = [];
   let rowIndexSeq = 0;
   sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    if (rowNumber === 1) return;
-    const cell = (index) => {
-      const value = row.getCell(index).value;
-      if (value == null) return "";
-      if (typeof value === "object" && "text" in value) return String(value.text ?? "").trim();
-      return String(value).trim();
-    };
-    const externalSoNumber = cell(1);
+    if (rowNumber <= headerRowNumber) return;
+    const cell = (field) => (columnByField[field] ? cellText(row, columnByField[field]) : "");
+    const externalSoNumber = cell("external_so_number");
     if (!externalSoNumber) return;
     rowIndexSeq += 1;
-    const hasSiteValue = cell(6).toUpperCase();
+    const hasSiteValue = cell("has_site").toUpperCase();
     rows.push({
       row_index: rowIndexSeq,
       external_so_number: externalSoNumber,
-      fo_number: cell(2),
-      customer_gst: cell(3).toUpperCase(),
-      customer_name: cell(4),
-      customer_address: cell(5),
+      fo_number: cell("fo_number"),
+      customer_gst: cell("customer_gst").toUpperCase(),
+      customer_name: cell("customer_name"),
+      customer_address: cell("customer_address"),
       has_site: hasSiteValue === "YES",
       has_site_valid: hasSiteValue === "YES" || hasSiteValue === "NO",
-      sku: cell(7),
-      pack_qty: Number(cell(8)) || 0,
+      site_address: cell("site_address"),
+      sku: cell("sku"),
+      pack_qty: Number(cell("pack_qty").replace(/,/g, "")) || 0,
     });
   });
   return rows;
@@ -135,7 +175,7 @@ function SiteResolutionCell({ row, raw, onChooseSite, onChangeSite, onAddSite })
   const resolution = row.site_resolution;
   if (!resolution) return <span className="text-slate-400">—</span>;
   if (resolution.status === "PENDING_CUSTOMER") return <span className="text-slate-400">Resolve customer first</span>;
-  if (resolution.status === "SINGLE") {
+  if (resolution.status === "SINGLE" || resolution.status === "MATCHED") {
     const candidate = resolution.candidates?.[0];
     return (
       <div className="flex items-center gap-2">
@@ -148,7 +188,7 @@ function SiteResolutionCell({ row, raw, onChooseSite, onChangeSite, onAddSite })
   if (resolution.status === "CHOOSE") {
     return (
       <div className="grid gap-1">
-        <span className="text-[10px] text-slate-500">Excel address: {raw?.customer_address || "—"}</span>
+        <span className="text-[10px] text-slate-500">Excel site address: {raw?.site_address || raw?.customer_address || "—"}</span>
         <select
           className="h-7 border border-amber-400 bg-amber-50 px-1 text-[11px]"
           defaultValue=""
@@ -172,9 +212,9 @@ function SiteResolutionCell({ row, raw, onChooseSite, onChangeSite, onAddSite })
 }
 
 function AddSiteAddressForm({ customerId, vdcId, raw, onDone, onCancel }) {
-  const [sameAsCustomer, setSameAsCustomer] = useState(true);
+  const [sameAsCustomer, setSameAsCustomer] = useState(!raw?.site_address);
   const [siteName, setSiteName] = useState(raw?.customer_name || "");
-  const [addressLine, setAddressLine] = useState(raw?.customer_address || "");
+  const [addressLine, setAddressLine] = useState(raw?.site_address || raw?.customer_address || "");
   const [town, setTown] = useState("");
   const [pinCode, setPinCode] = useState("");
   const [saving, setSaving] = useState(false);
