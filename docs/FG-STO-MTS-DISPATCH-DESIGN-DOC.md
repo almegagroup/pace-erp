@@ -666,6 +666,56 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       (Choose-from-N)/no-match (Create-New drawer) — manual text বসালে সরাসরি accept হবে
       না।
 
+15. **Bulk DO Upload-এর validation (সম্পূর্ণ confirm হয়েছে):**
+    - **Format-level:** mandatory blank না — FO/SO Number, DO Date, Transporter, LR Number,
+      LR Date, SKU, Pack Qty। (Truck Number, Dispatch Date, Tally Invoice Number/Date,
+      Inbound Number optional)। Pack Qty বৈধ positive number, Date column বৈধ date format।
+    - **FO/SO Number type-check** — VDC→FO/DC→SO mismatch হলে row skip, re-upload করতে
+      হবে।
+    - **FO Number** আগে SO Map-এ resolve/mapped হয়ে থাকতেই হবে, না থাকলে error, skip।
+    - **SKU/Pack Qty consistency** — FO/SO-র জন্য আগেই resolve হয়ে থাকা SKU/qty-র সাথে
+      মিলতে হবে, না মিললে highlight + auto-suggest dropdown (SO Map-এর একই pattern)।
+    - **Duplicate key = (FO/SO Number + SKU):**
+      - সব field অপরিবর্তিত থাকলে → plain Duplicate, auto-skip।
+      - কোনো field-এ **আগে blank ছিল, এখন value এসেছে** (Truck Number/Dispatch Date-এর
+        মতো) → row highlighted, per-row **Confirm** (overwrite) / Remove, যতক্ষণ না হয়
+        **Save button inactive**।
+      - কোনো field-এ **আগে থেকেই value ছিল, এখন ভিন্ন value এসেছে** (true correction) →
+        bulk upload দিয়ে overwrite হবে না — শুধু note/flag দেখাবে, user-কে সেই correction
+        **DO-র single-row Edit screen থেকেই** করতে হবে।
+    - **একটা FO-তে multiple SKU/item** — (FO/SO + SKU) key-এর কারণে স্বাভাবিকভাবেই সাপোর্ট
+      করে, প্রতিটা আলাদা row/line হিসেবে independently resolve/validate হয়।
+
+16. **DO Edit — "Edit Transporter Details" mechanism (SO03):**
+    - লাইভ কোড-এ `DO01CreatePage.jsx` Edit mode (`isEditMode`/`editDcId`) আগে থেকেই আছে,
+      Vehicle Number/Transporter (TransporterPicker — Transporter Master-এর বিরুদ্ধে
+      search/pick + নতুন add)/LR Number/LR Date editable — কিন্তু Dispatch Date নেই, আর
+      PGI-trigger logic wired নেই।
+    - **নতুন mechanism:** SO03-এ **"Edit Transporter Details"** button → click করলে user-কে
+      **FO Number** দিতে হবে → সেই FO-র under-এ Transporter, LR Number, LR Date, Truck
+      Number, Dispatch Date — এই পাঁচটা field খুলবে → edit করে Save করলেই update হয়ে যাবে।
+      এই page শুধু data update করে — **PGI trigger এখানে fire হয় না**, সেটা SO02-এর Bulk
+      Posting action-এ হয় (point ১৭)।
+
+17. **SO02 — Bulk Posting page (PGI + Invoice-এর পূর্ণ consolidated design):**
+    - এই table **শুধু সেই DO-গুলোই দেখাবে যারা Bulk DO Upload (SO03) দিয়ে তৈরি হয়েছে** — SO03-এ
+      Excel upload + Save করলে DO তৈরি হয় (status CREATED), সেই DO-গুলোই এখানে আসে — ঠিক
+      existing SO02-এর DO-wise list/"Prepare Invoices" pattern-এরই bulk-select সংস্করণ।
+    - উপরে Company resolve, তারপর ERP Dense Grid (Excel-style navigation+filter)।
+    - **Column order (left থেকে):** select checkbox (+ header "Select All") → **DD Flag**
+      (Yes/No, সবচেয়ে left-এ, VDC/DC কোনটা বোঝানোর জন্য) → SO Number → FO Number → External
+      SO Number → Company Code → Vendor Code → SKU → Pack Qty → Base Qty → Tally Invoice
+      Number → Tally Invoice Date → Inbound Number → Rate → GST Split → Value → Round Off →
+      Parent Company → Bill To → Ship To → Transporter → LR Number → LR Date → Truck Number
+      → Dispatch Date।
+    - প্রতিটা row-এ checkbox, উপরে **Bulk Post** button — mixed selection (VDC+DC একসাথে)
+      handle করবে:
+      - **DD/VDC row** → শুধু **Invoice** post হবে (PGI deferred, Truck/Dispatch Date পরে
+        আসবে)।
+      - **DC row** → **PGI + Invoice দুটোই একসাথে** post হবে (atomic, §113.15 pattern)।
+    - Posting হওয়ার পূর্বশর্ত (point ১৩-এর পাঁচটা field পূর্ণ) এখানেও প্রযোজ্য — অসম্পূর্ণ
+      row Bulk Post দিয়ে post হবে না।
+
 **এখনো খোলা (পরের point-এ আলোচনা চলবে):**
 - FO Number আসলে কোথায় capture/store হবে (নতুন column? কোন table — SO line-level না
   DO-level?), আর SO Map UI-তে কীভাবে ঢোকানো হবে।
@@ -674,5 +724,5 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
 - Customer+Site+Transporter resolution mechanism (point ৯, ১৪) এখনো শুধু
   **conversation-level confirm** — কোনো backend/frontend implementation শুরু হয়নি, আর
   document হিসেবেও formally LOCKED ঘোষণা করা হয়নি।
-- পরের point: Truck Number + Dispatch Date-এর own bulk-entry/trigger mechanism (SO02/PGI
-  পর্যায়ে) — আলোচনা শুরু হচ্ছে।
+- পরের point: Truck Number + Dispatch Date-এর own bulk-entry/trigger mechanism — আলোচনা
+  শুরু হচ্ছে।
