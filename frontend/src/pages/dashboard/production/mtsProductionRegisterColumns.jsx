@@ -32,9 +32,9 @@ function qtyColumn(key, label, width, digits = 3) {
   };
 }
 
-function statusBadge(status) {
-  if (status === "VERIFIED") return "bg-emerald-100 text-emerald-800";
-  if (status === "CANCELLED") return "bg-slate-100 text-slate-500";
+function statusBadge(row) {
+  if (row.status === "VERIFIED") return "bg-emerald-100 text-emerald-800";
+  if (row.status === "CANCELLED") return "bg-slate-100 text-slate-500";
   return "bg-amber-100 text-amber-800";
 }
 
@@ -61,10 +61,11 @@ function signedColumn(key, label, width, suffix = "") {
 
 export const MTS_REGISTER_COLUMNS = [
   {
-    key: "status",
+    key: "status_label",
     label: "Status",
     width: "105px",
-    render: (r) => <span className={`rounded px-2 py-0.5 text-xs font-semibold ${statusBadge(r.status)}`}>{r.status || "--"}</span>,
+    render: (r) => <span className={`rounded px-2 py-0.5 text-xs font-semibold ${statusBadge(r)}`}>{r.status_label || r.status || "--"}</span>,
+    copyValue: (r) => r.status_label || r.status || "",
   },
   { key: "production_date", label: "Date", width: "96px", filterType: "date" },
   { key: "shift_name", label: "Shift", width: "70px", render: (r) => r.shift_name || "--" },

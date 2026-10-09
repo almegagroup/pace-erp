@@ -19,7 +19,7 @@ import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useScreenBackInterceptor } from "../../../hooks/useScreenBackInterceptor.js";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
-import { getBatchCountsReport, getMtsProductionRegister, getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
+import { getBatchCountsReport, getMtsProductionRegister, getMtsProductionRegisterPendingCount, getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
 import { MTS_REGISTER_COLUMNS } from "./mtsProductionRegisterColumns.jsx";
 import MtsRegisterModal from "./MtsRegisterModal.jsx";
 import { listMachines } from "../om/omApi.js";
@@ -358,6 +358,21 @@ export default function OrderInformationSystemPage() {
     enabled: Boolean(mtsParams),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });
+  const mtsPendingCompanyId = mtsForm.companyId || defaultRegisterCompanyId;
+  const mtsPendingCountQ = useQuery({
+    queryKey: ["ois-mts-register-pending-count", mtsPendingCompanyId],
+    queryFn: () => getMtsProductionRegisterPendingCount({ company_id: mtsPendingCompanyId }),
+    enabled: Boolean(mtsPendingCompanyId),
+    select: (data) => Number(data?.count ?? data?.data?.count ?? 0),
+  });
+  const mtsPendingCount = mtsPendingCountQ.data ?? 0;
+  const mtsRegisterAction = {
+    key: "mts-register",
+    label: mtsPendingCount > 0 ? `MTS Production Register (${mtsPendingCount} Pending)` : "MTS Production Register",
+    title: mtsPendingCount > 0 ? `${mtsPendingCount} MTS Process PO${mtsPendingCount === 1 ? " is" : "s are"} pending.` : "No MTS Process PO is pending.",
+    tone: mtsPendingCount > 0 ? "danger" : undefined,
+    attention: mtsPendingCount > 0,
+  };
   const mtsRows = useMemo(() => mtsQ.data ?? [], [mtsQ.data]);
 
   // Same single global search as the main grid: matches if ANY column's own plain-text
@@ -576,7 +591,7 @@ export default function OrderInformationSystemPage() {
         page === 1
           ? [
               { key: "batch-counts", label: "Batch Counts", onClick: handleOpenBatchCountsModal },
-              { key: "mts-register", label: "MTS Production Register", onClick: handleOpenMtsModal },
+              { ...mtsRegisterAction, onClick: handleOpenMtsModal },
               { key: "reset", label: "Reset", onClick: handleReset },
               { key: "execute", label: "Execute", tone: "primary", onClick: handleExecute },
             ]
@@ -605,7 +620,7 @@ export default function OrderInformationSystemPage() {
           : [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
               { key: "batch-counts", label: "Batch Counts", onClick: handleOpenBatchCountsModal },
-              { key: "mts-register", label: "MTS Production Register", onClick: handleOpenMtsModal },
+              { ...mtsRegisterAction, onClick: handleOpenMtsModal },
               { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExport(), disabled: exporting || filteredRows.length === 0 },
               {
                 key: "execute",
@@ -777,7 +792,7 @@ export default function OrderInformationSystemPage() {
       </div>
       ) : page === "MTS_REGISTER" ? (
       <div className="grid gap-4">
-        <ErpSectionCard eyebrow="MTS Production Register" title={`MTS batch history — Standard, Verified and Cancelled (${mtsParams?.date_from ?? ""} to ${mtsParams?.date_to ?? ""})`}>
+        <ErpSectionCard eyebrow="MTS Production Register" title={`MTS batch history — Pending, Verified and Cancelled (${mtsParams?.date_from ?? ""} to ${mtsParams?.date_to ?? ""})`}>
           <div className="mb-2 flex items-center justify-between">
             <button type="button" onClick={() => setPage(1)} className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
               Back to Filters
@@ -791,7 +806,7 @@ export default function OrderInformationSystemPage() {
             </span>
           </div>
           <div className="mb-2 text-xs text-slate-500">
-            STANDARD, VERIFIED and CANCELLED MTS Process POs appear. Cancelled rows are inactive; actual output, loss/gain and posting information are shown only after Verify. Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C
+            STANDARD MTS rows show as Pending, while FINAL rows show as Pending Verify. Verified and Cancelled history remains visible; actual output, loss/gain and posting information are shown only after Verify. Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C
             to copy — same as Excel. Use the funnel in any column header to filter that column.
           </div>
           <div className="mb-2 flex items-center gap-2">
@@ -825,7 +840,7 @@ export default function OrderInformationSystemPage() {
                 ? "Loading..."
                 : hasMtsSearch
                   ? "No rows match this search."
-                  : "No Standard, Verified or Cancelled MTS production in this date range."
+                  : "No Pending, Verified or Cancelled MTS production in this date range."
             }
           />
         </ErpSectionCard>

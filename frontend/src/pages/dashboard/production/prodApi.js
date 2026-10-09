@@ -133,6 +133,7 @@ export const listOldPackingPoBatches = (p) => fetchProd("GET", "/api/production/
 export const getOrderInformationReport = (p) => fetchProd("GET", "/api/production/order-information-system", undefined, p);
 export const getBatchCountsReport = (p) => fetchProd("GET", "/api/production/order-information-system/batch-counts", undefined, p);
 export const getMtsProductionRegister = (p) => fetchProd("GET", "/api/production/order-information-system/mts-register", undefined, p);
+export const getMtsProductionRegisterPendingCount = (p) => fetchProd("GET", "/api/production/order-information-system/mts-register/pending-count", undefined, p);
 
 // ── PR14 Batch Variance Report (§123) ──────────────────────────────────────────
 export const searchBatchVarianceReport = (p) => fetchProd("GET", "/api/production/batch-variance-report", undefined, p);

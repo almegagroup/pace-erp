@@ -4,7 +4,9 @@ BEGIN;
 -- DOs already carry an OPEN reservation because Truck + Dispatch Date were
 -- supplied at Bulk DO upload; others intentionally have none.  Keep this
 -- VDC-only branch separate from the established DC/RM/PM/INT cancel path.
-CREATE OR REPLACE FUNCTION erp_procurement.cancel_vdc_created_delivery_order_atomic(
+-- Quote the existing lower-case name to avoid the pinned Supabase CLI's
+-- `_atomic` statement-splitter bug during CI deployment.
+CREATE OR REPLACE FUNCTION erp_procurement."cancel_vdc_created_delivery_order_atomic"(
   p_dc_id uuid,
   p_reason text,
   p_actor uuid
@@ -59,8 +61,8 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION erp_procurement.cancel_vdc_created_delivery_order_atomic(uuid, text, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_procurement.cancel_vdc_created_delivery_order_atomic(uuid, text, uuid) TO service_role;
+REVOKE ALL ON FUNCTION erp_procurement."cancel_vdc_created_delivery_order_atomic"(uuid, text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION erp_procurement."cancel_vdc_created_delivery_order_atomic"(uuid, text, uuid) TO service_role;
 
 NOTIFY pgrst, 'reload schema';
 COMMIT;

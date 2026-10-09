@@ -180,7 +180,7 @@ import {
   createMtsCreationDocumentsHandler,
 } from "../_core/production/mts_creation_session.handlers.ts";
 import { getOrderInformationReportHandler, getBatchCountsReportHandler } from "../_core/production/order_information_system.handlers.ts";
-import { getMtsProductionRegisterHandler } from "../_core/production/mts_production_register.handlers.ts";
+import { getMtsProductionRegisterHandler, getMtsProductionRegisterPendingCountHandler } from "../_core/production/mts_production_register.handlers.ts";
 import { searchBatchVarianceHandler, getBatchVarianceDetailHandler } from "../_core/production/batch_variance_report.handlers.ts";
 import {
   listPackingOrdersHandler,
@@ -436,6 +436,8 @@ export async function dispatchProductionRoutes(
       return await getBatchCountsReportHandler(req, ctx);
     case "GET:/api/production/order-information-system/mts-register":
       return await getMtsProductionRegisterHandler(req, ctx);
+    case "GET:/api/production/order-information-system/mts-register/pending-count":
+      return await getMtsProductionRegisterPendingCountHandler(req, ctx);
 
     // PR14 Batch Variance Report
     case "GET:/api/production/batch-variance-report":

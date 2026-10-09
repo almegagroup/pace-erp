@@ -3,7 +3,9 @@ BEGIN;
 -- §6 SO Map: an External FO Number identifies one dispatch inside one SO.
 -- Re-uploading a confirmed changed quantity replaces that group's active
 -- allocations atomically; it must not create a second active FO mapping.
-CREATE OR REPLACE FUNCTION erp_procurement.save_so_map_group_atomic(p_group jsonb, p_allocations jsonb)
+-- Keep the lower-case RPC name unchanged, but quote it so the pinned
+-- Supabase CLI does not mistake the `_atomic` suffix for `BEGIN ATOMIC`.
+CREATE OR REPLACE FUNCTION erp_procurement."save_so_map_group_atomic"(p_group jsonb, p_allocations jsonb)
 RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -89,8 +91,8 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION erp_procurement.save_so_map_group_atomic(jsonb, jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_procurement.save_so_map_group_atomic(jsonb, jsonb) TO service_role;
+REVOKE ALL ON FUNCTION erp_procurement."save_so_map_group_atomic"(jsonb, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION erp_procurement."save_so_map_group_atomic"(jsonb, jsonb) TO service_role;
 
 -- This migration runs before the original similarity-helper migration in the
 -- current repository timestamp order. Define the helper here so the hardened
