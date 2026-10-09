@@ -588,12 +588,14 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
    `customer_master`/`customer_address` টেবিলেই লেখে, status ACTIVE/approved — তাই তৈরি হওয়া
    সাথে সাথেই MM04-এ গিয়ে দেখলে একই data পাওয়া যাবে।
 
-10. **এই পুরো SO Map Excel Template/Upload mechanism শুধু VDC (Dependent Direct)-এর জন্য —
-    DC (Dependent Depot)-এর আলাদা কিছু লাগে না।** যুক্তি: DC-এর কোনো FO Number নেই, flow-টাই
-    Atomic (DO+PGI+Invoice একসাথে, §113.15-এর RM/PM/INT-এর জন্য আগে তৈরি mechanism-এর মতোই)
-    — সেখানে কোনো bulk Excel reconciliation-এর প্রয়োজনই নেই, existing direct DO+PGI+Invoice
-    creation screen-ই যথেষ্ট। SO Map/Bulk-DD-SO-Map button + template শুধু VDC flow-এর জন্য,
-    যেখানে মাসে অসংখ্য ছোট FO-level dispatch Asian-এর Tally export থেকে bulk-এ আনতে হয়।
+10. **⚠️ সংশোধিত (পরে point ১৪-এ DC-ও Bulk DO Upload-এ যুক্ত হওয়ায়) — এই point-টা এখন শুধু
+    SO Map (Customer+Site resolution)-এর scope-এ সীমিত, পুরো "bulk mechanism" নয়:**
+    SO Map Excel Template/Upload (point ৮-৯, Customer+Site resolution) শুধু VDC (Dependent
+    Direct)-এর জন্য — DC (Dependent Depot)-এ এই resolution ধাপের দরকারই নেই, কারণ DC নিজেই
+    Bill-To/Ship-To (point ১৪)। যুক্তি: DC-এর কোনো FO Number নেই, এখানে Customer/Site খোঁজার
+    প্রশ্নই আসে না। **কিন্তু DC বাকি bulk mechanism (Bulk DO Upload, SO02 Bulk Posting) থেকে
+    বাদ না** — point ১৪ অনুযায়ী DC ঠিক একই Bulk DO Upload template-ই ব্যবহার করে, শুধু
+    Customer/Site resolution বাদ দিয়ে (SO Number সরাসরি resolve করে)।
 
 11. **Button + Upload + Review Grid — পূর্ণ consolidated flow:**
     - **SO01 → SO Map tab** → **"Bulk DD SO Map"** button → Template Download + Upload, দুই
@@ -656,10 +658,16 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       - **DO page-এ লাগে না, কিন্তু preserve হবে SO02 (PGI+Invoice)-এর জন্য:** Tally Invoice
         Number, Tally Invoice Date, Inbound Number, Truck Number, Dispatch Date — এখনই
         capture হবে, পরে SO02-তে গেলে prefilled পাওয়া যাবে।
-      - **Truck Number/Dispatch Date independently optional** — বাস্তব data-তে (Asian-এর
-        Excel-এ verify করা) অনেক row-এ Truck Number আছে কিন্তু Date নেই — upload-এর সময় Date
-        blank থাকলে blank-ই থাকবে, Truck Number থাকলে সেটা preserve হবে, একটা থাকলে
-        অন্যটার জন্য wait করতে হবে না।
+      - **Truck Number/Dispatch Date-এর mandatory/optional নিয়ম row-type অনুযায়ী আলাদা:**
+        - **VDC row-এ independently optional** — বাস্তব data-তে (Asian-এর Excel-এ verify
+          করা) অনেক row-এ Truck Number আছে কিন্তু Date নেই — upload-এর সময় Date blank
+          থাকলে blank-ই থাকবে, Truck Number থাকলে সেটা preserve হবে, একটা থাকলে অন্যটার
+          জন্য wait করতে হবে না। (পরে point ১৯-এর আলাদা Truck+Dispatch Date Upload দিয়ে
+          ভরা হয়।)
+        - **DC row-এ দুটোই mandatory** — Truck Number আর Dispatch Date দুটো না থাকলে
+          system সেই DO **তৈরিই হতে দেবে না**, Save button inactive থাকবে। তাই DC-এর জন্য
+          point ১৯-এর মতো আলাদা কোনো পরের-ধাপের Truck+Dispatch Date Upload মেকানিজম
+          লাগে না — DC হয় সম্পূর্ণ data নিয়েই create হয়, নাহয় create-ই হয় না।
     - **Review grid:** একটা **"DD Flagged" (Yes/No)** column দেখাবে প্রতিটা row আসলে VDC/DD
       নাকি DC-type।
     - **Transporter resolution** — Customer/Site-এর মতোই পূর্ণ mechanism: existing
@@ -669,8 +677,10 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
 
 15. **Bulk DO Upload-এর validation (সম্পূর্ণ confirm হয়েছে):**
     - **Format-level:** mandatory blank না — FO/SO Number, DO Date, Transporter, LR Number,
-      LR Date, SKU, Pack Qty। (Truck Number, Dispatch Date, Tally Invoice Number/Date,
-      Inbound Number optional)। Pack Qty বৈধ positive number, Date column বৈধ date format।
+      LR Date, SKU, Pack Qty। Tally Invoice Number/Date, Inbound Number সবসময় optional।
+      **Truck Number/Dispatch Date — VDC row-এ optional, DC row-এ mandatory** (point ১৪-এর
+      সংশোধিত নিয়ম — DC-তে এই দুটো না থাকলে DO তৈরিই হবে না)। Pack Qty বৈধ positive
+      number, Date column বৈধ date format।
     - **FO/SO Number type-check** — VDC→FO/DC→SO mismatch হলে row skip, re-upload করতে
       হবে।
     - **FO Number** আগে SO Map-এ resolve/mapped হয়ে থাকতেই হবে, না থাকলে error, skip।
@@ -735,7 +745,10 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       বাদ) — এটা **DO cancel করে না**, বরং পরের বার সেই pending row আবার posting
       list-এ দেখাবে। Clean row-গুলো সেবার post হয়ে যাবে।
 
-19. **Truck + Dispatch Date Upload — পূর্ণ mechanism (SO03):**
+19. **Truck + Dispatch Date Upload — পূর্ণ mechanism (SO03, VDC-only):**
+    - ⚠️ এই পুরো page **শুধু VDC row-এর জন্য** — DC-এর Truck Number/Dispatch Date point
+      ১৪-এর নিয়মে Bulk DO Upload-এর সময়েই mandatory থাকে, তাই DC-র জন্য এই আলাদা
+      পরের-ধাপের upload প্রযোজ্যই না।
     - **"Truck and Dispatch Date Upload"** button → Template + Upload, দুই option।
     - **Template = system-generated PREFILLED export, ব্যবহারকারীর ভরা blank টেমপ্লেট না।**
       এটা সেই সব FO-র list যাদের **Truck Number বা Dispatch Date-এর কোনো একটা (বা দুটোই)
@@ -764,17 +777,29 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       row remove করলে DO cancel হয় না, পরের বার pending-এ থাকবে। সব clear হলে **Post** →
       সেই **Dispatch Date-এই PGI post** হয়ে যায়।
 
-20. **Invoice-vs-PGI handler architecture — split প্রয়োজন (confirm হয়েছে):**
+20. **Invoice-vs-PGI handler architecture — নতুন additive endpoint, existing handler অপরিবর্তিত
+    (business owner-এর explicit guardrail, 2026-10-09):**
     - VDC-এর জন্য যতক্ষণ Truck Number+Dispatch Date দিয়ে post না হচ্ছে, **stock_ledger-এ
       কোনো entry পড়বে না** — Invoice তৈরি হয়ে যাবে, DO status এগিয়ে যাবে, কিন্তু physical
       stock সিস্টেমে move করেনি।
-    - তাই existing §113.15-এর `createPgiInvoiceHandler` (আজ RM/PM/INT-এর জন্য **একসাথে**
-      Invoice তৈরি + P601 posting করে, atomic) VDC-এর জন্য **দুই ভাগে split করতে হবে**:
-      - **Invoice-creation ধাপ** (SO02 Bulk Post, VDC row) → Invoice তৈরি, stock_ledger
-        touch হয় না।
-      - **PGI-posting ধাপ** (Truck+Dispatch Date Upload-এর Post, পরে) → এখানেই আসল P601
-        posting, stock_ledger/stock_snapshot update, reservation resolve।
-    - **DC-এর জন্য existing atomic pattern অপরিবর্তিত** (Invoice+PGI একসাথে, একই handler)।
+    - **🔒 Hard rule: existing §113.15-এর `createPgiInvoiceHandler` (এবং এই পুরো bulk
+      mechanism-এর বাইরে থাকা অন্য সব existing single-row create/PGI/Invoice flow) একটা
+      বিন্দুও পরিবর্তন হবে না** — এগুলো আজ RM/PM/INT এবং MTO/HPS/MTEST dispatch-এ **সরাসরি
+      production-এ চলমান**, কোনো modification করা risky। এই পুরো §6-এর SO Map/Bulk DO
+      Upload/SO02 Bulk Posting/Truck+Dispatch Date Upload mechanism সম্পূর্ণ **additive
+      layer** — নতুন button, নতুন page, নতুন endpoint — কোনো existing handler/route/page
+      touch করে না।
+    - VDC-এর Invoice-তখন-PGI-পরে split এই নিয়ম মেনেই হবে — **existing atomic
+      `createPgiInvoiceHandler` যেমন আছে তেমনই থাকবে** (DC/RM/PM/INT সবাই এটাই অপরিবর্তিত
+      ব্যবহার করে যাবে), VDC-র জন্য **সম্পূর্ণ নতুন, আলাদা দুটো endpoint** বানাতে হবে:
+      - **নতুন Invoice-only endpoint** (SO02 Bulk Post, VDC row) → Invoice তৈরি, stock_ledger
+        touch করে না।
+      - **নতুন PGI-only endpoint** (Truck+Dispatch Date Upload-এর Post, পরে) → এখানেই আসল
+        P601 posting, stock_ledger/stock_snapshot update, reservation resolve।
+    - **DC** (ও RM/PM/INT) existing atomic `createPgiInvoiceHandler`-ই ব্যবহার করে, **কোনো
+      পরিবর্তন ছাড়াই** (Truck Number+Dispatch Date point ১৪-র নিয়মে Bulk DO Upload-এর
+      সময়েই mandatory, তাই এই handler call করার আগেই সব data present থাকে — handler-এর
+      নিজের ভেতরে কিছু বদলাতে হয় না)।
 
 21. **Cancel cascade + re-upload readiness (confirm হয়েছে):**
     - **PGI cancel হলে Invoice-ও cancel** হয়ে যাবে — existing DO-cancel flow-এর মতোই
