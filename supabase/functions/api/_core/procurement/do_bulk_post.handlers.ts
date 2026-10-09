@@ -134,20 +134,30 @@ export async function bulkPostDeliveryOrdersHandler(req: Request, ctx: Procureme
     for (const doc of (docs ?? []) as JsonRecord[]) {
       const dcId = text(doc.id); const companyId = text(doc.selling_company_id);
       const denied = await assertInvoiceAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;
-      if (doc.is_bulk_uploaded !== true || upper(doc.status) !== "CREATED") return fail(req, ctx, "BULK_POST_DO_NOT_READY", 400, "Every selected row must be a CREATED Bulk DO.");
+      if (doc.is_bulk_uploaded !== true || upper(doc.status) !== "CREATED") {
+        results.push({ dc_id: dcId, ok: false, code: "BULK_POST_DO_NOT_READY", message: "Delivery order is no longer a CREATED Bulk DO." });
+        continue;
+      }
       if (doc.pgi_deferred === true) {
         const inner = new Request(`http://internal/api/procurement/delivery-orders-v2/${dcId}/vdc-invoice-only`, { method: "POST" });
         const response = await createVdcInvoiceOnlyHandler(inner, ctx);
-        if (!response.ok) return response;
-        results.push({ dc_id: dcId, mode: "VDC_INVOICE_ONLY", ...(await response.json()) });
+        const payload = await response.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+        results.push(response.ok
+          ? { dc_id: dcId, ok: true, mode: "VDC_INVOICE_ONLY", ...payload }
+          : { dc_id: dcId, ok: false, mode: "VDC_INVOICE_ONLY", code: text(payload.code) || "VDC_INVOICE_ONLY_POST_FAILED", message: text(payload.message) || "Invoice-only posting failed." });
       } else {
         const { groups } = await computeInvoiceGroups(dcId);
         const tallyNumber = text(doc.pre_invoice_tally_invoice_number); const tallyDate = text(doc.pre_invoice_tally_invoice_date);
-        if (!tallyNumber || !tallyDate) return fail(req, ctx, "BULK_POST_TALLY_FIELDS_REQUIRED", 400, "Tally Invoice Number and Date are required for every selected DO.");
+        if (!tallyNumber || !tallyDate) {
+          results.push({ dc_id: dcId, ok: false, mode: "DC_ATOMIC_PGI_INVOICE", code: "BULK_POST_TALLY_FIELDS_REQUIRED", message: "Tally Invoice Number and Date are required." });
+          continue;
+        }
         const inner = new Request(`http://internal/api/procurement/delivery-orders-v2/${dcId}/pgi-invoice-groups`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ groups: groups.map((group) => ({ group_key: group.group_key, tally_invoice_number: tallyNumber, tally_invoice_date: tallyDate, inbound_number: text(doc.pre_invoice_inbound_number) || undefined, round_off_amount: group.so_round_off_amount })) }) });
         const response = await postPgiInvoiceGroupsHandler(inner, ctx);
-        if (!response.ok) return response;
-        results.push({ dc_id: dcId, mode: "DC_ATOMIC_PGI_INVOICE", ...(await response.json()) });
+        const payload = await response.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+        results.push(response.ok
+          ? { dc_id: dcId, ok: true, mode: "DC_ATOMIC_PGI_INVOICE", ...payload }
+          : { dc_id: dcId, ok: false, mode: "DC_ATOMIC_PGI_INVOICE", code: text(payload.code) || "DC_ATOMIC_POST_FAILED", message: text(payload.message) || "Atomic PGI and Invoice posting failed." });
       }
     }
     return okResponse({ results }, ctx.request_id, req);

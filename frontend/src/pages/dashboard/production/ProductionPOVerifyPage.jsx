@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
@@ -405,6 +406,7 @@ function MtsVerifyWorkspace({ po, saving, onApprove, onReject }) {
 
 export default function ProductionPOVerifyPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [companyId, setCompanyId] = useState("");
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [activeOrderId, setActiveOrderId] = useState("");
@@ -437,6 +439,18 @@ export default function ProductionPOVerifyPage() {
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
+  const mtsPendingVerifyQ = useQuery({
+    queryKey: ["production-mts-pending-verify", effectiveCompanyId],
+    queryFn: () => listProcessOrders({
+      company_id: effectiveCompanyId,
+      po_type: "MTS",
+      status: "FINAL",
+      per_page: 100,
+    }),
+    enabled: Boolean(effectiveCompanyId),
+    select: (data) => Array.isArray(data) ? data : data?.data ?? [],
+  });
+  const mtsPendingVerifyCount = (mtsPendingVerifyQ.data ?? []).length;
   const orderOptions = useMemo(
     () => (ordersQ.data ?? []).map((order) => ({ value: order.id, label: orderLabel(order) || order.po_number || "Process PO" })),
     [ordersQ.data],
@@ -663,6 +677,7 @@ export default function ProductionPOVerifyPage() {
         : "MTS Process PO verified and stock posted.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-orders"] });
+      qc.invalidateQueries({ queryKey: ["production-mts-pending-verify"] });
       qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
       resetSelection(effectiveCompanyId);
     } catch (error) {
@@ -688,6 +703,7 @@ export default function ProductionPOVerifyPage() {
       toast("MTS Process PO rejected. Linked documents, reservations, and batch claims were released.");
       qc.invalidateQueries({ queryKey: ["process-orders"] });
       qc.invalidateQueries({ queryKey: ["production-verify-orders"] });
+      qc.invalidateQueries({ queryKey: ["production-mts-pending-verify"] });
       qc.invalidateQueries({ queryKey: ["production-verify-detail", po.id] });
       detailQ.refetch();
     } catch (error) {
@@ -790,6 +806,19 @@ export default function ProductionPOVerifyPage() {
     >
       <ErpSectionCard title="Select Process PO">
         <div className="flex flex-col gap-4">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              disabled={!effectiveCompanyId}
+              onClick={() => navigate(`/dashboard/production/mts-pending-verify?company_id=${encodeURIComponent(effectiveCompanyId)}`)}
+              className="relative rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {mtsPendingVerifyCount > 0 ? (
+                <span aria-hidden="true" className="absolute -right-1.5 -top-1.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white" />
+              ) : null}
+              MTS Pending List{mtsPendingVerifyCount > 0 ? ` (${mtsPendingVerifyCount})` : ""}
+            </button>
+          </div>
           <form onSubmit={handleLookupSubmit} className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-slate-600">PO Number</label>

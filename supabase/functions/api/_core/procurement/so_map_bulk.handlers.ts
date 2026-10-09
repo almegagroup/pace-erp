@@ -42,6 +42,7 @@ type RawUploadRow = {
   customer_name?: string;
   customer_address?: string;
   has_site: boolean;
+  has_site_valid?: boolean;
   sku: string;
   pack_qty: number;
 };
@@ -72,6 +73,7 @@ async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyI
 async function resolveCustomerByGst(gstNumber: string, vdcId: string): Promise<{
   status: "FOUND" | "FOUND_DIFFERENT_VDC" | "NOT_FOUND";
   customer_id?: string;
+  customer_address_id?: string;
   customer_name?: string;
   matched_vdc_id?: string;
 }> {
@@ -83,13 +85,16 @@ async function resolveCustomerByGst(gstNumber: string, vdcId: string): Promise<{
   const customerIds = customerRows.map((row) => String(row.id));
   const { data: addressRows, error: addressError } = await serviceRoleClient
     .schema("erp_master").from("customer_address")
-    .select("customer_id, depot_code_id").in("customer_id", customerIds).eq("status", "ACTIVE")
+    .select("id, customer_id, depot_code_id").in("customer_id", customerIds).eq("status", "ACTIVE")
     .not("depot_code_id", "is", null);
   if (addressError) return { status: "NOT_FOUND" };
   const matchInVdc = (addressRows as JsonRecord[]).find((row) => toTrimmedString(row.depot_code_id) === vdcId);
   if (matchInVdc) {
     const customer = (customerRows as JsonRecord[]).find((row) => toTrimmedString(row.id) === toTrimmedString(matchInVdc.customer_id));
-    return { status: "FOUND", customer_id: toTrimmedString(matchInVdc.customer_id), customer_name: toTrimmedString(customer?.customer_name) };
+    return {
+      status: "FOUND", customer_id: toTrimmedString(matchInVdc.customer_id),
+      customer_address_id: toTrimmedString(matchInVdc.id), customer_name: toTrimmedString(customer?.customer_name),
+    };
   }
   const matchElsewhere = (addressRows as JsonRecord[])[0];
   if (matchElsewhere) return { status: "FOUND_DIFFERENT_VDC", matched_vdc_id: toTrimmedString(matchElsewhere.depot_code_id) };
@@ -102,6 +107,8 @@ async function resolveCustomerByGst(gstNumber: string, vdcId: string): Promise<{
 async function resolveCustomerByName(customerName: string, vdcId: string): Promise<{
   status: "MATCHED" | "AMBIGUOUS" | "NOT_FOUND";
   customer_id?: string;
+  customer_name?: string;
+  customer_address_id?: string;
   candidates?: JsonRecord[];
 }> {
   const { data, error } = await serviceRoleClient.schema("erp_master").rpc("find_similar_customer_names_in_vdc", {
@@ -111,7 +118,14 @@ async function resolveCustomerByName(customerName: string, vdcId: string): Promi
   const rows = (data ?? []) as JsonRecord[];
   if (rows.length === 0) return { status: "NOT_FOUND" };
   const distinctCustomerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)))];
-  if (distinctCustomerIds.length === 1) return { status: "MATCHED", customer_id: distinctCustomerIds[0] };
+  if (distinctCustomerIds.length === 1) {
+    const candidate = rows[0];
+    return {
+      status: "MATCHED", customer_id: distinctCustomerIds[0],
+      customer_name: toTrimmedString(candidate.customer_name),
+      customer_address_id: toTrimmedString(candidate.customer_address_id),
+    };
+  }
   return { status: "AMBIGUOUS", candidates: rows };
 }
 
@@ -133,6 +147,11 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     if (!companyId) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_COMPANY_REQUIRED", 400, "company_id is required.");
     const rows = Array.isArray(body.rows) ? (body.rows as RawUploadRow[]) : [];
     if (rows.length === 0) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_ROWS_REQUIRED", 400, "At least one row is required.");
+    const uploadKeyCounts = new Map<string, number>();
+    for (const row of rows) {
+      const key = [row.external_so_number, row.fo_number, row.sku].map(toUpperTrimmedString).join("::");
+      uploadKeyCounts.set(key, (uploadKeyCounts.get(key) ?? 0) + 1);
+    }
 
     // Bulk-resolve every distinct External SO Number in one round (§8B/§8E).
     // The Excel value is the customer's external SO/PO reference, not PACE's
@@ -141,7 +160,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     const soNumbers = [...new Set(rows.map((row) => toTrimmedString(row.external_so_number)).filter(Boolean))];
     const { data: soRows, error: soError } = soNumbers.length
       ? await serviceRoleClient.schema("erp_procurement").from("sales_order")
-          .select("id, so_number, customer_po_number, company_id, dispatch_type, bill_to_vdc_id, status")
+          .select("id, so_number, customer_po_number, company_id, dispatch_type, is_dd_dispatch, bill_to_vdc_id, bill_to_state, status")
           .in("customer_po_number", soNumbers)
       : { data: [] as JsonRecord[], error: null };
     if (soError) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_SO_LOOKUP_FAILED", 500, "Unable to resolve External SO Numbers.");
@@ -197,8 +216,49 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       linesBySoId.get(soId)!.push(line);
     }
 
+    // A balance check has to consider the whole uploaded batch, not merely
+    // each row in isolation. Existing allocations represented by a row being
+    // re-uploaded are replaced by its new quantity; every other allocation
+    // remains consumed.
+    const batchRequestedByLine = new Map<string, number>();
+    const batchReplacingByLine = new Map<string, number>();
+    for (const row of rows) {
+      const so = soByNumber.get(toTrimmedString(row.external_so_number)) as JsonRecord | undefined;
+      if (!so || toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)
+        || toUpperTrimmedString(so.dispatch_type) !== "DEPENDENT_DIRECT" || so.is_dd_dispatch !== true) continue;
+      const soId = toTrimmedString(so.id);
+      const skuTarget = toUpperTrimmedString(row.sku);
+      const matchedLine = (linesBySoId.get(soId) ?? []).find((line) => {
+        const material = materialById.get(toTrimmedString(line.material_id));
+        return material && [material.pace_code, material.external_code, material.material_name]
+          .some((field) => toUpperTrimmedString(field) === skuTarget);
+      });
+      if (!matchedLine) continue;
+      const lineId = toTrimmedString(matchedLine.id);
+      batchRequestedByLine.set(lineId, (batchRequestedByLine.get(lineId) ?? 0) + Number(row.pack_qty ?? 0));
+      const group = existingGroupByKey.get(`${soId}::${toTrimmedString(row.fo_number)}`);
+      const previous = group
+        ? allocatedQtyByGroupAndLine.get(`${toTrimmedString(group.id)}::${lineId}`) ?? 0
+        : 0;
+      batchReplacingByLine.set(lineId, (batchReplacingByLine.get(lineId) ?? 0) + previous);
+    }
+
     const results: JsonRecord[] = [];
     for (const row of rows) {
+      // Keep malformed spreadsheet rows visible in the review grid, rather
+      // than silently treating them as "not found" business data.
+      if (!toTrimmedString(row.external_so_number) || !toTrimmedString(row.fo_number)
+        || !toTrimmedString(row.customer_name) || !toTrimmedString(row.customer_address)
+        || !toTrimmedString(row.sku) || !Number.isFinite(Number(row.pack_qty)) || Number(row.pack_qty) <= 0
+        || typeof row.has_site !== "boolean" || row.has_site_valid === false) {
+        results.push({ row_index: row.row_index, status: "ERROR", error_code: "INVALID_UPLOAD_ROW" });
+        continue;
+      }
+      const uploadKey = [row.external_so_number, row.fo_number, row.sku].map(toUpperTrimmedString).join("::");
+      if ((uploadKeyCounts.get(uploadKey) ?? 0) > 1) {
+        results.push({ row_index: row.row_index, status: "ERROR", error_code: "DUPLICATE_UPLOAD_ROW" });
+        continue;
+      }
       const soNumber = toTrimmedString(row.external_so_number);
       const so = soByNumber.get(soNumber) as JsonRecord | undefined;
       if (!so) {
@@ -209,7 +269,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         results.push({ row_index: row.row_index, status: "ERROR", error_code: "SO_COMPANY_MISMATCH" });
         continue;
       }
-      if (toUpperTrimmedString(so.dispatch_type) !== "DEPENDENT_DIRECT") {
+      if (toUpperTrimmedString(so.dispatch_type) !== "DEPENDENT_DIRECT" || so.is_dd_dispatch !== true) {
         results.push({ row_index: row.row_index, status: "ERROR", error_code: "SO_NOT_VDC_DD" });
         continue;
       }
@@ -236,7 +296,18 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       });
       const skuCandidates = soLines.map((line) => {
         const material = materialById.get(toTrimmedString(line.material_id));
-        return { so_line_id: line.id, material_id: line.material_id, display: material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : toTrimmedString(line.material_id) };
+        const lineId = toTrimmedString(line.id);
+        const groupQty = existingGroup
+          ? allocatedQtyByGroupAndLine.get(`${toTrimmedString(existingGroup.id)}::${lineId}`) ?? 0
+          : 0;
+        return {
+          so_line_id: line.id, material_id: line.material_id,
+          document_name: toTrimmedString(material?.material_name),
+          display: material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : toTrimmedString(line.material_id),
+          line_total_qty: Number(line.base_qty ?? line.quantity ?? 0),
+          existing_allocated_qty: allocatedByLine.get(lineId) ?? 0,
+          existing_group_qty: groupQty,
+        };
       });
 
       // §6 point 12 duplicate/changed-qty compare — only meaningful when
@@ -260,8 +331,8 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         // Balance check excludes this row's own prior allocation (if any) so
         // a same-qty or corrected re-upload of the SAME group+line is never
         // compared against itself.
-        const allocatedByOthers = totalAlreadyAllocated - existingSameGroupQty;
-        if (allocatedByOthers + Number(row.pack_qty ?? 0) > lineTotal + QTY_TOL) qtyStatus = "EXCEEDS_BALANCE";
+        const retainedAllocation = totalAlreadyAllocated - (batchReplacingByLine.get(lineId) ?? 0);
+        if (retainedAllocation + (batchRequestedByLine.get(lineId) ?? 0) > lineTotal + QTY_TOL) qtyStatus = "EXCEEDS_BALANCE";
       }
 
       // Customer resolve.
@@ -296,13 +367,24 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         row_index: row.row_index,
         status: "RESOLVED",
         so_id: soId,
-        so_number: soNumber,
+        // External SO is the lookup key; the grid must display PACE's own SO
+        // number so a reviewer sees the actual mapping target.
+        so_number: toTrimmedString(so.so_number),
         vdc_id: vdcId,
+        vdc_state: toTrimmedString(so.bill_to_state),
+        has_site: row.has_site === true,
+        dd_flagged: true,
         existing_group_id: existingGroup ? toTrimmedString(existingGroup.id) : null,
         duplicate_status: duplicateStatus,
         previous_qty: previousQty,
         sku_resolution: matchedLine
-          ? { status: "MATCHED", so_line_id: matchedLine.id, material_id: matchedLine.material_id }
+          ? {
+              status: "MATCHED", so_line_id: matchedLine.id, material_id: matchedLine.material_id,
+              document_name: toTrimmedString(materialById.get(toTrimmedString(matchedLine.material_id))?.material_name),
+              line_total_qty: Number(matchedLine.base_qty ?? matchedLine.quantity ?? 0),
+              existing_allocated_qty: allocatedByLine.get(toTrimmedString(matchedLine.id)) ?? 0,
+              existing_group_qty: previousQty ?? 0,
+            }
           : { status: "NOT_FOUND", candidates: skuCandidates },
         qty_status: qtyStatus,
         customer_resolution: customerResolution,

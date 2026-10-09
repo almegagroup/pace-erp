@@ -17,7 +17,7 @@
 import { useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import { previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
+import { createTransporter, previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
 
 const TEMPLATE_HEADERS = [
   "FO/SO Number", "DO Date", "Transporter", "LR Number", "LR Date", "SKU",
@@ -104,6 +104,10 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saveResults, setSaveResults] = useState(null);
+  const [transporterCreate, setTransporterCreate] = useState(null);
+  const [newTransporterName, setNewTransporterName] = useState("");
+  const [newTransporterGst, setNewTransporterGst] = useState("");
+  const [creatingTransporter, setCreatingTransporter] = useState(false);
   const fileInputRef = useRef(null);
 
   function updateRaw(rowIndex, patch) {
@@ -161,6 +165,36 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
       : row)));
   }
 
+  function beginCreateTransporter(row) {
+    setTransporterCreate({ rowIndex: row.row_index });
+    setNewTransporterName(rawByIndex[row.row_index]?.transporter_name || "");
+    setNewTransporterGst("");
+  }
+
+  async function saveNewTransporter() {
+    const name = newTransporterName.trim();
+    if (!name || !transporterCreate) return;
+    setCreatingTransporter(true); setError("");
+    try {
+      const result = await createTransporter({
+        transporter_name: name,
+        usage_direction: "BOTH",
+        business_context: "SALES",
+        gst_number: newTransporterGst.trim() || undefined,
+      });
+      const created = result?.data ?? result;
+      if (!created?.id) throw new Error("TRANSPORTER_CREATE_FAILED");
+      chooseTransporter(transporterCreate.rowIndex, created.id);
+      setTransporterCreate(null);
+      setNewTransporterName("");
+      setNewTransporterGst("");
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "TRANSPORTER_CREATE_FAILED");
+    } finally {
+      setCreatingTransporter(false);
+    }
+  }
+
   // One Delivery Order per (fo_or_so_number) group — §6 point 14/17. Header
   // fields (DO Date/LR/Transporter/Truck/Dispatch/Tally) are repeated on
   // every row of the same group in the source Excel; the first row's raw
@@ -180,6 +214,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
   function groupReadiness(group) {
     const problems = [];
     const raw = group.raw;
+    if (!raw.do_date) problems.push("DO Date");
     if (!raw.transporter_name) problems.push("Transporter");
     if (!raw.lr_number) problems.push("LR Number");
     if (!raw.lr_date) problems.push("LR Date");
@@ -192,6 +227,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
       if (row.sku_resolution?.status !== "MATCHED") problems.push(`Row ${row.row_index}: SKU not resolved`);
       if (!row.storage_location?.id) problems.push(`Row ${row.row_index}: Storage Location not resolved`);
       if (row.qty_status === "EXCEEDS_BALANCE") problems.push(`Row ${row.row_index}: exceeds remaining balance`);
+      if ((row.format_errors ?? []).length) problems.push(`Row ${row.row_index}: ${row.format_errors.join(", ")}`);
     }
     return problems;
   }
@@ -281,6 +317,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
                 { key: "fo_or_so", label: "FO/SO Number", width: "130px", render: (row) => row.fo_or_so_number },
                 { key: "dd_flag", label: "DD Flag", width: "80px", render: (row) => row.status === "RESOLVED" ? (row.dd_flag ? "Yes" : "No") : "—" },
                 { key: "so_number", label: "SO Number", width: "120px", render: (row) => row.so_number || "—" },
+                { key: "do_date", label: "DO Date", width: "115px", render: (row) => rawByIndex[row.row_index]?.do_date || "—" },
                 {
                   key: "status", label: "Status", width: "180px", render: (row) => row.status === "ERROR"
                     ? <span className="font-semibold text-rose-700">{row.error_code}</span>
@@ -316,6 +353,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
                   key: "storage_location", label: "Storage Location", width: "200px", render: (row) => {
                     if (row.status !== "RESOLVED") return <span className="text-slate-400">—</span>;
                     const resolved = row.storage_location;
+                    const options = row.storage_location_candidates ?? [];
                     return (
                       <div className="grid gap-1">
                         {resolved?.id ? (
@@ -323,12 +361,14 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
                         ) : (
                           <span className="font-semibold text-rose-700">Not found</span>
                         )}
-                        <input
-                          defaultValue={rawByIndex[row.row_index]?.storage_location_code || ""}
-                          onBlur={(event) => updateRaw(row.row_index, { storage_location_code: event.target.value })}
-                          placeholder="F-location code"
-                          className="h-6 w-32 border border-slate-300 bg-[#fffef7] px-1 text-[11px]"
-                        />
+                        <select
+                          value={rawByIndex[row.row_index]?.storage_location_code || ""}
+                          onChange={(event) => updateRaw(row.row_index, { storage_location_code: event.target.value })}
+                          className="h-6 border border-slate-300 bg-[#fffef7] px-1 text-[11px]"
+                        >
+                          <option value="">Choose F-location…</option>
+                          {options.map((option) => <option key={option.id} value={option.code}>{option.code} — {option.name}</option>)}
+                        </select>
                       </div>
                     );
                   },
@@ -349,12 +389,18 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
                         </select>
                       );
                     }
-                    return <span className="font-semibold text-rose-700">Not found — add via Transporter Master</span>;
+                    return <button type="button" onClick={() => beginCreateTransporter(row)} className="border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-800">Not found — Create New</button>;
                   },
                 },
+                { key: "lr_number", label: "LR Number", width: "135px", render: (row) => rawByIndex[row.row_index]?.lr_number || "—" },
+                { key: "lr_date", label: "LR Date", width: "115px", render: (row) => rawByIndex[row.row_index]?.lr_date || "—" },
+                { key: "truck_number", label: "Truck Number", width: "135px", render: (row) => rawByIndex[row.row_index]?.truck_number || "—" },
+                { key: "dispatch_date", label: "Dispatch Date", width: "125px", render: (row) => rawByIndex[row.row_index]?.dispatch_date || "—" },
                 {
                   key: "missing", label: "Missing", width: "180px", render: (row) => row.status === "RESOLVED" && (row.missing_required_fields ?? []).length > 0
-                    ? <span className="font-semibold text-amber-700">{row.missing_required_fields.join(", ")}</span>
+                    ? <span className="font-semibold text-amber-700">{[...(row.missing_required_fields ?? []), ...(row.format_errors ?? [])].join(", ")}</span>
+                    : (row.format_errors ?? []).length > 0
+                      ? <span className="font-semibold text-rose-700">{row.format_errors.join(", ")}</span>
                     : <span className="text-slate-400">—</span>,
                 },
                 {
@@ -396,6 +442,22 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
               </ul>
             ) : null}
           </>
+        ) : null}
+        {transporterCreate ? (
+          <DrawerBase
+            visible
+            title="Create Transporter"
+            onEscape={() => !creatingTransporter && setTransporterCreate(null)}
+            onClose={() => !creatingTransporter && setTransporterCreate(null)}
+            width="min(520px, calc(100vw - 24px))"
+            actions={<button type="button" onClick={() => void saveNewTransporter()} disabled={creatingTransporter || !newTransporterName.trim()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">{creatingTransporter ? "Creating…" : "Create & Use"}</button>}
+          >
+            <div className="grid gap-3">
+              <p className="text-xs text-slate-600">No matching Transporter Master record was found. Create it here, then this upload row will use the new master record.</p>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">Transporter Name<input autoFocus value={newTransporterName} onChange={(event) => setNewTransporterName(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-sm font-normal" /></label>
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">GST Number <span className="font-normal text-slate-500">(optional)</span><input value={newTransporterGst} onChange={(event) => setNewTransporterGst(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-sm font-normal" /></label>
+            </div>
+          </DrawerBase>
         ) : null}
       </div>
     </DrawerBase>

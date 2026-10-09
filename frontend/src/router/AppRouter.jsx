@@ -227,6 +227,7 @@ import ProductionPOCreatePage from "../pages/dashboard/production/ProductionPOCr
 import ProductionPOEditPage from "../pages/dashboard/production/ProductionPOEditPage.jsx";
 import ProductionPOFinalPage from "../pages/dashboard/production/ProductionPOFinalPage.jsx";
 import ProductionPOVerifyPage from "../pages/dashboard/production/ProductionPOVerifyPage.jsx";
+import MtsPendingVerifyPage from "../pages/dashboard/production/MtsPendingVerifyPage.jsx";
 import OrderListPage from "../pages/dashboard/production/OrderListPage.jsx";
 import OrderInformationSystemPage from "../pages/dashboard/production/OrderInformationSystemPage.jsx";
 import BatchVariancePage from "../pages/dashboard/production/BatchVariancePage.jsx";
@@ -995,6 +996,7 @@ export default function AppRouter() {
                   <Route path="production/po-edit" element={<ProductionPOEditPage />} />
                   <Route path="production/po-final" element={<ProductionPOFinalPage />} />
                   <Route path="production/po-verify" element={<ProductionPOVerifyPage />} />
+                  <Route path="production/mts-pending-verify" element={<MtsPendingVerifyPage />} />
                   <Route path="production/order-list" element={<OrderListPage />} />
                   <Route path="production/order-information-system" element={<OrderInformationSystemPage />} />
                   <Route path="production/batch-variance" element={<BatchVariancePage />} />
