@@ -201,6 +201,7 @@ export async function createCustomerAddressHandler(
     const addressLine = toTrimmedString(body.address_line);
     const town = toTrimmedString(body.town);
     let state = toTrimmedString(body.state);
+    const depotCodeId = toTrimmedString(body.depot_code_id);
 
     if (!customerId) {
       return addressErrorResponse(req, ctx, "OM_ADDRESS_CUSTOMER_ID_REQUIRED", 400, "customer_id is required");
@@ -228,6 +229,13 @@ export async function createCustomerAddressHandler(
     if (customerState && state !== customerState) {
       return addressErrorResponse(req, ctx, "OM_ADDRESS_STATE_MISMATCH", 400, "Address state must match the customer's own state");
     }
+    if (depotCodeId) {
+      const { data: depot, error: depotError } = await serviceRoleClient
+        .schema("erp_master").from("fg_depot_code").select("id").eq("id", depotCodeId).maybeSingle();
+      if (depotError || !depot) {
+        return addressErrorResponse(req, ctx, "OM_ADDRESS_DEPOT_CODE_NOT_FOUND", 404, "Depot code not found");
+      }
+    }
 
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
@@ -239,6 +247,7 @@ export async function createCustomerAddressHandler(
         town,
         state,
         pin_code: toTrimmedString(body.pin_code) || null,
+        depot_code_id: depotCodeId || null,
         status: "ACTIVE",
         created_by: ctx.auth_user_id,
       })
@@ -248,6 +257,7 @@ export async function createCustomerAddressHandler(
       console.error("[createCustomerAddressHandler] insert failed:", JSON.stringify(error));
       throw new Error("OM_ADDRESS_CREATE_FAILED");
     }
+    if (depotCodeId) await recomputeCustomerIsDependent(customerId);
 
     const [enriched] = await enrichAddressRows([data as JsonRecord]);
     return okResponse({ data: enriched }, ctx.request_id, req);

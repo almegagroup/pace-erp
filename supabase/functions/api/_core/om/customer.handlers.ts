@@ -304,6 +304,7 @@ export async function createCustomerHandler(
     const siteName = toTrimmedString(body.site_name);
     const foCustomerTypeRaw = normalizeFoCustomerType(body.fo_customer_type);
     const gstCategory = toTrimmedString(body.gst_category).toUpperCase();
+    const depotCodeId = toTrimmedString(body.depot_code_id);
     // §113.6 — a customer created with no company mapping produces an
     // unscoped row every other company can see; mandatory at create time.
     const companyId = toTrimmedString(body.company_id);
@@ -345,6 +346,13 @@ export async function createCustomerHandler(
     } catch {
       return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (depotCodeId) {
+      const { data: depot, error: depotError } = await serviceRoleClient
+        .schema("erp_master").from("fg_depot_code").select("id").eq("id", depotCodeId).maybeSingle();
+      if (depotError || !depot) {
+        return customerErrorResponse(req, ctx, "OM_ADDRESS_DEPOT_CODE_NOT_FOUND", 404, "Depot code not found");
+      }
+    }
 
     const { data: customerCode, error: codeError } = await serviceRoleClient.rpc("generate_customer_code");
     if (codeError || !customerCode) {
@@ -377,6 +385,9 @@ export async function createCustomerHandler(
       // created under. Always known at create time since company_id is
       // mandatory (§113.6) -- set here directly, never derived later.
       origin_company_id: companyId,
+      // A newly created customer has only this first address. If it is
+      // VDC-mapped in the same request, dependent status is already known.
+      is_dependent: Boolean(depotCodeId),
       status: "ACTIVE",
       approved_by: ctx.auth_user_id,
       approved_at: new Date().toISOString(),
@@ -413,7 +424,7 @@ export async function createCustomerHandler(
     // just captured (delivery_address/billing_state/town) + site_name.
     // Without this, a newly-created customer has zero customer_address rows
     // and the whole Address -> VDC -> Bill-To/Ship-To chain never applies.
-    const { error: addressError } = await serviceRoleClient
+    const { data: firstAddress, error: addressError } = await serviceRoleClient
       .schema("erp_master")
       .from("customer_address")
       .insert({
@@ -421,12 +432,15 @@ export async function createCustomerHandler(
         site_name: siteName,
         address_line: deliveryAddress,
         town: toTrimmedString(body.town) || null,
-      pin_code: toTrimmedString(body.pin_code) || null,
+        pin_code: toTrimmedString(body.pin_code) || null,
         state: billingState,
+        depot_code_id: depotCodeId || null,
         status: "ACTIVE",
         created_by: ctx.auth_user_id,
-      });
-    if (addressError) {
+      })
+      .select("*")
+      .single();
+    if (addressError || !firstAddress) {
       console.error("[createCustomerHandler] first address insert failed:", JSON.stringify(addressError));
       await serviceRoleClient.schema("erp_master").from("customer_company_map").delete().eq("customer_id", data.id);
       await serviceRoleClient.schema("erp_master").from("customer_master").delete().eq("id", data.id);
@@ -434,7 +448,7 @@ export async function createCustomerHandler(
     }
 
     const [enriched] = await enrichCustomerRows([data as Record<string, unknown>]);
-    return okResponse({ data: enriched }, ctx.request_id, req);
+    return okResponse({ data: { ...enriched, first_address: firstAddress } }, ctx.request_id, req);
   } catch (err) {
     console.error("[createCustomerHandler] caught error:", err);
     const code = (err as Error).message || "OM_CUSTOMER_CREATE_FAILED";

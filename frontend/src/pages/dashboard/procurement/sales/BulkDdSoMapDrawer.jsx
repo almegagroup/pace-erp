@@ -230,11 +230,9 @@ function AddSiteAddressForm({ customerId, vdcId, raw, onDone, onCancel }) {
         address_line: (sameAsCustomer ? (raw?.customer_address || addressLine) : addressLine) || addressLine,
         town: town.trim(),
         pin_code: pinCode.trim() || undefined,
+        depot_code_id: vdcId,
       });
       const createdAddress = created?.data ?? created;
-      if (createdAddress?.id) {
-        await updateCustomerAddress({ id: createdAddress.id, depot_code_id: vdcId });
-      }
       onDone(createdAddress);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "OM_ADDRESS_CREATE_FAILED");
@@ -462,10 +460,15 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
 
   async function handleCustomerCreated(rowIndex, vdcId, customer) {
     try {
-      const addrResult = await listCustomerAddresses(customer.id);
-      const addresses = Array.isArray(addrResult?.data) ? addrResult.data : (Array.isArray(addrResult) ? addrResult : []);
-      const firstAddress = addresses[0];
-      if (firstAddress?.id) await updateCustomerAddress({ id: firstAddress.id, depot_code_id: vdcId });
+      // The Customer POST returns its VDC-mapped first address. The fallback
+      // only supports an older backend while a stale browser tab is open.
+      let firstAddress = customer?.first_address;
+      if (!firstAddress?.id) {
+        const addrResult = await listCustomerAddresses(customer.id);
+        const addresses = Array.isArray(addrResult?.data) ? addrResult.data : (Array.isArray(addrResult) ? addrResult : []);
+        firstAddress = addresses[0];
+        if (firstAddress?.id) await updateCustomerAddress({ id: firstAddress.id, depot_code_id: vdcId });
+      }
       const siteResolution = firstAddress ? { count: 1, status: "SINGLE", candidates: [firstAddress] } : { count: 0, status: "NONE", candidates: [] };
       const targetRow = (rows ?? []).find((row) => row.row_index === rowIndex);
       updateRow(rowIndex, {
@@ -666,6 +669,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
             initialPinCode=""
             initialGstNumber={rawByIndex[createDrawerRow.row_index]?.customer_gst || ""}
             initialGstCategory={rawByIndex[createDrawerRow.row_index]?.customer_gst ? "REGISTERED" : "UNREGISTERED"}
+            initialDepotCodeId={createDrawerRow.vdc_id}
             lockBillingState
             requireTown
             onSaved={(customer) => void handleCustomerCreated(createDrawerRow.row_index, createDrawerRow.vdc_id, customer)}

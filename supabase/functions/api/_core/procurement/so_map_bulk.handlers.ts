@@ -284,6 +284,19 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     }
 
     const results: JsonRecord[] = [];
+    // Preview is one HTTP request per upload. Reuse repeated VDC-scoped
+    // resolver inputs so rows sharing a customer/site do not issue the same
+    // database/API lookup again and again.
+    const gstResolutionCache = new Map<string, Promise<JsonRecord>>();
+    const nameResolutionCache = new Map<string, Promise<JsonRecord>>();
+    const siteAddressCache = new Map<string, Promise<JsonRecord[]>>();
+    const resolveCached = <T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> => {
+      const existing = cache.get(key);
+      if (existing) return existing;
+      const pending = load();
+      cache.set(key, pending);
+      return pending;
+    };
     for (const row of rows) {
       // Keep malformed spreadsheet rows visible in the review grid, rather
       // than silently treating them as "not found" business data.
@@ -379,10 +392,11 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       const gst = toUpperTrimmedString(row.customer_gst);
       let customerResolution: JsonRecord;
       if (gst) {
-        const gstResult = await resolveCustomerByGst(gst, vdcId);
+        const gstResult = await resolveCached(gstResolutionCache, `${vdcId}::${gst}`, () => resolveCustomerByGst(gst, vdcId));
         customerResolution = { mode: "GST", ...gstResult };
       } else {
-        const nameResult = await resolveCustomerByName(toTrimmedString(row.customer_name), vdcId);
+        const customerName = toTrimmedString(row.customer_name);
+        const nameResult = await resolveCached(nameResolutionCache, `${vdcId}::${toUpperTrimmedString(customerName)}`, () => resolveCustomerByName(customerName, vdcId));
         customerResolution = { mode: "NAME", ...nameResult };
       }
 
@@ -392,7 +406,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       if (row.has_site) {
         const resolvedCustomerId = toTrimmedString((customerResolution as JsonRecord).customer_id);
         if (resolvedCustomerId) {
-          const addresses = await resolveSiteAddresses(resolvedCustomerId, vdcId);
+          const addresses = await resolveCached(siteAddressCache, `${vdcId}::${resolvedCustomerId}`, () => resolveSiteAddresses(resolvedCustomerId, vdcId));
           siteResolution = buildSiteResolution(addresses, row.site_address);
         } else {
           siteResolution = { count: 0, status: "PENDING_CUSTOMER", candidates: [] };
