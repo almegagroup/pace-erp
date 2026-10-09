@@ -254,7 +254,11 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
       parsedRows.forEach((row) => { rawMap[row.row_index] = row; });
       setRawByIndex(rawMap);
       const result = await previewSoMapBulkUpload({ company_id: companyId, rows: parsedRows });
-      setRows(Array.isArray(result?.data) ? result.data : []);
+      // fetchProcurement unwraps the standard `{ data: [...] }` envelope, so
+      // preview responses arrive here as the array itself. Retain the nested
+      // fallback for callers that return an unwrapped API payload.
+      const previewRows = Array.isArray(result) ? result : result?.data;
+      setRows(Array.isArray(previewRows) ? previewRows : []);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "SO_MAP_BULK_PREVIEW_FAILED");
     } finally {
