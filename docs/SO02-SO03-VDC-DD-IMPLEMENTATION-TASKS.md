@@ -232,14 +232,41 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
 
 ## Phase 3 — Edit Transporter Details (pre-PGI, FO-keyed)
 
-- [ ] **T15.** Backend: new endpoint, FO-Number-keyed, editing Transporter/LR
+- [x] **T15.** Backend: new endpoint, FO-Number-keyed, editing Transporter/LR
   Number/LR Date/Truck Number/Dispatch Date on a VDC DO **before** PGI (status
   still CREATED/invoice-only) — this is new, since `amendDispatchDetailsHandler`
   only works post-DISPATCHED. Decide: extend that RPC with a pre-PGI branch, or a
   parallel new RPC — pick whichever requires zero change to the existing
   post-DISPATCH amend path.
-- [ ] **T16.** Frontend: "Edit Transporter Details" button on SO03, FO Number
+  **2026-10-09 ✅** Added to `do_bulk.handlers.ts` (same file as Phase 2,
+  thematically one additive VDC/DC bulk-dispatch module):
+  `findDoByFoNumberHandler` (GET, resolves FO Number → map_group →
+  allocations → delivery_challan_line → the one non-CANCELLED DO,
+  404s `DO_BULK_EDIT_WINDOW_CLOSED` if its status isn't CREATED/INVOICED)
+  and `editTransporterDetailsHandler` (POST, re-checks company scope +
+  EDIT ACL + the same pre-PGI status gate, then a **plain additive
+  UPDATE** on `delivery_challan`'s own header columns only —
+  deliberately NOT routed through `updateDeliveryOrderUnifiedHandler`,
+  since that handler mandatorily replaces the entire line set and this
+  edit never touches lines, matching the design's "এই page শুধু data
+  update করে" framing). Reuses the existing `isManualDocumentDateWithinWindow`
+  check for LR Date (same shared helper `do_unified.handlers.ts` already
+  imports, no duplication). Routes `GET .../bulk/find-by-fo` (VIEW) and
+  `POST .../bulk/edit-transporter` (EDIT), both `PROC_DO_CREATE` (no ACL
+  change). **Verified:** `deno check` 97/97 (zero new), all 9 backend
+  guards green (write-handler count 151, +1 for the new EDIT handler).
+- [x] **T16.** Frontend: "Edit Transporter Details" button on SO03, FO Number
   prompt, 5-field editor.
+  **2026-10-09 ✅** New `EditTransporterDetailsDrawer.jsx` — FO Number
+  input + Find button, then a 5-field editor (Transporter — a proper
+  `<select>` dropdown off `listTransporters()`, same pattern
+  `DODetailPage.jsx`'s own dispatch-amendment modal already uses, not a
+  raw-UUID text field/§8A violation; LR Number; LR Date; Truck Number;
+  Dispatch Date) + Save, calling `findDoByFoNumber`/`editTransporterDetails`.
+  Wired into `DOListPage.jsx` as a second new toolbar action ("Edit
+  Transporter Details", disabled until a company is selected), refetching
+  the DO list on save. **Verified:** `eslint` clean on all 3 touched/new
+  files; `jsx-no-undef-guard.mjs` 0 violations.
 
 ## Phase 4 — SO02 Bulk Posting (Invoice + PGI, VDC/DC split)
 

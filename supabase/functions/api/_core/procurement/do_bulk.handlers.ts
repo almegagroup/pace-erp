@@ -37,6 +37,7 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { createDeliveryOrderUnifiedHandler } from "./do_unified.handlers.ts";
 import { saveSoMapGroupHandler } from "./so_map.handlers.ts";
 
@@ -528,6 +529,135 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_BULK_SAVE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
+    return doBulkErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §6 point 16 — "Edit Transporter Details" (SO03, VDC-only, pre-PGI). Keyed
+// by FO Number rather than DO id because the business owner operates off
+// the FO, not an internal DO identifier; resolves to the one Delivery Order
+// a Bulk-DO-Upload-created allocation traces back to.
+const PRE_PGI_EDITABLE_STATUSES = new Set(["CREATED", "INVOICED"]);
+
+export async function findDoByFoNumberHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(url.searchParams.get("company_id")));
+    if (!companyId) return doBulkErrorResponse(req, ctx, "DO_BULK_COMPANY_REQUIRED", 400, "company_id is required.");
+    if (!(await canMaintainDoBulkAccess(ctx, companyId, "VIEW"))) {
+      return doBulkErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Create-DO access at this company.");
+    }
+    const foNumber = toTrimmedString(url.searchParams.get("fo_number"));
+    if (!foNumber) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NUMBER_REQUIRED", 400, "fo_number is required.");
+
+    const { data: groupRow, error: groupError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_group")
+      .select("id, so:so_id(company_id)").eq("external_fo_number", foNumber).eq("status", "ACTIVE").maybeSingle();
+    if (groupError) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_LOOKUP_FAILED", 500, "Unable to look up this FO Number.");
+    if (!groupRow) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NOT_FOUND", 404, "This FO Number is not mapped yet.");
+    const so = (groupRow as JsonRecord).so as JsonRecord | null;
+    if (!so || toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NOT_FOUND", 404, "This FO Number is not mapped in this company.");
+    }
+
+    const { data: allocRows, error: allocError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_allocation")
+      .select("id").eq("map_group_id", toTrimmedString((groupRow as JsonRecord).id));
+    if (allocError) return doBulkErrorResponse(req, ctx, "DO_BULK_ALLOCATION_LOOKUP_FAILED", 500, "Unable to look up this FO's allocations.");
+    const allocationIds = ((allocRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id));
+    if (allocationIds.length === 0) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NOT_DISPATCHED", 404, "This FO has no Delivery Order yet.");
+
+    const { data: lineRows, error: lineError } = await serviceRoleClient
+      .schema("erp_procurement").from("delivery_challan_line")
+      .select("dc_id").in("so_map_allocation_id", allocationIds);
+    if (lineError) return doBulkErrorResponse(req, ctx, "DO_BULK_LINE_LOOKUP_FAILED", 500, "Unable to look up this FO's Delivery Order.");
+    const dcIds = [...new Set(((lineRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.dc_id)).filter(Boolean))];
+    if (dcIds.length === 0) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NOT_DISPATCHED", 404, "This FO has no Delivery Order yet.");
+
+    const { data: dcRows, error: dcError } = await serviceRoleClient
+      .schema("erp_procurement").from("delivery_challan")
+      .select("id, dc_number, status, transporter_id, transporter_name_freetext, lr_number, lr_date, vehicle_number, dispatch_date, pgi_deferred")
+      .in("id", dcIds).neq("status", "CANCELLED").order("dc_date", { ascending: false });
+    if (dcError) return doBulkErrorResponse(req, ctx, "DO_BULK_DO_LOOKUP_FAILED", 500, "Unable to load this FO's Delivery Order.");
+    const dcRow = ((dcRows ?? []) as JsonRecord[])[0];
+    if (!dcRow) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NOT_DISPATCHED", 404, "This FO has no active Delivery Order.");
+    if (!PRE_PGI_EDITABLE_STATUSES.has(toUpperTrimmedString(dcRow.status))) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_WINDOW_CLOSED", 400, "This Delivery Order has already been dispatched — use the regular DO Edit (Transporter/Vehicle/LR) screen instead.");
+    }
+
+    let transporterDisplay: string | null = toTrimmedString(dcRow.transporter_name_freetext) || null;
+    if (dcRow.transporter_id) {
+      const { data: transporter } = await serviceRoleClient
+        .schema("erp_master").from("transporter_master").select("transporter_code, transporter_name").eq("id", toTrimmedString(dcRow.transporter_id)).maybeSingle();
+      if (transporter) transporterDisplay = `${toTrimmedString((transporter as JsonRecord).transporter_code)} — ${toTrimmedString((transporter as JsonRecord).transporter_name)}`;
+    }
+
+    return okResponse({
+      dc_id: dcRow.id,
+      dc_number: dcRow.dc_number,
+      status: dcRow.status,
+      transporter_id: dcRow.transporter_id,
+      transporter_display: transporterDisplay,
+      lr_number: dcRow.lr_number,
+      lr_date: dcRow.lr_date,
+      truck_number: dcRow.vehicle_number,
+      dispatch_date: dcRow.dispatch_date,
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DO_BULK_FO_LOOKUP_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : code.includes("NOT_FOUND") || code.includes("NOT_DISPATCHED") ? 404 : 500;
+    return doBulkErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// §6 point 16 — this page only updates data; it never triggers PGI (that
+// happens separately via the Truck+Dispatch Date Upload page's Post action,
+// §6 point 19/Phase 5). A direct, additive UPDATE on delivery_challan's own
+// header columns — never routed through updateDeliveryOrderUnifiedHandler,
+// since that handler mandatorily replaces the whole line set and this edit
+// never touches lines at all.
+export async function editTransporterDetailsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const dcId = toTrimmedString(body.dc_id);
+    if (!dcId) return doBulkErrorResponse(req, ctx, "DO_BULK_DC_ID_REQUIRED", 400, "dc_id is required.");
+    const lrDate = toTrimmedString(body.lr_date);
+    if (lrDate && !isManualDocumentDateWithinWindow(lrDate)) {
+      return doBulkErrorResponse(req, ctx, "DO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
+
+    const { data: dc, error: dcError } = await serviceRoleClient
+      .schema("erp_procurement").from("delivery_challan").select("id, status, selling_company_id").eq("id", dcId).maybeSingle();
+    if (dcError || !dc) return doBulkErrorResponse(req, ctx, "DO_BULK_DO_NOT_FOUND", 404, "Delivery order not found.");
+    const companyId = toTrimmedString((dc as JsonRecord).selling_company_id);
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      return doBulkErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+    }
+    if (!(await canMaintainDoBulkAccess(ctx, companyId, "EDIT"))) {
+      return doBulkErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Edit-DO access at this company.");
+    }
+    if (!PRE_PGI_EDITABLE_STATUSES.has(toUpperTrimmedString((dc as JsonRecord).status))) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_WINDOW_CLOSED", 400, "This Delivery Order has already been dispatched — use the regular DO Edit (Transporter/Vehicle/LR) screen instead.");
+    }
+
+    const patch: JsonRecord = {};
+    if (toTrimmedString(body.transporter_id)) patch.transporter_id = toTrimmedString(body.transporter_id);
+    if (toTrimmedString(body.lr_number)) patch.lr_number = toTrimmedString(body.lr_number);
+    if (lrDate) patch.lr_date = lrDate;
+    if (toTrimmedString(body.truck_number)) patch.vehicle_number = toTrimmedString(body.truck_number);
+    if (toTrimmedString(body.dispatch_date)) patch.dispatch_date = toTrimmedString(body.dispatch_date);
+    if (Object.keys(patch).length === 0) return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_NO_FIELDS", 400, "At least one field is required.");
+
+    const { error: patchError } = await serviceRoleClient
+      .schema("erp_procurement").from("delivery_challan").update(patch).eq("id", dcId);
+    if (patchError) return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_FAILED", 500, "Unable to update dispatch details.");
+
+    return okResponse({ dc_id: dcId, updated: true }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DO_BULK_EDIT_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : code.includes("NOT_FOUND") ? 404 : 500;
     return doBulkErrorResponse(req, ctx, code, status, code);
   }
 }

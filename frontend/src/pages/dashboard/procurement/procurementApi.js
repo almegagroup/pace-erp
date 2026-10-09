@@ -1225,6 +1225,12 @@ export function previewDoBulkUpload(data) {
 export function saveDoBulkUpload(data) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/save", data);
 }
+export function findDoByFoNumber(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/find-by-fo", undefined, params);
+}
+export function editTransporterDetails(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/edit-transporter", data);
+}
 
 // §133.13 -- IBN-driven multi-invoice preview + post, per DO.
 export function previewInvoiceGroups(dcId) {

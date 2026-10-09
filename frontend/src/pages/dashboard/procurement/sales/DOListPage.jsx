@@ -22,6 +22,7 @@ import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/opera
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
 import BulkDoUploadDrawer from "./BulkDoUploadDrawer.jsx";
+import EditTransporterDetailsDrawer from "./EditTransporterDetailsDrawer.jsx";
 
 const LIMIT = 50;
 
@@ -62,6 +63,7 @@ export default function DOListPage() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  const [editTransporterOpen, setEditTransporterOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const params = useMemo(
@@ -127,6 +129,7 @@ export default function DOListPage() {
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => doQuery.refetch() },
         { key: "create", label: "Create DO", tone: "primary", onClick: openCreateDO },
         { key: "bulk-upload", label: "Bulk DO Upload", tone: "neutral", onClick: () => setBulkUploadOpen(true), disabled: !effectiveCompanyId },
+        { key: "edit-transporter", label: "Edit Transporter Details", tone: "neutral", onClick: () => setEditTransporterOpen(true), disabled: !effectiveCompanyId },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}
       notices={doQuery.error ? [{ key: "do-list-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "PROCUREMENT_DO_LIST_FAILED" }] : []}
@@ -208,6 +211,13 @@ export default function DOListPage() {
       <BulkDoUploadDrawer
         companyId={effectiveCompanyId}
         onClose={() => setBulkUploadOpen(false)}
+        onSaved={() => void doQuery.refetch()}
+      />
+    ) : null}
+    {editTransporterOpen ? (
+      <EditTransporterDetailsDrawer
+        companyId={effectiveCompanyId}
+        onClose={() => setEditTransporterOpen(false)}
         onSaved={() => void doQuery.refetch()}
       />
     ) : null}

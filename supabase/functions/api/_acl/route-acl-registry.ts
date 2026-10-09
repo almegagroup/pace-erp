@@ -263,6 +263,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // routes above already use) -- no ACL change needed.
   "POST:/api/procurement/delivery-orders-v2/bulk/preview":      { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/delivery-orders-v2/bulk/save":         { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
+  "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
