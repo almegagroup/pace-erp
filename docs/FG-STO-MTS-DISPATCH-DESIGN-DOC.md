@@ -468,6 +468,77 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
    কোন flow-এ যাবে** — Flag ON = VDC-style Deferred-PGI (FO-number-keyed), Flag OFF =
    DC-style Atomic (FO ছাড়া)।
 
+5. **Ship-To resolution per-FO, per-customer না:** একটা Customer Master record-এর under-এ
+   একাধিক Site Address থাকতে পারে (`erp_master.customer_address` — আগে থেকেই আছে, এটাই
+   "Site Address" মেকানিজম)। কোনো একটা FO সেই customer-এর Main Address-এ Ship-To হতে পারে,
+   আবার অন্য একটা FO (একই customer, একই SO-র আওতায়) তার কোনো একটা Site Address-এ Ship-To
+   হতে পারে — অর্থাৎ Ship-To decide হয় **per-dispatch-occasion (per-FO), customer-level fix
+   না**।
+
+6. **Excel ↔ Customer Master (MM04) cross-check — real data-quality finding (live DB
+   query দিয়ে verify করা):** Tally Excel-এর ৫০টা distinct Consignee নামের মধ্যে CMP003-এর
+   Customer Master-এ মাত্র ২১টা নাম কোনো না কোনো রূপে পাওয়া গেছে — **২৯টা একদমই নেই**।
+   পাওয়া ২১টার মধ্যে ৪টা name-group-এর একাধিক `customer_master` record একই নামে আছে — তাদের
+   address মিলিয়ে দেখা গেছে একটা (KUNDU PAINT HOUSE) সত্যিই duplicate (একই Site Address —
+   "Shriram Grand City", শুধু billing-address সম্পূর্ণতা/GST আলাদা), কিন্তু বাকি তিনটা
+   (MA LAXMI TRADERS, MAA TRADERS, MONDAL PAINTS) **সম্পূর্ণ ভিন্ন real business, শুধু নাম
+   মিলে গেছে** (billing address/district/GST number আলাদা)। সিদ্ধান্ত: শুধু নাম মিলিয়ে
+   customer resolve করা অনিরাপদ — true duplicate আর coincidental name-collision দুটোই
+   একসাথে বাস্তবে আছে, আর এই ৪টা example দেখেই বোঝা যায় পুরো customer base-এ এই রকম case
+   "প্রচুর" (business owner-এর নিজের শব্দ) থাকবে।
+
+7. **আসল challenge, SO Map-এর সবচেয়ে বড় সমস্যা (business owner-এর নিজের ভাষায়, ৩টা
+   scenario):**
+   - যাদের GST আছে তাদের কোনো সমস্যা নেই — GST দিয়ে direct resolve।
+   - কিন্তু Asian-এর export-এ সব customer-এর GST থাকে না।
+   - MM04-এর পুরো customer list user-কে download করিয়ে, SO Map upload Excel তৈরি করার সময়
+     row-ধরে-row সঠিক customer/site address manually বসানো **practically impossible** —
+     কারণ upload Excel-এ row count ৫০০+ পর্যন্ত হতে পারে।
+
+8. **SO Map Excel Template + Resolution Logic — business owner-এর প্রস্তাব (এই session-এ
+   confirm হয়েছে, এখনো formally LOCKED না — customer-resolve-এর বিস্তারিত method নিয়ে
+   আলোচনা এখনো চলমান):**
+
+   **Template columns:** External SO Number, FO Number, Customer GST, Customer Name,
+   Customer Address, Has Site (Yes/No), SKU, Pack Qty।
+
+   - **External SO Number** → PACE-এর SO resolve হয়ে যাবে।
+   - **FO Number** → as-is capture (কোথায় store হবে এখনো খোলা, নিচে দেখো)।
+   - **Customer resolution:**
+     - **GST দেওয়া থাকলে** → GST দিয়ে customer + address system resolve করবে। এই search
+       **শুধু সেই SO-তে যে VDC choose করা আছে তার under-এই** হবে — global GST search না।
+       যদি সেই GST অন্য কোনো VDC-এর under-এ match করে (customer exist করে, কিন্তু ভিন্ন
+       VDC-scope-এ), system সেটা আলাদাভাবে জানাবে: **"GST matched but in Different VDC"**
+       — এটা "not found at all"-এর থেকে আলাদা একটা নির্দিষ্ট error state। Resolution: user
+       GST ঠিক করবে (ভুল GST দেওয়া হয়েছে ধরে), অথবা সেই line remove করবে — কারণ যুক্তি হলো
+       এই SO-টা সেই VDC-এর জন্যই নয় যেখানে ওই GST belong করে।
+     - **GST না থাকলে** → Customer Name column দিয়ে খুঁজবে:
+       - একটাই match হলে → direct resolve।
+       - একাধিক match (ambiguous) হলে → **"Choose from N"** list দেখাবে (N = কতগুলো similar
+         match পাওয়া গেছে)।
+       - কোনো match না পেলে → **"Not in database, need to create"** দেখাবে — bulk upload-এর
+         ভেতর থেকেই inline customer create করতে হবে (single-row "+New Customer" modal
+         pattern আগে থেকেই আছে SO01-তে, কিন্তু এটা bulk-scale-এ কীভাবে হবে এখনো আলোচনা
+         বাকি)।
+   - **Site Address resolution** (Has Site = Yes marked line-গুলোতে):
+     - resolved customer-এর under-এ কতগুলো Site Address আছে — এই **count** Customer
+       column-এর পাশেই দেখাবে, প্রতিটা Yes-marked line-এ।
+     - ১টাই Site Address থাকলে → সেটা সরাসরি bose যাবে, পাশে **"Add"** option-ও থাকবে
+       (নতুন site address লাগলে)।
+     - একাধিক থাকলে → **"Choose from N sites"** list।
+     - কোনো Site Address না থাকলে → **"Add Site Address"** দেখাবে।
+   - **SKU, Pack Qty** → সরাসরি column থেকেই নেওয়া, কোনো resolution লাগে না।
+
+   > **Claude-প্রস্তাবিত, এখনো business owner দ্বারা formally locked না:** ৫০০+ row-এর
+   > scale সমস্যা মোকাবিলার জন্য — একই (Customer Name + Address) combination অনেক row-এ
+   > repeat করতে পারে, তাই unique combination অনুযায়ী group করে resolve করালে (একবার
+   > resolve হলে সব matching row-এ auto-apply), manual touch-point সংখ্যা row-count থেকে
+   > কমে unique-customer-count-এ নেমে আসবে। Business owner এটাকে "ভালো পদ্ধতি" বলেছেন
+   > কিন্তু এখনো formal lock দেননি, আর এর পরেই "MM04-এ একদমই নেই" case-টা third challenge
+   > হিসেবে তুলেছেন (উপরের point ৮-এর তৃতীয় bullet) — তাই dedupe-group approach টা শুধু
+   > "GST নেই কিন্তু exists" case-এর জন্য যথেষ্ট, "MM04-এ নেই" case-এর জন্য আলাদা bulk-create
+   > mechanism লাগবে।
+
 **এখনো খোলা (পরের point-এ আলোচনা চলবে):**
 - FO Number আসলে কোথায় capture/store হবে (নতুন column? কোন table — SO line-level না
   DO-level?), আর SO Map UI-তে কীভাবে ঢোকানো হবে।
@@ -478,3 +549,7 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
   consumption tracking)।
 - Tally Excel-এর বাকি column-গুলোর (Vehicle No., Transporter, Port/Destination ইত্যাদি)
   PACE-এ কোথায় bosbe সেটা এখনো আলোচনা হয়নি।
+- **Customer resolve-এর বিস্তারিত method** — point ৮-এ template + logic confirm হয়েছে,
+  কিন্তু "MM04-এ একদমই নেই" case-এ bulk-scale-এ কীভাবে inline customer create হবে (company/
+  billing_state/GST-category কে ভরবে, approval লাগবে কিনা), আর ambiguous-name-match-এর
+  "Choose from N" UI ঠিক কীভাবে কাজ করবে — এই নিয়ে আলোচনা এখনো চলমান, এখনো LOCKED না।
