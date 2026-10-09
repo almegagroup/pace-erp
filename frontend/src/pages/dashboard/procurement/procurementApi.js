@@ -1216,6 +1216,16 @@ export function getDeliveryOrderUnified(id) {
   return fetchProcurement("GET", `/api/procurement/delivery-orders-v2/${encodeURIComponent(id)}`);
 }
 
+// §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) -- "Bulk DO Upload", additive to
+// SO03 (DOListPage.jsx). Both drive the existing createDeliveryOrderUnified
+// path internally -- see do_bulk.handlers.ts's own header note.
+export function previewDoBulkUpload(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/preview", data);
+}
+export function saveDoBulkUpload(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/save", data);
+}
+
 // §133.13 -- IBN-driven multi-invoice preview + post, per DO.
 export function previewInvoiceGroups(dcId) {
   return fetchProcurement("GET", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/invoice-groups`);

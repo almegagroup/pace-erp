@@ -417,6 +417,10 @@ import {
   previewSoMapBulkUploadHandler,
 } from "../_core/procurement/so_map_bulk.handlers.ts";
 import {
+  previewDoBulkUploadHandler,
+  saveDoBulkUploadHandler,
+} from "../_core/procurement/do_bulk.handlers.ts";
+import {
   cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
   createPgiInvoiceHandler,
@@ -881,6 +885,14 @@ export async function dispatchProcurementRoutes(
     // resource as map-fo/map-address/save-group) -- no ACL change needed.
     case "POST:/api/procurement/so-map/bulk/preview":
       return await previewSoMapBulkUploadHandler(req, ctx);
+
+    // §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Bulk DO Upload", additive to
+    // SO03. Shares PROC_DO_CREATE (same resource as the v2 DO create/edit
+    // routes below) -- no ACL change needed.
+    case "POST:/api/procurement/delivery-orders-v2/bulk/preview":
+      return await previewDoBulkUploadHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/save":
+      return await saveDoBulkUploadHandler(req, ctx);
 
     case "GET:/api/procurement/delivery-orders":
       return await listDeliveryOrdersHandler(req, ctx);

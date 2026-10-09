@@ -21,6 +21,7 @@ import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
+import BulkDoUploadDrawer from "./BulkDoUploadDrawer.jsx";
 
 const LIMIT = 50;
 
@@ -60,6 +61,7 @@ export default function DOListPage() {
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const params = useMemo(
@@ -117,12 +119,14 @@ export default function DOListPage() {
   }
 
   return (
+    <>
     <ErpMasterListTemplate
       eyebrow="Procurement"
       title="Delivery Order"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => doQuery.refetch() },
         { key: "create", label: "Create DO", tone: "primary", onClick: openCreateDO },
+        { key: "bulk-upload", label: "Bulk DO Upload", tone: "neutral", onClick: () => setBulkUploadOpen(true), disabled: !effectiveCompanyId },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}
       notices={doQuery.error ? [{ key: "do-list-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "PROCUREMENT_DO_LIST_FAILED" }] : []}
@@ -200,5 +204,13 @@ export default function DOListPage() {
         ),
       }}
     />
+    {bulkUploadOpen ? (
+      <BulkDoUploadDrawer
+        companyId={effectiveCompanyId}
+        onClose={() => setBulkUploadOpen(false)}
+        onSaved={() => void doQuery.refetch()}
+      />
+    ) : null}
+    </>
   );
 }

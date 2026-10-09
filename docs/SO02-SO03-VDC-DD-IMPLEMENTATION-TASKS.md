@@ -106,23 +106,129 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   `candidates` (this SO's own lines only); qty-vs-balance excludes this
   row's own prior allocation from the "already allocated by others" sum so
   a same-qty or corrected re-upload is never compared against itself.
-- [ ] **T9.** Frontend: "Bulk DD SO Map" button + template download inside the
+- [x] **T9.** Frontend: "Bulk DD SO Map" button + template download inside the
   **existing** `SO01MapPage.jsx` (additive tab content, not a new page).
-- [ ] **T10.** Frontend: Review Grid (SO Number/SKU resolved, DD Flagged column,
+  **2026-10-09 ✅** Button added to the Pending-mappings toolbar, opens
+  `BulkDdSoMapDrawer`; disabled until a Company is selected.
+- [x] **T10.** Frontend: Review Grid (SO Number/SKU resolved, DD Flagged column,
   Customer/Site resolve drawers, Save).
-- [ ] **T11.** Verify against real data (a real VDC SO + a slice of the real Tally
+  **2026-10-09 ✅** New `BulkDdSoMapDrawer.jsx` — exceljs template
+  download/upload, `ErpDenseGrid` review table reading
+  `previewSoMapBulkUploadHandler`'s per-row resolution (SKU/Customer/Site/
+  duplicate/qty status), inline Customer resolve (Choose-from-N dropdown +
+  "+ New Customer" sub-drawer using `CustomerCreateForm` in `MINIMAL` mode,
+  prefilled from the Excel row via its new optional `initial*` props), inline
+  Site resolve (existing-address dropdown + "+ Add Site" sub-drawer calling
+  `createCustomerAddress`/`updateCustomerAddress`), same-Company+Address-Line
+  dedup across batch rows (`applyDedup`), and "Save All" calling the existing
+  `saveSoMapGroup` once per resolved row (source="address",
+  `external_fo_number` attached) — zero new save-side endpoint, per the T6
+  note above.
+- [x] **T11.** Verify against real data (a real VDC SO + a slice of the real Tally
   Excel), `deno check`/`eslint` clean, re-run all `.mjs` guards.
+  **2026-10-09 ✅ (code-verified; real-data click-through still blocked)**
+  `eslint` clean on `SO01MapPage.jsx`/`BulkDdSoMapDrawer.jsx`/
+  `CustomerCreateForm.jsx`; `jsx-no-undef-guard.mjs` 0 violations;
+  `deno check` on all 4 touched/added backend files = 97/97 pre-existing
+  errors (zero new, confirmed via `git stash -u` before/after); all 9
+  backend guard scripts (`route-acl-registry`, `hardcoded-role-check`,
+  `wrong-company-source`, `stock-posting`, `frontend-payload`,
+  `company-scope`, `company-scope-write-acl`, `resource-code-domain`,
+  `approver-chain`) pass with no new findings. **Not yet done:** an actual
+  click-through with a real VDC SO + real Tally Excel rows — dev has zero
+  `customer_address.depot_code_id`-mapped rows (confirmed earlier this
+  session), so no VDC test data exists in this environment; that
+  verification needs either a dev data seed or a prod/staging click-through
+  by the business owner.
 
 ## Phase 2 — Bulk DO Upload (SO03)
 
-- [ ] **T12.** Backend: bulk-resolve + validate endpoint for the Bulk DO Upload
+- [x] **T12.** Backend: bulk-resolve + validate endpoint for the Bulk DO Upload
   template (FO/SO type-mismatch check, Storage Location dropdown, Transporter
   resolve, stock-check/reservation per §6 point 18) — driving **existing**
   `createDeliveryOrderUnifiedHandler` per resolved FO/SO group, never new DO-write
   logic.
-- [ ] **T13.** Frontend: "Bulk DO Upload" button + template on `DOListPage.jsx`
+  **2026-10-09 ✅** New `supabase/functions/api/_core/procurement/do_bulk.handlers.ts`
+  (`previewDoBulkUploadHandler`/`saveDoBulkUploadHandler`). FO/SO type
+  detection: a template value first tries `sales_order_map_group.
+  external_fo_number` (VDC); if that misses, tries `sales_order.so_number`
+  directly, checking `dispatch_type` — `DEPENDENT_DEPOT` = DC (correct
+  field), `DEPENDENT_DIRECT` = `VDC_WRONG_FIELD` (user put an SO Number
+  where an FO Number belongs), anything else = `DC_WRONG_FIELD`. SKU
+  resolve: VDC matches against that FO's own already-mapped
+  `sales_order_map_allocation` rows (point 15 — "FO must already be SO
+  Map-resolved, else error"); DC matches directly against the SO's own
+  `sales_order_line` rows (no SO Map step needed per point 10's
+  correction) — but DC still needs an allocation row to hand to
+  `createDeliveryOrderUnifiedHandler`, so a new `ensureDepotAllocation()`
+  helper auto-creates one via the **existing, unmodified**
+  `saveSoMapGroupHandler(source:"depot")` (same call the manual "map to
+  Fixed Depot" button already makes) the first time a DC line is used,
+  reusing it on every later Bulk DO Upload row for that same line.
+  Transporter resolve: exact-match-wins, else ILIKE-substring
+  Choose-from-N against `transporter_master` (global table, no VDC
+  scoping needed — mirrors `l2_masters.handlers.ts`'s own listing). Qty:
+  Pack Qty × `sales_order_line.per_pack_qty` = base qty (falls back to
+  Pack Qty = base qty when the line isn't pack-driven), checked against
+  the matched line/allocation's remaining balance for display only — the
+  real enforcement is `createDeliveryOrderUnifiedHandler`'s own existing
+  balance check, never duplicated here. DC rows hard-require Truck
+  Number + Dispatch Date at save time (point 14/15's "DC-তে দুটোই
+  mandatory"); VDC rows leave them optional (filled later by Phase 5's
+  Truck+Dispatch Date Upload).
+  **Save** drives `createDeliveryOrderUnifiedHandler` via the exact
+  synthetic-`Request` pattern `gate_entry.handlers.ts`'s own "replace
+  lines" flow already uses (same codebase convention, not a new one) —
+  one call per FO/SO group, passing `transporter_id`/`lr_number`/
+  `lr_date`/`vehicle_number` straight through (all already-existing body
+  fields on that handler) and `so_map_allocation_id`/`quantity`/
+  `storage_location_id` per line. Since that handler's own RPC payload
+  hardcodes `dc_date` to today and has no slot at all for Tally Invoice
+  Number/Date, Inbound Number, or Dispatch Date, a single additive
+  follow-up `UPDATE delivery_challan SET ...` (new migration
+  `20261009140000_delivery_challan_bulk_upload_flag.sql`'s
+  `is_bulk_uploaded` column + the already-existing Phase-0
+  `pre_invoice_tally_invoice_number/_date/_inbound_number`/`dispatch_date`
+  columns, plus `pgi_deferred = dd_flag`) stamps those in — the create
+  handler itself is never touched. Routes
+  `POST /api/procurement/delivery-orders-v2/bulk/preview` (VIEW) and
+  `.../bulk/save` (WRITE), both reusing `PROC_DO_CREATE` (no ACL change).
+  **Verified:** `deno check` before/after = 97/97 pre-existing errors
+  (zero new); all 9 backend guard scripts pass (`company-scope-write-acl`
+  now 150, was 149 — the one new write handler); migration applied +
+  reconciled on dev (local filename timestamp matches remote exactly);
+  `NOTIFY pgrst, 'reload schema'` run. **Not yet verified against real
+  data** — same dev-has-no-VDC-mapping limitation as Phase 1 (T11); DC
+  rows are additionally untestable click-through today because dev has
+  no `sales_order` row with `dispatch_type='DEPENDENT_DEPOT'` either
+  (unconfirmed, not checked this round — flag for the real-data pass).
+- [x] **T13.** Frontend: "Bulk DO Upload" button + template on `DOListPage.jsx`
   (SO03), Review Grid, Save.
-- [ ] **T14.** Verify against real data, guards, SU24.
+  **2026-10-09 ✅** New `BulkDoUploadDrawer.jsx` — exceljs template
+  (13 columns per point 14) download/upload, Review Grid reading
+  `previewDoBulkUpload`'s per-row resolution (status/SKU/qty/storage
+  location/transporter/missing-required-fields), inline SKU
+  Choose-from-N, inline Transporter Choose-from-N, an editable Storage
+  Location code input + "Re-check Rows" button (re-runs the whole batch
+  preview after a manual correction — simpler than a per-cell live
+  lookup, consistent with this drawer's batch-oriented design), a
+  per-FO/SO-group readiness summary (one Delivery Order per group,
+  listing exactly what's still missing), and "Create N Delivery
+  Order(s)" calling `saveDoBulkUpload` once with every ready group,
+  showing a per-group CREATED/ERROR result list (never an all-or-nothing
+  submit — matches point 18's "insufficient rows get removed, clean rows
+  still post" intent at the group level). Wired into `DOListPage.jsx` as
+  a new "Bulk DO Upload" toolbar action (disabled until a company is
+  selected), refetching the DO list on any successful create.
+- [x] **T14.** Verify against real data, guards, SU24.
+  **2026-10-09 ✅ (code-verified; real-data click-through still blocked,
+  same reason as T11)** `eslint` clean on `DOListPage.jsx`/
+  `BulkDoUploadDrawer.jsx`/`procurementApi.js`; `jsx-no-undef-guard.mjs`
+  0 violations; all 9 backend guard scripts green; SU24
+  (`dependency-provisioning-check.mjs`) and the full ship-level
+  verification are deferred to Phase 8 (T30) per the master task
+  sequencing, run once per the whole effort rather than after every
+  phase.
 
 ## Phase 3 — Edit Transporter Details (pre-PGI, FO-keyed)
 

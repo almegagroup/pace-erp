@@ -258,6 +258,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/delivery-orders-v2/add-sto-options":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/delivery-orders-v2/storage-options":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/delivery-orders-v2":                   { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
+  // §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Bulk DO Upload", additive to
+  // SO03. Shares PROC_DO_CREATE (same resource the regular v2 create/edit
+  // routes above already use) -- no ACL change needed.
+  "POST:/api/procurement/delivery-orders-v2/bulk/preview":      { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
+  "POST:/api/procurement/delivery-orders-v2/bulk/save":         { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
