@@ -135,14 +135,17 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     if (rows.length === 0) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_ROWS_REQUIRED", 400, "At least one row is required.");
 
     // Bulk-resolve every distinct External SO Number in one round (§8B/§8E).
+    // The Excel value is the customer's external SO/PO reference, not PACE's
+    // internally generated so_number. Preserve the latter on the resolved row
+    // for display and downstream allocation.
     const soNumbers = [...new Set(rows.map((row) => toTrimmedString(row.external_so_number)).filter(Boolean))];
     const { data: soRows, error: soError } = soNumbers.length
       ? await serviceRoleClient.schema("erp_procurement").from("sales_order")
-          .select("id, so_number, company_id, dispatch_type, bill_to_vdc_id, status")
-          .in("so_number", soNumbers)
+          .select("id, so_number, customer_po_number, company_id, dispatch_type, bill_to_vdc_id, status")
+          .in("customer_po_number", soNumbers)
       : { data: [] as JsonRecord[], error: null };
     if (soError) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_SO_LOOKUP_FAILED", 500, "Unable to resolve External SO Numbers.");
-    const soByNumber = new Map(((soRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.so_number), row]));
+    const soByNumber = new Map(((soRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.customer_po_number), row]));
 
     const soIds = [...new Set(((soRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)))];
     const [lineRowsResult, existingGroupsResult, existingAllocationsResult] = await Promise.all([
