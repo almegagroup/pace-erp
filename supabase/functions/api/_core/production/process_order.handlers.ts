@@ -543,11 +543,13 @@ export async function fetchMachineBucketBalances(
   return balances;
 }
 
-// MTS Page 4 uses the same availability semantic as MTO/HPS/MTEST.  The
-// machine (or Unassigned) bucket answers only "which physical shelf"; it
-// does not bypass the ordinary open-reservation deduction for that material
-// and storage location.  The caller may then allocate several formulation
-// groups from the returned shared map without double-counting a bucket.
+// MTS Page 4 is machine-bucket aware.  An open PROCESS_PO reservation consumes
+// availability only from the bucket belonging to that Process PO's machine
+// (or from Unassigned when its Process PO has no machine).  Deducting every
+// reservation at the storage location from every bucket makes stock on one
+// machine look unavailable merely because another machine has an open PO.
+// The caller may then allocate several formulation groups from the returned
+// shared map without double-counting a bucket.
 export async function fetchNetMachineBucketBalances(
   companyId: string,
   storageLocationId: string,
@@ -560,7 +562,7 @@ export async function fetchNetMachineBucketBalances(
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("reservation_document")
-    .select("material_id, balance_qty")
+    .select("material_id, balance_qty, source_type, source_id")
     .eq("company_id", companyId)
     .eq("storage_location_id", storageLocationId)
     .in("material_id", ids)
@@ -569,9 +571,38 @@ export async function fetchNetMachineBucketBalances(
     console.error("[process_order.fetchNetMachineBucketBalances] reservation query failed:", JSON.stringify(error));
     throw new Error("PROD_PO_STOCK_CHECK_FAILED");
   }
-  for (const row of (data ?? []) as JsonRecord[]) {
+  const reservations = (data ?? []) as JsonRecord[];
+  const processOrderIds = [...new Set(
+    reservations
+      .filter((row) => toUpperTrimmedString(row.source_type) === "PROCESS_PO")
+      .map((row) => toTrimmedString(row.source_id))
+      .filter(Boolean),
+  )];
+  const machineByProcessOrderId = new Map<string, string | null>();
+  if (processOrderIds.length > 0) {
+    const { data: processOrders, error: processOrderError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .select("id, machine_id")
+      .in("id", processOrderIds);
+    if (processOrderError) {
+      console.error("[process_order.fetchNetMachineBucketBalances] process-order lookup failed:", JSON.stringify(processOrderError));
+      throw new Error("PROD_PO_STOCK_CHECK_FAILED");
+    }
+    for (const processOrder of (processOrders ?? []) as JsonRecord[]) {
+      const processOrderId = toTrimmedString(processOrder.id);
+      if (processOrderId) {
+        machineByProcessOrderId.set(processOrderId, toTrimmedString(processOrder.machine_id) || null);
+      }
+    }
+  }
+  for (const row of reservations) {
     const materialId = toTrimmedString(row.material_id);
     if (!materialId) continue;
+    if (toUpperTrimmedString(row.source_type) === "PROCESS_PO") {
+      const reservationMachineId = machineByProcessOrderId.get(toTrimmedString(row.source_id));
+      if (reservationMachineId === undefined || reservationMachineId !== machineId) continue;
+    }
     balances.set(materialId, Number(((balances.get(materialId) ?? 0) - Number(row.balance_qty ?? 0)).toFixed(6)));
   }
   return balances;
