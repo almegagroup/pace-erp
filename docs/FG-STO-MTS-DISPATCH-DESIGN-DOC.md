@@ -495,49 +495,98 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
      row-ধরে-row সঠিক customer/site address manually বসানো **practically impossible** —
      কারণ upload Excel-এ row count ৫০০+ পর্যন্ত হতে পারে।
 
-8. **SO Map Excel Template + Resolution Logic — business owner-এর প্রস্তাব (এই session-এ
-   confirm হয়েছে, এখনো formally LOCKED না — customer-resolve-এর বিস্তারিত method নিয়ে
-   আলোচনা এখনো চলমান):**
+8. **SO Map Excel Template — basic shape (business owner-এর প্রস্তাব):**
 
    **Template columns:** External SO Number, FO Number, Customer GST, Customer Name,
    Customer Address, Has Site (Yes/No), SKU, Pack Qty।
 
    - **External SO Number** → PACE-এর SO resolve হয়ে যাবে।
    - **FO Number** → as-is capture (কোথায় store হবে এখনো খোলা, নিচে দেখো)।
-   - **Customer resolution:**
-     - **GST দেওয়া থাকলে** → GST দিয়ে customer + address system resolve করবে। এই search
-       **শুধু সেই SO-তে যে VDC choose করা আছে তার under-এই** হবে — global GST search না।
-       যদি সেই GST অন্য কোনো VDC-এর under-এ match করে (customer exist করে, কিন্তু ভিন্ন
-       VDC-scope-এ), system সেটা আলাদাভাবে জানাবে: **"GST matched but in Different VDC"**
-       — এটা "not found at all"-এর থেকে আলাদা একটা নির্দিষ্ট error state। Resolution: user
-       GST ঠিক করবে (ভুল GST দেওয়া হয়েছে ধরে), অথবা সেই line remove করবে — কারণ যুক্তি হলো
-       এই SO-টা সেই VDC-এর জন্যই নয় যেখানে ওই GST belong করে।
-     - **GST না থাকলে** → Customer Name column দিয়ে খুঁজবে:
-       - একটাই match হলে → direct resolve।
-       - একাধিক match (ambiguous) হলে → **"Choose from N"** list দেখাবে (N = কতগুলো similar
-         match পাওয়া গেছে)।
-       - কোনো match না পেলে → **"Not in database, need to create"** দেখাবে — bulk upload-এর
-         ভেতর থেকেই inline customer create করতে হবে (single-row "+New Customer" modal
-         pattern আগে থেকেই আছে SO01-তে, কিন্তু এটা bulk-scale-এ কীভাবে হবে এখনো আলোচনা
-         বাকি)।
-   - **Site Address resolution** (Has Site = Yes marked line-গুলোতে):
-     - resolved customer-এর under-এ কতগুলো Site Address আছে — এই **count** Customer
-       column-এর পাশেই দেখাবে, প্রতিটা Yes-marked line-এ।
-     - ১টাই Site Address থাকলে → সেটা সরাসরি bose যাবে, পাশে **"Add"** option-ও থাকবে
-       (নতুন site address লাগলে)।
-     - একাধিক থাকলে → **"Choose from N sites"** list।
-     - কোনো Site Address না থাকলে → **"Add Site Address"** দেখাবে।
    - **SKU, Pack Qty** → সরাসরি column থেকেই নেওয়া, কোনো resolution লাগে না।
+   - Customer + Site Address resolution-এর পূর্ণ mechanism point ৯-এ।
 
-   > **Claude-প্রস্তাবিত, এখনো business owner দ্বারা formally locked না:** ৫০০+ row-এর
-   > scale সমস্যা মোকাবিলার জন্য — একই (Customer Name + Address) combination অনেক row-এ
-   > repeat করতে পারে, তাই unique combination অনুযায়ী group করে resolve করালে (একবার
-   > resolve হলে সব matching row-এ auto-apply), manual touch-point সংখ্যা row-count থেকে
-   > কমে unique-customer-count-এ নেমে আসবে। Business owner এটাকে "ভালো পদ্ধতি" বলেছেন
-   > কিন্তু এখনো formal lock দেননি, আর এর পরেই "MM04-এ একদমই নেই" case-টা third challenge
-   > হিসেবে তুলেছেন (উপরের point ৮-এর তৃতীয় bullet) — তাই dedupe-group approach টা শুধু
-   > "GST নেই কিন্তু exists" case-এর জন্য যথেষ্ট, "MM04-এ নেই" case-এর জন্য আলাদা bulk-create
-   > mechanism লাগবে।
+9. **Customer + Site Address Resolution — পূর্ণ mechanism (এই session-এ step-by-step
+   confirm হয়েছে, এখনো formally document-level LOCKED না কিন্তু প্রতিটা অংশ business
+   owner নিজে confirm করেছেন):**
+
+   **MM04-এর real mechanism ground-truth (live code verify করে নিশ্চিত হয়েছে, এই design
+   সেগুলোর উপরেই বসছে, নতুন কিছু বানাতে হচ্ছে না):**
+   - **"Check GST" (Applyflow)** — `lookupCustomerGstProfileHandler` → `resolveGstProfileWithSource()`
+     → Applyflow API (cache-first, `erp_cache.gst_profiles`) থেকে real legal_name + state +
+     full_address + pin_code নিয়ে আসে।
+   - **Duplicate-detect (§132.8)** — `findCustomerByGstHandler` নতুন create করার আগে সেই GST
+     দিয়ে আমাদের নিজের `customer_master`-এ (সব company জুড়ে) আগে থেকেই কোনো record আছে কিনা
+     check করে।
+   - **Customer create (`createCustomerHandler`)** mandatory fields: customer_name,
+     customer_type, delivery_address, billing_state, site_name (প্রথম address-এর জন্য),
+     company_id। Create atomic-ভাবে ৩টা row বসায়: `customer_master` + `customer_company_map`
+     + প্রথম `customer_address`। Status সরাসরি `ACTIVE`/approved — আলাদা approval ধাপ নেই।
+   - **Site Address create (`createCustomerAddressHandler`)** mandatory fields: site_name,
+     address_line, **town** (mandatory, optional না), pin_code (optional)। **state স্বাধীনভাবে
+     দেওয়া যায় না — এটা সবসময় customer-এর নিজের billing_state-এর সাথে lock থাকে** (mismatch
+     হলে reject করে)।
+   - **VDC mapping** customer_master-এ নেই — এটা `customer_address.depot_code_id` column-এ
+     বসে (site-level), একটা আলাদা update call দিয়ে (`updateCustomerAddressHandler`/
+     `bulkMapCustomerAddressesHandler`) — create করার সাথে সাথেই এটা chain করে সেট করতে হবে,
+     user-কে আলাদা করে জিজ্ঞেস করতে হবে না (SO-র নিজের VDC তো আগে থেকেই জানা)।
+
+   **Customer resolution flow:**
+   - **GST দেওয়া থাকলে:**
+     - GST দিয়ে customer + address system resolve করবে, **শুধু সেই SO-র VDC-র under-এই**
+       (global search না)। অন্য VDC-তে match হলে — **"GST matched but in Different VDC"**
+       আলাদা error state, resolution: GST ঠিক করা বা line remove করা।
+     - GST দেওয়া আছে কিন্তু কোথাও MM04-এ নেই → system GST দিয়েই সরাসরি **auto-create** করে
+       দেবে (Create button/click), user-কে কিছু করতে হবে না। একই Excel batch-এ একই GST-র
+       আরও row থাকলে সেগুলোতেও auto বসে যাবে।
+     - **Name-mismatch caveat:** GST lookup-এর `legal_name` সরাসরি customer_name হিসেবে
+       বসবে না (proprietorship-এ GST legal_name = প্রোপ্রাইটরের ব্যক্তিগত নাম, দোকানের নাম না)
+       — customer_name আসবে Excel-এর নিজের Customer Name column থেকে। GST থেকে আসবে শুধু
+       **state/address/pin_code**।
+   - **GST না থাকলে — "Create" click করলে center drawer খুলবে (manual mechanism নেই, GST
+     case-এর মতোই button/click-ভিত্তিক):**
+     - প্রথমে Customer Name দিয়ে existing MM04-তে খোঁজা হয়, **শুধু সেই SO-র VDC-র under-এই**
+       (GST-case-এর মতোই VDC-scoped — অন্য VDC-তে একই নামের customer থাকলেও সেটা ধরা পড়বে
+       না/দেখাবে না, "কোনো match নেই" ধরে নেওয়া হবে)।
+       - একটাই match → direct resolve।
+       - একাধিক match (ambiguous) → **"Choose from N"** list — প্রতিটা candidate-এর পাশে
+         তার **Address/Town** দেখাবে (শুধু নাম না — একই নামে ভিন্ন real business থাকতে পারে,
+         §6 point ৬-এ confirm করা বাস্তব finding), আর Excel row-এর নিজের Customer Address-ও
+         পাশে দেখাবে, যাতে user মিলিয়ে বুঝতে পারে। list-এর নিচে **"None of these — Create
+         New"** escape hatch থাকবে।
+       - কোনো match নেই → সরাসরি Create New drawer।
+     - **Create New drawer-এর field:**
+       - Customer Name, Customer Address — Excel row থেকে prefilled (editable)।
+       - **Billing State** — VDC-র নিজের state থেকে auto (manual input লাগবে না)।
+       - Site Name — "Same as Customer" (Customer Name reuse)।
+       - **Town, Pin Code** — manual (Excel-এ নেই, এটাই একমাত্র real manual touch-point)।
+       - GST Category — default UNREGISTERED।
+       - Company, VDC — পুরোপুরি automatic (SO থেকে জানা), দেখানোরও দরকার নেই।
+       - একই drawer-এর ভেতরেই **"Add Site Address"** button থাকবে, চাইলে সেখানেই আরও site
+         যুক্ত করা যাবে।
+     - **Dedup/reuse (business owner confirmed, Claude-suggestion নয়):** এই customer তৈরি
+       হওয়ার পর একই upload batch-এ অন্য কোনো row-এ **ঠিক একই Company + Address Line** থাকলে
+       সেখানেও এই customer+site automatic বসে যাবে — আবার নতুন করে create করতে হবে না।
+
+   **Site Address resolution (Has Site = Yes marked line-গুলোতেই, No হলে প্রযোজ্য না):**
+   - resolved customer-এর under-এ কতগুলো Site Address আছে (N) — এই count Customer column-এর
+     পাশে দেখাবে, প্রতিটা Yes-marked line-এ।
+   - N=1 → auto-select, পাশে "Add" option (ভুল হলে নতুন লাগাতে)।
+   - N>1 → **"Choose from N sites"** — Customer-এর মতোই প্রতিটা candidate-এর Address/Town
+     সহ, Excel row-এর address-এর পাশে।
+   - N=0 (কোনো Site Address নেই) অথবা N candidate-এর কোনোটাই match না হলে → একই
+     **"Add Site Address"** drawer: "Same as Customer" checkbox (টিক দিলে Site Name +
+     Address Line auto), Town + Pin Code manual, State auto (customer/VDC-র state)।
+   - Add করলে সেটা **সরাসরি সেই row-এ বসে যায়** — আলাদা করে আবার "choose" করতে হয় না।
+   - **Dedup + per-row override:** একই Customer + একই Site একাধিক row-এ থাকলে একবার resolve
+     হলে বাকি row-এও auto বসে যায়, কিন্তু প্রতিটা row individually **"Change"** করা যায় — Change
+     click করলে একই detail-rich (Address/Town সহ) list drawer খোলে, Customer-choose আর
+     Site-choose দুটোর জন্যই একই pattern/component reuse হয়।
+
+   **নিশ্চিত করা হয়েছে — MM04 visit লাগবে না:** পুরো mechanism (GST auto-create, Choose-from-N,
+   Create New drawer, Add Site Address) SO Map-এর Review screen-এর ভিতরেই ঘটে, আলাদা পেজে
+   navigate করতে হয় না। আর এটা আলাদা কোনো shadow table নয় — সরাসরি MM04-এর নিজের
+   `customer_master`/`customer_address` টেবিলেই লেখে, status ACTIVE/approved — তাই তৈরি হওয়া
+   সাথে সাথেই MM04-এ গিয়ে দেখলে একই data পাওয়া যাবে।
 
 **এখনো খোলা (পরের point-এ আলোচনা চলবে):**
 - FO Number আসলে কোথায় capture/store হবে (নতুন column? কোন table — SO line-level না
@@ -549,7 +598,6 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
   consumption tracking)।
 - Tally Excel-এর বাকি column-গুলোর (Vehicle No., Transporter, Port/Destination ইত্যাদি)
   PACE-এ কোথায় bosbe সেটা এখনো আলোচনা হয়নি।
-- **Customer resolve-এর বিস্তারিত method** — point ৮-এ template + logic confirm হয়েছে,
-  কিন্তু "MM04-এ একদমই নেই" case-এ bulk-scale-এ কীভাবে inline customer create হবে (company/
-  billing_state/GST-category কে ভরবে, approval লাগবে কিনা), আর ambiguous-name-match-এর
-  "Choose from N" UI ঠিক কীভাবে কাজ করবে — এই নিয়ে আলোচনা এখনো চলমান, এখনো LOCKED না।
+- Customer+Site resolution mechanism (point ৯) এখনো শুধু **conversation-level confirm** —
+  কোনো backend/frontend implementation শুরু হয়নি, আর document হিসেবেও formally LOCKED ঘোষণা
+  করা হয়নি।
