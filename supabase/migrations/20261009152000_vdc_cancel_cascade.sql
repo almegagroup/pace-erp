@@ -6,7 +6,7 @@
 -- supplied at Bulk-DO create time) even though its invoice is still DRAFT.
 -- Therefore invoice cancellation, DO cancellation and release must be one
 -- transaction; otherwise an interrupted request can strand reserved stock.
-CREATE OR REPLACE FUNCTION erp_procurement.cancel_vdc_invoice_only_atomic(
+CREATE OR REPLACE FUNCTION erp_procurement."cancel_vdc_invoice_only_atomic"(
   p_dc_id uuid,
   p_reason text,
   p_actor uuid
@@ -75,8 +75,8 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION erp_procurement.cancel_vdc_invoice_only_atomic(uuid, text, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_procurement.cancel_vdc_invoice_only_atomic(uuid, text, uuid) TO service_role;
+REVOKE ALL ON FUNCTION erp_procurement."cancel_vdc_invoice_only_atomic"(uuid, text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION erp_procurement."cancel_vdc_invoice_only_atomic"(uuid, text, uuid) TO service_role;
 
 -- Partial multi-group PGI is possible: some invoice groups may already be
 -- POSTED while another is still DRAFT. Cancel the commercial-only groups

@@ -3,7 +3,7 @@
 -- do not run a stock check or create a reservation until the deferred PGI.
 -- This function is intentionally separate from save_delivery_order_unified_
 -- atomic so existing DO01/DC/RM/PM/INT behaviour stays untouched.
-CREATE OR REPLACE FUNCTION erp_procurement.save_vdc_deferred_bulk_delivery_order_atomic(
+CREATE OR REPLACE FUNCTION erp_procurement."save_vdc_deferred_bulk_delivery_order_atomic"(
   p_header jsonb,
   p_sources jsonb,
   p_lines jsonb,
@@ -86,8 +86,8 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION erp_procurement.save_vdc_deferred_bulk_delivery_order_atomic(jsonb, jsonb, jsonb, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_procurement.save_vdc_deferred_bulk_delivery_order_atomic(jsonb, jsonb, jsonb, uuid) TO service_role;
+REVOKE ALL ON FUNCTION erp_procurement."save_vdc_deferred_bulk_delivery_order_atomic"(jsonb, jsonb, jsonb, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION erp_procurement."save_vdc_deferred_bulk_delivery_order_atomic"(jsonb, jsonb, jsonb, uuid) TO service_role;
 
 -- A dedicated posting source keeps the VDC deferred action outside the live
 -- SALES_INVOICE completion chain. post_document() still owns P601 and this
