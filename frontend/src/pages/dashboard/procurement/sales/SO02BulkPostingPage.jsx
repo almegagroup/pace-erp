@@ -24,7 +24,15 @@ export default function SO02BulkPostingPage() {
   async function post() {
     if (!selected.size) return;
     setPosting(true); setNotice("");
-    try { const result = await bulkPostDeliveryOrders([...selected]); setNotice(`Posted ${result?.results?.length ?? selected.size} delivery order(s).`); setSelected(new Set()); await query.refetch(); }
+    try {
+      const result = await bulkPostDeliveryOrders([...selected]);
+      const outcomes = Array.isArray(result?.results) ? result.results : [];
+      const failed = outcomes.filter((row) => row.ok === false);
+      setNotice(failed.length
+        ? `${outcomes.length - failed.length} posted; ${failed.length} remain in the queue.`
+        : `Posted ${outcomes.length || selected.size} delivery order(s).`);
+      setSelected(new Set()); await query.refetch();
+    }
     catch (error) { setNotice(error instanceof Error ? error.message : "BULK_POST_FAILED"); }
     finally { setPosting(false); }
   }
@@ -36,7 +44,7 @@ export default function SO02BulkPostingPage() {
       { key: "refresh", label: "Refresh", tone: "neutral", onClick: () => query.refetch(), disabled: query.isFetching },
       { key: "post", label: posting ? "Posting..." : `Bulk Post (${selected.size})`, tone: "primary", onClick: post, disabled: posting || selected.size === 0 },
     ]}
-    notices={notice ? [{ key: "bulk-posting-notice", tone: notice.includes("FAILED") ? "error" : "success", message: notice }] : []}
+    notices={notice ? [{ key: "bulk-posting-notice", tone: notice.includes("FAILED") || notice.includes("remain in the queue") ? "warning" : "success", message: notice }] : []}
     filterSection={{ eyebrow: "Company", title: "Bulk-DO Upload records only", children: <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={(value) => { setCompanyId(value); setSelected(new Set()); }} label="Company" /> }}
     listSection={{ eyebrow: "Bulk PGI queue", title: `${allIds.length} delivery order${allIds.length === 1 ? "" : "s"}`, children: <ErpDenseGrid cellNavigate rows={rows} rowKey={(row) => `${row.id}-${row.line_number}`} emptyMessage={query.isLoading ? "Loading Bulk Posting queue..." : "No Bulk DO Upload records are pending."}
       columns={[

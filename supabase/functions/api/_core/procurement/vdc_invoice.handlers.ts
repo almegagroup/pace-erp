@@ -289,8 +289,15 @@ export async function cancelVdcDeliveryOrderHandler(req: Request, ctx: Procureme
     const companyId = text(dc.selling_company_id);
     try { await assertCompanyScope(ctx, companyId); } catch { return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
     if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
-    if (dc.pgi_deferred !== true || dc.is_bulk_uploaded !== true || !["INVOICED", "DISPATCHED"].includes(upper(dc.status))) {
+    if (dc.pgi_deferred !== true || dc.is_bulk_uploaded !== true || !["CREATED", "INVOICED", "DISPATCHED"].includes(upper(dc.status))) {
       return fail(req, ctx, "VDC_CANCEL_BLOCKED", 409, "Only an active VDC Bulk DO can be cancelled here.");
+    }
+    if (upper(dc.status) === "CREATED") {
+      const { error } = await serviceRoleClient.schema("erp_procurement").rpc("cancel_vdc_created_delivery_order_atomic", {
+        p_dc_id: dcId, p_reason: reason, p_actor: ctx.auth_user_id,
+      });
+      if (error) return fail(req, ctx, "VDC_CANCEL_FAILED", 500, error.message || "Unable to cancel the VDC delivery order.");
+      return okResponse({ dc_id: dcId, status: "CANCELLED", invoice_count: 0 }, ctx.request_id, req);
     }
     const { data: invoiceRows, error: invoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
       .select("id, invoice_number, invoice_date, company_id, dc_id, status").eq("dc_id", dcId).in("status", ["DRAFT", "POSTED"]);

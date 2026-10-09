@@ -60,6 +60,9 @@ function toTrimmedString(value: unknown): string {
 function toUpperTrimmedString(value: unknown): string {
   return toTrimmedString(value).toUpperCase();
 }
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
 function doBulkErrorResponse(req: Request, ctx: ProcurementHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
@@ -161,14 +164,25 @@ async function resolveTransporterByName(name: string): Promise<{
   return { status: "AMBIGUOUS", candidates: rows };
 }
 
-async function resolveStorageLocationByCode(companyId: string, code: string): Promise<JsonRecord | null> {
+async function resolveStorageLocationByCode(code: string): Promise<JsonRecord | null> {
   const target = toTrimmedString(code);
   if (!target) return null;
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory").from("storage_location_master")
-    .select("id, code, name").eq("company_id", companyId).ilike("code", target).maybeSingle();
+    // Storage locations are global master data in this schema (they do not
+    // carry a company_id).  Bulk DD dispatch is deliberately limited to the
+    // Finished-Goods (F*) locations from the design, not any arbitrary
+    // warehouse/shop-floor/RM location.
+    .select("id, code, name").ilike("code", target).ilike("code", "F%").eq("active", true).maybeSingle();
   if (error) return null;
   return (data as JsonRecord | null) ?? null;
+}
+
+async function listFinishedGoodsStorageLocations(): Promise<JsonRecord[]> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory").from("storage_location_master")
+    .select("id, code, name").ilike("code", "F%").eq("active", true).order("code");
+  return error ? [] : (data ?? []) as JsonRecord[];
 }
 
 // §6 point 14 — one template column takes either an FO Number (VDC/Dependent
@@ -220,6 +234,8 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
     }
     const rows = Array.isArray(body.rows) ? (body.rows as RawUploadRow[]) : [];
     if (rows.length === 0) return doBulkErrorResponse(req, ctx, "DO_BULK_ROWS_REQUIRED", 400, "At least one row is required.");
+
+    const finishedGoodsLocations = await listFinishedGoodsStorageLocations();
 
     const results: JsonRecord[] = [];
     // Row-by-row resolution — each row's identifier is independently looked
@@ -316,16 +332,24 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       const qtyStatus = matchedSoLineId && baseQty > lineRemaining + QTY_TOL ? "EXCEEDS_BALANCE" : "OK";
 
       const transporterResolution = await resolveTransporterByName(toTrimmedString(row.transporter_name));
-      const storageLocation = await resolveStorageLocationByCode(companyId, toTrimmedString(row.storage_location_code));
+      const storageLocation = await resolveStorageLocationByCode(toTrimmedString(row.storage_location_code));
 
       const truckNumber = toTrimmedString(row.truck_number);
       const dispatchDate = toTrimmedString(row.dispatch_date);
+      const doDate = toTrimmedString(row.do_date);
       const lrNumber = toTrimmedString(row.lr_number);
       const lrDate = toTrimmedString(row.lr_date);
       const missingRequired: string[] = [];
+      const formatErrors: string[] = [];
+      if (!doDate) missingRequired.push("do_date");
+      else if (!isIsoDate(doDate)) formatErrors.push("DO Date is invalid");
       if (!lrNumber) missingRequired.push("lr_number");
       if (!lrDate) missingRequired.push("lr_date");
+      else if (!isIsoDate(lrDate)) formatErrors.push("LR Date is invalid");
       if (transporterResolution.status === "NOT_FOUND") missingRequired.push("transporter");
+      if (!Number.isFinite(packQty) || packQty <= 0) formatErrors.push("Pack Qty must be positive");
+      if (toTrimmedString(row.tally_invoice_date) && !isIsoDate(toTrimmedString(row.tally_invoice_date))) formatErrors.push("Tally Invoice Date is invalid");
+      if (dispatchDate && !isIsoDate(dispatchDate)) formatErrors.push("Dispatch Date is invalid");
       // §6 point 14/15 — DC row: Truck Number + Dispatch Date mandatory at
       // upload time (DO never created without them); VDC row: optional
       // (filled later by the Truck+Dispatch Date Upload page, §6 point 19).
@@ -347,7 +371,9 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
         base_qty: matchedSoLineId ? baseQty : null,
         transporter_resolution: transporterResolution,
         storage_location: storageLocation,
+        storage_location_candidates: finishedGoodsLocations,
         missing_required_fields: missingRequired,
+        format_errors: formatErrors,
       });
     }
 
@@ -465,6 +491,16 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
     const results: JsonRecord[] = [];
     for (const group of groups) {
       try {
+        if (!isIsoDate(toTrimmedString(group.do_date))) throw new Error("DO_BULK_DO_DATE_REQUIRED_OR_INVALID");
+        if (!toTrimmedString(group.lr_number) || !isIsoDate(toTrimmedString(group.lr_date))) throw new Error("DO_BULK_LR_FIELDS_REQUIRED_OR_INVALID");
+        if (!toTrimmedString(group.transporter_id)) throw new Error("DO_BULK_TRANSPORTER_REQUIRED");
+        if (!Array.isArray(group.rows) || group.rows.length === 0 || group.rows.some((row) => !Number.isFinite(Number(row.base_qty)) || Number(row.base_qty) <= 0)) {
+          throw new Error("DO_BULK_LINE_QTY_INVALID");
+        }
+        const { data: transporter, error: transporterError } = await serviceRoleClient
+          .schema("erp_master").from("transporter_master")
+          .select("id").eq("id", toTrimmedString(group.transporter_id)).eq("active", true).maybeSingle();
+        if (transporterError || !transporter) throw new Error("DO_BULK_TRANSPORTER_INVALID");
         // Never trust the spreadsheet's DD flag to choose a reservation
         // policy. Resolve the underlying SO type again at commit time.
         const { data: sourceSo, error: sourceSoError } = await serviceRoleClient
@@ -477,6 +513,11 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
         if ((group.dd_flag && !isVdc) || (!group.dd_flag && !isDc)) {
           throw new Error("DO_BULK_DD_FLAG_SOURCE_MISMATCH");
         }
+        const sourceReference = await resolveFoOrSo(toTrimmedString(group.fo_or_so_number), companyId);
+        if ((isVdc && (sourceReference.status !== "VDC" || sourceReference.so_id !== group.so_id))
+          || (isDc && (sourceReference.status !== "DC" || sourceReference.so_id !== group.so_id))) {
+          throw new Error("DO_BULK_SOURCE_REFERENCE_INVALID");
+        }
         if (!group.dd_flag) {
           if (!toTrimmedString(group.truck_number) || !toTrimmedString(group.dispatch_date)) {
             throw new Error("DO_BULK_DC_TRUCK_DISPATCH_REQUIRED");
@@ -484,7 +525,31 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
         }
         const lines: JsonRecord[] = [];
         for (const row of group.rows) {
+          const { data: soLine, error: soLineError } = await serviceRoleClient
+            .schema("erp_procurement").from("sales_order_line")
+            .select("id, so_id").eq("id", toTrimmedString(row.so_line_id)).maybeSingle();
+          if (soLineError || !soLine || toTrimmedString((soLine as JsonRecord).so_id) !== toTrimmedString(group.so_id)) {
+            throw new Error("DO_BULK_SO_LINE_SOURCE_INVALID");
+          }
+          const { data: storageLocation, error: storageLocationError } = await serviceRoleClient
+            .schema("erp_inventory").from("storage_location_master")
+            .select("id, code, active").eq("id", toTrimmedString(row.storage_location_id)).maybeSingle();
+          if (storageLocationError || !storageLocation || (storageLocation as JsonRecord).active !== true || !toUpperTrimmedString((storageLocation as JsonRecord).code).startsWith("F")) {
+            throw new Error("DO_BULK_FG_STORAGE_LOCATION_REQUIRED");
+          }
           let allocationId = toTrimmedString(row.so_map_allocation_id);
+          if (isVdc) {
+            const { data: allocation, error: allocationError } = await serviceRoleClient
+              .schema("erp_procurement").from("sales_order_map_allocation")
+              .select("id, map_group_id, so_line_id, status")
+              .eq("id", allocationId).maybeSingle();
+            if (allocationError || !allocation
+              || toUpperTrimmedString((allocation as JsonRecord).status) !== "ACTIVE"
+              || toTrimmedString((allocation as JsonRecord).map_group_id) !== toTrimmedString(sourceReference.map_group_id)
+              || toTrimmedString((allocation as JsonRecord).so_line_id) !== toTrimmedString(row.so_line_id)) {
+              throw new Error("DO_BULK_VDC_ALLOCATION_INVALID");
+            }
+          }
           if (!allocationId && !group.dd_flag) {
             const ensured = await ensureDepotAllocation(req, ctx, group.so_id, row.so_line_id, row.base_qty);
             if ("error_code" in ensured) throw new Error(ensured.error_code);
@@ -549,11 +614,12 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
   }
 }
 
-// §6 point 16 — "Edit Transporter Details" (SO03, VDC-only, pre-PGI). Keyed
-// by FO Number rather than DO id because the business owner operates off
-// the FO, not an internal DO identifier; resolves to the one Delivery Order
-// a Bulk-DO-Upload-created allocation traces back to.
-const PRE_PGI_EDITABLE_STATUSES = new Set(["CREATED", "INVOICED"]);
+// §6 points 13/16 — the Bulk SO03 editor is FO-keyed because the business
+// owner operates from the Sales/Dispatch FO Number, not an internal DO id.
+// It remains available after VDC PGI as well: the business rule explicitly
+// permits header corrections after DO create, invoice post, and PGI post.
+// This additive endpoint never changes a line, reservation, or stock event.
+const BULK_DISPATCH_HEADER_EDITABLE_STATUSES = new Set(["CREATED", "INVOICED", "DISPATCHED"]);
 
 export async function findDoByFoNumberHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
@@ -597,8 +663,8 @@ export async function findDoByFoNumberHandler(req: Request, ctx: ProcurementHand
     if (dcError) return doBulkErrorResponse(req, ctx, "DO_BULK_DO_LOOKUP_FAILED", 500, "Unable to load this FO's Delivery Order.");
     const dcRow = ((dcRows ?? []) as JsonRecord[])[0];
     if (!dcRow) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NOT_DISPATCHED", 404, "This FO has no active Delivery Order.");
-    if (!PRE_PGI_EDITABLE_STATUSES.has(toUpperTrimmedString(dcRow.status))) {
-      return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_WINDOW_CLOSED", 400, "This Delivery Order has already been dispatched — use the regular DO Edit (Transporter/Vehicle/LR) screen instead.");
+    if (!BULK_DISPATCH_HEADER_EDITABLE_STATUSES.has(toUpperTrimmedString(dcRow.status))) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_WINDOW_CLOSED", 400, "This Delivery Order is cancelled and cannot be edited.");
     }
 
     let transporterDisplay: string | null = toTrimmedString(dcRow.transporter_name_freetext) || null;
@@ -643,7 +709,7 @@ export async function editTransporterDetailsHandler(req: Request, ctx: Procureme
     }
 
     const { data: dc, error: dcError } = await serviceRoleClient
-      .schema("erp_procurement").from("delivery_challan").select("id, status, selling_company_id").eq("id", dcId).maybeSingle();
+      .schema("erp_procurement").from("delivery_challan").select("id, status, selling_company_id, lr_date").eq("id", dcId).maybeSingle();
     if (dcError || !dc) return doBulkErrorResponse(req, ctx, "DO_BULK_DO_NOT_FOUND", 404, "Delivery order not found.");
     const companyId = toTrimmedString((dc as JsonRecord).selling_company_id);
     try {
@@ -654,16 +720,28 @@ export async function editTransporterDetailsHandler(req: Request, ctx: Procureme
     if (!(await canMaintainDoBulkAccess(ctx, companyId, "EDIT"))) {
       return doBulkErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Edit-DO access at this company.");
     }
-    if (!PRE_PGI_EDITABLE_STATUSES.has(toUpperTrimmedString((dc as JsonRecord).status))) {
-      return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_WINDOW_CLOSED", 400, "This Delivery Order has already been dispatched — use the regular DO Edit (Transporter/Vehicle/LR) screen instead.");
+    if (!BULK_DISPATCH_HEADER_EDITABLE_STATUSES.has(toUpperTrimmedString((dc as JsonRecord).status))) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_WINDOW_CLOSED", 400, "This Delivery Order is cancelled and cannot be edited.");
+    }
+
+    const truckNumber = toTrimmedString(body.truck_number);
+    if (truckNumber && truckNumber.length < 4) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_TRUCK_INVALID", 400, "Truck Number must contain at least 4 characters.");
+    }
+    const dispatchDate = toTrimmedString(body.dispatch_date);
+    if (dispatchDate) {
+      const effectiveLrDate = lrDate || toTrimmedString((dc as JsonRecord).lr_date);
+      if (!isIsoDate(dispatchDate) || !isIsoDate(effectiveLrDate) || dispatchDate < effectiveLrDate || dispatchDate > todayIsoInKolkata()) {
+        return doBulkErrorResponse(req, ctx, "DO_BULK_DISPATCH_DATE_INVALID", 400, "Dispatch Date must be on/after LR Date and cannot be in the future.");
+      }
     }
 
     const patch: JsonRecord = {};
     if (toTrimmedString(body.transporter_id)) patch.transporter_id = toTrimmedString(body.transporter_id);
     if (toTrimmedString(body.lr_number)) patch.lr_number = toTrimmedString(body.lr_number);
     if (lrDate) patch.lr_date = lrDate;
-    if (toTrimmedString(body.truck_number)) patch.vehicle_number = toTrimmedString(body.truck_number);
-    if (toTrimmedString(body.dispatch_date)) patch.dispatch_date = toTrimmedString(body.dispatch_date);
+    if (truckNumber) patch.vehicle_number = truckNumber;
+    if (dispatchDate) patch.dispatch_date = dispatchDate;
     if (Object.keys(patch).length === 0) return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_NO_FIELDS", 400, "At least one field is required.");
 
     const { error: patchError } = await serviceRoleClient

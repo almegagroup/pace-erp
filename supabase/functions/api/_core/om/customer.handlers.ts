@@ -421,6 +421,7 @@ export async function createCustomerHandler(
         site_name: siteName,
         address_line: deliveryAddress,
         town: toTrimmedString(body.town) || null,
+      pin_code: toTrimmedString(body.pin_code) || null,
         state: billingState,
         status: "ACTIVE",
         created_by: ctx.auth_user_id,

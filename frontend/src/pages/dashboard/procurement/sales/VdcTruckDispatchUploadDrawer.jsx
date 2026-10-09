@@ -1,15 +1,36 @@
 /* VDC-only Truck + Dispatch Date upload/review, §6 point 19. */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listVdcTruckDispatchPending, postVdcTruckDispatch } from "../procurementApi.js";
 
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '"') {
+      if (quoted && text[index + 1] === '"') { cell += '"'; index += 1; }
+      else quoted = !quoted;
+    } else if (char === "," && !quoted) { row.push(cell); cell = ""; }
+    else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && text[index + 1] === "\n") index += 1;
+      row.push(cell); rows.push(row); row = []; cell = "";
+    } else cell += char;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
 export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSaved }) {
   const [edits, setEdits] = useState({});
   const [posting, setPosting] = useState(false);
   const [notice, setNotice] = useState("");
+  const fileInputRef = useRef(null);
   const query = useQuery({
     queryKey: ["procurement", "vdc-truck-dispatch", companyId],
     queryFn: () => listVdcTruckDispatchPending(companyId),
@@ -49,6 +70,43 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
     });
   }
 
+  async function uploadFilledTemplate(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const parsed = parseCsv(await file.text());
+      const headers = (parsed.shift() ?? []).map((value) => String(value).trim().toLowerCase());
+      const foIndex = headers.indexOf("fo number");
+      const truckIndex = headers.indexOf("truck number");
+      const dispatchIndex = headers.indexOf("dispatch date");
+      if (foIndex < 0 || truckIndex < 0 || dispatchIndex < 0) throw new Error("Template must contain FO Number, Truck Number, and Dispatch Date columns.");
+      const incomingByFo = new Map();
+      for (const values of parsed) {
+        const foNumber = String(values[foIndex] ?? "").trim();
+        if (!foNumber) continue;
+        incomingByFo.set(foNumber, {
+          truck_number: String(values[truckIndex] ?? "").trim(),
+          dispatch_date: String(values[dispatchIndex] ?? "").trim(),
+        });
+      }
+      let matched = 0;
+      setEdits((current) => {
+        const next = { ...current };
+        for (const row of sourceRows) {
+          const incoming = incomingByFo.get(String(row.fo_number ?? "").trim());
+          if (!incoming) continue;
+          matched += 1;
+          next[row.dc_id] = { ...(next[row.dc_id] ?? {}), ...incoming };
+        }
+        return next;
+      });
+      setNotice(matched ? `Loaded Truck/Dispatch values for ${matched} pending row(s). Review, then Post PGI.` : "No pending FO Number from the template matched this company.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "TRUCK_DISPATCH_TEMPLATE_UPLOAD_FAILED");
+    }
+  }
+
   async function post() {
     const byDcId = new Map();
     for (const row of rows) {
@@ -69,7 +127,7 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
   }
 
   return <DrawerBase visible title="Truck and Dispatch Date Upload — VDC" onEscape={onClose} onClose={onClose} width="min(1480px, calc(100vw - 24px))"
-    actions={<div className="flex gap-2"><button type="button" onClick={downloadTemplate} disabled={!rows.length} className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">Download Prefilled Template</button><button type="button" onClick={() => void post()} disabled={posting || !rows.length} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">{posting ? "Posting…" : "Post PGI"}</button><button type="button" onClick={onClose} className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold">Close</button></div>}>
+    actions={<div className="flex gap-2"><button type="button" onClick={downloadTemplate} disabled={!rows.length} className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">Download Prefilled Template</button><button type="button" onClick={() => fileInputRef.current?.click()} disabled={!rows.length} className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">Upload Filled Template</button><input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(event) => void uploadFilledTemplate(event)} /><button type="button" onClick={() => void post()} disabled={posting || !rows.length} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">{posting ? "Posting…" : "Post PGI"}</button><button type="button" onClick={onClose} className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold">Close</button></div>}>
     <div className="grid gap-3">
       <p className="text-xs text-slate-600">Only pending VDC Invoice-only rows appear. Leaving either Truck Number or Dispatch Date blank keeps that FO pending. A value entered for one FO row is propagated to every row of that FO.</p>
       {query.error ? <p className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">{query.error instanceof Error ? query.error.message : "VDC_UPLOAD_PENDING_FAILED"}</p> : null}

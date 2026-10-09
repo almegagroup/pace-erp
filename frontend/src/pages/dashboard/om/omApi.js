@@ -524,6 +524,7 @@ export async function listMappedMaterialIdsForVendor(vendorId) {
  * @property {string} [billing_address]
  * @property {string} billing_state Required for both DOMESTIC and EXPORT.
  * @property {string} [town]
+ * @property {string} [pin_code]
  * @property {string} company_id Required company scope for the initial map row.
  * @property {string} [gst_number]
  * @property {"REGISTERED"|"UNREGISTERED"|"COMPOSITION"|"EXPORT"} [gst_category]

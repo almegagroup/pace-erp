@@ -80,7 +80,11 @@ export default function CustomerCreateForm({
   initialDeliveryAddress = "",
   initialBillingState = "",
   initialSiteName = "",
+  initialPinCode = "",
+  initialGstNumber = "",
   initialGstCategory = "",
+  lockBillingState = false,
+  requireTown = false,
   onSaved,
   onCancel,
   submitLabel = "Save Customer",
@@ -102,8 +106,9 @@ export default function CustomerCreateForm({
     billing_address: "",
     billing_state: initialBillingState,
     town: "",
+    pin_code: initialPinCode,
     site_name: initialSiteName,
-    gst_number: "",
+    gst_number: initialGstNumber,
     gst_category: initialGstCategory,
     primary_contact_person: "",
     phone: "",
@@ -250,6 +255,10 @@ export default function CustomerCreateForm({
       setError("Site Name is required (§129.3 -- every customer needs at least one named address/site).");
       return;
     }
+    if (requireTown && !form.town.trim()) {
+      setError("Town is required for the first site address.");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -264,6 +273,7 @@ export default function CustomerCreateForm({
         billing_address: form.billing_address.trim() || undefined,
         billing_state: form.billing_state.trim(),
         town: form.town.trim() || undefined,
+        pin_code: form.pin_code.trim() || undefined,
         site_name: form.site_name.trim(),
         gst_number: isVendorLinked ? undefined : form.gst_number.trim() || undefined,
         gst_category: form.gst_category || undefined,
@@ -485,6 +495,7 @@ export default function CustomerCreateForm({
           <select
             value={form.billing_state}
             onChange={(event) => updateField("billing_state", event.target.value)}
+            disabled={lockBillingState}
             className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
           >
             <option value="">Select state</option>
@@ -496,17 +507,25 @@ export default function CustomerCreateForm({
           <input
             value={form.billing_state}
             onChange={(event) => updateField("billing_state", event.target.value)}
+            disabled={lockBillingState}
             placeholder="State / province (foreign customer)"
             className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
           />
         )}
         <p className="mt-1 text-xs text-slate-500">Determines CGST+SGST vs IGST on sales invoices — required for every customer, registered or not.</p>
       </ErpDenseFormRow>
-      <ErpDenseFormRow label="Town">
+      <ErpDenseFormRow label={requireTown ? "Town *" : "Town"}>
         <input
           value={form.town}
           onChange={(event) => updateField("town", event.target.value)}
           className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+        />
+      </ErpDenseFormRow>
+      <ErpDenseFormRow label="Pin Code">
+        <input
+          value={form.pin_code}
+          onChange={(event) => updateField("pin_code", event.target.value)}
+          className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
         />
       </ErpDenseFormRow>
       {/* §129.3 — Stage 1 mandatory, both modes: seeds this customer's first
