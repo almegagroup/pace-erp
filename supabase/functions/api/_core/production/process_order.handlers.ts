@@ -2139,10 +2139,10 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
       .from("process_order")
       .select(`
         id, company_id, po_number, po_type, segment_code,
-        material_id, stroke_master_id, machine_id, batch_number,
+        material_id, stroke_master_id, machine_id, shift_id, batch_number,
         planned_qty, actual_qty, status, priority,
         qa_decided_by, qa_decided_at, manager_decided_by, manager_decided_at,
-        batch_started_at, finalized_at, verified_at, created_by, created_at,
+        production_date, batch_started_at, finalized_at, verified_at, created_by, created_at,
         mts_used_current_stroke, batch_number_from, batch_number_to, number_of_batches
       `, { count: "exact" })
       .order("created_at", { ascending: false });
@@ -2170,13 +2170,14 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
 
     const strokeIds = [...new Set(rows.map((row) => String(row.stroke_master_id ?? "")).filter(Boolean))];
     const machineIds = [...new Set(rows.map((row) => String(row.machine_id ?? "")).filter(Boolean))];
+    const shiftIds = [...new Set(rows.map((row) => String(row.shift_id ?? "")).filter(Boolean))];
     const createdByIds = [...new Set(rows.map((row) => String(row.created_by ?? "")).filter(Boolean))];
 
-    // PERF: INDEPENDENT per CLAUDE.md 8B — all four lookups read only `rows`, never each other's
+    // PERF: INDEPENDENT per CLAUDE.md 8B — all five lookups read only `rows`, never each other's
     // result, so they run as one parallel round instead of four sequential Oregon->Mumbai round
     // trips. Every branch raises the same PROD_PO_LIST_FAILED, so Promise.all's first-rejection
     // surfaces the identical error the old sequential order did.
-    const [materialMap, strokeNumberById, machineById, createdByDisplayMap] = await Promise.all([
+    const [materialMap, strokeNumberById, machineById, shiftById, createdByDisplayMap] = await Promise.all([
       getMaterialMapByIds(
         rows.map((row) => String(row.material_id ?? "")),
         "[process_order.listProcessOrders]",
@@ -2218,6 +2219,23 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
         return map;
       })(),
       (async () => {
+        const map = new Map<string, string>();
+        if (shiftIds.length === 0) return map;
+        const { data: shifts, error: shiftErr } = await serviceRoleClient
+          .schema("erp_production")
+          .from("shift_master")
+          .select("id, shift_name")
+          .in("id", shiftIds);
+        if (shiftErr) {
+          console.error("[process_order.listProcessOrders] shift query failed:", JSON.stringify(shiftErr));
+          throw new Error("PROD_PO_LIST_FAILED");
+        }
+        for (const shift of (shifts ?? []) as JsonRecord[]) {
+          map.set(String(shift.id), String(shift.shift_name ?? ""));
+        }
+        return map;
+      })(),
+      (async () => {
         if (createdByIds.length === 0) return new Map<string, string>();
         try {
           return await resolveUserDisplayNames(createdByIds);
@@ -2234,6 +2252,7 @@ export async function listProcessOrdersHandler(req: Request, ctx: ProdHandlerCon
         material: materialMap.get(String(row.material_id ?? "")) ?? null,
         stroke_number: strokeNumberById.get(String(row.stroke_master_id ?? "")) || null,
         machine: machineById.get(String(row.machine_id ?? "")) ?? null,
+        shift_name: shiftById.get(String(row.shift_id ?? "")) || null,
         created_by_display: createdByDisplayMap.get(String(row.created_by ?? "")) || null,
       })),
       pagination: { page, per_page: perPage, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / perPage) },
