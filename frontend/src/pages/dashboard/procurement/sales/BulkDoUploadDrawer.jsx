@@ -55,6 +55,15 @@ function toIsoDate(value) {
   return String(value).trim();
 }
 
+// fetchProcurement unwraps the standard `{ data: [...] }` API envelope for
+// collection responses.  Keep this tolerant of either shape so a valid
+// preview can never be mistaken for an empty upload when the client wrapper
+// evolves.
+function responseRows(result) {
+  if (Array.isArray(result)) return result;
+  return Array.isArray(result?.data) ? result.data : [];
+}
+
 async function parseUploadedWorkbook(file) {
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
@@ -119,7 +128,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
 
   async function runPreview(parsedRows) {
     const result = await previewDoBulkUpload({ company_id: companyId, rows: parsedRows });
-    setRows(Array.isArray(result?.data) ? result.data : []);
+    setRows(responseRows(result));
   }
 
   async function handleFileChosen(event) {
@@ -263,7 +272,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
         });
       if (payloadGroups.length === 0) { setError("No group is fully ready to save yet."); return; }
       const result = await saveDoBulkUpload({ company_id: companyId, groups: payloadGroups });
-      const resultRows = Array.isArray(result?.data) ? result.data : [];
+      const resultRows = responseRows(result);
       setSaveResults(resultRows);
       const createdCount = resultRows.filter((row) => row.status === "CREATED").length;
       setNotice(`${createdCount} of ${resultRows.length} Delivery Order(s) created.`);
