@@ -69,11 +69,16 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   Tally Invoice Number/Date, Inbound Number capture at Bulk-DO-Upload time (verify
   these don't already exist pre-Invoice-creation — Task 0 found them only inside
   `sales_invoice` itself, written at invoice-group post time).
-- [ ] **T4.** Verify Storage Location (F-location dropdown) already resolvable via
+- [x] **T4.** Verify Storage Location (F-location dropdown) already resolvable via
   existing `listDoStorageOptionsHandler`/`storage-locations` endpoint — reuse, no
   new column expected (`delivery_challan_line.storage_location_id` already exists).
-- [ ] **T5.** `node scripts/migration-integrity-check.mjs` after each migration —
-  dev first, reconcile, confirm `in_sync=true`.
+  **2026-10-09 ✅** confirmed: `GET /api/procurement/delivery-orders/storage-locations`
+  already ACL-registered (`PROC_DO_CREATE`/VIEW) and `delivery_challan_line.
+  storage_location_id` already exists — no new migration needed.
+- [x] **T5.** `node scripts/migration-integrity-check.mjs` after each migration —
+  dev first, reconcile, confirm `in_sync=true`. **2026-10-09 ✅** ran after every
+  migration this phase; each new migration lands with zero added drift (the 4
+  pre-existing drifted rows from earlier sessions are unchanged/untouched).
 
 ## Phase 1 — Customer + Site + Transporter bulk resolution (SO Map Excel Upload)
 
@@ -171,3 +176,33 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
 ## Progress Log
 
 *(each task gets a dated one-line update appended here as it completes)*
+
+- **2026-10-09 T1 ✅** `sales_order_map_group.external_fo_number` added (migration
+  `20261009100000_so_map_group_external_fo_number.sql`), unique per
+  `(so_id, external_fo_number)` where not null. Applied to dev, reconciled in
+  `supabase_migrations.schema_migrations`, `migration-integrity-check.mjs`
+  confirms in-sync for this migration (4 unrelated pre-existing drifted rows
+  found from earlier sessions — `single_machine_auto_allocation`,
+  `mts_urgent_manager_posting`, `grant_accounts_department_ac05_access`,
+  `fix_ac05_accounts_l4_manager_acl` — flagged, not touched, out of this
+  effort's scope).
+- **2026-10-09 T2 ✅** Found the existing `urgent_dispatch_workflow` mechanism
+  (`delivery_challan_line.urgent_dispatch_decision`) — this IS the business
+  owner's "Urgent Process PO" reference: PGI normally enforces
+  `assertPhase3PostingDateMatch(tallyInvoiceDate, today)` (strict same-day),
+  bypassed only when `urgent_dispatch_decision='YES'`. VDC's deferred PGI
+  needs its own, separate bypass (different business reason — truck-arrival
+  timing, not Process-PO urgency) — added migration
+  `20261009110000_delivery_challan_vdc_deferred_pgi.sql`: widened
+  `delivery_challan_status_check` to add `'INVOICED'` (additive, every
+  existing status check in `do_unified.handlers.ts` is untouched and never
+  produces/reads it), plus `pgi_deferred boolean` + `dispatch_date date`
+  columns. Truck Number reuses the existing `vehicle_number` column — no
+  duplicate added. Applied + reconciled, no new drift.
+- **2026-10-09 T3 ✅** `delivery_challan.pre_invoice_tally_invoice_number/
+  _date/_inbound_number` added (migration
+  `20261009120000_delivery_challan_pre_invoice_tally_fields.sql`) — Bulk DO
+  Upload (SO03) captures these before any `sales_invoice` row exists; the new
+  Invoice-only endpoint (Phase 4) copies them into the real
+  `sales_invoice.tally_invoice_number/tally_invoice_date/inbound_number`
+  columns at posting time. Applied + reconciled, no new drift.
