@@ -52,6 +52,79 @@ function uniqueRelationIds(values: unknown[]): string[] {
   return [...new Set(values.map(toRelationId).filter(Boolean))];
 }
 
+// A CRCP receipt's ITC owner is the Bill-To company, even before an AC01
+// user creates a landed_cost header.  The first implementation of the AC01
+// mirror queried only landed_cost.itc_owner_company_id, which created a
+// circular dependency: Bill-To could not see a newly received CRCP GRN in
+// AC01 until somebody had already opened it and created its landed-cost
+// header.  Resolve the owner from the PO/STO itself so the read model begins
+// at GRN creation and every later QA, payment, freight, and landed-cost
+// update is naturally reflected by the ordinary AC01 re-fetch.
+async function getCrcpMirrorOwnerByGrnId(
+  billToCompanyId: string,
+): Promise<Map<string, string>> {
+  const [poResponse, stoResponse] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order")
+      .select("id")
+      .eq("company_id", billToCompanyId)
+      .eq("crcp_enabled", true),
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("stock_transfer_order")
+      .select("id")
+      .eq("receiving_company_id", billToCompanyId)
+      .eq("crcp_enabled", true),
+  ]);
+
+  if (poResponse.error || stoResponse.error) {
+    throw new Error("AC01_CRCP_OWNER_SOURCE_FETCH_FAILED");
+  }
+
+  const poIds = uniqueRelationIds(((poResponse.data ?? []) as JsonRecord[]).map((row) => row.id));
+  const stoIds = uniqueRelationIds(((stoResponse.data ?? []) as JsonRecord[]).map((row) => row.id));
+  const [poGrns, stoGrns] = await Promise.all([
+    fetchInChunks<JsonRecord>(poIds, (chunk) =>
+      serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+        .select("id").in("po_id", chunk)),
+    fetchInChunks<JsonRecord>(stoIds, (chunk) =>
+      serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+        .select("id").in("sto_id", chunk)),
+  ]);
+
+  return new Map(
+    uniqueRelationIds([...poGrns, ...stoGrns].map((row) => row.id))
+      .map((grnId) => [grnId, billToCompanyId]),
+  );
+}
+
+// Single-GRN counterpart used by the drawer access check.  This is kept
+// independent of landed_cost so a Bill-To user can open the initial read-only
+// mirror before any landed-cost, freight, or other AC01 record exists.
+async function getCrcpMirrorOwnerForGrn(grn: JsonRecord): Promise<string | null> {
+  const [poResponse, stoResponse] = await Promise.all([
+    grn.po_id
+      ? serviceRoleClient.schema("erp_procurement").from("purchase_order")
+        .select("company_id, crcp_enabled").eq("id", String(grn.po_id)).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    grn.sto_id
+      ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order")
+        .select("receiving_company_id, crcp_enabled").eq("id", String(grn.sto_id)).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+
+  if (poResponse.error || stoResponse.error) {
+    throw new Error("AC01_CRCP_OWNER_SOURCE_FETCH_FAILED");
+  }
+
+  const po = poResponse.data as JsonRecord | null;
+  const sto = stoResponse.data as JsonRecord | null;
+  if (po?.crcp_enabled === true) return toRelationId(po.company_id) || null;
+  if (sto?.crcp_enabled === true) return toRelationId(sto.receiving_company_id) || null;
+  return null;
+}
+
 function parsePositiveInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -473,6 +546,7 @@ function buildListRow(
   deductionTypeNameMap: Map<string, string>,
   splitIntoGrnNumbersMap: Map<string, string[]>,
   settlementInvoiceMap: Map<string, JsonRecord>,
+  crcpMirrorOwnerByGrnId: Map<string, string>,
   // Viewer's own resolved company scope (listAC01GRNsHandler's companyId) --
   // "" when no company filter is active (SA/GA viewing across companies).
   // Drives both the "ITC To"/row-lock display and the Settlement Invoice
@@ -507,9 +581,10 @@ function buildListRow(
   // isItcOwnerViewer/isEditableForViewer unchanged for the ordinary case
   // (itcOwnerCompanyId === viewerCompanyId was already true for the GRN's
   // own company either way).
-  const itcOwnerCompanyId = landedCost?.itc_owner_company_id
-    ? String(landedCost.itc_owner_company_id)
-    : String(grn.company_id);
+  const itcOwnerCompanyId = crcpMirrorOwnerByGrnId.get(String(grn.id))
+    ?? (landedCost?.itc_owner_company_id
+      ? String(landedCost.itc_owner_company_id)
+      : String(grn.company_id));
   const isItcOwnerViewer = !viewerCompanyId || (itcOwnerCompanyId != null && itcOwnerCompanyId === viewerCompanyId);
   const settlementInvoice = isItcOwnerViewer && grn.settlement_invoice_id
     ? settlementInvoiceMap.get(String(grn.settlement_invoice_id))
@@ -708,24 +783,31 @@ export async function listAC01GRNsHandler(
     const ALLOWED_DATE_FIELDS = new Set(["invoice_date", "grn_date", "posting_date"]);
     const dateColumn = ALLOWED_DATE_FIELDS.has(dateField) ? dateField : "invoice_date";
 
-    // AC01 "ITC To" + cross-company visibility (locked 2026-10-04) -- a
-    // company sees a GRN whenever it owns it (today's existing rule) OR it
-    // is that GRN's own landed_cost.itc_owner_company_id (the CRCP case,
-    // §5 of the PO12 design doc section). Write access is unchanged --
-    // still strictly GRN-company-scoped via canWriteAC01() below.
+    // AC01 "ITC To" + cross-company visibility: a company sees a GRN when it
+    // owns it, when a landed-cost record names it as ITC owner, OR when the
+    // receipt belongs to one of its CRCP POs/STOs. The latter is essential
+    // before the first landed-cost header exists; otherwise a Bill-To company
+    // cannot see the very GRN whose quality/payment/freight it must monitor.
+    // Write access remains strictly GRN-company-scoped via canWriteAC01().
     let itcOwnerGrnIds: string[] = [];
+    let crcpMirrorOwnerByGrnId = new Map<string, string>();
     if (companyId) {
-      const { data: itcOwnerLcRows } = await serviceRoleClient
-        .schema("erp_procurement").from("landed_cost")
-        .select("grn_id").eq("itc_owner_company_id", companyId).not("grn_id", "is", null);
-      itcOwnerGrnIds = uniqueRelationIds(
-        ((itcOwnerLcRows ?? []) as JsonRecord[]).map((row) => row.grn_id),
-      );
-      // §8E guard -- this list is inlined into a single .or() URL below, not
-      // read via fetchInChunks' .in(), so cap it defensively. A company
-      // being the CRCP ITC owner on hundreds of GRNs is not expected for
-      // this brand-new, low-volume feature; revisit with a dedicated view
-      // if this cap is ever actually hit in practice.
+      const [itcOwnerLcResponse, crcpMirrorOwners] = await Promise.all([
+        serviceRoleClient
+          .schema("erp_procurement").from("landed_cost")
+          .select("grn_id").eq("itc_owner_company_id", companyId).not("grn_id", "is", null),
+        getCrcpMirrorOwnerByGrnId(companyId),
+      ]);
+      if (itcOwnerLcResponse.error) {
+        return ac01ErrorResponse(req, ctx, "AC01_ITC_OWNER_FETCH_FAILED", 500, "Unable to resolve AC01 ITC-owner GRNs.");
+      }
+      crcpMirrorOwnerByGrnId = crcpMirrorOwners;
+      itcOwnerGrnIds = uniqueRelationIds([
+        ...((itcOwnerLcResponse.data ?? []) as JsonRecord[]).map((row) => row.grn_id),
+        ...crcpMirrorOwnerByGrnId.keys(),
+      ]);
+      // This list is inlined into one .or() URL below. Keep the established
+      // cap until the list becomes large enough to justify a dedicated view.
       itcOwnerGrnIds = itcOwnerGrnIds.slice(0, 300);
     }
 
@@ -803,7 +885,7 @@ export async function listAC01GRNsHandler(
           .select("id, company_code, gst_number").in("id", chunk)),
       fetchInChunks<JsonRecord>(poIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("purchase_order")
-          .select("id, payment_term_id, freight_term").in("id", chunk)),
+          .select("id, payment_term_id, freight_term, company_id, crcp_enabled").in("id", chunk)),
       fetchInChunks<JsonRecord>(grnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("landed_cost")
           // itc_owner_company_id added for the "ITC To" column + Settlement
@@ -899,7 +981,10 @@ export async function listAC01GRNsHandler(
     // from every company already covered by `companies` above (that fetch
     // only covers rows' own company_id). Resolve any not already known.
     const itcOwnerCompanyIds = [...new Set(
-      landedCosts.map((lc) => toTrimmedString(lc.itc_owner_company_id)).filter(Boolean),
+      [
+        ...landedCosts.map((lc) => toTrimmedString(lc.itc_owner_company_id)),
+        ...crcpMirrorOwnerByGrnId.values(),
+      ].filter(Boolean),
     )].filter((id) => !companyMap.has(id));
     if (itcOwnerCompanyIds.length > 0) {
       const extraCompanies = await fetchInChunks<JsonRecord>(itcOwnerCompanyIds, (chunk) =>
@@ -1003,7 +1088,7 @@ export async function listAC01GRNsHandler(
       ...buildListRow(
         row, materialMap, vendorMap, companyMap, poMap, paymentTermsMap, csnMap, landedCostMap,
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
-        splitIntoGrnNumbersMap, settlementInvoiceMap, companyId,
+        splitIntoGrnNumbersMap, settlementInvoiceMap, crcpMirrorOwnerByGrnId, companyId,
       ),
       invoice_verified_by: toTrimmedString(row.invoice_verified_by) || null,
       invoice_verified_by_display: verifierDisplayNames.get(toTrimmedString(row.invoice_verified_by)) || null,
@@ -1067,13 +1152,14 @@ export async function getAC01GRNHandler(
     // handler previously compared directly against ctx.context.companyId,
     // which wrongly 403'd legitimate multi-company access.
     //
-    // CRCP fallback (locked 2026-10-04): a company that is NOT this GRN's
-    // own owner can still open it read-only when it is this GRN's
-    // landed_cost.itc_owner_company_id -- the exact mirrored-view case the
-    // "ITC To"/"Settlement Invoice" features exist to serve. Without this,
-    // the ITC-owner company could see the row in the LIST (listAC01GRNsHandler
-    // already allows it via the same itc_owner_company_id OR-clause) but got
-    // a 403 the moment it tried to open the drawer -- found live 2026-10-05.
+    // CRCP fallback: a company that is NOT this GRN's actual receiver can
+    // still open the Bill-To mirror read-only. Resolve from the CRCP PO/STO
+    // first, then retain landed_cost as the persisted ITC-owner record. This
+    // deliberately works before the first landed-cost header exists.
+    const crcpMirrorOwnerCompanyId = await getCrcpMirrorOwnerForGrn(grn as JsonRecord);
+    const effectiveItcOwnerCompanyId = (
+      crcpMirrorOwnerCompanyId ?? toRelationId(landedCost?.itc_owner_company_id)
+    ) || toRelationId(grn.company_id);
     let isDirectOwner = true;
     try {
       await assertCompanyScope(ctx, String(grn.company_id));
@@ -1081,9 +1167,9 @@ export async function getAC01GRNHandler(
       isDirectOwner = false;
     }
     let isItcOwnerViewer = false;
-    if (!isDirectOwner && landedCost?.itc_owner_company_id) {
+    if (!isDirectOwner && effectiveItcOwnerCompanyId) {
       try {
-        await assertCompanyScope(ctx, String(landedCost.itc_owner_company_id));
+        await assertCompanyScope(ctx, effectiveItcOwnerCompanyId);
         isItcOwnerViewer = true;
       } catch {
         isItcOwnerViewer = false;
@@ -1243,7 +1329,7 @@ export async function getAC01GRNHandler(
       // above, never via direct GRN-company ownership. Frontend uses this to
       // lock the whole drawer read-only for the mirrored view.
       is_editable_for_viewer: isEditableForViewer,
-      itc_owner_company_id: landedCost?.itc_owner_company_id ?? null,
+      itc_owner_company_id: effectiveItcOwnerCompanyId || null,
       split_into_grn_numbers: splitIntoGrnNumbers.length > 0 ? splitIntoGrnNumbers : null,
       item_name: materialName,
       external_code: materialExternalCode,

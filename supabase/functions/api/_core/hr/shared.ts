@@ -10,10 +10,18 @@ import {
   isGeneralOpsWorkContextCode,
   isWorkflowActionableForApprover,
   loadActiveCompanyWorkContexts,
+  loadActiveCompanyWorkContextsByCompany,
   pickScopedApproverRules,
   pickScopedViewerRules as pickScopedViewerRulesByPriority,
   resolveDepartmentWorkflowScopeId,
 } from "../../_shared/workflow_scope.ts";
+
+// Shared HR handlers consume these workflow-scope loaders through this module.
+// Re-export them so all HR route modules resolve one canonical implementation.
+export {
+  loadActiveCompanyWorkContexts,
+  loadActiveCompanyWorkContextsByCompany,
+};
 
 export const LEAVE_RESOURCE_CODES = Object.freeze({
   apply: "HR_LEAVE_APPLY",
