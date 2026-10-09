@@ -588,14 +588,48 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
    `customer_master`/`customer_address` টেবিলেই লেখে, status ACTIVE/approved — তাই তৈরি হওয়া
    সাথে সাথেই MM04-এ গিয়ে দেখলে একই data পাওয়া যাবে।
 
+10. **এই পুরো SO Map Excel Template/Upload mechanism শুধু VDC (Dependent Direct)-এর জন্য —
+    DC (Dependent Depot)-এর আলাদা কিছু লাগে না।** যুক্তি: DC-এর কোনো FO Number নেই, flow-টাই
+    Atomic (DO+PGI+Invoice একসাথে, §113.15-এর RM/PM/INT-এর জন্য আগে তৈরি mechanism-এর মতোই)
+    — সেখানে কোনো bulk Excel reconciliation-এর প্রয়োজনই নেই, existing direct DO+PGI+Invoice
+    creation screen-ই যথেষ্ট। SO Map/Bulk-DD-SO-Map button + template শুধু VDC flow-এর জন্য,
+    যেখানে মাসে অসংখ্য ছোট FO-level dispatch Asian-এর Tally export থেকে bulk-এ আনতে হয়।
+
+11. **Button + Upload + Review Grid — পূর্ণ consolidated flow:**
+    - **SO01 → SO Map tab** → **"Bulk DD SO Map"** button → Template Download + Upload, দুই
+      option।
+    - Template-এর column আর তাদের resolution (point ৮-৯-এ confirm হওয়া সব একসাথে): External
+      SO Number (→ PACE SO + তার VDC resolve), FO Number (as-is capture), Customer GST/Name/
+      Address (→ point ৯-এর পূর্ণ Customer+Site resolution mechanism), Has Site (Yes/No),
+      SKU, Pack Qty।
+    - Upload-পরবর্তী **ERP Dense Grid Review page**-এ যা দেখাবে: **SO Number** (resolved),
+      **SKU → document_name** (resolved), একটা **"DD Flagged" (Yes/No)** column (সেই SO
+      আসলেই DD/VDC-type কিনা confirm), তারপর Customer+Site resolution-এর পূর্ণ UI (inline
+      choose/create drawer), সব শেষে নিচে **Save** button। Save করলে সব FO সেই SO-র সাথে
+      mapped হয়ে যায়।
+
+12. **Upload Validation mechanism (সম্পূর্ণ confirm হয়েছে):**
+    - **Duplicate key = (External SO + FO Number + SKU), Pack Qty দিয়ে compare:**
+      - আগের কোনো upload-এ একই key-তে একই Pack Qty থাকলে → plain Duplicate, auto-skip।
+      - একই key-তে **ভিন্ন Pack Qty** থাকলে (Asian Paints পরে data revise করে পাঠানোর real
+        case) → সেই row **highlighted/coloured**, নতুন qty দেখাবে, পাশে per-row **Confirm**
+        button — Confirm করলে পুরনো qty overwrite হয়ে যাবে, ভুল মনে হলে user row remove
+        করবে। যতক্ষণ Confirm/Remove না হয়, পুরো **Save button inactive** থাকবে।
+      - Wrong/invalid row স্বাভাবিকভাবেই skip হবে।
+    - **SKU সেই SO-র নিজের line-list-এর বাইরে হলে** → সেই row highlight হবে, user-কে এই
+      page-এই SKU ঠিক করতে হবে — সেই row-এর SKU field-এ একটা **auto-suggest dropdown**
+      (সেই SO-র নিজের SKU-গুলো থেকেই) থাকবে।
+    - **Qty-vs-Balance hard check** — একটা SKU-র জন্য সব FO row-এর Pack Qty-র sum সেই SKU-র
+      **SO-তে অবশিষ্ট balance qty**-কে (ordered qty বাদে আগের dispatch) ছাড়িয়ে যেতে পারবে না —
+      এটা soft warning না, hard validation (নিচের "partial consumption tracking" open item
+      এটা দিয়েই resolve হয়ে গেছে)।
+
 **এখনো খোলা (পরের point-এ আলোচনা চলবে):**
 - FO Number আসলে কোথায় capture/store হবে (নতুন column? কোন table — SO line-level না
   DO-level?), আর SO Map UI-তে কীভাবে ঢোকানো হবে।
 - VDC-এর Deferred PGI-এর জন্য "truck এলো" confirm করার UI/trigger mechanism কী হবে (§3.4-এর
   Powder Advance Billing-এর "Deferred PGI trigger (Vehicle Number+Date, বা আলাদা button)"
   open item-এর সাথে সরাসরি যুক্ত, একই প্রশ্ন দুই জায়গায়)।
-- একই SO-র একাধিক FO-dispatch কীভাবে SO-র বাকি/অবশিষ্ট qty-র সাথে reconcile হবে (partial
-  consumption tracking)।
 - Tally Excel-এর বাকি column-গুলোর (Vehicle No., Transporter, Port/Destination ইত্যাদি)
   PACE-এ কোথায় bosbe সেটা এখনো আলোচনা হয়নি।
 - Customer+Site resolution mechanism (point ৯) এখনো শুধু **conversation-level confirm** —
