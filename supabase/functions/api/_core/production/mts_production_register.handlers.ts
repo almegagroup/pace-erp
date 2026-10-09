@@ -5,7 +5,8 @@
  * Phase: 27
  * Domain: PRODUCTION
  * Purpose: PR24 "MTS Production Register" sub-report -- MTS batch history at
- *          STANDARD, VERIFIED, and CANCELLED status. See feasibility doc §143.
+ *          STANDARD/PENDING, FINAL/PENDING VERIFY, VERIFIED, and CANCELLED
+ *          status. See feasibility doc §143.
  * Authority: Backend
  */
 
@@ -62,7 +63,10 @@ async function fetchMtsProcessOrders(companyIds: string[] | null, dateFrom: stri
     let query = serviceRoleClient.schema("erp_production").from("process_order")
       .select("id, company_id, po_number, material_id, stroke_master_id, shift_id, production_date, planned_qty, number_of_batches, batch_number_from, batch_number_to, status, created_by, verified_by")
       .eq("po_type", "MTS")
-      .in("status", ["STANDARD", "VERIFIED", "CANCELLED"])
+      // MTS does not use the ordinary Start Batch flow. A completed Page-6
+      // document is FINAL until QA posts it from PR12, so omitting FINAL made
+      // every Verify-pending MTS disappear from PR24's register.
+      .in("status", ["STANDARD", "FINAL", "VERIFIED", "CANCELLED"])
       .gte("production_date", dateFrom)
       .lte("production_date", dateTo)
       .order("production_date", { ascending: true })
@@ -76,6 +80,37 @@ async function fetchMtsProcessOrders(companyIds: string[] | null, dateFrom: stri
     if (page.length < PAGE_SIZE) break;
   }
   return rows;
+}
+
+// GET /api/production/order-information-system/mts-register/pending-count
+// A separate, date-independent count for PR24's action badge. "Pending" means
+// either just standardized (STANDARD) or ready for PR12 Verify (FINAL); a
+// VERIFIED/CANCELLED MTS has no action remaining and must not raise the badge.
+export async function getMtsProductionRegisterPendingCountHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const requestedCompanyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const allowedCompanyIds = await resolveAllowedCompanyIds(ctx);
+    const companyIds = scopeCompanyIds(allowedCompanyIds, requestedCompanyIds);
+    if (companyIds !== null && companyIds.length === 0) {
+      return okResponse({ data: { count: 0 } }, ctx.request_id, req);
+    }
+
+    let query = serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .select("id", { count: "exact", head: true })
+      .eq("po_type", "MTS")
+      .in("status", ["STANDARD", "FINAL"]);
+    if (companyIds) query = query.in("company_id", companyIds);
+    const { count, error } = await query;
+    if (error) throw new Error("PROD_MTS_REGISTER_PENDING_COUNT_FAILED");
+    return okResponse({ data: { count: count ?? 0 } }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_MTS_REGISTER_PENDING_COUNT_FAILED";
+    return oisErr(req, ctx, code, 500, "MTS pending count failed");
+  }
 }
 
 // GET /api/production/order-information-system/mts-register
@@ -197,6 +232,12 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
       const reportPacks = packs.length > 0 ? packs : [null];
       const processStatus = toTrimmedString(po.status) || "STANDARD";
       const isVerified = processStatus === "VERIFIED";
+      const isPending = processStatus === "STANDARD" || processStatus === "FINAL";
+      const statusLabel = processStatus === "FINAL"
+        ? "PENDING VERIFY"
+        : processStatus === "STANDARD"
+          ? "PENDING (STANDARD)"
+          : processStatus;
 
       const processBatches = toNumber(po.number_of_batches);
       const batchSizeKg = processBatches > 0 ? toNumber(po.planned_qty) / processBatches : 0;
@@ -237,6 +278,8 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
         result.push({
           id: pack ? String(pack.id) : `process:${poId}`,
           status: processStatus,
+          status_label: statusLabel,
+          is_pending: isPending,
           production_date: toTrimmedString(po.production_date),
           shift_name: shiftMap.get(toTrimmedString(po.shift_id)) ?? null,
           prodshade_code: prodshade?.external_code ?? null,

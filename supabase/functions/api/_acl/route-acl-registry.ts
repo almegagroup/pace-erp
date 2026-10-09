@@ -640,6 +640,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/production/order-information-system/batch-counts": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   // MTS Production Register sub-report (§143), same PR24 screen/resource as Batch Counts above.
   "GET:/api/production/order-information-system/mts-register": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
+  // Date-independent badge count for that same PR24 MTS register action.
+  "GET:/api/production/order-information-system/mts-register/pending-count": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   // PR14 §123 — Batch Variance Report, its own resource (report page, CAP_EVERYONE_REPORTS).
   "GET:/api/production/batch-variance-report":        { skipAcl: false, resourceCode: "PROD_BATCH_VARIANCE", action: "VIEW" },
   // PR25/PR26 — RM/PM Sale Report + Excess Consumption Report, both read-only "Everyone

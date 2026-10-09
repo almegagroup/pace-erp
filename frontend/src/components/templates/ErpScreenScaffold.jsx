@@ -234,8 +234,11 @@ export function ErpActionStrip({ actions = [] }) {
             disabled={action.disabled}
             onClick={action.onClick}
             onKeyDown={action.onKeyDown}
-            className={`border px-2 py-[3px] text-left transition ${toneClass}`}
+            className={`relative border px-2 py-[3px] text-left transition ${toneClass}`}
           >
+            {action.attention ? (
+              <span aria-hidden="true" className="absolute -right-1.5 -top-1.5 h-3 w-3 rounded-full bg-rose-600 ring-2 ring-white" />
+            ) : null}
             <span className="block text-[11px] font-semibold uppercase tracking-[0.06em]">
               {renderMnemonicLabel(action.label, action.mnemonic)}
             </span>
