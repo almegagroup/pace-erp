@@ -72,6 +72,15 @@ export default function CustomerCreateForm({
   companyOptions = [],
   initialFoCustomerType = "",
   fieldMode = "FULL",
+  // §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — Bulk DD SO Map's "Create New"
+  // drawer prefills Customer Name/Address from the Excel row and Billing
+  // State from the SO's own VDC. Purely additive: every existing caller
+  // (MM04, SO01, Plan Feed) omits these and gets the prior empty defaults.
+  initialCustomerName = "",
+  initialDeliveryAddress = "",
+  initialBillingState = "",
+  initialSiteName = "",
+  initialGstCategory = "",
   onSaved,
   onCancel,
   submitLabel = "Save Customer",
@@ -85,17 +94,17 @@ export default function CustomerCreateForm({
   const [form, setForm] = useState({
     company_id: companyMode === "LOCKED" ? lockedCompanyId : "",
     vendor_id: "",
-    customer_name: "",
+    customer_name: initialCustomerName,
     customer_type: "DOMESTIC",
     fo_customer_type: initialFoCustomerType,
     currency_code: "INR",
-    delivery_address: "",
+    delivery_address: initialDeliveryAddress,
     billing_address: "",
-    billing_state: "",
+    billing_state: initialBillingState,
     town: "",
-    site_name: "",
+    site_name: initialSiteName,
     gst_number: "",
-    gst_category: "",
+    gst_category: initialGstCategory,
     primary_contact_person: "",
     phone: "",
     primary_email: "",

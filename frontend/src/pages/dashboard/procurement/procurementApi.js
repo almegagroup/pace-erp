@@ -1147,6 +1147,11 @@ export function mapSoLineToDepot(data) {
 export function saveSoMapGroup(data) {
   return fetchProcurement("POST", "/api/procurement/so-map/save-group", data);
 }
+// §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Bulk DD SO Map" additive flow,
+// VDC-only, same PROC_SO_LIST/EDIT resource as the rest of SO Map.
+export function previewSoMapBulkUpload(data) {
+  return fetchProcurement("POST", "/api/procurement/so-map/bulk/preview", data);
+}
 export function releaseSoMapGroup(groupId) {
   return fetchProcurement("POST", `/api/procurement/so-map/groups/${encodeURIComponent(groupId)}/release`);
 }

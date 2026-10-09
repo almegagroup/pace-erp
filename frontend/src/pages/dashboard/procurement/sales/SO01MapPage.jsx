@@ -30,6 +30,7 @@ import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templa
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openConfirmPrompt } from "../../../../store/actionPrompt.js";
+import BulkDdSoMapDrawer from "./BulkDdSoMapDrawer.jsx";
 import {
   getSoMapStatus,
   listCustomerAddressesForSo,
@@ -372,6 +373,7 @@ export default function SO01MapPage() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [activeSo, setActiveSo] = useState(null);
+  const [bulkMapOpen, setBulkMapOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const listQuery = useQuery({
@@ -451,6 +453,15 @@ export default function SO01MapPage() {
                 {hasActiveSearch ? (
                   <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} SOs</span>
                 ) : null}
+                <button
+                  type="button"
+                  disabled={!effectiveCompanyId}
+                  onClick={() => setBulkMapOpen(true)}
+                  className="ml-auto h-8 border border-sky-700 bg-sky-100 px-3 text-xs font-semibold uppercase tracking-wide text-sky-950 disabled:opacity-50"
+                  title={effectiveCompanyId ? "" : "Select a company first"}
+                >
+                  Bulk DD SO Map
+                </button>
               </div>
               <ErpDenseGrid
                 cellNavigate
@@ -470,6 +481,16 @@ export default function SO01MapPage() {
       </ErpScreenScaffold>
       {activeSo ? (
         <MapDrawer so={activeSo} onClose={() => setActiveSo(null)} onChanged={() => void listQuery.refetch()} />
+      ) : null}
+      {bulkMapOpen ? (
+        <BulkDdSoMapDrawer
+          companyId={effectiveCompanyId}
+          onClose={() => setBulkMapOpen(false)}
+          onSaved={() => {
+            setBulkMapOpen(false);
+            void listQuery.refetch();
+          }}
+        />
       ) : null}
     </>
   );
