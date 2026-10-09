@@ -402,6 +402,36 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
   // (goods_receipt_line-based) and new (flat goods_receipt row) GRN shapes — no client
   // lookup needed.
   const storageLocationLabel = grn?.location_name || grn?.location_code || grn?.storage_location_id || "—";
+  // QA decisions are made against one exact GRN receipt, not an aggregate PO
+  // balance. Keep its inbound-document context visible without making QA users
+  // navigate away to GRN Detail and risk reviewing the wrong receipt.
+  const vendorDisplay = grn?.vendor_name
+    ? `${grn.vendor_code || ""} — ${grn.vendor_name}`.replace(/^( — )/, "")
+    : "—";
+  const materialDisplay = grn?.material_name
+    ? `${grn.pace_code || ""} — ${grn.material_name}`.replace(/^( — )/, "")
+    : (row.material_name || row.pace_code || "—");
+  const receiptDetails = [
+    ["GRN number", grn?.grn_number || row.grn_number || "—"],
+    ["GRN date", grn?.grn_date || "—"],
+    ["GE number", grn?.ge_number || "—"],
+    ["GE date", grn?.ge_date || "—"],
+    ["Vendor", vendorDisplay],
+    ["Material", materialDisplay],
+    ["Received quantity", grn?.received_qty != null ? `${Number(grn.received_qty).toLocaleString()} ${grn.uom_code || ""}`.trim() : "—"],
+    ["Batch / lot", grn?.batch_lot_number || "—"],
+    ["Invoice number", grn?.invoice_number || "—"],
+    ["Invoice date", grn?.invoice_date || "—"],
+    ["Delivery challan number", grn?.bulk_challan_number || "—"],
+    ["Delivery challan date", grn?.bulk_challan_date || "—"],
+    ["Container number", grn?.physical_container_number || grn?.bulk_container_number || "—"],
+    ["GE container number", grn?.bulk_container_number || "—"],
+    ["LR number", grn?.lr_number || "—"],
+    ["LR date", grn?.lr_date || "—"],
+    ["Transporter", grn?.transporter_name || "—"],
+    ["Truck number", grn?.gate_entry?.vehicle_number || "—"],
+    ["E-way bill number", grn?.bulk_ewaybill_number || "—"],
+  ];
 
   const testLines = Array.isArray(detail?.test_lines) ? detail.test_lines : [];
   const decisionLines = Array.isArray(detail?.decision_lines) ? detail.decision_lines : [];
@@ -888,6 +918,21 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
               </div>
             </ErpDenseFormRow>
           </div>
+
+          <section className="grid gap-2 rounded border border-sky-200 bg-sky-50 p-2.5">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-sky-900">GRN receipt details</p>
+              <p className="mt-0.5 text-[11px] text-slate-600">Read-only GE and GRN documents for the material being inspected.</p>
+            </div>
+            <div className="grid gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-4">
+              {receiptDetails.map(([label, value]) => (
+                <div key={label} className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">{label}</p>
+                  <p className="break-words text-[12px] font-medium text-slate-800">{value}</p>
+                </div>
+              ))}
+            </div>
+          </section>
 
           <div className="grid gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Test Results — {materialCategory || "No category on material"}</p>
