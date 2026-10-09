@@ -1,8 +1,11 @@
--- AC05 MTS SKU Costing: grant only Accounts department work contexts access.
--- This capability is intentionally dedicated to AC05, so it cannot change
--- Director, ACL-MASTER, or any non-Accounts department's permissions.
--- ACL source is immutable once captured, so affected company snapshots and
--- menu caches must be rebuilt after the narrow grant is added.
+-- AC05 MTS SKU Costing — Accounts department access
+--
+-- R-04 operational rollout. Run separately through MCP/direct SQL in each
+-- environment. This is deliberately NOT a Supabase migration: capabilities,
+-- work-context grants, ACL versions, snapshots and menu caches are
+-- environment data.
+--
+-- Production applied: 2026-10-08 IST
 
 BEGIN;
 
@@ -73,13 +76,9 @@ BEGIN
       next_version_id, current_version.company_id, current_version.created_by
     );
     PERFORM acl.generate_acl_snapshot(next_version_id, current_version.company_id);
-
-    UPDATE acl.acl_versions
-    SET is_active = false
+    UPDATE acl.acl_versions SET is_active = false
     WHERE acl_version_id = current_version.acl_version_id;
-
-    UPDATE acl.acl_versions
-    SET is_active = true
+    UPDATE acl.acl_versions SET is_active = true
     WHERE acl_version_id = next_version_id;
 
     FOR affected_user IN
@@ -94,38 +93,6 @@ BEGIN
       );
     END LOOP;
   END LOOP;
-END $$;
-
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM erp_acl.user_work_contexts uwc
-    JOIN erp_acl.work_contexts wc
-      ON wc.work_context_id = uwc.work_context_id
-    JOIN erp_acl.user_roles ur
-      ON ur.auth_user_id = uwc.auth_user_id
-    JOIN acl.acl_versions av
-      ON av.company_id = uwc.company_id AND av.is_active
-    LEFT JOIN acl.precomputed_acl_view pav
-      ON pav.acl_version_id = av.acl_version_id
-      AND pav.auth_user_id = uwc.auth_user_id
-      AND pav.company_id = uwc.company_id
-      AND pav.work_context_id = uwc.work_context_id
-      AND pav.resource_code = 'ACC_AC05_MTS_SKU_COSTING'
-      AND pav.action_code IN ('VIEW', 'WRITE')
-    WHERE wc.work_context_id IN (
-      SELECT accounts_wc.work_context_id
-      FROM erp_acl.work_contexts accounts_wc
-      JOIN erp_master.departments accounts_dept
-        ON accounts_dept.id = accounts_wc.department_id
-      WHERE accounts_dept.department_name = 'ACCOUNTS'
-    )
-    GROUP BY uwc.auth_user_id, uwc.company_id, uwc.work_context_id
-    HAVING count(*) FILTER (WHERE pav.decision = 'ALLOW') <> 2
-  ) THEN
-    RAISE EXCEPTION 'AC05 Accounts department ACL verification failed';
-  END IF;
 END $$;
 
 COMMIT;

@@ -143,6 +143,7 @@ export default function SalesInvoiceListPage() {
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setReloadTick((tick) => tick + 1) },
         { key: "do-list", label: "All DOs", tone: "neutral", onClick: () => { openScreen(OPERATION_SCREENS.PROC_DO_LIST.screen_code); navigate("/dashboard/procurement/delivery-orders"); } },
+        { key: "bulk-posting", label: "Bulk Posting", tone: "primary", onClick: () => navigate("/dashboard/procurement/sales-invoices/bulk-posting") },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: pagedRows.length === 0 },
       ]}
       notices={error ? [{ key: "do-queue-error", tone: "error", message: error }] : []}

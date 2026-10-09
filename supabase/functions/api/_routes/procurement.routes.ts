@@ -423,6 +423,12 @@ import {
   editTransporterDetailsHandler,
 } from "../_core/procurement/do_bulk.handlers.ts";
 import {
+  bulkPostDeliveryOrdersHandler,
+  listBulkPostingQueueHandler,
+} from "../_core/procurement/do_bulk_post.handlers.ts";
+import { cancelVdcDeliveryOrderHandler, completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "../_core/procurement/vdc_invoice.handlers.ts";
+import { listVdcTruckDispatchPendingHandler, postVdcTruckDispatchUploadHandler } from "../_core/procurement/vdc_truck_dispatch.handlers.ts";
+import {
   cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
   createPgiInvoiceHandler,
@@ -895,6 +901,14 @@ export async function dispatchProcurementRoutes(
       return await previewDoBulkUploadHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/save":
       return await saveDoBulkUploadHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/bulk/posting":
+      return await listBulkPostingQueueHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/post":
+      return await bulkPostDeliveryOrdersHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch":
+      return await listVdcTruckDispatchPendingHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post":
+      return await postVdcTruckDispatchUploadHandler(req, ctx);
     case "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":
       return await findDoByFoNumberHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter":
@@ -1444,6 +1458,15 @@ export async function dispatchProcurementRoutes(
   }
   if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/.test(pathname) && req.method === "POST") {
     return await postPgiInvoiceGroupsHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/vdc-invoice-only$/.test(pathname) && req.method === "POST") {
+    return await createVdcInvoiceOnlyHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/vdc-cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelVdcDeliveryOrderHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/sales-invoices\/[^/]+\/vdc-pgi-only$/.test(pathname) && req.method === "POST") {
+    return await completeVdcPgiOnlyHandler(req, ctx);
   }
   if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/cancel-invoice-groups$/.test(pathname) && req.method === "POST") {
     return await cancelPgiInvoiceGroupsHandler(req, ctx);

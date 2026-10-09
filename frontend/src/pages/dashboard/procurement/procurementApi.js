@@ -1231,6 +1231,18 @@ export function findDoByFoNumber(params) {
 export function editTransporterDetails(data) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/edit-transporter", data);
 }
+export function listBulkPostingQueue(companyId) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/posting", undefined, { company_id: companyId });
+}
+export function bulkPostDeliveryOrders(dcIds) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/post", { dc_ids: dcIds });
+}
+export function listVdcTruckDispatchPending(companyId) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch", undefined, { company_id: companyId });
+}
+export function postVdcTruckDispatch(rows) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post", { rows });
+}
 
 // §133.13 -- IBN-driven multi-invoice preview + post, per DO.
 export function previewInvoiceGroups(dcId) {

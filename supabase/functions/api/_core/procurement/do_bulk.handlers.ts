@@ -38,7 +38,7 @@ import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
-import { createDeliveryOrderUnifiedHandler } from "./do_unified.handlers.ts";
+import { createDeferredVdcBulkDeliveryOrder, createDeliveryOrderUnifiedHandler } from "./do_unified.handlers.ts";
 import { saveSoMapGroupHandler } from "./so_map.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -465,6 +465,18 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
     const results: JsonRecord[] = [];
     for (const group of groups) {
       try {
+        // Never trust the spreadsheet's DD flag to choose a reservation
+        // policy. Resolve the underlying SO type again at commit time.
+        const { data: sourceSo, error: sourceSoError } = await serviceRoleClient
+          .schema("erp_procurement").from("sales_order").select("dispatch_type")
+          .eq("id", toTrimmedString(group.so_id)).maybeSingle();
+        if (sourceSoError || !sourceSo) throw new Error("DO_BULK_SOURCE_SO_NOT_FOUND");
+        const actualDispatchType = toUpperTrimmedString((sourceSo as JsonRecord).dispatch_type);
+        const isVdc = actualDispatchType === "DEPENDENT_DIRECT";
+        const isDc = actualDispatchType === "DEPENDENT_DEPOT";
+        if ((group.dd_flag && !isVdc) || (!group.dd_flag && !isDc)) {
+          throw new Error("DO_BULK_DD_FLAG_SOURCE_MISMATCH");
+        }
         if (!group.dd_flag) {
           if (!toTrimmedString(group.truck_number) || !toTrimmedString(group.dispatch_date)) {
             throw new Error("DO_BULK_DC_TRUCK_DISPATCH_REQUIRED");
@@ -486,19 +498,23 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           });
         }
 
+        const createPayload: JsonRecord = {
+          company_id: companyId,
+          lines,
+          transporter_id: group.transporter_id,
+          lr_number: group.lr_number,
+          lr_date: group.lr_date,
+          vehicle_number: toTrimmedString(group.truck_number) || undefined,
+        };
+        const deferVdcReservation = isVdc && (!toTrimmedString(group.truck_number) || !toTrimmedString(group.dispatch_date));
         const createReq = new Request(req.url, {
           method: "POST",
-          body: JSON.stringify({
-            company_id: companyId,
-            lines,
-            transporter_id: group.transporter_id,
-            lr_number: group.lr_number,
-            lr_date: group.lr_date,
-            vehicle_number: toTrimmedString(group.truck_number) || undefined,
-          }),
+          body: JSON.stringify(createPayload),
           headers: req.headers,
         });
-        const createResp = await createDeliveryOrderUnifiedHandler(createReq, ctx);
+        const createResp = deferVdcReservation
+          ? await createDeferredVdcBulkDeliveryOrder(req, ctx, createPayload)
+          : await createDeliveryOrderUnifiedHandler(createReq, ctx);
         const createJson = await createResp.json().catch(() => null) as { ok?: boolean; data?: JsonRecord; error?: JsonRecord } | null;
         if (!createResp.ok || !createJson?.ok || !createJson.data?.id) {
           throw new Error(toTrimmedString(createJson?.error && (createJson.error as JsonRecord).code) || "DO_BULK_CREATE_FAILED");

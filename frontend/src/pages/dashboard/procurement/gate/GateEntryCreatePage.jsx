@@ -630,6 +630,10 @@ export default function GateEntryCreatePage() {
           invoiceNumber: l.bulkInvoiceNumber, invoiceDate: l.bulkInvoiceDate,
           containerNumber: l.bulkContainerNumber, ewaybillNumber: l.bulkEwaybillNumber,
           geQty: l.rcvQty, item: l.po || l.sto,
+          // Order-in-LOT validation needs the persisted row context, not
+          // only the drawer fields. Without these, an already-selected lot
+          // is read as blank and a valid Bulk GE cannot be saved.
+          isSto: Boolean(l.sto), line: bulkLine, lotNumber: l.lotNumber,
         });
         const firstError = Object.values(bulkErrors)[0];
         if (firstError) {
@@ -1036,6 +1040,8 @@ export default function GateEntryCreatePage() {
       invoiceNumber: l.bulkInvoiceNumber, invoiceDate: l.bulkInvoiceDate,
       containerNumber: l.bulkContainerNumber, ewaybillNumber: l.bulkEwaybillNumber,
       geQty: l.rcvQty, item: l.po || l.sto,
+      // Keep the real-time Save GE gate identical to final submit validation.
+      isSto: Boolean(l.sto), line: bulkLine, lotNumber: l.lotNumber,
     });
     return Object.keys(errors).length > 0;
   });
