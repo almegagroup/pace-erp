@@ -736,6 +736,10 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       trigger করে) stock check (location+SKU) হয়, **আর তখনই reservation তৈরি হয়** — DO
       create হওয়ার সময় না। অর্থাৎ reservation-creation trigger = stock-check trigger =
       Truck Number+Dispatch Date উভয়েই present।
+  **Clarification (2026-10-09):** যদি Bulk DO Upload-এর সময়েই DD row-তে Truck
+  Number এবং Dispatch Date দুটোই দেওয়া থাকে, সেই create event-এই reservation তৈরি
+  হবে। দুটির যেকোনো একটি blank থাকলে VDC DO তৈরি হবে reservation ছাড়া; পরে এই দুই
+  field সম্পূর্ণ হওয়ার PGI event-এই stock check + reservation record হবে।
     - **Per-row sequential stock check:** একই SKU batch-এর একাধিক row-এ থাকতে পারে বলে
       check হয় **top-to-bottom cumulative** — row 1-এর SKU A-র জন্য net available check
       করে qty claim হয়, পরের কোনো row-এ সেই একই SKU A এলে net available থেকে আগের
@@ -824,3 +828,15 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
 - Invoice Cancel-এর "Cancel with CN" mechanism (point ২১) — design বাকি, future session।
 - "Urgent Process PO" mechanism-এর সাথে point ১৯-এর RPC rule-এর সাদৃশ্য দাবি করা হয়েছে
   কিন্তু এখনো code-এ independently verify করা হয়নি।
+
+### Implementation log — 2026-10-09 (working-tree status)
+
+- Phase 0–3 are implemented on the shared `dev` line; the task tracker records
+  their individual evidence.
+- Phase 4–5 additive code is present in the working tree: VDC Invoice-only and
+  PGI-only handlers, SO02 queue/dispatcher, the SO03 Truck + Dispatch Date
+  review/post action, routes and ACL entries.
+- This is **not a completion claim**. Cancellation cascade, real-data
+  validation and migration application/reconciliation remain open. The VDC-only
+  cancellation cascade and the repository guard suite are now implemented/run;
+  existing atomic DC/RM/PM/INT posting paths remain outside this work.

@@ -273,16 +273,30 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
 - [ ] **T17.** Backend: brand-new Invoice-only endpoint for VDC rows (reuses
   `computeInvoiceGroups`/GST logic from `do_unified.handlers.ts` where possible,
   but does **not** call `post_document`/P601 — stock_ledger untouched).
+  **2026-10-09 ⏳ code complete, database verification pending:** additive
+  `vdc_invoice.handlers.ts` plus `create_vdc_invoice_only_atomic` are present;
+  the handler type-checks, but the un-applied migration has not been verified
+  against real database data, so this task remains open.
 - [ ] **T18.** Backend: brand-new PGI-only endpoint (Truck+Dispatch Date Upload's
   Post action) that performs the deferred P601 posting for a previously
   Invoice-only VDC row, dated as the Dispatch Date.
+  **2026-10-09 ⏳ code complete, database verification pending:** the endpoint
+  builds one P601 event dated as Dispatch Date, performs cumulative stock/PI
+  checks and uses the dedicated VDC posting-source completion chain. It remains
+  open until the migration and a real posting/reversal scenario are verified.
 - [ ] **T19.** Backend: DC rows keep calling **existing**
   `postPgiInvoiceGroupsHandler` unchanged (atomic, Truck+Dispatch mandatory at
   Bulk DO Upload time per §6 point 14 correction).
 - [ ] **T20.** Backend: Bulk Post endpoint (multi-select, dispatches to T17 for
   VDC rows / T19 for DC rows), full column list + DD Flag per §6 point 17.
+  **2026-10-09 ⏳ code complete, end-to-end verification pending:** the queue
+  projects all specified commercial columns from fresh invoice groups and the
+  dispatcher preserves the existing DC atomic path.
 - [ ] **T21.** Frontend: SO02 Bulk Posting page (only lists Bulk-DO-Upload-created
   DOs, checkbox multi-select, Bulk Post button).
+  **2026-10-09 ⏳ code complete, end-to-end verification pending:** full §6
+  column order, checkbox multi-select and Bulk Post action are implemented;
+  frontend lint and production build pass.
 - [ ] **T22.** Verify against real data, guards, SU24.
 
 ## Phase 5 — Truck + Dispatch Date Upload (VDC-only)
@@ -290,9 +304,18 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
 - [ ] **T23.** Backend: system-generated prefilled template (pending FOs only),
   Dispatch Date validation (LR Date ≤ Dispatch Date ≤ Today, transitional RPC
   tightening to Today-2..Today after 2026-10-14), Truck Number min-4-char check.
+  **2026-10-09 ⏳ code complete, real-data verification pending:** pending-only
+  VDC DRAFT-invoice projection, date-window validation and truck validation are
+  implemented. The UI offers a system-generated prefilled CSV export.
 - [ ] **T24.** Backend: same-FO/multi-SKU propagation, stock-check (point 18)
   reapplied, Post → calls T18's PGI-only endpoint per resolved row.
+  **2026-10-09 ⏳ code complete, real-data verification pending:** the UI
+  propagates an FO edit across its rows; posting reuses T18 for each DRAFT
+  invoice and returns partial-safe per-DO outcomes.
 - [ ] **T25.** Frontend: Truck+Dispatch Date Upload page on SO03.
+  **2026-10-09 ⏳ code complete, end-to-end verification pending:** an additive
+  SO03 drawer provides pending-only grid review, propagation, template download
+  and Post PGI action; lint/build pass.
 - [ ] **T26.** Verify against real data, guards, SU24.
 
 ## Phase 6 — Cancel cascade
@@ -300,23 +323,33 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
 - [ ] **T27.** Backend: PGI cancel → Invoice cancel cascade (mirrors existing
   `cancelDeliveryOrderHandler`/`reverseSalesInvoiceHandler` shape) + re-upload
   readiness (FO stays re-processable while parent SO is active).
+  **2026-10-09 ⏳ code complete, database verification pending:** VDC-only
+  cancellation now handles Invoice-only DRAFT, PGI'd POSTED and mixed invoice
+  groups through its own posting source. It cancels/reverses invoice groups,
+  releases the VDC reservation, and leaves the DO `CANCELLED` for re-upload;
+  no shared DC/RM/PM/INT cancellation function was changed.
 - [ ] **T28.** Verify against real data, guards, SU24.
 
 ## Phase 7 — Cross-check against this session's SO01 fixes
 
-- [ ] **T29.** Confirm the SO01 Excel-Upload bug fixes already shipped this
+- [x] **T29.** Confirm the SO01 Excel-Upload bug fixes already shipped this
   session (missing `uom_code`/`pack_uom_code` in submit payload, GST-preview
   rehydration fields, `FgRateCell` AC05 rate auto-resolution) are consistent with
   / correctly feed into SO03/SO02's new bulk flow — no regression, no duplicate
-  gap.
+  gap. **2026-10-09 ✅** SO01 preserves and submits base/pack UOM and display-rate
+  values; SO03 resolves them onto DO lines and SO02 reads the same fresh
+  invoice-group commercial projection.
 
 ## Phase 8 — Final verification + ship
 
 - [ ] **T30.** Run all 18+ `.mjs` guard scripts + `dependency-provisioning-check`
-  (SU24) + `migration-integrity-check.mjs` — all green.
-- [ ] **T31.** Write implementation log into
+  (SU24) + `migration-integrity-check.mjs` — all green. **2026-10-09 ⏳** all
+  17 present `.mjs` scripts exit successfully, including stock-posting, route/ACL,
+  migration-column/order and SU24 report. The integrity script produced the local
+  checksum; remote cannot be in sync until the VDC migrations are applied.
+- [x] **T31.** Write implementation log into
   `docs/FG-STO-MTS-DISPATCH-DESIGN-DOC.md` (§6, new "Implementation Log"
-  subsection).
+  subsection). **2026-10-09 ✅** updated incrementally with verified status.
 - [ ] **T32.** Commit + push (main → dev) + PR.
 
 ---
@@ -324,6 +357,31 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
 ## Progress Log
 
 *(each task gets a dated one-line update appended here as it completes)*
+
+- **2026-10-09 Phase 4 status (in progress, not verified):** an additive VDC
+  Invoice-only handler (`vdc_invoice.handlers.ts`), SO02 Bulk Posting UI
+  (`SO02BulkPostingPage.jsx`), bulk queue/dispatcher handler, route and ACL
+  registrations are present in the working tree. These are deliberately not
+  marked complete: the PGI-only half, Phase 5 integration, complete grid data,
+  migration ordering/application, real-data validation and all final guards
+  remain outstanding.
+- **2026-10-09 Phase 4–5 implementation update (not a completion claim):**
+  SO02's full queue projection/dispatcher and SO03's VDC Truck + Dispatch Date
+  review/posting drawer are now implemented. Focused Deno checks, frontend lint,
+  production build, route/ACL guard and `git diff --check` pass. Migrations are
+  still unapplied; therefore no task that needs a real posting path is marked
+  complete.
+- **2026-10-09 Phase 6 + verification update (not a deployment claim):**
+  VDC-only cancellation supports DRAFT/POSTED/mixed invoice groups without
+  touching the shared posting or cancellation functions. All 17 available guard
+  scripts passed. `supabase migration list --linked` confirms that the deployed
+  project already has `20261009150000`, while VDC contract
+  `20261009151000` and VDC cancellation `20261009152000` remain unapplied.
+- **2026-10-09 reservation rule clarified by business owner:** DD/VDC Bulk
+  DO has a reservation only when both Truck Number and Dispatch Date are
+  present. If either value is absent, no create-time stock check/reservation
+  is permitted; the later deferred PGI event performs both. DC behaviour is
+  unchanged.
 
 - **2026-10-09 T1 ✅** `sales_order_map_group.external_fo_number` added (migration
   `20261009100000_so_map_group_external_fo_number.sql`), unique per

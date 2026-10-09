@@ -920,32 +920,34 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                     <input type="date" value={deliveryChallanDate} onChange={(e) => setDeliveryChallanDate(e.target.value)}
                       className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
                   </ErpDenseFormRow>
-                  <ErpDenseFormRow label="Container number">
-                    <div className="flex flex-col gap-2 md:flex-row md:items-center">
-                      <input
-                        type="text"
-                        value={containerNumber}
-                        onChange={(e) => {
-                          const nextValue = e.target.value;
-                          setContainerNumber(nextValue);
-                          if (physicalContainerMatchesGe) setPhysicalContainerNumber(nextValue);
-                        }}
-                        className="h-9 min-w-0 flex-1 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
-                      />
-                      <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-slate-700">
+                  <div className="md:col-span-3">
+                    <ErpDenseFormRow label="Container number">
+                      <div className="flex flex-col gap-2 md:flex-row md:items-center">
                         <input
-                          type="checkbox"
-                          checked={physicalContainerMatchesGe}
+                          type="text"
+                          value={containerNumber}
                           onChange={(e) => {
-                            const checked = e.target.checked;
-                            setPhysicalContainerMatchesGe(checked);
-                            if (checked) setPhysicalContainerNumber(containerNumber);
+                            const nextValue = e.target.value;
+                            setContainerNumber(nextValue);
+                            if (physicalContainerMatchesGe) setPhysicalContainerNumber(nextValue);
                           }}
+                          className="h-9 min-w-0 flex-1 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500 md:min-w-[14rem]"
                         />
-                        Matched with Physical Container Number?
-                      </label>
-                    </div>
-                  </ErpDenseFormRow>
+                        <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={physicalContainerMatchesGe}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setPhysicalContainerMatchesGe(checked);
+                              if (checked) setPhysicalContainerNumber(containerNumber);
+                            }}
+                          />
+                          Matched with Physical Container Number?
+                        </label>
+                      </div>
+                    </ErpDenseFormRow>
+                  </div>
                   <ErpDenseFormRow label={<><span>Physical Container Number</span> <span className="text-red-500">*</span></>}>
                     <input
                       type="text"

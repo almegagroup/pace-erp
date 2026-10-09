@@ -23,6 +23,7 @@ import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
 import BulkDoUploadDrawer from "./BulkDoUploadDrawer.jsx";
 import EditTransporterDetailsDrawer from "./EditTransporterDetailsDrawer.jsx";
+import VdcTruckDispatchUploadDrawer from "./VdcTruckDispatchUploadDrawer.jsx";
 
 const LIMIT = 50;
 
@@ -64,6 +65,7 @@ export default function DOListPage() {
   const [page, setPage] = useState(1);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editTransporterOpen, setEditTransporterOpen] = useState(false);
+  const [vdcTruckDispatchOpen, setVdcTruckDispatchOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const params = useMemo(
@@ -130,6 +132,7 @@ export default function DOListPage() {
         { key: "create", label: "Create DO", tone: "primary", onClick: openCreateDO },
         { key: "bulk-upload", label: "Bulk DO Upload", tone: "neutral", onClick: () => setBulkUploadOpen(true), disabled: !effectiveCompanyId },
         { key: "edit-transporter", label: "Edit Transporter Details", tone: "neutral", onClick: () => setEditTransporterOpen(true), disabled: !effectiveCompanyId },
+        { key: "truck-dispatch-upload", label: "Truck & Dispatch Upload", tone: "neutral", onClick: () => setVdcTruckDispatchOpen(true), disabled: !effectiveCompanyId },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}
       notices={doQuery.error ? [{ key: "do-list-error", tone: "error", message: doQuery.error instanceof Error ? doQuery.error.message : "PROCUREMENT_DO_LIST_FAILED" }] : []}
@@ -218,6 +221,13 @@ export default function DOListPage() {
       <EditTransporterDetailsDrawer
         companyId={effectiveCompanyId}
         onClose={() => setEditTransporterOpen(false)}
+        onSaved={() => void doQuery.refetch()}
+      />
+    ) : null}
+    {vdcTruckDispatchOpen ? (
+      <VdcTruckDispatchUploadDrawer
+        companyId={effectiveCompanyId}
+        onClose={() => setVdcTruckDispatchOpen(false)}
         onSaved={() => void doQuery.refetch()}
       />
     ) : null}

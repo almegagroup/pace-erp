@@ -265,6 +265,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/delivery-orders-v2/bulk/save":         { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
   "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+  // SO02 Bulk Posting reads/posts only Bulk-DO-Upload records. It is an
+  // Accounts action, so it deliberately uses the existing Invoice/PGI ACL.
+  "GET:/api/procurement/delivery-orders-v2/bulk/posting":        { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
+  "POST:/api/procurement/delivery-orders-v2/bulk/post":          { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
+  "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
+  "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
@@ -1383,6 +1389,18 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
   {
     pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/vdc-invoice-only$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/delivery-orders-v2\/[^/]+\/vdc-cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/sales-invoices\/[^/]+\/vdc-pgi-only$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" } },
   },
   {

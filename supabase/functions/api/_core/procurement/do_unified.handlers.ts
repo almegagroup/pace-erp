@@ -849,7 +849,7 @@ type PreparedDoLineSet = {
 // Edit calls this only AFTER tearing down its own old lines/reservations
 // (§133.12), so "remaining balance" here is never polluted by the very
 // lines this same DO is about to replace.
-async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord[], excludeDcId?: string): Promise<PreparedDoLineSet> {
+async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord[], excludeDcId?: string, deferStockReservation = false): Promise<PreparedDoLineSet> {
   const soLineIds = [...new Set(rawLines.map((l) => toTrimmedString(l.so_line_id)).filter(Boolean))];
     const stoLineIds = [...new Set(rawLines.map((l) => toTrimmedString(l.sto_line_id)).filter(Boolean))];
     const allocationIds = [...new Set(rawLines.map((l) => toTrimmedString(l.so_map_allocation_id)).filter(Boolean))];
@@ -1108,13 +1108,14 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       if (soMapAllocationId) {
         allocationUsedInThisSubmission.set(soMapAllocationId, (allocationUsedInThisSubmission.get(soMapAllocationId) ?? 0) + quantity);
       }
-      const stockKey = `${storageLocationId}|${materialId}`;
-      const available = await getAvailableQty(companyId, storageLocationId, materialId, excludeDcId) - (stockUsedInThisSubmission.get(stockKey) ?? 0);
-      if (quantity > available + QTY_TOL) {
-        throw new Error("INSUFFICIENT_STOCK");
+      if (!deferStockReservation) {
+        const stockKey = `${storageLocationId}|${materialId}`;
+        const available = await getAvailableQty(companyId, storageLocationId, materialId, excludeDcId) - (stockUsedInThisSubmission.get(stockKey) ?? 0);
+        if (quantity > available + QTY_TOL) {
+          throw new Error("INSUFFICIENT_STOCK");
+        }
+        stockUsedInThisSubmission.set(stockKey, (stockUsedInThisSubmission.get(stockKey) ?? 0) + quantity);
       }
-
-      stockUsedInThisSubmission.set(stockKey, (stockUsedInThisSubmission.get(stockKey) ?? 0) + quantity);
       if (stoLineId) stoUsedInThisSubmission.set(stoLineId, (stoUsedInThisSubmission.get(stoLineId) ?? 0) + quantity);
       if (sourceType === "SALES_ORDER") soIdsForSources.add(sourceId); else stoIdsForSources.add(sourceId);
       const rawRate = Number(salesSourceLine?.rate ?? 0);
@@ -1337,6 +1338,49 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
       : ["DO_QTY_EXCEEDS_BALANCE", "INSUFFICIENT_STOCK", "DO_CREATE_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "DO_PACKING_ORDER_NOT_ALLOCATED_TO_FO", "DO_PACKING_ORDER_INSUFFICIENT_BALANCE", "DO_PACKING_ORDER_ALLOCATION_EXCEEDED"].includes(code) ? 400
       : code.includes("NOT_FOUND") ? 404
       : 500;
+    return doErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// Internal bridge for the additive VDC Bulk-DO workflow. It is deliberately
+// not routed: do_bulk.handlers.ts calls it only after it has independently
+// resolved the SO as DEPENDENT_DIRECT and established that Truck Number or
+// Dispatch Date is still missing. Ordinary DO01 requests always use the
+// handler above and therefore cannot suppress stock validation/reservation.
+export async function createDeferredVdcBulkDeliveryOrder(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+  body: JsonRecord,
+): Promise<Response> {
+  try {
+    const companyId = toTrimmedString(body.company_id);
+    const rawLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    if (!companyId || rawLines.length === 0) return doErrorResponse(req, ctx, "DO_CREATE_INVALID", 400, "company_id and at least one line are required.");
+    const lrDate = toTrimmedString(body.lr_date);
+    if (lrDate && !isManualDocumentDateWithinWindow(lrDate)) {
+      return doErrorResponse(req, ctx, "DO_MANUAL_DATE_OUTSIDE_ALLOWED_WINDOW", 400, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE);
+    }
+    try { await assertCompanyScope(ctx, companyId); }
+    catch { return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
+    if (!(await canMaintainDoCreate(ctx, companyId, "WRITE"))) {
+      return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Create-DO access at this company.");
+    }
+    const { prepared, soIdsForSources, stoIdsForSources, netWeight, dcType } = await prepareAndValidateDoLines(companyId, rawLines, undefined, true);
+    if (dcType !== "SALES" || stoIdsForSources.size !== 0) {
+      return doErrorResponse(req, ctx, "VDC_BULK_SOURCE_INVALID", 400, "Deferred reservation is available only for VDC sales-order lines.");
+    }
+    await freezeDoSalesShipTo(prepared);
+    const payload = buildDoAtomicPayload(companyId, await generateProcurementDocNumber("DC"), body, prepared, soIdsForSources, stoIdsForSources, netWeight, dcType);
+    const { data: dcId, error } = await serviceRoleClient.schema("erp_procurement").rpc("save_vdc_deferred_bulk_delivery_order_atomic", {
+      p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
+    });
+    if (error || !dcId) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+    return okResponse(await hydrateDeliveryOrderUnified(String(dcId)), ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403
+      : ["DO_QTY_EXCEEDS_BALANCE", "DO_CREATE_INVALID", "DO_LINE_INVALID", "DO_LINE_SOURCE_MISSING", "DO_SOURCE_COMPANY_MISMATCH", "VDC_BULK_SOURCE_INVALID"].includes(code) ? 400
+      : code.includes("NOT_FOUND") ? 404 : 500;
     return doErrorResponse(req, ctx, code, status, code);
   }
 }
@@ -1584,7 +1628,7 @@ export async function getDeliveryOrderUnifiedHandler(req: Request, ctx: Procurem
 //     bucket here).
 //   - SO and STO never merge into the same invoice.
 
-async function canMaintainSalesInvoice(ctx: ProcurementHandlerContext, companyId: string, actionCode: "VIEW" | "WRITE" | "EDIT" = "WRITE"): Promise<boolean> {
+export async function canMaintainSalesInvoice(ctx: ProcurementHandlerContext, companyId: string, actionCode: "VIEW" | "WRITE" | "EDIT" = "WRITE"): Promise<boolean> {
   if (ctx.context.isAdmin) return true;
   if (!companyId) return false;
   let workContextIds: string[];
@@ -1709,7 +1753,7 @@ type ProcInvoiceGroup = {
 // the read-only preview (Page 3 table) and the actual POST (which re-derives
 // this fresh -- never trusts a client-submitted grouping) so the two can
 // never drift apart.
-async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; groups: ProcInvoiceGroup[] }> {
+export async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonRecord; groups: ProcInvoiceGroup[] }> {
   const { data: dc, error: dcError } = await serviceRoleClient
     .schema("erp_procurement").from("delivery_challan").select("*").eq("id", dcId).single();
   if (dcError || !dc) throw new Error("DO_NOT_FOUND");
@@ -2127,7 +2171,7 @@ function roundWithResidual(rawByMaterial: Map<string, number>, target: number): 
   return rounded;
 }
 
-async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<DispatchRecoLine[]> {
+export async function computeDispatchRecoRows(group: ProcInvoiceGroup): Promise<DispatchRecoLine[]> {
   if (group.source_type !== "SALES_ORDER" || !group.so_id) return [];
 
   const { data: soRow, error: soError } = await serviceRoleClient
@@ -2443,6 +2487,7 @@ type InvoiceGroupInput = {
     gst_treatment?: "INCLUSIVE" | "EXCLUSIVE";
     gst_rate?: number;
   }>;
+  round_off_amount?: number;
   remarks?: string;
 };
 
