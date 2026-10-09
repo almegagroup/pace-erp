@@ -647,11 +647,12 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
         Number-এর জায়গায় বসানো হয়েছে, বা উল্টো) → সেই row **skip**, error দেখিয়ে আবার upload
         করতে বলবে।
     - **Template columns (সবগুলোর জন্য common):** FO/SO Number, DO Date, Transporter, LR
-      Number, LR Date, SKU, Pack Qty, Tally Invoice Number, Tally Invoice Date, Inbound
+      Number, LR Date, SKU, Pack Qty, **Storage Location** (dropdown, শুধু F-location —
+      Finished Goods, §83.15 pattern), Tally Invoice Number, Tally Invoice Date, Inbound
       Number, Truck Number, Dispatch Date।
     - **Field split — কে কোথায় ব্যবহার হবে:**
       - **DO নিজের জন্য:** FO/SO Number (resolve), DO Date, Transporter (resolve), LR
-        Number, LR Date, SKU, Pack Qty।
+        Number, LR Date, SKU, Pack Qty, Storage Location।
       - **DO page-এ লাগে না, কিন্তু preserve হবে SO02 (PGI+Invoice)-এর জন্য:** Tally Invoice
         Number, Tally Invoice Date, Inbound Number, Truck Number, Dispatch Date — এখনই
         capture হবে, পরে SO02-তে গেলে prefilled পাওয়া যাবে।
@@ -716,6 +717,77 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
     - Posting হওয়ার পূর্বশর্ত (point ১৩-এর পাঁচটা field পূর্ণ) এখানেও প্রযোজ্য — অসম্পূর্ণ
       row Bulk Post দিয়ে post হবে না।
 
+18. **Stock Check + Reservation mechanism — DC vs VDC timing (সম্পূর্ণ confirm হয়েছে):**
+    - **DC:** DO upload/create হওয়ার সাথে সাথেই সেই Storage Location+SKU-র বিরুদ্ধে
+      **Blended stock check** (MTS batch-blind, §108 List A point ৮) + **reservation
+      তৈরি** হয়ে যায়। DO cancel হলে reservation release হয়, আবার re-upload করা যায়।
+    - **VDC (DD):** Invoice-only posting-এ কোনো stock check/reservation হয় না (dispatch
+      তখনো confirmed না)। **Truck Number + Dispatch Date দেওয়ার মুহূর্তেই** (যেটা PGI-ও
+      trigger করে) stock check (location+SKU) হয়, **আর তখনই reservation তৈরি হয়** — DO
+      create হওয়ার সময় না। অর্থাৎ reservation-creation trigger = stock-check trigger =
+      Truck Number+Dispatch Date উভয়েই present।
+    - **Per-row sequential stock check:** একই SKU batch-এর একাধিক row-এ থাকতে পারে বলে
+      check হয় **top-to-bottom cumulative** — row 1-এর SKU A-র জন্য net available check
+      করে qty claim হয়, পরের কোনো row-এ সেই একই SKU A এলে net available থেকে আগের
+      claimed qty বাদ দিয়ে তার বিরুদ্ধে check হবে — একই stock দুই row-এ double-count হবে
+      না।
+    - **Stock insufficient হলে:** সেই row **remove** করা যায় (এই posting attempt থেকে
+      বাদ) — এটা **DO cancel করে না**, বরং পরের বার সেই pending row আবার posting
+      list-এ দেখাবে। Clean row-গুলো সেবার post হয়ে যাবে।
+
+19. **Truck + Dispatch Date Upload — পূর্ণ mechanism (SO03):**
+    - **"Truck and Dispatch Date Upload"** button → Template + Upload, দুই option।
+    - **Template = system-generated PREFILLED export, ব্যবহারকারীর ভরা blank টেমপ্লেট না।**
+      এটা সেই সব FO-র list যাদের **Truck Number বা Dispatch Date-এর কোনো একটা (বা দুটোই)
+      এখনো blank/pending** — FO Number, Ship-To Address, Town, VDC Code prefilled, পাশে
+      Truck Number + Dispatch Date-এর blank জায়গা।
+    - **Dispatch Date validation:** **LR Date ≤ Dispatch Date ≤ Today** (এখানে "DO Date"
+      বললেও আসলে **LR Date**-এর সাথেই compare হয়) — Excel formula না, upload-পরবর্তী
+      system check। Condition-এর বাইরে গেলে date change-এর option, resolve না হলে Save
+      inactive।
+    - **Transitional rule (RPC, 2026-10-14 থেকে কড়াকড়ি):** 14 অক্টোবরের আগে wider window
+      (LR Date to Today) চালু থাকবে ব্যাকলগ data ধরার জন্য; **14 অক্টোবরের পরে** window
+      সংকুচিত হবে — Dispatch Date-এর valid range হবে **Today−2 থেকে Today**। PGI post
+      হবে ঠিক যে Dispatch Date সেট করা, সেই date-এই (আজকের date না) — এই pattern
+      business-এর existing "Urgent Process PO" mechanism-এর সাথে মেলে (এই নির্দিষ্ট
+      mechanism এখনো code-এ independently verify করা হয়নি)।
+    - **Truck Number:** minimum ৪ character, না হলে highlighted, resolve না করলে Save
+      inactive।
+    - **Intentionally blank রাখা Truck/Date** → error না, simply skip, pending
+      list-এই থেকে যাবে — প্রতিটা row-এ দুটো field ভরাই বাধ্যতামূলক নয় একবারে।
+    - **Post-upload Review Grid:** ERP Dense Grid (excel navigation+filter) — SKU আর
+      Storage Location-ও এখানে দেখাবে।
+    - **একই FO-তে multiple SKU/row** → Truck Number/Dispatch Date যেকোনো একটা row-এ
+      change করলে, সেই FO-র বাকি সব row-এও propagate হয়ে যাবে (এগুলো তো একই physical
+      dispatch event)।
+    - **একই stock-check পুনরাবৃত্তি** (point ১৮-এর mechanism) এই পর্যায়েও হবে — insufficient
+      row remove করলে DO cancel হয় না, পরের বার pending-এ থাকবে। সব clear হলে **Post** →
+      সেই **Dispatch Date-এই PGI post** হয়ে যায়।
+
+20. **Invoice-vs-PGI handler architecture — split প্রয়োজন (confirm হয়েছে):**
+    - VDC-এর জন্য যতক্ষণ Truck Number+Dispatch Date দিয়ে post না হচ্ছে, **stock_ledger-এ
+      কোনো entry পড়বে না** — Invoice তৈরি হয়ে যাবে, DO status এগিয়ে যাবে, কিন্তু physical
+      stock সিস্টেমে move করেনি।
+    - তাই existing §113.15-এর `createPgiInvoiceHandler` (আজ RM/PM/INT-এর জন্য **একসাথে**
+      Invoice তৈরি + P601 posting করে, atomic) VDC-এর জন্য **দুই ভাগে split করতে হবে**:
+      - **Invoice-creation ধাপ** (SO02 Bulk Post, VDC row) → Invoice তৈরি, stock_ledger
+        touch হয় না।
+      - **PGI-posting ধাপ** (Truck+Dispatch Date Upload-এর Post, পরে) → এখানেই আসল P601
+        posting, stock_ledger/stock_snapshot update, reservation resolve।
+    - **DC-এর জন্য existing atomic pattern অপরিবর্তিত** (Invoice+PGI একসাথে, একই handler)।
+
+21. **Cancel cascade + re-upload readiness (confirm হয়েছে):**
+    - **PGI cancel হলে Invoice-ও cancel** হয়ে যাবে — existing DO-cancel flow-এর মতোই
+      consistent pattern (pre-PGI cancel = reservation release, post-PGI cancel =
+      reversal posting — §113.15-এর `cancelDeliveryOrderHandler`/
+      `reverseSalesInvoiceHandler`-এর মতো same shape)।
+    - **যতক্ষণ parent SO cancel না হচ্ছে**, সেই FO/line **প্রতিটা Excel upload-এর জন্যই
+      আবার ready/available** থাকবে — DO/Invoice/PGI cancel হলেও সেই FO permanently
+      block হয়ে যাবে না, আবার re-process করা যাবে।
+    - **🔵 Deferred, future session-এ design হবে:** Invoice cancel-এর জন্য একটা "**Cancel
+      with CN (Credit Note)**" mechanism লাগবে — এখন শুধু note করে রাখা হলো, design এখনই
+      করা হয়নি।
+
 **এখনো খোলা (পরের point-এ আলোচনা চলবে):**
 - FO Number আসলে কোথায় capture/store হবে (নতুন column? কোন table — SO line-level না
   DO-level?), আর SO Map UI-তে কীভাবে ঢোকানো হবে।
@@ -724,5 +796,6 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
 - Customer+Site+Transporter resolution mechanism (point ৯, ১৪) এখনো শুধু
   **conversation-level confirm** — কোনো backend/frontend implementation শুরু হয়নি, আর
   document হিসেবেও formally LOCKED ঘোষণা করা হয়নি।
-- পরের point: Truck Number + Dispatch Date-এর own bulk-entry/trigger mechanism — আলোচনা
-  শুরু হচ্ছে।
+- Invoice Cancel-এর "Cancel with CN" mechanism (point ২১) — design বাকি, future session।
+- "Urgent Process PO" mechanism-এর সাথে point ১৯-এর RPC rule-এর সাদৃশ্য দাবি করা হয়েছে
+  কিন্তু এখনো code-এ independently verify করা হয়নি।
