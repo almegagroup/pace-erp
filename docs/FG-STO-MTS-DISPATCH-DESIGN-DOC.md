@@ -624,14 +624,55 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       এটা soft warning না, hard validation (নিচের "partial consumption tracking" open item
       এটা দিয়েই resolve হয়ে গেছে)।
 
+13. **DO + Invoicing + PGI header fields — business rule (confirm হয়েছে):**
+    - **Transporter, LR Number, Invoice Number, Truck Number — DC আর VDC দুটোতেই DO
+      create/Invoice post/PGI-এর পরেও change করা যাবে** (header-level edit option লাগবে,
+      live code-এ ইতিমধ্যে existing `PROC_DO_EDIT` screen আছে — এটা extend করতে হবে)।
+    - **VDC (DD):** DO+Invoice তৈরির সময় Transporter+LR Number জানা থাকে, কিন্তু **Truck
+      Number তখনো দেওয়া হয় না** — truck physically এলে Truck Number + Dispatch Date দেওয়া
+      হয়, **সেই date-এই PGI post হয়** (এটাই আগের "truck এলো" trigger mechanism-এর উত্তর)।
+    - **DC:** Invoice date আর PGI date same/atomic — existing §113.15 design অপরিবর্তিত।
+    - **PGI post হওয়ার পূর্ণ শর্ত (VDC):** Transporter + LR Number + LR Date + Truck Number +
+      Dispatch Date — এই **পাঁচটাই** পূর্ণ হতে হবে, শুধু Dispatch Date একা দেখেই PGI post হবে
+      না।
+
+14. **Bulk DO Upload — SO03 (Delivery Order list)-এ button, দুই dispatch-type-ই একসাথে
+    সামলায়:**
+    - **একটাই template**, একটা column (FO/SO Number) দুই রকম value নিতে পারে:
+      - **VDC row-এ সবসময় FO Number** — SO Map থেকে আগেই resolve হওয়া SO/Customer/
+        Ship-To/SKU/Qty এখান থেকেই টানবে।
+      - **DC row-এ SO Number** — DC-তে আলাদা Customer/Site resolve লাগে না, কারণ **DC নিজেই
+        Bill-To/Ship-To** (সেই depot company নিজেই); সরাসরি SO resolve করবে।
+      - Upload-এর পরে system যদি দেখে mismatch হয়েছে (যেমন VDC-এর SO Number ভুলে FO
+        Number-এর জায়গায় বসানো হয়েছে, বা উল্টো) → সেই row **skip**, error দেখিয়ে আবার upload
+        করতে বলবে।
+    - **Template columns (সবগুলোর জন্য common):** FO/SO Number, DO Date, Transporter, LR
+      Number, LR Date, SKU, Pack Qty, Tally Invoice Number, Tally Invoice Date, Inbound
+      Number, Truck Number, Dispatch Date।
+    - **Field split — কে কোথায় ব্যবহার হবে:**
+      - **DO নিজের জন্য:** FO/SO Number (resolve), DO Date, Transporter (resolve), LR
+        Number, LR Date, SKU, Pack Qty।
+      - **DO page-এ লাগে না, কিন্তু preserve হবে SO02 (PGI+Invoice)-এর জন্য:** Tally Invoice
+        Number, Tally Invoice Date, Inbound Number, Truck Number, Dispatch Date — এখনই
+        capture হবে, পরে SO02-তে গেলে prefilled পাওয়া যাবে।
+      - **Truck Number/Dispatch Date independently optional** — বাস্তব data-তে (Asian-এর
+        Excel-এ verify করা) অনেক row-এ Truck Number আছে কিন্তু Date নেই — upload-এর সময় Date
+        blank থাকলে blank-ই থাকবে, Truck Number থাকলে সেটা preserve হবে, একটা থাকলে
+        অন্যটার জন্য wait করতে হবে না।
+    - **Review grid:** একটা **"DD Flagged" (Yes/No)** column দেখাবে প্রতিটা row আসলে VDC/DD
+      নাকি DC-type।
+    - **Transporter resolution** — Customer/Site-এর মতোই পূর্ণ mechanism: existing
+      Transporter Master-এর বিরুদ্ধে name-similarity match, single/ambiguous
+      (Choose-from-N)/no-match (Create-New drawer) — manual text বসালে সরাসরি accept হবে
+      না।
+
 **এখনো খোলা (পরের point-এ আলোচনা চলবে):**
 - FO Number আসলে কোথায় capture/store হবে (নতুন column? কোন table — SO line-level না
   DO-level?), আর SO Map UI-তে কীভাবে ঢোকানো হবে।
-- VDC-এর Deferred PGI-এর জন্য "truck এলো" confirm করার UI/trigger mechanism কী হবে (§3.4-এর
-  Powder Advance Billing-এর "Deferred PGI trigger (Vehicle Number+Date, বা আলাদা button)"
-  open item-এর সাথে সরাসরি যুক্ত, একই প্রশ্ন দুই জায়গায়)।
-- Tally Excel-এর বাকি column-গুলোর (Vehicle No., Transporter, Port/Destination ইত্যাদি)
-  PACE-এ কোথায় bosbe সেটা এখনো আলোচনা হয়নি।
-- Customer+Site resolution mechanism (point ৯) এখনো শুধু **conversation-level confirm** —
-  কোনো backend/frontend implementation শুরু হয়নি, আর document হিসেবেও formally LOCKED ঘোষণা
-  করা হয়নি।
+- Tally Excel-এর বাকি column-গুলোর (Port/Destination ইত্যাদি) PACE-এ কোথায় bosbe সেটা এখনো
+  আলোচনা হয়নি।
+- Customer+Site+Transporter resolution mechanism (point ৯, ১৪) এখনো শুধু
+  **conversation-level confirm** — কোনো backend/frontend implementation শুরু হয়নি, আর
+  document হিসেবেও formally LOCKED ঘোষণা করা হয়নি।
+- পরের point: Truck Number + Dispatch Date-এর own bulk-entry/trigger mechanism (SO02/PGI
+  পর্যায়ে) — আলোচনা শুরু হচ্ছে।
