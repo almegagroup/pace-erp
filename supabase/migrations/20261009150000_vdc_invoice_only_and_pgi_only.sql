@@ -1,7 +1,7 @@
 -- VDC Bulk Dispatch: invoice now; PGI is deliberately deferred until the
 -- truck and dispatch date are confirmed. This is separate from, and never
 -- modifies, the existing atomic PGI+Invoice transaction used by DC/RM/PM/INT.
-CREATE OR REPLACE FUNCTION erp_procurement.create_vdc_invoice_only_atomic(p_groups jsonb)
+CREATE OR REPLACE FUNCTION erp_procurement."create_vdc_invoice_only_atomic"(p_groups jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -87,12 +87,15 @@ BEGIN
       NULLIF(dr->>'standard_qty', '')::numeric, NULLIF(dr->>'actual_qty', '')::numeric,
       NULLIF(dr->>'ap_approved_qty', '')::numeric, COALESCE((dr->>'is_asian_billed')::boolean, true), (v_inv->>'created_by')::uuid
     FROM jsonb_array_elements(COALESCE(v_group->'dispatch_reco_lines', '[]'::jsonb)) AS dr;
+    UPDATE erp_procurement.delivery_challan
+    SET status = 'INVOICED'
+    WHERE id = v_dc_id;
+
     v_results := v_results || jsonb_build_array(jsonb_build_object('invoice_id', v_invoice_id, 'invoice_number', v_invoice_number));
   END LOOP;
-  UPDATE erp_procurement.delivery_challan SET status = 'INVOICED' WHERE id = v_dc_id;
   RETURN v_results;
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION erp_procurement.create_vdc_invoice_only_atomic(jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_procurement.create_vdc_invoice_only_atomic(jsonb) TO service_role;
+REVOKE ALL ON FUNCTION erp_procurement."create_vdc_invoice_only_atomic"(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION erp_procurement."create_vdc_invoice_only_atomic"(jsonb) TO service_role;
