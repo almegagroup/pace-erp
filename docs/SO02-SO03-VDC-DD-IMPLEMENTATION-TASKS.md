@@ -80,17 +80,32 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   migration this phase; each new migration lands with zero added drift (the 4
   pre-existing drifted rows from earlier sessions are unchanged/untouched).
 
-## Phase 1 — Customer + Site + Transporter bulk resolution (SO Map Excel Upload)
+## Phase 1 — Customer + Site bulk resolution (SO Map Excel Upload)
 
-- [ ] **T6.** Backend: bulk-resolve endpoint(s) for the SO Map Excel template rows
+> **Correction (2026-10-09):** T7 (Transporter bulk-resolve) was mis-filed
+> here — §6's SO Map template (point 8) has no Transporter column at all;
+> Transporter only appears in the Bulk DO Upload template (point 14). Moved
+> to Phase 2.
+
+- [x] **T6.** Backend: bulk-resolve endpoint(s) for the SO Map Excel template rows
   (GST-based resolve/auto-create, name-based Choose-from-N/Create-New, VDC-scoped
   search) — driving **existing** `createCustomerHandler`/`createCustomerAddressHandler`
   (never duplicating their logic), ending in calls to **existing**
   `saveSoMapGroupHandler(source: "address")` per resolved row/group.
-- [ ] **T7.** Backend: Transporter bulk-resolve (reuse existing `/procurement/transporters`
-  search; add Choose-from-N/Create-New semantics matching Customer/Site pattern).
-- [ ] **T8.** Backend: upload validation (duplicate key, changed-qty Confirm/Remove,
+  **2026-10-09 ✅** `previewSoMapBulkUploadHandler` built (see Progress Log);
+  the "save" step needs no new endpoint at all — the frontend calls the
+  now-extended `saveSoMapGroupHandler` directly per resolved row, source=
+  "address", with `external_fo_number` + the resolved `customer_address_id`.
+- [x] **T8.** Backend: upload validation (duplicate key, changed-qty Confirm/Remove,
   out-of-SO SKU highlight, Qty-vs-balance hard check) per §6 point 12.
+  **2026-10-09 ✅** all four implemented in `previewSoMapBulkUploadHandler`:
+  duplicate key = (so_id, external_fo_number, so_line_id) compared against
+  existing `sales_order_map_allocation.allocated_qty` for that exact
+  (group, line) → `duplicate_status: NONE/UNCHANGED/CHANGED_QTY` +
+  `previous_qty`; out-of-SO SKU → `sku_resolution.status: NOT_FOUND` +
+  `candidates` (this SO's own lines only); qty-vs-balance excludes this
+  row's own prior allocation from the "already allocated by others" sum so
+  a same-qty or corrected re-upload is never compared against itself.
 - [ ] **T9.** Frontend: "Bulk DD SO Map" button + template download inside the
   **existing** `SO01MapPage.jsx` (additive tab content, not a new page).
 - [ ] **T10.** Frontend: Review Grid (SO Number/SKU resolved, DD Flagged column,

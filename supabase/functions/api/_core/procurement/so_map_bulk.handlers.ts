@@ -159,7 +159,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       soIds.length
         ? fetchInChunks<JsonRecord>(soIds, (chunk) =>
             serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
-              .select("so_id, so_line_id, allocated_qty").in("so_id", chunk).eq("status", "ACTIVE"))
+              .select("so_id, so_line_id, map_group_id, allocated_qty").in("so_id", chunk).eq("status", "ACTIVE"))
         : Promise.resolve([] as JsonRecord[]),
     ]);
     const lineRows = lineRowsResult as JsonRecord[];
@@ -167,9 +167,18 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       (existingGroupsResult as JsonRecord[]).map((row) => [`${toTrimmedString(row.so_id)}::${toTrimmedString(row.external_fo_number)}`, row]),
     );
     const allocatedByLine = new Map<string, number>();
+    // §6 point 12 — the duplicate-vs-changed-qty compare is per (group, SO
+    // line): the same FO can carry several SKUs, each with its own
+    // previously-allocated qty to compare the re-upload against.
+    const allocatedQtyByGroupAndLine = new Map<string, number>();
     for (const alloc of existingAllocationsResult as JsonRecord[]) {
       const lineId = toTrimmedString(alloc.so_line_id);
       allocatedByLine.set(lineId, (allocatedByLine.get(lineId) ?? 0) + Number(alloc.allocated_qty ?? 0));
+      const groupId = toTrimmedString(alloc.map_group_id);
+      if (groupId) {
+        const key = `${groupId}::${lineId}`;
+        allocatedQtyByGroupAndLine.set(key, (allocatedQtyByGroupAndLine.get(key) ?? 0) + Number(alloc.allocated_qty ?? 0));
+      }
     }
 
     const materialIds = [...new Set(lineRows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
@@ -227,11 +236,29 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         return { so_line_id: line.id, material_id: line.material_id, display: material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : toTrimmedString(line.material_id) };
       });
 
+      // §6 point 12 duplicate/changed-qty compare — only meaningful when
+      // this exact (FO group, SO line/SKU) combination was already
+      // allocated before; a new SKU added to an already-existing FO group
+      // is not a duplicate at all, just another line under that same FO.
+      let duplicateStatus: "NONE" | "UNCHANGED" | "CHANGED_QTY" = "NONE";
+      let previousQty: number | null = null;
       let qtyStatus: "OK" | "EXCEEDS_BALANCE" = "OK";
       if (matchedLine) {
         const lineTotal = Number(matchedLine.base_qty ?? matchedLine.quantity ?? 0);
-        const alreadyAllocated = allocatedByLine.get(toTrimmedString(matchedLine.id)) ?? 0;
-        if (alreadyAllocated + Number(row.pack_qty ?? 0) > lineTotal + QTY_TOL) qtyStatus = "EXCEEDS_BALANCE";
+        const lineId = toTrimmedString(matchedLine.id);
+        const totalAlreadyAllocated = allocatedByLine.get(lineId) ?? 0;
+        const existingSameGroupQty = existingGroup
+          ? allocatedQtyByGroupAndLine.get(`${toTrimmedString(existingGroup.id)}::${lineId}`) ?? 0
+          : 0;
+        if (existingSameGroupQty > 0) {
+          previousQty = existingSameGroupQty;
+          duplicateStatus = Math.abs(existingSameGroupQty - Number(row.pack_qty ?? 0)) <= QTY_TOL ? "UNCHANGED" : "CHANGED_QTY";
+        }
+        // Balance check excludes this row's own prior allocation (if any) so
+        // a same-qty or corrected re-upload of the SAME group+line is never
+        // compared against itself.
+        const allocatedByOthers = totalAlreadyAllocated - existingSameGroupQty;
+        if (allocatedByOthers + Number(row.pack_qty ?? 0) > lineTotal + QTY_TOL) qtyStatus = "EXCEEDS_BALANCE";
       }
 
       // Customer resolve.
@@ -269,7 +296,8 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         so_number: soNumber,
         vdc_id: vdcId,
         existing_group_id: existingGroup ? toTrimmedString(existingGroup.id) : null,
-        is_duplicate: Boolean(existingGroup),
+        duplicate_status: duplicateStatus,
+        previous_qty: previousQty,
         sku_resolution: matchedLine
           ? { status: "MATCHED", so_line_id: matchedLine.id, material_id: matchedLine.material_id }
           : { status: "NOT_FOUND", candidates: skuCandidates },
