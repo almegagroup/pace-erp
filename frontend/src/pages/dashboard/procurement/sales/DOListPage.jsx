@@ -17,7 +17,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
-import { openScreen } from "../../../../navigation/screenStackEngine.js";
+import { getActiveScreenContext, openScreen, updateActiveScreenContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
@@ -63,7 +63,8 @@ export default function DOListPage() {
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  const [restoredBulkUploadDraft] = useState(() => getActiveScreenContext()?.bulkDoUploadDraft ?? null);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(Boolean(restoredBulkUploadDraft));
   const [editTransporterOpen, setEditTransporterOpen] = useState(false);
   const [vdcTruckDispatchOpen, setVdcTruckDispatchOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -120,6 +121,16 @@ export default function DOListPage() {
       columns: DO_EXPORT_COLUMNS,
       rows,
     });
+  }
+
+  function closeBulkUpload() {
+    updateActiveScreenContext({ bulkDoUploadDraft: null });
+    setBulkUploadOpen(false);
+  }
+
+  function openTransporterMasterForBulkUpload(draft) {
+    updateActiveScreenContext({ bulkDoUploadDraft: draft });
+    openScreen(OPERATION_SCREENS.PROC_TRANSPORTER_MASTER.screen_code);
   }
 
   return (
@@ -213,7 +224,10 @@ export default function DOListPage() {
     {bulkUploadOpen ? (
       <BulkDoUploadDrawer
         companyId={effectiveCompanyId}
-        onClose={() => setBulkUploadOpen(false)}
+        initialDraft={restoredBulkUploadDraft}
+        onClose={closeBulkUpload}
+        onDraftRestored={() => updateActiveScreenContext({ bulkDoUploadDraft: null })}
+        onOpenTransporterMaster={openTransporterMasterForBulkUpload}
         onSaved={() => void doQuery.refetch()}
       />
     ) : null}

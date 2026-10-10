@@ -44,6 +44,13 @@ function getSoDestinationDepotId(so: JsonRecord): string {
     : toTrimmedString(so.bill_to_vdc_id);
 }
 
+// VDC/DD's Sales/Dispatch FO is not Production Plan Feed's FO.  Keep the
+// uploaded value immutable for audit and let a later revision become the
+// effective operational number everywhere it is displayed or resolved.
+function effectiveExternalFoNumber(group: JsonRecord | undefined): string {
+  return toTrimmedString(group?.revised_external_fo_number) || toTrimmedString(group?.external_fo_number);
+}
+
 // An FO is a customer/address commitment. It can be offered against an SO only
 // when that address resolves to the SO's already-resolved VDC/DC and Parent
 // Company. This prevents a same-company FO from leaking across destinations.
@@ -302,6 +309,13 @@ export async function getSoMapStatusHandler(req: Request, ctx: ProcurementHandle
       return soMapErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
     const allocations = await fetchActiveAllocationsForSo(soId);
+    const mapGroupIds = [...new Set(allocations.map((row) => toTrimmedString(row.map_group_id)).filter(Boolean))];
+    const { data: mapGroupRows, error: mapGroupError } = mapGroupIds.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+          .select("id, external_fo_number, revised_external_fo_number").in("id", mapGroupIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (mapGroupError) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_LOOKUP_FAILED", 500, "Unable to load mapped FO numbers.");
+    const mapGroupById = new Map(((mapGroupRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
     const { data: materialRows, error: materialError } = materialIds.length
       ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds)
@@ -321,17 +335,24 @@ export async function getSoMapStatusHandler(req: Request, ctx: ProcurementHandle
     const mappedAddressById = new Map(((mappedAddressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const mappedDepotById = new Map(((mappedDepotRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const enrichedAllocations = allocations.map((allocation) => {
+      const mapGroup = mapGroupById.get(toTrimmedString(allocation.map_group_id));
+      const externalFoNumber = effectiveExternalFoNumber(mapGroup);
+      const externalFoFields = mapGroup ? {
+        external_fo_number: toTrimmedString(mapGroup.external_fo_number) || null,
+        revised_external_fo_number: toTrimmedString(mapGroup.revised_external_fo_number) || null,
+        effective_external_fo_number: externalFoNumber || null,
+      } : {};
       if (toTrimmedString(allocation.fo_id)) {
         const fo = mappedFoById.get(toTrimmedString(allocation.fo_id));
-        return { ...allocation, source_display: fo ? `FO ${toTrimmedString(fo.fo_number)} - ${toTrimmedString(fo.party_name)}` : "FO" };
+        return { ...allocation, ...externalFoFields, source_display: fo ? `FO ${toTrimmedString(fo.fo_number)} - ${toTrimmedString(fo.party_name)}` : "FO" };
       }
       if (toTrimmedString(allocation.depot_code_id)) {
         const depot = mappedDepotById.get(toTrimmedString(allocation.depot_code_id));
-        return { ...allocation, source_display: depot ? `Fixed Depot ${toTrimmedString(depot.code)} - ${toTrimmedString(depot.description)}` : "Fixed Depot" };
+        return { ...allocation, ...externalFoFields, source_display: depot ? `Fixed Depot ${toTrimmedString(depot.code)} - ${toTrimmedString(depot.description)}` : "Fixed Depot" };
       }
       const address = mappedAddressById.get(toTrimmedString(allocation.customer_address_id));
       const addressLabel = address ? [address.site_name, address.address_line, address.town, address.state].map(toTrimmedString).filter(Boolean).join(", ") : "Customer address";
-      return { ...allocation, source_display: addressLabel };
+      return { ...allocation, ...externalFoFields, source_display: addressLabel };
     });
     const mappedByLine = new Map<string, number>();
     for (const alloc of allocations) {
@@ -356,6 +377,157 @@ export async function getSoMapStatusHandler(req: Request, ctx: ProcurementHandle
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_MAP_STATUS_FAILED";
     return soMapErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+// One read row per VDC/DD Sales/Dispatch FO group.  All names and addresses
+// are resolved server-side so the ERP grid never exposes foreign-key UUIDs.
+export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const soId = getIdFromPath(req);
+    if (!soId) return soMapErrorResponse(req, ctx, "SO_MAP_ID_MISSING", 400, "SO id required.");
+    const { so, lines } = await fetchSoWithLines(soId);
+    await assertCompanyScope(ctx, toTrimmedString(so.company_id));
+
+    const { data: groupRows, error: groupError } = await serviceRoleClient.schema("erp_procurement")
+      .from("sales_order_map_group")
+      .select("id, customer_address_id, external_fo_number, revised_external_fo_number, created_at, status")
+      .eq("so_id", soId).eq("status", "ACTIVE").not("external_fo_number", "is", null)
+      .order("created_at", { ascending: true });
+    if (groupError) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_LOOKUP_FAILED", 500, "Unable to load Sales/Dispatch FOs.");
+    const groups = (groupRows ?? []) as JsonRecord[];
+    const groupIds = groups.map((group) => toTrimmedString(group.id));
+    const { data: allocationRows, error: allocationError } = groupIds.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+          .select("map_group_id, so_line_id, allocated_qty").in("map_group_id", groupIds).eq("status", "ACTIVE")
+      : { data: [] as JsonRecord[], error: null };
+    if (allocationError) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load Sales/Dispatch FO quantities.");
+
+    const addressIds = [...new Set(groups.map((group) => toTrimmedString(group.customer_address_id)).filter(Boolean))];
+    const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+    const companyIds = [...new Set([toTrimmedString(so.company_id), toTrimmedString(so.bill_to_parent_company_id)].filter(Boolean))];
+    const [{ data: addressRows, error: addressError }, { data: materialRows, error: materialError }, { data: companyRows, error: companyError }] = await Promise.all([
+      addressIds.length ? serviceRoleClient.schema("erp_master").from("customer_address").select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", addressIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      materialIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name").in("id", materialIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, gst_number, state_name, full_address, pin_code").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    ]);
+    if (addressError || materialError || companyError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_DISPLAY_LOOKUP_FAILED", 500, "Unable to resolve Sales/Dispatch FO display details.");
+    const addressById = new Map(((addressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const materialById = new Map(((materialRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const companyById = new Map(((companyRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const customerIds = [...new Set([...addressById.values()].map((address) => toTrimmedString(address.customer_id)).filter(Boolean))];
+    const { data: customerRows, error: customerError } = customerIds.length
+      ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name, gst_number, billing_address, billing_state").in("id", customerIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (customerError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_CUSTOMER_LOOKUP_FAILED", 500, "Unable to resolve Sales/Dispatch FO customer details.");
+    const customerById = new Map(((customerRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const lineById = new Map(lines.map((line) => [toTrimmedString(line.id), line]));
+    const allocationsByGroup = new Map<string, JsonRecord[]>();
+    for (const allocation of (allocationRows ?? []) as JsonRecord[]) {
+      const groupId = toTrimmedString(allocation.map_group_id);
+      if (!allocationsByGroup.has(groupId)) allocationsByGroup.set(groupId, []);
+      allocationsByGroup.get(groupId)!.push(allocation);
+    }
+    const company = companyById.get(toTrimmedString(so.company_id));
+    const parentCompany = companyById.get(toTrimmedString(so.bill_to_parent_company_id));
+    const proportionate = (line: JsonRecord, allocation: JsonRecord, field: string): number => {
+      const baseQty = Number(line.base_qty ?? line.quantity ?? 0);
+      const ratio = baseQty > 0 ? Number(allocation.allocated_qty ?? 0) / baseQty : 0;
+      return Number(((Number(line[field] ?? 0) || 0) * ratio).toFixed(6));
+    };
+    // One grid row is one FO allocation/SKU, not an FO-level financial
+    // aggregate. This preserves the exact SO line's rate, tax rate and
+    // amount for the SKU the user is looking at.
+    const rows = groups.flatMap((group) => {
+      const groupAllocations = allocationsByGroup.get(toTrimmedString(group.id)) ?? [];
+      const groupAddress = addressById.get(toTrimmedString(group.customer_address_id));
+      const customer = groupAddress ? customerById.get(toTrimmedString(groupAddress.customer_id)) : undefined;
+      return groupAllocations.flatMap((allocation) => {
+        const line = lineById.get(toTrimmedString(allocation.so_line_id));
+        if (!line) return [];
+        const material = materialById.get(toTrimmedString(line.material_id));
+        const sku = toTrimmedString(material?.external_code) || toTrimmedString(material?.pace_code);
+        const description = toTrimmedString(material?.material_name) || toTrimmedString(line.manual_sku_name);
+        const allocationQty = Number(allocation.allocated_qty ?? 0);
+        const perPackQty = Number(line.per_pack_qty ?? 0);
+        const allocationPackQty = perPackQty > 0 ? allocationQty / perPackQty : allocationQty;
+        const lineGst = Number(line.gst_amount ?? 0) || (Number(line.cgst_amount ?? 0) + Number(line.sgst_amount ?? 0) + Number(line.igst_amount ?? 0));
+        const lineTotal = Number(line.total_value ?? 0);
+        const allocationRatio = Number(line.base_qty ?? line.quantity ?? 0) > 0
+          ? allocationQty / Number(line.base_qty ?? line.quantity ?? 0)
+          : 0;
+        return {
+        row_id: `${toTrimmedString(group.id)}::${toTrimmedString(allocation.so_line_id)}`,
+        map_group_id: group.id,
+        company_code: toTrimmedString(company?.company_code) || null,
+        company_name: toTrimmedString(company?.company_name) || null,
+        so_number: toTrimmedString(so.so_number), external_so_number: toTrimmedString(so.customer_po_number) || null,
+        external_so_date: toTrimmedString(so.customer_po_date) || null,
+        fo_number: toTrimmedString(group.external_fo_number), revised_fo_number: toTrimmedString(group.revised_external_fo_number) || null,
+        effective_fo_number: effectiveExternalFoNumber(group),
+        parent_company_code: toTrimmedString(parentCompany?.company_code) || null,
+        parent_company_name: toTrimmedString(parentCompany?.company_name) || null,
+        parent_company_gst: toTrimmedString(parentCompany?.gst_number) || null,
+        bill_to_name: toTrimmedString(so.bill_to_name) || null, bill_to_address: toTrimmedString(so.bill_to_address) || null,
+        bill_to_state: toTrimmedString(so.bill_to_state) || null, bill_to_gst: toTrimmedString(so.bill_to_gst_number) || null,
+        ship_to_name: toTrimmedString(so.ship_to_name) || null, ship_to_address: toTrimmedString(so.ship_to_address) || null,
+        ship_to_state: toTrimmedString(so.ship_to_state) || null, ship_to_gst: toTrimmedString(so.ship_to_gst_number) || null,
+        customer_code: toTrimmedString(customer?.customer_code) || null, customer_name: toTrimmedString(customer?.customer_name) || null,
+        customer_gst: toTrimmedString(customer?.gst_number) || null, customer_billing_address: toTrimmedString(customer?.billing_address) || null,
+        customer_billing_state: toTrimmedString(customer?.billing_state) || null,
+        site_name: toTrimmedString(groupAddress?.site_name) || null, site_address: toTrimmedString(groupAddress?.address_line) || null,
+        site_town: toTrimmedString(groupAddress?.town) || null, site_state: toTrimmedString(groupAddress?.state) || null, site_pin_code: toTrimmedString(groupAddress?.pin_code) || null,
+        sku: sku || null, material_description: description || null,
+        pack_qty: Number(allocationPackQty.toFixed(6)), base_qty: Number(allocationQty.toFixed(6)), rate: Number(Number(line.net_rate ?? 0).toFixed(6)), gst_rate: Number(Number(line.gst_rate ?? 0).toFixed(6)),
+        taxable_amount: Number(((lineTotal - lineGst) * allocationRatio).toFixed(6)), cgst_amount: proportionate(line, allocation, "cgst_amount"), sgst_amount: proportionate(line, allocation, "sgst_amount"),
+        igst_amount: proportionate(line, allocation, "igst_amount"), gst_amount: Number((lineGst * allocationRatio).toFixed(6)), total_amount: proportionate(line, allocation, "total_value"),
+        mapped_at: toTrimmedString(group.created_at) || null,
+        };
+      });
+    });
+    return okResponse(rows, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_MAP_MTS_FO_LIST_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
+    return soMapErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+export async function reviseMtsFoNumberHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const groupId = getGroupIdFromPath(req);
+    const body = await parseBody(req);
+    const revisedFoNumber = toTrimmedString(body.revised_fo_number);
+    if (!groupId || !revisedFoNumber) return soMapErrorResponse(req, ctx, "SO_MAP_REVISED_FO_REQUIRED", 400, "A revised FO Number is required.");
+    const { data: group, error: groupError } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      .select("id, so_id, external_fo_number, revised_external_fo_number, status, so:so_id(company_id)").eq("id", groupId).maybeSingle();
+    if (groupError || !group) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_NOT_FOUND", 404, "Sales/Dispatch FO mapping was not found.");
+    const groupRecord = group as JsonRecord;
+    const companyId = toTrimmedString((groupRecord.so as JsonRecord | null)?.company_id);
+    await assertCompanyScope(ctx, companyId);
+    if (!(await canMaintainSoMap(ctx, companyId))) return soMapErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have SO Map edit access at this company.");
+    if (toUpperTrimmedString(groupRecord.status) !== "ACTIVE" || !toTrimmedString(groupRecord.external_fo_number)) return soMapErrorResponse(req, ctx, "SO_MAP_MTS_FO_NOT_ACTIVE", 409, "Only an active Sales/Dispatch FO mapping can be revised.");
+    // Avoid embedding user-entered FO text in PostgREST's `.or()` grammar.
+    // Query the two immutable columns independently so a valid FO containing
+    // punctuation cannot bypass or corrupt the duplicate check.
+    const [originalFoResult, revisedFoResult] = await Promise.all([
+      serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+        .select("id").eq("so_id", groupRecord.so_id).neq("id", groupId).eq("external_fo_number", revisedFoNumber).limit(1),
+      serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+        .select("id").eq("so_id", groupRecord.so_id).neq("id", groupId).eq("revised_external_fo_number", revisedFoNumber).limit(1),
+    ]);
+    if (originalFoResult.error || revisedFoResult.error) return soMapErrorResponse(req, ctx, "SO_MAP_REVISED_FO_CHECK_FAILED", 500, "Unable to validate revised FO Number.");
+    if ((originalFoResult.data ?? []).length > 0 || (revisedFoResult.data ?? []).length > 0) return soMapErrorResponse(req, ctx, "SO_MAP_REVISED_FO_DUPLICATE", 409, "That FO Number is already used by another mapping on this SO.");
+    const { data: updated, error: updateError } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      .update({ revised_external_fo_number: revisedFoNumber, last_updated_by: ctx.auth_user_id, last_updated_at: new Date().toISOString() })
+      .eq("id", groupId).select("id, external_fo_number, revised_external_fo_number").single();
+    if (updateError || !updated) return soMapErrorResponse(req, ctx, "SO_MAP_REVISED_FO_UPDATE_FAILED", 500, "Unable to revise FO Number.");
+    const updatedRecord = updated as JsonRecord;
+    return okResponse({ ...updatedRecord, effective_fo_number: effectiveExternalFoNumber(updatedRecord) }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_MAP_REVISED_FO_UPDATE_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
+    return soMapErrorResponse(req, ctx, code, status, code);
   }
 }
 
@@ -796,7 +968,22 @@ export async function saveSoMapGroupHandler(req: Request, ctx: ProcurementHandle
     // distinct from plan_feed.fo_number). Purely additive: optional, absent
     // for every existing caller (manual SO01 Map UI never sends it).
     const externalFoNumber = toTrimmedString(body.external_fo_number);
-    if (externalFoNumber) groupPayload.external_fo_number = externalFoNumber;
+    if (externalFoNumber) {
+      // RPC save matches the immutable column, while the bulk UI accepts the
+      // effective (revised) FO. Translate a revised input back to its original
+      // group key before saving so the atomic RPC updates that same group.
+      const { data: revisedGroup, error: revisedGroupError } = await serviceRoleClient.schema("erp_procurement")
+        .from("sales_order_map_group")
+        .select("external_fo_number")
+        .eq("so_id", soId)
+        .eq("status", "ACTIVE")
+        .eq("revised_external_fo_number", externalFoNumber)
+        .maybeSingle();
+      if (revisedGroupError) return soMapErrorResponse(req, ctx, "SO_MAP_REVISED_FO_LOOKUP_FAILED", 500, "Unable to resolve the revised FO Number.");
+      groupPayload.external_fo_number = revisedGroup
+        ? toTrimmedString((revisedGroup as JsonRecord).external_fo_number)
+        : externalFoNumber;
+    }
     if (!Object.values(groupPayload).some((value) => value === "")) {
       const allocations: JsonRecord[] = [];
       for (const item of items) {

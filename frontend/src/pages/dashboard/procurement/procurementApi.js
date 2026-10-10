@@ -1129,6 +1129,9 @@ export function listSoForMap(params) {
 export function getSoMapStatus(soId) {
   return fetchProcurement("GET", `/api/procurement/so-map/${encodeURIComponent(soId)}/status`);
 }
+export function listMtsFoForSo(soId) {
+  return fetchProcurement("GET", `/api/procurement/so-map/${encodeURIComponent(soId)}/mts-fo-list`);
+}
 export function listFoOptionsForSo(soId) {
   return fetchProcurement("GET", "/api/procurement/so-map/fo-options", undefined, { so_id: soId });
 }
@@ -1154,6 +1157,9 @@ export function previewSoMapBulkUpload(data) {
 }
 export function releaseSoMapGroup(groupId) {
   return fetchProcurement("POST", `/api/procurement/so-map/groups/${encodeURIComponent(groupId)}/release`);
+}
+export function reviseMtsFoNumber(groupId, revisedFoNumber) {
+  return fetchProcurement("POST", `/api/procurement/so-map/groups/${encodeURIComponent(groupId)}/revise-fo`, { revised_fo_number: revisedFoNumber });
 }
 export function unmapSoAllocation(allocationId) {
   return fetchProcurement("POST", `/api/procurement/so-map/${encodeURIComponent(allocationId)}/unmap`);

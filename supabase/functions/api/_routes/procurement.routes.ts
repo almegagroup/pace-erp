@@ -402,6 +402,7 @@ import {
 } from "../_core/procurement/sales_return.handlers.ts";
 import {
   getSoMapStatusHandler,
+  listMtsFoForSoHandler,
   listCustomerAddressesForSoHandler,
   listFoOptionsForSoHandler,
   listSoForMapHandler,
@@ -410,6 +411,7 @@ import {
   mapSoLineToFoHandler,
   releaseLegacySoMapMappingHandler,
   releaseSoMapGroupHandler,
+  reviseMtsFoNumberHandler,
   saveSoMapGroupHandler,
   unmapSoAllocationHandler,
 } from "../_core/procurement/so_map.handlers.ts";
@@ -1526,12 +1528,18 @@ export async function dispatchProcurementRoutes(
   if (/^\/api\/procurement\/so-map\/[^/]+\/status$/.test(pathname) && req.method === "GET") {
     return await getSoMapStatusHandler(req, ctx);
   }
+  if (/^\/api\/procurement\/so-map\/[^/]+\/mts-fo-list$/.test(pathname) && req.method === "GET") {
+    return await listMtsFoForSoHandler(req, ctx);
+  }
 
   if (/^\/api\/procurement\/so-map\/[^/]+\/unmap$/.test(pathname) && req.method === "POST") {
     return await unmapSoAllocationHandler(req, ctx);
   }
   if (/^\/api\/procurement\/so-map\/groups\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
     return await releaseSoMapGroupHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/so-map\/groups\/[^/]+\/revise-fo$/.test(pathname) && req.method === "POST") {
+    return await reviseMtsFoNumberHandler(req, ctx);
   }
   if (/^\/api\/procurement\/so-map\/[^/]+\/release$/.test(pathname) && req.method === "POST") {
     return await releaseLegacySoMapMappingHandler(req, ctx);
