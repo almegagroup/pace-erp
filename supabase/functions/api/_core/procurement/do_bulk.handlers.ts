@@ -69,7 +69,11 @@ function isIsoDate(value: string): boolean {
 function normalizeInputDate(value: unknown): string {
   const text = toTrimmedString(value);
   if (!text || isIsoDate(text)) return text;
-  const displayMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  // Some source workbooks lose the second display separator (`03/102026`
+  // for `03/10/2026`). Treat only this constrained day/month/year shape as
+  // a date, then validate its calendar value before accepting it.
+  const displayMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
+    || text.match(/^(\d{1,2})[/-](\d{1,2})(\d{4})$/);
   if (displayMatch) {
     const [, day, month, year] = displayMatch;
     const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
