@@ -1579,12 +1579,33 @@ export async function postOpeningStockDocumentHandler(
       );
     }
 
+    // A zero-stock row is an explicit, valid declaration that this material has
+    // no opening balance.  It must be retained on the document, but there is
+    // no inventory movement to create for it: post_stock_movement correctly
+    // rejects quantities <= 0.  Previously those rows were sent to the RPC,
+    // leaving a multi-line document partially posted when the first zero row
+    // appeared after valid lines.
+    const unpostedLines = lines.filter((line) => !line.posted_stock_document_id);
+    const invalidUnpostedLine = unpostedLines.find((line) => {
+      const quantity = Number(line.quantity);
+      return !Number.isFinite(quantity) || quantity < 0 || (quantity === 0 && line.is_zero_stock !== true);
+    });
+    if (invalidUnpostedLine) {
+      return openingStockErrorResponse(
+        req,
+        ctx,
+        "OPENING_STOCK_LINE_QUANTITY_INVALID",
+        400,
+        "Every unposted line must have a positive quantity, unless it is explicitly marked as zero stock.",
+      );
+    }
+    const linesToPost = unpostedLines.filter((line) => Number(line.quantity) > 0);
+
     // §Q1-2026-09-29 — extend the PID posting-block check here, checked before any line writes
     // (not after), same discipline as §8D's check-before-write fix for Process PO.
     const blockedCombo = await findFirstPhysicalInventoryBlock(
       toTrimmedString(document.company_id),
-      lines
-        .filter((line) => !line.posted_stock_document_id)
+      linesToPost
         .map((line) => ({
           materialId: toTrimmedString(line.material_id),
           storageLocationId: toTrimmedString(line.storage_location_id),
@@ -1614,10 +1635,7 @@ export async function postOpeningStockDocumentHandler(
     const isMtsOpeningDocument = toUpperTrimmedString(document.po_type) === "MTS";
 
     // DEPENDENT: each line posts opening stock and writes back its posting reference, so stock ledger order must remain stable.
-    for (const line of lines) {
-      if (line.posted_stock_document_id) {
-        continue;
-      }
+    for (const line of linesToPost) {
 
       const baseUomCode = await fetchMaterialBaseUom(String(line.material_id));
       const rpcResult = await serviceRoleClient
