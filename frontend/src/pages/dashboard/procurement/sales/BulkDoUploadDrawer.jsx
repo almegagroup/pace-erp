@@ -66,7 +66,11 @@ function toIsoDate(value) {
   // Asian Paints' source files commonly carry a display-formatted Excel date
   // (DD/MM/YYYY). The API correctly requires ISO, so normalize it at the
   // upload boundary rather than flagging an otherwise valid LR/DO date.
-  const match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  // A few source exports collapse the second separator, e.g. `03/102026`
+  // instead of `03/10/2026`. Keep this deliberately narrow: it is only a
+  // day + separator + month + four-digit-year date, never an identifier.
+  const match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/)
+    || text.match(/^(\d{1,2})[/-](\d{1,2})(\d{4})$/);
   if (!match) return text;
   const [, day, month, year] = match;
   const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
