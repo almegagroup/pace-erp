@@ -721,8 +721,10 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       → Dispatch Date।
     - প্রতিটা row-এ checkbox, উপরে **Bulk Post** button — mixed selection (VDC+DC একসাথে)
       handle করবে:
-      - **DD/VDC row** → শুধু **Invoice** post হবে (PGI deferred, Truck/Dispatch Date পরে
-        আসবে)।
+      - **DD/VDC row:** DO create কখনো PGI করে না। SO02-এ Truck Number + Dispatch Date
+        দুটোই থাকলে একই SO02 action-এ আগে **Invoice**, তারপর **PGI** post হবে। যেকোনো একটি
+        না থাকলে শুধু **Invoice-only** হবে; পরে Pending Truck + Dispatch Date page-এ দুটো
+        field পূরণ করে সেই page-এর **Post PGI** button-এ physical PGI হবে।
       - **DC row** → **PGI + Invoice দুটোই একসাথে** post হবে (atomic, §113.15 pattern)।
     - Posting হওয়ার পূর্বশর্ত (point ১৩-এর পাঁচটা field পূর্ণ) এখানেও প্রযোজ্য — অসম্পূর্ণ
       row Bulk Post দিয়ে post হবে না।
@@ -731,15 +733,13 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
     - **DC:** DO upload/create হওয়ার সাথে সাথেই সেই Storage Location+SKU-র বিরুদ্ধে
       **Blended stock check** (MTS batch-blind, §108 List A point ৮) + **reservation
       তৈরি** হয়ে যায়। DO cancel হলে reservation release হয়, আবার re-upload করা যায়।
-    - **VDC (DD):** Invoice-only posting-এ কোনো stock check/reservation হয় না (dispatch
-      তখনো confirmed না)। **Truck Number + Dispatch Date দেওয়ার মুহূর্তেই** (যেটা PGI-ও
-      trigger করে) stock check (location+SKU) হয়, **আর তখনই reservation তৈরি হয়** — DO
-      create হওয়ার সময় না। অর্থাৎ reservation-creation trigger = stock-check trigger =
-      Truck Number+Dispatch Date উভয়েই present।
-  **Clarification (2026-10-09):** যদি Bulk DO Upload-এর সময়েই DD row-তে Truck
-  Number এবং Dispatch Date দুটোই দেওয়া থাকে, সেই create event-এই reservation তৈরি
-  হবে। দুটির যেকোনো একটি blank থাকলে VDC DO তৈরি হবে reservation ছাড়া; পরে এই দুই
-  field সম্পূর্ণ হওয়ার PGI event-এই stock check + reservation record হবে।
+    - **VDC (DD):** DO create এবং Invoice-only posting-এ কোনো stock check/reservation হয়
+      না—Truck Number/Dispatch Date source Excel-এ আগেই থাকলেও সেগুলো কেবল header data
+      হিসেবে preserve হবে। Truck + Dispatch Date শুরুতেই থাকলে SO02-এর initial action-এ,
+      আর পরে দেওয়া হলে Pending Truck + Dispatch Date page-এর **Post PGI** action-এ, সেই
+      মুহূর্তে stock check (location+SKU), reservation এবং PGI হবে। অর্থাৎ
+      reservation-creation trigger = stock-check trigger = PGI trigger; DO create বা শুধু
+      header-update কখনোই না।
     - **Per-row sequential stock check:** একই SKU batch-এর একাধিক row-এ থাকতে পারে বলে
       check হয় **top-to-bottom cumulative** — row 1-এর SKU A-র জন্য net available check
       করে qty claim হয়, পরের কোনো row-এ সেই একই SKU A এলে net available থেকে আগের
@@ -755,9 +755,11 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       পরের-ধাপের upload প্রযোজ্যই না।
     - **"Truck and Dispatch Date Upload"** button → Template + Upload, দুই option।
     - **Template = system-generated PREFILLED export, ব্যবহারকারীর ভরা blank টেমপ্লেট না।**
-      এটা সেই সব FO-র list যাদের **Truck Number বা Dispatch Date-এর কোনো একটা (বা দুটোই)
-      এখনো blank/pending** — FO Number, Ship-To Address, Town, VDC Code prefilled, পাশে
-      Truck Number + Dispatch Date-এর blank জায়গা।
+      এটা সেই সব Invoice-only VDC FO-র list যাদের **physical PGI এখনো pending** —
+      Truck Number/Dispatch Date আগে Bulk DO source Excel-এ থাকলেও সেই captured value-দুটো
+      prefilled দেখাবে; blank থাকলে user এখানেই পূরণ করবে। FO Number, Ship-To Address,
+      Town, VDC Code-ও prefilled থাকবে। এই page-এর explicit **Post PGI** action ছাড়া
+      কোনো Invoice-only VDC FO-তে stock check, reservation বা PGI হবে না।
     - **Dispatch Date validation:** **LR Date ≤ Dispatch Date ≤ Today** (এখানে "DO Date"
       বললেও আসলে **LR Date**-এর সাথেই compare হয়) — Excel formula না, upload-পরবর্তী
       system check। Condition-এর বাইরে গেলে date change-এর option, resolve না হলে Save
@@ -777,9 +779,9 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
     - **একই FO-তে multiple SKU/row** → Truck Number/Dispatch Date যেকোনো একটা row-এ
       change করলে, সেই FO-র বাকি সব row-এও propagate হয়ে যাবে (এগুলো তো একই physical
       dispatch event)।
-    - **একই stock-check পুনরাবৃত্তি** (point ১৮-এর mechanism) এই পর্যায়েও হবে — insufficient
-      row remove করলে DO cancel হয় না, পরের বার pending-এ থাকবে। সব clear হলে **Post** →
-      সেই **Dispatch Date-এই PGI post** হয়ে যায়।
+    - এই page-এর **Post PGI**-তেই point ১৮-এর stock check, reservation এবং PGI হবে।
+      Insufficient row DO cancel করে না, পরের বার pending-এই থাকে। PGI হলে সেই
+      **Dispatch Date-এই** post হয়।
 
 20. **Invoice-vs-PGI handler architecture — নতুন additive endpoint, existing handler অপরিবর্তিত
     (business owner-এর explicit guardrail, 2026-10-09):**
@@ -798,8 +800,10 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       ব্যবহার করে যাবে), VDC-র জন্য **সম্পূর্ণ নতুন, আলাদা দুটো endpoint** বানাতে হবে:
       - **নতুন Invoice-only endpoint** (SO02 Bulk Post, VDC row) → Invoice তৈরি, stock_ledger
         touch করে না।
-      - **নতুন PGI-only endpoint** (Truck+Dispatch Date Upload-এর Post, পরে) → এখানেই আসল
-        P601 posting, stock_ledger/stock_snapshot update, reservation resolve।
+      - **নতুন PGI-only endpoint** (Pending Truck+Dispatch Date Upload-এর Post, পরে) →
+        এখানেই আসল P601 posting, stock_ledger/stock_snapshot update, reservation resolve।
+        Source Excel-এ Truck+Dispatch আগে থেকেই থাকলে SO02 এই একই PGI-only endpoint-কে
+        Invoice-only step-এর পরেই call করবে।
     - **DC** (ও RM/PM/INT) existing atomic `createPgiInvoiceHandler`-ই ব্যবহার করে, **কোনো
       পরিবর্তন ছাড়াই** (Truck Number+Dispatch Date point ১৪-র নিয়মে Bulk DO Upload-এর
       সময়েই mandatory, তাই এই handler call করার আগেই সব data present থাকে — handler-এর

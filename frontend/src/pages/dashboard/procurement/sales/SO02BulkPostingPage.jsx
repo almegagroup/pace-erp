@@ -18,7 +18,7 @@ export default function SO02BulkPostingPage() {
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const query = useQuery({ queryKey: ["so02-bulk-posting", effectiveCompanyId], queryFn: () => listBulkPostingQueue(effectiveCompanyId), enabled: Boolean(effectiveCompanyId) });
   const rows = useMemo(() => Array.isArray(query.data?.items) ? query.data.items : [], [query.data]);
-  const allIds = [...new Set(rows.map((row) => row.id).filter(Boolean))];
+  const allIds = [...new Set(rows.filter((row) => row.postable !== false).map((row) => row.id).filter(Boolean))];
   const displayNumber = (value) => (value === null || value === undefined || value === "" ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
   function toggle(id) { setSelected((current) => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; }); }
   async function post() {
@@ -48,8 +48,9 @@ export default function SO02BulkPostingPage() {
     filterSection={{ eyebrow: "Company", title: "Bulk-DO Upload records only", children: <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={(value) => { setCompanyId(value); setSelected(new Set()); }} label="Company" /> }}
     listSection={{ eyebrow: "Bulk PGI queue", title: `${allIds.length} delivery order${allIds.length === 1 ? "" : "s"}`, children: <ErpDenseGrid cellNavigate rows={rows} rowKey={(row) => `${row.id}-${row.line_number}`} emptyMessage={query.isLoading ? "Loading Bulk Posting queue..." : "No Bulk DO Upload records are pending."}
       columns={[
-        { key: "select", label: <input aria-label="Select all" type="checkbox" checked={allIds.length > 0 && allIds.every((id) => selected.has(id))} onChange={(event) => setSelected(event.target.checked ? new Set(allIds) : new Set())} />, width: "52px", render: (row) => <input aria-label={`Select ${row.dc_number}`} type="checkbox" checked={selected.has(row.id)} onChange={() => toggle(row.id)} /> },
+        { key: "select", label: <input aria-label="Select all" type="checkbox" checked={allIds.length > 0 && allIds.every((id) => selected.has(id))} onChange={(event) => setSelected(event.target.checked ? new Set(allIds) : new Set())} />, width: "52px", render: (row) => <input aria-label={`Select ${row.dc_number}`} type="checkbox" disabled={row.postable === false} checked={selected.has(row.id)} onChange={() => toggle(row.id)} /> },
         { key: "dd_flag", label: "DD Flag", width: "84px", render: (row) => row.dd_flag ? "YES" : "NO" },
+        { key: "posting_action", label: "SO02 Action", width: "180px", render: (row) => row.posting_action || "—" },
         { key: "so_number", label: "SO Number", width: "135px", render: (row) => row.so_number || "—" },
         { key: "fo_number", label: "FO Number", width: "135px", render: (row) => row.fo_number || "—" },
         { key: "external_so_number", label: "External SO Number", width: "165px", render: (row) => row.external_so_number || "—" },
