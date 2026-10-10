@@ -52,7 +52,16 @@ async function downloadTemplate() {
 function toIsoDate(value) {
   if (!value) return "";
   if (value instanceof Date) return value.toISOString().slice(0, 10);
+  // ExcelJS may expose a date-formatted cell as its numeric serial instead
+  // of a Date. Convert the workbook serial before falling through to text.
+  if (typeof value === "number" && Number.isFinite(value) && value > 0 && value < 100000) {
+    return new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86_400_000).toISOString().slice(0, 10);
+  }
   const text = String(value).trim();
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (serial > 0 && serial < 100000) return new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000).toISOString().slice(0, 10);
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
   // Asian Paints' source files commonly carry a display-formatted Excel date
   // (DD/MM/YYYY). The API correctly requires ISO, so normalize it at the
