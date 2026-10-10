@@ -11,8 +11,8 @@
  *
  *          Strictly additive, per the business owner's explicit guardrail
  *          (§6 point 20, 2026-10-09): `do_unified.handlers.ts`'s
- *          `createDeliveryOrderUnifiedHandler` is NEVER modified — this file
- *          drives it exactly as the gate_entry.handlers.ts "replace lines"
+ *          `createDeliveryOrderUnifiedHandler` is NEVER modified — DC rows
+ *          drive it exactly as the gate_entry.handlers.ts "replace lines"
  *          pattern already does (construct a synthetic in-process Request,
  *          call the existing exported handler, read its JSON envelope).
  *          For a VDC row, if the FO's own Fixed-Depot/address allocation
@@ -608,7 +608,14 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           lr_date: lrDate,
           vehicle_number: toTrimmedString(group.truck_number) || undefined,
         };
-        const deferVdcReservation = isVdc && (!toTrimmedString(group.truck_number) || !dispatchDate);
+        // DD/VDC creation is always commercial-only. Truck/dispatch values
+        // may already be present in the source workbook, but they are merely
+        // captured on the DO at this point. Physical stock validation,
+        // reservation and PGI belong exclusively to the later FO-keyed
+        // Truck + Dispatch Date Upload Post action. DC continues through the
+        // established create handler and therefore retains its live stock
+        // validation/reservation behaviour unchanged.
+        const deferVdcReservation = isVdc;
         const createReq = new Request(req.url, {
           method: "POST",
           body: JSON.stringify(createPayload),
@@ -617,9 +624,14 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
         const createResp = deferVdcReservation
           ? await createDeferredVdcBulkDeliveryOrder(req, ctx, createPayload)
           : await createDeliveryOrderUnifiedHandler(createReq, ctx);
-        const createJson = await createResp.json().catch(() => null) as { ok?: boolean; data?: JsonRecord; error?: JsonRecord } | null;
+        const createJson = await createResp.json().catch(() => null) as { ok?: boolean; data?: JsonRecord; code?: string; error?: JsonRecord } | null;
         if (!createResp.ok || !createJson?.ok || !createJson.data?.id) {
-          throw new Error(toTrimmedString(createJson?.error && (createJson.error as JsonRecord).code) || "DO_BULK_CREATE_FAILED");
+          // errorResponse() uses a top-level `code`; preserve it so a future
+          // row-level failure is actionable instead of collapsing into the
+          // unhelpful generic DO_BULK_CREATE_FAILED label.
+          throw new Error(toTrimmedString(createJson?.code)
+            || toTrimmedString(createJson?.error && (createJson.error as JsonRecord).code)
+            || "DO_BULK_CREATE_FAILED");
         }
         const dcId = toTrimmedString(createJson.data.id);
 

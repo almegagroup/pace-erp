@@ -1344,8 +1344,9 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
 
 // Internal bridge for the additive VDC Bulk-DO workflow. It is deliberately
 // not routed: do_bulk.handlers.ts calls it only after it has independently
-// resolved the SO as DEPENDENT_DIRECT and established that Truck Number or
-// Dispatch Date is still missing. Ordinary DO01 requests always use the
+// resolved the SO as DEPENDENT_DIRECT. Every VDC Bulk DO is commercial-only
+// at creation, whether or not the upload already contains Truck/Dispatch
+// data. Ordinary DO01 requests always use the
 // handler above and therefore cannot suppress stock validation/reservation.
 export async function createDeferredVdcBulkDeliveryOrder(
   req: Request,

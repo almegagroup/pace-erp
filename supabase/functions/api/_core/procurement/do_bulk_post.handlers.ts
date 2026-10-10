@@ -4,7 +4,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { canMaintainSalesInvoice, computeInvoiceGroups, postPgiInvoiceGroupsHandler } from "./do_unified.handlers.ts";
-import { createVdcInvoiceOnlyHandler } from "./vdc_invoice.handlers.ts";
+import { completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "./vdc_invoice.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = { context: Extract<ContextResolution, { status: "RESOLVED" }>; request_id: string; auth_user_id: string; roleCode: string; };
@@ -18,13 +18,30 @@ async function assertInvoiceAccess(req: Request, ctx: ProcurementHandlerContext,
   return null;
 }
 
+async function postPendingVdcPgi(req: Request, ctx: ProcurementHandlerContext, dcId: string): Promise<{ ok: boolean; code?: string; message?: string; }> {
+  const { data: invoices, error } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+    .select("id").eq("dc_id", dcId).eq("status", "DRAFT");
+  if (error || !(invoices ?? []).length) {
+    return { ok: false, code: "VDC_PGI_ONLY_INVOICE_NOT_FOUND", message: "No draft VDC invoice is available for PGI." };
+  }
+  for (const invoice of (invoices ?? []) as JsonRecord[]) {
+    const inner = new Request(`http://internal/api/procurement/sales-invoices/${text(invoice.id)}/vdc-pgi-only`, { method: "POST" });
+    const response = await completeVdcPgiOnlyHandler(inner, ctx);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+      return { ok: false, code: text(payload.code) || "VDC_PGI_ONLY_POST_FAILED", message: text(payload.message) || "VDC PGI posting failed." };
+    }
+  }
+  return { ok: true };
+}
+
 export async function listBulkPostingQueueHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const companyId = text(new URL(req.url).searchParams.get("company_id"));
     if (!companyId) return fail(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required.");
     const denied = await assertInvoiceAccess(req, ctx, companyId, "VIEW"); if (denied) return denied;
     const { data: docs, error } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .select("id, dc_number, dc_date, pgi_deferred, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number, transporter_id, transporter_name_freetext, lr_number, lr_date, vehicle_number, dispatch_date")
+      .select("id, dc_number, dc_date, status, pgi_deferred, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number, transporter_id, transporter_name_freetext, lr_number, lr_date, vehicle_number, dispatch_date")
       .eq("selling_company_id", companyId).eq("is_bulk_uploaded", true).eq("status", "CREATED").order("dc_date", { ascending: true });
     if (error) return fail(req, ctx, "BULK_POST_QUEUE_FETCH_FAILED", 500, error.message || "Unable to load the Bulk Posting queue.");
     const rows = (docs ?? []) as JsonRecord[];
@@ -91,10 +108,17 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
       const mapGroup = allocation ? mapGroupById.get(text(allocation.map_group_id)) : undefined;
       const vendor = group ? vendorById.get(text(soById.get(text(group.so_id))?.vendor_code_id)) : undefined;
       const transporter = transporterById.get(text(doc.transporter_id));
+      const isVdc = doc.pgi_deferred === true;
+      const hasTruckAndDispatch = Boolean(text(doc.vehicle_number) && text(doc.dispatch_date));
+      const postingAction = !isVdc
+        ? "PGI + Invoice"
+        : (hasTruckAndDispatch ? "Invoice + PGI" : "Invoice only");
       return {
         ...doc,
         ...rawLine,
         dd_flag: doc.pgi_deferred === true,
+        posting_action: postingAction,
+        postable: true,
         so_number: group?.document_number ?? null,
         fo_number: text(mapGroup?.revised_external_fo_number) || text(mapGroup?.external_fo_number) || group?.fo_number || null,
         external_so_number: group?.customer_po_number ?? null,
@@ -127,24 +151,37 @@ export async function bulkPostDeliveryOrdersHandler(req: Request, ctx: Procureme
     const ids = [...new Set((Array.isArray(payload.dc_ids) ? payload.dc_ids : []).map(text).filter(Boolean))];
     if (!ids.length) return fail(req, ctx, "BULK_POST_SELECTION_REQUIRED", 400, "Select at least one delivery order.");
     const { data: docs, error } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .select("id, selling_company_id, pgi_deferred, is_bulk_uploaded, status, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number")
+      .select("id, selling_company_id, pgi_deferred, is_bulk_uploaded, status, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number, vehicle_number, dispatch_date")
       .in("id", ids);
     if (error || (docs ?? []).length !== ids.length) return fail(req, ctx, "BULK_POST_DO_NOT_FOUND", 404, "One or more selected delivery orders no longer exist.");
     const results: JsonRecord[] = [];
     for (const doc of (docs ?? []) as JsonRecord[]) {
       const dcId = text(doc.id); const companyId = text(doc.selling_company_id);
       const denied = await assertInvoiceAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;
+      const isDeferredVdc = doc.pgi_deferred === true;
       if (doc.is_bulk_uploaded !== true || upper(doc.status) !== "CREATED") {
-        results.push({ dc_id: dcId, ok: false, code: "BULK_POST_DO_NOT_READY", message: "Delivery order is no longer a CREATED Bulk DO." });
+        results.push({ dc_id: dcId, ok: false, code: "BULK_POST_DO_NOT_READY", message: "Delivery order is not ready for this SO02 posting action." });
         continue;
       }
-      if (doc.pgi_deferred === true) {
+      if (isDeferredVdc) {
         const inner = new Request(`http://internal/api/procurement/delivery-orders-v2/${dcId}/vdc-invoice-only`, { method: "POST" });
         const response = await createVdcInvoiceOnlyHandler(inner, ctx);
         const payload = await response.json().catch(() => ({} as JsonRecord)) as JsonRecord;
-        results.push(response.ok
-          ? { dc_id: dcId, ok: true, mode: "VDC_INVOICE_ONLY", ...payload }
-          : { dc_id: dcId, ok: false, mode: "VDC_INVOICE_ONLY", code: text(payload.code) || "VDC_INVOICE_ONLY_POST_FAILED", message: text(payload.message) || "Invoice-only posting failed." });
+        if (!response.ok) {
+          results.push({ dc_id: dcId, ok: false, mode: "VDC_INVOICE_ONLY", code: text(payload.code) || "VDC_INVOICE_ONLY_POST_FAILED", message: text(payload.message) || "Invoice-only posting failed." });
+          continue;
+        }
+        // DD/VDC DO creation never moves stock. When the source upload already
+        // supplied both physical fields, SO02—not SO03—performs the follow-up
+        // PGI immediately after the Invoice-only record exists.
+        if (text(doc.vehicle_number) && text(doc.dispatch_date)) {
+          const pgiResult = await postPendingVdcPgi(req, ctx, dcId);
+          results.push(pgiResult.ok
+            ? { dc_id: dcId, ok: true, mode: "VDC_INVOICE_PGI" }
+            : { dc_id: dcId, ok: false, mode: "VDC_INVOICE_PGI", code: pgiResult.code, message: pgiResult.message || "Invoice was created, but PGI remains pending in SO02." });
+        } else {
+          results.push({ dc_id: dcId, ok: true, mode: "VDC_INVOICE_ONLY", ...payload });
+        }
       } else {
         const { groups } = await computeInvoiceGroups(dcId);
         const tallyNumber = text(doc.pre_invoice_tally_invoice_number); const tallyDate = text(doc.pre_invoice_tally_invoice_date);
