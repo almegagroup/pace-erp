@@ -35,7 +35,6 @@ type PurchaseOrderLineRow = Record<string, unknown>;
 type MaterialRow = Record<string, unknown>;
 
 const GRN_STATUSES = new Set(["DRAFT", "POSTED", "REVERSED"]);
-const STOCK_TYPES = new Set(["UNRESTRICTED", "QUALITY_INSPECTION", "BLOCKED"]);
 const EXPIRY_TYPES = new Set(["DATE", "SPAN", "N_A"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
@@ -2286,41 +2285,17 @@ export async function splitGrnHandler(
       return procurementErrorResponse(req, ctx, "GRN_SPLIT_QTY_MISMATCH", 400, `Invoice quantities (${sliceQtySum}) must sum exactly to the GRN's received quantity (${originalReceivedQty}).`);
     }
 
-    const material = await fetchMaterial(String(grn.material_id));
-    const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(grn.uom_code) || "PCS";
-    const grnUomMismatch = toTrimmedString(grn.uom_code) !== baseUomCode;
-    const grnPerPackQty = parseNullableNumber(grn.per_pack_qty);
-    const toBaseQty = (qty: number) => (grnUomMismatch && grnPerPackQty && grnPerPackQty > 0 ? Number((qty * grnPerPackQty).toFixed(6)) : qty);
-    const toBaseRate = (rate: number) => (grnUomMismatch && grnPerPackQty && grnPerPackQty > 0 ? Number((rate / grnPerPackQty).toFixed(6)) : rate);
-    const stockTypeCode = toUpperTrimmedString(grn.target_stock_type) || "UNRESTRICTED";
-
     const geQtyShares = splitProportionally(parseNullableNumber(grn.ge_qty) ?? 0, slices, originalReceivedQty);
-    const consideredQtyShares = splitProportionally(parseNullableNumber(grn.considered_qty) ?? 0, slices, originalReceivedQty);
+    // Old receipts predating the Considered Qty backfill may not have a
+    // stored value; their invoice children must still be payable/costable.
+    const consideredQtyShares = splitProportionally(
+      parseNullableNumber(grn.considered_qty) ?? originalReceivedQty,
+      slices,
+      originalReceivedQty,
+    );
     const netWeightShares = splitProportionally(parseNullableNumber(grn.net_weight_from_weighbridge) ?? 0, slices, originalReceivedQty);
 
     const nowIso = new Date().toISOString();
-    const grnMatDoc = await generateMaterialDocNumber(grnCompanyId);
-
-    const movements: JsonRecord[] = [{
-      document_number: grn.grn_number,
-      document_date: todayIsoInKolkata(),
-      posting_date: todayIsoInKolkata(),
-      movement_type_code: "P102",
-      company_id: grnCompanyId,
-      storage_location_id: grn.storage_location_id,
-      material_id: grn.material_id,
-      quantity: toBaseQty(originalReceivedQty),
-      base_uom_code: baseUomCode,
-      unit_value: toBaseRate(parseNullableNumber(grn.grn_rate) ?? 0),
-      stock_type_code: stockTypeCode,
-      direction: "OUT",
-      posted_by: ctx.auth_user_id,
-      reversal_of_id: grn.stock_document_id,
-      material_doc_number: grnMatDoc.docNumber,
-      material_doc_year: grnMatDoc.docYear,
-      reference_document_number: grn.grn_number,
-      line_ref: "REVERSAL",
-    }];
 
     const splitPayloads: JsonRecord[] = [];
     for (let i = 0; i < slices.length; i += 1) {
@@ -2328,26 +2303,6 @@ export async function splitGrnHandler(
       const lineRef = `SPLIT_${i}`;
       const newGrnNumber = await generateProcurementDocNumber("GRN");
       const newId = crypto.randomUUID();
-
-      movements.push({
-        document_number: newGrnNumber,
-        document_date: todayIsoInKolkata(),
-        posting_date: todayIsoInKolkata(),
-        movement_type_code: "P101",
-        company_id: grnCompanyId,
-        storage_location_id: grn.storage_location_id,
-        material_id: grn.material_id,
-        quantity: toBaseQty(slice.quantity),
-        base_uom_code: baseUomCode,
-        unit_value: toBaseRate(slice.invoiceRate),
-        stock_type_code: stockTypeCode,
-        direction: "IN",
-        posted_by: ctx.auth_user_id,
-        material_doc_number: grnMatDoc.docNumber,
-        material_doc_year: grnMatDoc.docYear,
-        reference_document_number: newGrnNumber,
-        line_ref: lineRef,
-      });
 
       splitPayloads.push({
         ...grn,
@@ -2394,23 +2349,35 @@ export async function splitGrnHandler(
       });
     }
 
-    const context = {
-      actor: ctx.auth_user_id,
-      reversal_reason: `GRN Split into ${slices.length} invoices`,
-      splits: splitPayloads,
-    };
-
-    const { error: postError } = await serviceRoleClient
-      .schema("erp_inventory")
-      .rpc("post_document", {
-        p_reference_document_type: "GRN",
-        p_reference_document_id: grnId,
-        p_movements: movements,
-        p_posted_by: ctx.auth_user_id,
-        p_context: context,
+    // A split changes commercial documents only. The original P101 may have
+    // moved from QI through QA (or even been consumed) long before invoices
+    // arrive, so it must never be reversed/re-posted here. The database RPC
+    // atomically creates the invoice GRNs and recalculates the one original
+    // physical receipt's valuation from all child invoices.
+    const { data: splitResult, error: splitError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .rpc("complete_grn_commercial_split", {
+        p_original_grn_id: grnId,
+        p_splits: splitPayloads,
+        p_actor: ctx.auth_user_id,
+        p_reason: `Commercial invoice split into ${slices.length} invoices`,
       });
-    if (postError) {
-      return procurementErrorResponse(req, ctx, "GRN_SPLIT_POST_FAILED", 500, postError.message || "Unable to split GRN.");
+    if (splitError) {
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_FAILED", 500, splitError.message || "Unable to split GRN.");
+    }
+
+    // The RPC atomically changes the source valuation. Carry that value
+    // through downstream QA/production postings using the standard cascade
+    // engine; this is the same correction propagation used by normal mapping.
+    const splitValuation = (splitResult as JsonRecord | null)?.split_source_valuation as JsonRecord | undefined;
+    const sourceLedgerId = toTrimmedString(splitValuation?.source_stock_ledger_id);
+    const sourceRate = Number(splitValuation?.valuation_rate);
+    if (sourceLedgerId && Number.isFinite(sourceRate) && sourceRate >= 0) {
+      await cascadeRecalculate(
+        [{ ledgerId: sourceLedgerId, newRate: sourceRate }],
+        ctx.auth_user_id,
+        "GRN commercial invoice split valuation cascade",
+      );
     }
 
     return okResponse({

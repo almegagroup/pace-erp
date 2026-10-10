@@ -2777,26 +2777,30 @@ quantity/rate slice of the original.
   understands it was split, not just an ordinary reversal — distinguishable from a plain
   reversal by checking whether any other GRN references it via the new
   `split_source_grn_id` column (see Engineering below).
-- Stock valuation (WAR) for each new split GRN's own rate uses the same §109
-  `cascadeRecalculate` engine already reused for §3.9.2's Map action — no new valuation
-  logic, same reuse.
+- Stock valuation (WAR) is recalculated from the N invoice children onto the **one
+  original physical P101 ledger**, then propagated through the same §109
+  `cascadeRecalculate` engine already reused for §3.9.2's Map action. Child GRNs are
+  commercial/accounting rows and therefore never receive duplicate physical stock.
 
-**Engineering — resolved during design, before locking:**
-- **Atomicity is mandatory, not optional.** Reverse-then-repost nets to zero, but if
-  anything else touched the same material/location's `stock_snapshot` in the window
-  between the original GRN and this split (another GRN, another issue), doing the
-  reversal and the N re-posts as separate steps risks a transient negative-stock state
-  mid-operation even though the net is zero. **Resolved:** built as one call to
-  `erp_inventory.post_document()` (§8D's "common gate", already proven for Process PO
-  Verify and §113.15's PGI+Invoice) — one P102 reversal of the original's full quantity
-  + N fresh P101 receipts for the splits, all in the SAME transaction, with a new
-  `erp_procurement.complete_grn_split()` completion function (registered against the
-  existing `GRN` entry in `posting_source_registry`, whose `completion_function` was
-  previously NULL — confirmed live before locking, no existing completion function is
-  being overwritten) doing the actual header-reversal + N-row-insert as the completion
-  step. Calculations (proportional split, validation) stay in TypeScript; only the
-  writes move into the completion function, same division of labor as every other
-  `post_document` migration in this codebase.
+**Engineering — revised after a real post-QA production failure (2026-10-10):**
+- **This is a commercial split, never a stock reversal/repost.** The original P101 is
+  the one physical receipt. By the time invoices arrive, QA may already have moved it
+  out of QI (or production may already have consumed it), so a P102 against the original
+  stock type can correctly fail with `INSUFFICIENT_STOCK` even though the invoice-slice
+  quantities add up. **Resolved:** one atomic
+  `erp_procurement.complete_grn_commercial_split()` call marks the original as
+  commercially superseded (`REVERSED`, preserving AC01's established non-payable UI
+  marker) and inserts N POSTED invoice-child GRNs. It deliberately creates **no P102,
+  no fresh P101, and no child stock ledger/document**. The source P101, all stock
+  snapshots, QA decisions and downstream production history remain untouched.
+- **AC01 remains full-featured for every child GRN.** Each child is a normal POSTED
+  Accounts row with its own invoice, rate, GST, landed-cost lines, freight/CHA/debit-
+  credit deductions, party-wise payable and invoice verification. On every child AC01
+  Save, the child retains its own commercial records; the system aggregates all active
+  children's base rate plus capitalised landed costs onto the one original physical
+  ledger, then uses the existing valuation cascade to carry that corrected value through
+  QA/production movements. Thus invoice-specific payable detail is never mixed, while
+  inventory remains one real truck receipt.
 - **Real pre-existing gap found while designing this (unrelated to the split feature
   itself, but it blocks it):** `ux_goods_receipt_gate_entry_line` is a unique index on
   `gate_entry_line_id` with **no status filter at all** (`WHERE gate_entry_line_id IS
@@ -2947,6 +2951,15 @@ Fixed, same day, approved ("ha kore dao"):
   done:** a real live REVERSED row to click-through against (Dev has none yet — no GRN has
   actually been reversed/split there since this is all same-day-shipped and not yet
   exercised through the real HTTP endpoint).
+
+**Post-QA correction (2026-10-10):** CMP005 GRN `2000000240` proved that the original
+P102+fresh-P101 implementation was unsafe: the source P101 had correctly been moved by QA
+from `QUALITY_INSPECTION` to later stock states, leaving QI at zero. The split therefore
+failed at the P102 negative-stock guard despite the invoice quantities matching exactly.
+The implementation now follows the commercial-only contract above: no stock reversal or
+new physical receipt is made; invoice child GRNs remain fully editable in AC01, and their
+aggregate commercial cost is applied to the retained physical source ledger and cascaded
+through QA/production history. This replaces the historical 2026-10-02 P102/P101 approach.
 
 #### 3.9.3 — Who performs the mapping, and cross-company visibility
 
