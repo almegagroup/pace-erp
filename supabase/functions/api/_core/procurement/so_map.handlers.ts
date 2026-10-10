@@ -417,7 +417,7 @@ export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandle
     const companyById = new Map(((companyRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const customerIds = [...new Set([...addressById.values()].map((address) => toTrimmedString(address.customer_id)).filter(Boolean))];
     const { data: customerRows, error: customerError } = customerIds.length
-      ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name, gst_number, billing_address, billing_state").in("id", customerIds)
+      ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name, gst_number, delivery_address, billing_address, billing_state").in("id", customerIds)
       : { data: [] as JsonRecord[], error: null };
     if (customerError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_CUSTOMER_LOOKUP_FAILED", 500, "Unable to resolve Sales/Dispatch FO customer details.");
     const customerById = new Map(((customerRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
@@ -470,8 +470,13 @@ export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandle
         parent_company_gst: toTrimmedString(parentCompany?.gst_number) || null,
         bill_to_name: toTrimmedString(so.bill_to_name) || null, bill_to_address: toTrimmedString(so.bill_to_address) || null,
         bill_to_state: toTrimmedString(so.bill_to_state) || null, bill_to_gst: toTrimmedString(so.bill_to_gst_number) || null,
-        ship_to_name: toTrimmedString(so.ship_to_name) || null, ship_to_address: toTrimmedString(so.ship_to_address) || null,
-        ship_to_state: toTrimmedString(so.ship_to_state) || null, ship_to_gst: toTrimmedString(so.ship_to_gst_number) || null,
+        // DD Ship-To is the customer selected by SO Map. The SO header is
+        // often blank because the VDC/site is resolved afterwards: use the
+        // mapped site address when present, otherwise Customer Master.
+        ship_to_name: toTrimmedString(customer?.customer_name) || toTrimmedString(so.ship_to_name) || null,
+        ship_to_address: toTrimmedString(groupAddress?.address_line) || toTrimmedString(customer?.delivery_address) || toTrimmedString(customer?.billing_address) || toTrimmedString(so.ship_to_address) || null,
+        ship_to_state: toTrimmedString(groupAddress?.state) || toTrimmedString(customer?.billing_state) || toTrimmedString(so.ship_to_state) || null,
+        ship_to_gst: toTrimmedString(customer?.gst_number) || toTrimmedString(so.ship_to_gst_number) || null,
         customer_code: toTrimmedString(customer?.customer_code) || null, customer_name: toTrimmedString(customer?.customer_name) || null,
         customer_gst: toTrimmedString(customer?.gst_number) || null, customer_billing_address: toTrimmedString(customer?.billing_address) || null,
         customer_billing_state: toTrimmedString(customer?.billing_state) || null,
@@ -534,7 +539,7 @@ export async function listMtsFoForCompanyHandler(req: Request, ctx: ProcurementH
     const companyById = new Map(companyRows.map((row) => [toTrimmedString(row.id), row]));
     const customerIds = [...new Set(addressRows.map((address) => toTrimmedString(address.customer_id)).filter(Boolean))];
     const customerRows = await fetchInChunks<JsonRecord>(customerIds, (chunk) => serviceRoleClient.schema("erp_master").from("customer_master")
-      .select("id, customer_code, customer_name, gst_number, billing_address, billing_state").in("id", chunk));
+      .select("id, customer_code, customer_name, gst_number, delivery_address, billing_address, billing_state").in("id", chunk));
     const customerById = new Map(customerRows.map((row) => [toTrimmedString(row.id), row]));
     const lineById = new Map(lineRows.map((line) => [toTrimmedString(line.id), line]));
     const allocationsByGroup = new Map<string, JsonRecord[]>();
@@ -568,7 +573,10 @@ export async function listMtsFoForCompanyHandler(req: Request, ctx: ProcurementH
           fo_number: toTrimmedString(group.external_fo_number), revised_fo_number: toTrimmedString(group.revised_external_fo_number) || null, effective_fo_number: effectiveExternalFoNumber(group),
           parent_company_code: toTrimmedString(parentCompany?.company_code) || null, parent_company_name: toTrimmedString(parentCompany?.company_name) || null, parent_company_gst: toTrimmedString(parentCompany?.gst_number) || null,
           bill_to_name: toTrimmedString(so.bill_to_name) || null, bill_to_address: toTrimmedString(so.bill_to_address) || null, bill_to_state: toTrimmedString(so.bill_to_state) || null, bill_to_gst: toTrimmedString(so.bill_to_gst_number) || null,
-          ship_to_name: toTrimmedString(so.ship_to_name) || null, ship_to_address: toTrimmedString(so.ship_to_address) || null, ship_to_state: toTrimmedString(so.ship_to_state) || null, ship_to_gst: toTrimmedString(so.ship_to_gst_number) || null,
+          ship_to_name: toTrimmedString(customer?.customer_name) || toTrimmedString(so.ship_to_name) || null,
+          ship_to_address: toTrimmedString(groupAddress?.address_line) || toTrimmedString(customer?.delivery_address) || toTrimmedString(customer?.billing_address) || toTrimmedString(so.ship_to_address) || null,
+          ship_to_state: toTrimmedString(groupAddress?.state) || toTrimmedString(customer?.billing_state) || toTrimmedString(so.ship_to_state) || null,
+          ship_to_gst: toTrimmedString(customer?.gst_number) || toTrimmedString(so.ship_to_gst_number) || null,
           customer_code: toTrimmedString(customer?.customer_code) || null, customer_name: toTrimmedString(customer?.customer_name) || null, customer_gst: toTrimmedString(customer?.gst_number) || null,
           customer_billing_address: toTrimmedString(customer?.billing_address) || null, customer_billing_state: toTrimmedString(customer?.billing_state) || null,
           site_name: toTrimmedString(groupAddress?.site_name) || null, site_address: toTrimmedString(groupAddress?.address_line) || null, site_town: toTrimmedString(groupAddress?.town) || null, site_state: toTrimmedString(groupAddress?.state) || null, site_pin_code: toTrimmedString(groupAddress?.pin_code) || null,

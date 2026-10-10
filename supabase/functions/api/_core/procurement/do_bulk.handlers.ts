@@ -63,6 +63,27 @@ function toUpperTrimmedString(value: unknown): string {
 function isIsoDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
 }
+// Browser upload normally normalizes dates, but validation must remain safe
+// for raw DD/MM/YYYY uploads and restored drafts too. Excel serial values are
+// accepted only in a plausible date range, never for document identifiers.
+function normalizeInputDate(value: unknown): string {
+  const text = toTrimmedString(value);
+  if (!text || isIsoDate(text)) return text;
+  const displayMatch = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (displayMatch) {
+    const [, day, month, year] = displayMatch;
+    const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    if (parsed.getUTCFullYear() === Number(year) && parsed.getUTCMonth() === Number(month) - 1 && parsed.getUTCDate() === Number(day)) {
+      return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    }
+    return text;
+  }
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const serial = Number(text);
+    if (serial > 0 && serial < 100000) return new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000).toISOString().slice(0, 10);
+  }
+  return text;
+}
 function doBulkErrorResponse(req: Request, ctx: ProcurementHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
@@ -341,10 +362,10 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       const storageLocation = await resolveStorageLocationByCode(toTrimmedString(row.storage_location_code));
 
       const truckNumber = toTrimmedString(row.truck_number);
-      const dispatchDate = toTrimmedString(row.dispatch_date);
-      const doDate = toTrimmedString(row.do_date);
+      const dispatchDate = normalizeInputDate(row.dispatch_date);
+      const doDate = normalizeInputDate(row.do_date);
       const lrNumber = toTrimmedString(row.lr_number);
-      const lrDate = toTrimmedString(row.lr_date);
+      const lrDate = normalizeInputDate(row.lr_date);
       const missingRequired: string[] = [];
       const formatErrors: string[] = [];
       if (!doDate) missingRequired.push("do_date");
@@ -354,7 +375,7 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       else if (!isIsoDate(lrDate)) formatErrors.push("LR Date is invalid");
       if (transporterResolution.status === "NOT_FOUND") missingRequired.push("transporter");
       if (!Number.isFinite(packQty) || packQty <= 0) formatErrors.push("Pack Qty must be positive");
-      if (toTrimmedString(row.tally_invoice_date) && !isIsoDate(toTrimmedString(row.tally_invoice_date))) formatErrors.push("Tally Invoice Date is invalid");
+      if (normalizeInputDate(row.tally_invoice_date) && !isIsoDate(normalizeInputDate(row.tally_invoice_date))) formatErrors.push("Tally Invoice Date is invalid");
       if (dispatchDate && !isIsoDate(dispatchDate)) formatErrors.push("Dispatch Date is invalid");
       // §6 point 14/15 — DC row: Truck Number + Dispatch Date mandatory at
       // upload time (DO never created without them); VDC row: optional
@@ -497,8 +518,14 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
     const results: JsonRecord[] = [];
     for (const group of groups) {
       try {
-        if (!isIsoDate(toTrimmedString(group.do_date))) throw new Error("DO_BULK_DO_DATE_REQUIRED_OR_INVALID");
-        if (!toTrimmedString(group.lr_number) || !isIsoDate(toTrimmedString(group.lr_date))) throw new Error("DO_BULK_LR_FIELDS_REQUIRED_OR_INVALID");
+        const doDate = normalizeInputDate(group.do_date);
+        const lrDate = normalizeInputDate(group.lr_date);
+        const dispatchDate = normalizeInputDate(group.dispatch_date);
+        const tallyInvoiceDate = normalizeInputDate(group.tally_invoice_date);
+        if (!isIsoDate(doDate)) throw new Error("DO_BULK_DO_DATE_REQUIRED_OR_INVALID");
+        if (!toTrimmedString(group.lr_number) || !isIsoDate(lrDate)) throw new Error("DO_BULK_LR_FIELDS_REQUIRED_OR_INVALID");
+        if (dispatchDate && !isIsoDate(dispatchDate)) throw new Error("DO_BULK_DISPATCH_DATE_INVALID");
+        if (tallyInvoiceDate && !isIsoDate(tallyInvoiceDate)) throw new Error("DO_BULK_TALLY_INVOICE_DATE_INVALID");
         if (!toTrimmedString(group.transporter_id)) throw new Error("DO_BULK_TRANSPORTER_REQUIRED");
         if (!Array.isArray(group.rows) || group.rows.length === 0 || group.rows.some((row) => !Number.isFinite(Number(row.base_qty)) || Number(row.base_qty) <= 0)) {
           throw new Error("DO_BULK_LINE_QTY_INVALID");
@@ -525,7 +552,7 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           throw new Error("DO_BULK_SOURCE_REFERENCE_INVALID");
         }
         if (!group.dd_flag) {
-          if (!toTrimmedString(group.truck_number) || !toTrimmedString(group.dispatch_date)) {
+          if (!toTrimmedString(group.truck_number) || !dispatchDate) {
             throw new Error("DO_BULK_DC_TRUCK_DISPATCH_REQUIRED");
           }
         }
@@ -574,10 +601,10 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           lines,
           transporter_id: group.transporter_id,
           lr_number: group.lr_number,
-          lr_date: group.lr_date,
+          lr_date: lrDate,
           vehicle_number: toTrimmedString(group.truck_number) || undefined,
         };
-        const deferVdcReservation = isVdc && (!toTrimmedString(group.truck_number) || !toTrimmedString(group.dispatch_date));
+        const deferVdcReservation = isVdc && (!toTrimmedString(group.truck_number) || !dispatchDate);
         const createReq = new Request(req.url, {
           method: "POST",
           body: JSON.stringify(createPayload),
@@ -596,10 +623,10 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           is_bulk_uploaded: true,
           pgi_deferred: Boolean(group.dd_flag),
         };
-        if (toTrimmedString(group.do_date)) patch.dc_date = toTrimmedString(group.do_date);
-        if (toTrimmedString(group.dispatch_date)) patch.dispatch_date = toTrimmedString(group.dispatch_date);
+        if (doDate) patch.dc_date = doDate;
+        if (dispatchDate) patch.dispatch_date = dispatchDate;
         if (toTrimmedString(group.tally_invoice_number)) patch.pre_invoice_tally_invoice_number = toTrimmedString(group.tally_invoice_number);
-        if (toTrimmedString(group.tally_invoice_date)) patch.pre_invoice_tally_invoice_date = toTrimmedString(group.tally_invoice_date);
+        if (tallyInvoiceDate) patch.pre_invoice_tally_invoice_date = tallyInvoiceDate;
         if (toTrimmedString(group.inbound_number)) patch.pre_invoice_inbound_number = toTrimmedString(group.inbound_number);
         const { error: patchError } = await serviceRoleClient
           .schema("erp_procurement").from("delivery_challan").update(patch).eq("id", dcId);
