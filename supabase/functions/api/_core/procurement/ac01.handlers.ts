@@ -20,6 +20,7 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
+import { cascadeRecalculate } from "./opening_stock.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1423,6 +1424,21 @@ export async function saveAC01GRNCostHandler(
 
     if (error) {
       return ac01ErrorResponse(req, ctx, "AC01_SAVE_FAILED", 500, error.message ?? "Unable to save AC01 GRN cost.");
+    }
+
+    // A commercial split has many invoice-only GRNs but exactly one physical
+    // P101 ledger. The RPC has already recalculated that source receipt
+    // atomically; this follows its normal impacted rows through QA/production
+    // so later stock states carry the corrected value too.
+    const splitValuation = (data as JsonRecord | null)?.split_source_valuation as JsonRecord | undefined;
+    const sourceLedgerId = toTrimmedString(splitValuation?.source_stock_ledger_id);
+    const sourceRate = Number(splitValuation?.valuation_rate);
+    if (sourceLedgerId && Number.isFinite(sourceRate) && sourceRate >= 0) {
+      await cascadeRecalculate(
+        [{ ledgerId: sourceLedgerId, newRate: sourceRate }],
+        ctx.auth_user_id,
+        toTrimmedString(body.reason) || "AC01 commercial split valuation cascade",
+      );
     }
 
     return okResponse(data, ctx.request_id, req);
