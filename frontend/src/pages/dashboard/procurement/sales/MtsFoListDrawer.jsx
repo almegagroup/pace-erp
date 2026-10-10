@@ -12,7 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
-import { listMtsFoForSo, reviseMtsFoNumber } from "../procurementApi.js";
+import { listMtsFoForCompany, listMtsFoForSo, reviseMtsFoNumber } from "../procurementApi.js";
 
 function textValue(row, column) {
   const value = typeof column.copyValue === "function" ? column.copyValue(row) : row?.[column.key];
@@ -66,7 +66,7 @@ const FO_COLUMNS = [
   { key: "mapped_at", label: "Mapped At", width: "170px" },
 ];
 
-export default function MtsFoListDrawer({ so, onClose }) {
+export default function MtsFoListDrawer({ so = null, companyId = "", onClose }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -74,9 +74,13 @@ export default function MtsFoListDrawer({ so, onClose }) {
   const [revisionRow, setRevisionRow] = useState(null);
   const [revisedFoNumber, setRevisedFoNumber] = useState("");
   const [savingRevision, setSavingRevision] = useState(false);
+  const isCompanyList = !so;
+  const scopeKey = so?.id || companyId;
+  const scopeLabel = so ? `SO ${so.so_number}` : "All SOs";
   const foQuery = useQuery({
-    queryKey: ["procurement", "so-map-mts-fo-list", so.id],
-    queryFn: () => listMtsFoForSo(so.id),
+    queryKey: ["procurement", "so-map-mts-fo-list", isCompanyList ? "company" : "so", scopeKey],
+    queryFn: () => isCompanyList ? listMtsFoForCompany(companyId) : listMtsFoForSo(so.id),
+    enabled: Boolean(scopeKey),
   });
   const rows = useMemo(() => (Array.isArray(foQuery.data) ? foQuery.data : []), [foQuery.data]);
   const suggestions = useMemo(() => [...new Set(rows.flatMap((row) => FO_COLUMNS.map((column) => textValue(row, column)).filter(Boolean)))].sort().slice(0, 500), [rows]);
@@ -96,7 +100,7 @@ export default function MtsFoListDrawer({ so, onClose }) {
     try {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
       await downloadColoredExcelFile({
-        fileName: `mts_fo_list_${so.so_number}_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        fileName: `mts_fo_list_${so?.so_number || "all_sos"}_${new Date().toISOString().slice(0, 10)}.xlsx`,
         sheetName: "MTS FO List",
         columns: FO_COLUMNS,
         rows: filteredRows,
@@ -113,7 +117,7 @@ export default function MtsFoListDrawer({ so, onClose }) {
     setSavingRevision(true);
     try {
       await reviseMtsFoNumber(revisionRow.map_group_id, value);
-      await queryClient.invalidateQueries({ queryKey: ["procurement", "so-map-mts-fo-list", so.id] });
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "so-map-mts-fo-list"] });
       setRevisionRow(null); setRevisedFoNumber("");
       pushToast({ message: `Revised FO Number saved: ${value}`, tone: "success" });
     } catch (error) {
@@ -127,14 +131,14 @@ export default function MtsFoListDrawer({ so, onClose }) {
     <>
       <DrawerBase
         visible
-        title={`MTS FO List — SO ${so.so_number}`}
+        title={`MTS FO List — ${scopeLabel}`}
         onEscape={onClose}
         onClose={onClose}
         width="calc(100vw - 28px)"
         actions={<div className="flex gap-2"><button type="button" onClick={() => setFiltersOpen((current) => !current)} className="border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">{filtersOpen ? "Hide Filters" : "Column Filters"}</button><button type="button" onClick={() => void exportExcel()} disabled={filteredRows.length === 0} className="border border-emerald-700 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900 disabled:opacity-50">Export Excel</button><button type="button" onClick={onClose} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950">Done</button></div>}
       >
         <div className="grid gap-3">
-          <p className="text-xs text-slate-600">Sales/Dispatch FO register for this VDC/DD SO. Each row is one FO–SKU allocation and shows that exact SO line's rate, tax and amount. Original FO remains auditable; after revision, System FO Number is used for all future lookup.</p>
+          <p className="text-xs text-slate-600">Sales/Dispatch FO register for {isCompanyList ? "every mapped VDC/DD SO in this company" : "this VDC/DD SO"}. Each row is one FO–SKU allocation and shows that exact SO line's rate, tax and amount. Original FO remains auditable; after revision, System FO Number is used for all future lookup.</p>
           <div className="flex items-center gap-2"><input list="mts-fo-list-search-options" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search across every column..." className="h-9 w-full max-w-xl border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" /><datalist id="mts-fo-list-search-options">{suggestions.map((value) => <option key={value} value={value} />)}</datalist><span className="whitespace-nowrap text-xs text-slate-500">{filteredRows.length} of {rows.length} rows</span></div>
           {filtersOpen ? <div className="grid gap-2 border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4">{FO_COLUMNS.map((column) => <label key={column.key} className="grid gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">{column.label}<input value={columnFilters[column.key] ?? ""} onChange={(event) => setColumnFilters((current) => ({ ...current, [column.key]: event.target.value }))} className="h-7 border border-slate-300 bg-white px-1 text-xs font-normal" /></label>)}</div> : null}
           {foQuery.isLoading ? <p className="py-8 text-center text-sm text-slate-500">Loading MTS FO List...</p> : foQuery.error ? <p className="border border-rose-300 bg-rose-50 p-3 text-sm font-semibold text-rose-800">{foQuery.error instanceof Error ? foQuery.error.message : "SO_MAP_MTS_FO_LIST_FAILED"}</p> : <ErpDenseGrid cellNavigate columns={[...FO_COLUMNS, { key: "revise", label: "", width: "72px", render: (row) => <button type="button" onClick={() => { setRevisionRow(row); setRevisedFoNumber(row.revised_fo_number || ""); }} className="border border-amber-500 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-900" title="Revise FO Number">♻</button> }]} rows={filteredRows} rowKey={(row) => row.row_id} emptyMessage="No Sales/Dispatch FO allocations are mapped to this SO." />}

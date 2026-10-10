@@ -52,7 +52,17 @@ async function downloadTemplate() {
 function toIsoDate(value) {
   if (!value) return "";
   if (value instanceof Date) return value.toISOString().slice(0, 10);
-  return String(value).trim();
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  // Asian Paints' source files commonly carry a display-formatted Excel date
+  // (DD/MM/YYYY). The API correctly requires ISO, so normalize it at the
+  // upload boundary rather than flagging an otherwise valid LR/DO date.
+  const match = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (!match) return text;
+  const [, day, month, year] = match;
+  const parsed = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (parsed.getUTCFullYear() !== Number(year) || parsed.getUTCMonth() !== Number(month) - 1 || parsed.getUTCDate() !== Number(day)) return text;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
 // fetchProcurement unwraps the standard `{ data: [...] }` API envelope for

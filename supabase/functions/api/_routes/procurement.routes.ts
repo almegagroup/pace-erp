@@ -402,6 +402,7 @@ import {
 } from "../_core/procurement/sales_return.handlers.ts";
 import {
   getSoMapStatusHandler,
+  listMtsFoForCompanyHandler,
   listMtsFoForSoHandler,
   listCustomerAddressesForSoHandler,
   listFoOptionsForSoHandler,
@@ -1527,6 +1528,9 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/so-map\/[^/]+\/status$/.test(pathname) && req.method === "GET") {
     return await getSoMapStatusHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/so-map\/mts-fo-list$/.test(pathname) && req.method === "GET") {
+    return await listMtsFoForCompanyHandler(req, ctx);
   }
   if (/^\/api\/procurement\/so-map\/[^/]+\/mts-fo-list$/.test(pathname) && req.method === "GET") {
     return await listMtsFoForSoHandler(req, ctx);

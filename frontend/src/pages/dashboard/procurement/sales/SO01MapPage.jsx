@@ -375,6 +375,7 @@ export default function SO01MapPage() {
   const [companyId, setCompanyId] = useState("");
   const [activeSo, setActiveSo] = useState(null);
   const [mtsFoListSo, setMtsFoListSo] = useState(null);
+  const [companyMtsFoListOpen, setCompanyMtsFoListOpen] = useState(false);
   const [bulkMapOpen, setBulkMapOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
@@ -429,7 +430,7 @@ export default function SO01MapPage() {
                 <TransactionCompanySelector
                   runtimeContext={runtimeContext}
                   value={companyId}
-                  onChange={(value) => { setCompanyId(value); setActiveSo(null); }}
+                  onChange={(value) => { setCompanyId(value); setActiveSo(null); setMtsFoListSo(null); setCompanyMtsFoListOpen(false); }}
                   label="Company"
                   hint="Select the company where the dependent SO was created."
                 />
@@ -464,6 +465,15 @@ export default function SO01MapPage() {
                 >
                   Bulk DD SO Map
                 </button>
+                <button
+                  type="button"
+                  disabled={!effectiveCompanyId}
+                  onClick={() => setCompanyMtsFoListOpen(true)}
+                  className="h-8 border border-emerald-700 bg-emerald-50 px-3 text-xs font-semibold uppercase tracking-wide text-emerald-950 disabled:opacity-50"
+                  title={effectiveCompanyId ? "View MTS FOs for all SOs in this company" : "Select a company first"}
+                >
+                  MTS FO List
+                </button>
               </div>
               <ErpDenseGrid
                 cellNavigate
@@ -485,6 +495,7 @@ export default function SO01MapPage() {
         <MapDrawer so={activeSo} onClose={() => setActiveSo(null)} onChanged={() => void listQuery.refetch()} onOpenMtsFoList={setMtsFoListSo} />
       ) : null}
       {mtsFoListSo ? <MtsFoListDrawer so={mtsFoListSo} onClose={() => setMtsFoListSo(null)} /> : null}
+      {companyMtsFoListOpen ? <MtsFoListDrawer companyId={effectiveCompanyId} onClose={() => setCompanyMtsFoListOpen(false)} /> : null}
       {bulkMapOpen ? (
         <BulkDdSoMapDrawer
           companyId={effectiveCompanyId}
