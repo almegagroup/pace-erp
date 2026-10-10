@@ -1132,6 +1132,9 @@ export function getSoMapStatus(soId) {
 export function listMtsFoForSo(soId) {
   return fetchProcurement("GET", `/api/procurement/so-map/${encodeURIComponent(soId)}/mts-fo-list`);
 }
+export function listMtsFoForCompany(companyId) {
+  return fetchProcurement("GET", "/api/procurement/so-map/mts-fo-list", undefined, { company_id: companyId });
+}
 export function listFoOptionsForSo(soId) {
   return fetchProcurement("GET", "/api/procurement/so-map/fo-options", undefined, { so_id: soId });
 }

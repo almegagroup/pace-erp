@@ -493,6 +493,98 @@ export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandle
   }
 }
 
+// Company-wide MTS FO register. This is deliberately one server-side bulk
+// read, never one browser request per SO: users need to export/search a long
+// company list without recreating the per-row API-call issue from upload
+// preview.
+export async function listMtsFoForCompanyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const companyId = await getCompanyScope(ctx, toTrimmedString(new URL(req.url).searchParams.get("company_id")));
+    if (!companyId) return soMapErrorResponse(req, ctx, "SO_MAP_COMPANY_REQUIRED", 400, "company_id is required.");
+    if (!(await canMaintainSoMap(ctx, companyId))) return soMapErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have SO Map access at this company.");
+
+    const { data: groupRows, error: groupError } = await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      .select("id, so_id, customer_address_id, external_fo_number, revised_external_fo_number, created_at, status, so:so_id!inner(*)")
+      .eq("status", "ACTIVE").not("external_fo_number", "is", null).eq("so.company_id", companyId)
+      .order("created_at", { ascending: false });
+    if (groupError) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_LOOKUP_FAILED", 500, "Unable to load Sales/Dispatch FOs.");
+    const groups = (groupRows ?? []) as JsonRecord[];
+    const soById = new Map<string, JsonRecord>();
+    for (const group of groups) {
+      const so = Array.isArray(group.so) ? group.so[0] as JsonRecord : group.so as JsonRecord | null;
+      if (so) soById.set(toTrimmedString(group.so_id), so);
+    }
+    const groupIds = groups.map((group) => toTrimmedString(group.id)).filter(Boolean);
+    const soIds = [...soById.keys()];
+    const [allocationRows, lineRows] = await Promise.all([
+      fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+        .select("map_group_id, so_line_id, allocated_qty").in("map_group_id", chunk).eq("status", "ACTIVE")),
+      fetchInChunks<JsonRecord>(soIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("*").in("so_id", chunk)),
+    ]);
+    const addressIds = [...new Set(groups.map((group) => toTrimmedString(group.customer_address_id)).filter(Boolean))];
+    const materialIds = [...new Set(lineRows.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+    const companyIds = [...new Set([...soById.values()].flatMap((so) => [toTrimmedString(so.company_id), toTrimmedString(so.bill_to_parent_company_id)]).filter(Boolean))];
+    const [addressRows, materialRows, companyRows] = await Promise.all([
+      fetchInChunks<JsonRecord>(addressIds, (chunk) => serviceRoleClient.schema("erp_master").from("customer_address").select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", chunk)),
+      fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name").in("id", chunk)),
+      fetchInChunks<JsonRecord>(companyIds, (chunk) => serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, gst_number").in("id", chunk)),
+    ]);
+    const addressById = new Map(addressRows.map((row) => [toTrimmedString(row.id), row]));
+    const materialById = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
+    const companyById = new Map(companyRows.map((row) => [toTrimmedString(row.id), row]));
+    const customerIds = [...new Set(addressRows.map((address) => toTrimmedString(address.customer_id)).filter(Boolean))];
+    const customerRows = await fetchInChunks<JsonRecord>(customerIds, (chunk) => serviceRoleClient.schema("erp_master").from("customer_master")
+      .select("id, customer_code, customer_name, gst_number, billing_address, billing_state").in("id", chunk));
+    const customerById = new Map(customerRows.map((row) => [toTrimmedString(row.id), row]));
+    const lineById = new Map(lineRows.map((line) => [toTrimmedString(line.id), line]));
+    const allocationsByGroup = new Map<string, JsonRecord[]>();
+    for (const allocation of allocationRows) {
+      const groupId = toTrimmedString(allocation.map_group_id);
+      if (!allocationsByGroup.has(groupId)) allocationsByGroup.set(groupId, []);
+      allocationsByGroup.get(groupId)!.push(allocation);
+    }
+    const rows = groups.flatMap((group) => {
+      const so = soById.get(toTrimmedString(group.so_id));
+      if (!so) return [];
+      const groupAddress = addressById.get(toTrimmedString(group.customer_address_id));
+      const customer = groupAddress ? customerById.get(toTrimmedString(groupAddress.customer_id)) : undefined;
+      const company = companyById.get(toTrimmedString(so.company_id));
+      const parentCompany = companyById.get(toTrimmedString(so.bill_to_parent_company_id));
+      return (allocationsByGroup.get(toTrimmedString(group.id)) ?? []).flatMap((allocation) => {
+        const line = lineById.get(toTrimmedString(allocation.so_line_id));
+        if (!line) return [];
+        const material = materialById.get(toTrimmedString(line.material_id));
+        const allocationQty = Number(allocation.allocated_qty ?? 0);
+        const lineBaseQty = Number(line.base_qty ?? line.quantity ?? 0);
+        const allocationRatio = lineBaseQty > 0 ? allocationQty / lineBaseQty : 0;
+        const perPackQty = Number(line.per_pack_qty ?? 0);
+        const lineGst = Number(line.gst_amount ?? 0) || Number(line.cgst_amount ?? 0) + Number(line.sgst_amount ?? 0) + Number(line.igst_amount ?? 0);
+        const lineTotal = Number(line.total_value ?? 0);
+        const proportional = (field: string) => Number(((Number(line[field] ?? 0) || 0) * allocationRatio).toFixed(6));
+        return [{
+          row_id: `${toTrimmedString(group.id)}::${toTrimmedString(allocation.so_line_id)}`, map_group_id: group.id,
+          company_code: toTrimmedString(company?.company_code) || null, company_name: toTrimmedString(company?.company_name) || null,
+          so_number: toTrimmedString(so.so_number), external_so_number: toTrimmedString(so.customer_po_number) || null, external_so_date: toTrimmedString(so.customer_po_date) || null,
+          fo_number: toTrimmedString(group.external_fo_number), revised_fo_number: toTrimmedString(group.revised_external_fo_number) || null, effective_fo_number: effectiveExternalFoNumber(group),
+          parent_company_code: toTrimmedString(parentCompany?.company_code) || null, parent_company_name: toTrimmedString(parentCompany?.company_name) || null, parent_company_gst: toTrimmedString(parentCompany?.gst_number) || null,
+          bill_to_name: toTrimmedString(so.bill_to_name) || null, bill_to_address: toTrimmedString(so.bill_to_address) || null, bill_to_state: toTrimmedString(so.bill_to_state) || null, bill_to_gst: toTrimmedString(so.bill_to_gst_number) || null,
+          ship_to_name: toTrimmedString(so.ship_to_name) || null, ship_to_address: toTrimmedString(so.ship_to_address) || null, ship_to_state: toTrimmedString(so.ship_to_state) || null, ship_to_gst: toTrimmedString(so.ship_to_gst_number) || null,
+          customer_code: toTrimmedString(customer?.customer_code) || null, customer_name: toTrimmedString(customer?.customer_name) || null, customer_gst: toTrimmedString(customer?.gst_number) || null,
+          customer_billing_address: toTrimmedString(customer?.billing_address) || null, customer_billing_state: toTrimmedString(customer?.billing_state) || null,
+          site_name: toTrimmedString(groupAddress?.site_name) || null, site_address: toTrimmedString(groupAddress?.address_line) || null, site_town: toTrimmedString(groupAddress?.town) || null, site_state: toTrimmedString(groupAddress?.state) || null, site_pin_code: toTrimmedString(groupAddress?.pin_code) || null,
+          sku: toTrimmedString(material?.external_code) || toTrimmedString(material?.pace_code) || null, material_description: toTrimmedString(material?.material_name) || toTrimmedString(line.manual_sku_name) || null,
+          pack_qty: Number((perPackQty > 0 ? allocationQty / perPackQty : allocationQty).toFixed(6)), base_qty: Number(allocationQty.toFixed(6)), rate: Number(Number(line.net_rate ?? 0).toFixed(6)), gst_rate: Number(Number(line.gst_rate ?? 0).toFixed(6)),
+          taxable_amount: Number(((lineTotal - lineGst) * allocationRatio).toFixed(6)), cgst_amount: proportional("cgst_amount"), sgst_amount: proportional("sgst_amount"), igst_amount: proportional("igst_amount"), gst_amount: Number((lineGst * allocationRatio).toFixed(6)), total_amount: proportional("total_value"), mapped_at: toTrimmedString(group.created_at) || null,
+        }];
+      });
+    });
+    return okResponse(rows, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_MAP_MTS_FO_LIST_FAILED";
+    return soMapErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, code);
+  }
+}
+
 export async function reviseMtsFoNumberHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const groupId = getGroupIdFromPath(req);
