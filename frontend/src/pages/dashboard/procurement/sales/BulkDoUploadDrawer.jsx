@@ -14,10 +14,10 @@
  * Authority: Frontend
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import { createTransporter, previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
+import { previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
 
 const TEMPLATE_HEADERS = [
   "FO/SO Number", "DO Date", "Transporter", "LR Number", "LR Date", "SKU",
@@ -104,7 +104,7 @@ async function parseUploadedWorkbook(file) {
   return rows;
 }
 
-export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
+export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initialDraft = null, onDraftRestored, onOpenTransporterMaster }) {
   const [rows, setRows] = useState(null);
   const [rawByIndex, setRawByIndex] = useState({});
   const [uploading, setUploading] = useState(false);
@@ -113,11 +113,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saveResults, setSaveResults] = useState(null);
-  const [transporterCreate, setTransporterCreate] = useState(null);
-  const [newTransporterName, setNewTransporterName] = useState("");
-  const [newTransporterGst, setNewTransporterGst] = useState("");
-  const [creatingTransporter, setCreatingTransporter] = useState(false);
   const fileInputRef = useRef(null);
+  const restoredDraftRef = useRef(false);
 
   function updateRaw(rowIndex, patch) {
     setRawByIndex((current) => ({ ...current, [rowIndex]: { ...current[rowIndex], ...patch } }));
@@ -126,10 +123,30 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
     setRows((current) => (current ?? []).filter((row) => row.row_index !== rowIndex));
   }
 
-  async function runPreview(parsedRows) {
+  const runPreview = useCallback(async (parsedRows) => {
     const result = await previewDoBulkUpload({ company_id: companyId, rows: parsedRows });
     setRows(responseRows(result));
-  }
+  }, [companyId]);
+
+  // Returning from Transporter Master must restore the exact upload, then
+  // preview it again.  The newly-created master record is consequently
+  // resolved through the same normal resolver as every other transporter.
+  useEffect(() => {
+    const restoredRows = initialDraft?.raw_rows;
+    if (restoredDraftRef.current || !Array.isArray(restoredRows) || restoredRows.length === 0) return;
+    restoredDraftRef.current = true;
+    const rawMap = {};
+    restoredRows.forEach((row) => { rawMap[row.row_index] = row; });
+    setRawByIndex(rawMap);
+    setUploading(true);
+    setError("");
+    void runPreview(restoredRows)
+      .catch((restoreError) => setError(restoreError instanceof Error ? restoreError.message : "DO_BULK_PREVIEW_FAILED"))
+      .finally(() => {
+        setUploading(false);
+        onDraftRestored?.();
+      });
+  }, [initialDraft, onDraftRestored, runPreview]);
 
   async function handleFileChosen(event) {
     const file = event.target.files?.[0];
@@ -174,34 +191,14 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
       : row)));
   }
 
-  function beginCreateTransporter(row) {
-    setTransporterCreate({ rowIndex: row.row_index });
-    setNewTransporterName(rawByIndex[row.row_index]?.transporter_name || "");
-    setNewTransporterGst("");
-  }
-
-  async function saveNewTransporter() {
-    const name = newTransporterName.trim();
-    if (!name || !transporterCreate) return;
-    setCreatingTransporter(true); setError("");
-    try {
-      const result = await createTransporter({
-        transporter_name: name,
-        usage_direction: "BOTH",
-        business_context: "SALES",
-        gst_number: newTransporterGst.trim() || undefined,
-      });
-      const created = result?.data ?? result;
-      if (!created?.id) throw new Error("TRANSPORTER_CREATE_FAILED");
-      chooseTransporter(transporterCreate.rowIndex, created.id);
-      setTransporterCreate(null);
-      setNewTransporterName("");
-      setNewTransporterGst("");
-    } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "TRANSPORTER_CREATE_FAILED");
-    } finally {
-      setCreatingTransporter(false);
-    }
+  function openTransporterMaster(row) {
+    const rawRows = Object.values(rawByIndex).sort((left, right) => Number(left.row_index) - Number(right.row_index));
+    onOpenTransporterMaster?.({
+      company_id: companyId,
+      raw_rows: rawRows,
+      pending_transporter_row_index: row.row_index,
+      transporter_name: rawByIndex[row.row_index]?.transporter_name || "",
+    });
   }
 
   // One Delivery Order per (fo_or_so_number) group — §6 point 14/17. Header
@@ -398,7 +395,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
                         </select>
                       );
                     }
-                    return <button type="button" onClick={() => beginCreateTransporter(row)} className="border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-800">Not found — Create New</button>;
+                    return <button type="button" onClick={() => openTransporterMaster(row)} className="border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-800">Not found — Open Transporter Master</button>;
                   },
                 },
                 { key: "lr_number", label: "LR Number", width: "135px", render: (row) => rawByIndex[row.row_index]?.lr_number || "—" },
@@ -451,22 +448,6 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved }) {
               </ul>
             ) : null}
           </>
-        ) : null}
-        {transporterCreate ? (
-          <DrawerBase
-            visible
-            title="Create Transporter"
-            onEscape={() => !creatingTransporter && setTransporterCreate(null)}
-            onClose={() => !creatingTransporter && setTransporterCreate(null)}
-            width="min(520px, calc(100vw - 24px))"
-            actions={<button type="button" onClick={() => void saveNewTransporter()} disabled={creatingTransporter || !newTransporterName.trim()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold text-sky-950 disabled:opacity-50">{creatingTransporter ? "Creating…" : "Create & Use"}</button>}
-          >
-            <div className="grid gap-3">
-              <p className="text-xs text-slate-600">No matching Transporter Master record was found. Create it here, then this upload row will use the new master record.</p>
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">Transporter Name<input autoFocus value={newTransporterName} onChange={(event) => setNewTransporterName(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-sm font-normal" /></label>
-              <label className="grid gap-1 text-xs font-semibold text-slate-700">GST Number <span className="font-normal text-slate-500">(optional)</span><input value={newTransporterGst} onChange={(event) => setNewTransporterGst(event.target.value)} className="h-9 border border-slate-300 bg-white px-2 text-sm font-normal" /></label>
-            </div>
-          </DrawerBase>
         ) : null}
       </div>
     </DrawerBase>

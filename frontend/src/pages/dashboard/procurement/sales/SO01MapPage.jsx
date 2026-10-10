@@ -31,6 +31,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { openConfirmPrompt } from "../../../../store/actionPrompt.js";
 import BulkDdSoMapDrawer from "./BulkDdSoMapDrawer.jsx";
+import MtsFoListDrawer from "./MtsFoListDrawer.jsx";
 import {
   getSoMapStatus,
   listCustomerAddressesForSo,
@@ -48,7 +49,7 @@ function StatusPill({ status }) {
   return <span className={`border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${tone}`}>{status.replace("_", " ")}</span>;
 }
 
-function MapDrawer({ so, onClose, onChanged }) {
+function MapDrawer({ so, onClose, onChanged, onOpenMtsFoList }) {
   const queryClient = useQueryClient();
   const [selectedFoId, setSelectedFoId] = useState("");
   const [selectedAddressId, setSelectedAddressId] = useState("");
@@ -241,9 +242,7 @@ function MapDrawer({ so, onClose, onChanged }) {
       onClose={onClose}
       width="min(920px, calc(100vw - 24px))"
       actions={
-        <button type="button" onClick={onClose} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950">
-          Done
-        </button>
+        <div className="flex gap-2"><button type="button" onClick={() => onOpenMtsFoList?.(so)} className="border border-emerald-700 bg-emerald-50 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-emerald-950">MTS FO List</button><button type="button" onClick={onClose} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold uppercase tracking-[0.06em] text-sky-950">Done</button></div>
       }
     >
       {loading ? (
@@ -304,6 +303,8 @@ function MapDrawer({ so, onClose, onChanged }) {
               cellNavigate
               maxHeight="none"
               columns={[
+                { key: "external_fo_number", label: "FO Number", width: "125px", render: (group) => group.external_fo_number || "—" },
+                { key: "revised_external_fo_number", label: "Revised FO", width: "125px", render: (group) => group.revised_external_fo_number || "—" },
                 { key: "source", label: "Destination", width: "280px", render: (group) => group.source_display || "Mapping destination" },
                 { key: "qty", label: "Items / Qty", width: "140px", align: "right", render: (group) => `${group.rows.length} / ${group.rows.reduce((sum, row) => sum + Number(row.allocated_qty ?? 0), 0).toFixed(4)}` },
                 { key: "actions", label: "", width: "150px", render: (row) => (
@@ -373,6 +374,7 @@ export default function SO01MapPage() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [activeSo, setActiveSo] = useState(null);
+  const [mtsFoListSo, setMtsFoListSo] = useState(null);
   const [bulkMapOpen, setBulkMapOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
@@ -467,8 +469,8 @@ export default function SO01MapPage() {
                 cellNavigate
                 columns={[
                   ...SO_MAP_COLUMNS,
-                  { key: "actions", label: "", width: "80px", render: (row) => (
-                    <button type="button" onClick={() => setActiveSo(row)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950">Map</button>
+                  { key: "actions", label: "", width: "170px", render: (row) => (
+                    <div className="flex gap-1"><button type="button" onClick={() => setActiveSo(row)} className="border border-sky-700 bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-950">Map</button><button type="button" onClick={() => setMtsFoListSo(row)} className="border border-emerald-700 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-950">MTS FO List</button></div>
                   ) },
                 ]}
                 rows={filteredRows}
@@ -480,8 +482,9 @@ export default function SO01MapPage() {
         )}
       </ErpScreenScaffold>
       {activeSo ? (
-        <MapDrawer so={activeSo} onClose={() => setActiveSo(null)} onChanged={() => void listQuery.refetch()} />
+        <MapDrawer so={activeSo} onClose={() => setActiveSo(null)} onChanged={() => void listQuery.refetch()} onOpenMtsFoList={setMtsFoListSo} />
       ) : null}
+      {mtsFoListSo ? <MtsFoListDrawer so={mtsFoListSo} onClose={() => setMtsFoListSo(null)} /> : null}
       {bulkMapOpen ? (
         <BulkDdSoMapDrawer
           companyId={effectiveCompanyId}

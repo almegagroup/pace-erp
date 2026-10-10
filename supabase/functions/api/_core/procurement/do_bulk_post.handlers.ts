@@ -54,7 +54,7 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
     const allocationById = new Map(((allocationRows ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
     const mapGroupIds = [...new Set(((allocationRows ?? []) as JsonRecord[]).map((row) => text(row.map_group_id)).filter(Boolean))];
     const { data: mapGroups, error: mapGroupError } = mapGroupIds.length
-      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").select("id, external_fo_number").in("id", mapGroupIds)
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").select("id, external_fo_number, revised_external_fo_number").in("id", mapGroupIds)
       : { data: [] as JsonRecord[], error: null };
     if (mapGroupError) return fail(req, ctx, "BULK_POST_QUEUE_FO_FETCH_FAILED", 500, "Unable to load External FO numbers.");
     const mapGroupById = new Map(((mapGroups ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
@@ -96,7 +96,7 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
         ...rawLine,
         dd_flag: doc.pgi_deferred === true,
         so_number: group?.document_number ?? null,
-        fo_number: text(mapGroup?.external_fo_number) || group?.fo_number || null,
+        fo_number: text(mapGroup?.revised_external_fo_number) || text(mapGroup?.external_fo_number) || group?.fo_number || null,
         external_so_number: group?.customer_po_number ?? null,
         company_code: companyCode,
         vendor_code: vendor ? [text(vendor.vendor_code), text(vendor.description)].filter(Boolean).join(" — ") : null,

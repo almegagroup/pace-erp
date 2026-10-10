@@ -211,12 +211,12 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       soIds.length
         ? fetchInChunks<JsonRecord>(soIds, (chunk) =>
             serviceRoleClient.schema("erp_procurement").from("sales_order_line")
-              .select("id, so_id, material_id, base_qty, quantity").in("so_id", chunk))
+              .select("id, so_id, material_id, base_qty, quantity, per_pack_qty").in("so_id", chunk))
         : Promise.resolve([] as JsonRecord[]),
       soIds.length
         ? fetchInChunks<JsonRecord>(soIds, (chunk) =>
             serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
-              .select("id, so_id, external_fo_number").in("so_id", chunk).eq("status", "ACTIVE").not("external_fo_number", "is", null))
+              .select("id, so_id, external_fo_number, revised_external_fo_number").in("so_id", chunk).eq("status", "ACTIVE").not("external_fo_number", "is", null))
         : Promise.resolve([] as JsonRecord[]),
       soIds.length
         ? fetchInChunks<JsonRecord>(soIds, (chunk) =>
@@ -225,9 +225,17 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         : Promise.resolve([] as JsonRecord[]),
     ]);
     const lineRows = lineRowsResult as JsonRecord[];
-    const existingGroupByKey = new Map<string, JsonRecord>(
-      (existingGroupsResult as JsonRecord[]).map((row) => [`${toTrimmedString(row.so_id)}::${toTrimmedString(row.external_fo_number)}`, row]),
-    );
+    // The upload may arrive with either the immutable original FO or a later
+    // corrected FO. Both names intentionally resolve to the one map group so
+    // a re-upload replaces the existing allocation instead of consuming the
+    // SO balance a second time.
+    const existingGroupByKey = new Map<string, JsonRecord>();
+    for (const row of existingGroupsResult as JsonRecord[]) {
+      const soId = toTrimmedString(row.so_id);
+      for (const foNumber of [toTrimmedString(row.external_fo_number), toTrimmedString(row.revised_external_fo_number)]) {
+        if (soId && foNumber) existingGroupByKey.set(`${soId}::${foNumber}`, row);
+      }
+    }
     const allocatedByLine = new Map<string, number>();
     // §6 point 12 — the duplicate-vs-changed-qty compare is per (group, SO
     // line): the same FO can carry several SKUs, each with its own
@@ -275,7 +283,9 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       });
       if (!matchedLine) continue;
       const lineId = toTrimmedString(matchedLine.id);
-      batchRequestedByLine.set(lineId, (batchRequestedByLine.get(lineId) ?? 0) + Number(row.pack_qty ?? 0));
+      const perPackQty = Number(matchedLine.per_pack_qty ?? 0);
+      const requestedBaseQty = Number(row.pack_qty ?? 0) * (perPackQty > 0 ? perPackQty : 1);
+      batchRequestedByLine.set(lineId, (batchRequestedByLine.get(lineId) ?? 0) + requestedBaseQty);
       const group = existingGroupByKey.get(`${soId}::${toTrimmedString(row.fo_number)}`);
       const previous = group
         ? allocatedQtyByGroupAndLine.get(`${toTrimmedString(group.id)}::${lineId}`) ?? 0
@@ -358,6 +368,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
           document_name: toTrimmedString(material?.material_name),
           display: material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : toTrimmedString(line.material_id),
           line_total_qty: Number(line.base_qty ?? line.quantity ?? 0),
+          per_pack_qty: Number(line.per_pack_qty ?? 0) || null,
           existing_allocated_qty: allocatedByLine.get(lineId) ?? 0,
           existing_group_qty: groupQty,
         };
@@ -370,16 +381,19 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
       let duplicateStatus: "NONE" | "UNCHANGED" | "CHANGED_QTY" = "NONE";
       let previousQty: number | null = null;
       let qtyStatus: "OK" | "EXCEEDS_BALANCE" = "OK";
+      const matchedLinePerPackQty = Number(matchedLine?.per_pack_qty ?? 0);
       if (matchedLine) {
         const lineTotal = Number(matchedLine.base_qty ?? matchedLine.quantity ?? 0);
         const lineId = toTrimmedString(matchedLine.id);
+        const perPackQty = Number(matchedLine.per_pack_qty ?? 0);
+        const requestedBaseQty = Number(row.pack_qty ?? 0) * (perPackQty > 0 ? perPackQty : 1);
         const totalAlreadyAllocated = allocatedByLine.get(lineId) ?? 0;
         const existingSameGroupQty = existingGroup
           ? allocatedQtyByGroupAndLine.get(`${toTrimmedString(existingGroup.id)}::${lineId}`) ?? 0
           : 0;
         if (existingSameGroupQty > 0) {
           previousQty = existingSameGroupQty;
-          duplicateStatus = Math.abs(existingSameGroupQty - Number(row.pack_qty ?? 0)) <= QTY_TOL ? "UNCHANGED" : "CHANGED_QTY";
+          duplicateStatus = Math.abs(existingSameGroupQty - requestedBaseQty) <= QTY_TOL ? "UNCHANGED" : "CHANGED_QTY";
         }
         // Balance check excludes this row's own prior allocation (if any) so
         // a same-qty or corrected re-upload of the SAME group+line is never
@@ -427,11 +441,13 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         existing_group_id: existingGroup ? toTrimmedString(existingGroup.id) : null,
         duplicate_status: duplicateStatus,
         previous_qty: previousQty,
+        previous_pack_qty: previousQty == null ? null : previousQty / (matchedLinePerPackQty > 0 ? matchedLinePerPackQty : 1),
         sku_resolution: matchedLine
           ? {
               status: "MATCHED", so_line_id: matchedLine.id, material_id: matchedLine.material_id,
               document_name: toTrimmedString(materialById.get(toTrimmedString(matchedLine.material_id))?.material_name),
               line_total_qty: Number(matchedLine.base_qty ?? matchedLine.quantity ?? 0),
+              per_pack_qty: Number(matchedLine.per_pack_qty ?? 0) || null,
               existing_allocated_qty: allocatedByLine.get(toTrimmedString(matchedLine.id)) ?? 0,
               existing_group_qty: previousQty ?? 0,
             }

@@ -64,14 +64,14 @@ export async function listVdcTruckDispatchPendingHandler(req: Request, ctx: Proc
     const allocationById = new Map(((allocations ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
     const groupIds = [...new Set(((allocations ?? []) as JsonRecord[]).map((row) => text(row.map_group_id)).filter(Boolean))];
     const { data: mapGroups, error: mapGroupError } = groupIds.length ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
-      .select("id, external_fo_number").in("id", groupIds)
+      .select("id, external_fo_number, revised_external_fo_number").in("id", groupIds)
       : { data: [] as JsonRecord[], error: null };
     if (mapGroupError) return fail(req, ctx, "VDC_UPLOAD_FO_FETCH_FAILED", 500, "Unable to load VDC FO numbers.");
     const mapGroupById = new Map(((mapGroups ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
     const externalFoByDcLine = new Map(((dcLines ?? []) as JsonRecord[]).map((line) => {
       const allocation = allocationById.get(text(line.so_map_allocation_id));
       const mapGroup = allocation ? mapGroupById.get(text(allocation.map_group_id)) : undefined;
-      return [text(line.id), text(mapGroup?.external_fo_number) || null];
+      return [text(line.id), text(mapGroup?.revised_external_fo_number) || text(mapGroup?.external_fo_number) || null];
     }));
     const rows: JsonRecord[] = [];
     for (const invoice of invoiceRows) {

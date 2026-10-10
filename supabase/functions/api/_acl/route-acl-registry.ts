@@ -1356,11 +1356,19 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { GET: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" } },
   },
   {
+    pattern: /^\/api\/procurement\/so-map\/[^/]+\/mts-fo-list$/,
+    methods: { GET: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" } },
+  },
+  {
     pattern: /^\/api\/procurement\/so-map\/[^/]+\/unmap$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
   },
   {
     pattern: /^\/api\/procurement\/so-map\/groups\/[^/]+\/release$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/so-map\/groups\/[^/]+\/revise-fo$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "EDIT" } },
   },
   {

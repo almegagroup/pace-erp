@@ -300,7 +300,8 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
       const key = String(resolution.so_line_id);
       const entry = totals.get(key) ?? { lineTotal: Number(resolution.line_total_qty ?? 0), allocated: Number(resolution.existing_allocated_qty ?? 0), replacing: 0, requested: 0 };
       entry.replacing += Number(resolution.existing_group_qty ?? 0);
-      entry.requested += Number(rawByIndex[row.row_index]?.pack_qty ?? 0);
+      const perPackQty = Number(resolution.per_pack_qty ?? 0);
+      entry.requested += Number(rawByIndex[row.row_index]?.pack_qty ?? 0) * (perPackQty > 0 ? perPackQty : 1);
       totals.set(key, entry);
     }
     return nextRows.map((row) => {
@@ -521,7 +522,9 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
           external_fo_number: raw?.fo_number || undefined,
           items: [],
         };
-        target.items.push({ so_line_id: soLineId, allocated_qty: raw?.pack_qty });
+        const perPackQty = Number(row.sku_resolution?.per_pack_qty ?? 0);
+        const packQty = Number(raw?.pack_qty ?? 0);
+        target.items.push({ so_line_id: soLineId, allocated_qty: packQty * (perPackQty > 0 ? perPackQty : 1) });
         groups.set(key, target);
       }
       for (const group of groups.values()) {
@@ -606,7 +609,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
                     if (row.duplicate_status === "UNCHANGED") return <span className="text-slate-500">Duplicate (skip)</span>;
                     if (row.duplicate_status === "CHANGED_QTY") return row.change_confirmed
                       ? <span className="font-semibold text-emerald-800">Qty change confirmed</span>
-                      : <span className="flex items-center gap-1 font-semibold text-amber-700">Changed from {row.previous_qty}<button type="button" onClick={() => updateRow(row.row_index, { change_confirmed: true })} className="border border-amber-500 bg-amber-50 px-1 text-[10px]">Confirm</button></span>;
+                      : <span className="flex items-center gap-1 font-semibold text-amber-700">Changed from {row.previous_pack_qty ?? row.previous_qty}<button type="button" onClick={() => updateRow(row.row_index, { change_confirmed: true })} className="border border-amber-500 bg-amber-50 px-1 text-[10px]">Confirm</button></span>;
                     return <span className="text-slate-400">—</span>;
                   },
                 },

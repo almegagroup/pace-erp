@@ -186,7 +186,7 @@ async function listFinishedGoodsStorageLocations(): Promise<JsonRecord[]> {
 }
 
 // §6 point 14 — one template column takes either an FO Number (VDC/Dependent
-// Direct, resolved through sales_order_map_group.external_fo_number — §6
+// Direct, resolved through the original or revised Sales/Dispatch FO Number — §6
 // point 1/T1) or a plain SO Number (DC/Dependent Depot, resolved directly
 // against sales_order.so_number). A value that resolves to the WRONG type
 // is a type-mismatch error, not a silent fallback.
@@ -196,10 +196,16 @@ async function resolveFoOrSo(value: string, companyId: string): Promise<{
   so_number?: string;
   map_group_id?: string;
 }> {
-  const { data: groupRow, error: groupError } = await serviceRoleClient
-    .schema("erp_procurement").from("sales_order_map_group")
-    .select("id, so_id, status, so:so_id(company_id, so_number)")
-    .eq("external_fo_number", value).eq("status", "ACTIVE").maybeSingle();
+  const [originalResult, revisedResult] = await Promise.all([
+    serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      .select("id, so_id, status, so:so_id(company_id, so_number)")
+      .eq("external_fo_number", value).eq("status", "ACTIVE").maybeSingle(),
+    serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      .select("id, so_id, status, so:so_id(company_id, so_number)")
+      .eq("revised_external_fo_number", value).eq("status", "ACTIVE").maybeSingle(),
+  ]);
+  const groupRow = originalResult.data ?? revisedResult.data;
+  const groupError = originalResult.error ?? revisedResult.error;
   if (!groupError && groupRow) {
     const so = (groupRow as JsonRecord).so as JsonRecord | null;
     if (so && toUpperTrimmedString(so.company_id) === toUpperTrimmedString(companyId)) {
@@ -632,9 +638,14 @@ export async function findDoByFoNumberHandler(req: Request, ctx: ProcurementHand
     const foNumber = toTrimmedString(url.searchParams.get("fo_number"));
     if (!foNumber) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NUMBER_REQUIRED", 400, "fo_number is required.");
 
-    const { data: groupRow, error: groupError } = await serviceRoleClient
-      .schema("erp_procurement").from("sales_order_map_group")
-      .select("id, so:so_id(company_id)").eq("external_fo_number", foNumber).eq("status", "ACTIVE").maybeSingle();
+    const [originalResult, revisedResult] = await Promise.all([
+      serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+        .select("id, so:so_id(company_id)").eq("external_fo_number", foNumber).eq("status", "ACTIVE").maybeSingle(),
+      serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+        .select("id, so:so_id(company_id)").eq("revised_external_fo_number", foNumber).eq("status", "ACTIVE").maybeSingle(),
+    ]);
+    const groupRow = originalResult.data ?? revisedResult.data;
+    const groupError = originalResult.error ?? revisedResult.error;
     if (groupError) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_LOOKUP_FAILED", 500, "Unable to look up this FO Number.");
     if (!groupRow) return doBulkErrorResponse(req, ctx, "DO_BULK_FO_NOT_FOUND", 404, "This FO Number is not mapped yet.");
     const so = (groupRow as JsonRecord).so as JsonRecord | null;
