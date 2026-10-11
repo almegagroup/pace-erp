@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
+import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 import { listVdcTruckDispatchPending, postVdcTruckDispatch } from "../procurementApi.js";
 
 function parseCsv(text) {
@@ -42,6 +43,10 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
     truck_number: edits[row.dc_id]?.truck_number ?? row.truck_number ?? "",
     dispatch_date: edits[row.dc_id]?.dispatch_date ?? row.dispatch_date ?? "",
   })), [edits, sourceRows]);
+  const reviewRows = useMemo(
+    () => prioritizeUploadReviewRows(rows, (row) => !String(row.truck_number || "").trim() || !String(row.dispatch_date || "").trim()),
+    [rows]
+  );
 
   function setField(row, field, value) {
     // An FO is one physical dispatch event: an edit must follow every SKU/DO
@@ -132,7 +137,7 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
       <p className="text-xs text-slate-600">Only pending VDC Invoice-only rows appear. Leaving either Truck Number or Dispatch Date blank keeps that FO pending. A value entered for one FO row is propagated to every row of that FO.</p>
       {query.error ? <p className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">{query.error instanceof Error ? query.error.message : "VDC_UPLOAD_PENDING_FAILED"}</p> : null}
       {notice ? <p className={`border px-3 py-2 text-xs font-semibold ${notice.includes("remain pending") || notice.includes("FAILED") ? "border-amber-300 bg-amber-50 text-amber-900" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>{notice}</p> : null}
-      <ErpDenseGrid cellNavigate rows={rows} rowKey={(row) => `${row.dc_id}-${row.storage_location_id}-${row.sku}`} emptyMessage={query.isLoading ? "Loading pending VDC rows…" : "No pending VDC Invoice-only rows."}
+      <ErpDenseGrid cellNavigate rows={reviewRows} rowKey={(row) => `${row.dc_id}-${row.storage_location_id}-${row.sku}`} emptyMessage={query.isLoading ? "Loading pending VDC rows…" : "No pending VDC Invoice-only rows."}
         columns={[
           { key: "fo_number", label: "FO Number", width: "145px", render: (row) => row.fo_number || "—" },
           { key: "ship_to", label: "Ship-To Address", width: "220px", render: (row) => row.ship_to || "—" },
