@@ -1158,6 +1158,9 @@ export function saveSoMapGroup(data) {
 export function previewSoMapBulkUpload(data) {
   return fetchProcurement("POST", "/api/procurement/so-map/bulk/preview", data);
 }
+export function createMissingGstCustomersForSoMap(data) {
+  return fetchProcurement("POST", "/api/procurement/so-map/bulk/create-missing-gst-customers", data);
+}
 export function releaseSoMapGroup(groupId) {
   return fetchProcurement("POST", `/api/procurement/so-map/groups/${encodeURIComponent(groupId)}/release`);
 }

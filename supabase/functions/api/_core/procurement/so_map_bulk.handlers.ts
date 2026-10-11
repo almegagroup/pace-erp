@@ -7,13 +7,13 @@
  *          into Customer+Site Address
  *          allocations, per FG-STO-MTS-DISPATCH-DESIGN-DOC.md §6 points 8-12.
  *          VDC (Dependent Direct) only — DC never uses this (§6 point 10).
- *          This is a bulk-resolve/preview layer: it never writes a new
- *          customer/address itself (the existing createCustomerHandler/
- *          createCustomerAddressHandler already do that, called directly by
- *          the frontend's Create-New drawer) and never writes an allocation
- *          itself (the existing saveSoMapGroupHandler, extended additively
- *          with external_fo_number, does that). so_map.handlers.ts and
- *          every other existing handler in this codebase are untouched.
+ *          Preview remains read-only. A separate batch action creates missing
+ *          GST customers by invoking the existing MM04 customer/address
+ *          handlers in-process, never one browser request per spreadsheet
+ *          row. It never writes an allocation itself (the existing
+ *          saveSoMapGroupHandler, extended additively with
+ *          external_fo_number, does that). so_map.handlers.ts and every
+ *          other existing handler in this codebase are untouched.
  * Authority: Backend
  */
 
@@ -22,6 +22,10 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
+import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
+import { createCustomerHandler } from "../om/customer.handlers.ts";
+import { createCustomerAddressHandler } from "../om/customer_address.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -52,6 +56,13 @@ type RawUploadRow = {
   pack_qty: number;
 };
 
+type PreviewRow = JsonRecord & {
+  row_index?: number;
+  status?: string;
+  vdc_id?: string;
+  customer_resolution?: JsonRecord;
+};
+
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
 }
@@ -76,6 +87,39 @@ function externalSoLookupValues(value: unknown): string[] {
 }
 function soMapBulkErrorResponse(req: Request, ctx: ProcurementHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
+}
+
+function makeInternalJsonRequest(source: Request, body: JsonRecord): Request {
+  return new Request(source.url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function unwrapInternalHandlerResponse(response: Response): Promise<JsonRecord> {
+  const payload = await response.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(toTrimmedString(payload.code) || "SO_MAP_GST_CUSTOMER_CREATE_FAILED");
+  }
+  const envelope = payload.data as JsonRecord | undefined;
+  const data = envelope?.data;
+  if (!data || typeof data !== "object") {
+    throw new Error("SO_MAP_GST_CUSTOMER_CREATE_FAILED");
+  }
+  return data as JsonRecord;
+}
+
+async function runWithConcurrency<T>(items: T[], maxConcurrency: number, work: (item: T) => Promise<void>): Promise<void> {
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex];
+      nextIndex += 1;
+      await work(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(maxConcurrency, items.length) }, worker));
 }
 
 async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyId?: string): Promise<string> {
@@ -485,6 +529,141 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     return okResponse({ data: results }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_MAP_BULK_PREVIEW_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
+    return soMapBulkErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// A large upload may contain hundreds of customers. The old frontend loop
+// made an HTTP call to MM04 for each row, which triggered the ERP action
+// blocker over and over again. Resolve candidates server-side first, then use
+// the existing MM04 handlers inside this one request. This preserves the
+// customer/company/address validation and audit fields exactly as manual MM04
+// creation does, while making the browser perform one bulk action.
+export async function createMissingGstCustomersForSoMapHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
+    if (!companyId) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_COMPANY_REQUIRED", 400, "company_id is required.");
+    const rows = Array.isArray(body.rows) ? (body.rows as RawUploadRow[]) : [];
+    if (rows.length === 0) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_ROWS_REQUIRED", 400, "At least one row is required.");
+
+    // Never trust VDC/customer resolution supplied by the browser. Reuse the
+    // authoritative preview resolver to establish which exact rows are both
+    // valid and GST-NOT_FOUND before writing anything.
+    const previewResponse = await previewSoMapBulkUploadHandler(
+      makeInternalJsonRequest(req, { company_id: companyId, rows }),
+      ctx,
+    );
+    const previewPayload = await previewResponse.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+    if (!previewResponse.ok || previewPayload.ok !== true) {
+      const code = toTrimmedString(previewPayload.code) || "SO_MAP_BULK_PREVIEW_FAILED";
+      return soMapBulkErrorResponse(req, ctx, code, previewResponse.status || 500, code);
+    }
+    const previewEnvelope = previewPayload.data as JsonRecord | undefined;
+    const previewRows = Array.isArray(previewEnvelope?.data) ? previewEnvelope!.data as PreviewRow[] : [];
+    const rawByIndex = new Map(rows.map((row) => [Number(row.row_index), row]));
+
+    type CandidateGroup = {
+      vdcId: string;
+      gstNumber: string;
+      seed: RawUploadRow;
+      rowIndexes: number[];
+      siteRows: RawUploadRow[];
+    };
+    const groupsByKey = new Map<string, CandidateGroup>();
+    for (const previewRow of previewRows) {
+      const rowIndex = Number(previewRow.row_index);
+      const raw = rawByIndex.get(rowIndex);
+      const customerResolution = previewRow.customer_resolution as JsonRecord | undefined;
+      const gstNumber = toUpperTrimmedString(raw?.customer_gst);
+      const vdcId = toTrimmedString(previewRow.vdc_id);
+      if (!raw || previewRow.status !== "RESOLVED" || !gstNumber || !vdcId || customerResolution?.status !== "NOT_FOUND") continue;
+
+      const key = `${vdcId}::${gstNumber}`;
+      let group = groupsByKey.get(key);
+      if (!group) {
+        group = { vdcId, gstNumber, seed: raw, rowIndexes: [], siteRows: [] };
+        groupsByKey.set(key, group);
+      }
+      group.rowIndexes.push(rowIndex);
+      if (raw.has_site) group.siteRows.push(raw);
+    }
+
+    const failed: JsonRecord[] = [];
+    let createdGroups = 0;
+    // The GST provider is an external dependency. Six workers gives large
+    // workbooks practical throughput without an unbounded burst against it.
+    await runWithConcurrency([...groupsByKey.values()], 6, async (group) => {
+      try {
+        const resolved = await resolveGstProfileWithSource(group.gstNumber);
+        const profile = deriveCompanyFieldsFromGstProfile(resolved.profile);
+        if (!profile.full_address || !profile.state_name) throw new Error("SO_MAP_GST_PROFILE_REQUIRED");
+
+        const createdCustomer = await unwrapInternalHandlerResponse(await createCustomerHandler(
+          makeInternalJsonRequest(req, {
+            company_id: companyId,
+            customer_name: group.seed.customer_name,
+            customer_type: "DOMESTIC",
+            currency_code: "INR",
+            // GST legal names are often proprietor names. The consignee name
+            // from the Excel row is the customer identity; GST supplies only
+            // address/state/pin details.
+            delivery_address: profile.full_address,
+            billing_state: profile.state_name,
+            town: group.seed.town,
+            site_name: group.seed.customer_name,
+            gst_number: group.gstNumber,
+            gst_category: "REGISTERED",
+            pin_code: profile.pin_code || undefined,
+            depot_code_id: group.vdcId,
+          }),
+          ctx,
+        ));
+        const customerId = toTrimmedString(createdCustomer.id);
+        if (!customerId) throw new Error("SO_MAP_GST_CUSTOMER_CREATE_FAILED");
+
+        // One GST/VDC group can carry several physical sites. Create each
+        // distinct uploaded site once, and rely on the refreshed preview for
+        // normal exact-match resolution/counts afterwards.
+        const uniqueSites = new Map<string, RawUploadRow>();
+        for (const siteRow of group.siteRows) {
+          const siteKey = [siteRow.site_name, siteRow.site_address, siteRow.site_town]
+            .map(normalizeSiteAddress).join("::");
+          if (!uniqueSites.has(siteKey)) uniqueSites.set(siteKey, siteRow);
+        }
+        for (const siteRow of uniqueSites.values()) {
+          await unwrapInternalHandlerResponse(await createCustomerAddressHandler(
+            makeInternalJsonRequest(req, {
+              customer_id: customerId,
+              site_name: siteRow.site_name,
+              address_line: siteRow.site_address,
+              town: siteRow.site_town,
+              depot_code_id: group.vdcId,
+            }),
+            ctx,
+          ));
+        }
+        createdGroups += 1;
+      } catch (error) {
+        failed.push({
+          gst_number: group.gstNumber,
+          vdc_id: group.vdcId,
+          row_indexes: group.rowIndexes,
+          error_code: error instanceof Error ? error.message : "SO_MAP_GST_CUSTOMER_CREATE_FAILED",
+        });
+      }
+    });
+
+    return okResponse({
+      data: {
+        created_groups: createdGroups,
+        skipped_groups: 0,
+        failed,
+      },
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_MAP_GST_CUSTOMER_CREATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
     return soMapBulkErrorResponse(req, ctx, code, status, code);
   }
