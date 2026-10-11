@@ -3,7 +3,8 @@
  * Domain: PROCUREMENT / Sales
  * Purpose: "Bulk DD SO Map" (SO01 Tab 2 additive button) — resolves a bulk
  *          Excel upload (External SO Number, FO Number, Customer GST/Name/
- *          Address, Has Site, SKU, Pack Qty) into Customer+Site Address
+ *          Address/Town, Has Site, Site Name/Address/Town, SKU, Pack Qty)
+ *          into Customer+Site Address
  *          allocations, per FG-STO-MTS-DISPATCH-DESIGN-DOC.md §6 points 8-12.
  *          VDC (Dependent Direct) only — DC never uses this (§6 point 10).
  *          This is a bulk-resolve/preview layer: it never writes a new
@@ -41,7 +42,10 @@ type RawUploadRow = {
   customer_gst?: string;
   customer_name?: string;
   customer_address?: string;
+  town?: string;
   site_address?: string;
+  site_name?: string;
+  site_town?: string;
   has_site: boolean;
   has_site_valid?: boolean;
   sku: string;
@@ -158,11 +162,23 @@ function normalizeSiteAddress(value: unknown): string {
   return toTrimmedString(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-function buildSiteResolution(addresses: JsonRecord[], uploadedSiteAddress: unknown): JsonRecord {
+function buildSiteResolution(
+  addresses: JsonRecord[],
+  uploadedSiteName: unknown,
+  uploadedSiteAddress: unknown,
+  uploadedSiteTown: unknown,
+): JsonRecord {
+  const normalizedUploadedName = normalizeSiteAddress(uploadedSiteName);
   const normalizedUploadedAddress = normalizeSiteAddress(uploadedSiteAddress);
-  const exactMatches = normalizedUploadedAddress
-    ? addresses.filter((address) => normalizeSiteAddress(address.address_line) === normalizedUploadedAddress)
-    : [];
+  const normalizedUploadedTown = normalizeSiteAddress(uploadedSiteTown);
+  // Address alone is not a reliable site identity: large customers often
+  // reuse a generic address label across towns/sites. Every supplied site
+  // attribute is therefore part of the exact-match key.
+  const exactMatches = addresses.filter((address) => (
+    (!normalizedUploadedName || normalizeSiteAddress(address.site_name) === normalizedUploadedName)
+    && (!normalizedUploadedAddress || normalizeSiteAddress(address.address_line) === normalizedUploadedAddress)
+    && (!normalizedUploadedTown || normalizeSiteAddress(address.town) === normalizedUploadedTown)
+  ));
   if (exactMatches.length === 1) {
     return { count: addresses.length, status: "MATCHED", candidates: exactMatches, all_candidates: addresses };
   }
@@ -317,6 +333,14 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         results.push({ row_index: row.row_index, status: "ERROR", error_code: "INVALID_UPLOAD_ROW" });
         continue;
       }
+      if (!toTrimmedString(row.town)) {
+        results.push({ row_index: row.row_index, status: "ERROR", error_code: "CUSTOMER_TOWN_REQUIRED" });
+        continue;
+      }
+      if (row.has_site && (!toTrimmedString(row.site_name) || !toTrimmedString(row.site_address) || !toTrimmedString(row.site_town))) {
+        results.push({ row_index: row.row_index, status: "ERROR", error_code: "SITE_DETAILS_REQUIRED" });
+        continue;
+      }
       const uploadKey = [row.external_so_number, row.fo_number, row.sku].map(toUpperTrimmedString).join("::");
       if ((uploadKeyCounts.get(uploadKey) ?? 0) > 1) {
         results.push({ row_index: row.row_index, status: "ERROR", error_code: "DUPLICATE_UPLOAD_ROW" });
@@ -421,7 +445,7 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         const resolvedCustomerId = toTrimmedString((customerResolution as JsonRecord).customer_id);
         if (resolvedCustomerId) {
           const addresses = await resolveCached(siteAddressCache, `${vdcId}::${resolvedCustomerId}`, () => resolveSiteAddresses(resolvedCustomerId, vdcId));
-          siteResolution = buildSiteResolution(addresses, row.site_address);
+          siteResolution = buildSiteResolution(addresses, row.site_name, row.site_address, row.site_town);
         } else {
           siteResolution = { count: 0, status: "PENDING_CUSTOMER", candidates: [] };
         }

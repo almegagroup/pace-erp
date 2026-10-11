@@ -124,6 +124,16 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   `saveSoMapGroup` once per resolved row (source="address",
   `external_fo_number` attached) — zero new save-side endpoint, per the T6
   note above.
+  **2026-10-11 ✅ contract hardening:** the template and the review-grid source
+  columns now use the locked order `External SO Number, FO Number, Customer GST,
+  Customer Name, Customer Address, TOWN, Has Site, SITE NAME, Site Address,
+  SITE TOWN, SKU, Pack Qty`. `TOWN` is persisted through the existing
+  `customer_master.town` field; the three site fields are persisted through
+  the existing `customer_address.site_name/address_line/town` fields. Has-Site
+  rows require all three site values; exact site resolution uses all three,
+  not address alone. Customer/site batch reuse likewise compares Town and the
+  full site identity, preventing cross-town/site auto-selection. No shadow
+  table or duplicate database columns were introduced.
 - [x] **T11.** Verify against real data (a real VDC SO + a slice of the real Tally
   Excel), `deno check`/`eslint` clean, re-run all `.mjs` guards.
   **2026-10-09 ✅ (code-verified; real-data click-through still blocked)**

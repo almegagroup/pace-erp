@@ -495,13 +495,20 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
      row-ধরে-row সঠিক customer/site address manually বসানো **practically impossible** —
      কারণ upload Excel-এ row count ৫০০+ পর্যন্ত হতে পারে।
 
-8. **SO Map Excel Template — basic shape (business owner-এর প্রস্তাব):**
+8. **SO Map Excel Template — locked, ordered contract (2026-10-11):**
 
-   **Template columns:** External SO Number, FO Number, Customer GST, Customer Name,
-   Customer Address, Has Site (Yes/No), SKU, Pack Qty।
+   **Template columns (এই order-এই):** External SO Number, FO Number, Customer GST,
+   Customer Name, Customer Address, **TOWN**, Has Site (Yes/No), **SITE NAME**,
+   **Site Address**, **SITE TOWN**, SKU, Pack Qty। Header সবকটিই থাকবে; Customer GST-এর
+   value blank হতে পারে, কিন্তু column নিজে optional না।
 
    - **External SO Number** → PACE-এর SO resolve হয়ে যাবে।
    - **FO Number** → as-is capture (কোথায় store হবে এখনো খোলা, নিচে দেখো)।
+   - **Customer Address + TOWN** → Customer Master-এর `delivery_address` + `town`-এর
+     source; নতুন customer create হলে Town আর manual input নয়।
+   - **Has Site = Yes** → SITE NAME, Site Address, SITE TOWN তিনটিই required; এগুলো
+     `customer_address.site_name/address_line/town`-এর source এবং তিনটি মিলিয়েই Site
+     exact-match key। Has Site = No হলে Site field-গুলো allocation/resolution-এ ব্যবহার হয় না।
    - **SKU, Pack Qty** → সরাসরি column থেকেই নেওয়া, কোনো resolution লাগে না।
    - Customer + Site Address resolution-এর পূর্ণ mechanism point ৯-এ।
 
@@ -555,10 +562,10 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
          New"** escape hatch থাকবে।
        - কোনো match নেই → সরাসরি Create New drawer।
      - **Create New drawer-এর field:**
-       - Customer Name, Customer Address — Excel row থেকে prefilled (editable)।
+       - Customer Name, Customer Address, **TOWN** — Excel row থেকে prefilled (editable)।
        - **Billing State** — VDC-র নিজের state থেকে auto (manual input লাগবে না)।
        - Site Name — "Same as Customer" (Customer Name reuse)।
-       - **Town, Pin Code** — manual (Excel-এ নেই, এটাই একমাত্র real manual touch-point)।
+       - Pin Code optional/manual; Town এখন Excel-এর mandatory `TOWN` column থেকে আসে।
        - GST Category — default UNREGISTERED।
        - Company, VDC — পুরোপুরি automatic (SO থেকে জানা), দেখানোরও দরকার নেই।
        - একই drawer-এর ভেতরেই **"Add Site Address"** button থাকবে, চাইলে সেখানেই আরও site
@@ -571,11 +578,12 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
    - resolved customer-এর under-এ কতগুলো Site Address আছে (N) — এই count Customer column-এর
      পাশে দেখাবে, প্রতিটা Yes-marked line-এ।
    - N=1 → auto-select, পাশে "Add" option (ভুল হলে নতুন লাগাতে)।
-   - N>1 → **"Choose from N sites"** — Customer-এর মতোই প্রতিটা candidate-এর Address/Town
-     সহ, Excel row-এর address-এর পাশে।
+   - N>1 → **"Choose from N sites"** — Customer-এর মতোই প্রতিটা candidate-এর Site Name +
+     Address/Town সহ, Excel-এর SITE NAME + Site Address + SITE TOWN-এর পাশে।
    - N=0 (কোনো Site Address নেই) অথবা N candidate-এর কোনোটাই match না হলে → একই
-     **"Add Site Address"** drawer: "Same as Customer" checkbox (টিক দিলে Site Name +
-     Address Line auto), Town + Pin Code manual, State auto (customer/VDC-র state)।
+     **"Add Site Address"** drawer: SITE NAME, Site Address, SITE TOWN Excel থেকে prefilled;
+     "Same as Customer" checkbox নিলে Customer Name/Address/TOWN বসবে, Pin Code optional,
+     State auto (customer/VDC-র state)।
    - Add করলে সেটা **সরাসরি সেই row-এ বসে যায়** — আলাদা করে আবার "choose" করতে হয় না।
    - **Dedup + per-row override:** একই Customer + একই Site একাধিক row-এ থাকলে একবার resolve
      হলে বাকি row-এও auto বসে যায়, কিন্তু প্রতিটা row individually **"Change"** করা যায় — Change
@@ -602,8 +610,8 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
       option।
     - Template-এর column আর তাদের resolution (point ৮-৯-এ confirm হওয়া সব একসাথে): External
       SO Number (→ PACE SO + তার VDC resolve), FO Number (as-is capture), Customer GST/Name/
-      Address (→ point ৯-এর পূর্ণ Customer+Site resolution mechanism), Has Site (Yes/No),
-      SKU, Pack Qty।
+      Address + TOWN (→ point ৯-এর পূর্ণ Customer resolution mechanism), Has Site (Yes/No),
+      SITE NAME + Site Address + SITE TOWN (→ Site resolution), SKU, Pack Qty।
     - Upload-পরবর্তী **ERP Dense Grid Review page**-এ যা দেখাবে: **SO Number** (resolved),
       **SKU → document_name** (resolved), একটা **"DD Flagged" (Yes/No)** column (সেই SO
       আসলেই DD/VDC-type কিনা confirm), তারপর Customer+Site resolution-এর পূর্ণ UI (inline

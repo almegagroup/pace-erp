@@ -4,7 +4,8 @@
  * Purpose: "Bulk DD SO Map" — additive to SO01MapPage.jsx (SO01 Tab 2),
  *          per FG-STO-MTS-DISPATCH-DESIGN-DOC.md §6 points 8-12. Resolves a
  *          bulk Excel upload (External SO Number, FO Number, Customer GST/
- *          Name/Address, Has Site, SKU, Pack Qty) into Customer+Site
+ *          Name/Address/Town, Has Site, Site Name/Address/Town, SKU, Pack Qty)
+ *          into Customer+Site
  *          Address allocations for VDC (Dependent Direct) SOs — MTS never
  *          uses the existing FO (plan_feed)-based path, this is the manual
  *          "address" source driven in bulk. VDC-only; DC never uses this.
@@ -20,7 +21,7 @@ import { previewSoMapBulkUpload, saveSoMapGroup } from "../procurementApi.js";
 
 const TEMPLATE_HEADERS = [
   "External SO Number", "FO Number", "Customer GST", "Customer Name",
-  "Customer Address", "Has Site", "Site Address", "SKU", "Pack Qty",
+  "Customer Address", "TOWN", "Has Site", "SITE NAME", "Site Address", "SITE TOWN", "SKU", "Pack Qty",
 ];
 
 async function buildTemplateWorkbook() {
@@ -30,7 +31,7 @@ async function buildTemplateWorkbook() {
   sheet.addRow(TEMPLATE_HEADERS);
   sheet.getRow(1).font = { bold: true };
   for (let rowNumber = 2; rowNumber <= 500; rowNumber += 1) {
-    sheet.getCell(rowNumber, 6).dataValidation = { type: "list", allowBlank: true, formulae: ['"Yes,No"'] };
+    sheet.getCell(rowNumber, 7).dataValidation = { type: "list", allowBlank: true, formulae: ['"Yes,No"'] };
   }
   sheet.columns.forEach((column) => { column.width = 20; });
   return workbook;
@@ -75,9 +76,12 @@ async function parseUploadedWorkbook(file) {
     customer_gst: ["customergst", "gstnumber"],
     customer_name: ["customername"],
     customer_address: ["customeraddress"],
+    town: ["town", "customertown"],
     has_site: ["hassite"],
+    site_name: ["sitename"],
     // Accept the legacy `Site adress` spelling used in the operations feed.
     site_address: ["siteaddress", "siteadress"],
+    site_town: ["sitetown"],
     sku: ["sku"],
     pack_qty: ["packqty", "packquantity"],
   };
@@ -92,13 +96,13 @@ async function parseUploadedWorkbook(file) {
         if (accepted.includes(header)) candidateColumns[field] = columnNumber;
       }
     });
-    if (candidateColumns.external_so_number && candidateColumns.fo_number && candidateColumns.sku && candidateColumns.pack_qty) {
+    if (Object.keys(aliases).every((field) => candidateColumns[field])) {
       headerRowNumber = rowNumber;
       columnByField = candidateColumns;
     }
   });
   if (!headerRowNumber) {
-    throw new Error("Template header not found. Required columns: External SO Number, FO Number, SKU, Pack Qty.");
+    throw new Error("Template header not found. Required columns: External SO Number, FO Number, Customer GST, Customer Name, Customer Address, TOWN, Has Site, SITE NAME, Site Address, SITE TOWN, SKU, Pack Qty.");
   }
   const rows = [];
   let rowIndexSeq = 0;
@@ -116,9 +120,12 @@ async function parseUploadedWorkbook(file) {
       customer_gst: cell("customer_gst").toUpperCase(),
       customer_name: cell("customer_name"),
       customer_address: cell("customer_address"),
+      town: cell("town"),
       has_site: hasSiteValue === "YES",
       has_site_valid: hasSiteValue === "YES" || hasSiteValue === "NO",
+      site_name: cell("site_name"),
       site_address: cell("site_address"),
+      site_town: cell("site_town"),
       sku: cell("sku"),
       pack_qty: Number(cell("pack_qty").replace(/,/g, "")) || 0,
     });
@@ -143,7 +150,7 @@ function CustomerResolutionCell({ row, raw, onChoose, onChange, onCreateNew }) {
   if (resolution.status === "AMBIGUOUS") {
     return (
       <div className="grid gap-1">
-        <span className="text-[10px] text-slate-500">Excel address: {raw?.customer_address || "—"}</span>
+        <span className="text-[10px] text-slate-500">Excel customer: {[raw?.customer_address, raw?.town].filter(Boolean).join(", ") || "—"}</span>
         <select
           className="h-7 border border-amber-400 bg-amber-50 px-1 text-[11px]"
           defaultValue=""
@@ -163,7 +170,7 @@ function CustomerResolutionCell({ row, raw, onChoose, onChange, onCreateNew }) {
   // NOT_FOUND
   return (
     <div className="grid gap-1">
-      <span className="text-[10px] text-slate-500">Excel address: {raw?.customer_address || "—"}</span>
+      <span className="text-[10px] text-slate-500">Excel customer: {[raw?.customer_address, raw?.town].filter(Boolean).join(", ") || "—"}</span>
       <button type="button" onClick={() => onCreateNew(row.row_index, raw)} className="border border-sky-700 bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-950">
         Not in database — Create
       </button>
@@ -179,7 +186,7 @@ function SiteResolutionCell({ row, raw, onChooseSite, onChangeSite, onAddSite })
     const candidate = resolution.candidates?.[0];
     return (
       <div className="flex items-center gap-2">
-        <span className="text-emerald-800">{candidate?.site_name || "Site"}</span>
+        <span className="text-emerald-800">{candidate?.site_name || "Site"} — {[candidate?.address_line, candidate?.town].filter(Boolean).join(", ")}</span>
         {(resolution.all_candidates?.length ?? 0) > 1 ? <button type="button" onClick={() => onChangeSite(row.row_index)} className="text-[11px] font-semibold text-sky-700 underline">Change</button> : null}
         <button type="button" onClick={() => onAddSite(row.row_index, raw)} className="text-[11px] font-semibold text-sky-700 underline">Add</button>
       </div>
@@ -188,7 +195,7 @@ function SiteResolutionCell({ row, raw, onChooseSite, onChangeSite, onAddSite })
   if (resolution.status === "CHOOSE") {
     return (
       <div className="grid gap-1">
-        <span className="text-[10px] text-slate-500">Excel site address: {raw?.site_address || raw?.customer_address || "—"}</span>
+        <span className="text-[10px] text-slate-500">Excel site: {[raw?.site_name, raw?.site_address, raw?.site_town].filter(Boolean).join(" — ") || "—"}</span>
         <select
           className="h-7 border border-amber-400 bg-amber-50 px-1 text-[11px]"
           defaultValue=""
@@ -213,9 +220,9 @@ function SiteResolutionCell({ row, raw, onChooseSite, onChangeSite, onAddSite })
 
 function AddSiteAddressForm({ customerId, vdcId, raw, onDone, onCancel }) {
   const [sameAsCustomer, setSameAsCustomer] = useState(!raw?.site_address);
-  const [siteName, setSiteName] = useState(raw?.customer_name || "");
+  const [siteName, setSiteName] = useState(raw?.site_name || raw?.customer_name || "");
   const [addressLine, setAddressLine] = useState(raw?.site_address || raw?.customer_address || "");
-  const [town, setTown] = useState("");
+  const [town, setTown] = useState(raw?.site_town || raw?.town || "");
   const [pinCode, setPinCode] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -291,6 +298,20 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
   }
   function rowHasSite(row) {
     return row?.has_site === true || rawByIndex[row?.row_index]?.has_site === true;
+  }
+  function normalizedInput(value) {
+    return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+  function sameCustomerInput(left, right) {
+    return Boolean(left?.customer_address && right?.customer_address)
+      && normalizedInput(left.customer_address) === normalizedInput(right.customer_address)
+      && normalizedInput(left.town) === normalizedInput(right.town);
+  }
+  function sameSiteInput(left, right) {
+    return Boolean(left?.site_name && left?.site_address && left?.site_town && right?.site_name && right?.site_address && right?.site_town)
+      && normalizedInput(left.site_name) === normalizedInput(right.site_name)
+      && normalizedInput(left.site_address) === normalizedInput(right.site_address)
+      && normalizedInput(left.site_town) === normalizedInput(right.site_town);
   }
   function recalculateQtyStatuses(nextRows) {
     const totals = new Map();
@@ -380,6 +401,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
             // the customer name; Applyflow supplies address/state/pin only.
             delivery_address: profile.full_address,
             billing_state: profile.state_name,
+            town: raw.town,
             site_name: raw.customer_name,
             gst_number: raw.customer_gst,
             gst_category: "REGISTERED",
@@ -391,12 +413,27 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
           const firstAddress = addresses[0];
           if (!firstAddress?.id) throw new Error("SO_MAP_GST_ADDRESS_CREATE_FAILED");
           await updateCustomerAddress({ id: firstAddress.id, depot_code_id: row.vdc_id, pin_code: profile.pin_code || undefined });
-          created = { customer, firstAddress: { ...firstAddress, depot_code_id: row.vdc_id } };
+          created = { customer, firstAddress: { ...firstAddress, depot_code_id: row.vdc_id }, sitesByKey: new Map() };
           createdByVdcAndGst.set(key, created);
         }
-        const siteResolution = raw.has_site
-          ? { count: 1, status: "SINGLE", candidates: [created.firstAddress] }
-          : null;
+        let siteResolution = null;
+        if (raw.has_site) {
+          const siteKey = `${normalizedInput(raw.site_name)}::${normalizedInput(raw.site_address)}::${normalizedInput(raw.site_town)}`;
+          let site = created.sitesByKey.get(siteKey);
+          if (!site) {
+            const siteResult = await createCustomerAddress({
+              customer_id: created.customer.id,
+              site_name: raw.site_name,
+              address_line: raw.site_address,
+              town: raw.site_town,
+              depot_code_id: row.vdc_id,
+            });
+            site = siteResult?.data ?? siteResult;
+            if (!site?.id) throw new Error("SO_MAP_GST_SITE_CREATE_FAILED");
+            created.sitesByKey.set(siteKey, site);
+          }
+          siteResolution = { count: 1, status: "MATCHED", candidates: [site] };
+        }
         nextRows.push({
           ...row,
           customer_resolution: {
@@ -414,22 +451,21 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
   }
 
   // §6 point 9 dedup/reuse — once a customer is resolved for one row, every
-  // OTHER row in this same batch with the exact same (Company + Address
-  // Line) reuses it, no re-resolution needed.
+  // OTHER row in this same batch with the exact same customer address + town
+  // reuses it. A site is reused only when its name, address and town all
+  // match; a generic customer-address match must never silently cross-map
+  // two physical sites.
   function applyDedup(sourceRowIndex, customerId, customerName, customerAddressId, siteResolution) {
     const sourceRaw = rawByIndex[sourceRowIndex];
     if (!sourceRaw) return;
     setRows((current) => (current ?? []).map((row) => {
       if (row.row_index === sourceRowIndex) return row;
       const otherRaw = rawByIndex[row.row_index];
-      const sameAddress = otherRaw
-        && otherRaw.customer_address?.trim().toLowerCase() === sourceRaw.customer_address?.trim().toLowerCase()
-        && otherRaw.customer_address?.trim().length > 0;
-      if (!sameAddress) return row;
+      if (!sameCustomerInput(otherRaw, sourceRaw)) return row;
       return {
         ...row,
         customer_resolution: { mode: row.customer_resolution?.mode, status: "FOUND", customer_id: customerId, customer_name: customerName, customer_address_id: customerAddressId },
-        site_resolution: rowHasSite(row) ? siteResolution : row.site_resolution,
+        site_resolution: rowHasSite(row) && sameSiteInput(otherRaw, sourceRaw) ? siteResolution : row.site_resolution,
       };
     }));
   }
@@ -470,11 +506,24 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
         firstAddress = addresses[0];
         if (firstAddress?.id) await updateCustomerAddress({ id: firstAddress.id, depot_code_id: vdcId });
       }
-      const siteResolution = firstAddress ? { count: 1, status: "SINGLE", candidates: [firstAddress] } : { count: 0, status: "NONE", candidates: [] };
       const targetRow = (rows ?? []).find((row) => row.row_index === rowIndex);
+      const raw = rawByIndex[rowIndex];
+      let siteResolution = null;
+      if (rowHasSite(targetRow)) {
+        const siteResult = await createCustomerAddress({
+          customer_id: customer.id,
+          site_name: raw?.site_name,
+          address_line: raw?.site_address,
+          town: raw?.site_town,
+          depot_code_id: vdcId,
+        });
+        const site = siteResult?.data ?? siteResult;
+        if (!site?.id) throw new Error("SO_MAP_SITE_CREATE_FAILED");
+        siteResolution = { count: 1, status: "MATCHED", candidates: [site] };
+      }
       updateRow(rowIndex, {
         customer_resolution: { status: "FOUND", customer_id: customer.id, customer_name: customer.customer_name, customer_address_id: firstAddress?.id },
-        site_resolution: rowHasSite(targetRow) ? siteResolution : null,
+        site_resolution: siteResolution,
       });
       applyDedup(rowIndex, customer.id, customer.customer_name, firstAddress?.id, siteResolution);
     } catch (chainError) {
@@ -489,9 +538,8 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     const sourceRaw = rawByIndex[rowIndex];
     setRows((current) => (current ?? []).map((row) => {
       const sameCustomer = String(row.customer_resolution?.customer_id) === String(source?.customer_resolution?.customer_id);
-      const sameAddress = rawByIndex[row.row_index]?.customer_address?.trim().toLowerCase()
-        === sourceRaw?.customer_address?.trim().toLowerCase();
-      return row.row_index === rowIndex || (sameCustomer && sameAddress && rowHasSite(row))
+      const sameSite = sameSiteInput(rawByIndex[row.row_index], sourceRaw);
+      return row.row_index === rowIndex || (sameCustomer && sameSite && rowHasSite(row))
         ? { ...row, site_resolution: { count: 1, status: "SINGLE", candidates: [createdAddress] } }
         : row;
     }));
@@ -579,9 +627,36 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
               cellNavigate
               maxHeight="520px"
               columns={[
-                { key: "so_number", label: "SO Number", width: "120px", render: (row) => row.so_number || "—" },
+                { key: "external_so_number", label: "External SO Number", width: "145px", render: (row) => rawByIndex[row.row_index]?.external_so_number || "—" },
                 { key: "fo_number", label: "FO Number", width: "120px", render: (row) => rawByIndex[row.row_index]?.fo_number || "—" },
-                { key: "dd_flagged", label: "DD Flagged", width: "95px", render: (row) => row.status === "RESOLVED" ? <span className="text-emerald-800">{row.dd_flagged ? "Yes" : "No"}</span> : "—" },
+                { key: "customer_gst", label: "Customer GST", width: "145px", render: (row) => rawByIndex[row.row_index]?.customer_gst || "—" },
+                {
+                  key: "customer", label: "Customer Name", width: "280px", render: (row) => row.status === "RESOLVED" ? (
+                    <CustomerResolutionCell
+                      row={row}
+                      raw={rawByIndex[row.row_index]}
+                      onChoose={chooseCustomer}
+                      onChange={(rowIndex) => updateRow(rowIndex, { customer_resolution: { ...row.customer_resolution, status: "AMBIGUOUS" } })}
+                      onCreateNew={(rowIndex) => setCreateDrawerRowIndex(rowIndex)}
+                    />
+                  ) : <span className="text-rose-700">{row.error_code || "—"}</span>,
+                },
+                { key: "customer_address", label: "Customer Address", width: "220px", render: (row) => rawByIndex[row.row_index]?.customer_address || "—" },
+                { key: "town", label: "Town", width: "130px", render: (row) => rawByIndex[row.row_index]?.town || "—" },
+                { key: "has_site", label: "Has Site", width: "90px", render: (row) => rawByIndex[row.row_index]?.has_site ? "Yes" : "No" },
+                { key: "site_name", label: "Site Name", width: "170px", render: (row) => rawByIndex[row.row_index]?.site_name || "—" },
+                {
+                  key: "site", label: "Site Address", width: "260px", render: (row) => (row.status === "RESOLVED" && rowHasSite(row)) ? (
+                    <SiteResolutionCell
+                      row={row}
+                      raw={rawByIndex[row.row_index]}
+                      onChooseSite={chooseSite}
+                      onChangeSite={(rowIndex) => updateRow(rowIndex, { site_resolution: { ...row.site_resolution, status: "CHOOSE", candidates: row.site_resolution?.all_candidates ?? [] } })}
+                      onAddSite={(rowIndex) => setAddSiteRowIndex(rowIndex)}
+                    />
+                  ) : <span className="text-slate-400">—</span>,
+                },
+                { key: "site_town", label: "Site Town", width: "140px", render: (row) => rawByIndex[row.row_index]?.site_town || "—" },
                 { key: "sku", label: "SKU", width: "180px", render: (row) => row.sku_resolution?.status === "MATCHED" ? (row.sku_resolution.document_name || rawByIndex[row.row_index]?.sku || "—") : (rawByIndex[row.row_index]?.sku || "—") },
                 {
                   key: "sku_status", label: "SKU Resolve", width: "160px", render: (row) => {
@@ -599,6 +674,8 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
                   },
                 },
                 { key: "pack_qty", label: "Pack Qty", width: "90px", align: "right", render: (row) => rawByIndex[row.row_index]?.pack_qty ?? "—" },
+                { key: "so_number", label: "SO Number", width: "120px", render: (row) => row.so_number || "—" },
+                { key: "dd_flagged", label: "DD Flagged", width: "95px", render: (row) => row.status === "RESOLVED" ? <span className="text-emerald-800">{row.dd_flagged ? "Yes" : "No"}</span> : "—" },
                 {
                   key: "qty_status", label: "Qty Check", width: "110px", render: (row) => row.qty_status === "EXCEEDS_BALANCE"
                     ? <span className="font-semibold text-rose-700">Exceeds balance</span>
@@ -612,28 +689,6 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
                       : <span className="flex items-center gap-1 font-semibold text-amber-700">Changed from {row.previous_pack_qty ?? row.previous_qty}<button type="button" onClick={() => updateRow(row.row_index, { change_confirmed: true })} className="border border-amber-500 bg-amber-50 px-1 text-[10px]">Confirm</button></span>;
                     return <span className="text-slate-400">—</span>;
                   },
-                },
-                {
-                  key: "customer", label: "Customer", width: "280px", render: (row) => row.status === "RESOLVED" ? (
-                    <CustomerResolutionCell
-                      row={row}
-                      raw={rawByIndex[row.row_index]}
-                      onChoose={chooseCustomer}
-                      onChange={(rowIndex) => updateRow(rowIndex, { customer_resolution: { ...row.customer_resolution, status: "AMBIGUOUS" } })}
-                      onCreateNew={(rowIndex) => setCreateDrawerRowIndex(rowIndex)}
-                    />
-                  ) : <span className="text-slate-400">—</span>,
-                },
-                {
-                  key: "site", label: "Site Address", width: "240px", render: (row) => (row.status === "RESOLVED" && rowHasSite(row)) ? (
-                    <SiteResolutionCell
-                      row={row}
-                      raw={rawByIndex[row.row_index]}
-                      onChooseSite={chooseSite}
-                      onChangeSite={(rowIndex) => updateRow(rowIndex, { site_resolution: { ...row.site_resolution, status: "CHOOSE", candidates: row.site_resolution?.all_candidates ?? [] } })}
-                      onAddSite={(rowIndex) => setAddSiteRowIndex(rowIndex)}
-                    />
-                  ) : <span className="text-slate-400">—</span>,
                 },
                 {
                   key: "actions", label: "", width: "70px", render: (row) => (
@@ -668,6 +723,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
             initialCustomerName={rawByIndex[createDrawerRow.row_index]?.customer_name || ""}
             initialDeliveryAddress={rawByIndex[createDrawerRow.row_index]?.customer_address || ""}
             initialBillingState={createDrawerRow.vdc_state || ""}
+            initialTown={rawByIndex[createDrawerRow.row_index]?.town || ""}
             initialSiteName={rawByIndex[createDrawerRow.row_index]?.customer_name || ""}
             initialPinCode=""
             initialGstNumber={rawByIndex[createDrawerRow.row_index]?.customer_gst || ""}
