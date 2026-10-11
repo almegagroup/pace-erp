@@ -1,8 +1,6 @@
 -- A DD Direct DO can originate from normal SO03 or Bulk DO Upload.  The
 -- deferred commercial/physical split is common; only the audit flag differs.
 -- Keep this function separate from the established atomic DO function.
-BEGIN;
-
 CREATE OR REPLACE FUNCTION erp_procurement.save_vdc_deferred_bulk_delivery_order_atomic(
   p_header jsonb, p_sources jsonb, p_lines jsonb, p_actor uuid
 ) RETURNS uuid
@@ -55,23 +53,3 @@ BEGIN
   RETURN v_dc_id;
 END;
 $function$;
-
-REVOKE ALL ON FUNCTION erp_procurement.save_vdc_deferred_bulk_delivery_order_atomic(jsonb, jsonb, jsonb, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_procurement.save_vdc_deferred_bulk_delivery_order_atomic(jsonb, jsonb, jsonb, uuid) TO service_role;
-
--- The invoice-only function was originally guarded by `is_bulk_uploaded`.
--- The DD lifecycle is now shared by normal SO03 and Bulk Upload, while the
--- durable `pgi_deferred` marker remains the actual eligibility check.  Use
--- pg_get_functiondef so this surgical guard removal preserves the complete
--- established invoice/reconciliation implementation verbatim.
-DO $block$
-DECLARE v_definition text;
-BEGIN
-  SELECT pg_get_functiondef('erp_procurement.create_vdc_invoice_only_atomic(jsonb)'::regprocedure)
-    INTO v_definition;
-  v_definition := regexp_replace(v_definition, E'\\s+AND\\s+is_bulk_uploaded\\s*=\\s*true', '', 'g');
-  EXECUTE v_definition;
-END;
-$block$;
-
-COMMIT;
