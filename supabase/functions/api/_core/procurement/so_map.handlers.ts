@@ -212,16 +212,25 @@ export async function listSoForMapHandler(req: Request, ctx: ProcurementHandlerC
 
     const soRows = (sos ?? []) as JsonRecord[];
     const soIds = soRows.map((row) => String(row.id));
-    const [lineResp, allocResp] = await Promise.all([
+    const [lineResp, allocResp, externalFoGroupResp] = await Promise.all([
       soIds.length
         ? serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, quantity, base_qty").in("so_id", soIds)
         : Promise.resolve({ data: [], error: null }),
       soIds.length
         ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("so_id, so_line_id, allocated_qty, fo_id").in("so_id", soIds).eq("status", "ACTIVE")
         : Promise.resolve({ data: [], error: null }),
+      // A Bulk DD SO Map's FO is the customer's Sales/Dispatch FO, not a
+      // production Plan Feed. It lives on the map group, so it must be read
+      // separately from allocation.fo_id to make it visible in this register.
+      soIds.length
+        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+          .select("so_id, external_fo_number, revised_external_fo_number")
+          .in("so_id", soIds).eq("status", "ACTIVE").not("external_fo_number", "is", null)
+        : Promise.resolve({ data: [], error: null }),
     ]);
     if (lineResp.error) return soMapErrorResponse(req, ctx, "SO_MAP_LINE_FETCH_FAILED", 500, "Unable to load SO lines.");
     if (allocResp.error) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load allocations.");
+    if (externalFoGroupResp.error) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_LOOKUP_FAILED", 500, "Unable to load Sales/Dispatch FOs.");
 
     const totalBySoId = new Map<string, number>();
     for (const line of (lineResp.data ?? []) as JsonRecord[]) {
@@ -239,6 +248,14 @@ export async function listSoForMapHandler(req: Request, ctx: ProcurementHandlerC
         if (!foIdsBySoId.has(soId)) foIdsBySoId.set(soId, new Set());
         foIdsBySoId.get(soId)!.add(foId);
       }
+    }
+    const externalFoNumbersBySoId = new Map<string, Set<string>>();
+    for (const group of (externalFoGroupResp.data ?? []) as JsonRecord[]) {
+      const soId = toTrimmedString(group.so_id);
+      const externalFoNumber = effectiveExternalFoNumber(group);
+      if (!soId || !externalFoNumber) continue;
+      if (!externalFoNumbersBySoId.has(soId)) externalFoNumbersBySoId.set(soId, new Set());
+      externalFoNumbersBySoId.get(soId)!.add(externalFoNumber);
     }
 
     // Business owner ask (2026-09-04) -- show which FO(s) and, per FO, which
@@ -279,8 +296,11 @@ export async function listSoForMapHandler(req: Request, ctx: ProcurementHandlerC
       const total = totalBySoId.get(String(row.id)) ?? 0;
       const mapped = mappedBySoId.get(String(row.id)) ?? 0;
       const foIds = [...(foIdsBySoId.get(String(row.id)) ?? [])];
-      const foPackingPoGroups = foIds
-        .map((foId) => ({ fo_number: foNumberById.get(foId) || foId, po_numbers: poNumbersByFoId.get(foId) ?? [] }))
+      const planFeedFoGroups = foIds
+        .map((foId) => ({ kind: "PLAN_FEED", fo_number: foNumberById.get(foId) || foId, po_numbers: poNumbersByFoId.get(foId) ?? [] }));
+      const externalFoGroups = [...(externalFoNumbersBySoId.get(String(row.id)) ?? [])]
+        .map((foNumber) => ({ kind: "SALES_DISPATCH", fo_number: foNumber, po_numbers: [] as string[] }));
+      const foPackingPoGroups = [...externalFoGroups, ...planFeedFoGroups]
         .sort((a, b) => a.fo_number.localeCompare(b.fo_number));
       return {
         ...row,
