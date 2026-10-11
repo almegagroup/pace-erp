@@ -1,6 +1,8 @@
 -- A DD Direct DO can originate from normal SO03 or Bulk DO Upload.  The
 -- deferred commercial/physical split is common; only the audit flag differs.
 -- Keep this function separate from the established atomic DO function.
+BEGIN;
+
 CREATE OR REPLACE FUNCTION erp_procurement.save_vdc_deferred_bulk_delivery_order_atomic(
   p_header jsonb, p_sources jsonb, p_lines jsonb, p_actor uuid
 ) RETURNS uuid
@@ -71,3 +73,5 @@ BEGIN
   EXECUTE v_definition;
 END;
 $block$;
+
+COMMIT;
