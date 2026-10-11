@@ -22,6 +22,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
+import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 import { listDraftExcelUploadSalesOrders, reviewSoExcelUploadBatch, submitSoExcelUploadBatch } from "../procurementApi.js";
 
 const FG_TYPE_CHOICES = ["MTO", "HPS", "MTEST", "MTS"];
@@ -195,6 +196,10 @@ export default function DraftSoExcelUploadPage() {
 
   const hasUnresolvedDuplicate = (reviewRows ?? []).some((row) => row.is_duplicate && !row.skip_reason);
   const submittableCount = (reviewRows ?? []).filter((row) => !row.skip_reason).length;
+  const orderedReviewRows = useMemo(
+    () => prioritizeUploadReviewRows(reviewRows, (row) => !row.skip_reason && (row.is_duplicate || (row.ac05_rate != null && !row.ac05_rate_match))),
+    [reviewRows]
+  );
 
   async function handleSubmitReview() {
     setError(""); setNotice(""); setSubmitting(true);
@@ -330,7 +335,7 @@ export default function DraftSoExcelUploadPage() {
               <button type="button" onClick={() => removeReviewRow(row.row_key)} className="border border-rose-300 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700">Remove</button>
             ) },
           ]}
-          rows={reviewRows ?? []}
+          rows={orderedReviewRows}
           rowKey={(row) => row.row_key}
           getRowProps={(row) => ({ className: reviewRowClassName(row) })}
           fitColumnWidths

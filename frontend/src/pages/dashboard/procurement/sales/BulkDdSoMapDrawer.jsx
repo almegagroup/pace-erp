@@ -18,6 +18,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import CustomerCreateForm from "../../om/customer/CustomerCreateForm.jsx";
 import { listCustomerAddresses, createCustomerAddress, updateCustomerAddress } from "../../om/omApi.js";
 import { createMissingGstCustomersForSoMap, previewSoMapBulkUpload, saveSoMapBulkGroups } from "../procurementApi.js";
+import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 
 const TEMPLATE_HEADERS = [
   "External SO Number", "FO Number", "Customer GST", "Customer Name",
@@ -577,6 +578,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
   const readyCount = (rows ?? []).filter((row) => row.duplicate_status !== "UNCHANGED" && isRowReady(row)).length;
   const blockingRows = (rows ?? []).filter((row) => getRowBlockReason(row));
   const blockingCount = blockingRows.length;
+  const reviewRows = prioritizeUploadReviewRows(rows, (row) => Boolean(getRowBlockReason(row)));
 
   return (
     <DrawerBase
@@ -684,7 +686,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
                   ),
                 },
               ]}
-              rows={rows}
+              rows={reviewRows}
               rowKey={(row) => row.row_index}
               getRowProps={(row) => (getRowBlockReason(row) ? { className: "bg-amber-50" } : {})}
               emptyMessage="No rows."

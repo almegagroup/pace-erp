@@ -18,6 +18,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
+import { getTransporterMasterRevision } from "./transporterMasterRevision.js";
+import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 
 const TEMPLATE_HEADERS = [
   "FO/SO Number", "DO Date", "Transporter", "LR Number", "LR Date", "SKU",
@@ -87,6 +89,24 @@ function responseRows(result) {
   return Array.isArray(result?.data) ? result.data : [];
 }
 
+function mergePreviewRows(currentRows, refreshedRows) {
+  const refreshedByIndex = new Map((refreshedRows ?? []).map((row) => [Number(row.row_index), row]));
+  return (currentRows ?? []).map((row) => refreshedByIndex.get(Number(row.row_index)) ?? row);
+}
+
+function rawUnresolvedTransporterRows(previewRows, rawByIndex, transporterName = "") {
+  const targetName = normalizedTransporterName(transporterName);
+  return (previewRows ?? [])
+    .filter((row) => row.status === "RESOLVED" && row.transporter_resolution?.status !== "MATCHED")
+    .map((row) => rawByIndex[row.row_index])
+    .filter((row) => !targetName || normalizedTransporterName(row?.transporter_name) === targetName)
+    .filter(Boolean);
+}
+
+function normalizedTransporterName(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
 async function parseUploadedWorkbook(file) {
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
@@ -146,14 +166,21 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     setRows((current) => (current ?? []).filter((row) => row.row_index !== rowIndex));
   }
 
-  const runPreview = useCallback(async (parsedRows) => {
+  const requestPreview = useCallback(async (parsedRows) => {
     const result = await previewDoBulkUpload({ company_id: companyId, rows: parsedRows });
-    setRows(responseRows(result));
+    return responseRows(result);
   }, [companyId]);
 
-  // Returning from Transporter Master must restore the exact upload, then
-  // preview it again.  The newly-created master record is consequently
-  // resolved through the same normal resolver as every other transporter.
+  const runPreview = useCallback(async (parsedRows) => {
+    const previewRows = await requestPreview(parsedRows);
+    setRows(previewRows);
+    return previewRows;
+  }, [requestPreview]);
+
+  // Returning from Transporter Master is navigation, not another upload. Keep
+  // the already-resolved preview on screen immediately. If a transporter was
+  // actually created while away, re-check only the unresolved transporter rows
+  // and merge them back into the cached preview.
   useEffect(() => {
     const restoredRows = initialDraft?.raw_rows;
     if (restoredDraftRef.current || !Array.isArray(restoredRows) || restoredRows.length === 0) return;
@@ -161,15 +188,34 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     const rawMap = {};
     restoredRows.forEach((row) => { rawMap[row.row_index] = row; });
     setRawByIndex(rawMap);
-    setUploading(true);
     setError("");
-    void runPreview(restoredRows)
+    const cachedPreviewRows = Array.isArray(initialDraft?.preview_rows) ? initialDraft.preview_rows : [];
+    if (cachedPreviewRows.length === 0) {
+      // Compatibility for a draft created before preview caching existed.
+      setUploading(true);
+      void runPreview(restoredRows)
+        .catch((restoreError) => setError(restoreError instanceof Error ? restoreError.message : "DO_BULK_PREVIEW_FAILED"))
+        .finally(() => { setUploading(false); onDraftRestored?.(); });
+      return;
+    }
+
+    setRows(cachedPreviewRows);
+    const masterChanged = Number(initialDraft?.transporter_master_revision ?? 0) !== getTransporterMasterRevision();
+    const pendingTransporterName = rawMap[initialDraft?.pending_transporter_row_index]?.transporter_name;
+    const unresolvedRows = masterChanged
+      ? rawUnresolvedTransporterRows(cachedPreviewRows, rawMap, pendingTransporterName)
+      : [];
+    if (unresolvedRows.length === 0) {
+      onDraftRestored?.();
+      return;
+    }
+
+    setValidating(true);
+    void requestPreview(unresolvedRows)
+      .then((refreshedRows) => setRows((currentRows) => mergePreviewRows(currentRows, refreshedRows)))
       .catch((restoreError) => setError(restoreError instanceof Error ? restoreError.message : "DO_BULK_PREVIEW_FAILED"))
-      .finally(() => {
-        setUploading(false);
-        onDraftRestored?.();
-      });
-  }, [initialDraft, onDraftRestored, runPreview]);
+      .finally(() => { setValidating(false); onDraftRestored?.(); });
+  }, [initialDraft, onDraftRestored, requestPreview, runPreview]);
 
   async function handleFileChosen(event) {
     const file = event.target.files?.[0];
@@ -194,8 +240,13 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     if (!rows) return;
     setValidating(true); setError("");
     try {
-      const parsedRows = rows.map((row) => rawByIndex[row.row_index]).filter(Boolean);
-      await runPreview(parsedRows);
+      const unresolvedRows = rawUnresolvedTransporterRows(rows, rawByIndex);
+      if (unresolvedRows.length === 0) {
+        setNotice("No unresolved transporter rows need re-checking.");
+        return;
+      }
+      const refreshedRows = await requestPreview(unresolvedRows);
+      setRows((currentRows) => mergePreviewRows(currentRows, refreshedRows));
     } catch (validateError) {
       setError(validateError instanceof Error ? validateError.message : "DO_BULK_PREVIEW_FAILED");
     } finally {
@@ -209,7 +260,9 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       : row)));
   }
   function chooseTransporter(rowIndex, transporterId) {
+    const selectedName = normalizedTransporterName(rawByIndex[rowIndex]?.transporter_name);
     setRows((current) => (current ?? []).map((row) => (row.row_index === rowIndex
+      || (selectedName && normalizedTransporterName(rawByIndex[row.row_index]?.transporter_name) === selectedName)
       ? { ...row, transporter_resolution: { status: "MATCHED", transporter_id: transporterId } }
       : row)));
   }
@@ -219,6 +272,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     onOpenTransporterMaster?.({
       company_id: companyId,
       raw_rows: rawRows,
+      preview_rows: rows ?? [],
+      transporter_master_revision: getTransporterMasterRevision(),
       pending_transporter_row_index: row.row_index,
       transporter_name: rawByIndex[row.row_index]?.transporter_name || "",
     });
@@ -305,6 +360,15 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   }
 
   const readyGroupCount = groups.filter((group) => groupReadiness(group).length === 0).length;
+  const reviewRows = useMemo(() => prioritizeUploadReviewRows(rows, (row) => (
+    row.status !== "RESOLVED"
+    || row.transporter_resolution?.status !== "MATCHED"
+    || row.sku_resolution?.status !== "MATCHED"
+    || !row.storage_location?.id
+    || row.qty_status === "EXCEEDS_BALANCE"
+    || (row.missing_required_fields ?? []).length > 0
+    || (row.format_errors ?? []).length > 0
+  )), [rows]);
 
   return (
     <DrawerBase
@@ -332,7 +396,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
           <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(event) => void handleFileChosen(event)} />
           {rows ? (
             <button type="button" disabled={validating} onClick={() => void handleRevalidate()} className="border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50">
-              {validating ? "Re-checking…" : "Re-check Rows"}
+              {validating ? "Re-checking…" : "Re-check unresolved transporters"}
             </button>
           ) : null}
         </div>
@@ -438,7 +502,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                   ),
                 },
               ]}
-              rows={rows}
+              rows={reviewRows}
               rowKey={(row) => row.row_index}
               emptyMessage="No rows."
             />

@@ -35,6 +35,7 @@ import {
   updateTransporter,
 } from "../procurementApi.js";
 import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
+import { recordTransporterMasterChange } from "../sales/transporterMasterRevision.js";
 
 const DIRECTION_OPTIONS = ["IMPORT", "DOMESTIC", "BOTH"];
 const CONTEXT_OPTIONS = ["PURCHASE", "SALES"];
@@ -181,6 +182,10 @@ export default function TransporterMasterPage() {
         pan_number: form.pan_number.trim() || null,
         address: form.address.trim() || null,
       });
+      // Bulk DO Upload retains its preview while this screen is open. Mark the
+      // in-session master change so it re-checks only its unresolved
+      // transporter rows when the user returns, never the entire workbook.
+      recordTransporterMasterChange();
       setForm({ ...EMPTY_CREATE });
       flash(`Transporter created: ${saved?.data?.transporter_code ?? saved?.transporter_code ?? "—"}`);
       await refetchAll();
@@ -365,6 +370,7 @@ function TransporterDetailPanel({ transporterId, rows, companies, flash, onSaved
         address: draft.address.trim() || null,
         active: draft.active,
       });
+      recordTransporterMasterChange();
       flash(`Transporter "${row.transporter_code}" updated.`);
       onSaved();
     } catch (err) {

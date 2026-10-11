@@ -61,6 +61,18 @@ const SCREEN_HOTKEY_LABELS = Object.freeze({
   focusPrimary: { key: "Alt+Shift+P / F7", label: "Primary" },
 });
 
+// A generic HTTP request does not expose the server's internal completion
+// percentage. Keep the global indicator visibly alive while it is in flight,
+// but never claim 100% until the request has actually returned.
+function getBusyProgressPercent(elapsedMs) {
+  const elapsedSeconds = Math.max(0, elapsedMs) / 1000;
+
+  return Math.min(
+    94,
+    Math.max(6, Math.round(8 + 86 * (1 - Math.exp(-elapsedSeconds / 18))))
+  );
+}
+
 function focusElement(element) {
   if (!(element instanceof HTMLElement)) {
     return false;
@@ -299,6 +311,7 @@ export default function MenuShell() {
     getNetworkActivitySnapshot()
   );
   const [busyElapsedSeconds, setBusyElapsedSeconds] = useState(0);
+  const [busyProgressPercent, setBusyProgressPercent] = useState(0);
   const [runtimeSwitchState, setRuntimeSwitchState] = useState({
     active: false,
     label: "",
@@ -854,6 +867,23 @@ export default function MenuShell() {
 
     return () => window.clearInterval(intervalId);
   }, [networkActivity.blockingInFlightCount, networkActivity.blockingStartedAt]);
+
+  useEffect(() => {
+    if (!busyOverlayVisible) {
+      setBusyProgressPercent(0);
+      return undefined;
+    }
+
+    const startedAt = networkActivity.blockingStartedAt || Date.now();
+    const updateProgress = () => {
+      setBusyProgressPercent(getBusyProgressPercent(Date.now() - startedAt));
+    };
+
+    updateProgress();
+    const intervalId = window.setInterval(updateProgress, 180);
+
+    return () => window.clearInterval(intervalId);
+  }, [busyOverlayVisible, networkActivity.blockingStartedAt]);
 
   useEffect(() => {
     // Back navigation: suppress content focus — the drawer restore logic will
@@ -2059,6 +2089,25 @@ export default function MenuShell() {
               Please wait until the current action completes. Menu clicks, form clicks,
               and keyboard actions stay blocked so the ERP state does not drift mid-request.
             </p>
+            <div className="mt-2 grid gap-2" aria-live="polite">
+              <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <span>Processing</span>
+                <span>{busyProgressPercent}%</span>
+              </div>
+              <div
+                className="h-2 overflow-hidden rounded-full border border-amber-200 bg-amber-50"
+                role="progressbar"
+                aria-label="ERP action progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={busyProgressPercent}
+              >
+                <div
+                  className="h-full bg-[linear-gradient(90deg,#f59e0b_0%,#fbbf24_55%,#f59e0b_100%)] transition-[width] duration-200 ease-out"
+                  style={{ width: `${busyProgressPercent}%` }}
+                />
+              </div>
+            </div>
           </div>
           <div className="text-xs uppercase tracking-[0.16em] text-slate-500">
             Blocking actions: {networkActivity.blockingInFlightCount}
