@@ -447,12 +447,14 @@ import {
 import {
   amendDispatchDetailsHandler,
   cancelPgiInvoiceGroupsHandler,
+  createDeliveryOrderDirectDispatchHandler,
   createDeliveryOrderUnifiedHandler,
   getDeliveryOrderUnifiedHandler,
   listDoAddSoOptionsHandler,
   listDoAddStoOptionsHandler,
   listDoStorageOptionsHandler,
   postPgiInvoiceGroupsHandler,
+  postPgiInvoiceGroupsDispatchAwareHandler,
   previewInvoiceGroupsHandler,
   updateDeliveryOrderUnifiedHandler,
 } from "../_core/procurement/do_unified.handlers.ts";
@@ -943,6 +945,8 @@ export async function dispatchProcurementRoutes(
       return await listDoStorageOptionsHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2":
       return await createDeliveryOrderUnifiedHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/direct-dispatch":
+      return await createDeliveryOrderDirectDispatchHandler(req, ctx);
 
     // ── Additional Cost Category master — §133.13 ───────────────────────────
     case "GET:/api/procurement/additional-cost-categories":
@@ -1466,7 +1470,7 @@ export async function dispatchProcurementRoutes(
     return await previewInvoiceGroupsHandler(req, ctx);
   }
   if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/pgi-invoice-groups$/.test(pathname) && req.method === "POST") {
-    return await postPgiInvoiceGroupsHandler(req, ctx);
+    return await postPgiInvoiceGroupsDispatchAwareHandler(req, ctx);
   }
   if (/^\/api\/procurement\/delivery-orders-v2\/[^/]+\/vdc-invoice-only$/.test(pathname) && req.method === "POST") {
     return await createVdcInvoiceOnlyHandler(req, ctx);

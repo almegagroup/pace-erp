@@ -1257,6 +1257,7 @@ function buildDoAtomicPayload(
       transporter_name_freetext: toTrimmedString(body.transporter_name_freetext) || null,
       lr_number: toTrimmedString(body.lr_number) || null,
       lr_date: toTrimmedString(body.lr_date) || null,
+      dispatch_date: toTrimmedString(body.dispatch_date) || null,
       gross_weight: parsePositiveNumber(body.gross_weight),
       net_weight: netWeight,
       driver_number: toTrimmedString(body.driver_number) || null,
@@ -1331,6 +1332,15 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
       p_action: "CREATE", p_dc_id: null, p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
     });
     if (error || !dcId) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+    // dispatch_date is a later additive column, so the established atomic
+    // RPC intentionally remains source-compatible.  Persist it separately
+    // only when the normal SO03 form supplied it.
+    const dispatchDate = toTrimmedString(body.dispatch_date);
+    if (dispatchDate) {
+      const { error: dispatchDateError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .update({ dispatch_date: dispatchDate }).eq("id", String(dcId));
+      if (dispatchDateError) return doErrorResponse(req, ctx, "DO_DISPATCH_DATE_SAVE_FAILED", 500, "Unable to save Dispatch Date.");
+    }
     return okResponse(await hydrateDeliveryOrderUnified(String(dcId)), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
@@ -1339,6 +1349,48 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
       : code.includes("NOT_FOUND") ? 404
       : 500;
     return doErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// Additive entry point for the normal SO03 Create DO screen.  It deliberately
+// leaves the established createDeliveryOrderUnifiedHandler untouched: ordinary
+// DC/RM/PM/INT/MTO/HPS/MTEST and Direct non-DD orders are delegated to that
+// handler byte-for-byte.  Only an SO explicitly marked DD gets the commercial
+// invoice-now / stock-PGI-later creation contract.
+export async function createDeliveryOrderDirectDispatchHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const rawLines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    const allocationIds = [...new Set(rawLines.map((line) => toTrimmedString(line.so_map_allocation_id)).filter(Boolean))];
+    if (!allocationIds.length) {
+      return await createDeliveryOrderUnifiedHandler(new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(body) }), ctx);
+    }
+    const { data: allocationRows, error: allocationError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_allocation").select("id, so_id").in("id", allocationIds);
+    if (allocationError || (allocationRows ?? []).length !== allocationIds.length) {
+      return doErrorResponse(req, ctx, "DO_DD_SOURCE_ALLOCATION_NOT_FOUND", 404, "A selected SO Map allocation no longer exists.");
+    }
+    const soIds = [...new Set((allocationRows as JsonRecord[]).map((row) => toTrimmedString(row.so_id)).filter(Boolean))];
+    const { data: soRows, error: soError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order").select("id, dispatch_type, is_dd_dispatch").in("id", soIds);
+    if (soError || (soRows ?? []).length !== soIds.length) {
+      return doErrorResponse(req, ctx, "DO_DD_SOURCE_SO_NOT_FOUND", 404, "A source Sales Order no longer exists.");
+    }
+    const sources = (soRows ?? []) as JsonRecord[];
+    const hasDd = sources.some((row) => toUpperTrimmedString(row.dispatch_type) === "DEPENDENT_DIRECT" && row.is_dd_dispatch === true);
+    if (!hasDd) {
+      return await createDeliveryOrderUnifiedHandler(new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(body) }), ctx);
+    }
+    // A physical dispatch cannot mix a DD-commercial source with a normal
+    // source: their stock/posting lifecycles differ.  The normal SO03 screen
+    // remains available to create each compatible DO separately.
+    if (sources.length !== 1 || sources.some((row) => toUpperTrimmedString(row.dispatch_type) !== "DEPENDENT_DIRECT" || row.is_dd_dispatch !== true)) {
+      return doErrorResponse(req, ctx, "DO_DD_MIXED_SOURCE_NOT_ALLOWED", 400, "A DD Direct Delivery Order may contain only DD Direct SO lines.");
+    }
+    return await createDeferredVdcBulkDeliveryOrder(req, ctx, body);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DO_DD_CREATE_FAILED";
+    return doErrorResponse(req, ctx, code, code.includes("NOT_FOUND") ? 404 : 500, code);
   }
 }
 
@@ -1376,6 +1428,13 @@ export async function createDeferredVdcBulkDeliveryOrder(
       p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
     });
     if (error || !dcId) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+    // This is the durable lifecycle marker consumed by SO02 and Pending Truck
+    // & Dispatch Date.  It intentionally does not mean "bulk uploaded":
+    // normal SO03 DD creation uses this same additive contract.
+    const dispatchDate = toTrimmedString(body.dispatch_date);
+    const { error: deferredFlagError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .update({ pgi_deferred: true, ...(dispatchDate ? { dispatch_date: dispatchDate } : {}) }).eq("id", String(dcId));
+    if (deferredFlagError) return doErrorResponse(req, ctx, "DO_DD_LIFECYCLE_MARK_FAILED", 500, "Unable to set the DD dispatch lifecycle.");
     return okResponse(await hydrateDeliveryOrderUnified(String(dcId)), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
@@ -1433,6 +1492,10 @@ export async function updateDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
       p_action: "UPDATE", p_dc_id: dcId, p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
     });
     if (error) return doErrorResponse(req, ctx, "DO_EDIT_FAILED", 500, "Unable to update delivery order.");
+    const dispatchDate = toTrimmedString(body.dispatch_date);
+    const { error: dispatchDateError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .update({ dispatch_date: dispatchDate || null }).eq("id", dcId);
+    if (dispatchDateError) return doErrorResponse(req, ctx, "DO_DISPATCH_DATE_SAVE_FAILED", 500, "Unable to save Dispatch Date.");
     return okResponse(await hydrateDeliveryOrderUnified(dcId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_EDIT_FAILED";
@@ -3308,5 +3371,44 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       : code.includes("REQUIRED") || code.includes("INVALID") || code.includes("NOT_READY") || code === "INSUFFICIENT_STOCK" || code === "DO_EMPTY" || code.includes("MISSING") || code.includes("MISMATCH") || code.includes("CONFLICT") ? 400
       : 500;
     return doErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// Additive SO02 guard.  The long-standing atomic PGI handler above remains
+// unchanged for every existing process.  This wrapper only applies the DD
+// policy to Direct SOs before delegating the exact same submitted payload.
+export async function postPgiInvoiceGroupsDispatchAwareHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  const body = await parseBody(req);
+  const dcId = getIdFromPath(req);
+  if (!dcId) return doErrorResponse(req, ctx, "DO_ID_REQUIRED", 400, "Delivery order id is required.");
+  try {
+    const { data: dcData, error: dcError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .select("id, sales_order_id, vehicle_number, dispatch_date, pgi_deferred").eq("id", dcId).maybeSingle();
+    if (dcError || !dcData) return doErrorResponse(req, ctx, "DO_NOT_FOUND", 404, "Delivery order not found.");
+    const dc = dcData as JsonRecord;
+    if (dc.pgi_deferred === true) {
+      return doErrorResponse(req, ctx, "DD_INVOICE_ONLY_REQUIRED", 400, "This DD Direct delivery order must post its invoice through the Invoice-only path.");
+    }
+    const { data: sourceRows, error: sourceError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan_source")
+      .select("source_type, source_id").eq("dc_id", dcId);
+    if (sourceError) return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to verify Delivery Order sources.");
+    const soIds = [...new Set(((sourceRows ?? []) as JsonRecord[])
+      .filter((source) => toUpperTrimmedString(source.source_type) === "SALES_ORDER")
+      .map((source) => toTrimmedString(source.source_id)).filter(Boolean))];
+    if (!soIds.length && toTrimmedString(dc.sales_order_id)) soIds.push(toTrimmedString(dc.sales_order_id));
+    if (soIds.length) {
+      const { data: soRows, error: soError } = await serviceRoleClient.schema("erp_procurement").from("sales_order")
+        .select("id, dispatch_type, is_dd_dispatch").in("id", soIds);
+      if (soError) return doErrorResponse(req, ctx, "DO_SOURCE_SO_FETCH_FAILED", 500, "Unable to verify Sales Order dispatch policy.");
+      const requiresAtomicDirectFields = ((soRows ?? []) as JsonRecord[]).some((so) =>
+        toUpperTrimmedString(so.dispatch_type) === "DEPENDENT_DIRECT" && so.is_dd_dispatch !== true);
+      if (requiresAtomicDirectFields && (!toTrimmedString(dc.vehicle_number) || !toTrimmedString(dc.dispatch_date))) {
+        return doErrorResponse(req, ctx, "DIRECT_TRUCK_DISPATCH_REQUIRED", 400, "Truck Number and Dispatch Date are both required before Invoice and PGI can post for a non-DD Direct SO.");
+      }
+    }
+    return await postPgiInvoiceGroupsHandler(new Request(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(body) }), ctx);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DIRECT_DISPATCH_POST_FAILED";
+    return doErrorResponse(req, ctx, code, code.includes("NOT_FOUND") ? 404 : 500, code);
   }
 }

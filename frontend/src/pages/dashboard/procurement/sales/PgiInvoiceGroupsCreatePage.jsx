@@ -38,11 +38,13 @@ import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_D
 import { todayIsoInIndia } from "../../../../utils/indiaDate.js";
 import {
   cancelPgiInvoiceGroups,
+  createDdInvoiceOnly,
   createAdditionalCostCategory,
   getDeliveryOrderUnified,
   listAdditionalCostCategories,
   listDeliveryOrders,
   postPgiInvoiceGroups,
+  postDdInvoicePgi,
   previewInvoiceGroups,
 } from "../procurementApi.js";
 
@@ -804,9 +806,20 @@ export default function PgiInvoiceGroupsCreatePage() {
           remarks: input.remarks || undefined,
         };
       });
-      const result = await postPgiInvoiceGroups(dcId, { groups: payloadGroups });
+      const isDdDeferred = dc?.pgi_deferred === true;
+      const result = isDdDeferred
+        ? await createDdInvoiceOnly(dcId, { groups: payloadGroups })
+        : await postPgiInvoiceGroups(dcId, { groups: payloadGroups });
       const invoices = Array.isArray(result?.invoices) ? result.invoices : [];
-      setNotice(`Posted ${invoices.length} invoice(s).`);
+      const ddCanPostPgiNow = isDdDeferred && Boolean(dc?.vehicle_number) && Boolean(dc?.dispatch_date);
+      if (ddCanPostPgiNow) {
+        await Promise.all(invoices.map((invoice) => postDdInvoicePgi(invoice.invoice_id)));
+      }
+      setNotice(isDdDeferred
+        ? ddCanPostPgiNow
+          ? `Posted ${invoices.length} DD invoice(s) and PGI.`
+          : `Created ${invoices.length} DD invoice(s). PGI will post from Pending Truck & Dispatch Date once both fields are supplied.`
+        : `Posted ${invoices.length} invoice(s).`);
       if (isViewMode) {
         setActiveGroupKey(null);
         await Promise.all([groupsQuery.refetch(), doQuery.refetch()]);
@@ -921,7 +934,7 @@ export default function PgiInvoiceGroupsCreatePage() {
               setDcId(""); setPage(0);
             },
           },
-          ...(!isViewMode ? [{ key: "post", label: saving ? "Posting..." : "Post Goods & Create Invoice", tone: "primary", onClick: () => void handlePostAll(), disabled: saving || !allGroupsReady }] : []),
+          ...(!isViewMode ? [{ key: "post", label: saving ? "Posting..." : dc?.pgi_deferred === true ? "Post DD Invoice Only" : "Post Goods & Create Invoice", tone: "primary", onClick: () => void handlePostAll(), disabled: saving || !allGroupsReady }] : []),
           ...(isViewMode ? [{ key: "cancel-selected", label: saving ? "Cancelling..." : `Cancel Selected (${selectedInvoiceIds.length})`, tone: "danger", onClick: () => void handleCancelSelected(), disabled: saving || selectedInvoiceIds.length === 0 }] : []),
         ]}
         notices={[

@@ -220,13 +220,14 @@ async function resolveFoOrSo(value: string, companyId: string): Promise<{
   so_id?: string;
   so_number?: string;
   map_group_id?: string;
+  is_dd_dispatch?: boolean;
 }> {
   const [originalResult, revisedResult] = await Promise.all([
     serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
-      .select("id, so_id, status, so:so_id(company_id, so_number)")
+      .select("id, so_id, status, so:so_id(company_id, so_number, dispatch_type, is_dd_dispatch)")
       .eq("external_fo_number", value).eq("status", "ACTIVE").maybeSingle(),
     serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
-      .select("id, so_id, status, so:so_id(company_id, so_number)")
+      .select("id, so_id, status, so:so_id(company_id, so_number, dispatch_type, is_dd_dispatch)")
       .eq("revised_external_fo_number", value).eq("status", "ACTIVE").maybeSingle(),
   ]);
   const groupRow = originalResult.data ?? revisedResult.data;
@@ -234,18 +235,31 @@ async function resolveFoOrSo(value: string, companyId: string): Promise<{
   if (!groupError && groupRow) {
     const so = (groupRow as JsonRecord).so as JsonRecord | null;
     if (so && toUpperTrimmedString(so.company_id) === toUpperTrimmedString(companyId)) {
-      return { status: "VDC", so_id: toTrimmedString((groupRow as JsonRecord).so_id), so_number: toTrimmedString(so.so_number), map_group_id: toTrimmedString((groupRow as JsonRecord).id) };
+      const isDdDispatch = so.is_dd_dispatch === true;
+      if (toUpperTrimmedString(so.dispatch_type) === "DEPENDENT_DIRECT") {
+        return {
+          // Direct/FO resolution and the DD timing flag are deliberately
+          // different things.  A non-DD Direct SO still resolves through its
+          // FO allocation; it simply follows the normal atomic Invoice+PGI
+          // path rather than the DD invoice-now/PGI-later path.
+          status: "VDC",
+          so_id: toTrimmedString((groupRow as JsonRecord).so_id),
+          so_number: toTrimmedString(so.so_number),
+          map_group_id: toTrimmedString((groupRow as JsonRecord).id),
+          is_dd_dispatch: isDdDispatch,
+        };
+      }
     }
   }
   const { data: soRow, error: soError } = await serviceRoleClient
     .schema("erp_procurement").from("sales_order")
-    .select("id, so_number, company_id, dispatch_type")
+    .select("id, so_number, company_id, dispatch_type, is_dd_dispatch")
     .eq("so_number", value).maybeSingle();
   if (!soError && soRow) {
     const so = soRow as JsonRecord;
     if (toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)) return { status: "NOT_FOUND" };
     const dispatchType = toUpperTrimmedString(so.dispatch_type);
-    if (dispatchType === "DEPENDENT_DEPOT") return { status: "DC", so_id: toTrimmedString(so.id), so_number: toTrimmedString(so.so_number) };
+    if (dispatchType === "DEPENDENT_DEPOT") return { status: "DC", so_id: toTrimmedString(so.id), so_number: toTrimmedString(so.so_number), is_dd_dispatch: false };
     if (dispatchType === "DEPENDENT_DIRECT") return { status: "VDC_WRONG_FIELD" };
     return { status: "DC_WRONG_FIELD" };
   }
@@ -281,7 +295,7 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       if (resolved.status === "NOT_FOUND") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "FO_SO_NOT_FOUND" }); continue; }
       if (resolved.status === "VDC_WRONG_FIELD") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_VDC_MUST_USE_FO_NUMBER" }); continue; }
       if (resolved.status === "DC_WRONG_FIELD") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_SO_WRONG_DISPATCH_TYPE" }); continue; }
-      const ddFlag = resolved.status === "VDC";
+      const ddFlag = resolved.is_dd_dispatch === true;
       const soId = toTrimmedString(resolved.so_id);
 
       // SKU candidates — VDC resolves against this FO's own already-mapped
@@ -538,16 +552,18 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           .schema("erp_master").from("transporter_master")
           .select("id").eq("id", toTrimmedString(group.transporter_id)).eq("active", true).maybeSingle();
         if (transporterError || !transporter) throw new Error("DO_BULK_TRANSPORTER_INVALID");
-        // Never trust the spreadsheet's DD flag to choose a reservation
-        // policy. Resolve the underlying SO type again at commit time.
+        // Never trust the browser's DD flag. Resolve the SO's persisted DD
+        // marker again at commit time: Direct selects the FO/allocation
+        // source, while is_dd_dispatch alone selects deferred Invoice→PGI.
         const { data: sourceSo, error: sourceSoError } = await serviceRoleClient
-          .schema("erp_procurement").from("sales_order").select("dispatch_type")
+          .schema("erp_procurement").from("sales_order").select("dispatch_type, is_dd_dispatch")
           .eq("id", toTrimmedString(group.so_id)).maybeSingle();
         if (sourceSoError || !sourceSo) throw new Error("DO_BULK_SOURCE_SO_NOT_FOUND");
         const actualDispatchType = toUpperTrimmedString((sourceSo as JsonRecord).dispatch_type);
         const isVdc = actualDispatchType === "DEPENDENT_DIRECT";
         const isDc = actualDispatchType === "DEPENDENT_DEPOT";
-        if ((group.dd_flag && !isVdc) || (!group.dd_flag && !isDc)) {
+        const isDdDispatch = isVdc && (sourceSo as JsonRecord).is_dd_dispatch === true;
+        if (Boolean(group.dd_flag) !== isDdDispatch || (!isVdc && !isDc)) {
           throw new Error("DO_BULK_DD_FLAG_SOURCE_MISMATCH");
         }
         const sourceReference = await resolveFoOrSo(toTrimmedString(group.fo_or_so_number), companyId);
@@ -555,7 +571,7 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           || (isDc && (sourceReference.status !== "DC" || sourceReference.so_id !== group.so_id))) {
           throw new Error("DO_BULK_SOURCE_REFERENCE_INVALID");
         }
-        if (!group.dd_flag) {
+        if (!isDdDispatch) {
           if (!toTrimmedString(group.truck_number) || !dispatchDate) {
             throw new Error("DO_BULK_DC_TRUCK_DISPATCH_REQUIRED");
           }
@@ -587,7 +603,7 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
               throw new Error("DO_BULK_VDC_ALLOCATION_INVALID");
             }
           }
-          if (!allocationId && !group.dd_flag) {
+          if (!allocationId && isDc) {
             const ensured = await ensureDepotAllocation(req, ctx, group.so_id, row.so_line_id, row.base_qty);
             if ("error_code" in ensured) throw new Error(ensured.error_code);
             allocationId = ensured.allocation_id;
@@ -615,7 +631,7 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
         // Truck + Dispatch Date Upload Post action. DC continues through the
         // established create handler and therefore retains its live stock
         // validation/reservation behaviour unchanged.
-        const deferVdcReservation = isVdc;
+        const deferVdcReservation = isDdDispatch;
         const createReq = new Request(req.url, {
           method: "POST",
           body: JSON.stringify(createPayload),
@@ -637,7 +653,7 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
 
         const patch: JsonRecord = {
           is_bulk_uploaded: true,
-          pgi_deferred: Boolean(group.dd_flag),
+          pgi_deferred: isDdDispatch,
         };
         if (doDate) patch.dc_date = doDate;
         if (dispatchDate) patch.dispatch_date = dispatchDate;

@@ -1,7 +1,8 @@
 /*
  * VDC Truck + Dispatch Date Upload (SO03). This is deliberately separate
  * from the live DO edit/PGI handlers: it operates only on Invoice-only VDC
- * Bulk DOs, then invokes the new VDC PGI-only endpoint for the physical leg.
+ * DD Direct invoice-only DOs, then invokes the new PGI-only endpoint for the
+ * physical leg.  Bulk and normal SO03 creation share this lifecycle.
  */
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -50,7 +51,7 @@ export async function listVdcTruckDispatchPendingHandler(req: Request, ctx: Proc
       : { data: [] as JsonRecord[], error: null };
     if (docError) return fail(req, ctx, "VDC_UPLOAD_DO_FETCH_FAILED", 500, "Unable to load pending VDC delivery orders.");
     const docById = new Map(((docs ?? []) as JsonRecord[])
-      .filter((row) => row.pgi_deferred === true && row.is_bulk_uploaded === true && upper(row.status) === "INVOICED")
+      .filter((row) => row.pgi_deferred === true && upper(row.status) === "INVOICED")
       .map((row) => [text(row.id), row]));
     const { data: dcLines, error: dcLineError } = docById.size ? await serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
       .select("id, so_map_allocation_id").in("dc_id", [...docById.keys()])
@@ -122,8 +123,8 @@ export async function postVdcTruckDispatchUploadHandler(req: Request, ctx: Procu
       const dcId = text(dc.id); const row = byDcId.get(dcId)!; const companyId = text(dc.selling_company_id);
       const denied = await assertAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;
       const truckNumber = text(row.truck_number); const dispatchDate = text(row.dispatch_date);
-      if (dc.pgi_deferred !== true || dc.is_bulk_uploaded !== true || upper(dc.status) !== "INVOICED") {
-        results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_DO_NOT_PENDING", message: "Delivery order is not a pending VDC Invoice-only row." }); continue;
+      if (dc.pgi_deferred !== true || upper(dc.status) !== "INVOICED") {
+        results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_DO_NOT_PENDING", message: "Delivery order is not a pending DD Invoice-only row." }); continue;
       }
       if (truckNumber.length < 4) { results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_TRUCK_INVALID", message: "Truck Number must contain at least 4 characters." }); continue; }
       if (!validDispatchDate(text(dc.lr_date), dispatchDate)) { results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_DISPATCH_DATE_INVALID", message: "Dispatch Date must be on/after LR Date and within the allowed posting window." }); continue; }
