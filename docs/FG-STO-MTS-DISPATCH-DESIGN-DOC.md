@@ -453,20 +453,23 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
    > থেকে **সম্পূর্ণ আলাদা জিনিস** — শুধু নামটাই এক। এই নতুন "SO Map FO Number" Sales/
    > Dispatch domain-এর, VDC-scoped, এখনো কোনো নির্দিষ্ট column/টেবিলে map করা হয়নি।
 
-3. **VDC vs DC (Dependent Depot) — দুই আলাদা dispatch mechanism, একই SO থেকেই:**
-   - **VDC (Dependent Direct):** প্রতিটা dispatch তার নিজের FO Number বহন করে। এটাই
-     **DD Flag**-এর (`sales_order.is_dd_dispatch`) আসল মানে — DD Flag ON থাকলে **Deferred
-     PGI flow**: DO + Sales Invoice আগেই তৈরি হয়ে যায়, কিন্তু **PGI (আসল stock movement/
-     P601 posting) হয় শুধু physically truck এলে/গেলে** — অর্থাৎ invoice আগেই কাটা যেতে
-     পারে, stock posting পরে।
+3. **Direct vs Depot source এবং DD timing flag — দুটো আলাদা concept:**
+   - **Dependent Direct:** প্রতিটা dispatch তার নিজের FO Number বহন করে এবং SO Map
+     allocation দিয়েই resolve হয়। Direct হওয়া মানে নিজে থেকে deferred PGI নয়।
+   - **DD Flag (`sales_order.is_dd_dispatch`) ON, শুধু Direct SO-তে:** **Deferred PGI
+     flow** — DO + Sales Invoice আগে তৈরি হতে পারে, কিন্তু **PGI (আসল stock movement/P601)
+     হবে Truck Number ও Dispatch Date দুটো পাওয়ার পরে**। একই rule Bulk Upload এবং normal
+     SO03 → SO02 path-এ identical।
+   - **Direct কিন্তু DD Flag OFF:** Truck Number ও Dispatch Date দুটো না থাকলে SO02-তে
+     Invoice বা PGI কোনোটা post হবে না; দুটো থাকলে established atomic Invoice+PGI path।
    - **DC (Dependent Depot):** এখানে কোনো FO Number লাগে না। DD Flag এখানে OFF/প্রযোজ্য
      না — **Atomic flow**: DO, PGI, Invoice **তিনটেই একসাথে** হয়ে যায়, কোনো deferred ধাপ
      নেই (এই অংশটা RM/PM/INT-এর জন্য আগে থেকেই তৈরি §113.15-এর
      `createPgiInvoiceHandler`-এর মতোই এক-ধাপ mechanism, নতুন প্যাটার্ন না)।
 
-4. **সিদ্ধান্তকারী switch: `sales_order.is_dd_dispatch` (DD Flag)-ই ঠিক করে দেবে কোন SO
-   কোন flow-এ যাবে** — Flag ON = VDC-style Deferred-PGI (FO-number-keyed), Flag OFF =
-   DC-style Atomic (FO ছাড়া)।
+4. **সিদ্ধান্তকারী switch:** Source lookup Direct হলে FO-number-keyed থাকবে; তারপর
+   `sales_order.is_dd_dispatch` শুধু posting timing ঠিক করবে — ON = deferred Invoice→PGI,
+   OFF = Truck+Dispatch থাকলে atomic Invoice+PGI। Depot কখনো DD deferred flow-এ যাবে না।
 
 5. **Ship-To resolution per-FO, per-customer না:** একটা Customer Master record-এর under-এ
    একাধিক Site Address থাকতে পারে (`erp_master.customer_address` — আগে থেকেই আছে, এটাই
@@ -668,12 +671,12 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
         Number, Tally Invoice Date, Inbound Number, Truck Number, Dispatch Date — এখনই
         capture হবে, পরে SO02-তে গেলে prefilled পাওয়া যাবে।
       - **Truck Number/Dispatch Date-এর mandatory/optional নিয়ম row-type অনুযায়ী আলাদা:**
-        - **VDC row-এ independently optional** — বাস্তব data-তে (Asian-এর Excel-এ verify
+      - **DD-flagged Direct row-এ independently optional** — বাস্তব data-তে (Asian-এর Excel-এ verify
           করা) অনেক row-এ Truck Number আছে কিন্তু Date নেই — upload-এর সময় Date blank
           থাকলে blank-ই থাকবে, Truck Number থাকলে সেটা preserve হবে, একটা থাকলে অন্যটার
           জন্য wait করতে হবে না। (পরে point ১৯-এর আলাদা Truck+Dispatch Date Upload দিয়ে
           ভরা হয়।)
-        - **DC row-এ দুটোই mandatory** — Truck Number আর Dispatch Date দুটো না থাকলে
+      - **Non-DD row-এ দুটোই mandatory** — Truck Number আর Dispatch Date দুটো না থাকলে
           system সেই DO **তৈরিই হতে দেবে না**, Save button inactive থাকবে। তাই DC-এর জন্য
           point ১৯-এর মতো আলাদা কোনো পরের-ধাপের Truck+Dispatch Date Upload মেকানিজম
           লাগে না — DC হয় সম্পূর্ণ data নিয়েই create হয়, নাহয় create-ই হয় না।
@@ -687,8 +690,8 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
 15. **Bulk DO Upload-এর validation (সম্পূর্ণ confirm হয়েছে):**
     - **Format-level:** mandatory blank না — FO/SO Number, DO Date, Transporter, LR Number,
       LR Date, SKU, Pack Qty। Tally Invoice Number/Date, Inbound Number সবসময় optional।
-      **Truck Number/Dispatch Date — VDC row-এ optional, DC row-এ mandatory** (point ১৪-এর
-      সংশোধিত নিয়ম — DC-তে এই দুটো না থাকলে DO তৈরিই হবে না)। Pack Qty বৈধ positive
+      **Truck Number/Dispatch Date — DD-flagged Direct row-এ optional, সব non-DD row-এ mandatory**
+      (non-DD-তে এই দুটো না থাকলে DO তৈরিই হবে না)। Pack Qty বৈধ positive
       number, Date column বৈধ date format।
     - **FO/SO Number type-check** — VDC→FO/DC→SO mismatch হলে row skip, re-upload করতে
       হবে।

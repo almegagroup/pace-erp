@@ -43,12 +43,43 @@ export async function createVdcInvoiceOnlyHandler(req: Request, ctx: Procurement
   try {
     const dcId = idFromPath(req);
     if (!dcId) return fail(req, ctx, "DO_ID_REQUIRED", 400, "Delivery order id is required.");
+    // Bulk DO stores one prefilled invoice header on the DO.  Normal SO02
+    // passes the same fields in its existing group payload; capture them on
+    // the deferred DO before using the shared invoice-only atomic contract.
+    const requestBody = await req.json().catch(() => ({} as JsonRecord));
     const { dc, groups } = await computeInvoiceGroups(dcId);
     const companyId = text(dc.selling_company_id);
     try { await assertCompanyScope(ctx, companyId); } catch { return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
     if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
-    if (dc.pgi_deferred !== true || dc.is_bulk_uploaded !== true) return fail(req, ctx, "VDC_INVOICE_ONLY_NOT_BULK_VDC", 400, "Invoice-only posting is available only for VDC Bulk DOs.");
-    if (upper(dc.status) !== "CREATED") return fail(req, ctx, "VDC_INVOICE_ONLY_DO_NOT_READY", 400, "Only a CREATED VDC delivery order can be invoiced.");
+    if (dc.pgi_deferred !== true) return fail(req, ctx, "VDC_INVOICE_ONLY_NOT_DD_DIRECT", 400, "Invoice-only posting is available only for a DD Direct delivery order.");
+    if (upper(dc.status) !== "CREATED") return fail(req, ctx, "VDC_INVOICE_ONLY_DO_NOT_READY", 400, "Only a CREATED DD Direct delivery order can be invoiced.");
+
+    const submittedGroups = Array.isArray(requestBody.groups) ? requestBody.groups as JsonRecord[] : [];
+    if (submittedGroups.length) {
+      if (submittedGroups.length !== groups.length) return fail(req, ctx, "VDC_INVOICE_GROUP_MISSING", 400, "Enter invoice details for every group before posting the DD invoice.");
+      const byKey = new Map(submittedGroups.map((group) => [text(group.group_key), group]));
+      if (byKey.size !== groups.length || groups.some((group) => !byKey.has(text(group.group_key)))) {
+        return fail(req, ctx, "VDC_INVOICE_GROUP_MISMATCH", 400, "Submitted invoice groups do not match this delivery order.");
+      }
+      const first = byKey.get(text(groups[0]?.group_key))!;
+      const invoiceNumber = text(first.tally_invoice_number);
+      const invoiceDate = text(first.tally_invoice_date);
+      const inbound = text(first.inbound_number);
+      // The original DD bulk sheet has one invoice header per FO/DO.  Keep
+      // that invariant visible for a multi-group normal DO rather than
+      // silently assigning one group's header to another.
+      if (groups.some((group) => {
+        const input = byKey.get(text(group.group_key))!;
+        return text(input.tally_invoice_number) !== invoiceNumber || text(input.tally_invoice_date) !== invoiceDate || text(input.inbound_number) !== inbound;
+      })) return fail(req, ctx, "VDC_INVOICE_GROUP_HEADER_MISMATCH", 400, "A DD Direct Delivery Order needs one common Tally Invoice Number, Date and IBN across its groups.");
+      const { error: headerError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .update({ pre_invoice_tally_invoice_number: invoiceNumber || null, pre_invoice_tally_invoice_date: invoiceDate || null, pre_invoice_inbound_number: inbound || null })
+        .eq("id", dcId);
+      if (headerError) return fail(req, ctx, "VDC_INVOICE_HEADER_SAVE_FAILED", 500, "Unable to save the DD invoice header.");
+      dc.pre_invoice_tally_invoice_number = invoiceNumber;
+      dc.pre_invoice_tally_invoice_date = invoiceDate;
+      dc.pre_invoice_inbound_number = inbound;
+    }
 
     const tallyInvoiceNumber = text(dc.pre_invoice_tally_invoice_number);
     const tallyInvoiceDate = text(dc.pre_invoice_tally_invoice_date);
@@ -158,7 +189,7 @@ export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHa
     if (dcError) return fail(req, ctx, "VDC_PGI_ONLY_DO_FETCH_FAILED", 500, "Unable to load the delivery order.");
     const dc = (dcData ?? null) as JsonRecord | null;
     if (!dc) return fail(req, ctx, "VDC_PGI_ONLY_DO_NOT_FOUND", 404, "Delivery order was not found.");
-    if (dc.pgi_deferred !== true || dc.is_bulk_uploaded !== true || upper(dc.status) !== "INVOICED") {
+    if (dc.pgi_deferred !== true || upper(dc.status) !== "INVOICED") {
       return fail(req, ctx, "VDC_PGI_ONLY_DO_NOT_INVOICED", 400, "This delivery order is not in the Invoice-only state.");
     }
 
@@ -289,8 +320,8 @@ export async function cancelVdcDeliveryOrderHandler(req: Request, ctx: Procureme
     const companyId = text(dc.selling_company_id);
     try { await assertCompanyScope(ctx, companyId); } catch { return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
     if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
-    if (dc.pgi_deferred !== true || dc.is_bulk_uploaded !== true || !["CREATED", "INVOICED", "DISPATCHED"].includes(upper(dc.status))) {
-      return fail(req, ctx, "VDC_CANCEL_BLOCKED", 409, "Only an active VDC Bulk DO can be cancelled here.");
+    if (dc.pgi_deferred !== true || !["CREATED", "INVOICED", "DISPATCHED"].includes(upper(dc.status))) {
+      return fail(req, ctx, "VDC_CANCEL_BLOCKED", 409, "Only an active DD Direct delivery order can be cancelled here.");
     }
     if (upper(dc.status) === "CREATED") {
       const { error } = await serviceRoleClient.schema("erp_procurement").rpc("cancel_vdc_created_delivery_order_atomic", {

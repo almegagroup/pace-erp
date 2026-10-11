@@ -1224,6 +1224,12 @@ export function listDoStorageOptions(params) {
 export function createDeliveryOrderUnified(data) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2", data);
 }
+// The normal SO03 screen always enters through this additive dispatcher. It
+// delegates normal documents to the live create handler and selects the DD
+// invoice-now/PGI-later contract only from the persisted source SO marker.
+export function createDeliveryOrderDispatchAware(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/direct-dispatch", data);
+}
 export function updateDeliveryOrderUnified(id, data) {
   return fetchProcurement("PUT", `/api/procurement/delivery-orders-v2/${encodeURIComponent(id)}`, data);
 }
@@ -1265,6 +1271,12 @@ export function previewInvoiceGroups(dcId) {
 }
 export function postPgiInvoiceGroups(dcId, data) {
   return fetchProcurement("POST", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/pgi-invoice-groups`, data);
+}
+export function createDdInvoiceOnly(dcId, data) {
+  return fetchProcurement("POST", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/vdc-invoice-only`, data);
+}
+export function postDdInvoicePgi(invoiceId) {
+  return fetchProcurement("POST", `/api/procurement/sales-invoices/${encodeURIComponent(invoiceId)}/vdc-pgi-only`, {});
 }
 export function cancelPgiInvoiceGroups(dcId, data) {
   return fetchProcurement("POST", `/api/procurement/delivery-orders-v2/${encodeURIComponent(dcId)}/cancel-invoice-groups`, data);

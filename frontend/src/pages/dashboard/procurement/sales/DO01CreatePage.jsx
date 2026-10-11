@@ -29,7 +29,7 @@ import { isRouteAllowed } from "../../../../router/routeIndex.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../../utils/manualDocumentDateWindow.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import {
-  createDeliveryOrderUnified,
+  createDeliveryOrderDispatchAware,
   getDeliveryOrderUnified,
   listDOSourceDocuments,
   listDoAddSoOptions,
@@ -574,7 +574,7 @@ export default function DO01CreatePage() {
   const [showStoDrawer, setShowStoDrawer] = useState(false);
   const [pickingSourceRef, setPickingSourceRef] = useState(null);
   const [pickingSourceType, setPickingSourceType] = useState(null);
-  const [header, setHeader] = useState(_saved.header ?? { vehicle_number: "", lr_number: "", lr_date: "", gross_weight: "", driver_number: "", driver_contact_number: "", remarks: "" });
+  const [header, setHeader] = useState(_saved.header ?? { vehicle_number: "", lr_number: "", lr_date: "", dispatch_date: "", gross_weight: "", driver_number: "", driver_contact_number: "", remarks: "" });
   const [transporterId, setTransporterId] = useState(_saved.transporterId ?? "");
   const [transporterName, setTransporterName] = useState(_saved.transporterName ?? "");
   const [saving, setSaving] = useState(false);
@@ -604,6 +604,7 @@ export default function DO01CreatePage() {
 
     setHeader({
       vehicle_number: detail.vehicle_number || "",
+      dispatch_date: detail.dispatch_date || "",
       lr_number: detail.lr_number || "",
       lr_date: detail.lr_date || "",
       gross_weight: detail.gross_weight ?? "",
@@ -752,6 +753,7 @@ export default function DO01CreatePage() {
         transporter_name_freetext: transporterId ? null : (transporterName || null),
         lr_number: header.lr_number || null,
         lr_date: header.lr_date || null,
+        dispatch_date: header.dispatch_date || null,
         gross_weight: header.gross_weight === "" ? null : Number(header.gross_weight),
         driver_number: header.driver_number || null,
         driver_contact_number: header.driver_contact_number || null,
@@ -759,7 +761,7 @@ export default function DO01CreatePage() {
       };
       const saved = isEditMode
         ? await updateDeliveryOrderUnified(editDcId, payload)
-        : await createDeliveryOrderUnified(payload);
+        : await createDeliveryOrderDispatchAware(payload);
       setNotice(isEditMode ? "Delivery order updated." : "Delivery order created.");
       const savedId = isEditMode ? editDcId : saved?.id;
       openScreenWithContext(OPERATION_SCREENS.PROC_DO_DETAIL.screen_code, { id: savedId, refreshOnReturn: true });
@@ -812,6 +814,7 @@ export default function DO01CreatePage() {
                 <ErpDenseFormRow label="Transporter"><TransporterPicker transporterId={transporterId} transporterName={transporterName} companyId={companyId} canManageTransporters={canManageTransporters} onSelect={(t) => { setTransporterId(t.id); setTransporterName(`${t.transporter_code} — ${t.transporter_name}`); }} onClear={() => { setTransporterId(""); setTransporterName(""); }} onAddNew={handleAddTransporterToMaster} /></ErpDenseFormRow>
                 <ErpDenseFormRow label="LR Number"><input value={header.lr_number} onChange={(event) => setHeader((current) => ({ ...current, lr_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="LR Date"><input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={header.lr_date} onChange={(event) => setHeader((current) => ({ ...current, lr_date: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
+                <ErpDenseFormRow label="Dispatch Date"><input type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={header.dispatch_date || ""} onChange={(event) => setHeader((current) => ({ ...current, dispatch_date: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="Gross Weight"><input type="number" step="0.01" value={header.gross_weight} onChange={(event) => setHeader((current) => ({ ...current, gross_weight: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="Driver Name"><input value={header.driver_number} onChange={(event) => setHeader((current) => ({ ...current, driver_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
                 <ErpDenseFormRow label="Driver Contact Number"><input value={header.driver_contact_number} onChange={(event) => setHeader((current) => ({ ...current, driver_contact_number: event.target.value }))} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500" /></ErpDenseFormRow>
