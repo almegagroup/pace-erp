@@ -35,22 +35,21 @@ const LIMIT = 50;
 // in the codebase (e.g. ReservationListPage), not a new one.
 const SO_EXPORT_COLUMNS = [
   { key: "so_number", label: "SO Number" },
-  { key: "customer_display", label: "Customer" },
-  { key: "ship_to_display", label: "Ship-To Address" },
-  { key: "customer_po_number", label: "Customer PO" },
+  { key: "customer_po_number", label: "External SO Number" },
+  { key: "external_so_date", label: "External SO Date" },
   { key: "dispatch_type", label: "Dispatch Type" },
+  { key: "dd_flag", label: "DD Flag" },
+  { key: "bill_to_display", label: "Bill-To" },
+  { key: "ship_to_name_display", label: "Ship-To" },
   { key: "dispatch_category", label: "Dispatch Category" },
-  { key: "parent_company_display", label: "Parent Company" },
-  { key: "depot_code_display", label: "VDC / DC" },
-  { key: "so_date", label: "SO Date" },
-  { key: "status", label: "Status" },
-  { key: "company_display", label: "Company" },
-  { key: "total_qty", label: "Total Qty" },
-  { key: "net_amount", label: "Net Amount" },
+  { key: "total_item_count", label: "Total Items" },
+  { key: "total_pack_qty", label: "Total Packs" },
+  { key: "total_value_before_gst", label: "Total Value (Before GST)" },
   { key: "cgst_amount", label: "CGST" },
   { key: "sgst_amount", label: "SGST" },
   { key: "igst_amount", label: "IGST" },
-  { key: "total_value", label: "Total Value" },
+  { key: "total_gst_amount", label: "Total GST" },
+  { key: "so_total_order_value", label: "SO Total Order Value" },
 ];
 
 // Business owner ask (2026-09-04) -- autosuggest search across every visible
@@ -58,18 +57,7 @@ const SO_EXPORT_COLUMNS = [
 // server-paginated (§113.10), so suggestions only reflect the currently
 // loaded page -- narrower than a full-dataset suggestion set, but zero extra
 // round trips and consistent with the existing search-is-server-side design.
-const SO_SEARCH_COLUMN_KEYS = ["so_number", "customer_display", "customer_po_number", "dispatch_type", "dispatch_category", "parent_company_display", "depot_code_display", "status", "company_display"];
-
-function soStatusTone(status) {
-  switch (String(status || "").toUpperCase()) {
-    case "ISSUED": return "bg-sky-100 text-sky-800";
-    case "INVOICED": return "bg-amber-100 text-amber-800";
-    case "CLOSED": return "bg-emerald-100 text-emerald-800";
-    case "CANCELLED": return "bg-rose-100 text-rose-800";
-    case "CREATED":
-    default: return "bg-slate-100 text-slate-700";
-  }
-}
+const SO_SEARCH_COLUMN_KEYS = ["so_number", "customer_po_number", "external_so_date", "dispatch_type", "dd_flag", "bill_to_display", "ship_to_name_display", "dispatch_category"];
 
 function formatMoney(value) {
   const numeric = Number(value);
@@ -155,7 +143,15 @@ export default function SOListPage() {
     downloadCsvFile({
       fileName: `sales_orders_${effectiveCompanyId || "all"}_page${page}.csv`,
       columns: SO_EXPORT_COLUMNS,
-      rows: rows.map((row) => ({ ...row, total_value: formatMoney(row.total_invoice_value ?? row.total_value) })),
+      rows: rows.map((row) => ({
+        ...row,
+        total_value_before_gst: formatMoney(row.total_value_before_gst),
+        cgst_amount: formatMoney(row.cgst_amount),
+        sgst_amount: formatMoney(row.sgst_amount),
+        igst_amount: formatMoney(row.igst_amount),
+        total_gst_amount: formatMoney(row.total_gst_amount),
+        so_total_order_value: formatMoney(row.so_total_order_value),
+      })),
     });
   }
 
@@ -224,31 +220,21 @@ export default function SOListPage() {
               <ErpDenseGrid
                 columns={[
                   { key: "so_number", label: "SO Number", width: "140px" },
-                  { key: "customer_display", label: "Customer", render: (row) => row.customer_display || "—" },
-                  { key: "ship_to_display", label: "Ship-To Address", width: "280px", render: (row) => row.ship_to_display || "—" },
-                  { key: "customer_po_number", label: "Customer PO", width: "140px" },
+                  { key: "customer_po_number", label: "External SO Number", width: "145px", render: (row) => row.customer_po_number || "—" },
+                  { key: "external_so_date", label: "External SO Date", width: "125px", render: (row) => row.external_so_date || "—" },
                   { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type || "—" },
+                  { key: "dd_flag", label: "DD Flag", width: "85px", render: (row) => row.dd_flag || "No" },
+                  { key: "bill_to_display", label: "Bill-To", width: "220px", render: (row) => row.bill_to_display || "—" },
+                  { key: "ship_to_name_display", label: "Ship-To", width: "220px", render: (row) => row.ship_to_name_display || "—" },
                   { key: "dispatch_category", label: "Dispatch Category", width: "140px", render: (row) => row.dispatch_category || "—" },
-                  { key: "parent_company_display", label: "Parent Company", width: "220px", render: (row) => row.parent_company_display || "—" },
-                  { key: "depot_code_display", label: "VDC / DC", width: "180px", render: (row) => row.depot_code_display || "—" },
-                  { key: "so_date", label: "SO Date", width: "110px" },
-                  {
-                    key: "status",
-                    label: "Status",
-                    width: "140px",
-                    render: (row) => (
-                      <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${soStatusTone(row.status)}`}>
-                        {row.status}
-                      </span>
-                    ),
-                  },
-                  { key: "company_display", label: "Company", render: (row) => row.company_display || "—" },
-                  { key: "total_qty", label: "Total Qty", width: "100px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
-                  { key: "net_amount", label: "Net Amount", width: "120px", align: "right", render: (row) => formatMoney(row.net_amount) },
+                  { key: "total_item_count", label: "Total Items", width: "100px", align: "right", render: (row) => Number(row.total_item_count ?? 0) },
+                  { key: "total_pack_qty", label: "Total Packs", width: "110px", align: "right", render: (row) => Number(row.total_pack_qty ?? 0).toFixed(2) },
+                  { key: "total_value_before_gst", label: "Total Value (Before GST)", width: "165px", align: "right", render: (row) => formatMoney(row.total_value_before_gst) },
                   { key: "cgst_amount", label: "CGST", width: "100px", align: "right", render: (row) => formatMoney(row.cgst_amount) },
                   { key: "sgst_amount", label: "SGST", width: "100px", align: "right", render: (row) => formatMoney(row.sgst_amount) },
                   { key: "igst_amount", label: "IGST", width: "100px", align: "right", render: (row) => formatMoney(row.igst_amount) },
-                  { key: "total_value", label: "Total Value", width: "120px", align: "right", render: (row) => formatMoney(row.total_value) },
+                  { key: "total_gst_amount", label: "Total GST", width: "115px", align: "right", render: (row) => formatMoney(row.total_gst_amount) },
+                  { key: "so_total_order_value", label: "SO Total Order Value", width: "155px", align: "right", render: (row) => formatMoney(row.so_total_order_value) },
                 ]}
                 rows={rows}
                 rowKey={(row) => row.id}
