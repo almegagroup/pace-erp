@@ -405,16 +405,22 @@ export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandle
 
     const addressIds = [...new Set(groups.map((group) => toTrimmedString(group.customer_address_id)).filter(Boolean))];
     const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
-    const companyIds = [...new Set([toTrimmedString(so.company_id), toTrimmedString(so.bill_to_parent_company_id)].filter(Boolean))];
-    const [{ data: addressRows, error: addressError }, { data: materialRows, error: materialError }, { data: companyRows, error: companyError }] = await Promise.all([
+    // bill_to_parent_company_id references erp_master.fg_parent_company, not
+    // erp_master.companies. Looking it up in companies left every Parent
+    // Company / Parent GST cell blank in the FO register.
+    const companyIds = [toTrimmedString(so.company_id)].filter(Boolean);
+    const parentCompanyIds = [toTrimmedString(so.bill_to_parent_company_id)].filter(Boolean);
+    const [{ data: addressRows, error: addressError }, { data: materialRows, error: materialError }, { data: companyRows, error: companyError }, { data: parentCompanyRows, error: parentCompanyError }] = await Promise.all([
       addressIds.length ? serviceRoleClient.schema("erp_master").from("customer_address").select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", addressIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      materialIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name").in("id", materialIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      materialIds.length ? serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name, document_name").in("id", materialIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
       companyIds.length ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, gst_number, state_name, full_address, pin_code").in("id", companyIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      parentCompanyIds.length ? serviceRoleClient.schema("erp_master").from("fg_parent_company").select("id, company_name, gst_number").in("id", parentCompanyIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     ]);
-    if (addressError || materialError || companyError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_DISPLAY_LOOKUP_FAILED", 500, "Unable to resolve Sales/Dispatch FO display details.");
+    if (addressError || materialError || companyError || parentCompanyError) return soMapErrorResponse(req, ctx, "SO_MAP_FO_DISPLAY_LOOKUP_FAILED", 500, "Unable to resolve Sales/Dispatch FO display details.");
     const addressById = new Map(((addressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const materialById = new Map(((materialRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const companyById = new Map(((companyRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    const parentCompanyById = new Map(((parentCompanyRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
     const customerIds = [...new Set([...addressById.values()].map((address) => toTrimmedString(address.customer_id)).filter(Boolean))];
     const { data: customerRows, error: customerError } = customerIds.length
       ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name, gst_number, delivery_address, billing_address, billing_state").in("id", customerIds)
@@ -429,7 +435,7 @@ export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandle
       allocationsByGroup.get(groupId)!.push(allocation);
     }
     const company = companyById.get(toTrimmedString(so.company_id));
-    const parentCompany = companyById.get(toTrimmedString(so.bill_to_parent_company_id));
+    const parentCompany = parentCompanyById.get(toTrimmedString(so.bill_to_parent_company_id));
     const proportionate = (line: JsonRecord, allocation: JsonRecord, field: string): number => {
       const baseQty = Number(line.base_qty ?? line.quantity ?? 0);
       const ratio = baseQty > 0 ? Number(allocation.allocated_qty ?? 0) / baseQty : 0;
@@ -447,7 +453,7 @@ export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandle
         if (!line) return [];
         const material = materialById.get(toTrimmedString(line.material_id));
         const sku = toTrimmedString(material?.external_code) || toTrimmedString(material?.pace_code);
-        const description = toTrimmedString(material?.material_name) || toTrimmedString(line.manual_sku_name);
+        const description = toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name) || toTrimmedString(line.manual_sku_name);
         const allocationQty = Number(allocation.allocated_qty ?? 0);
         const perPackQty = Number(line.per_pack_qty ?? 0);
         const allocationPackQty = perPackQty > 0 ? allocationQty / perPackQty : allocationQty;
@@ -465,7 +471,7 @@ export async function listMtsFoForSoHandler(req: Request, ctx: ProcurementHandle
         external_so_date: toTrimmedString(so.customer_po_date) || null,
         fo_number: toTrimmedString(group.external_fo_number), revised_fo_number: toTrimmedString(group.revised_external_fo_number) || null,
         effective_fo_number: effectiveExternalFoNumber(group),
-        parent_company_code: toTrimmedString(parentCompany?.company_code) || null,
+        parent_company_code: null,
         parent_company_name: toTrimmedString(parentCompany?.company_name) || null,
         parent_company_gst: toTrimmedString(parentCompany?.gst_number) || null,
         bill_to_name: toTrimmedString(so.bill_to_name) || null, bill_to_address: toTrimmedString(so.bill_to_address) || null,
@@ -528,15 +534,20 @@ export async function listMtsFoForCompanyHandler(req: Request, ctx: ProcurementH
     ]);
     const addressIds = [...new Set(groups.map((group) => toTrimmedString(group.customer_address_id)).filter(Boolean))];
     const materialIds = [...new Set(lineRows.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
-    const companyIds = [...new Set([...soById.values()].flatMap((so) => [toTrimmedString(so.company_id), toTrimmedString(so.bill_to_parent_company_id)]).filter(Boolean))];
-    const [addressRows, materialRows, companyRows] = await Promise.all([
+    // Parent-company IDs belong to fg_parent_company. Fetching them from
+    // companies was the reason the company-wide register showed blanks.
+    const companyIds = [...new Set([...soById.values()].map((so) => toTrimmedString(so.company_id)).filter(Boolean))];
+    const parentCompanyIds = [...new Set([...soById.values()].map((so) => toTrimmedString(so.bill_to_parent_company_id)).filter(Boolean))];
+    const [addressRows, materialRows, companyRows, parentCompanyRows] = await Promise.all([
       fetchInChunks<JsonRecord>(addressIds, (chunk) => serviceRoleClient.schema("erp_master").from("customer_address").select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", chunk)),
-      fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name").in("id", chunk)),
+      fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name, document_name").in("id", chunk)),
       fetchInChunks<JsonRecord>(companyIds, (chunk) => serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name, gst_number").in("id", chunk)),
+      fetchInChunks<JsonRecord>(parentCompanyIds, (chunk) => serviceRoleClient.schema("erp_master").from("fg_parent_company").select("id, company_name, gst_number").in("id", chunk)),
     ]);
     const addressById = new Map(addressRows.map((row) => [toTrimmedString(row.id), row]));
     const materialById = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
     const companyById = new Map(companyRows.map((row) => [toTrimmedString(row.id), row]));
+    const parentCompanyById = new Map(parentCompanyRows.map((row) => [toTrimmedString(row.id), row]));
     const customerIds = [...new Set(addressRows.map((address) => toTrimmedString(address.customer_id)).filter(Boolean))];
     const customerRows = await fetchInChunks<JsonRecord>(customerIds, (chunk) => serviceRoleClient.schema("erp_master").from("customer_master")
       .select("id, customer_code, customer_name, gst_number, delivery_address, billing_address, billing_state").in("id", chunk));
@@ -554,7 +565,7 @@ export async function listMtsFoForCompanyHandler(req: Request, ctx: ProcurementH
       const groupAddress = addressById.get(toTrimmedString(group.customer_address_id));
       const customer = groupAddress ? customerById.get(toTrimmedString(groupAddress.customer_id)) : undefined;
       const company = companyById.get(toTrimmedString(so.company_id));
-      const parentCompany = companyById.get(toTrimmedString(so.bill_to_parent_company_id));
+      const parentCompany = parentCompanyById.get(toTrimmedString(so.bill_to_parent_company_id));
       return (allocationsByGroup.get(toTrimmedString(group.id)) ?? []).flatMap((allocation) => {
         const line = lineById.get(toTrimmedString(allocation.so_line_id));
         if (!line) return [];
@@ -571,7 +582,7 @@ export async function listMtsFoForCompanyHandler(req: Request, ctx: ProcurementH
           company_code: toTrimmedString(company?.company_code) || null, company_name: toTrimmedString(company?.company_name) || null,
           so_number: toTrimmedString(so.so_number), external_so_number: toTrimmedString(so.customer_po_number) || null, external_so_date: toTrimmedString(so.customer_po_date) || null,
           fo_number: toTrimmedString(group.external_fo_number), revised_fo_number: toTrimmedString(group.revised_external_fo_number) || null, effective_fo_number: effectiveExternalFoNumber(group),
-          parent_company_code: toTrimmedString(parentCompany?.company_code) || null, parent_company_name: toTrimmedString(parentCompany?.company_name) || null, parent_company_gst: toTrimmedString(parentCompany?.gst_number) || null,
+          parent_company_code: null, parent_company_name: toTrimmedString(parentCompany?.company_name) || null, parent_company_gst: toTrimmedString(parentCompany?.gst_number) || null,
           bill_to_name: toTrimmedString(so.bill_to_name) || null, bill_to_address: toTrimmedString(so.bill_to_address) || null, bill_to_state: toTrimmedString(so.bill_to_state) || null, bill_to_gst: toTrimmedString(so.bill_to_gst_number) || null,
           ship_to_name: toTrimmedString(customer?.customer_name) || toTrimmedString(so.ship_to_name) || null,
           ship_to_address: toTrimmedString(groupAddress?.address_line) || toTrimmedString(customer?.delivery_address) || toTrimmedString(customer?.billing_address) || toTrimmedString(so.ship_to_address) || null,
@@ -580,7 +591,7 @@ export async function listMtsFoForCompanyHandler(req: Request, ctx: ProcurementH
           customer_code: toTrimmedString(customer?.customer_code) || null, customer_name: toTrimmedString(customer?.customer_name) || null, customer_gst: toTrimmedString(customer?.gst_number) || null,
           customer_billing_address: toTrimmedString(customer?.billing_address) || null, customer_billing_state: toTrimmedString(customer?.billing_state) || null,
           site_name: toTrimmedString(groupAddress?.site_name) || null, site_address: toTrimmedString(groupAddress?.address_line) || null, site_town: toTrimmedString(groupAddress?.town) || null, site_state: toTrimmedString(groupAddress?.state) || null, site_pin_code: toTrimmedString(groupAddress?.pin_code) || null,
-          sku: toTrimmedString(material?.external_code) || toTrimmedString(material?.pace_code) || null, material_description: toTrimmedString(material?.material_name) || toTrimmedString(line.manual_sku_name) || null,
+          sku: toTrimmedString(material?.external_code) || toTrimmedString(material?.pace_code) || null, material_description: toTrimmedString(material?.document_name) || toTrimmedString(material?.material_name) || toTrimmedString(line.manual_sku_name) || null,
           pack_qty: Number((perPackQty > 0 ? allocationQty / perPackQty : allocationQty).toFixed(6)), base_qty: Number(allocationQty.toFixed(6)), rate: Number(Number(line.net_rate ?? 0).toFixed(6)), gst_rate: Number(Number(line.gst_rate ?? 0).toFixed(6)),
           taxable_amount: Number(((lineTotal - lineGst) * allocationRatio).toFixed(6)), cgst_amount: proportional("cgst_amount"), sgst_amount: proportional("sgst_amount"), igst_amount: proportional("igst_amount"), gst_amount: Number((lineGst * allocationRatio).toFixed(6)), total_amount: proportional("total_value"), mapped_at: toTrimmedString(group.created_at) || null,
         }];
