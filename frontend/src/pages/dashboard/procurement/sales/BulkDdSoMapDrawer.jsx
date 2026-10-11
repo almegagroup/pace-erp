@@ -16,8 +16,8 @@ import { useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import CustomerCreateForm from "../../om/customer/CustomerCreateForm.jsx";
-import { createCustomer, listCustomerAddresses, createCustomerAddress, lookupCustomerGstProfile, updateCustomerAddress } from "../../om/omApi.js";
-import { previewSoMapBulkUpload, saveSoMapGroup } from "../procurementApi.js";
+import { listCustomerAddresses, createCustomerAddress, updateCustomerAddress } from "../../om/omApi.js";
+import { createMissingGstCustomersForSoMap, previewSoMapBulkUpload, saveSoMapGroup } from "../procurementApi.js";
 
 const TEMPLATE_HEADERS = [
   "External SO Number", "FO Number", "Customer GST", "Customer Name",
@@ -115,6 +115,10 @@ async function parseUploadedWorkbook(file) {
     const hasSiteValue = cell("has_site").toUpperCase();
     rows.push({
       row_index: rowIndexSeq,
+      // Keep the real worksheet row visible in validation messages. The
+      // sequence number alone becomes misleading when users leave blanks or
+      // notes above/between data rows.
+      excel_row_number: rowNumber,
       external_so_number: externalSoNumber,
       fo_number: cell("fo_number"),
       customer_gst: cell("customer_gst").toUpperCase(),
@@ -356,98 +360,26 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
       const rawMap = {};
       parsedRows.forEach((row) => { rawMap[row.row_index] = row; });
       setRawByIndex(rawMap);
-      const result = await previewSoMapBulkUpload({ company_id: companyId, rows: parsedRows });
-      // fetchProcurement unwraps the standard `{ data: [...] }` envelope, so
-      // preview responses arrive here as the array itself. Retain the nested
-      // fallback for callers that return an unwrapped API payload.
-      const previewRows = Array.isArray(result) ? result : result?.data;
-      const resolvedPreviewRows = await autoCreateMissingGstCustomers(Array.isArray(previewRows) ? previewRows : [], rawMap);
-      setRows(resolvedPreviewRows);
+      // The server first performs its own authoritative preview and creates
+      // only GST-NOT_FOUND groups. Calling it unconditionally avoids a
+      // browser-side preview/write/preview chain: every upload has exactly
+      // one bulk action followed by one final review-grid preview.
+      const batchResult = await createMissingGstCustomersForSoMap({ company_id: companyId, rows: parsedRows });
+      const batchData = batchResult?.data ?? batchResult;
+      const failedCount = Array.isArray(batchData?.failed) ? batchData.failed.length : 0;
+      if (failedCount > 0) {
+        setNotice(`${failedCount} GST customer group(s) could not be auto-created. Those rows remain available for correction.`);
+      }
+      // Re-run the single preview after the batch write so all rows use the
+      // normal resolver path (including customer/site reuse and counts).
+      const refreshedResult = await previewSoMapBulkUpload({ company_id: companyId, rows: parsedRows });
+      const refreshedRows = Array.isArray(refreshedResult) ? refreshedResult : refreshedResult?.data;
+      setRows(Array.isArray(refreshedRows) ? refreshedRows : []);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "SO_MAP_BULK_PREVIEW_FAILED");
     } finally {
       setUploading(false);
     }
-  }
-
-  // A GST that exists nowhere in MM04 is not a user-selection case. The
-  // confirmed SO Map design creates the domestic customer and its first VDC
-  // site automatically from the uploaded row, then reuses it within the
-  // current batch. The no-GST path remains deliberately manual.
-  async function autoCreateMissingGstCustomers(previewRows, rawMap) {
-    const createdByVdcAndGst = new Map();
-    const nextRows = [];
-    for (const row of previewRows) {
-      const raw = rawMap[row.row_index];
-      if (row.status !== "RESOLVED" || !raw?.customer_gst || row.customer_resolution?.status !== "NOT_FOUND") {
-        nextRows.push(row);
-        continue;
-      }
-      const key = `${row.vdc_id}::${raw.customer_gst}`;
-      try {
-        let created = createdByVdcAndGst.get(key);
-        if (!created) {
-          if (!row.vdc_state) throw new Error("SO_MAP_VDC_STATE_REQUIRED");
-          const profileResult = await lookupCustomerGstProfile(raw.customer_gst);
-          const profile = profileResult?.data ?? profileResult;
-          if (!profile?.full_address || !profile?.state_name) throw new Error("SO_MAP_GST_PROFILE_REQUIRED");
-          const result = await createCustomer({
-            company_id: companyId,
-            customer_name: raw.customer_name,
-            customer_type: "DOMESTIC",
-            currency_code: "INR",
-            // GST legal name is intentionally NOT used: it can be the
-            // proprietor's personal name. The Excel consignee name remains
-            // the customer name; Applyflow supplies address/state/pin only.
-            delivery_address: profile.full_address,
-            billing_state: profile.state_name,
-            town: raw.town,
-            site_name: raw.customer_name,
-            gst_number: raw.customer_gst,
-            gst_category: "REGISTERED",
-            pin_code: profile.pin_code || undefined,
-          });
-          const customer = result?.data ?? result;
-          const addressResult = await listCustomerAddresses(customer.id);
-          const addresses = Array.isArray(addressResult?.data) ? addressResult.data : (Array.isArray(addressResult) ? addressResult : []);
-          const firstAddress = addresses[0];
-          if (!firstAddress?.id) throw new Error("SO_MAP_GST_ADDRESS_CREATE_FAILED");
-          await updateCustomerAddress({ id: firstAddress.id, depot_code_id: row.vdc_id, pin_code: profile.pin_code || undefined });
-          created = { customer, firstAddress: { ...firstAddress, depot_code_id: row.vdc_id }, sitesByKey: new Map() };
-          createdByVdcAndGst.set(key, created);
-        }
-        let siteResolution = null;
-        if (raw.has_site) {
-          const siteKey = `${normalizedInput(raw.site_name)}::${normalizedInput(raw.site_address)}::${normalizedInput(raw.site_town)}`;
-          let site = created.sitesByKey.get(siteKey);
-          if (!site) {
-            const siteResult = await createCustomerAddress({
-              customer_id: created.customer.id,
-              site_name: raw.site_name,
-              address_line: raw.site_address,
-              town: raw.site_town,
-              depot_code_id: row.vdc_id,
-            });
-            site = siteResult?.data ?? siteResult;
-            if (!site?.id) throw new Error("SO_MAP_GST_SITE_CREATE_FAILED");
-            created.sitesByKey.set(siteKey, site);
-          }
-          siteResolution = { count: 1, status: "MATCHED", candidates: [site] };
-        }
-        nextRows.push({
-          ...row,
-          customer_resolution: {
-            mode: "GST", status: "FOUND", customer_id: created.customer.id,
-            customer_name: created.customer.customer_name || raw.customer_name,
-            customer_address_id: created.firstAddress.id,
-          },
-          site_resolution: siteResolution,
-        });
-      } catch {
-        nextRows.push({ ...row, customer_resolution: { mode: "GST", status: "AUTO_CREATE_FAILED" } });
-      }
-    }
-    return nextRows;
   }
 
   // §6 point 9 dedup/reuse — once a customer is resolved for one row, every
@@ -538,10 +470,42 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     const sourceRaw = rawByIndex[rowIndex];
     setRows((current) => (current ?? []).map((row) => {
       const sameCustomer = String(row.customer_resolution?.customer_id) === String(source?.customer_resolution?.customer_id);
+      const sameVdc = String(row.vdc_id) === String(source?.vdc_id);
       const sameSite = sameSiteInput(rawByIndex[row.row_index], sourceRaw);
-      return row.row_index === rowIndex || (sameCustomer && sameSite && rowHasSite(row))
-        ? { ...row, site_resolution: { count: 1, status: "SINGLE", candidates: [createdAddress] } }
-        : row;
+      if (!sameCustomer || !sameVdc || !rowHasSite(row)) return row;
+
+      // A Site Address created from one row is immediately a valid candidate
+      // for every other row of that customer in this VDC. Exact same uploaded
+      // site details auto-select it; other rows deliberately get it in their
+      // dropdown instead of being forced to create the same site again.
+      const resolution = row.site_resolution ?? {};
+      const currentCandidates = resolution.all_candidates ?? resolution.candidates ?? [];
+      const allCandidates = currentCandidates.some((candidate) => String(candidate?.id) === String(createdAddress?.id))
+        ? currentCandidates
+        : [...currentCandidates, createdAddress];
+      if (row.row_index === rowIndex || sameSite) {
+        return {
+          ...row,
+          site_resolution: {
+            count: allCandidates.length,
+            status: "MATCHED",
+            candidates: [createdAddress],
+            all_candidates: allCandidates,
+          },
+        };
+      }
+      if (resolution.status === "SINGLE" || resolution.status === "MATCHED") {
+        return { ...row, site_resolution: { ...resolution, count: allCandidates.length, all_candidates: allCandidates } };
+      }
+      return {
+        ...row,
+        site_resolution: {
+          count: allCandidates.length,
+          status: "CHOOSE",
+          candidates: allCandidates,
+          all_candidates: allCandidates,
+        },
+      };
     }));
     setAddSiteRowIndex(null);
   }
@@ -588,15 +552,25 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     }
   }
 
-  function isRowReady(row) {
-    if (row.status !== "RESOLVED" || row.duplicate_status === "UNCHANGED") return row.duplicate_status === "UNCHANGED";
-    if (row.duplicate_status === "CHANGED_QTY" && !row.change_confirmed) return false;
-    if (row.sku_resolution?.status !== "MATCHED" || row.qty_status !== "OK" || !row.customer_resolution?.customer_id) return false;
+  function getRowBlockReason(row) {
+    if (row.duplicate_status === "UNCHANGED") return null;
+    if (row.status !== "RESOLVED") return row.error_code || "Upload row is invalid";
+    if (row.duplicate_status === "CHANGED_QTY" && !row.change_confirmed) return "Confirm changed quantity or remove this row";
+    if (row.sku_resolution?.status !== "MATCHED") return "Choose a SKU from this SO";
+    if (row.qty_status !== "OK") return "Quantity exceeds this SO item's remaining balance";
+    if (!row.customer_resolution?.customer_id) {
+      if (row.customer_resolution?.status === "FOUND_DIFFERENT_VDC") return "GST belongs to a different VDC";
+      return "Resolve or create the customer";
+    }
     const addressId = row.site_resolution?.candidates?.[0]?.id || row.customer_resolution?.customer_address_id;
-    return Boolean(addressId) && (!rowHasSite(row) || Boolean(row.site_resolution?.candidates?.[0]?.id));
+    if (!addressId) return "Customer address is not resolved";
+    if (rowHasSite(row) && !row.site_resolution?.candidates?.[0]?.id) return "Choose or add the Site Address";
+    return null;
   }
+  function isRowReady(row) { return getRowBlockReason(row) === null; }
   const readyCount = (rows ?? []).filter((row) => row.duplicate_status !== "UNCHANGED" && isRowReady(row)).length;
-  const blockingCount = (rows ?? []).filter((row) => row.duplicate_status !== "UNCHANGED" && !isRowReady(row)).length;
+  const blockingRows = (rows ?? []).filter((row) => getRowBlockReason(row));
+  const blockingCount = blockingRows.length;
 
   return (
     <DrawerBase
@@ -627,6 +601,14 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
               cellNavigate
               maxHeight="520px"
               columns={[
+                {
+                  key: "review_status", label: "Review Status", width: "260px", render: (row) => {
+                    const reason = getRowBlockReason(row);
+                    return reason
+                      ? <span className="font-semibold text-rose-700">Excel row {rawByIndex[row.row_index]?.excel_row_number ?? row.row_index}: {reason}</span>
+                      : <span className="text-emerald-800">Ready</span>;
+                  },
+                },
                 { key: "external_so_number", label: "External SO Number", width: "145px", render: (row) => rawByIndex[row.row_index]?.external_so_number || "—" },
                 { key: "fo_number", label: "FO Number", width: "120px", render: (row) => rawByIndex[row.row_index]?.fo_number || "—" },
                 { key: "customer_gst", label: "Customer GST", width: "145px", render: (row) => rawByIndex[row.row_index]?.customer_gst || "—" },
@@ -698,9 +680,18 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
               ]}
               rows={rows}
               rowKey={(row) => row.row_index}
+              getRowProps={(row) => (getRowBlockReason(row) ? { className: "bg-amber-50" } : {})}
               emptyMessage="No rows."
             />
-            {blockingCount ? <div className="text-xs font-semibold text-amber-800">Resolve, confirm, or remove {blockingCount} highlighted row(s) before saving.</div> : null}
+            {blockingCount ? (
+              <div className="grid gap-1 border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                <span>Resolve, confirm, or remove {blockingCount} highlighted row(s) before saving.</span>
+                {blockingRows.slice(0, 5).map((row) => (
+                  <span key={row.row_index}>Excel row {rawByIndex[row.row_index]?.excel_row_number ?? row.row_index}: {getRowBlockReason(row)}</span>
+                ))}
+                {blockingRows.length > 5 ? <span>…and {blockingRows.length - 5} more row(s).</span> : null}
+              </div>
+            ) : null}
             <button type="button" disabled={saving || readyCount === 0 || blockingCount > 0} onClick={() => void handleSaveAll()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
               {saving ? "Saving…" : `Save ${readyCount} Mapping(s)`}
             </button>

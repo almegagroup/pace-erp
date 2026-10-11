@@ -417,6 +417,7 @@ import {
   unmapSoAllocationHandler,
 } from "../_core/procurement/so_map.handlers.ts";
 import {
+  createMissingGstCustomersForSoMapHandler,
   previewSoMapBulkUploadHandler,
 } from "../_core/procurement/so_map_bulk.handlers.ts";
 import {
@@ -896,6 +897,8 @@ export async function dispatchProcurementRoutes(
     // resource as map-fo/map-address/save-group) -- no ACL change needed.
     case "POST:/api/procurement/so-map/bulk/preview":
       return await previewSoMapBulkUploadHandler(req, ctx);
+    case "POST:/api/procurement/so-map/bulk/create-missing-gst-customers":
+      return await createMissingGstCustomersForSoMapHandler(req, ctx);
 
     // §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Bulk DO Upload", additive to
     // SO03. Shares PROC_DO_CREATE (same resource as the v2 DO create/edit

@@ -92,8 +92,13 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   search) — driving **existing** `createCustomerHandler`/`createCustomerAddressHandler`
   (never duplicating their logic), ending in calls to **existing**
   `saveSoMapGroupHandler(source: "address")` per resolved row/group.
-  **2026-10-09 ✅** `previewSoMapBulkUploadHandler` built (see Progress Log);
-  the "save" step needs no new endpoint at all — the frontend calls the
+  **2026-10-11 ✅ batch-write correction:** preview stays read-only; when GST
+  customers are missing, one `createMissingGstCustomersForSoMapHandler`
+  request first re-runs the authoritative VDC-scoped preview and then invokes
+  the existing MM04 customer/address handlers in-process (six bounded workers).
+  It is deliberately **one browser action for the whole workbook**, not one
+  MM04 API/blocker cycle per row; the frontend refreshes preview once after
+  the batch completes. The "save" step needs no new endpoint at all — the frontend calls the
   now-extended `saveSoMapGroupHandler` directly per resolved row, source=
   "address", with `external_fo_number` + the resolved `customer_address_id`.
 - [x] **T8.** Backend: upload validation (duplicate key, changed-qty Confirm/Remove,

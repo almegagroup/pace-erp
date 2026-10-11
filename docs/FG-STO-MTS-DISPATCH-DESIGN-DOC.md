@@ -544,7 +544,8 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
        আলাদা error state, resolution: GST ঠিক করা বা line remove করা।
      - GST দেওয়া আছে কিন্তু কোথাও MM04-এ নেই → system GST দিয়েই সরাসরি **auto-create** করে
        দেবে (Create button/click), user-কে কিছু করতে হবে না। একই Excel batch-এ একই GST-র
-       আরও row থাকলে সেগুলোতেও auto বসে যাবে।
+       আরও row থাকলে সেগুলোতেও auto বসে যাবে। Large upload-এ এটি একটিই server-side bulk
+       action; browser থেকে row-by-row MM04 create/API call বা repeated ERP blocker হবে না।
      - **Name-mismatch caveat:** GST lookup-এর `legal_name` সরাসরি customer_name হিসেবে
        বসবে না (proprietorship-এ GST legal_name = প্রোপ্রাইটরের ব্যক্তিগত নাম, দোকানের নাম না)
        — customer_name আসবে Excel-এর নিজের Customer Name column থেকে। GST থেকে আসবে শুধু
