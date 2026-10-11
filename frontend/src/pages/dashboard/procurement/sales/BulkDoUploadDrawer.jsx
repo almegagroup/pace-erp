@@ -8,16 +8,15 @@
  *          allocation, §6 points 8-12); a DC row carries a plain SO Number
  *          (no Customer/Site resolution needed, §6 point 10's correction).
  *          Driven entirely by the new previewDoBulkUpload/saveDoBulkUpload
- *          endpoints, which themselves only ever call the EXISTING,
- *          unmodified createDeliveryOrderUnifiedHandler/saveSoMapGroupHandler
- *          — see do_bulk.handlers.ts's own header note.
+ *          endpoints, which preserve the established unified DO business
+ *          transaction while adding durable submission reconciliation.
  * Authority: Frontend
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import { previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
+import { getDoBulkSubmissionStatus, previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
 import { getTransporterMasterRevision } from "./transporterMasterRevision.js";
 import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 
@@ -89,6 +88,31 @@ function responseRows(result) {
   return Array.isArray(result?.data) ? result.data : [];
 }
 
+function newSubmissionId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  window.crypto?.getRandomValues?.(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function submissionStorageKey(companyId) {
+  return `pace-erp:bulk-do-submission:${companyId}`;
+}
+
+function safeStoredSubmission(companyId) {
+  try {
+    const value = window.sessionStorage.getItem(submissionStorageKey(companyId));
+    if (!value) return null;
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function mergePreviewRows(currentRows, refreshedRows) {
   const refreshedByIndex = new Map((refreshedRows ?? []).map((row) => [Number(row.row_index), row]));
   return (currentRows ?? []).map((row) => refreshedByIndex.get(Number(row.row_index)) ?? row);
@@ -156,6 +180,9 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saveResults, setSaveResults] = useState(null);
+  const [submissionId, setSubmissionId] = useState("");
+  const [submissionGroupKeys, setSubmissionGroupKeys] = useState({});
+  const [reconciling, setReconciling] = useState(false);
   const fileInputRef = useRef(null);
   const restoredDraftRef = useRef(false);
 
@@ -164,6 +191,30 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   }
   function removeRow(rowIndex) {
     setRows((current) => (current ?? []).filter((row) => row.row_index !== rowIndex));
+  }
+
+  const persistSubmission = useCallback((next = {}) => {
+    if (!companyId) return;
+    try {
+      const nextRows = next.rows ?? rows;
+      const nextRaw = next.rawByIndex ?? rawByIndex;
+      const nextSubmissionId = next.submissionId ?? submissionId;
+      const nextGroupKeys = next.submissionGroupKeys ?? submissionGroupKeys;
+      if (!nextSubmissionId || !Array.isArray(nextRows)) return;
+      window.sessionStorage.setItem(submissionStorageKey(companyId), JSON.stringify({
+        submission_id: nextSubmissionId,
+        group_keys: nextGroupKeys,
+        preview_rows: nextRows,
+        raw_rows: Object.values(nextRaw),
+      }));
+    } catch {
+      // Session persistence is a safety enhancement, not a reason to block
+      // the user from completing a server-authoritative submission.
+    }
+  }, [companyId, rawByIndex, rows, submissionGroupKeys, submissionId]);
+
+  function clearPersistedSubmission() {
+    try { window.sessionStorage.removeItem(submissionStorageKey(companyId)); } catch { /* no-op */ }
   }
 
   const requestPreview = useCallback(async (parsedRows) => {
@@ -176,6 +227,38 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     setRows(previewRows);
     return previewRows;
   }, [requestPreview]);
+
+  const reconcileSubmission = useCallback(async (activeSubmissionId, activeGroupKeys, currentRows) => {
+    if (!activeSubmissionId) return { created: 0, total: 0, groups: [] };
+    const result = await getDoBulkSubmissionStatus({ company_id: companyId, submission_id: activeSubmissionId });
+    const statusGroups = Array.isArray(result?.groups) ? result.groups : [];
+    const byKey = new Map(statusGroups.map((group) => [group.client_group_key, group]));
+    const createdGroups = new Set(statusGroups.filter((group) => group.status === "CREATED").map((group) => group.client_group_key));
+    const createdReferences = new Set(statusGroups.filter((group) => group.status === "CREATED").map((group) => group.source_reference));
+    const nextRows = (currentRows ?? []).filter((row) => {
+      const groupKey = activeGroupKeys[row.fo_or_so_number];
+      return !createdGroups.has(groupKey) && !createdReferences.has(row.fo_or_so_number);
+    });
+    const nextResults = statusGroups.map((group) => ({
+      submission_group_key: group.client_group_key,
+      fo_or_so_number: group.source_reference,
+      status: group.status,
+      dc_id: group.delivery_challan_id,
+      error_code: group.error_code,
+      attempt_count: group.attempt_count,
+    }));
+    Object.entries(activeGroupKeys)
+      .filter(([, groupKey]) => !byKey.has(groupKey))
+      .forEach(([sourceReference, groupKey]) => nextResults.push({
+        submission_group_key: groupKey,
+        fo_or_so_number: sourceReference,
+        status: "NOT_STARTED",
+      }));
+    setRows(nextRows);
+    setSaveResults(nextResults);
+    persistSubmission({ rows: nextRows, submissionId: activeSubmissionId, submissionGroupKeys: activeGroupKeys });
+    return { created: createdGroups.size, total: statusGroups.length, groups: statusGroups, nextRows };
+  }, [companyId, persistSubmission]);
 
   // Returning from Transporter Master is navigation, not another upload. Keep
   // the already-resolved preview on screen immediately. If a transporter was
@@ -217,6 +300,27 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       .finally(() => { setValidating(false); onDraftRestored?.(); });
   }, [initialDraft, onDraftRestored, requestPreview, runPreview]);
 
+  // A lost browser response must not turn into another Create click.  Restore
+  // the exact submission identity, then ask the backend which groups actually
+  // committed before re-enabling any action.
+  useEffect(() => {
+    if (initialDraft || restoredDraftRef.current) return;
+    const saved = safeStoredSubmission(companyId);
+    if (!saved?.submission_id || !Array.isArray(saved.preview_rows)) return;
+    restoredDraftRef.current = true;
+    const restoredRaw = {};
+    (saved.raw_rows ?? []).forEach((row) => { restoredRaw[row.row_index] = row; });
+    setRawByIndex(restoredRaw);
+    setRows(saved.preview_rows);
+    setSubmissionId(saved.submission_id);
+    setSubmissionGroupKeys(saved.group_keys ?? {});
+    setReconciling(true);
+    void reconcileSubmission(saved.submission_id, saved.group_keys ?? {}, saved.preview_rows)
+      .then((outcome) => setNotice(`${outcome.created} created group(s) reconciled from the previous submission.`))
+      .catch(() => setError("This Bulk DO submission needs reconciliation. Do not create it again until the status check succeeds."))
+      .finally(() => setReconciling(false));
+  }, [companyId, initialDraft, reconcileSubmission]);
+
   async function handleFileChosen(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -228,7 +332,11 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       const rawMap = {};
       parsedRows.forEach((row) => { rawMap[row.row_index] = row; });
       setRawByIndex(rawMap);
-      await runPreview(parsedRows);
+      const previewRows = await runPreview(parsedRows);
+      const nextSubmissionId = newSubmissionId();
+      setSubmissionId(nextSubmissionId);
+      setSubmissionGroupKeys({});
+      persistSubmission({ rows: previewRows, rawByIndex: rawMap, submissionId: nextSubmissionId, submissionGroupKeys: {} });
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "DO_BULK_PREVIEW_FAILED");
     } finally {
@@ -317,14 +425,23 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   }
 
   async function handleSaveAll() {
+    if (saving || reconciling) return;
+    const activeSubmissionId = submissionId || newSubmissionId();
     setSaving(true); setError(""); setNotice(""); setSaveResults(null);
     try {
+      const nextGroupKeys = { ...submissionGroupKeys };
+      groups.forEach((group) => {
+        if (!nextGroupKeys[group.fo_or_so_number]) nextGroupKeys[group.fo_or_so_number] = newSubmissionId();
+      });
+      setSubmissionId(activeSubmissionId);
+      setSubmissionGroupKeys(nextGroupKeys);
       const payloadGroups = groups
         .filter((group) => groupReadiness(group).length === 0)
         .map((group) => {
           const first = group.rows[0];
           const raw = group.raw;
           return {
+            submission_group_key: nextGroupKeys[group.fo_or_so_number],
             fo_or_so_number: group.fo_or_so_number,
             dd_flag: group.dd_flag,
             so_id: group.so_id,
@@ -346,14 +463,38 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
           };
         });
       if (payloadGroups.length === 0) { setError("No group is fully ready to save yet."); return; }
-      const result = await saveDoBulkUpload({ company_id: companyId, groups: payloadGroups });
+      persistSubmission({ submissionId: activeSubmissionId, submissionGroupKeys: nextGroupKeys });
+      const result = await saveDoBulkUpload({ company_id: companyId, submission_id: activeSubmissionId, groups: payloadGroups });
       const resultRows = responseRows(result);
       setSaveResults(resultRows);
       const createdCount = resultRows.filter((row) => row.status === "CREATED").length;
-      setNotice(`${createdCount} of ${resultRows.length} Delivery Order(s) created.`);
-      if (createdCount > 0) onSaved?.();
+      const createdReferences = new Set(resultRows.filter((row) => row.status === "CREATED").map((row) => row.fo_or_so_number));
+      const remainingRows = (rows ?? []).filter((row) => !createdReferences.has(row.fo_or_so_number));
+      setRows(remainingRows);
+      persistSubmission({ rows: remainingRows, submissionId: activeSubmissionId, submissionGroupKeys: nextGroupKeys });
+      const failureCount = resultRows.length - createdCount;
+      setNotice(failureCount === 0
+        ? `${createdCount} Delivery Order(s) created and reconciled.`
+        : `${createdCount} created; ${failureCount} failed. Only failed or unresolved groups remain eligible for retry.`);
+      if (createdCount > 0) await onSaved?.();
+      if (remainingRows.length === 0 && failureCount === 0) {
+        clearPersistedSubmission();
+        onClose?.();
+      }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "DO_BULK_SAVE_FAILED");
+      if (activeSubmissionId) {
+        setReconciling(true);
+        try {
+          const outcome = await reconcileSubmission(activeSubmissionId, submissionGroupKeys, rows);
+          setError(`The save response was interrupted. ${outcome.created} group(s) are confirmed created; only unresolved groups may be retried.`);
+        } catch {
+          setError("The save outcome is unknown. Do not retry yet; keep this drawer open or reopen it to reconcile the saved submission.");
+        } finally {
+          setReconciling(false);
+        }
+      } else {
+        setError(saveError instanceof Error ? saveError.message : "DO_BULK_SAVE_FAILED");
+      }
     } finally {
       setSaving(false);
     }
@@ -521,15 +662,15 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
               </ul>
             </div>
 
-            <button type="button" disabled={saving || readyGroupCount === 0} onClick={() => void handleSaveAll()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
-              {saving ? "Saving…" : `Create ${readyGroupCount} Delivery Order(s)`}
+            <button type="button" disabled={saving || reconciling || readyGroupCount === 0} onClick={() => void handleSaveAll()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+              {reconciling ? "Reconciling…" : saving ? "Saving…" : `Create ${readyGroupCount} Delivery Order(s)`}
             </button>
 
             {saveResults ? (
               <ul className="grid gap-1 text-xs">
                 {saveResults.map((result) => (
-                  <li key={result.fo_or_so_number} className={result.status === "CREATED" ? "text-emerald-800" : "text-rose-700"}>
-                    {result.fo_or_so_number}: {result.status === "CREATED" ? `Created (DO ${result.dc_id})` : result.error_code}
+                  <li key={result.submission_group_key ?? result.fo_or_so_number} className={result.status === "CREATED" ? "text-emerald-800" : result.status === "PROCESSING" ? "text-amber-700" : "text-rose-700"}>
+                    {result.fo_or_so_number}: {result.status === "CREATED" ? `Created (DO ${result.dc_id})` : result.status === "NOT_STARTED" ? "Not started — safe to submit" : result.status === "PROCESSING" ? "Processing — reconcile before retry" : result.error_code || result.status}
                   </li>
                 ))}
               </ul>

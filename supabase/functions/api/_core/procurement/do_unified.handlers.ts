@@ -78,6 +78,60 @@ function todayIsoDate(): string {
 function doErrorResponse(req: Request, ctx: ProcurementHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// The ordinary SO03 handler remains the source of truth for every validation
+// and for the payload passed to the established atomic create RPC.  Bulk DO
+// save opts into this tiny bridge only after those checks have passed.  The
+// database wrapper records the group outcome in the *same transaction* as
+// the existing create RPC, so a lost HTTP response can be reconciled safely.
+function readBulkSubmissionContext(body: JsonRecord): {
+  submissionId: string;
+  groupKey: string;
+  fingerprint: string;
+  patch: JsonRecord;
+} | null {
+  const submissionId = toTrimmedString(body.bulk_submission_id);
+  const groupKey = toTrimmedString(body.bulk_submission_group_key);
+  const fingerprint = toTrimmedString(body.bulk_submission_fingerprint);
+  const patch = body.bulk_submission_patch && typeof body.bulk_submission_patch === "object"
+    && !Array.isArray(body.bulk_submission_patch) ? body.bulk_submission_patch as JsonRecord : {};
+  if (!submissionId && !groupKey && !fingerprint) return null;
+  if (!UUID_PATTERN.test(submissionId) || !UUID_PATTERN.test(groupKey) || !/^[a-f0-9]{64}$/i.test(fingerprint)) {
+    throw new Error("DO_BULK_SUBMISSION_IDENTITY_INVALID");
+  }
+  return { submissionId, groupKey, fingerprint: fingerprint.toLowerCase(), patch };
+}
+
+async function saveBulkSubmissionGroupAtomic(
+  submission: NonNullable<ReturnType<typeof readBulkSubmissionContext>>,
+  companyId: string,
+  actorId: string,
+  sourceReference: string,
+  deferred: boolean,
+  payload: JsonRecord,
+): Promise<{ dcId: string; reused: boolean }> {
+  const { data, error } = await serviceRoleClient.schema("erp_procurement").rpc("save_bulk_delivery_order_submission_group_atomic", {
+    p_submission_id: submission.submissionId,
+    p_group_key: submission.groupKey,
+    p_company_id: companyId,
+    p_actor: actorId,
+    p_source_reference: sourceReference,
+    p_deferred: deferred,
+    p_payload_fingerprint: submission.fingerprint,
+    p_header: payload.header,
+    p_sources: payload.sources,
+    p_lines: payload.lines,
+    p_patch: submission.patch,
+  });
+  const outcome = data && typeof data === "object" && !Array.isArray(data) ? data as JsonRecord : null;
+  if (error || !outcome) throw new Error("DO_BULK_SUBMISSION_ATOMIC_SAVE_FAILED");
+  if (toUpperTrimmedString(outcome.status) !== "CREATED" || !toTrimmedString(outcome.dc_id)) {
+    throw new Error(toTrimmedString(outcome.error_code) || "DO_BULK_CREATE_FAILED");
+  }
+  return { dcId: toTrimmedString(outcome.dc_id), reused: outcome.reused === true };
+}
+
 async function generateProcurementDocNumber(docType: string): Promise<string> {
   const { data, error } = await serviceRoleClient.schema("erp_procurement").rpc("generate_doc_number", { p_doc_type: docType });
   if (error || !data) throw new Error("PROCUREMENT_DOC_NUMBER_FAILED");
@@ -1328,20 +1382,38 @@ export async function createDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     await freezeDoSalesShipTo(prepared);
 
     const payload = buildDoAtomicPayload(companyId, await generateProcurementDocNumber("DC"), body, prepared, soIdsForSources, stoIdsForSources, netWeight, dcType);
-    const { data: dcId, error } = await serviceRoleClient.schema("erp_procurement").rpc("save_delivery_order_unified_atomic", {
-      p_action: "CREATE", p_dc_id: null, p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
-    });
-    if (error || !dcId) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+    const bulkSubmission = readBulkSubmissionContext(body);
+    let dcId: string;
+    let bulkReused = false;
+    if (bulkSubmission) {
+      const saved = await saveBulkSubmissionGroupAtomic(
+        bulkSubmission,
+        companyId,
+        ctx.auth_user_id,
+        toTrimmedString(body.bulk_submission_source_reference),
+        false,
+        payload,
+      );
+      dcId = saved.dcId;
+      bulkReused = saved.reused;
+    } else {
+      const { data, error } = await serviceRoleClient.schema("erp_procurement").rpc("save_delivery_order_unified_atomic", {
+        p_action: "CREATE", p_dc_id: null, p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
+      });
+      if (error || !data) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+      dcId = String(data);
+    }
     // dispatch_date is a later additive column, so the established atomic
     // RPC intentionally remains source-compatible.  Persist it separately
     // only when the normal SO03 form supplied it.
     const dispatchDate = toTrimmedString(body.dispatch_date);
-    if (dispatchDate) {
+    if (!bulkSubmission && dispatchDate) {
       const { error: dispatchDateError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-        .update({ dispatch_date: dispatchDate }).eq("id", String(dcId));
+        .update({ dispatch_date: dispatchDate }).eq("id", dcId);
       if (dispatchDateError) return doErrorResponse(req, ctx, "DO_DISPATCH_DATE_SAVE_FAILED", 500, "Unable to save Dispatch Date.");
     }
-    return okResponse(await hydrateDeliveryOrderUnified(String(dcId)), ctx.request_id, req);
+    const hydrated = await hydrateDeliveryOrderUnified(dcId);
+    return okResponse(bulkSubmission ? { ...hydrated, bulk_submission: { reused: bulkReused, submission_id: bulkSubmission.submissionId, group_key: bulkSubmission.groupKey } } : hydrated, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403
@@ -1424,18 +1496,38 @@ export async function createDeferredVdcBulkDeliveryOrder(
     }
     await freezeDoSalesShipTo(prepared);
     const payload = buildDoAtomicPayload(companyId, await generateProcurementDocNumber("DC"), body, prepared, soIdsForSources, stoIdsForSources, netWeight, dcType);
-    const { data: dcId, error } = await serviceRoleClient.schema("erp_procurement").rpc("save_vdc_deferred_bulk_delivery_order_atomic", {
-      p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
-    });
-    if (error || !dcId) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+    const bulkSubmission = readBulkSubmissionContext(body);
+    let dcId: string;
+    let bulkReused = false;
+    if (bulkSubmission) {
+      const saved = await saveBulkSubmissionGroupAtomic(
+        bulkSubmission,
+        companyId,
+        ctx.auth_user_id,
+        toTrimmedString(body.bulk_submission_source_reference),
+        true,
+        payload,
+      );
+      dcId = saved.dcId;
+      bulkReused = saved.reused;
+    } else {
+      const { data, error } = await serviceRoleClient.schema("erp_procurement").rpc("save_vdc_deferred_bulk_delivery_order_atomic", {
+        p_header: payload.header, p_sources: payload.sources, p_lines: payload.lines, p_actor: ctx.auth_user_id,
+      });
+      if (error || !data) return doErrorResponse(req, ctx, "DO_CREATE_FAILED", 500, "Unable to create delivery order.");
+      dcId = String(data);
+    }
     // This is the durable lifecycle marker consumed by SO02 and Pending Truck
     // & Dispatch Date.  It intentionally does not mean "bulk uploaded":
     // normal SO03 DD creation uses this same additive contract.
     const dispatchDate = toTrimmedString(body.dispatch_date);
-    const { error: deferredFlagError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .update({ pgi_deferred: true, ...(dispatchDate ? { dispatch_date: dispatchDate } : {}) }).eq("id", String(dcId));
-    if (deferredFlagError) return doErrorResponse(req, ctx, "DO_DD_LIFECYCLE_MARK_FAILED", 500, "Unable to set the DD dispatch lifecycle.");
-    return okResponse(await hydrateDeliveryOrderUnified(String(dcId)), ctx.request_id, req);
+    if (!bulkSubmission) {
+      const { error: deferredFlagError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .update({ pgi_deferred: true, ...(dispatchDate ? { dispatch_date: dispatchDate } : {}) }).eq("id", dcId);
+      if (deferredFlagError) return doErrorResponse(req, ctx, "DO_DD_LIFECYCLE_MARK_FAILED", 500, "Unable to set the DD dispatch lifecycle.");
+    }
+    const hydrated = await hydrateDeliveryOrderUnified(dcId);
+    return okResponse(bulkSubmission ? { ...hydrated, bulk_submission: { reused: bulkReused, submission_id: bulkSubmission.submissionId, group_key: bulkSubmission.groupKey } } : hydrated, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_CREATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403

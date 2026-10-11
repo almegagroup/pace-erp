@@ -1246,6 +1246,9 @@ export function previewDoBulkUpload(data) {
 export function saveDoBulkUpload(data) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/save", data);
 }
+export function getDoBulkSubmissionStatus(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/submission-status", undefined, params);
+}
 export function findDoByFoNumber(params) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/find-by-fo", undefined, params);
 }

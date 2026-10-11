@@ -9,24 +9,19 @@
  *          One template row-group = one FO (VDC/Dependent Direct) or one SO
  *          (DC/Dependent Depot) = one Delivery Order.
  *
- *          Strictly additive, per the business owner's explicit guardrail
- *          (§6 point 20, 2026-10-09): `do_unified.handlers.ts`'s
- *          `createDeliveryOrderUnifiedHandler` is NEVER modified — DC rows
- *          drive it exactly as the gate_entry.handlers.ts "replace lines"
- *          pattern already does (construct a synthetic in-process Request,
- *          call the existing exported handler, read its JSON envelope).
+ *          Strictly additive to the established business transaction: DC
+ *          rows drive `createDeliveryOrderUnifiedHandler` and DD/VDC rows
+ *          drive its existing deferred bridge.  The handlers retain their
+ *          validation/payload logic; their narrowly-scoped bulk opt-in only
+ *          records a submission result atomically with that existing RPC.
  *          For a VDC row, if the FO's own Fixed-Depot/address allocation
  *          doesn't exist yet it is created via the EXISTING, unmodified
  *          `saveSoMapGroupHandler` the exact same way — never a new
  *          allocation-write code path. The only genuinely new writes this
- *          file performs are: (a) a follow-up UPDATE on the just-created
- *          `delivery_challan` row to stamp the new, additive-only columns
- *          `dc_date`/`is_bulk_uploaded`/`pgi_deferred`/`dispatch_date`/
- *          `pre_invoice_tally_invoice_number`/`_date`/`_inbound_number`
- *          (createDeliveryOrderUnifiedHandler's own RPC payload has no slot
- *          for any of these — `dc_date` is hardcoded to today, the rest
- *          don't exist on its header at all), and (b) the DC-only
- *          auto-depot-mapping bootstrap described above.
+ *          file performs are the DC-only auto-depot-mapping bootstrap and
+ *          request preparation. Header stamping now occurs inside the same
+ *          submission transaction as the DO, eliminating the prior
+ *          create-then-patch partial-success window.
  * Authority: Backend
  */
 
@@ -50,6 +45,7 @@ type ProcurementHandlerContext = {
 };
 
 const QTY_TOL = 0.0001;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -459,6 +455,7 @@ async function computeDrawnQtyByLine(soLineIds: string[]): Promise<Map<string, n
 }
 
 type SaveGroupInput = {
+  submission_group_key: string;
   fo_or_so_number: string;
   dd_flag: boolean;
   so_id: string;
@@ -479,6 +476,55 @@ type SaveGroupInput = {
     storage_location_id: string;
   }>;
 };
+
+function canonicalBulkGroupPayload(group: SaveGroupInput): JsonRecord {
+  return {
+    fo_or_so_number: toTrimmedString(group.fo_or_so_number),
+    dd_flag: group.dd_flag === true,
+    so_id: toTrimmedString(group.so_id),
+    do_date: normalizeInputDate(group.do_date),
+    transporter_id: toTrimmedString(group.transporter_id),
+    lr_number: toTrimmedString(group.lr_number),
+    lr_date: normalizeInputDate(group.lr_date),
+    truck_number: toTrimmedString(group.truck_number),
+    dispatch_date: normalizeInputDate(group.dispatch_date),
+    tally_invoice_number: toTrimmedString(group.tally_invoice_number),
+    tally_invoice_date: normalizeInputDate(group.tally_invoice_date),
+    inbound_number: toTrimmedString(group.inbound_number),
+    rows: [...(group.rows ?? [])].map((row) => ({
+      so_line_id: toTrimmedString(row.so_line_id),
+      so_map_allocation_id: toTrimmedString(row.so_map_allocation_id),
+      base_qty: Number(row.base_qty),
+      storage_location_id: toTrimmedString(row.storage_location_id),
+    })).sort((left, right) => `${left.so_line_id}:${left.so_map_allocation_id}`.localeCompare(`${right.so_line_id}:${right.so_map_allocation_id}`)),
+  };
+}
+
+async function fingerprintBulkGroup(group: SaveGroupInput): Promise<string> {
+  const encoded = new TextEncoder().encode(JSON.stringify(canonicalBulkGroupPayload(group)));
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(digest)).map((part) => part.toString(16).padStart(2, "0")).join("");
+}
+
+async function recordBulkGroupFailure(
+  submissionId: string,
+  group: SaveGroupInput,
+  companyId: string,
+  actorId: string,
+  fingerprint: string,
+  errorCode: string,
+): Promise<void> {
+  const { error } = await serviceRoleClient.schema("erp_procurement").rpc("record_bulk_delivery_order_submission_group_failure", {
+    p_submission_id: submissionId,
+    p_group_key: group.submission_group_key,
+    p_company_id: companyId,
+    p_actor: actorId,
+    p_source_reference: toTrimmedString(group.fo_or_so_number),
+    p_payload_fingerprint: fingerprint,
+    p_error_code: errorCode,
+  });
+  if (error) throw new Error("DO_BULK_SUBMISSION_FAILURE_RECORD_FAILED");
+}
 
 // DC-only: a Depot destination needs no customer/address choice at all (the
 // depot company itself is always the Ship-To), so when a matched SO line
@@ -532,9 +578,17 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
     }
     const groups = Array.isArray(body.groups) ? (body.groups as SaveGroupInput[]) : [];
     if (groups.length === 0) return doBulkErrorResponse(req, ctx, "DO_BULK_GROUPS_REQUIRED", 400, "At least one group is required.");
+    const submissionId = toTrimmedString(body.submission_id);
+    if (!UUID_PATTERN.test(submissionId) || groups.some((group) => !UUID_PATTERN.test(toTrimmedString(group.submission_group_key)))) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_SUBMISSION_IDENTITY_REQUIRED", 400, "A valid submission and stable group identity are required.");
+    }
+    if (new Set(groups.map((group) => toTrimmedString(group.submission_group_key))).size !== groups.length) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_SUBMISSION_GROUP_KEY_DUPLICATE", 400, "Each submitted Delivery Order group needs a distinct identity.");
+    }
 
     const results: JsonRecord[] = [];
     for (const group of groups) {
+      const fingerprint = await fingerprintBulkGroup(group);
       try {
         const doDate = normalizeInputDate(group.do_date);
         const lrDate = normalizeInputDate(group.lr_date);
@@ -623,6 +677,20 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           lr_number: group.lr_number,
           lr_date: lrDate,
           vehicle_number: toTrimmedString(group.truck_number) || undefined,
+          // `do_unified` validates the identity then calls the existing
+          // transactional DO creator through the DB wrapper.  The wrapper
+          // persists the group outcome atomically with the created DO.
+          bulk_submission_id: submissionId,
+          bulk_submission_group_key: toTrimmedString(group.submission_group_key),
+          bulk_submission_fingerprint: fingerprint,
+          bulk_submission_source_reference: toTrimmedString(group.fo_or_so_number),
+          bulk_submission_patch: {
+            do_date: doDate || undefined,
+            dispatch_date: dispatchDate || undefined,
+            tally_invoice_number: toTrimmedString(group.tally_invoice_number) || undefined,
+            tally_invoice_date: tallyInvoiceDate || undefined,
+            inbound_number: toTrimmedString(group.inbound_number) || undefined,
+          },
         };
         // DD/VDC creation is always commercial-only. Truck/dispatch values
         // may already be present in the source workbook, but they are merely
@@ -650,30 +718,83 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
             || "DO_BULK_CREATE_FAILED");
         }
         const dcId = toTrimmedString(createJson.data.id);
-
-        const patch: JsonRecord = {
-          is_bulk_uploaded: true,
-          pgi_deferred: isDdDispatch,
-        };
-        if (doDate) patch.dc_date = doDate;
-        if (dispatchDate) patch.dispatch_date = dispatchDate;
-        if (toTrimmedString(group.tally_invoice_number)) patch.pre_invoice_tally_invoice_number = toTrimmedString(group.tally_invoice_number);
-        if (tallyInvoiceDate) patch.pre_invoice_tally_invoice_date = tallyInvoiceDate;
-        if (toTrimmedString(group.inbound_number)) patch.pre_invoice_inbound_number = toTrimmedString(group.inbound_number);
-        const { error: patchError } = await serviceRoleClient
-          .schema("erp_procurement").from("delivery_challan").update(patch).eq("id", dcId);
-        if (patchError) throw new Error("DO_BULK_PATCH_FAILED");
-
-        results.push({ fo_or_so_number: group.fo_or_so_number, status: "CREATED", dc_id: dcId });
+        const reused = (createJson.data.bulk_submission as JsonRecord | undefined)?.reused === true;
+        results.push({ submission_group_key: group.submission_group_key, fo_or_so_number: group.fo_or_so_number, status: "CREATED", dc_id: dcId, reused });
       } catch (groupError) {
         const code = groupError instanceof Error ? groupError.message : "DO_BULK_GROUP_FAILED";
-        results.push({ fo_or_so_number: group.fo_or_so_number, status: "ERROR", error_code: code });
+        try {
+          await recordBulkGroupFailure(submissionId, group, companyId, ctx.auth_user_id, fingerprint, code);
+        } catch (recordError) {
+          const recordCode = recordError instanceof Error ? recordError.message : "DO_BULK_SUBMISSION_FAILURE_RECORD_FAILED";
+          results.push({ submission_group_key: group.submission_group_key, fo_or_so_number: group.fo_or_so_number, status: "ERROR", error_code: recordCode });
+          continue;
+        }
+        results.push({ submission_group_key: group.submission_group_key, fo_or_so_number: group.fo_or_so_number, status: "ERROR", error_code: code });
       }
     }
 
-    return okResponse({ data: results }, ctx.request_id, req);
+    const { data: outcomeRows, error: outcomeError } = await serviceRoleClient
+      .schema("erp_procurement").from("bulk_do_submission_group")
+      .select("status").eq("submission_id", submissionId);
+    if (!outcomeError) {
+      const statuses: string[] = ((outcomeRows ?? []) as JsonRecord[]).map((row: JsonRecord) => toUpperTrimmedString(row.status));
+      const created = statuses.filter((status: string) => status === "CREATED").length;
+      const failed = statuses.filter((status: string) => status === "FAILED").length;
+      const status = failed === 0 ? "COMPLETED" : created > 0 ? "PARTIAL" : "FAILED";
+      await serviceRoleClient.schema("erp_procurement").from("bulk_do_submission")
+        .update({ status, updated_at: new Date().toISOString() }).eq("id", submissionId).eq("company_id", companyId).eq("submitted_by", ctx.auth_user_id);
+    }
+    return okResponse({ submission_id: submissionId, data: results }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_BULK_SAVE_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
+    return doBulkErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// P0 reconciliation endpoint.  It is intentionally read-only and never
+// rebuilds a preview or replays business work.  After an HTTP timeout or a
+// browser refresh, this is the authority for whether a group committed a DO.
+export async function getDoBulkSubmissionStatusHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, toTrimmedString(url.searchParams.get("company_id")));
+    const submissionId = toTrimmedString(url.searchParams.get("submission_id"));
+    if (!companyId || !UUID_PATTERN.test(submissionId)) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_SUBMISSION_ID_REQUIRED", 400, "company_id and submission_id are required.");
+    }
+    if (!(await canMaintainDoBulkAccess(ctx, companyId, "VIEW"))) {
+      return doBulkErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Delivery Order access at this company.");
+    }
+    const { data: submission, error: submissionError } = await serviceRoleClient
+      .schema("erp_procurement").from("bulk_do_submission")
+      .select("id, status, company_id, submitted_by, created_at, updated_at")
+      .eq("id", submissionId).eq("company_id", companyId).eq("submitted_by", ctx.auth_user_id).maybeSingle();
+    if (submissionError || !submission) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_SUBMISSION_NOT_FOUND", 404, "The Bulk DO submission was not found for this user and company.");
+    }
+    const { data: groups, error: groupsError } = await serviceRoleClient
+      .schema("erp_procurement").from("bulk_do_submission_group")
+      .select("client_group_key, source_reference, status, delivery_challan_id, error_code, attempt_count, updated_at")
+      .eq("submission_id", submissionId).order("created_at", { ascending: true });
+    if (groupsError) return doBulkErrorResponse(req, ctx, "DO_BULK_SUBMISSION_RECONCILE_FAILED", 500, "Unable to reconcile the Bulk DO submission.");
+    const resultRows = (groups ?? []) as JsonRecord[];
+    const created = resultRows.filter((row) => toUpperTrimmedString(row.status) === "CREATED").length;
+    const failed = resultRows.filter((row) => toUpperTrimmedString(row.status) === "FAILED").length;
+    const processing = resultRows.filter((row) => toUpperTrimmedString(row.status) === "PROCESSING").length;
+    const status = processing > 0 ? "PROCESSING" : failed === 0 ? "COMPLETED" : created > 0 ? "PARTIAL" : "FAILED";
+    if (toUpperTrimmedString((submission as JsonRecord).status) !== status) {
+      await serviceRoleClient.schema("erp_procurement").from("bulk_do_submission")
+        .update({ status, updated_at: new Date().toISOString() }).eq("id", submissionId).eq("company_id", companyId).eq("submitted_by", ctx.auth_user_id);
+    }
+    return okResponse({
+      submission_id: submissionId,
+      status,
+      counts: { total: resultRows.length, created, failed, processing, pending: resultRows.length - created - failed - processing },
+      groups: resultRows,
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "DO_BULK_SUBMISSION_RECONCILE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
     return doBulkErrorResponse(req, ctx, code, status, code);
   }

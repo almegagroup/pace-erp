@@ -266,6 +266,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // routes above already use) -- no ACL change needed.
   "POST:/api/procurement/delivery-orders-v2/bulk/preview":      { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/delivery-orders-v2/bulk/save":         { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "WRITE" },
+  "GET:/api/procurement/delivery-orders-v2/bulk/submission-status": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
   // SO02 Bulk Posting reads/posts only Bulk-DO-Upload records. It is an
