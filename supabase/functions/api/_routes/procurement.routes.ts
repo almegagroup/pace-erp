@@ -419,6 +419,7 @@ import {
 import {
   createMissingGstCustomersForSoMapHandler,
   previewSoMapBulkUploadHandler,
+  saveSoMapBulkGroupsHandler,
 } from "../_core/procurement/so_map_bulk.handlers.ts";
 import {
   previewDoBulkUploadHandler,
@@ -899,6 +900,8 @@ export async function dispatchProcurementRoutes(
       return await previewSoMapBulkUploadHandler(req, ctx);
     case "POST:/api/procurement/so-map/bulk/create-missing-gst-customers":
       return await createMissingGstCustomersForSoMapHandler(req, ctx);
+    case "POST:/api/procurement/so-map/bulk/save-groups":
+      return await saveSoMapBulkGroupsHandler(req, ctx);
 
     // §6 (FG-STO-MTS-DISPATCH-DESIGN-DOC.md) — "Bulk DO Upload", additive to
     // SO03. Shares PROC_DO_CREATE (same resource as the v2 DO create/edit

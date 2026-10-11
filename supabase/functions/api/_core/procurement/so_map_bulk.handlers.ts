@@ -26,6 +26,7 @@ import { resolveGstProfileWithSource } from "../../_shared/gst_resolver.ts";
 import { deriveCompanyFieldsFromGstProfile } from "../../_shared/gst_company_fields.ts";
 import { createCustomerHandler } from "../om/customer.handlers.ts";
 import { createCustomerAddressHandler } from "../om/customer_address.handlers.ts";
+import { saveSoMapGroupHandler } from "./so_map.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -665,6 +666,54 @@ export async function createMissingGstCustomersForSoMapHandler(req: Request, ctx
   } catch (error) {
     const code = error instanceof Error ? error.message : "SO_MAP_GST_CUSTOMER_CREATE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
+    return soMapBulkErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// Saving 500 mapped FO groups from the browser used to issue 500 sequential
+// /save-group requests, making the action blocker appear stuck for minutes.
+// Keep the established group-level validation + atomic RPC as the sole write
+// path, but execute it inside one authenticated server operation. Bounded
+// concurrency is deliberately used rather than an unbounded Promise.all so a
+// large workbook cannot exhaust PostgREST/database connections.
+export async function saveSoMapBulkGroupsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const groups = Array.isArray(body.groups) ? body.groups.filter((group): group is JsonRecord => Boolean(group) && typeof group === "object") : [];
+    if (groups.length === 0) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_GROUPS_REQUIRED", 400, "At least one mapping group is required.");
+    if (groups.length > 1000) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_GROUP_LIMIT", 400, "A single bulk save can contain at most 1000 mapping groups.");
+
+    const saved: JsonRecord[] = [];
+    const failed: JsonRecord[] = [];
+    await runWithConcurrency(groups.map((group, index) => ({ group, index })), 12, async ({ group, index }) => {
+      const response = await saveSoMapGroupHandler(makeInternalJsonRequest(req, group), ctx);
+      const payload = await response.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+      if (!response.ok || payload.ok !== true) {
+        failed.push({
+          group_index: index,
+          external_fo_number: toTrimmedString(group.external_fo_number) || null,
+          row_indexes: Array.isArray(group.row_indexes) ? group.row_indexes : [],
+          error_code: toTrimmedString(payload.code) || "SO_MAP_GROUP_SAVE_FAILED",
+        });
+        return;
+      }
+      saved.push({
+        group_index: index,
+        external_fo_number: toTrimmedString(group.external_fo_number) || null,
+        row_indexes: Array.isArray(group.row_indexes) ? group.row_indexes : [],
+      });
+    });
+
+    return okResponse({
+      data: {
+        saved_groups: saved.length,
+        saved_rows: saved.reduce((total, group) => total + (Array.isArray(group.row_indexes) ? group.row_indexes.length : 0), 0),
+        failed,
+      },
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SO_MAP_BULK_SAVE_FAILED";
+    const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") || code.includes("LIMIT") ? 400 : 500;
     return soMapBulkErrorResponse(req, ctx, code, status, code);
   }
 }

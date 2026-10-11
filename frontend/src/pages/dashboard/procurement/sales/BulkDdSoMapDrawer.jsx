@@ -17,7 +17,7 @@ import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import CustomerCreateForm from "../../om/customer/CustomerCreateForm.jsx";
 import { listCustomerAddresses, createCustomerAddress, updateCustomerAddress } from "../../om/omApi.js";
-import { createMissingGstCustomersForSoMap, previewSoMapBulkUpload, saveSoMapGroup } from "../procurementApi.js";
+import { createMissingGstCustomersForSoMap, previewSoMapBulkUpload, saveSoMapBulkGroups } from "../procurementApi.js";
 
 const TEMPLATE_HEADERS = [
   "External SO Number", "FO Number", "Customer GST", "Customer Name",
@@ -533,15 +533,21 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
           customer_address_id: siteId,
           external_fo_number: raw?.fo_number || undefined,
           items: [],
+          row_indexes: [],
         };
         const perPackQty = Number(row.sku_resolution?.per_pack_qty ?? 0);
         const packQty = Number(raw?.pack_qty ?? 0);
         target.items.push({ so_line_id: soLineId, allocated_qty: packQty * (perPackQty > 0 ? perPackQty : 1) });
+        target.row_indexes.push(raw?.excel_row_number ?? row.row_index);
         groups.set(key, target);
       }
-      for (const group of groups.values()) {
-        await saveSoMapGroup(group);
-        savedCount += group.items.length;
+      const result = await saveSoMapBulkGroups({ groups: [...groups.values()] });
+      const saveResult = result?.data ?? result;
+      const failures = Array.isArray(saveResult?.failed) ? saveResult.failed : [];
+      savedCount = Number(saveResult?.saved_rows ?? 0);
+      if (failures.length > 0) {
+        const failedRows = failures.flatMap((failure) => failure.row_indexes ?? []);
+        throw new Error(`SO_MAP_BULK_SAVE_PARTIAL: ${failures.length} FO group(s) could not be mapped (Excel row(s): ${failedRows.join(", ") || "unknown"}).`);
       }
       setNotice(`${savedCount} row(s) mapped.`);
       onSaved?.();

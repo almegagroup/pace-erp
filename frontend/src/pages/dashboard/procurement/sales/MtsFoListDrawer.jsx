@@ -52,7 +52,7 @@ const FO_COLUMNS = [
   { key: "site_state", label: "Site State", width: "130px" },
   { key: "site_pin_code", label: "Site Pin", width: "100px" },
   { key: "sku", label: "SKU", width: "155px" },
-  { key: "material_description", label: "Material Description", width: "240px" },
+  { key: "material_description", label: "Document Name", width: "240px" },
   { key: "pack_qty", label: "Pack Qty", width: "110px", align: "right", render: (row) => numberCell(row.pack_qty), excelValue: (row) => Number(row.pack_qty ?? 0) },
   { key: "base_qty", label: "Base Qty", width: "110px", align: "right", render: (row) => numberCell(row.base_qty), excelValue: (row) => Number(row.base_qty ?? 0) },
   { key: "rate", label: "Rate", width: "100px", align: "right", render: (row) => numberCell(row.rate), excelValue: (row) => Number(row.rate ?? 0) },

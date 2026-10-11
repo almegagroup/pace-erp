@@ -98,9 +98,13 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   the existing MM04 customer/address handlers in-process (six bounded workers).
   It is deliberately **one browser action for the whole workbook**, not one
   MM04 API/blocker cycle per row; the frontend refreshes preview once after
-  the batch completes. The "save" step needs no new endpoint at all — the frontend calls the
-  now-extended `saveSoMapGroupHandler` directly per resolved row, source=
-  "address", with `external_fo_number` + the resolved `customer_address_id`.
+  the batch completes. **2026-10-11 ✅ bulk-save correction:** the review
+  screen sends all ready FO groups once to `saveSoMapBulkGroupsHandler`; it
+  runs the existing `saveSoMapGroupHandler` in bounded server-side concurrency,
+  preserving its group-level validation/atomic RPC while removing hundreds of
+  browser `save-group` requests and repeated action blockers. Each group still
+  carries `source="address"`, `external_fo_number`, and the resolved
+  `customer_address_id`.
 - [x] **T8.** Backend: upload validation (duplicate key, changed-qty Confirm/Remove,
   out-of-SO SKU highlight, Qty-vs-balance hard check) per §6 point 12.
   **2026-10-09 ✅** all four implemented in `previewSoMapBulkUploadHandler`:
