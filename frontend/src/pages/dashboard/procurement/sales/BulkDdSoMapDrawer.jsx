@@ -18,7 +18,7 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import CustomerCreateForm from "../../om/customer/CustomerCreateForm.jsx";
 import { listCustomerAddresses, createCustomerAddress, updateCustomerAddress } from "../../om/omApi.js";
 import { createMissingGstCustomersForSoMap, previewSoMapBulkUpload, saveSoMapBulkGroups } from "../procurementApi.js";
-import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
+import { markSpreadsheetDuplicates, prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 
 const TEMPLATE_HEADERS = [
   "External SO Number", "FO Number", "Customer GST", "Customer Name",
@@ -347,7 +347,12 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     });
   }
   function removeRow(rowIndex) {
-    setRows((current) => (current ?? []).filter((row) => row.row_index !== rowIndex));
+    removeRows([rowIndex]);
+  }
+  function removeRows(rowIndexes) {
+    const indexes = new Set(rowIndexes);
+    setRows((current) => (current ?? []).filter((row) => !indexes.has(row.row_index)));
+    setRawByIndex((current) => Object.fromEntries(Object.entries(current).filter(([rowIndex]) => !indexes.has(Number(rowIndex)))));
   }
 
   async function handleFileChosen(event) {
@@ -516,7 +521,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     let savedCount = 0;
     try {
       const groups = new Map();
-      for (const row of rows ?? []) {
+      for (const row of effectiveRows) {
         if (row.duplicate_status === "UNCHANGED" || !isRowReady(row)) continue;
         const soLineId = row.sku_resolution?.so_line_id;
         if (!soLineId) continue;
@@ -575,10 +580,20 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     return null;
   }
   function isRowReady(row) { return getRowBlockReason(row) === null; }
-  const readyCount = (rows ?? []).filter((row) => row.duplicate_status !== "UNCHANGED" && isRowReady(row)).length;
-  const blockingRows = (rows ?? []).filter((row) => getRowBlockReason(row));
+  const reviewedRowsWithDuplicates = useMemo(() => markSpreadsheetDuplicates(rows, (row) => {
+    const raw = rawByIndex[row.row_index] ?? {};
+    return [raw.external_so_number, raw.fo_number, raw.sku, Number(raw.pack_qty ?? 0).toFixed(6)].map(normalizedInput).join("::");
+  }).map((row) => ({
+    ...row,
+    review_duplicate_kind: row.duplicate_status === "UNCHANGED" ? "ALREADY_MAPPED" : row.upload_duplicate ? "UPLOAD_DUPLICATE" : null,
+    is_removable_duplicate: row.duplicate_status === "UNCHANGED" || row.upload_duplicate === true,
+  })), [rawByIndex, rows]);
+  const effectiveRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => !row.is_removable_duplicate), [reviewedRowsWithDuplicates]);
+  const removableDuplicateRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => row.is_removable_duplicate), [reviewedRowsWithDuplicates]);
+  const readyCount = effectiveRows.filter((row) => isRowReady(row)).length;
+  const blockingRows = effectiveRows.filter((row) => getRowBlockReason(row));
   const blockingCount = blockingRows.length;
-  const reviewRows = prioritizeUploadReviewRows(rows, (row) => Boolean(getRowBlockReason(row)));
+  const reviewRows = prioritizeUploadReviewRows(reviewedRowsWithDuplicates, (row) => row.review_duplicate_kind ? -10 : Boolean(getRowBlockReason(row)));
 
   return (
     <DrawerBase
@@ -601,6 +616,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
             {uploading ? "Uploading…" : "Upload Excel"}
           </button>
           <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(event) => void handleFileChosen(event)} />
+          {removableDuplicateRows.length ? <button type="button" onClick={() => removeRows(removableDuplicateRows.map((row) => row.row_index))} className="border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">Remove {removableDuplicateRows.length} duplicate row(s)</button> : null}
         </div>
 
         {rows ? (
@@ -611,6 +627,8 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
               columns={[
                 {
                   key: "review_status", label: "Review Status", width: "260px", render: (row) => {
+                    if (row.review_duplicate_kind === "ALREADY_MAPPED") return <span className="font-semibold text-slate-600">Already mapped — excluded from save</span>;
+                    if (row.review_duplicate_kind === "UPLOAD_DUPLICATE") return <span className="font-semibold text-slate-600">Duplicate of Excel row {row.upload_duplicate_of}</span>;
                     const reason = getRowBlockReason(row);
                     return reason
                       ? <span className="font-semibold text-rose-700">Excel row {rawByIndex[row.row_index]?.excel_row_number ?? row.row_index}: {reason}</span>
@@ -688,7 +706,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
               ]}
               rows={reviewRows}
               rowKey={(row) => row.row_index}
-              getRowProps={(row) => (getRowBlockReason(row) ? { className: "bg-amber-50" } : {})}
+              getRowProps={(row) => row.review_duplicate_kind ? { className: "bg-slate-100 text-slate-500" } : (getRowBlockReason(row) ? { className: "bg-amber-50" } : {})}
               emptyMessage="No rows."
             />
             {blockingCount ? (
