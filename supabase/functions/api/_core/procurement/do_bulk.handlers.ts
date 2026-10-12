@@ -277,7 +277,8 @@ type BulkPreviewLookup = {
 
 // Preview exposes these references only to explain an exhausted balance.  They
 // are derived from the same non-cancelled DO lines used by the balance check;
-// the browser never infers an "already dispatched" state from a number alone.
+// the browser can identify an already-created DO without implying PGI or
+// physical dispatch has happened.
 type ExistingDeliveryOrder = {
   dc_number: string;
   quantity: number;

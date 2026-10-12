@@ -178,7 +178,7 @@ function deriveBulkDoReviewRows(rows, rawByIndex) {
   return withUploadDuplicates.map((row) => {
     const existingDoNumbers = fullyDispatchedSources.get(normalizedUploadKeyPart(row.fo_or_so_number)) ?? [];
     const existingDeliveryOrderDuplicate = existingDoNumbers.length > 0;
-    const reviewDuplicateKind = existingDeliveryOrderDuplicate ? "ALREADY_DISPATCHED" : row.upload_duplicate ? "UPLOAD_DUPLICATE" : null;
+    const reviewDuplicateKind = existingDeliveryOrderDuplicate ? "ALREADY_CREATED" : row.upload_duplicate ? "UPLOAD_DUPLICATE" : null;
     return {
       ...row,
       existing_do_numbers: existingDoNumbers,
@@ -632,7 +632,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                 { key: "do_date", label: "DO Date", width: "115px", render: (row) => rawByIndex[row.row_index]?.do_date || "—" },
                 {
                   key: "status", label: "Status", width: "220px", render: (row) => {
-                    if (row.review_duplicate_kind === "ALREADY_DISPATCHED") return <span className="font-semibold text-amber-800">Already dispatched: {row.existing_do_numbers.join(", ")}</span>;
+                    if (row.review_duplicate_kind === "ALREADY_CREATED") return <span className="font-semibold text-amber-800">Already created: {row.existing_do_numbers.join(", ")}</span>;
                     if (row.review_duplicate_kind === "UPLOAD_DUPLICATE") return <span className="font-semibold text-amber-800">Duplicate of Excel row {row.upload_duplicate_of}</span>;
                     if (row.status === "ERROR") return <span className="font-semibold text-rose-700">{row.error_code}</span>;
                     return <span className="text-emerald-800">Resolved</span>;
