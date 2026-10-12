@@ -136,6 +136,16 @@ function rawUnresolvedTransporterRows(previewRows, rawByIndex, transporterName =
     .filter(Boolean);
 }
 
+// The raw codes mean nothing to the person reading the review grid.  Say
+// what is wrong with the uploaded FO/SO and where to fix it.
+const BULK_DO_SOURCE_ERROR_TEXT = {
+  FO_SO_NOT_FOUND: "FO/SO not found — this FO is not mapped in SO Map (or SO number does not exist in this company)",
+  FO_SO_NUMBER_REQUIRED: "FO/SO number is blank in the Excel",
+  DO_BULK_VDC_MUST_USE_FO_NUMBER: "Dependent Direct SO — enter the FO number, not the SO number",
+  DO_BULK_SO_WRONG_DISPATCH_TYPE: "This SO is not a Dependent Depot/Direct SO",
+  DO_BULK_FO_NOT_MAPPED: "FO has no SO Map allocation yet",
+};
+
 function bulkDoReviewPriority(row) {
   // Historical/excel duplicates are informational and removable. They belong
   // below live work, while unresolved transporters must be immediately visible.
@@ -714,10 +724,10 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                 { key: "so_number", label: "SO Number", width: "120px", render: (row) => row.so_number || "—" },
                 { key: "do_date", label: "DO Date", width: "115px", render: (row) => rawByIndex[row.row_index]?.do_date || "—" },
                 {
-                  key: "status", label: "Status", width: "220px", render: (row) => {
+                  key: "status", label: "Status", width: "320px", render: (row) => {
                     if (row.review_duplicate_kind === "ALREADY_CREATED") return <span className="font-semibold text-amber-800">Already created: {row.existing_do_numbers.join(", ")}</span>;
                     if (row.review_duplicate_kind === "UPLOAD_DUPLICATE") return <span className="font-semibold text-amber-800">Duplicate of Excel row {row.upload_duplicate_of}</span>;
-                    if (row.status === "ERROR") return <span className="font-semibold text-rose-700">{row.error_code}</span>;
+                    if (row.status === "ERROR") return <span title={row.error_code} className="font-semibold text-rose-700">{BULK_DO_SOURCE_ERROR_TEXT[row.error_code] ?? row.error_code}</span>;
                     return <span className="text-emerald-800">Resolved</span>;
                   },
                 },
