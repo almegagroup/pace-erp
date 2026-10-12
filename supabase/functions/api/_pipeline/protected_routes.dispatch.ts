@@ -14,6 +14,7 @@ import { dispatchProductionRoutes } from "../_routes/production.routes.ts";
 import { dispatchMenuRoutes } from "../_routes/menu.routes.ts";
 import { dispatchSessionRoutes } from "../_routes/session.routes.ts";
 import { dispatchCommunicationRoutes } from "../_routes/communication.routes.ts";
+import { haikuSmokeHandler } from "../_core/ai/haiku.smoke.ts";
 import { logoutHandler } from "../_core/auth/logout.handler.ts";
 import { errorResponse } from "../_core/response.ts";
 
@@ -28,6 +29,10 @@ export async function dispatchProtectedRoute(
   sessionResult: Extract<SessionResolution, { status: "ACTIVE" }>,
 contextResult: Extract<ContextResolution, { status: "RESOLVED" }>
 ): Promise<Response> {
+
+     if (routeKey === "POST:/api/ai/smoke-test") {
+       return haikuSmokeHandler(req, requestId, contextResult);
+     }
 
      const admin = await dispatchAdminRoutes(
   routeKey,

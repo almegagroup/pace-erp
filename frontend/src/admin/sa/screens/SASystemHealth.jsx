@@ -30,6 +30,8 @@ export default function SASystemHealth() {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [aiSmokeBusy, setAiSmokeBusy] = useState(false);
+  const [aiSmokeResult, setAiSmokeResult] = useState(null);
 
   async function loadHealth({ userInitiated = false } = {}) {
     setLoading(true);
@@ -80,6 +82,30 @@ export default function SASystemHealth() {
       alive = false;
     };
   }, []);
+
+  async function handleAiSmokeTest() {
+    if (aiSmokeBusy) return;
+    setAiSmokeBusy(true);
+    setAiSmokeResult(null);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE}/api/ai/smoke-test`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const payload = await readJsonSafe(response);
+      if (!response.ok || !payload?.ok) {
+        setAiSmokeResult({ status: "NOT_CONNECTED", message: payload?.message || payload?.code || `HTTP ${response.status}` });
+        return;
+      }
+      setAiSmokeResult({ status: payload.data?.status || "CONNECTED", model: payload.data?.model, tokens: payload.data?.usage });
+    } catch {
+      setAiSmokeResult({ status: "NOT_CONNECTED", message: "Unable to contact AI Core test endpoint." });
+    } finally {
+      setAiSmokeBusy(false);
+    }
+  }
 
   async function handleRefresh() {
     await loadHealth({ userInitiated: true });
@@ -269,6 +295,14 @@ export default function SASystemHealth() {
     >
       <div className="grid gap-3">
         <ErpSelectionSection label="Diagnostics Interpretation" />
+        <section aria-label="AI Core diagnostics" className="flex flex-wrap items-center gap-3 text-sm">
+          <button type="button" disabled={aiSmokeBusy} onClick={() => void handleAiSmokeTest()} className="rounded border px-3 py-2 disabled:opacity-50">
+            {aiSmokeBusy ? "Testing Haiku..." : "Test Haiku Connection"}
+          </button>
+          <span aria-live="polite">
+            {aiSmokeResult ? `${aiSmokeResult.status}${aiSmokeResult.model ? ` · ${aiSmokeResult.model}` : ""}${aiSmokeResult.tokens ? ` · Input ${aiSmokeResult.tokens.input_tokens} / Output ${aiSmokeResult.tokens.output_tokens}` : ""}${aiSmokeResult.message ? ` · ${aiSmokeResult.message}` : ""}` : "AI Core is disabled until explicitly enabled on the backend."}
+          </span>
+        </section>
         <ErpDenseGrid
           columns={[
             { key: "surface", label: "Surface", width: "180px" },
