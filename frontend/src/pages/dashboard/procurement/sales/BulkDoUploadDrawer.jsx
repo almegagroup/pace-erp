@@ -18,7 +18,7 @@ import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { getDoBulkSubmissionStatus, previewDoBulkUpload, saveDoBulkUpload } from "../procurementApi.js";
 import { getTransporterMasterRevision } from "./transporterMasterRevision.js";
-import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
+import { markSpreadsheetDuplicates, prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 
 const TEMPLATE_HEADERS = [
   "FO/SO Number", "DO Date", "Transporter", "LR Number", "LR Date", "SKU",
@@ -127,6 +127,67 @@ function rawUnresolvedTransporterRows(previewRows, rawByIndex, transporterName =
     .filter(Boolean);
 }
 
+function bulkDoReviewPriority(row) {
+  // Historical/excel duplicates are informational and removable. They belong
+  // below live work, while unresolved transporters must be immediately visible.
+  if (row.review_duplicate_kind) return -10;
+  // A transporter can be resolved immediately in this review. Put it before
+  // quantity errors that may only be explainable after the original save has
+  // been reconciled. Preserve source-row order for every equal priority.
+  if (row.transporter_resolution?.status !== "MATCHED") return 30;
+  if (row.status !== "RESOLVED") return 20;
+  if (row.sku_resolution?.status !== "MATCHED" || !row.storage_location?.id) return 15;
+  if ((row.missing_required_fields ?? []).length > 0 || (row.format_errors ?? []).length > 0) return 10;
+  if (row.qty_status === "EXCEEDS_BALANCE") return 5;
+  return 0;
+}
+
+function normalizedUploadKeyPart(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+function normalizeUploadQuantity(value) {
+  const quantity = Number(value);
+  return Number.isFinite(quantity) ? quantity.toFixed(6) : normalizedUploadKeyPart(value);
+}
+
+function deriveBulkDoReviewRows(rows, rawByIndex) {
+  // The agreed spreadsheet identity is FO/SO + SKU + Pack Qty.  A repeated
+  // physical line is removable from this upload; it does not alter any ERP DO.
+  const withUploadDuplicates = markSpreadsheetDuplicates(rows, (row) => {
+    const raw = rawByIndex[row.row_index] ?? {};
+    return [raw.fo_or_so_number ?? row.fo_or_so_number, raw.sku, normalizeUploadQuantity(raw.pack_qty)].map(normalizedUploadKeyPart).join("::");
+  });
+  const rowsBySource = new Map();
+  for (const row of withUploadDuplicates) {
+    const key = normalizedUploadKeyPart(row.fo_or_so_number);
+    rowsBySource.set(key, [...(rowsBySource.get(key) ?? []), row]);
+  }
+  const fullyDispatchedSources = new Map();
+  for (const [key, groupRows] of rowsBySource.entries()) {
+    const everyLineIsExhaustedByExistingDo = groupRows.length > 0 && groupRows.every((row) => (
+      row.qty_status === "EXCEEDS_BALANCE"
+      && Number(row.remaining_base_qty ?? 0) <= 0.0001
+      && Array.isArray(row.existing_delivery_orders)
+      && row.existing_delivery_orders.length > 0
+    ));
+    if (!everyLineIsExhaustedByExistingDo) continue;
+    const references = [...new Set(groupRows.flatMap((row) => (row.existing_delivery_orders ?? []).map((entry) => String(entry.dc_number ?? "").trim()).filter(Boolean)))];
+    fullyDispatchedSources.set(key, references);
+  }
+  return withUploadDuplicates.map((row) => {
+    const existingDoNumbers = fullyDispatchedSources.get(normalizedUploadKeyPart(row.fo_or_so_number)) ?? [];
+    const existingDeliveryOrderDuplicate = existingDoNumbers.length > 0;
+    const reviewDuplicateKind = existingDeliveryOrderDuplicate ? "ALREADY_CREATED" : row.upload_duplicate ? "UPLOAD_DUPLICATE" : null;
+    return {
+      ...row,
+      existing_do_numbers: existingDoNumbers,
+      review_duplicate_kind: reviewDuplicateKind,
+      is_removable_duplicate: Boolean(reviewDuplicateKind),
+    };
+  });
+}
+
 function normalizedTransporterName(value) {
   return String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
 }
@@ -189,8 +250,16 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   function updateRaw(rowIndex, patch) {
     setRawByIndex((current) => ({ ...current, [rowIndex]: { ...current[rowIndex], ...patch } }));
   }
+  function removeRows(rowIndexes) {
+    const indexes = new Set(rowIndexes);
+    const nextRows = (rows ?? []).filter((row) => !indexes.has(row.row_index));
+    const nextRaw = Object.fromEntries(Object.entries(rawByIndex).filter(([rowIndex]) => !indexes.has(Number(rowIndex))));
+    setRows(nextRows);
+    setRawByIndex(nextRaw);
+    persistSubmission({ rows: nextRows, rawByIndex: nextRaw });
+  }
   function removeRow(rowIndex) {
-    setRows((current) => (current ?? []).filter((row) => row.row_index !== rowIndex));
+    removeRows([rowIndex]);
   }
 
   const persistSubmission = useCallback((next = {}) => {
@@ -391,9 +460,18 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   // fields (DO Date/LR/Transporter/Truck/Dispatch/Tally) are repeated on
   // every row of the same group in the source Excel; the first row's raw
   // values are used as the group's header.
+  const reviewedRowsWithDuplicates = useMemo(
+    () => deriveBulkDoReviewRows(rows, rawByIndex),
+    [rawByIndex, rows],
+  );
+  const removableDuplicateRows = useMemo(
+    () => reviewedRowsWithDuplicates.filter((row) => row.is_removable_duplicate),
+    [reviewedRowsWithDuplicates],
+  );
   const groups = useMemo(() => {
     const byKey = new Map();
-    for (const row of rows ?? []) {
+    for (const row of reviewedRowsWithDuplicates) {
+      if (row.is_removable_duplicate) continue;
       if (row.status !== "RESOLVED") continue;
       const raw = rawByIndex[row.row_index] ?? {};
       const key = row.fo_or_so_number;
@@ -401,7 +479,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       byKey.get(key).rows.push(row);
     }
     return [...byKey.values()];
-  }, [rows, rawByIndex]);
+  }, [rawByIndex, reviewedRowsWithDuplicates]);
 
   function groupReadiness(group) {
     const problems = [];
@@ -501,15 +579,10 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   }
 
   const readyGroupCount = groups.filter((group) => groupReadiness(group).length === 0).length;
-  const reviewRows = useMemo(() => prioritizeUploadReviewRows(rows, (row) => (
-    row.status !== "RESOLVED"
-    || row.transporter_resolution?.status !== "MATCHED"
-    || row.sku_resolution?.status !== "MATCHED"
-    || !row.storage_location?.id
-    || row.qty_status === "EXCEEDS_BALANCE"
-    || (row.missing_required_fields ?? []).length > 0
-    || (row.format_errors ?? []).length > 0
-  )), [rows]);
+  const reviewRows = useMemo(
+    () => prioritizeUploadReviewRows(reviewedRowsWithDuplicates, bulkDoReviewPriority),
+    [reviewedRowsWithDuplicates],
+  );
 
   return (
     <DrawerBase
@@ -540,6 +613,11 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
               {validating ? "Re-checking…" : "Re-check unresolved transporters"}
             </button>
           ) : null}
+          {removableDuplicateRows.length ? (
+            <button type="button" onClick={() => removeRows(removableDuplicateRows.map((row) => row.row_index))} className="border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">
+              Remove {removableDuplicateRows.length} duplicate row(s)
+            </button>
+          ) : null}
         </div>
 
         {rows ? (
@@ -553,9 +631,12 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                 { key: "so_number", label: "SO Number", width: "120px", render: (row) => row.so_number || "—" },
                 { key: "do_date", label: "DO Date", width: "115px", render: (row) => rawByIndex[row.row_index]?.do_date || "—" },
                 {
-                  key: "status", label: "Status", width: "180px", render: (row) => row.status === "ERROR"
-                    ? <span className="font-semibold text-rose-700">{row.error_code}</span>
-                    : <span className="text-emerald-800">Resolved</span>,
+                  key: "status", label: "Status", width: "220px", render: (row) => {
+                    if (row.review_duplicate_kind === "ALREADY_CREATED") return <span className="font-semibold text-amber-800">Already created: {row.existing_do_numbers.join(", ")}</span>;
+                    if (row.review_duplicate_kind === "UPLOAD_DUPLICATE") return <span className="font-semibold text-amber-800">Duplicate of Excel row {row.upload_duplicate_of}</span>;
+                    if (row.status === "ERROR") return <span className="font-semibold text-rose-700">{row.error_code}</span>;
+                    return <span className="text-emerald-800">Resolved</span>;
+                  },
                 },
                 { key: "sku", label: "SKU", width: "90px", render: (row) => rawByIndex[row.row_index]?.sku || "—" },
                 {
@@ -645,6 +726,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
               ]}
               rows={reviewRows}
               rowKey={(row) => row.row_index}
+              getRowProps={(row) => row.review_duplicate_kind ? { className: "bg-slate-100 text-slate-500" } : {}}
               emptyMessage="No rows."
             />
 

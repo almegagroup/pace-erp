@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
-import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
+import { markSpreadsheetDuplicates, prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 import { listVdcTruckDispatchPending, postVdcTruckDispatch } from "../procurementApi.js";
 
 function parseCsv(text) {
@@ -86,15 +86,23 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
       const truckIndex = headers.indexOf("truck number");
       const dispatchIndex = headers.indexOf("dispatch date");
       if (foIndex < 0 || truckIndex < 0 || dispatchIndex < 0) throw new Error("Template must contain FO Number, Truck Number, and Dispatch Date columns.");
-      const incomingByFo = new Map();
+      const incomingRows = [];
       for (const values of parsed) {
         const foNumber = String(values[foIndex] ?? "").trim();
         if (!foNumber) continue;
-        incomingByFo.set(foNumber, {
+        incomingRows.push({
+          row_index: incomingRows.length + 1,
+          fo_number: foNumber,
           truck_number: String(values[truckIndex] ?? "").trim(),
           dispatch_date: String(values[dispatchIndex] ?? "").trim(),
         });
       }
+      // This uploader has no separate review grid: never silently let a later
+      // duplicate FO overwrite the first spreadsheet line. Keep the first
+      // value and report the later rows explicitly before PGI is posted.
+      const reviewedIncomingRows = markSpreadsheetDuplicates(incomingRows, (row) => String(row.fo_number).trim().toUpperCase());
+      const duplicateCount = reviewedIncomingRows.filter((row) => row.upload_duplicate).length;
+      const incomingByFo = new Map(reviewedIncomingRows.filter((row) => !row.upload_duplicate).map((row) => [row.fo_number, row]));
       let matched = 0;
       setEdits((current) => {
         const next = { ...current };
@@ -106,7 +114,9 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
         }
         return next;
       });
-      setNotice(matched ? `Loaded Truck/Dispatch values for ${matched} pending row(s). Review, then Post PGI.` : "No pending FO Number from the template matched this company.");
+      setNotice(matched
+        ? `Loaded Truck/Dispatch values for ${matched} pending row(s).${duplicateCount ? ` Ignored ${duplicateCount} duplicate FO row(s); the first Excel row was retained.` : ""} Review, then Post PGI.`
+        : "No pending FO Number from the template matched this company.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "TRUCK_DISPATCH_TEMPLATE_UPLOAD_FAILED");
     }
