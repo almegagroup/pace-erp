@@ -268,9 +268,24 @@ type BulkPreviewLookup = {
   materialById: Map<string, JsonRecord>;
   drawnByAllocation: Map<string, number>;
   drawnByLine: Map<string, number>;
+  deliveryOrdersByAllocation: Map<string, ExistingDeliveryOrder[]>;
+  deliveryOrdersByLine: Map<string, ExistingDeliveryOrder[]>;
   storageByCode: Map<string, JsonRecord>;
   finishedGoodsLocations: JsonRecord[];
   transporters: JsonRecord[];
+};
+
+// Preview exposes these references only to explain an exhausted balance.  They
+// are derived from the same non-cancelled DO lines used by the balance check;
+// the browser never infers an "already dispatched" state from a number alone.
+type ExistingDeliveryOrder = {
+  dc_number: string;
+  quantity: number;
+};
+
+type DrawnDeliveryOrderLookup = {
+  drawnByKey: Map<string, number>;
+  deliveryOrdersByKey: Map<string, ExistingDeliveryOrder[]>;
 };
 
 // Batch the immutable preview reads.  The business decision remains exactly
@@ -344,11 +359,11 @@ async function buildBulkPreviewLookup(rows: RawUploadRow[], companyId: string): 
     linesBySo.set(key, [...(linesBySo.get(key) ?? []), line]);
   }
   const materialIds = [...new Set(allLines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
-  const [materialRows, drawnByAllocation, drawnByLine] = await Promise.all([
+  const [materialRows, allocationDraws, lineDraws] = await Promise.all([
     fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
       .select("id, pace_code, external_code, material_name").in("id", chunk)),
-    computeDrawnQtyByAllocation(allocations.map((allocation) => toTrimmedString(allocation.id))),
-    computeDrawnQtyByLine(allLines.map((line) => toTrimmedString(line.id))),
+    computeDrawnDeliveryOrdersByAllocation(allocations.map((allocation) => toTrimmedString(allocation.id))),
+    computeDrawnDeliveryOrdersByLine(allLines.map((line) => toTrimmedString(line.id))),
   ]);
   return {
     resolvedByIdentifier,
@@ -356,8 +371,10 @@ async function buildBulkPreviewLookup(rows: RawUploadRow[], companyId: string): 
     linesBySo,
     lineById,
     materialById: new Map(materialRows.map((material) => [toTrimmedString(material.id), material])),
-    drawnByAllocation,
-    drawnByLine,
+    drawnByAllocation: allocationDraws.drawnByKey,
+    drawnByLine: lineDraws.drawnByKey,
+    deliveryOrdersByAllocation: allocationDraws.deliveryOrdersByKey,
+    deliveryOrdersByLine: lineDraws.deliveryOrdersByKey,
     storageByCode: new Map(finishedGoodsLocations.map((location) => [toUpperTrimmedString(location.code), location])),
     finishedGoodsLocations,
     transporters,
@@ -394,6 +411,7 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       let matchedMaterialId: string | null = null;
       let lineRemaining = 0;
       let perPackQty: number | null = null;
+      let existingDeliveryOrders: ExistingDeliveryOrder[] = [];
       if (isVdc) {
         const mapGroupId = toTrimmedString(resolved.map_group_id);
         if (!mapGroupId) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_FO_NOT_MAPPED" }); continue; }
@@ -408,6 +426,7 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
             matchedMaterialId = toTrimmedString(line?.material_id);
             perPackQty = Number(line?.per_pack_qty) || null;
             lineRemaining = Number(allocation.allocated_qty ?? 0) - (lookup.drawnByAllocation.get(toTrimmedString(allocation.id)) ?? 0);
+            existingDeliveryOrders = lookup.deliveryOrdersByAllocation.get(toTrimmedString(allocation.id)) ?? [];
           }
         }
       } else {
@@ -420,6 +439,7 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
             matchedMaterialId = toTrimmedString(line.material_id);
             perPackQty = Number(line.per_pack_qty) || null;
             lineRemaining = Number(line.base_qty ?? line.quantity ?? 0) - (lookup.drawnByLine.get(toTrimmedString(line.id)) ?? 0);
+            existingDeliveryOrders = lookup.deliveryOrdersByLine.get(toTrimmedString(line.id)) ?? [];
           }
         }
       }
@@ -450,6 +470,8 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
         sku_resolution: matchedSoLineId ? { status: "MATCHED", so_line_id: matchedSoLineId, so_map_allocation_id: matchedAllocationId, material_id: matchedMaterialId } : { status: "NOT_FOUND", candidates: skuCandidates },
         qty_status: matchedSoLineId && baseQty > lineRemaining + QTY_TOL ? "EXCEEDS_BALANCE" : "OK",
         base_qty: matchedSoLineId ? baseQty : null,
+        remaining_base_qty: matchedSoLineId ? Math.max(0, lineRemaining) : null,
+        existing_delivery_orders: existingDeliveryOrders,
         transporter_resolution: transporterResolution,
         storage_location: lookup.storageByCode.get(toUpperTrimmedString(row.storage_location_code)) ?? null,
         storage_location_candidates: lookup.finishedGoodsLocations,
@@ -466,32 +488,44 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
   }
 }
 
-async function computeDrawnQtyByAllocation(allocationIds: string[]): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
-  if (allocationIds.length === 0) return map;
-  const rows = await fetchInChunks<JsonRecord>(allocationIds, (chunk) =>
-    serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
-      .select("so_map_allocation_id, quantity, delivery_challan!inner(status)")
-      .in("so_map_allocation_id", chunk).neq("delivery_challan.status", "CANCELLED"));
+function accumulateDrawnDeliveryOrders(rows: JsonRecord[], sourceKey: "so_map_allocation_id" | "so_line_id"): DrawnDeliveryOrderLookup {
+  const drawnByKey = new Map<string, number>();
+  const perSourceDo = new Map<string, Map<string, ExistingDeliveryOrder>>();
   for (const row of rows) {
-    const key = toTrimmedString(row.so_map_allocation_id);
-    map.set(key, (map.get(key) ?? 0) + Number(row.quantity ?? 0));
+    const key = toTrimmedString(row[sourceKey]);
+    const deliveryChallan = (row.delivery_challan && typeof row.delivery_challan === "object" ? row.delivery_challan : {}) as JsonRecord;
+    const dcNumber = toTrimmedString(deliveryChallan.dc_number);
+    const dcId = toTrimmedString(deliveryChallan.id) || dcNumber;
+    const quantity = Number(row.quantity ?? 0);
+    if (!key || !dcId || !Number.isFinite(quantity)) continue;
+    drawnByKey.set(key, (drawnByKey.get(key) ?? 0) + quantity);
+    const deliveryOrders = perSourceDo.get(key) ?? new Map<string, ExistingDeliveryOrder>();
+    const existing = deliveryOrders.get(dcId);
+    deliveryOrders.set(dcId, { dc_number: dcNumber || "DO", quantity: (existing?.quantity ?? 0) + quantity });
+    perSourceDo.set(key, deliveryOrders);
   }
-  return map;
+  return {
+    drawnByKey,
+    deliveryOrdersByKey: new Map([...perSourceDo.entries()].map(([key, values]) => [key, [...values.values()].sort((left, right) => left.dc_number.localeCompare(right.dc_number))])),
+  };
 }
 
-async function computeDrawnQtyByLine(soLineIds: string[]): Promise<Map<string, number>> {
-  const map = new Map<string, number>();
-  if (soLineIds.length === 0) return map;
+async function computeDrawnDeliveryOrdersByAllocation(allocationIds: string[]): Promise<DrawnDeliveryOrderLookup> {
+  if (allocationIds.length === 0) return { drawnByKey: new Map(), deliveryOrdersByKey: new Map() };
+  const rows = await fetchInChunks<JsonRecord>(allocationIds, (chunk) =>
+    serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+      .select("so_map_allocation_id, quantity, delivery_challan!inner(id, dc_number, status)")
+      .in("so_map_allocation_id", chunk).neq("delivery_challan.status", "CANCELLED"));
+  return accumulateDrawnDeliveryOrders(rows, "so_map_allocation_id");
+}
+
+async function computeDrawnDeliveryOrdersByLine(soLineIds: string[]): Promise<DrawnDeliveryOrderLookup> {
+  if (soLineIds.length === 0) return { drawnByKey: new Map(), deliveryOrdersByKey: new Map() };
   const rows = await fetchInChunks<JsonRecord>(soLineIds, (chunk) =>
     serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
-      .select("so_line_id, quantity, delivery_challan!inner(status)")
+      .select("so_line_id, quantity, delivery_challan!inner(id, dc_number, status)")
       .in("so_line_id", chunk).neq("delivery_challan.status", "CANCELLED"));
-  for (const row of rows) {
-    const key = toTrimmedString(row.so_line_id);
-    map.set(key, (map.get(key) ?? 0) + Number(row.quantity ?? 0));
-  }
-  return map;
+  return accumulateDrawnDeliveryOrders(rows, "so_line_id");
 }
 
 type SaveGroupInput = {

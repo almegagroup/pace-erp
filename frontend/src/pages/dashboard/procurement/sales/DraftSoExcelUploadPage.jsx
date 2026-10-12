@@ -22,7 +22,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { openScreenWithContext } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
-import { prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
+import { markSpreadsheetDuplicates, prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 import { listDraftExcelUploadSalesOrders, reviewSoExcelUploadBatch, submitSoExcelUploadBatch } from "../procurementApi.js";
 
 const FG_TYPE_CHOICES = ["MTO", "HPS", "MTEST", "MTS"];
@@ -194,17 +194,26 @@ export default function DraftSoExcelUploadPage() {
     }]);
   }
 
-  const hasUnresolvedDuplicate = (reviewRows ?? []).some((row) => row.is_duplicate && !row.skip_reason);
-  const submittableCount = (reviewRows ?? []).filter((row) => !row.skip_reason).length;
+  const reviewedRowsWithDuplicates = useMemo(() => markSpreadsheetDuplicates(reviewRows, (row) => [
+    row.so_number, row.external_so_number, row.sku, Number(row.pack_qty ?? 0).toFixed(6), row.rate, row.gst_rate,
+  ].map((value) => String(value ?? "").trim().toUpperCase()).join("::")).map((row) => ({
+    ...row,
+    review_duplicate_kind: row.is_duplicate ? "EXISTING_RECORD" : row.upload_duplicate ? "UPLOAD_DUPLICATE" : null,
+    is_removable_duplicate: row.is_duplicate || row.upload_duplicate === true,
+  })), [reviewRows]);
+  const effectiveReviewRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => !row.is_removable_duplicate), [reviewedRowsWithDuplicates]);
+  const removableDuplicateRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => row.is_removable_duplicate), [reviewedRowsWithDuplicates]);
+  const hasUnresolvedDuplicate = false;
+  const submittableCount = effectiveReviewRows.filter((row) => !row.skip_reason).length;
   const orderedReviewRows = useMemo(
-    () => prioritizeUploadReviewRows(reviewRows, (row) => !row.skip_reason && (row.is_duplicate || (row.ac05_rate != null && !row.ac05_rate_match))),
-    [reviewRows]
+    () => prioritizeUploadReviewRows(reviewedRowsWithDuplicates, (row) => row.review_duplicate_kind ? -10 : (!row.skip_reason && row.ac05_rate != null && !row.ac05_rate_match)),
+    [reviewedRowsWithDuplicates]
   );
 
   async function handleSubmitReview() {
     setError(""); setNotice(""); setSubmitting(true);
     try {
-      const submittableRows = (reviewRows ?? []).filter((row) => !row.skip_reason);
+      const submittableRows = effectiveReviewRows.filter((row) => !row.skip_reason);
       const result = await submitSoExcelUploadBatch({ company_id: effectiveCompanyId, rows: submittableRows });
       const skippedCount = (result?.rows ?? []).filter((row) => row.skipped).length;
       const savedCount = (result?.rows ?? []).length - skippedCount;
@@ -220,7 +229,7 @@ export default function DraftSoExcelUploadPage() {
 
   function reviewRowClassName(row) {
     if (row.skip_reason) return "bg-slate-100 text-slate-400";
-    if (row.is_duplicate) return "bg-rose-50";
+    if (row.review_duplicate_kind) return "bg-slate-100 text-slate-500";
     return undefined;
   }
 
@@ -281,6 +290,10 @@ export default function DraftSoExcelUploadPage() {
         title="Review Excel Upload"
         actions={[
           <button key="add" type="button" onClick={addManualReviewRow} className="border border-slate-400 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Add Row</button>,
+          ...(removableDuplicateRows.length ? [<button key="remove-duplicates" type="button" onClick={() => {
+            const duplicateKeys = new Set(removableDuplicateRows.map((row) => row.row_key));
+            setReviewRows((current) => (current ?? []).filter((row) => !duplicateKeys.has(row.row_key)));
+          }} className="border border-amber-500 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">Remove {removableDuplicateRows.length} duplicate row(s)</button>] : []),
           <button key="cancel" type="button" onClick={() => setReviewRows(null)} className="border border-slate-400 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Cancel</button>,
           <button key="submit" type="button" disabled={submitting || hasUnresolvedDuplicate || submittableCount === 0}
             onClick={() => void handleSubmitReview()}
@@ -327,8 +340,10 @@ export default function DraftSoExcelUploadPage() {
             { key: "status", label: "Status", width: "190px", render: (row) => (
               row.skip_reason
                 ? <span className="text-[11px] font-semibold text-slate-500">{row.skip_reason}</span>
-                : row.is_duplicate
-                  ? <span className="text-[11px] font-semibold text-rose-700">Duplicate</span>
+                : row.review_duplicate_kind === "EXISTING_RECORD"
+                  ? <span className="text-[11px] font-semibold text-slate-600">Already exists — excluded</span>
+                  : row.review_duplicate_kind === "UPLOAD_DUPLICATE"
+                    ? <span className="text-[11px] font-semibold text-slate-600">Duplicate of row {row.upload_duplicate_of}</span>
                   : <span className="text-[11px] font-semibold text-emerald-700">Ready</span>
             ) },
             { key: "actions", label: "", width: "80px", render: (row) => (
