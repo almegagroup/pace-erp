@@ -398,11 +398,20 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
     const results: JsonRecord[] = [];
     for (const row of rows) {
       const identifier = toTrimmedString(row.fo_or_so_number);
-      if (!identifier) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "FO_SO_NUMBER_REQUIRED" }); continue; }
+      // A transporter refresh must never make the uploaded source reference
+      // disappear from the review grid.  Resolve it before FO/SO validation
+      // and include both fields in every response shape, including errors.
+      const transporterResolution = resolveTransporterFromRows(toTrimmedString(row.transporter_name), lookup.transporters);
+      const previewIdentity = {
+        row_index: row.row_index,
+        fo_or_so_number: identifier,
+        transporter_resolution: transporterResolution,
+      };
+      if (!identifier) { results.push({ ...previewIdentity, status: "ERROR", error_code: "FO_SO_NUMBER_REQUIRED" }); continue; }
       const resolved = lookup.resolvedByIdentifier.get(identifier) ?? { status: "NOT_FOUND" };
-      if (resolved.status === "NOT_FOUND") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "FO_SO_NOT_FOUND" }); continue; }
-      if (resolved.status === "VDC_WRONG_FIELD") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_VDC_MUST_USE_FO_NUMBER" }); continue; }
-      if (resolved.status === "DC_WRONG_FIELD") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_SO_WRONG_DISPATCH_TYPE" }); continue; }
+      if (resolved.status === "NOT_FOUND") { results.push({ ...previewIdentity, status: "ERROR", error_code: "FO_SO_NOT_FOUND" }); continue; }
+      if (resolved.status === "VDC_WRONG_FIELD") { results.push({ ...previewIdentity, status: "ERROR", error_code: "DO_BULK_VDC_MUST_USE_FO_NUMBER" }); continue; }
+      if (resolved.status === "DC_WRONG_FIELD") { results.push({ ...previewIdentity, status: "ERROR", error_code: "DO_BULK_SO_WRONG_DISPATCH_TYPE" }); continue; }
       const isVdc = resolved.status === "VDC";
       const ddFlag = resolved.is_dd_dispatch === true;
       const soId = toTrimmedString(resolved.so_id);
@@ -415,7 +424,7 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       let existingDeliveryOrders: ExistingDeliveryOrder[] = [];
       if (isVdc) {
         const mapGroupId = toTrimmedString(resolved.map_group_id);
-        if (!mapGroupId) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_FO_NOT_MAPPED" }); continue; }
+        if (!mapGroupId) { results.push({ ...previewIdentity, status: "ERROR", error_code: "DO_BULK_FO_NOT_MAPPED" }); continue; }
         for (const allocation of lookup.allocationsByMapGroup.get(mapGroupId) ?? []) {
           const line = lookup.lineById.get(toTrimmedString(allocation.so_line_id));
           const material = line ? lookup.materialById.get(toTrimmedString(line.material_id)) : undefined;
@@ -446,7 +455,6 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       }
       const packQty = Number(row.pack_qty ?? 0);
       const baseQty = perPackQty ? packQty * perPackQty : packQty;
-      const transporterResolution = resolveTransporterFromRows(toTrimmedString(row.transporter_name), lookup.transporters);
       const truckNumber = toTrimmedString(row.truck_number);
       const dispatchDate = normalizeInputDate(row.dispatch_date);
       const doDate = normalizeInputDate(row.do_date);
@@ -466,8 +474,8 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
         if (!dispatchDate) missingRequired.push("dispatch_date");
       }
       results.push({
-        row_index: row.row_index, status: "RESOLVED", dd_flag: ddFlag, so_id: soId, so_number: resolved.so_number,
-        fo_or_so_number: identifier, map_group_id: resolved.map_group_id ?? null,
+        ...previewIdentity, status: "RESOLVED", dd_flag: ddFlag, so_id: soId, so_number: resolved.so_number,
+        map_group_id: resolved.map_group_id ?? null,
         sku_resolution: matchedSoLineId ? { status: "MATCHED", so_line_id: matchedSoLineId, so_map_allocation_id: matchedAllocationId, material_id: matchedMaterialId } : { status: "NOT_FOUND", candidates: skuCandidates },
         qty_status: matchedSoLineId && baseQty > lineRemaining + QTY_TOL ? "EXCEEDS_BALANCE" : "OK",
         base_qty: matchedSoLineId ? baseQty : null,
