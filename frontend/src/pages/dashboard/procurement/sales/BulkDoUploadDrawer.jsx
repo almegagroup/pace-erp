@@ -113,9 +113,18 @@ function safeStoredSubmission(companyId) {
   }
 }
 
-function mergePreviewRows(currentRows, refreshedRows) {
+// Transporter Master return is intentionally a narrow refresh.  The original
+// preview has already resolved FO/SO, SKU, allocation and quantity against a
+// coherent snapshot.  Replacing that with a second full preview can turn a
+// valid source reference into FO_SO_NOT_FOUND while the user is only trying
+// to resolve the transporter.  Carry only the refreshed transporter decision.
+function mergeTransporterRecheckRows(currentRows, refreshedRows) {
   const refreshedByIndex = new Map((refreshedRows ?? []).map((row) => [Number(row.row_index), row]));
-  return (currentRows ?? []).map((row) => refreshedByIndex.get(Number(row.row_index)) ?? row);
+  return (currentRows ?? []).map((row) => {
+    const refreshed = refreshedByIndex.get(Number(row.row_index));
+    if (!refreshed?.transporter_resolution) return row;
+    return { ...row, transporter_resolution: refreshed.transporter_resolution };
+  });
 }
 
 function rawUnresolvedTransporterRows(previewRows, rawByIndex, transporterName = "") {
@@ -243,6 +252,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   const [saveResults, setSaveResults] = useState(null);
   const [submissionId, setSubmissionId] = useState("");
   const [submissionGroupKeys, setSubmissionGroupKeys] = useState({});
+  const [submissionStarted, setSubmissionStarted] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const fileInputRef = useRef(null);
   const restoredDraftRef = useRef(false);
@@ -269,9 +279,13 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       const nextRaw = next.rawByIndex ?? rawByIndex;
       const nextSubmissionId = next.submissionId ?? submissionId;
       const nextGroupKeys = next.submissionGroupKeys ?? submissionGroupKeys;
+      const nextSubmissionStarted = next.submissionStarted ?? submissionStarted;
       if (!nextSubmissionId || !Array.isArray(nextRows)) return;
       window.sessionStorage.setItem(submissionStorageKey(companyId), JSON.stringify({
         submission_id: nextSubmissionId,
+        // A preview UUID is local-only.  It becomes reconciliation-eligible
+        // only immediately before the first save request leaves the browser.
+        submission_started: Boolean(nextSubmissionStarted),
         group_keys: nextGroupKeys,
         preview_rows: nextRows,
         raw_rows: Object.values(nextRaw),
@@ -280,11 +294,11 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       // Session persistence is a safety enhancement, not a reason to block
       // the user from completing a server-authoritative submission.
     }
-  }, [companyId, rawByIndex, rows, submissionGroupKeys, submissionId]);
+  }, [companyId, rawByIndex, rows, submissionGroupKeys, submissionId, submissionStarted]);
 
-  function clearPersistedSubmission() {
+  const clearPersistedSubmission = useCallback(() => {
     try { window.sessionStorage.removeItem(submissionStorageKey(companyId)); } catch { /* no-op */ }
-  }
+  }, [companyId]);
 
   const requestPreview = useCallback(async (parsedRows) => {
     const result = await previewDoBulkUpload({ company_id: companyId, rows: parsedRows });
@@ -364,7 +378,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
 
     setValidating(true);
     void requestPreview(unresolvedRows)
-      .then((refreshedRows) => setRows((currentRows) => mergePreviewRows(currentRows, refreshedRows)))
+      .then((refreshedRows) => setRows((currentRows) => mergeTransporterRecheckRows(currentRows, refreshedRows)))
       .catch((restoreError) => setError(restoreError instanceof Error ? restoreError.message : "DO_BULK_PREVIEW_FAILED"))
       .finally(() => { setValidating(false); onDraftRestored?.(); });
   }, [initialDraft, onDraftRestored, requestPreview, runPreview]);
@@ -383,12 +397,28 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     setRows(saved.preview_rows);
     setSubmissionId(saved.submission_id);
     setSubmissionGroupKeys(saved.group_keys ?? {});
+    setSubmissionStarted(saved.submission_started === true);
+    // Older drawer versions persisted a UUID immediately after preview.
+    // That UUID has no server row yet, so it must be restored as a normal
+    // preview, not sent to the submission-status endpoint.
+    if (saved.submission_started !== true) {
+      setNotice("Restored the unsubmitted Bulk DO upload.");
+      return;
+    }
     setReconciling(true);
     void reconcileSubmission(saved.submission_id, saved.group_keys ?? {}, saved.preview_rows)
       .then((outcome) => setNotice(`${outcome.created} created group(s) reconciled from the previous submission.`))
-      .catch(() => setError("This Bulk DO submission needs reconciliation. Do not create it again until the status check succeeds."))
+      .catch((reconcileError) => {
+        if (reconcileError?.code === "DO_BULK_SUBMISSION_NOT_FOUND") {
+          clearPersistedSubmission();
+          setSubmissionStarted(false);
+          setNotice("Restored the unsubmitted Bulk DO upload. No Delivery Order was created by the previous preview.");
+          return;
+        }
+        setError("This Bulk DO submission needs reconciliation. Do not create it again until the status check succeeds.");
+      })
       .finally(() => setReconciling(false));
-  }, [companyId, initialDraft, reconcileSubmission]);
+  }, [clearPersistedSubmission, companyId, initialDraft, reconcileSubmission]);
 
   async function handleFileChosen(event) {
     const file = event.target.files?.[0];
@@ -405,7 +435,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       const nextSubmissionId = newSubmissionId();
       setSubmissionId(nextSubmissionId);
       setSubmissionGroupKeys({});
-      persistSubmission({ rows: previewRows, rawByIndex: rawMap, submissionId: nextSubmissionId, submissionGroupKeys: {} });
+      setSubmissionStarted(false);
+      persistSubmission({ rows: previewRows, rawByIndex: rawMap, submissionId: nextSubmissionId, submissionGroupKeys: {}, submissionStarted: false });
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "DO_BULK_PREVIEW_FAILED");
     } finally {
@@ -423,7 +454,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
         return;
       }
       const refreshedRows = await requestPreview(unresolvedRows);
-      setRows((currentRows) => mergePreviewRows(currentRows, refreshedRows));
+      setRows((currentRows) => mergeTransporterRecheckRows(currentRows, refreshedRows));
     } catch (validateError) {
       setError(validateError instanceof Error ? validateError.message : "DO_BULK_PREVIEW_FAILED");
     } finally {
@@ -541,7 +572,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
           };
         });
       if (payloadGroups.length === 0) { setError("No group is fully ready to save yet."); return; }
-      persistSubmission({ submissionId: activeSubmissionId, submissionGroupKeys: nextGroupKeys });
+      setSubmissionStarted(true);
+      persistSubmission({ submissionId: activeSubmissionId, submissionGroupKeys: nextGroupKeys, submissionStarted: true });
       const result = await saveDoBulkUpload({ company_id: companyId, submission_id: activeSubmissionId, groups: payloadGroups });
       const resultRows = responseRows(result);
       setSaveResults(resultRows);
