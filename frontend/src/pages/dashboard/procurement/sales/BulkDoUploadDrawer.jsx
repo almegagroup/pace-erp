@@ -127,6 +127,18 @@ function rawUnresolvedTransporterRows(previewRows, rawByIndex, transporterName =
     .filter(Boolean);
 }
 
+function bulkDoReviewPriority(row) {
+  // A transporter can be resolved immediately in this review. Put it before
+  // quantity errors that may only be explainable after the original save has
+  // been reconciled. Preserve source-row order for every equal priority.
+  if (row.transporter_resolution?.status !== "MATCHED") return 30;
+  if (row.status !== "RESOLVED") return 20;
+  if (row.sku_resolution?.status !== "MATCHED" || !row.storage_location?.id) return 15;
+  if ((row.missing_required_fields ?? []).length > 0 || (row.format_errors ?? []).length > 0) return 10;
+  if (row.qty_status === "EXCEEDS_BALANCE") return 5;
+  return 0;
+}
+
 function normalizedTransporterName(value) {
   return String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
 }
@@ -501,15 +513,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   }
 
   const readyGroupCount = groups.filter((group) => groupReadiness(group).length === 0).length;
-  const reviewRows = useMemo(() => prioritizeUploadReviewRows(rows, (row) => (
-    row.status !== "RESOLVED"
-    || row.transporter_resolution?.status !== "MATCHED"
-    || row.sku_resolution?.status !== "MATCHED"
-    || !row.storage_location?.id
-    || row.qty_status === "EXCEEDS_BALANCE"
-    || (row.missing_required_fields ?? []).length > 0
-    || (row.format_errors ?? []).length > 0
-  )), [rows]);
+  const reviewRows = useMemo(() => prioritizeUploadReviewRows(rows, bulkDoReviewPriority), [rows]);
 
   return (
     <DrawerBase
