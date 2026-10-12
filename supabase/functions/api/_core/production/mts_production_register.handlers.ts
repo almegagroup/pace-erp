@@ -13,7 +13,7 @@
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
-import { assertProdReadRole, toTrimmedString } from "./production.shared.ts";
+import { assertProdReadRole, toTrimmedString, toUpperTrimmedString } from "./production.shared.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import {
@@ -306,6 +306,25 @@ export async function getMtsProductionRegisterHandler(req: Request, ctx: ProdHan
         });
       }
     }
+
+    // Actionable MTS orders must never be hidden below the completed register.
+    // After the pending queue, retain a true reverse production timeline: a
+    // NIGHT shift is later than the DAY shift on the same production date.
+    result.sort((a, b) => {
+      const pendingDelta = Number(Boolean(b.is_pending)) - Number(Boolean(a.is_pending));
+      if (pendingDelta !== 0) return pendingDelta;
+
+      const dateDelta = toTrimmedString(b.production_date).localeCompare(toTrimmedString(a.production_date));
+      if (dateDelta !== 0) return dateDelta;
+
+      const shiftA = toUpperTrimmedString(a.shift_name);
+      const shiftB = toUpperTrimmedString(b.shift_name);
+      const shiftRankA = shiftA === "NIGHT" ? 2 : shiftA === "DAY" ? 1 : 0;
+      const shiftRankB = shiftB === "NIGHT" ? 2 : shiftB === "DAY" ? 1 : 0;
+      if (shiftRankA !== shiftRankB) return shiftRankB - shiftRankA;
+
+      return toTrimmedString(b.process_po_number).localeCompare(toTrimmedString(a.process_po_number), undefined, { numeric: true });
+    });
 
     return okResponse({ data: result }, ctx.request_id, req);
   } catch (err) {

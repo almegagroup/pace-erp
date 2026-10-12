@@ -1393,8 +1393,27 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
         const parentProcessOrder = parentProcessOrderFor(row);
         const effectiveMachineId = toTrimmedString(row.machine_id)
           || toTrimmedString(parentProcessOrder?.machine_id);
+        const ownBatchFrom = toTrimmedString(row.batch_number_from);
+        const ownBatchTo = toTrimmedString(row.batch_number_to);
+        const ownBatchFromMatch = /^(.*?)(\d+)$/.exec(ownBatchFrom);
+        const ownBatchToMatch = /^(.*?)(\d+)$/.exec(ownBatchTo);
+        const ownBatchCount = ownBatchFromMatch && ownBatchToMatch && ownBatchFromMatch[1] === ownBatchToMatch[1]
+          ? Number(ownBatchToMatch[2]) - Number(ownBatchFromMatch[2]) + 1
+          : null;
+        const displayProcessOrder = parentProcessOrder
+          ? {
+              ...parentProcessOrder,
+              batch_number_from: ownBatchFrom || parentProcessOrder.batch_number_from,
+              batch_number_to: ownBatchTo || parentProcessOrder.batch_number_to,
+              number_of_batches: ownBatchCount && ownBatchCount > 0
+                ? ownBatchCount
+                : parentProcessOrder.number_of_batches,
+            }
+          : null;
+
         return {
           ...row,
+          process_order: displayProcessOrder,
           material: materialMap.get(String(row.material_id ?? "")) ?? null,
           machine: machineById.get(effectiveMachineId) ?? null,
           fo_allocated_qty_kg: allocatedQty,
