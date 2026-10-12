@@ -689,22 +689,26 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                   },
                 },
                 {
-                  key: "transporter", label: "Transporter", width: "220px", render: (row) => {
+                  key: "transporter", label: "Transporter", width: "260px", render: (row) => {
                     if (row.status !== "RESOLVED") return <span className="text-slate-400">—</span>;
                     const resolution = row.transporter_resolution;
                     if (resolution?.status === "MATCHED") return <span className="text-emerald-800">Resolved</span>;
+                    const uploadedTransporter = rawByIndex[row.row_index]?.transporter_name || "—";
                     if (resolution?.status === "AMBIGUOUS") {
                       return (
-                        <select className="h-7 border border-amber-400 bg-amber-50 px-1 text-[11px]" defaultValue=""
-                          onChange={(event) => chooseTransporter(row.row_index, event.target.value)}>
-                          <option value="">Choose from {resolution.candidates?.length ?? 0}…</option>
-                          {(resolution.candidates ?? []).map((candidate) => (
-                            <option key={candidate.id} value={candidate.id}>{candidate.transporter_code} — {candidate.transporter_name}</option>
-                          ))}
-                        </select>
+                        <div className="grid gap-1">
+                          <span title={uploadedTransporter} className="truncate text-[10px] text-slate-500">Excel: {uploadedTransporter}</span>
+                          <select className="h-7 border border-amber-400 bg-amber-50 px-1 text-[11px]" defaultValue=""
+                            onChange={(event) => chooseTransporter(row.row_index, event.target.value)}>
+                            <option value="">Choose from {resolution.candidates?.length ?? 0}…</option>
+                            {(resolution.candidates ?? []).map((candidate) => (
+                              <option key={candidate.id} value={candidate.id}>{candidate.transporter_code} — {candidate.transporter_name}</option>
+                            ))}
+                          </select>
+                        </div>
                       );
                     }
-                    return <button type="button" onClick={() => openTransporterMaster(row)} className="border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-800">Not found — Open Transporter Master</button>;
+                    return <div className="grid gap-1"><span title={uploadedTransporter} className="truncate text-[10px] text-slate-500">Excel: {uploadedTransporter}</span><button type="button" onClick={() => openTransporterMaster(row)} className="border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-800">Not found — Open Transporter Master</button></div>;
                   },
                 },
                 { key: "lr_number", label: "LR Number", width: "135px", render: (row) => rawByIndex[row.row_index]?.lr_number || "—" },
