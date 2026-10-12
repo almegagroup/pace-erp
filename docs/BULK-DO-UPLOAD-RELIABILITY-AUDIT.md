@@ -12,6 +12,10 @@ to Dev and exercised with a representative non-production workbook.
 - [x] Current frontend/backend request lifecycle traced.
 - [x] Production incident evidence recorded without modifying Production.
 - [x] P0 durable submission/group identity implemented.
+- [x] P0 cross-user, same-payload DO idempotency added in Dev schema.
+- [x] SO Map's shared normal/bulk atomic write serialized by its natural SO+FO identity.
+- [x] SO01 Excel line submit moved behind an atomic, cross-user replay-safe writer.
+- [x] SO02 concurrent PGI upload reconciles an already-posted winner without replaying PGI.
 - [x] P0 duplicate/retry/reconciliation UI implemented.
 - [x] Dev migration applied and isolated failure-path test run/cleaned up.
 - [ ] P0 real successful-DO fixture and race test in Dev.
@@ -98,6 +102,30 @@ without a DO may change its review values and retry under the same submission.
 This preserves legitimate multiple-DO-per-FO cases because there is no unique
 constraint on FO, SO, transporter, or DO date.
 
+### Cross-user submission boundary
+
+The original P0 submission ID is browser/user scoped.  Consequently, two
+users could submit the same canonical DO group using two different submission
+IDs.  Migration `20261012021756_global_upload_submission_idempotency.sql`
+adds `bulk_do_business_result`, unique only on `(company_id,
+payload_fingerprint)`.  The existing DO wrapper locks that business identity,
+creates the DO and stores the business result in the *same* transaction.  A
+racing request therefore waits for the first transaction and receives the
+same DO ID instead of running the create path.  Each user's local submission
+history may reference that one DO, so the old one-to-one group/DO uniqueness
+constraint is removed.
+
+The fingerprint is the canonical complete group payload—not FO number, SO
+number, transporter, or date alone.  A later legitimate dispatch remains
+possible whenever its business payload differs; there is deliberately no
+blanket FO/SO uniqueness rule.
+
+The same migration also puts a transaction-scoped advisory lock inside
+`save_so_map_group_atomic`, which is the shared normal and Excel SO Map write
+path.  Its natural identity is `(SO, external FO, source)`.  Two users saving
+the same map cannot create competing groups or allocations; the second caller
+runs after the first and applies the established idempotent allocation upsert.
+
 The drawer now generates and session-persists one submission UUID plus one
 stable group UUID, sends both on save, removes created groups immediately,
 refreshes the DO list, preserves only actionable failures/unresolved rows,
@@ -116,6 +144,11 @@ reconciliation state has been updated.
   `DO_BULK_SUBMISSION_SCOPE_MISMATCH`.
 - Verified a retry failure updates the same group record rather than creating
   another one; the isolated Dev test rows were deleted afterwards.
+- Applied `20261012021756_global_upload_submission_idempotency.sql` to Dev;
+  verified the global business-result table and both rewritten database
+  functions exist.  An isolated invalid-payload wrapper test returned the
+  expected VDC validation error and its Dev-only submission/group/business
+  rows were verified deleted afterwards.
 - Focused ESLint for the three changed frontend files and `npm.cmd run build`
   passed. Build still reports the pre-existing `GRNListPage.jsx` duplicate
   `emptyMessage` warning. Repository-wide lint remains blocked by unrelated
@@ -159,6 +192,32 @@ personal data.
 - A synchronous request must show indeterminate processing rather than a fake
   percentage. Actual completion percentage requires an approved durable worker
   that claims and persists one group at a time.
+
+### Other upload flows: current position
+
+This repository contains three other transactional upload/post paths: SO01
+Draft-SO Excel line insert, SO Map bulk allocation save, and SO02 VDC
+Truck/Dispatch-to-PGI posting. SO Map is protected by the shared atomic lock
+above. Migration `20261012023519_so01_excel_upload_submission_idempotency.sql`
+adds `sales_order_excel_upload_result` and an atomic SO01 writer. It locks
+each affected DRAFT Excel SO in a deterministic order, allocates line numbers
+inside that lock, inserts the line and records the canonical line fingerprint
+in one transaction. A cross-user replay returns the existing line reference
+instead of adding another row.
+
+SO02's final PGI was already guarded at the authoritative level: its existing
+completion transaction changes each invoice from `DRAFT` to `POSTED` with a
+conditional update in the same transaction as P601, reservation issuance and
+DO status completion. The upload handler now recognises the loser of that
+race by rereading invoice state: if all invoices are already `POSTED`, it
+returns `ok: true, reused: true`; it never reruns PGI.
+
+No route may gain a transactional Excel upload merely by adding a frontend
+button. Its backend implementation must define a canonical company-scoped
+business fingerprint and use an atomic writer that persists the business
+record and outcome together (or reuse one of the established writers above).
+A generic pre-flight claim is explicitly forbidden: a process failure between
+that claim and a separate business write would make the outcome ambiguous.
 
 ### Required Dev benchmark before any further optimisation
 
