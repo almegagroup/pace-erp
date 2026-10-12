@@ -8488,6 +8488,20 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/production/MtsPendingVerifyPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "listProcessOrders",
+        "method": "GET",
+        "path": "/api/production/process-orders",
+        "resourceCode": "PROD_ORDER_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/production/QAQueuePage.jsx",
     "dependencyCount": 6,
     "deps": [
