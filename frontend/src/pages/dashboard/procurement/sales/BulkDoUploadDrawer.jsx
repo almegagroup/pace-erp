@@ -36,18 +36,69 @@ async function buildTemplateWorkbook() {
   return workbook;
 }
 
-async function downloadTemplate() {
-  const workbook = await buildTemplateWorkbook();
+async function saveWorkbook(workbook, fileName) {
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = "bulk_do_upload_template.xlsx";
+  anchor.download = fileName;
   document.body.appendChild(anchor);
   anchor.click();
   document.body.removeChild(anchor);
   window.URL.revokeObjectURL(url);
+}
+
+async function downloadTemplate() {
+  await saveWorkbook(await buildTemplateWorkbook(), "bulk_do_upload_template.xlsx");
+}
+
+// One line per FO/SO number that could not be resolved, so the user can map
+// them in SO Map first.  Built only from the uploaded Excel + preview result.
+function summarizeUnresolvedSources(reviewRows, rawByIndex) {
+  const bySource = new Map();
+  for (const row of reviewRows) {
+    if (row.is_removable_duplicate || row.status !== "ERROR") continue;
+    const raw = rawByIndex[row.row_index] ?? {};
+    const key = String(row.fo_or_so_number ?? raw.fo_or_so_number ?? "").trim();
+    if (!bySource.has(key)) {
+      bySource.set(key, { fo_or_so_number: key, error_code: row.error_code, reason: BULK_DO_SOURCE_ERROR_TEXT[row.error_code] ?? row.error_code, row_indexes: [], skus: new Set(), pack_qty: 0, do_dates: new Set(), lr_numbers: new Set() });
+    }
+    const entry = bySource.get(key);
+    entry.row_indexes.push(row.row_index);
+    if (raw.sku) entry.skus.add(String(raw.sku));
+    entry.pack_qty += Number(raw.pack_qty) || 0;
+    if (raw.do_date) entry.do_dates.add(raw.do_date);
+    if (raw.lr_number) entry.lr_numbers.add(String(raw.lr_number));
+  }
+  return [...bySource.values()].map((entry) => ({
+    ...entry,
+    row_count: entry.row_indexes.length,
+    skus: [...entry.skus].join(", "),
+    do_dates: [...entry.do_dates].sort().join(", "),
+    lr_numbers: [...entry.lr_numbers].join(", "),
+  }));
+}
+
+async function exportUnresolvedSources(summary, rawByIndex) {
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  const summarySheet = workbook.addWorksheet("Unmapped FO-SO");
+  summarySheet.addRow(["FO/SO Number", "Reason", "Error Code", "Excel Rows", "SKUs", "Total Pack Qty", "DO Dates", "LR Numbers"]);
+  summary.forEach((entry) => summarySheet.addRow([entry.fo_or_so_number, entry.reason, entry.error_code, entry.row_count, entry.skus, entry.pack_qty, entry.do_dates, entry.lr_numbers]));
+  summarySheet.getRow(1).font = { bold: true };
+  summarySheet.columns.forEach((column) => { column.width = 22; });
+  // Same layout as the upload template: after mapping in SO Map, this sheet
+  // can be uploaded again as-is.
+  const rowsSheet = workbook.addWorksheet("Rows to re-upload");
+  rowsSheet.addRow(TEMPLATE_HEADERS);
+  summary.flatMap((entry) => entry.row_indexes).sort((left, right) => left - right).forEach((rowIndex) => {
+    const raw = rawByIndex[rowIndex] ?? {};
+    rowsSheet.addRow([raw.fo_or_so_number, raw.do_date, raw.transporter_name, raw.lr_number, raw.lr_date, raw.sku, raw.pack_qty, raw.storage_location_code, raw.tally_invoice_number, raw.tally_invoice_date, raw.inbound_number, raw.truck_number, raw.dispatch_date]);
+  });
+  rowsSheet.getRow(1).font = { bold: true };
+  rowsSheet.columns.forEach((column) => { column.width = 20; });
+  await saveWorkbook(workbook, `bulk_do_unmapped_fo_so_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 function toIsoDate(value) {
@@ -264,6 +315,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   const [submissionGroupKeys, setSubmissionGroupKeys] = useState({});
   const [submissionStarted, setSubmissionStarted] = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  const [showUnresolvedSources, setShowUnresolvedSources] = useState(false);
   // The company a preview was built for is part of that preview's identity.
   // Re-checks, saves and session persistence must keep using it even if the
   // host page comes back (e.g. after Transporter Master) on another company.
@@ -667,10 +719,11 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       (position.get(left.row_index) ?? Number.MAX_SAFE_INTEGER) - (position.get(right.row_index) ?? Number.MAX_SAFE_INTEGER)
     ));
   }, [frozenReviewOrder, reviewedRowsWithDuplicates]);
-  const unresolvedSourceRowCount = useMemo(
-    () => reviewedRowsWithDuplicates.filter((row) => !row.is_removable_duplicate && row.status === "ERROR").length,
-    [reviewedRowsWithDuplicates],
+  const unresolvedSources = useMemo(
+    () => summarizeUnresolvedSources(reviewedRowsWithDuplicates, rawByIndex),
+    [rawByIndex, reviewedRowsWithDuplicates],
   );
+  const unresolvedSourceRowCount = unresolvedSources.reduce((sum, entry) => sum + entry.row_count, 0);
 
   return (
     <DrawerBase
@@ -701,6 +754,11 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
               {validating ? "Re-checking…" : "Re-check unresolved transporters"}
             </button>
           ) : null}
+          {unresolvedSources.length ? (
+            <button type="button" onClick={() => setShowUnresolvedSources((current) => !current)} className="border border-rose-400 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">
+              {showUnresolvedSources ? "Hide" : "Show"} unmapped FO/SO ({unresolvedSources.length})
+            </button>
+          ) : null}
           {removableDuplicateRows.length ? (
             <button type="button" onClick={() => removeRows(removableDuplicateRows.map((row) => row.row_index))} className="border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">
               Remove {removableDuplicateRows.length} duplicate row(s)
@@ -712,7 +770,30 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
           <>
             {unresolvedSourceRowCount > 0 ? (
               <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
-                {unresolvedSourceRowCount} row(s) have an FO/SO problem (e.g. FO_SO_NOT_FOUND) and will not become a Delivery Order. These come from the uploaded Excel itself, not from transporter selection.
+                {unresolvedSources.length} FO/SO number(s) ({unresolvedSourceRowCount} row(s)) could not be resolved and will not become a Delivery Order. These come from the uploaded Excel itself, not from transporter selection. Use "Show unmapped FO/SO" to list and export them, map them in SO Map, then upload those rows again.
+              </div>
+            ) : null}
+            {showUnresolvedSources && unresolvedSources.length ? (
+              <div className="grid gap-2 border border-rose-200 bg-white p-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-rose-800">Unmapped / unresolved FO-SO numbers</span>
+                  <button type="button" onClick={() => void exportUnresolvedSources(unresolvedSources, rawByIndex)} className="border border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-900">Export Excel</button>
+                </div>
+                <ErpDenseGrid
+                  maxHeight="260px"
+                  columns={[
+                    { key: "fo_or_so_number", label: "FO/SO Number", width: "130px" },
+                    { key: "reason", label: "Reason", width: "380px" },
+                    { key: "row_count", label: "Excel Rows", width: "90px", align: "right" },
+                    { key: "skus", label: "SKUs", width: "220px" },
+                    { key: "pack_qty", label: "Total Pack Qty", width: "110px", align: "right" },
+                    { key: "do_dates", label: "DO Dates", width: "140px" },
+                    { key: "lr_numbers", label: "LR Numbers", width: "140px" },
+                  ]}
+                  rows={unresolvedSources}
+                  rowKey={(row) => row.fo_or_so_number}
+                  emptyMessage="No unmapped FO/SO."
+                />
               </div>
             ) : null}
             <ErpDenseGrid
