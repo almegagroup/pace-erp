@@ -26,7 +26,7 @@
 
 ## Not implemented by this first foundation
 
-- ERP-native AI test page (requires guarded frontend route and menu/ACL design)
+- A standalone ERP-wide AI conversation page (not yet built). An SA-only test button is available in the existing ERP System Health diagnostics screen.
 - Provider-neutral tools, per-user cost ledger, persisted usage audit, idempotency, module quotas, rate budget
 - Planning data access, natural language queries, forecasting, or operational writes
 
