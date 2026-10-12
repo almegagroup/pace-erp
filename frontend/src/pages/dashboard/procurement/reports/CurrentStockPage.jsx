@@ -168,6 +168,7 @@ const MACHINE_WISE_COLUMNS = [
   { key: "unrestricted_qty", label: "Unrestricted (Machine)", width: "150px", align: "right", render: (row) => formatQuantity(row.unrestricted_qty) },
   { key: "base_uom_code", label: "UOM", width: "80px", render: (row) => row.base_uom_code || "—" },
 ];
+const EMPTY_MACHINE_WISE_ROWS = [];
 
 // §138.8 — "Machine wise stock" drawer (business owner, 2026-09-22). Re-runs
 // the exact same filter criteria the main Current Stock report was last
@@ -179,17 +180,32 @@ const MACHINE_WISE_COLUMNS = [
 // Unrestricted-equivalent qty splits by machine (business owner confirmed) —
 // Reserved/QI/Blocked/Net Available have no machine dimension here.
 function MachineWiseStockDrawer({ visible, onClose, params }) {
+  // This drawer is an RM staging view: material type must not inherit a
+  // broader IN03 selection (for example RM + PM + FG) from the parent grid.
+  // Keep every other executed report filter intact, including an explicitly
+  // selected RM material, storage location, batch, and zero-stock choice.
+  const machineWiseParams = useMemo(
+    () => (params ? { ...params, material_types: "RM" } : null),
+    [params],
+  );
   const query = useQuery({
-    queryKey: ["current-stock-machine-wise", params],
-    queryFn: () => getCurrentStockMachineWise(params),
-    enabled: visible && Boolean(params),
+    queryKey: ["current-stock-machine-wise", machineWiseParams],
+    queryFn: () => getCurrentStockMachineWise(machineWiseParams),
+    enabled: visible && Boolean(machineWiseParams),
     select: (result) => (Array.isArray(result?.data) ? result.data : []),
   });
-  const rows = query.data ?? [];
+  const rows = query.data ?? EMPTY_MACHINE_WISE_ROWS;
+  const [allColumnSearch, setAllColumnSearch] = useState("");
   const [exporting, setExporting] = useState(false);
+  const filteredRows = useMemo(() => {
+    const searchTerm = allColumnSearch.trim().toLocaleLowerCase();
+    if (!searchTerm) return rows;
+    return rows.filter((row) => MACHINE_WISE_COLUMNS.some((column) =>
+      String(row?.[column.key] ?? "").toLocaleLowerCase().includes(searchTerm)));
+  }, [allColumnSearch, rows]);
 
   async function handleExport() {
-    if (rows.length === 0) return;
+    if (filteredRows.length === 0) return;
     setExporting(true);
     try {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
@@ -197,7 +213,7 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
         fileName: `current_stock_machine_wise_${new Date().toISOString().slice(0, 10)}.xlsx`,
         sheetName: "Machine Wise Stock",
         columns: MACHINE_WISE_COLUMNS,
-        rows,
+        rows: filteredRows,
         getCellValue: (row, column) =>
           column.key === "unrestricted_qty" ? Number(row?.unrestricted_qty ?? 0) : (row?.[column.key] ?? "—"),
       });
@@ -213,7 +229,7 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
       onEscape={onClose}
       side="center"
       width="min(1000px, calc(100vw - 24px))"
-      title="Machine Wise Stock"
+      title="Machine Wise RM Stock"
       actions={(
         <>
           <button
@@ -226,7 +242,7 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
           <button
             type="button"
             onClick={() => void handleExport()}
-            disabled={exporting || rows.length === 0}
+            disabled={exporting || filteredRows.length === 0}
             className="h-8 border border-sky-700 bg-sky-100 px-4 text-xs font-semibold uppercase tracking-[0.12em] text-sky-950 disabled:opacity-50"
           >
             {exporting ? "Exporting..." : "Export Excel"}
@@ -235,16 +251,37 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
       )}
     >
       <p className="mb-3 text-xs text-slate-500">
-        Same filters as the report just executed — company, material types, materials, storage locations, batch numbers.
+        RM materials only. Uses the same executed company, material, storage location, batch, and zero-stock filters.
       </p>
       {query.isLoading ? (
         <p className="py-6 text-center text-sm text-slate-500">Loading...</p>
       ) : query.error ? (
         <p className="py-6 text-center text-sm text-rose-600">{query.error instanceof Error ? query.error.message : "Failed to load machine-wise stock."}</p>
       ) : rows.length === 0 ? (
-        <p className="py-6 text-center text-sm text-slate-400">No machine-tracked stock for this filter.</p>
+        <p className="py-6 text-center text-sm text-slate-400">No RM machine-tracked stock for this filter.</p>
       ) : (
-        <ErpDenseGrid columns={MACHINE_WISE_COLUMNS} rows={rows} rowKey={(row, index) => `${row.material_id}-${row.storage_location_code}-${row.machine_label}-${index}`} virtualize />
+        <>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <label className="min-w-[260px] flex-1 text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">
+              Search all columns
+              <input
+                type="search"
+                value={allColumnSearch}
+                onChange={(event) => setAllColumnSearch(event.target.value)}
+                placeholder="Material, machine, batch, quantity..."
+                className="mt-1 h-9 w-full border border-slate-300 bg-white px-3 text-sm font-normal normal-case tracking-normal text-slate-900 outline-none focus:border-sky-600"
+              />
+            </label>
+            <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} RM rows</span>
+          </div>
+          <ErpDenseGrid
+            columns={MACHINE_WISE_COLUMNS}
+            rows={filteredRows}
+            rowKey={(row, index) => `${row.material_id}-${row.storage_location_code}-${row.machine_label}-${index}`}
+            emptyMessage="No RM machine-wise stock matches this search."
+            virtualize
+          />
+        </>
       )}
     </DrawerBase>
   );

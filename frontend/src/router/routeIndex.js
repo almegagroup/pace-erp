@@ -187,6 +187,11 @@ export function buildRouteIndex(menuSnapshot) {
     // entirely, so every click bounced straight to the dashboard (found live
     // 2026-08-25, business owner).
     ["/dashboard/production/sloc-costing-group", "/dashboard/production/sloc-costing-group/report"],
+    // PR12's MTS Pending List is a read-only companion screen rather than a
+    // separate menu/ACL row. It inherits Production PO Verify visibility;
+    // without this authorization bridge the dashboard guard resets the click
+    // back to home before React Router can render the list.
+    ["/dashboard/production/po-verify", "/dashboard/production/mts-pending-verify"],
 
     // ── SA ────────────────────────────────────────────────────────────────────
     ["/sa/users",              "/sa/users/report"],

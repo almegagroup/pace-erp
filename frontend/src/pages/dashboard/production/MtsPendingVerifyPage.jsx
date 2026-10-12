@@ -9,13 +9,14 @@
 
 import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../context/useMenu.js";
+import { popScreen } from "../../../navigation/screenStackEngine.js";
 import { listProcessOrders } from "./prodApi.js";
 
 function displayMachine(row) {
@@ -54,7 +55,6 @@ const COLUMNS = [
 ];
 
 export default function MtsPendingVerifyPage() {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState(() => searchParams.get("company_id") || "");
@@ -113,7 +113,7 @@ export default function MtsPendingVerifyPage() {
           </div>
           <button
             type="button"
-            onClick={() => navigate("/dashboard/production/po-verify")}
+            onClick={() => popScreen()}
             className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             Back to Production PO Verify
