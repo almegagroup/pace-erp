@@ -1003,6 +1003,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROD_MTS_PENDING_VERIFY: {
+    screen_code: "PROD_MTS_PENDING_VERIFY",
+    route: "/dashboard/production/mts-pending-verify",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROD_ORDER_LIST: {
     screen_code: "PROD_ORDER_LIST",
     route: "/dashboard/production/order-list",

@@ -34,7 +34,13 @@ function displayBatchRange(row) {
 }
 
 const COLUMNS = [
-  { key: "po_number", label: "Process PO", width: 145 },
+  {
+    key: "po_number",
+    label: "Process PO",
+    width: 145,
+    copyValue: (row) => row.po_number || "",
+    filterValue: (row) => row.po_number || "",
+  },
   { key: "production_date", label: "Production Date", width: 135, filterType: "date", render: (row) => row.production_date || "--" },
   { key: "shift_name", label: "Shift", width: 130, render: (row) => row.shift_name || "--" },
   { key: "machine", label: "Machine", width: 190, render: displayMachine, copyValue: displayMachine, filterValue: displayMachine },
@@ -66,7 +72,24 @@ export default function MtsPendingVerifyPage() {
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
   });
-  const rows = useMemo(() => pendingQ.data ?? [], [pendingQ.data]);
+  const rows = useMemo(() => {
+    const shiftRank = (shiftName) => {
+      const normalized = String(shiftName ?? "").trim().toUpperCase();
+      if (normalized === "NIGHT") return 2;
+      if (normalized === "DAY") return 1;
+      return 0;
+    };
+
+    return [...(pendingQ.data ?? [])].sort((left, right) => {
+      const dateOrder = String(right.production_date ?? "").localeCompare(String(left.production_date ?? ""));
+      if (dateOrder !== 0) return dateOrder;
+
+      const shiftOrder = shiftRank(right.shift_name) - shiftRank(left.shift_name);
+      if (shiftOrder !== 0) return shiftOrder;
+
+      return String(right.po_number ?? "").localeCompare(String(left.po_number ?? ""), undefined, { numeric: true });
+    });
+  }, [pendingQ.data]);
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return rows;
