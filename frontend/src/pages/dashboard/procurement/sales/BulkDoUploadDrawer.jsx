@@ -254,6 +254,11 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   const [submissionGroupKeys, setSubmissionGroupKeys] = useState({});
   const [submissionStarted, setSubmissionStarted] = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  // The company a preview was built for is part of that preview's identity.
+  // Re-checks, saves and session persistence must keep using it even if the
+  // host page comes back (e.g. after Transporter Master) on another company.
+  const [previewCompanyId, setPreviewCompanyId] = useState(() => initialDraft?.company_id || "");
+  const activeCompanyId = previewCompanyId || companyId;
   const fileInputRef = useRef(null);
   const restoredDraftRef = useRef(false);
 
@@ -273,7 +278,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   }
 
   const persistSubmission = useCallback((next = {}) => {
-    if (!companyId) return;
+    const persistCompanyId = next.companyId ?? activeCompanyId;
+    if (!persistCompanyId) return;
     try {
       const nextRows = next.rows ?? rows;
       const nextRaw = next.rawByIndex ?? rawByIndex;
@@ -281,7 +287,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       const nextGroupKeys = next.submissionGroupKeys ?? submissionGroupKeys;
       const nextSubmissionStarted = next.submissionStarted ?? submissionStarted;
       if (!nextSubmissionId || !Array.isArray(nextRows)) return;
-      window.sessionStorage.setItem(submissionStorageKey(companyId), JSON.stringify({
+      window.sessionStorage.setItem(submissionStorageKey(persistCompanyId), JSON.stringify({
+        company_id: persistCompanyId,
         submission_id: nextSubmissionId,
         // A preview UUID is local-only.  It becomes reconciliation-eligible
         // only immediately before the first save request leaves the browser.
@@ -294,26 +301,33 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       // Session persistence is a safety enhancement, not a reason to block
       // the user from completing a server-authoritative submission.
     }
-  }, [companyId, rawByIndex, rows, submissionGroupKeys, submissionId, submissionStarted]);
+  }, [activeCompanyId, rawByIndex, rows, submissionGroupKeys, submissionId, submissionStarted]);
+
+  // Transporter picks and targeted re-checks change `rows` without passing
+  // through an explicit persist call.  Keep the session copy in step so a
+  // reload/back never resurrects the pre-resolution preview.
+  useEffect(() => {
+    if (submissionId && Array.isArray(rows)) persistSubmission();
+  }, [persistSubmission, rows, submissionId]);
 
   const clearPersistedSubmission = useCallback(() => {
-    try { window.sessionStorage.removeItem(submissionStorageKey(companyId)); } catch { /* no-op */ }
-  }, [companyId]);
+    try { window.sessionStorage.removeItem(submissionStorageKey(activeCompanyId)); } catch { /* no-op */ }
+  }, [activeCompanyId]);
 
-  const requestPreview = useCallback(async (parsedRows) => {
-    const result = await previewDoBulkUpload({ company_id: companyId, rows: parsedRows });
+  const requestPreview = useCallback(async (parsedRows, previewCompany = activeCompanyId) => {
+    const result = await previewDoBulkUpload({ company_id: previewCompany, rows: parsedRows });
     return responseRows(result);
-  }, [companyId]);
+  }, [activeCompanyId]);
 
-  const runPreview = useCallback(async (parsedRows) => {
-    const previewRows = await requestPreview(parsedRows);
+  const runPreview = useCallback(async (parsedRows, previewCompany) => {
+    const previewRows = await requestPreview(parsedRows, previewCompany);
     setRows(previewRows);
     return previewRows;
   }, [requestPreview]);
 
   const reconcileSubmission = useCallback(async (activeSubmissionId, activeGroupKeys, currentRows) => {
     if (!activeSubmissionId) return { created: 0, total: 0, groups: [] };
-    const result = await getDoBulkSubmissionStatus({ company_id: companyId, submission_id: activeSubmissionId });
+    const result = await getDoBulkSubmissionStatus({ company_id: activeCompanyId, submission_id: activeSubmissionId });
     const statusGroups = Array.isArray(result?.groups) ? result.groups : [];
     const byKey = new Map(statusGroups.map((group) => [group.client_group_key, group]));
     const createdGroups = new Set(statusGroups.filter((group) => group.status === "CREATED").map((group) => group.client_group_key));
@@ -341,7 +355,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     setSaveResults(nextResults);
     persistSubmission({ rows: nextRows, submissionId: activeSubmissionId, submissionGroupKeys: activeGroupKeys });
     return { created: createdGroups.size, total: statusGroups.length, groups: statusGroups, nextRows };
-  }, [companyId, persistSubmission]);
+  }, [activeCompanyId, persistSubmission]);
 
   // Returning from Transporter Master is navigation, not another upload. Keep
   // the already-resolved preview on screen immediately. If a transporter was
@@ -355,6 +369,12 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     restoredRows.forEach((row) => { rawMap[row.row_index] = row; });
     setRawByIndex(rawMap);
     setError("");
+    // Keep the idempotency identity of this upload across the navigation.
+    if (initialDraft?.submission_id) {
+      setSubmissionId(initialDraft.submission_id);
+      setSubmissionGroupKeys(initialDraft.group_keys ?? {});
+      setSubmissionStarted(initialDraft.submission_started === true);
+    }
     const cachedPreviewRows = Array.isArray(initialDraft?.preview_rows) ? initialDraft.preview_rows : [];
     if (cachedPreviewRows.length === 0) {
       // Compatibility for a draft created before preview caching existed.
@@ -394,6 +414,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     const restoredRaw = {};
     (saved.raw_rows ?? []).forEach((row) => { restoredRaw[row.row_index] = row; });
     setRawByIndex(restoredRaw);
+    setPreviewCompanyId(saved.company_id || companyId);
     setRows(saved.preview_rows);
     setSubmissionId(saved.submission_id);
     setSubmissionGroupKeys(saved.group_keys ?? {});
@@ -431,12 +452,13 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       const rawMap = {};
       parsedRows.forEach((row) => { rawMap[row.row_index] = row; });
       setRawByIndex(rawMap);
-      const previewRows = await runPreview(parsedRows);
+      setPreviewCompanyId(companyId);
+      const previewRows = await runPreview(parsedRows, companyId);
       const nextSubmissionId = newSubmissionId();
       setSubmissionId(nextSubmissionId);
       setSubmissionGroupKeys({});
       setSubmissionStarted(false);
-      persistSubmission({ rows: previewRows, rawByIndex: rawMap, submissionId: nextSubmissionId, submissionGroupKeys: {}, submissionStarted: false });
+      persistSubmission({ companyId, rows: previewRows, rawByIndex: rawMap, submissionId: nextSubmissionId, submissionGroupKeys: {}, submissionStarted: false });
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "DO_BULK_PREVIEW_FAILED");
     } finally {
@@ -478,7 +500,10 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   function openTransporterMaster(row) {
     const rawRows = Object.values(rawByIndex).sort((left, right) => Number(left.row_index) - Number(right.row_index));
     onOpenTransporterMaster?.({
-      company_id: companyId,
+      company_id: activeCompanyId,
+      submission_id: submissionId,
+      group_keys: submissionGroupKeys,
+      submission_started: submissionStarted,
       raw_rows: rawRows,
       preview_rows: rows ?? [],
       transporter_master_revision: getTransporterMasterRevision(),
@@ -574,7 +599,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       if (payloadGroups.length === 0) { setError("No group is fully ready to save yet."); return; }
       setSubmissionStarted(true);
       persistSubmission({ submissionId: activeSubmissionId, submissionGroupKeys: nextGroupKeys, submissionStarted: true });
-      const result = await saveDoBulkUpload({ company_id: companyId, submission_id: activeSubmissionId, groups: payloadGroups });
+      const result = await saveDoBulkUpload({ company_id: activeCompanyId, submission_id: activeSubmissionId, groups: payloadGroups });
       const resultRows = responseRows(result);
       setSaveResults(resultRows);
       const createdCount = resultRows.filter((row) => row.status === "CREATED").length;

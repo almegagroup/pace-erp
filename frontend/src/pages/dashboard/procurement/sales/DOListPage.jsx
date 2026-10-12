@@ -59,11 +59,15 @@ function doStatusTone(status) {
 export default function DOListPage() {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
-  const [companyId, setCompanyId] = useState("");
+  const [restoredBulkUploadDraft] = useState(() => getActiveScreenContext()?.bulkDoUploadDraft ?? null);
+  // Returning from Transporter Master remounts this page.  The Bulk DO draft
+  // was previewed against a specific company; restoring the page on the
+  // default company instead would re-check every FO/SO against the wrong
+  // company and report them all as FO_SO_NOT_FOUND.
+  const [companyId, setCompanyId] = useState(() => restoredBulkUploadDraft?.company_id ?? "");
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [restoredBulkUploadDraft] = useState(() => getActiveScreenContext()?.bulkDoUploadDraft ?? null);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(Boolean(restoredBulkUploadDraft));
   const [editTransporterOpen, setEditTransporterOpen] = useState(false);
   const [vdcTruckDispatchOpen, setVdcTruckDispatchOpen] = useState(false);
