@@ -135,14 +135,32 @@ export async function postVdcTruckDispatchUploadHandler(req: Request, ctx: Procu
         .select("id").eq("dc_id", dcId).eq("status", "DRAFT");
       if (invoiceError || !(invoices ?? []).length) { results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_INVOICE_NOT_FOUND", message: "No draft VDC invoice was found after saving the row." }); continue; }
       let failed: JsonRecord | null = null;
+      let reused = false;
       for (const invoice of (invoices ?? []) as JsonRecord[]) {
         const internal = new Request(`http://internal/api/procurement/sales-invoices/${text(invoice.id)}/vdc-pgi-only`, { method: "POST" });
         const response = await completeVdcPgiOnlyHandler(internal, ctx);
         if (!response.ok) { failed = (await response.json().catch(() => ({}))) as JsonRecord; break; }
       }
+      // `complete_vdc_pgi_only_action` atomically changes DRAFT -> POSTED in
+      // the same transaction as P601/reservation/DO completion. A concurrent
+      // uploader can therefore lose that conditional transition even though
+      // the first request completed safely. Reconcile against the durable
+      // invoice states before reporting a failure; never re-run PGI here.
+      if (failed && text(failed.code) === "VDC_PGI_ONLY_INVOICE_NOT_DRAFT") {
+        const { data: currentInvoices, error: currentInvoiceError } = await serviceRoleClient
+          .schema("erp_procurement").from("sales_invoice")
+          .select("status").eq("dc_id", dcId);
+        const allPosted = !currentInvoiceError
+          && (currentInvoices ?? []).length > 0
+          && ((currentInvoices ?? []) as JsonRecord[]).every((currentInvoice: JsonRecord) => upper(currentInvoice.status) === "POSTED");
+        if (allPosted) {
+          failed = null;
+          reused = true;
+        }
+      }
       results.push(failed
         ? { dc_id: dcId, ok: false, code: text(failed.code) || "VDC_UPLOAD_PGI_FAILED", message: text(failed.message) || "PGI could not be posted; the row remains pending." }
-        : { dc_id: dcId, ok: true });
+        : { dc_id: dcId, ok: true, reused });
     }
     return okResponse({ results }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "VDC_UPLOAD_POST_FAILED"; return fail(req, ctx, code, 500, code); }

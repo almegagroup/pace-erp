@@ -424,6 +424,7 @@ import {
 import {
   previewDoBulkUploadHandler,
   saveDoBulkUploadHandler,
+  getDoBulkSubmissionStatusHandler,
   findDoByFoNumberHandler,
   editTransporterDetailsHandler,
 } from "../_core/procurement/do_bulk.handlers.ts";
@@ -912,6 +913,8 @@ export async function dispatchProcurementRoutes(
       return await previewDoBulkUploadHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/save":
       return await saveDoBulkUploadHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/bulk/submission-status":
+      return await getDoBulkSubmissionStatusHandler(req, ctx);
     case "GET:/api/procurement/delivery-orders-v2/bulk/posting":
       return await listBulkPostingQueueHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/post":

@@ -3523,7 +3523,8 @@ export async function submitExcelUploadBatchHandler(req: Request, ctx: Procureme
 
     const rowResults: JsonRecord[] = [];
     const hsnWriteBacks: Array<{ materialId: string; hsnCode: string }> = [];
-    const insertPayloadBySoId = new Map<string, JsonRecord[]>();
+    const preparedSubmissionLines: JsonRecord[] = [];
+    const hsnWriteBackByRowKey = new Map<string, { materialId: string; hsnCode: string }>();
     const touchedSoIds = new Set<string>();
 
     for (const row of rows) {
@@ -3578,10 +3579,30 @@ export async function submitExcelUploadBatchHandler(req: Request, ctx: Procureme
       const nextLineNumber = (maxLineNumberBySoId.get(soId) ?? 0) + 1;
       try {
         const prepared = await prepareUnifiedSoLine(lineInput, nextLineNumber - 1, materialTypes, companyStateName, resolvedShipToOrBillState);
-        insertPayloadBySoId.set(soId, [...(insertPayloadBySoId.get(soId) ?? []), { ...prepared.payload, so_id: soId }]);
-        if (prepared.hsnWriteBack) hsnWriteBacks.push(prepared.hsnWriteBack);
+        const preparedPayload = { ...prepared.payload, so_id: soId };
+        // The database wrapper owns the final line number under an SO row
+        // lock. Do not include its provisional preview number in the business
+        // identity: another valid manual line can be added between preview and
+        // submit without turning this same workbook row into a new business
+        // transaction.
+        const canonicalPayload = {
+          ...preparedPayload,
+          line_number: undefined,
+          row_key: toTrimmedString(row.row_key),
+        };
+        const digest = await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(JSON.stringify(canonicalPayload)),
+        );
+        const submissionFingerprint = Array.from(new Uint8Array(digest))
+          .map((part) => part.toString(16).padStart(2, "0")).join("");
+        preparedSubmissionLines.push({
+          ...preparedPayload,
+          row_key: toTrimmedString(row.row_key),
+          submission_fingerprint: submissionFingerprint,
+        });
+        if (prepared.hsnWriteBack && row.row_key) hsnWriteBackByRowKey.set(row.row_key, prepared.hsnWriteBack);
         maxLineNumberBySoId.set(soId, nextLineNumber);
-        touchedSoIds.add(soId);
         rowResults.push({ row_key: row.row_key, so_id: soId, skipped: false });
       } catch (lineError) {
         const code = lineError instanceof Error ? lineError.message : "SO_LINE_INVALID";
@@ -3589,21 +3610,32 @@ export async function submitExcelUploadBatchHandler(req: Request, ctx: Procureme
       }
     }
 
-    for (const [soId, payload] of insertPayloadBySoId) {
-      if (payload.length === 0) continue;
-      const { error: lineInsertError } = await serviceRoleClient
-        .schema("erp_procurement").from("sales_order_line").insert(payload);
-      if (lineInsertError) {
-        console.error("SO_EXCEL_LINE_INSERT_FAILED", { request_id: ctx.request_id, so_id: soId, error: lineInsertError });
+    if (preparedSubmissionLines.length > 0) {
+      const { data: savedRows, error: lineSaveError } = await serviceRoleClient
+        .schema("erp_procurement").rpc("save_sales_order_excel_lines_atomic", {
+          p_company_id: companyId,
+          p_actor: ctx.auth_user_id,
+          p_lines: preparedSubmissionLines,
+        });
+      if (lineSaveError || !Array.isArray(savedRows)) {
+        console.error("SO_EXCEL_LINE_INSERT_FAILED", { request_id: ctx.request_id, error: lineSaveError });
         return salesErrorResponse(req, ctx, "SO_EXCEL_LINE_INSERT_FAILED", 500, "Unable to save sales order lines.");
       }
-    }
-    await persistMissingMaterialHsns(hsnWriteBacks);
-
-    if (touchedSoIds.size > 0) {
-      const { error: flagError } = await serviceRoleClient
-        .schema("erp_procurement").from("sales_order").update({ excel_uploaded: true }).in("id", [...touchedSoIds]);
-      if (flagError) return salesErrorResponse(req, ctx, "SO_EXCEL_FLAG_UPDATE_FAILED", 500, "Lines saved, but unable to mark Excel Uploaded.");
+      const savedByRowKey = new Map<string, JsonRecord>();
+      for (const savedRow of savedRows as JsonRecord[]) savedByRowKey.set(toTrimmedString(savedRow.row_key), savedRow);
+      for (const result of rowResults) {
+        if (result.skipped) continue;
+        const saved = savedByRowKey.get(toTrimmedString(result.row_key));
+        if (!saved || toUpperTrimmedString(saved.status) === "FAILED") {
+          result.skipped = true;
+          result.reason = toTrimmedString(saved?.error_code) || "Unable to save this Excel row";
+          continue;
+        }
+        touchedSoIds.add(toTrimmedString(result.so_id));
+        const hsnWriteBack = hsnWriteBackByRowKey.get(toTrimmedString(result.row_key));
+        if (hsnWriteBack) hsnWriteBacks.push(hsnWriteBack);
+      }
+      if (hsnWriteBacks.length > 0) await persistMissingMaterialHsns(hsnWriteBacks);
     }
 
     return okResponse({ rows: rowResults, updated_so_ids: [...touchedSoIds] }, ctx.request_id, req);
