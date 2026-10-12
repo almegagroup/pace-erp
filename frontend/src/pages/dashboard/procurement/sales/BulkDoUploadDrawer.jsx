@@ -636,8 +636,29 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   }
 
   const readyGroupCount = groups.filter((group) => groupReadiness(group).length === 0).length;
-  const reviewRows = useMemo(
-    () => prioritizeUploadReviewRows(reviewedRowsWithDuplicates, bulkDoReviewPriority),
+  // Priority order is decided once per row set (upload, duplicate removal,
+  // save).  Picking a transporter must not reshuffle the grid: doing so
+  // pulled genuinely unresolved FO/SO rows from below the fold to the top,
+  // which looked as if the already-resolved rows had been wiped.
+  const reviewMembershipKey = useMemo(
+    () => reviewedRowsWithDuplicates.map((row) => row.row_index).join(","),
+    [reviewedRowsWithDuplicates],
+  );
+  const [frozenReviewOrder, setFrozenReviewOrder] = useState({ key: null, order: [] });
+  if (frozenReviewOrder.key !== reviewMembershipKey) {
+    setFrozenReviewOrder({
+      key: reviewMembershipKey,
+      order: prioritizeUploadReviewRows(reviewedRowsWithDuplicates, bulkDoReviewPriority).map((row) => row.row_index),
+    });
+  }
+  const reviewRows = useMemo(() => {
+    const position = new Map(frozenReviewOrder.order.map((rowIndex, index) => [rowIndex, index]));
+    return [...reviewedRowsWithDuplicates].sort((left, right) => (
+      (position.get(left.row_index) ?? Number.MAX_SAFE_INTEGER) - (position.get(right.row_index) ?? Number.MAX_SAFE_INTEGER)
+    ));
+  }, [frozenReviewOrder, reviewedRowsWithDuplicates]);
+  const unresolvedSourceRowCount = useMemo(
+    () => reviewedRowsWithDuplicates.filter((row) => !row.is_removable_duplicate && row.status === "ERROR").length,
     [reviewedRowsWithDuplicates],
   );
 
@@ -679,6 +700,11 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
 
         {rows ? (
           <>
+            {unresolvedSourceRowCount > 0 ? (
+              <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                {unresolvedSourceRowCount} row(s) have an FO/SO problem (e.g. FO_SO_NOT_FOUND) and will not become a Delivery Order. These come from the uploaded Excel itself, not from transporter selection.
+              </div>
+            ) : null}
             <ErpDenseGrid
               cellNavigate
               maxHeight="520px"
