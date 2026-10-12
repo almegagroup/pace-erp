@@ -27,6 +27,9 @@ export type RouteAclMeta =
 // ---------------------------------------------------------------------------
 
 const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
+  // The handler itself requires admin context plus AI_CORE_ENABLED=true.
+  // This utility does not grant AI access to business data.
+  "POST:/api/ai/smoke-test": { skipAcl: true },
 
   // Runtime Communication configuration dynamically verifies the requested
   // page's EDIT ACL in its page-local company. A static resource here would
