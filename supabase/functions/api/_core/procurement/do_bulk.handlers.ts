@@ -160,50 +160,48 @@ type RawUploadRow = {
   dispatch_date?: string;
 };
 
-// Transporter resolve — simple ILIKE similarity against transporter_master
-// (global, not company-scoped — l2_masters.handlers.ts's listTransportersHandler
-// already treats it this way). Exact case-insensitive match wins outright;
-// otherwise every substring match becomes a Choose-from-N candidate, same
-// shape as so_map_bulk.handlers.ts's Customer resolution.
-async function resolveTransporterByName(name: string): Promise<{
-  status: "MATCHED" | "AMBIGUOUS" | "NOT_FOUND";
-  transporter_id?: string;
-  candidates?: JsonRecord[];
-}> {
-  const target = toTrimmedString(name);
-  if (!target) return { status: "NOT_FOUND" };
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master").from("transporter_master")
-    .select("id, transporter_code, transporter_name")
-    .ilike("transporter_name", `%${target}%`).eq("active", true).limit(10);
-  if (error) return { status: "NOT_FOUND" };
-  const rows = (data ?? []) as JsonRecord[];
-  if (rows.length === 0) return { status: "NOT_FOUND" };
-  const exact = rows.find((row) => toUpperTrimmedString(row.transporter_name) === toUpperTrimmedString(target));
-  if (exact) return { status: "MATCHED", transporter_id: toTrimmedString(exact.id) };
-  if (rows.length === 1) return { status: "MATCHED", transporter_id: toTrimmedString(rows[0].id) };
-  return { status: "AMBIGUOUS", candidates: rows };
-}
-
-async function resolveStorageLocationByCode(code: string): Promise<JsonRecord | null> {
-  const target = toTrimmedString(code);
-  if (!target) return null;
-  const { data, error } = await serviceRoleClient
-    .schema("erp_inventory").from("storage_location_master")
-    // Storage locations are global master data in this schema (they do not
-    // carry a company_id).  Bulk DD dispatch is deliberately limited to the
-    // Finished-Goods (F*) locations from the design, not any arbitrary
-    // warehouse/shop-floor/RM location.
-    .select("id, code, name").ilike("code", target).ilike("code", "F%").eq("active", true).maybeSingle();
-  if (error) return null;
-  return (data as JsonRecord | null) ?? null;
-}
-
 async function listFinishedGoodsStorageLocations(): Promise<JsonRecord[]> {
   const { data, error } = await serviceRoleClient
     .schema("erp_inventory").from("storage_location_master")
     .select("id, code, name").ilike("code", "F%").eq("active", true).order("code");
   return error ? [] : (data ?? []) as JsonRecord[];
+}
+
+// The uploader frequently has many SKU rows for one FO and many FOs using
+// the same transporter/location.  Load the small global active transporter
+// master once (paginated so PostgREST's response cap cannot silently omit a
+// later record), rather than issuing one substring search per spreadsheet
+// row.  This is preview-only reference data; save still revalidates the
+// chosen transporter's active state at commit time.
+async function listActiveTransporters(): Promise<JsonRecord[]> {
+  const rows: JsonRecord[] = [];
+  const pageSize = 1_000;
+  for (let from = 0;; from += pageSize) {
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master").from("transporter_master")
+      .select("id, transporter_code, transporter_name")
+      .eq("active", true).order("transporter_name").range(from, from + pageSize - 1);
+    if (error) throw new Error("DO_BULK_TRANSPORTER_LOOKUP_FAILED");
+    const page = (data ?? []) as JsonRecord[];
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}
+
+function resolveTransporterFromRows(name: string, rows: JsonRecord[]): {
+  status: "MATCHED" | "AMBIGUOUS" | "NOT_FOUND";
+  transporter_id?: string;
+  candidates?: JsonRecord[];
+} {
+  const target = toTrimmedString(name);
+  if (!target) return { status: "NOT_FOUND" };
+  const normalized = toUpperTrimmedString(target);
+  const matches = rows.filter((row) => toUpperTrimmedString(row.transporter_name).includes(normalized)).slice(0, 10);
+  if (matches.length === 0) return { status: "NOT_FOUND" };
+  const exact = matches.find((row) => toUpperTrimmedString(row.transporter_name) === normalized);
+  if (exact) return { status: "MATCHED", transporter_id: toTrimmedString(exact.id) };
+  if (matches.length === 1) return { status: "MATCHED", transporter_id: toTrimmedString(matches[0].id) };
+  return { status: "AMBIGUOUS", candidates: matches };
 }
 
 // §6 point 14 — one template column takes either an FO Number (VDC/Dependent
@@ -262,119 +260,172 @@ async function resolveFoOrSo(value: string, companyId: string): Promise<{
   return { status: "NOT_FOUND" };
 }
 
-// Preview/resolve — read-only, mirrors so_map_bulk.handlers.ts's
-// previewSoMapBulkUploadHandler exactly (same style, same guarantees: never
-// writes a customer/address/allocation/DO itself).
+type BulkPreviewLookup = {
+  resolvedByIdentifier: Map<string, Awaited<ReturnType<typeof resolveFoOrSo>>>;
+  allocationsByMapGroup: Map<string, JsonRecord[]>;
+  linesBySo: Map<string, JsonRecord[]>;
+  lineById: Map<string, JsonRecord>;
+  materialById: Map<string, JsonRecord>;
+  drawnByAllocation: Map<string, number>;
+  drawnByLine: Map<string, number>;
+  storageByCode: Map<string, JsonRecord>;
+  finishedGoodsLocations: JsonRecord[];
+  transporters: JsonRecord[];
+};
+
+// Batch the immutable preview reads.  The business decision remains exactly
+// the existing one: Direct rows resolve by FO→SO Map allocation; Depot rows
+// resolve by SO line.  `is_dd_dispatch` only decides the later
+// invoice/PGI lifecycle, never which Direct allocation is valid.
+async function buildBulkPreviewLookup(rows: RawUploadRow[], companyId: string): Promise<BulkPreviewLookup> {
+  const identifiers = [...new Set(rows.map((row) => toTrimmedString(row.fo_or_so_number)).filter(Boolean))];
+  const [originalGroups, revisedGroups, soByNumberRows, finishedGoodsLocations, transporters] = await Promise.all([
+    fetchInChunks<JsonRecord>(identifiers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      .select("id, so_id, external_fo_number, revised_external_fo_number").in("external_fo_number", chunk).eq("status", "ACTIVE")),
+    fetchInChunks<JsonRecord>(identifiers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      .select("id, so_id, external_fo_number, revised_external_fo_number").in("revised_external_fo_number", chunk).eq("status", "ACTIVE")),
+    fetchInChunks<JsonRecord>(identifiers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order")
+      .select("id, so_number, company_id, dispatch_type, is_dd_dispatch").in("so_number", chunk)),
+    listFinishedGoodsStorageLocations(),
+    listActiveTransporters(),
+  ]);
+  const mapGroupByIdentifier = new Map<string, JsonRecord>();
+  for (const group of [...originalGroups, ...revisedGroups]) {
+    const keys = [toTrimmedString(group.external_fo_number), toTrimmedString(group.revised_external_fo_number)].filter(Boolean);
+    for (const key of keys) if (!mapGroupByIdentifier.has(key)) mapGroupByIdentifier.set(key, group);
+  }
+  const mappedSoIds = [...new Set([...mapGroupByIdentifier.values()].map((group) => toTrimmedString(group.so_id)).filter(Boolean))];
+  const mappedSoRows = await fetchInChunks<JsonRecord>(mappedSoIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order")
+    .select("id, so_number, company_id, dispatch_type, is_dd_dispatch").in("id", chunk));
+  const soById = new Map([...soByNumberRows, ...mappedSoRows].map((so) => [toTrimmedString(so.id), so]));
+  const soByNumber = new Map(soByNumberRows.map((so) => [toTrimmedString(so.so_number), so]));
+  const resolvedByIdentifier = new Map<string, Awaited<ReturnType<typeof resolveFoOrSo>>>();
+  for (const identifier of identifiers) {
+    const group = mapGroupByIdentifier.get(identifier);
+    const mappedSo = group ? soById.get(toTrimmedString(group.so_id)) : undefined;
+    if (mappedSo && toUpperTrimmedString(mappedSo.company_id) === toUpperTrimmedString(companyId)
+      && toUpperTrimmedString(mappedSo.dispatch_type) === "DEPENDENT_DIRECT") {
+      resolvedByIdentifier.set(identifier, { status: "VDC", so_id: toTrimmedString(mappedSo.id), so_number: toTrimmedString(mappedSo.so_number), map_group_id: toTrimmedString(group?.id), is_dd_dispatch: mappedSo.is_dd_dispatch === true });
+      continue;
+    }
+    const so = soByNumber.get(identifier);
+    if (!so || toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)) {
+      resolvedByIdentifier.set(identifier, { status: "NOT_FOUND" });
+    } else if (toUpperTrimmedString(so.dispatch_type) === "DEPENDENT_DEPOT") {
+      resolvedByIdentifier.set(identifier, { status: "DC", so_id: toTrimmedString(so.id), so_number: toTrimmedString(so.so_number), is_dd_dispatch: false });
+    } else if (toUpperTrimmedString(so.dispatch_type) === "DEPENDENT_DIRECT") {
+      resolvedByIdentifier.set(identifier, { status: "VDC_WRONG_FIELD" });
+    } else {
+      resolvedByIdentifier.set(identifier, { status: "DC_WRONG_FIELD" });
+    }
+  }
+
+  const vdcMapGroupIds = [...new Set([...resolvedByIdentifier.values()].filter((resolved) => resolved.status === "VDC").map((resolved) => toTrimmedString(resolved.map_group_id)).filter(Boolean))];
+  const dcSoIds = [...new Set([...resolvedByIdentifier.values()].filter((resolved) => resolved.status === "DC").map((resolved) => toTrimmedString(resolved.so_id)).filter(Boolean))];
+  const [allocations, dcLines] = await Promise.all([
+    fetchInChunks<JsonRecord>(vdcMapGroupIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+      .select("id, map_group_id, so_line_id, allocated_qty").in("map_group_id", chunk).eq("status", "ACTIVE")),
+    fetchInChunks<JsonRecord>(dcSoIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line")
+      .select("id, so_id, material_id, base_qty, quantity, per_pack_qty").in("so_id", chunk)),
+  ]);
+  const allocationsByMapGroup = new Map<string, JsonRecord[]>();
+  for (const allocation of allocations) {
+    const key = toTrimmedString(allocation.map_group_id);
+    allocationsByMapGroup.set(key, [...(allocationsByMapGroup.get(key) ?? []), allocation]);
+  }
+  const allocationLineIds = [...new Set(allocations.map((allocation) => toTrimmedString(allocation.so_line_id)).filter(Boolean))];
+  const allocationLines = await fetchInChunks<JsonRecord>(allocationLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line")
+    .select("id, so_id, material_id, base_qty, quantity, per_pack_qty").in("id", chunk));
+  const allLines = [...dcLines, ...allocationLines];
+  const lineById = new Map(allLines.map((line) => [toTrimmedString(line.id), line]));
+  const linesBySo = new Map<string, JsonRecord[]>();
+  for (const line of dcLines) {
+    const key = toTrimmedString(line.so_id);
+    linesBySo.set(key, [...(linesBySo.get(key) ?? []), line]);
+  }
+  const materialIds = [...new Set(allLines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+  const [materialRows, drawnByAllocation, drawnByLine] = await Promise.all([
+    fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
+      .select("id, pace_code, external_code, material_name").in("id", chunk)),
+    computeDrawnQtyByAllocation(allocations.map((allocation) => toTrimmedString(allocation.id))),
+    computeDrawnQtyByLine(allLines.map((line) => toTrimmedString(line.id))),
+  ]);
+  return {
+    resolvedByIdentifier,
+    allocationsByMapGroup,
+    linesBySo,
+    lineById,
+    materialById: new Map(materialRows.map((material) => [toTrimmedString(material.id), material])),
+    drawnByAllocation,
+    drawnByLine,
+    storageByCode: new Map(finishedGoodsLocations.map((location) => [toUpperTrimmedString(location.code), location])),
+    finishedGoodsLocations,
+    transporters,
+  };
+}
+
+// Preview/resolve is read-only.  It resolves every unique source/master key
+// once, then preserves the exact row index and candidate/error contract the
+// review drawer already uses.
 export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  const startedAt = performance.now();
   try {
     const body = await parseBody(req);
     const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
     if (!companyId) return doBulkErrorResponse(req, ctx, "DO_BULK_COMPANY_REQUIRED", 400, "company_id is required.");
-    if (!(await canMaintainDoBulkAccess(ctx, companyId, "VIEW"))) {
-      return doBulkErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Create-DO access at this company.");
-    }
+    if (!(await canMaintainDoBulkAccess(ctx, companyId, "VIEW"))) return doBulkErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Create-DO access at this company.");
     const rows = Array.isArray(body.rows) ? (body.rows as RawUploadRow[]) : [];
     if (rows.length === 0) return doBulkErrorResponse(req, ctx, "DO_BULK_ROWS_REQUIRED", 400, "At least one row is required.");
-
-    const finishedGoodsLocations = await listFinishedGoodsStorageLocations();
-
+    const lookup = await buildBulkPreviewLookup(rows, companyId);
     const results: JsonRecord[] = [];
-    // Row-by-row resolution — each row's identifier is independently looked
-    // up (not batched) because the lookup itself spans two different tables
-    // (map_group vs sales_order) and the row count on a real Bulk DO Upload
-    // sheet is small (one FO/SO + a handful of SKU lines), unlike the
-    // bulk-material/customer sweeps elsewhere that justify a prefetch round.
     for (const row of rows) {
       const identifier = toTrimmedString(row.fo_or_so_number);
       if (!identifier) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "FO_SO_NUMBER_REQUIRED" }); continue; }
-      const resolved = await resolveFoOrSo(identifier, companyId);
+      const resolved = lookup.resolvedByIdentifier.get(identifier) ?? { status: "NOT_FOUND" };
       if (resolved.status === "NOT_FOUND") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "FO_SO_NOT_FOUND" }); continue; }
       if (resolved.status === "VDC_WRONG_FIELD") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_VDC_MUST_USE_FO_NUMBER" }); continue; }
       if (resolved.status === "DC_WRONG_FIELD") { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_SO_WRONG_DISPATCH_TYPE" }); continue; }
+      const isVdc = resolved.status === "VDC";
       const ddFlag = resolved.is_dd_dispatch === true;
       const soId = toTrimmedString(resolved.so_id);
-
-      // SKU candidates — VDC resolves against this FO's own already-mapped
-      // allocations (point 15: "FO Number আগে SO Map-এ resolve/mapped হয়ে
-      // থাকতেই হবে, না থাকলে error"); DC resolves straight against the SO's
-      // own lines (no SO Map step required for Depot per point 10's
-      // correction).
-      let skuCandidates: JsonRecord[] = [];
+      const skuCandidates: JsonRecord[] = [];
       let matchedAllocationId: string | null = null;
       let matchedSoLineId: string | null = null;
       let matchedMaterialId: string | null = null;
       let lineRemaining = 0;
       let perPackQty: number | null = null;
-
-      if (ddFlag) {
-        if (!resolved.map_group_id) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_FO_NOT_MAPPED" }); continue; }
-        const { data: allocRows, error: allocError } = await serviceRoleClient
-          .schema("erp_procurement").from("sales_order_map_allocation")
-          .select("id, so_line_id, allocated_qty").eq("map_group_id", resolved.map_group_id).eq("status", "ACTIVE");
-        if (allocError) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_ALLOCATION_LOOKUP_FAILED" }); continue; }
-        const allocations = (allocRows ?? []) as JsonRecord[];
-        const soLineIds = [...new Set(allocations.map((a) => toTrimmedString(a.so_line_id)).filter(Boolean))];
-        const { data: lineRows } = soLineIds.length
-          ? await serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, material_id, per_pack_qty").in("id", soLineIds)
-          : { data: [] as JsonRecord[] };
-        const lineById = new Map(((lineRows ?? []) as JsonRecord[]).map((l) => [toTrimmedString(l.id), l]));
-        const materialIds = [...new Set(((lineRows ?? []) as JsonRecord[]).map((l) => toTrimmedString(l.material_id)).filter(Boolean))];
-        const { data: materialRows } = materialIds.length
-          ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name").in("id", materialIds)
-          : { data: [] as JsonRecord[] };
-        const materialById = new Map(((materialRows ?? []) as JsonRecord[]).map((m) => [toTrimmedString(m.id), m]));
-        const drawnByAllocation = await computeDrawnQtyByAllocation(allocations.map((a) => toTrimmedString(a.id)));
-        const skuTarget = toUpperTrimmedString(row.sku);
-        for (const alloc of allocations) {
-          const line = lineById.get(toTrimmedString(alloc.so_line_id));
-          const material = line ? materialById.get(toTrimmedString(line.material_id)) : undefined;
-          const display = material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : toTrimmedString(alloc.so_line_id);
-          skuCandidates.push({ allocation_id: alloc.id, so_line_id: alloc.so_line_id, material_id: line?.material_id, display });
-          if (material && [material.pace_code, material.external_code, material.material_name].some((f) => toUpperTrimmedString(f) === skuTarget)) {
-            matchedAllocationId = toTrimmedString(alloc.id);
-            matchedSoLineId = toTrimmedString(alloc.so_line_id);
+      if (isVdc) {
+        const mapGroupId = toTrimmedString(resolved.map_group_id);
+        if (!mapGroupId) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_FO_NOT_MAPPED" }); continue; }
+        for (const allocation of lookup.allocationsByMapGroup.get(mapGroupId) ?? []) {
+          const line = lookup.lineById.get(toTrimmedString(allocation.so_line_id));
+          const material = line ? lookup.materialById.get(toTrimmedString(line.material_id)) : undefined;
+          const display = material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : toTrimmedString(allocation.so_line_id);
+          skuCandidates.push({ allocation_id: allocation.id, so_line_id: allocation.so_line_id, material_id: line?.material_id, display });
+          if (material && [material.pace_code, material.external_code, material.material_name].some((field) => toUpperTrimmedString(field) === toUpperTrimmedString(row.sku))) {
+            matchedAllocationId = toTrimmedString(allocation.id);
+            matchedSoLineId = toTrimmedString(allocation.so_line_id);
             matchedMaterialId = toTrimmedString(line?.material_id);
             perPackQty = Number(line?.per_pack_qty) || null;
-            lineRemaining = Number(alloc.allocated_qty ?? 0) - (drawnByAllocation.get(toTrimmedString(alloc.id)) ?? 0);
+            lineRemaining = Number(allocation.allocated_qty ?? 0) - (lookup.drawnByAllocation.get(toTrimmedString(allocation.id)) ?? 0);
           }
         }
       } else {
-        const { data: lineRows, error: lineError } = await serviceRoleClient
-          .schema("erp_procurement").from("sales_order_line")
-          .select("id, material_id, base_qty, quantity, per_pack_qty").eq("so_id", soId);
-        if (lineError) { results.push({ row_index: row.row_index, status: "ERROR", error_code: "DO_BULK_SO_LINE_LOOKUP_FAILED" }); continue; }
-        const lines = (lineRows ?? []) as JsonRecord[];
-        const materialIds = [...new Set(lines.map((l) => toTrimmedString(l.material_id)).filter(Boolean))];
-        const { data: materialRows } = materialIds.length
-          ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name").in("id", materialIds)
-          : { data: [] as JsonRecord[] };
-        const materialById = new Map(((materialRows ?? []) as JsonRecord[]).map((m) => [toTrimmedString(m.id), m]));
-        const drawnByLine = await computeDrawnQtyByLine(lines.map((l) => toTrimmedString(l.id)));
-        const skuTarget = toUpperTrimmedString(row.sku);
-        for (const line of lines) {
-          const material = materialById.get(toTrimmedString(line.material_id));
+        for (const line of lookup.linesBySo.get(soId) ?? []) {
+          const material = lookup.materialById.get(toTrimmedString(line.material_id));
           const display = material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : toTrimmedString(line.id);
           skuCandidates.push({ so_line_id: line.id, material_id: line.material_id, display });
-          if (material && [material.pace_code, material.external_code, material.material_name].some((f) => toUpperTrimmedString(f) === skuTarget)) {
+          if (material && [material.pace_code, material.external_code, material.material_name].some((field) => toUpperTrimmedString(field) === toUpperTrimmedString(row.sku))) {
             matchedSoLineId = toTrimmedString(line.id);
             matchedMaterialId = toTrimmedString(line.material_id);
             perPackQty = Number(line.per_pack_qty) || null;
-            lineRemaining = Number(line.base_qty ?? line.quantity ?? 0) - (drawnByLine.get(toTrimmedString(line.id)) ?? 0);
+            lineRemaining = Number(line.base_qty ?? line.quantity ?? 0) - (lookup.drawnByLine.get(toTrimmedString(line.id)) ?? 0);
           }
         }
       }
-
-      const skuResolution = matchedSoLineId
-        ? { status: "MATCHED", so_line_id: matchedSoLineId, so_map_allocation_id: matchedAllocationId, material_id: matchedMaterialId }
-        : { status: "NOT_FOUND", candidates: skuCandidates };
-
       const packQty = Number(row.pack_qty ?? 0);
       const baseQty = perPackQty ? packQty * perPackQty : packQty;
-      const qtyStatus = matchedSoLineId && baseQty > lineRemaining + QTY_TOL ? "EXCEEDS_BALANCE" : "OK";
-
-      const transporterResolution = await resolveTransporterByName(toTrimmedString(row.transporter_name));
-      const storageLocation = await resolveStorageLocationByCode(toTrimmedString(row.storage_location_code));
-
+      const transporterResolution = resolveTransporterFromRows(toTrimmedString(row.transporter_name), lookup.transporters);
       const truckNumber = toTrimmedString(row.truck_number);
       const dispatchDate = normalizeInputDate(row.dispatch_date);
       const doDate = normalizeInputDate(row.do_date);
@@ -382,43 +433,32 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       const lrDate = normalizeInputDate(row.lr_date);
       const missingRequired: string[] = [];
       const formatErrors: string[] = [];
-      if (!doDate) missingRequired.push("do_date");
-      else if (!isIsoDate(doDate)) formatErrors.push("DO Date is invalid");
+      if (!doDate) missingRequired.push("do_date"); else if (!isIsoDate(doDate)) formatErrors.push("DO Date is invalid");
       if (!lrNumber) missingRequired.push("lr_number");
-      if (!lrDate) missingRequired.push("lr_date");
-      else if (!isIsoDate(lrDate)) formatErrors.push("LR Date is invalid");
+      if (!lrDate) missingRequired.push("lr_date"); else if (!isIsoDate(lrDate)) formatErrors.push("LR Date is invalid");
       if (transporterResolution.status === "NOT_FOUND") missingRequired.push("transporter");
       if (!Number.isFinite(packQty) || packQty <= 0) formatErrors.push("Pack Qty must be positive");
       if (normalizeInputDate(row.tally_invoice_date) && !isIsoDate(normalizeInputDate(row.tally_invoice_date))) formatErrors.push("Tally Invoice Date is invalid");
       if (dispatchDate && !isIsoDate(dispatchDate)) formatErrors.push("Dispatch Date is invalid");
-      // §6 point 14/15 — DC row: Truck Number + Dispatch Date mandatory at
-      // upload time (DO never created without them); VDC row: optional
-      // (filled later by the Truck+Dispatch Date Upload page, §6 point 19).
       if (!ddFlag) {
         if (!truckNumber) missingRequired.push("truck_number");
         if (!dispatchDate) missingRequired.push("dispatch_date");
       }
-
       results.push({
-        row_index: row.row_index,
-        status: "RESOLVED",
-        dd_flag: ddFlag,
-        so_id: soId,
-        so_number: resolved.so_number,
-        fo_or_so_number: identifier,
-        map_group_id: resolved.map_group_id ?? null,
-        sku_resolution: skuResolution,
-        qty_status: qtyStatus,
+        row_index: row.row_index, status: "RESOLVED", dd_flag: ddFlag, so_id: soId, so_number: resolved.so_number,
+        fo_or_so_number: identifier, map_group_id: resolved.map_group_id ?? null,
+        sku_resolution: matchedSoLineId ? { status: "MATCHED", so_line_id: matchedSoLineId, so_map_allocation_id: matchedAllocationId, material_id: matchedMaterialId } : { status: "NOT_FOUND", candidates: skuCandidates },
+        qty_status: matchedSoLineId && baseQty > lineRemaining + QTY_TOL ? "EXCEEDS_BALANCE" : "OK",
         base_qty: matchedSoLineId ? baseQty : null,
         transporter_resolution: transporterResolution,
-        storage_location: storageLocation,
-        storage_location_candidates: finishedGoodsLocations,
-        missing_required_fields: missingRequired,
-        format_errors: formatErrors,
+        storage_location: lookup.storageByCode.get(toUpperTrimmedString(row.storage_location_code)) ?? null,
+        storage_location_candidates: lookup.finishedGoodsLocations,
+        missing_required_fields: missingRequired, format_errors: formatErrors,
       });
     }
-
-    return okResponse({ data: results }, ctx.request_id, req);
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    console.info("DO_BULK_PREVIEW_TIMING", { request_id: ctx.request_id, row_count: rows.length, unique_source_count: lookup.resolvedByIdentifier.size, elapsed_ms: elapsedMs });
+    return okResponse({ data: results, metrics: { row_count: rows.length, unique_source_count: lookup.resolvedByIdentifier.size, elapsed_ms: elapsedMs } }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_BULK_PREVIEW_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;
@@ -569,6 +609,7 @@ async function ensureDepotAllocation(req: Request, ctx: ProcurementHandlerContex
 // synthetic-Request pattern), then a single additive follow-up UPDATE for
 // the columns that handler's own RPC payload has no slot for at all.
 export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  const startedAt = performance.now();
   try {
     const body = await parseBody(req);
     const companyId = await getCompanyScope(ctx, toTrimmedString(body.company_id));
@@ -587,9 +628,12 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
     }
 
     const results: JsonRecord[] = [];
+    const groupDurationsMs: number[] = [];
     for (const group of groups) {
-      const fingerprint = await fingerprintBulkGroup(group);
+      const groupStartedAt = performance.now();
+      let fingerprint = "";
       try {
+        fingerprint = await fingerprintBulkGroup(group);
         const doDate = normalizeInputDate(group.do_date);
         const lrDate = normalizeInputDate(group.lr_date);
         const dispatchDate = normalizeInputDate(group.dispatch_date);
@@ -730,6 +774,8 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
           continue;
         }
         results.push({ submission_group_key: group.submission_group_key, fo_or_so_number: group.fo_or_so_number, status: "ERROR", error_code: code });
+      } finally {
+        groupDurationsMs.push(Math.round(performance.now() - groupStartedAt));
       }
     }
 
@@ -744,7 +790,20 @@ export async function saveDoBulkUploadHandler(req: Request, ctx: ProcurementHand
       await serviceRoleClient.schema("erp_procurement").from("bulk_do_submission")
         .update({ status, updated_at: new Date().toISOString() }).eq("id", submissionId).eq("company_id", companyId).eq("submitted_by", ctx.auth_user_id);
     }
-    return okResponse({ submission_id: submissionId, data: results }, ctx.request_id, req);
+    const sortedDurations = [...groupDurationsMs].sort((left, right) => left - right);
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    const averageGroupMs = sortedDurations.length === 0 ? 0 : Math.round(sortedDurations.reduce((sum, duration) => sum + duration, 0) / sortedDurations.length);
+    const p95GroupMs = sortedDurations.length === 0 ? 0 : sortedDurations[Math.min(sortedDurations.length - 1, Math.ceil(sortedDurations.length * 0.95) - 1)];
+    console.info("DO_BULK_SAVE_TIMING", {
+      request_id: ctx.request_id,
+      group_count: groups.length,
+      created_count: results.filter((result) => result.status === "CREATED").length,
+      failed_count: results.filter((result) => result.status === "ERROR").length,
+      elapsed_ms: elapsedMs,
+      average_group_ms: averageGroupMs,
+      p95_group_ms: p95GroupMs,
+    });
+    return okResponse({ submission_id: submissionId, data: results, metrics: { group_count: groups.length, elapsed_ms: elapsedMs, average_group_ms: averageGroupMs, p95_group_ms: p95GroupMs } }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_BULK_SAVE_FAILED";
     const status = code === "COMPANY_SCOPE_VIOLATION" ? 403 : code.includes("REQUIRED") ? 400 : 500;

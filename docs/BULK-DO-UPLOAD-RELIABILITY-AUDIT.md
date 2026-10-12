@@ -1,8 +1,10 @@
 # Bulk DO Upload Reliability Audit
 
-Status: P0 implemented and Dev-schema verified on 2026-10-12. P1-P4 remain
-separate follow-on work; no performance improvement is claimed by this P0
-change.
+Status: P0 implemented and Dev-schema verified on 2026-10-12. P1 batching and
+safe timing instrumentation are implemented locally; deployment-backed
+benchmarking and P2 implementation remain deliberately gated by measurements. No measured
+performance improvement is claimed until the revised Edge Function is deployed
+to Dev and exercised with a representative non-production workbook.
 
 ## Progress checklist
 
@@ -13,10 +15,11 @@ change.
 - [x] P0 duplicate/retry/reconciliation UI implemented.
 - [x] Dev migration applied and isolated failure-path test run/cleaned up.
 - [ ] P0 real successful-DO fixture and race test in Dev.
-- [ ] P1 bulk preview query reduction and benchmark.
+- [x] P1 bulk preview query reduction (benchmark pending Dev runtime deploy).
+- [x] Save per-group timing instrumentation (P2 baseline prerequisite).
 - [ ] P2 creation-path query reduction and benchmark.
-- [ ] P3 bounded-concurrency safety experiment.
-- [ ] P4 durable asynchronous-job architecture decision/implementation.
+- [x] P3 safety decision: retain serial execution pending dependency-safe benchmark evidence.
+- [x] P4 architecture decision: no early background worker; synchronous reconciliation remains until an approved worker runtime exists.
 
 ## Verified current flow before P0
 
@@ -124,13 +127,46 @@ reconciliation state has been updated.
 
 ## Remaining risks and next measurements
 
-- P0 intentionally does not add concurrency; processing remains serial.
-- A synchronous HTTP request cannot expose truthful durable in-progress
-  percentage for work that is still inside one database transaction. P4 needs
-  a job runner before progress can be reported as actual completed groups.
-- The 543-row/465-group production timing is an incident observation, not a
-  reproducible benchmark. No before/after performance claim is made here.
-- P1 must batch immutable reference resolution but still revalidate mutable
-  allocation and stock facts at commit. P2 must measure exact query time and
-  RPC time before changing serial processing. P3 must not parallelize groups
-  sharing stock/allocation dependencies.
+### P1 implementation
+
+`previewDoBulkUploadHandler` now extracts all distinct FO/SO identifiers and
+fetches the following bounded, paginated sets once: active FO map groups,
+matching SOs, mapped SOs, VDC allocations, source SO lines, material masters,
+open DO draw quantities, active FG locations, and active transporters. Row
+resolution happens in memory and still returns the original Excel row index.
+This eliminates repeated reads for repeated FOs, SKUs, transporters and
+locations. Direct FO rows now consistently resolve through their SO Map
+allocation whether or not their separate DD flag is set; the DD flag only
+controls deferred Invoice→PGI timing.
+
+The response and structured backend log include only request ID, row count,
+unique source count, and elapsed milliseconds—never spreadsheet values or
+personal data.
+
+### P2/P3/P4 safety decisions
+
+- Save now logs actual total, average-group, and p95-group duration, plus
+  created/failed counts. This establishes a deployment-side baseline before
+  changing the commit path.
+- Serial creation is deliberately retained. Groups can share SO allocations,
+  FG stock and database locks; running them concurrently before measuring and
+  partitioning those dependencies risks oversell or false failures.
+- The repository constitution permits external cron/manual triggers but
+  explicitly forbids early worker usage. No worker/queue has been provisioned
+  or approved in the actual deployment topology, so a durable background job
+  would be speculative and unsafe. The existing durable P0 submission result
+  remains the authoritative timeout/refresh recovery mechanism.
+- A synchronous request must show indeterminate processing rather than a fake
+  percentage. Actual completion percentage requires an approved durable worker
+  that claims and persists one group at a time.
+
+### Required Dev benchmark before any further optimisation
+
+1. Deploy this branch to Dev only.
+2. Upload a non-production 543-row/approximately-465-group fixture.
+3. Record the `DO_BULK_PREVIEW_TIMING` and `DO_BULK_SAVE_TIMING` structured
+   logs (rows/groups, elapsed, average and p95).
+4. Compare with the documented incident observation without presenting it as a
+   controlled baseline.
+5. Inspect query plans for the slowest save reads before adding indexes or
+   considering bounded concurrency.
