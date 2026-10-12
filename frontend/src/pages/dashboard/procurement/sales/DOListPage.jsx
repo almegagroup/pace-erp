@@ -228,7 +228,7 @@ export default function DOListPage() {
         onClose={closeBulkUpload}
         onDraftRestored={() => updateActiveScreenContext({ bulkDoUploadDraft: null })}
         onOpenTransporterMaster={openTransporterMasterForBulkUpload}
-        onSaved={() => void doQuery.refetch()}
+        onSaved={() => doQuery.refetch()}
       />
     ) : null}
     {editTransporterOpen ? (
