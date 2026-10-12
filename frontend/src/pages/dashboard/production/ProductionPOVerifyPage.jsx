@@ -19,6 +19,8 @@ import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import { MASTER_PICKER_FETCH_LIMIT, useMaterialOptionsQuery, useStorageLocationOptionsQuery } from "../../../hooks/queries/useOmMasterQueries.js";
 import { useMenu } from "../../../context/useMenu.js";
 import { openActionConfirm } from "../../../store/actionConfirm.js";
+import { openScreen } from "../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../navigation/screens/projects/operationModule/operationScreens.js";
 import ModalBase from "../../../components/layer/ModalBase.jsx";
 import { availabilityPreviewProcessOrder, correctProcessOrder, getProcessOrder, listProcessOrders, verifyProcessOrder } from "./prodApi.js";
 import { formatPreciseNumber, formatSum, PRODUCTION_DECIMAL_STEP } from "./productionPrecision.js";
@@ -809,7 +811,10 @@ export default function ProductionPOVerifyPage() {
             <button
               type="button"
               disabled={!effectiveCompanyId}
-              onClick={() => navigate(`/dashboard/production/mts-pending-verify?company_id=${encodeURIComponent(effectiveCompanyId)}`)}
+              onClick={() => {
+                openScreen(OPERATION_SCREENS.PROD_MTS_PENDING_VERIFY.screen_code);
+                navigate(`/dashboard/production/mts-pending-verify?company_id=${encodeURIComponent(effectiveCompanyId)}`);
+              }}
               className="relative rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {mtsPendingVerifyCount > 0 ? (

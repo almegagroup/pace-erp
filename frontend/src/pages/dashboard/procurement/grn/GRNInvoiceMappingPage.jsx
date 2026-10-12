@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -71,6 +71,8 @@ export default function GRNInvoiceMappingPage() {
   const [shipToCompanyId, setShipToCompanyId] = useState("");
   const [mapToExisting, setMapToExisting] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [checkingDuplicateInvoice, setCheckingDuplicateInvoice] = useState(false);
+  const [existingInvoiceMatch, setExistingInvoiceMatch] = useState(null);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
@@ -103,6 +105,9 @@ export default function GRNInvoiceMappingPage() {
   // the search box and a selected CRCP row is no longer visible.
   const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
   const selectedTotalQty = selectedRows.reduce((sum, row) => sum + Number(row.received_qty ?? 0), 0);
+  const typedInvoiceQty = Number(invoiceQty);
+  const hasValidInvoiceQty = invoiceQty.trim() !== "" && Number.isFinite(typedInvoiceQty) && typedInvoiceQty > 0;
+  const selectedQtyExceedsInvoiceQty = hasValidInvoiceQty && selectedTotalQty - typedInvoiceQty > 0.0001;
   const selectedNeedsShipTo = selectedRows.some((row) => row.requires_ship_to);
   const selectedShipToOptions = useMemo(() => {
     const byId = new Map();
@@ -110,6 +115,44 @@ export default function GRNInvoiceMappingPage() {
     return [...byId.values()];
   }, [selectedRows]);
   const allVisibleSelected = filteredRows.length > 0 && filteredRows.every((row) => selectedIds.includes(row.id));
+
+  // One invoice can correctly be shared by many GRNs, so this is deliberately
+  // a warning rather than a block. Run after a short pause while typing so a
+  // user notices an existing invoice before mapping it as a new one.
+  useEffect(() => {
+    const candidateInvoiceNumber = invoiceNumber.trim();
+    setExistingInvoiceMatch(null);
+    if (!candidateInvoiceNumber || !effectiveCompanyId) {
+      setCheckingDuplicateInvoice(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setCheckingDuplicateInvoice(true);
+      void checkExistingGrnInvoice(effectiveCompanyId, candidateInvoiceNumber)
+        .then((existing) => {
+          if (!cancelled) setExistingInvoiceMatch(existing);
+        })
+        .catch((err) => {
+          // A 404 simply means this is a new invoice number. Other errors are
+          // not allowed to prevent a mapping; the regular Save response stays
+          // authoritative for the actual action.
+          const code = err instanceof Error ? err.message : "";
+          if (!cancelled && code !== "GRN_MAPPING_INVOICE_NOT_FOUND") {
+            setExistingInvoiceMatch(null);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setCheckingDuplicateInvoice(false);
+        });
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [effectiveCompanyId, invoiceNumber]);
 
   function toggleRow(id) {
     setSelectedIds((current) => (current.includes(id) ? current.filter((x) => x !== id) : [...current, id]));
@@ -152,7 +195,11 @@ export default function GRNInvoiceMappingPage() {
     setActionError("");
     setActionNotice("");
     if (selectedIds.length === 0) { setActionError("Select at least one GRN to map."); return; }
-    if (!invoiceNumber.trim() || !invoiceDate || !invoiceRate || String(gstPct).trim() === "") { setActionError("Invoice Number, Invoice Date, Rate, and GST % are all required."); return; }
+    if (!invoiceNumber.trim() || !invoiceDate || !hasValidInvoiceQty || !invoiceRate || String(gstPct).trim() === "") { setActionError("Invoice Number, Date, Quantity, Rate, and GST % are all required."); return; }
+    if (selectedQtyExceedsInvoiceQty) {
+      setActionError(`Selected GRN quantity (${selectedTotalQty.toFixed(4)}) cannot exceed Invoice Quantity (${typedInvoiceQty.toFixed(4)}).`);
+      return;
+    }
     if (selectedNeedsShipTo && !shipToCompanyId) { setActionError("Ship To company is required for the selected CRCP invoice GRN(s)."); return; }
     setSaving(true);
     try {
@@ -160,6 +207,7 @@ export default function GRNInvoiceMappingPage() {
         grn_ids: selectedIds,
         invoice_number: invoiceNumber.trim(),
         invoice_date: invoiceDate,
+        invoice_qty: typedInvoiceQty,
         invoice_rate: Number(invoiceRate),
         gst_pct: Number(gstPct),
         ship_to_company_id: shipToCompanyId || null,
@@ -301,7 +349,10 @@ export default function GRNInvoiceMappingPage() {
                 <input
                   type="text"
                   value={invoiceNumber}
-                  onChange={(e) => setInvoiceNumber(e.target.value)}
+                  onChange={(e) => {
+                    setInvoiceNumber(e.target.value);
+                    setExistingInvoiceMatch(null);
+                  }}
                   className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
                 />
                 {mapToExisting && (
@@ -314,6 +365,13 @@ export default function GRNInvoiceMappingPage() {
                   </button>
                 )}
               </div>
+              {checkingDuplicateInvoice && !mapToExisting ? (
+                <p className="mt-1 text-xs text-slate-500">Checking whether this invoice is already mapped…</p>
+              ) : existingInvoiceMatch && !mapToExisting ? (
+                <p role="status" className="mt-1 border-l-2 border-amber-500 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                  Warning: this invoice number is already mapped for this company. You may still map additional GRNs to it; use “Map to existing Invoice” and Check to reuse its commercial details.
+                </p>
+              ) : null}
             </ErpDenseFormRow>
             <ErpDenseFormRow label={<>Invoice Date <span className="text-red-500">*</span></>}>
               <input
@@ -324,7 +382,7 @@ export default function GRNInvoiceMappingPage() {
                 className={`h-9 w-full border px-3 text-sm outline-none ${mapToExisting ? "border-slate-200 bg-slate-100 text-slate-600" : "border-slate-300 bg-white focus:border-sky-500"}`}
               />
             </ErpDenseFormRow>
-            <ErpDenseFormRow label="Invoice Quantity (for cross-check)">
+            <ErpDenseFormRow label={<>Invoice Quantity <span className="text-red-500">*</span></>}>
               <input
                 type="number"
                 min="0"
@@ -332,7 +390,7 @@ export default function GRNInvoiceMappingPage() {
                 placeholder="Qty as per invoice"
                 value={invoiceQty}
                 onChange={(e) => setInvoiceQty(e.target.value)}
-                className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                className={`h-9 w-full border px-3 text-sm outline-none ${selectedQtyExceedsInvoiceQty ? "border-rose-500 bg-rose-50 text-rose-950 focus:border-rose-600" : "border-slate-300 bg-white focus:border-sky-500"}`}
               />
             </ErpDenseFormRow>
             <ErpDenseFormRow label={<>Rate <span className="text-red-500">*</span></>}>
@@ -369,10 +427,14 @@ export default function GRNInvoiceMappingPage() {
               </ErpDenseFormRow>
             )}
           </div>
-          {invoiceQty && (
-            <p className={`mt-2 text-xs ${Math.abs(Number(invoiceQty) - selectedTotalQty) < 0.0001 ? "text-emerald-700" : "text-amber-700"}`}>
-              Selected rows total: <strong>{selectedTotalQty.toFixed(4)}</strong> vs. typed Invoice Quantity: <strong>{Number(invoiceQty).toFixed(4)}</strong>
-              {Math.abs(Number(invoiceQty) - selectedTotalQty) < 0.0001 ? " — match." : " — mismatch, double-check selection."}
+          {hasValidInvoiceQty && (
+            <p className={`mt-2 border-l-2 px-2 py-1 text-xs ${selectedQtyExceedsInvoiceQty ? "border-rose-600 bg-rose-50 text-rose-900" : Math.abs(typedInvoiceQty - selectedTotalQty) < 0.0001 ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-amber-500 bg-amber-50 text-amber-900"}`}>
+              Selected GRN total: <strong>{selectedTotalQty.toFixed(4)}</strong> vs. Invoice Quantity: <strong>{typedInvoiceQty.toFixed(4)}</strong>
+              {selectedQtyExceedsInvoiceQty
+                ? " — cannot map: selected GRN quantity is greater than the invoice quantity."
+                : Math.abs(typedInvoiceQty - selectedTotalQty) < 0.0001
+                  ? " — match."
+                  : " — invoice quantity is higher; verify that the remaining quantity belongs to another GRN."}
             </p>
           )}
         </ErpSectionCard>

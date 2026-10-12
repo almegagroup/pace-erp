@@ -2032,17 +2032,31 @@ export async function mapGrnInvoiceHandler(
     const grnIds = Array.isArray(body.grn_ids) ? body.grn_ids.map((id) => toTrimmedString(id)).filter(Boolean) : [];
     const invoiceNumber = toTrimmedString(body.invoice_number);
     const invoiceDate = toTrimmedString(body.invoice_date);
+    const invoiceQty = parseNullableNumber(body.invoice_qty);
     const invoiceRate = parseNullableNumber(body.invoice_rate);
     const gstPct = parseNullableNumber(body.gst_pct);
     const shipToCompanyId = toTrimmedString(body.ship_to_company_id);
-    if (grnIds.length === 0 || !invoiceNumber || !invoiceDate || invoiceRate === null || gstPct === null) {
-      return procurementErrorResponse(req, ctx, "GRN_MAPPING_MAP_INVALID", 400, "grn_ids, invoice number/date/rate, and GST % are all required.");
+    if (grnIds.length === 0 || !invoiceNumber || !invoiceDate || invoiceQty === null || invoiceQty <= 0 || invoiceRate === null || gstPct === null) {
+      return procurementErrorResponse(req, ctx, "GRN_MAPPING_MAP_INVALID", 400, "grn_ids, invoice number/date/quantity/rate, and GST % are all required.");
     }
 
     const grns = await fetchInChunks<JsonRecord>(grnIds, (idChunk) =>
       serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("*").in("id", idChunk));
     if (grns.length !== grnIds.length) {
       return procurementErrorResponse(req, ctx, "GRN_MAPPING_GRN_NOT_FOUND", 404, "One or more selected GRNs were not found.");
+    }
+    const selectedGrnQty = grns.reduce((total, grn) => total + Number(grn.received_qty ?? 0), 0);
+    // This is a hard business gate, not merely the UI cross-check: callers
+    // cannot map more received GRN quantity than the vendor invoice covers.
+    // Keep the same small precision tolerance used by other quantity checks.
+    if (selectedGrnQty - invoiceQty > 0.0001) {
+      return procurementErrorResponse(
+        req,
+        ctx,
+        "GRN_MAPPING_QUANTITY_EXCEEDS_INVOICE",
+        400,
+        `Selected GRN quantity (${selectedGrnQty.toFixed(4)}) cannot exceed Invoice Quantity (${invoiceQty.toFixed(4)}).`,
+      );
     }
     const shipToByGrnId = new Map<string, string | null>();
     for (const grn of grns) {
