@@ -3,7 +3,7 @@
 Status: P0 implemented and Dev-schema verified on 2026-10-12. P1 batching and
 safe timing instrumentation are implemented locally; deployment-backed
 benchmarking and P2 implementation remain deliberately gated by measurements. No measured
-performance improvement is claimed until the revised Edge Function is deployed
+performance improvement is claimed until the revised API service is deployed
 to Dev and exercised with a representative non-production workbook.
 
 ## Progress checklist
@@ -192,6 +192,21 @@ personal data.
 - A synchronous request must show indeterminate processing rather than a fake
   percentage. Actual completion percentage requires an approved durable worker
   that claims and persists one group at a time.
+
+### Deployment boundary verified on 2026-10-12
+
+The API is a Render Node service, not a deployable Supabase Edge Function in
+this repository. Render's `pace-erp-api-dev` service follows only the `dev`
+branch; the production `pace-erp` service follows only `main`. Pull-request
+previews are disabled. Consequently, this dedicated reliability branch cannot
+be exercised against the Dev API until an approved merge to `dev` occurs. The
+database migrations were applied only to the linked Dev Supabase project; no
+Production schema or business data was changed. A search of the available
+12-Oct Render logs found no existing `DO_BULK_SAVE_TIMING` event, so the
+17-minute incident remains the only verified save-duration baseline. It would
+be unsafe to claim a measured improvement, enable parallel creation, or
+introduce a background worker before the Dev API is running this code and a
+non-production representative workbook has been run.
 
 ### Other upload flows: current position
 
