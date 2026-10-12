@@ -74,6 +74,7 @@ function summarizeUnresolvedSources(reviewRows, rawByIndex) {
   return [...bySource.values()].map((entry) => ({
     ...entry,
     row_count: entry.row_indexes.length,
+    excel_rows: entry.row_indexes.map((rowIndex) => excelRowLabel(rawByIndex, rowIndex)).join(", "),
     skus: [...entry.skus].join(", "),
     do_dates: [...entry.do_dates].sort().join(", "),
     lr_numbers: [...entry.lr_numbers].join(", "),
@@ -84,8 +85,8 @@ async function exportUnresolvedSources(summary, rawByIndex) {
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   const summarySheet = workbook.addWorksheet("Unmapped FO-SO");
-  summarySheet.addRow(["FO/SO Number", "Reason", "Error Code", "Excel Rows", "SKUs", "Total Pack Qty", "DO Dates", "LR Numbers"]);
-  summary.forEach((entry) => summarySheet.addRow([entry.fo_or_so_number, entry.reason, entry.error_code, entry.row_count, entry.skus, entry.pack_qty, entry.do_dates, entry.lr_numbers]));
+  summarySheet.addRow(["FO/SO Number", "Reason", "Error Code", "Row Count", "Excel Row Numbers", "SKUs", "Total Pack Qty", "DO Dates", "LR Numbers"]);
+  summary.forEach((entry) => summarySheet.addRow([entry.fo_or_so_number, entry.reason, entry.error_code, entry.row_count, entry.excel_rows, entry.skus, entry.pack_qty, entry.do_dates, entry.lr_numbers]));
   summarySheet.getRow(1).font = { bold: true };
   summarySheet.columns.forEach((column) => { column.width = 22; });
   // Same layout as the upload template: after mapping in SO Map, this sheet
@@ -197,6 +198,50 @@ const BULK_DO_SOURCE_ERROR_TEXT = {
   DO_BULK_FO_NOT_MAPPED: "FO has no SO Map allocation yet",
 };
 
+// One primary issue per row, in the order a user has to fix them.  The review
+// opens on "Needs action" so the rows that block a DO are in front of the
+// user instead of hidden among hundreds of ready rows.
+const BULK_DO_ISSUE_FILTERS = [
+  { key: "NEEDS_ACTION", label: "Needs action" },
+  { key: "SOURCE", label: "FO/SO not mapped" },
+  { key: "TRANSPORTER", label: "Transporter" },
+  { key: "SKU", label: "SKU" },
+  { key: "LOCATION", label: "Storage location" },
+  { key: "QTY", label: "Qty exceeds balance" },
+  { key: "FIELDS", label: "Missing / invalid fields" },
+  { key: "DUPLICATE", label: "Duplicates" },
+  { key: "READY", label: "Ready" },
+  { key: "ALL", label: "All rows" },
+];
+
+function bulkDoRowIssue(row) {
+  if (row.review_duplicate_kind) return "DUPLICATE";
+  if (row.status !== "RESOLVED") return "SOURCE";
+  if (row.transporter_resolution?.status !== "MATCHED") return "TRANSPORTER";
+  if (row.sku_resolution?.status !== "MATCHED") return "SKU";
+  if (!row.storage_location?.id) return "LOCATION";
+  if (row.qty_status === "EXCEEDS_BALANCE") return "QTY";
+  if ((row.missing_required_fields ?? []).length > 0 || (row.format_errors ?? []).length > 0) return "FIELDS";
+  return "READY";
+}
+
+function bulkDoIssueText(row) {
+  switch (bulkDoRowIssue(row)) {
+    case "DUPLICATE": return row.review_duplicate_kind === "ALREADY_CREATED" ? "Already created as DO — will be skipped" : "Repeated line in Excel — will be skipped";
+    case "SOURCE": return BULK_DO_SOURCE_ERROR_TEXT[row.error_code] ?? row.error_code;
+    case "TRANSPORTER": return row.transporter_resolution?.status === "AMBIGUOUS" ? "Choose the transporter" : "Transporter not in master";
+    case "SKU": return "SKU not on this FO/SO — choose item";
+    case "LOCATION": return "Choose storage location";
+    case "QTY": return "Pack qty exceeds remaining balance";
+    case "FIELDS": return `Fix: ${[...(row.missing_required_fields ?? []), ...(row.format_errors ?? [])].join(", ")}`;
+    default: return "Ready";
+  }
+}
+
+function excelRowLabel(rawByIndex, rowIndex) {
+  return rawByIndex[rowIndex]?.excel_row ?? rowIndex;
+}
+
 function bulkDoReviewPriority(row) {
   // Historical/excel duplicates are informational and removable. They belong
   // below live work, while unresolved transporters must be immediately visible.
@@ -284,6 +329,9 @@ async function parseUploadedWorkbook(file) {
     rowIndexSeq += 1;
     rows.push({
       row_index: rowIndexSeq,
+      // The physical Excel row number, so the review grid can point the user
+      // straight to the line to fix in their own sheet.
+      excel_row: rowNumber,
       fo_or_so_number: foOrSoNumber,
       do_date: toIsoDate(cell(2)),
       transporter_name: String(cell(3) ?? "").trim(),
@@ -315,7 +363,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
   const [submissionGroupKeys, setSubmissionGroupKeys] = useState({});
   const [submissionStarted, setSubmissionStarted] = useState(false);
   const [reconciling, setReconciling] = useState(false);
-  const [showUnresolvedSources, setShowUnresolvedSources] = useState(false);
+  const [issueFilter, setIssueFilter] = useState(null);
+  const [showReadyGroups, setShowReadyGroups] = useState(false);
   // The company a preview was built for is part of that preview's identity.
   // Re-checks, saves and session persistence must keep using it even if the
   // host page comes back (e.g. after Transporter Master) on another company.
@@ -723,7 +772,24 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     () => summarizeUnresolvedSources(reviewedRowsWithDuplicates, rawByIndex),
     [rawByIndex, reviewedRowsWithDuplicates],
   );
-  const unresolvedSourceRowCount = unresolvedSources.reduce((sum, entry) => sum + entry.row_count, 0);
+  const issueCounts = useMemo(() => {
+    const counts = Object.fromEntries(BULK_DO_ISSUE_FILTERS.map((filter) => [filter.key, 0]));
+    for (const row of reviewRows) {
+      const issue = bulkDoRowIssue(row);
+      counts[issue] += 1;
+      counts.ALL += 1;
+      if (issue !== "READY" && issue !== "DUPLICATE") counts.NEEDS_ACTION += 1;
+    }
+    return counts;
+  }, [reviewRows]);
+  // Until the user picks a view, open on the rows that need work.
+  const activeIssueFilter = issueFilter ?? (issueCounts.NEEDS_ACTION > 0 ? "NEEDS_ACTION" : "ALL");
+  const visibleReviewRows = useMemo(() => reviewRows.filter((row) => {
+    if (activeIssueFilter === "ALL") return true;
+    const issue = bulkDoRowIssue(row);
+    if (activeIssueFilter === "NEEDS_ACTION") return issue !== "READY" && issue !== "DUPLICATE";
+    return issue === activeIssueFilter;
+  }), [activeIssueFilter, reviewRows]);
 
   return (
     <DrawerBase
@@ -754,11 +820,6 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
               {validating ? "Re-checking…" : "Re-check unresolved transporters"}
             </button>
           ) : null}
-          {unresolvedSources.length ? (
-            <button type="button" onClick={() => setShowUnresolvedSources((current) => !current)} className="border border-rose-400 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">
-              {showUnresolvedSources ? "Hide" : "Show"} unmapped FO/SO ({unresolvedSources.length})
-            </button>
-          ) : null}
           {removableDuplicateRows.length ? (
             <button type="button" onClick={() => removeRows(removableDuplicateRows.map((row) => row.row_index))} className="border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">
               Remove {removableDuplicateRows.length} duplicate row(s)
@@ -768,23 +829,44 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
 
         {rows ? (
           <>
-            {unresolvedSourceRowCount > 0 ? (
-              <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
-                {unresolvedSources.length} FO/SO number(s) ({unresolvedSourceRowCount} row(s)) could not be resolved and will not become a Delivery Order. These come from the uploaded Excel itself, not from transporter selection. Use "Show unmapped FO/SO" to list and export them, map them in SO Map, then upload those rows again.
+            <div className="grid gap-2 border border-slate-300 bg-slate-50 p-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                <span className="font-semibold text-slate-800">{issueCounts.ALL} row(s) uploaded</span>
+                <span className="font-semibold text-emerald-800">{issueCounts.READY} ready</span>
+                <span className={issueCounts.NEEDS_ACTION ? "font-semibold text-rose-700" : "text-slate-500"}>{issueCounts.NEEDS_ACTION} need action</span>
+                <span className="font-semibold text-sky-900">{readyGroupCount} of {groups.length} Delivery Order(s) ready</span>
               </div>
-            ) : null}
-            {showUnresolvedSources && unresolvedSources.length ? (
-              <div className="grid gap-2 border border-rose-200 bg-white p-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-rose-800">Unmapped / unresolved FO-SO numbers</span>
+              <div className="flex flex-wrap gap-1">
+                {BULK_DO_ISSUE_FILTERS.filter((filter) => ["NEEDS_ACTION", "READY", "ALL"].includes(filter.key) || issueCounts[filter.key] > 0).map((filter) => {
+                  const active = activeIssueFilter === filter.key;
+                  const problem = !["READY", "ALL", "DUPLICATE"].includes(filter.key) && issueCounts[filter.key] > 0;
+                  const tone = active
+                    ? "border-sky-700 bg-sky-700 text-white"
+                    : problem ? "border-rose-300 bg-white text-rose-800" : "border-slate-300 bg-white text-slate-700";
+                  const label = filter.key === "SOURCE" ? `${filter.label} (${unresolvedSources.length} FO/SO · ${issueCounts.SOURCE} rows)` : `${filter.label} (${issueCounts[filter.key]})`;
+                  return (
+                    <button key={filter.key} type="button" onClick={() => setIssueFilter(filter.key)} className={`border px-2 py-1 text-[11px] font-semibold ${tone}`}>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {activeIssueFilter === "SOURCE" ? (
+              <div className="grid gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+                  <span>These FO/SO numbers from your Excel are not mapped in SO Map (or the SO does not exist in this company). Map them in SO Map, then upload the exported &quot;Rows to re-upload&quot; sheet. All other ready rows can be created now.</span>
                   <button type="button" onClick={() => void exportUnresolvedSources(unresolvedSources, rawByIndex)} className="border border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-900">Export Excel</button>
                 </div>
                 <ErpDenseGrid
-                  maxHeight="260px"
+                  cellNavigate
+                  maxHeight="520px"
                   columns={[
                     { key: "fo_or_so_number", label: "FO/SO Number", width: "130px" },
-                    { key: "reason", label: "Reason", width: "380px" },
-                    { key: "row_count", label: "Excel Rows", width: "90px", align: "right" },
+                    { key: "reason", label: "Reason", width: "360px" },
+                    { key: "excel_rows", label: "Excel Row No.", width: "160px" },
+                    { key: "row_count", label: "Rows", width: "60px", align: "right" },
                     { key: "skus", label: "SKUs", width: "220px" },
                     { key: "pack_qty", label: "Total Pack Qty", width: "110px", align: "right" },
                     { key: "do_dates", label: "DO Dates", width: "140px" },
@@ -795,11 +877,19 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                   emptyMessage="No unmapped FO/SO."
                 />
               </div>
-            ) : null}
+            ) : (
             <ErpDenseGrid
               cellNavigate
               maxHeight="520px"
               columns={[
+                { key: "excel_row", label: "Excel Row", width: "80px", align: "right", render: (row) => excelRowLabel(rawByIndex, row.row_index) },
+                {
+                  key: "issue", label: "Issue", width: "240px", render: (row) => {
+                    const issue = bulkDoRowIssue(row);
+                    const tone = issue === "READY" ? "text-emerald-800" : issue === "DUPLICATE" ? "text-amber-800" : "font-semibold text-rose-700";
+                    return <span title={row.error_code || ""} className={tone}>{bulkDoIssueText(row)}</span>;
+                  },
+                },
                 { key: "fo_or_so", label: "FO/SO Number", width: "130px", render: (row) => row.fo_or_so_number },
                 { key: "dd_flag", label: "DD Flag", width: "80px", render: (row) => row.status === "RESOLVED" ? (row.dd_flag ? "Yes" : "No") : "—" },
                 { key: "so_number", label: "SO Number", width: "120px", render: (row) => row.so_number || "—" },
@@ -807,7 +897,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                 {
                   key: "status", label: "Status", width: "320px", render: (row) => {
                     if (row.review_duplicate_kind === "ALREADY_CREATED") return <span className="font-semibold text-amber-800">Already created: {row.existing_do_numbers.join(", ")}</span>;
-                    if (row.review_duplicate_kind === "UPLOAD_DUPLICATE") return <span className="font-semibold text-amber-800">Duplicate of Excel row {row.upload_duplicate_of}</span>;
+                    if (row.review_duplicate_kind === "UPLOAD_DUPLICATE") return <span className="font-semibold text-amber-800">Duplicate of Excel row {excelRowLabel(rawByIndex, row.upload_duplicate_of)}</span>;
                     if (row.status === "ERROR") return <span title={row.error_code} className="font-semibold text-rose-700">{BULK_DO_SOURCE_ERROR_TEXT[row.error_code] ?? row.error_code}</span>;
                     return <span className="text-emerald-800">Resolved</span>;
                   },
@@ -902,24 +992,32 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                   ),
                 },
               ]}
-              rows={reviewRows}
+              rows={visibleReviewRows}
               rowKey={(row) => row.row_index}
               getRowProps={(row) => row.review_duplicate_kind ? { className: "bg-slate-100 text-slate-500" } : {}}
-              emptyMessage="No rows."
+              emptyMessage={activeIssueFilter === "NEEDS_ACTION" ? "Nothing needs action — every remaining row is ready." : "No rows in this view."}
             />
+            )}
 
             <div>
-              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">Delivery Orders to be created ({groups.length} group(s))</h4>
-              <ul className="grid gap-1 text-xs text-slate-700">
-                {groups.map((group) => {
-                  const problems = groupReadiness(group);
-                  return (
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Delivery Orders to be created — {readyGroupCount} ready, {groups.length - readyGroupCount} not ready
+              </h4>
+              <ul className="grid max-h-60 gap-1 overflow-auto text-xs text-slate-700">
+                {groups.map((group) => ({ group, problems: groupReadiness(group) }))
+                  .filter(({ problems }) => problems.length > 0 || showReadyGroups)
+                  .sort((left, right) => Number(right.problems.length > 0) - Number(left.problems.length > 0))
+                  .map(({ group, problems }) => (
                     <li key={group.fo_or_so_number} className={problems.length ? "text-rose-700" : "text-emerald-800"}>
                       {group.fo_or_so_number} ({group.dd_flag ? "VDC" : "DC"}, {group.rows.length} line(s)) — {problems.length ? `Not ready: ${problems.join("; ")}` : "Ready"}
                     </li>
-                  );
-                })}
+                  ))}
               </ul>
+              {readyGroupCount > 0 ? (
+                <button type="button" onClick={() => setShowReadyGroups((current) => !current)} className="mt-1 text-[11px] font-semibold text-sky-800 underline">
+                  {showReadyGroups ? "Hide" : "Show"} {readyGroupCount} ready Delivery Order(s)
+                </button>
+              ) : null}
             </div>
 
             <button type="button" disabled={saving || reconciling || readyGroupCount === 0} onClick={() => void handleSaveAll()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
