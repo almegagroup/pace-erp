@@ -1,15 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { bulkPostDeliveryOrders, listBulkPostingQueue } from "../procurementApi.js";
+import { popScreen } from "../../../../navigation/screenStackEngine.js";
 
 export default function SO02BulkPostingPage() {
-  const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
   const [selected, setSelected] = useState(() => new Set());
@@ -40,7 +39,7 @@ export default function SO02BulkPostingPage() {
     eyebrow="Procurement / SO02"
     title="Bulk Posting — PGI & Invoice"
     actions={[
-      { key: "back", label: "SO02 Queue", tone: "neutral", onClick: () => navigate("/dashboard/procurement/sales-invoices") },
+      { key: "back", label: "SO02 Queue", tone: "neutral", onClick: () => popScreen() },
       { key: "refresh", label: "Refresh", tone: "neutral", onClick: () => query.refetch(), disabled: query.isFetching },
       { key: "post", label: posting ? "Posting..." : `Bulk Post (${selected.size})`, tone: "primary", onClick: post, disabled: posting || selected.size === 0 },
     ]}
