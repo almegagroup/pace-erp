@@ -52,6 +52,76 @@ async function downloadTemplate() {
   window.URL.revokeObjectURL(url);
 }
 
+// One business line in the upload: External SO (leading zeros ignored, as
+// the server does) + FO + SKU. Pack Qty is deliberately not part of it.
+function uploadKey(raw) {
+  return [String(raw?.external_so_number ?? "").replace(/^0+(?=\d)/, ""), raw?.fo_number, raw?.sku]
+    .map((value) => String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "")).join("::");
+}
+
+function collapseSpaces(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+// Source exports append the town to the address after a wide gap
+// ("...742151  DWANSARAI") although TOWN is its own column. Drop only that
+// exact trailing copy, so the address does not carry the town twice.
+function stripTrailingTown(rawAddress, town) {
+  const match = String(rawAddress ?? "").match(/^([\s\S]*\S)\s{2,}(\S[\s\S]*?)\s*$/);
+  if (match && town && collapseSpaces(match[2]).toUpperCase() === town.toUpperCase()) return collapseSpaces(match[1]);
+  return collapseSpaces(rawAddress);
+}
+
+// Server preview error codes, in words a user can act on in the Excel.
+const UPLOAD_ERROR_TEXT = {
+  INVALID_UPLOAD_ROW: "A required column is blank or invalid (SO, FO, Customer Name/Address, SKU, Pack Qty, or Has Site not Yes/No)",
+  CUSTOMER_TOWN_REQUIRED: "TOWN is blank",
+  SITE_DETAILS_REQUIRED: "Has Site = Yes but Site Name / Site Address / Site Town is blank",
+  DUPLICATE_UPLOAD_ROW: "Same External SO + FO + SKU repeated in this Excel",
+  DUPLICATE_UPLOAD_ROW_QTY_CONFLICT: "Same External SO + FO + SKU repeated in this Excel with DIFFERENT Pack Qty — keep only the correct line",
+  SO_NOT_FOUND: "External SO Number not found",
+  SO_COMPANY_MISMATCH: "External SO belongs to another company",
+  SO_NOT_VDC_DD: "SO is not a Dependent Direct (DD) SO",
+  SO_NO_VDC: "SO has no VDC",
+};
+
+function uploadErrorText(code) {
+  if (!code) return "";
+  const prefix = String(code).split(":")[0];
+  return UPLOAD_ERROR_TEXT[prefix] ?? String(code);
+}
+
+// Mirrors BulkDoUploadDrawer's "Export Excel": a reason sheet plus the same
+// template layout, so the rows can be corrected and uploaded again as-is.
+async function exportNotMappedRows(notMappedRows) {
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  const reasonSheet = workbook.addWorksheet("Not mapped");
+  reasonSheet.addRow(["Excel Row No.", "External SO Number", "FO Number", "SKU", "Pack Qty", "Reason"]);
+  notMappedRows.forEach((entry) => reasonSheet.addRow([entry.excel_row_number, entry.raw.external_so_number, entry.raw.fo_number, entry.raw.sku, entry.raw.pack_qty, entry.reason]));
+  reasonSheet.getRow(1).font = { bold: true };
+  reasonSheet.columns.forEach((column) => { column.width = 22; });
+  reasonSheet.getColumn(6).width = 80;
+  const rowsSheet = workbook.addWorksheet("Rows to re-upload");
+  rowsSheet.addRow(TEMPLATE_HEADERS);
+  notMappedRows.forEach(({ raw }) => rowsSheet.addRow([
+    raw.external_so_number, raw.fo_number, raw.customer_gst, raw.customer_name, raw.customer_address, raw.town,
+    raw.has_site ? "Yes" : "No", raw.site_name, raw.site_address, raw.site_town, raw.sku, raw.pack_qty,
+  ]));
+  rowsSheet.getRow(1).font = { bold: true };
+  rowsSheet.columns.forEach((column) => { column.width = 20; });
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `bulk_dd_so_map_not_mapped_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.URL.revokeObjectURL(url);
+}
+
 async function parseUploadedWorkbook(file) {
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
@@ -109,11 +179,18 @@ async function parseUploadedWorkbook(file) {
   let rowIndexSeq = 0;
   sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
     if (rowNumber <= headerRowNumber) return;
-    const cell = (field) => (columnByField[field] ? cellText(row, columnByField[field]) : "");
+    // Raw text keeps internal spacing so the address/town separator below can
+    // still be seen; every value stored on the row is whitespace-normalized
+    // (non-breaking spaces, tabs, repeated spaces -> one space, trimmed), so a
+    // cell holding only spaces is simply blank.
+    const rawCell = (field) => (columnByField[field] ? cellText(row, columnByField[field]).replace(/\u00a0/g, " ") : "");
+    const cell = (field) => collapseSpaces(rawCell(field));
     const externalSoNumber = cell("external_so_number");
     if (!externalSoNumber) return;
     rowIndexSeq += 1;
-    const hasSiteValue = cell("has_site").toUpperCase();
+    // Business rule (2026-10-13): a blank Has Site means "No". Only a value
+    // that is neither Yes nor No is invalid.
+    const hasSiteValue = cell("has_site").toUpperCase() || "NO";
     rows.push({
       row_index: rowIndexSeq,
       // Keep the real worksheet row visible in validation messages. The
@@ -124,10 +201,10 @@ async function parseUploadedWorkbook(file) {
       fo_number: cell("fo_number"),
       customer_gst: cell("customer_gst").toUpperCase(),
       customer_name: cell("customer_name"),
-      customer_address: cell("customer_address"),
+      customer_address: stripTrailingTown(rawCell("customer_address"), cell("town")),
       town: cell("town"),
-      has_site: hasSiteValue === "YES",
-      has_site_valid: hasSiteValue === "YES" || hasSiteValue === "NO",
+      has_site: hasSiteValue === "YES" || hasSiteValue === "Y",
+      has_site_valid: ["YES", "Y", "NO", "N"].includes(hasSiteValue),
       site_name: cell("site_name"),
       site_address: cell("site_address"),
       site_town: cell("site_town"),
@@ -293,6 +370,9 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
   const [notice, setNotice] = useState("");
   const [createDrawerRowIndex, setCreateDrawerRowIndex] = useState(null);
   const [addSiteRowIndex, setAddSiteRowIndex] = useState(null);
+  // row_index -> server error code for FO groups the bulk save rejected.
+  const [saveFailures, setSaveFailures] = useState({});
+  const [showNotMapped, setShowNotMapped] = useState(false);
   const fileInputRef = useRef(null);
 
   const createDrawerRow = useMemo(() => (rows ?? []).find((row) => row.row_index === createDrawerRowIndex), [rows, createDrawerRowIndex]);
@@ -351,8 +431,26 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
   }
   function removeRows(rowIndexes) {
     const indexes = new Set(rowIndexes);
-    setRows((current) => (current ?? []).filter((row) => !indexes.has(row.row_index)));
-    setRawByIndex((current) => Object.fromEntries(Object.entries(current).filter(([rowIndex]) => !indexes.has(Number(rowIndex)))));
+    const remainingRows = (rows ?? []).filter((row) => !indexes.has(row.row_index));
+    const remainingRaw = Object.fromEntries(Object.entries(rawByIndex).filter(([rowIndex]) => !indexes.has(Number(rowIndex))));
+    setRows(remainingRows);
+    setRawByIndex(remainingRaw);
+    // A quantity-conflict row whose other copy was just removed is now a
+    // normal row; ask the server to resolve it instead of leaving the stale
+    // conflict error on screen.
+    const keyCounts = new Map();
+    for (const raw of Object.values(remainingRaw)) keyCounts.set(uploadKey(raw), (keyCounts.get(uploadKey(raw)) ?? 0) + 1);
+    const nowUnique = remainingRows
+      .filter((row) => row.error_code === "DUPLICATE_UPLOAD_ROW_QTY_CONFLICT" && keyCounts.get(uploadKey(remainingRaw[row.row_index])) === 1)
+      .map((row) => remainingRaw[row.row_index]);
+    if (nowUnique.length === 0) return;
+    previewSoMapBulkUpload({ company_id: companyId, rows: nowUnique })
+      .then((result) => {
+        const refreshed = Array.isArray(result) ? result : result?.data;
+        const byIndex = new Map((Array.isArray(refreshed) ? refreshed : []).map((row) => [row.row_index, row]));
+        setRows((current) => recalculateQtyStatuses((current ?? []).map((row) => byIndex.get(row.row_index) ?? row)));
+      })
+      .catch((previewError) => setError(previewError instanceof Error ? previewError.message : "SO_MAP_BULK_PREVIEW_FAILED"));
   }
 
   async function handleFileChosen(event) {
@@ -360,6 +458,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     event.target.value = "";
     if (!file) return;
     setError(""); setNotice(""); setUploading(true);
+    setSaveFailures({}); setShowNotMapped(false);
     try {
       const parsedRows = await parseUploadedWorkbook(file);
       if (parsedRows.length === 0) { setError("The uploaded file has no data rows."); return; }
@@ -518,45 +617,30 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
 
   async function handleSaveAll() {
     setSaving(true); setError(""); setNotice("");
-    let savedCount = 0;
     try {
-      const groups = new Map();
-      for (const row of effectiveRows) {
-        if (row.duplicate_status === "UNCHANGED" || !isRowReady(row)) continue;
-        const soLineId = row.sku_resolution?.so_line_id;
-        if (!soLineId) continue;
-        const siteId = row.site_resolution?.candidates?.[0]?.id || row.customer_resolution?.customer_address_id;
-        if (!siteId) continue;
-        const raw = rawByIndex[row.row_index];
-        const key = `${row.so_id}::${raw?.fo_number || ""}`;
-        const group = groups.get(key);
-        if (group && String(group.customer_address_id) !== String(siteId)) {
-          throw new Error("SO_MAP_FO_DESTINATION_MISMATCH: one FO must resolve to one customer and site address.");
-        }
-        const target = group ?? {
-          so_id: row.so_id,
-          source: "address",
-          customer_address_id: siteId,
-          external_fo_number: raw?.fo_number || undefined,
-          items: [],
-          row_indexes: [],
-        };
-        const perPackQty = Number(row.sku_resolution?.per_pack_qty ?? 0);
-        const packQty = Number(raw?.pack_qty ?? 0);
-        target.items.push({ so_line_id: soLineId, allocated_qty: packQty * (perPackQty > 0 ? perPackQty : 1) });
-        target.row_indexes.push(raw?.excel_row_number ?? row.row_index);
-        groups.set(key, target);
-      }
-      const result = await saveSoMapBulkGroups({ groups: [...groups.values()] });
+      const groups = saveAnalysis.groups;
+      const attemptedRows = groups.reduce((total, group) => total + group.row_indexes.length, 0);
+      const result = await saveSoMapBulkGroups({ groups });
       const saveResult = result?.data ?? result;
       const failures = Array.isArray(saveResult?.failed) ? saveResult.failed : [];
-      savedCount = Number(saveResult?.saved_rows ?? 0);
-      if (failures.length > 0) {
-        const failedRows = failures.flatMap((failure) => failure.row_indexes ?? []);
-        throw new Error(`SO_MAP_BULK_SAVE_PARTIAL: ${failures.length} FO group(s) could not be mapped (Excel row(s): ${failedRows.join(", ") || "unknown"}).`);
+      const nextFailures = {};
+      for (const failure of failures) {
+        for (const rowIndex of failure.row_indexes ?? []) nextFailures[rowIndex] = failure.error_code || "SO_MAP_GROUP_SAVE_FAILED";
       }
-      setNotice(`${savedCount} row(s) mapped.`);
-      onSaved?.();
+      setSaveFailures(nextFailures);
+      const failedRowCount = Object.keys(nextFailures).length;
+      const mappedCount = attemptedRows - failedRowCount;
+      // Re-run the authoritative preview so just-saved rows show as already
+      // mapped and every remaining row shows its real, current state.
+      const refreshedResult = await previewSoMapBulkUpload({ company_id: companyId, rows: Object.values(rawByIndex) });
+      const refreshedRows = Array.isArray(refreshedResult) ? refreshedResult : refreshedResult?.data;
+      if (Array.isArray(refreshedRows)) setRows(refreshedRows);
+      const keptBack = saveAnalysis.notMapped.length + failedRowCount;
+      setNotice(keptBack > 0
+        ? `${mappedCount} row(s) mapped. ${keptBack} row(s) NOT mapped — open "Not mapped rows" to see why and export them.`
+        : `${mappedCount} row(s) mapped.`);
+      if (keptBack > 0) setShowNotMapped(true);
+      if (mappedCount > 0) onSaved?.();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "SO_MAP_BULK_SAVE_FAILED");
     } finally {
@@ -566,7 +650,8 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
 
   function getRowBlockReason(row) {
     if (row.duplicate_status === "UNCHANGED") return null;
-    if (row.status !== "RESOLVED") return row.error_code || "Upload row is invalid";
+    if (saveFailures[row.row_index]) return `Save failed: ${saveFailures[row.row_index]}`;
+    if (row.status !== "RESOLVED") return uploadErrorText(row.error_code) || "Upload row is invalid";
     if (row.duplicate_status === "CHANGED_QTY" && !row.change_confirmed) return "Confirm changed quantity or remove this row";
     if (row.sku_resolution?.status !== "MATCHED") return "Choose a SKU from this SO";
     if (row.qty_status !== "OK") return "Quantity exceeds this SO item's remaining balance";
@@ -579,21 +664,70 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
     if (rowHasSite(row) && !row.site_resolution?.candidates?.[0]?.id) return "Choose or add the Site Address";
     return null;
   }
-  function isRowReady(row) { return getRowBlockReason(row) === null; }
-  const reviewedRowsWithDuplicates = useMemo(() => markSpreadsheetDuplicates(rows, (row) => {
-    const raw = rawByIndex[row.row_index] ?? {};
-    return [raw.external_so_number, raw.fo_number, raw.sku, Number(raw.pack_qty ?? 0).toFixed(6)].map(normalizedInput).join("::");
-  }).map((row) => ({
-    ...row,
-    review_duplicate_kind: row.duplicate_status === "UNCHANGED" ? "ALREADY_MAPPED" : row.upload_duplicate ? "UPLOAD_DUPLICATE" : null,
-    is_removable_duplicate: row.duplicate_status === "UNCHANGED" || row.upload_duplicate === true,
-  })), [rawByIndex, rows]);
-  const effectiveRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => !row.is_removable_duplicate), [reviewedRowsWithDuplicates]);
-  const removableDuplicateRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => row.is_removable_duplicate), [reviewedRowsWithDuplicates]);
-  const readyCount = effectiveRows.filter((row) => isRowReady(row)).length;
-  const blockingRows = effectiveRows.filter((row) => getRowBlockReason(row));
-  const blockingCount = blockingRows.length;
-  const reviewRows = prioritizeUploadReviewRows(reviewedRowsWithDuplicates, (row) => row.review_duplicate_kind ? -10 : Boolean(getRowBlockReason(row)));
+  const reviewedRowsWithDuplicates = useMemo(() => markSpreadsheetDuplicates(rows, (row) => uploadKey(rawByIndex[row.row_index])).map((row) => {
+    const isUploadDuplicate = row.error_code === "DUPLICATE_UPLOAD_ROW" || (row.upload_duplicate === true && row.error_code !== "DUPLICATE_UPLOAD_ROW_QTY_CONFLICT");
+    return {
+      ...row,
+      upload_duplicate_of: row.upload_duplicate_of ?? row.duplicate_of_row_index ?? null,
+      review_duplicate_kind: row.duplicate_status === "UNCHANGED" ? "ALREADY_MAPPED" : isUploadDuplicate ? "UPLOAD_DUPLICATE" : null,
+    };
+  }), [rawByIndex, rows]);
+  const effectiveRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => !row.review_duplicate_kind), [reviewedRowsWithDuplicates]);
+  const uploadDuplicateRows = useMemo(() => reviewedRowsWithDuplicates.filter((row) => row.review_duplicate_kind === "UPLOAD_DUPLICATE"), [reviewedRowsWithDuplicates]);
+  const alreadyMappedCount = reviewedRowsWithDuplicates.filter((row) => row.review_duplicate_kind === "ALREADY_MAPPED").length;
+
+  // One FO is saved as one mapping group. If any line of an FO is not ready,
+  // the whole FO is kept back (never half-mapped) and listed with a reason.
+  const saveAnalysis = (() => {
+    const excelRow = (row) => rawByIndex[row.row_index]?.excel_row_number ?? row.row_index;
+    const byFo = new Map();
+    for (const row of effectiveRows) {
+      const raw = rawByIndex[row.row_index] ?? {};
+      const key = [String(raw.external_so_number ?? "").replace(/^0+(?=\d)/, ""), raw.fo_number].map(normalizedInput).join("::");
+      if (!byFo.has(key)) byFo.set(key, []);
+      byFo.get(key).push({ row, reason: getRowBlockReason(row) });
+    }
+    const groups = [];
+    const notMapped = [];
+    for (const entries of byFo.values()) {
+      const blocked = entries.find((entry) => entry.reason);
+      const siteIds = new Set(entries.map(({ row }) => String(row.site_resolution?.candidates?.[0]?.id || row.customer_resolution?.customer_address_id || "")));
+      const foNumber = rawByIndex[entries[0].row.row_index]?.fo_number || "";
+      if (blocked || siteIds.size > 1) {
+        for (const { row, reason } of entries) {
+          notMapped.push({
+            row_index: row.row_index,
+            excel_row_number: excelRow(row),
+            raw: rawByIndex[row.row_index] ?? {},
+            reason: reason
+              || (blocked
+                ? `Another line of FO ${foNumber} is not ready (Excel row ${excelRow(blocked.row)}) — the whole FO is kept back`
+                : `Lines of FO ${foNumber} resolve to different customer/site addresses — one FO must have one destination`),
+          });
+        }
+        continue;
+      }
+      const first = entries[0].row;
+      const raw = rawByIndex[first.row_index] ?? {};
+      groups.push({
+        so_id: first.so_id,
+        source: "address",
+        customer_address_id: first.site_resolution?.candidates?.[0]?.id || first.customer_resolution?.customer_address_id,
+        external_fo_number: raw.fo_number || undefined,
+        items: entries.map(({ row }) => {
+          const perPackQty = Number(row.sku_resolution?.per_pack_qty ?? 0);
+          const packQty = Number(rawByIndex[row.row_index]?.pack_qty ?? 0);
+          return { so_line_id: row.sku_resolution?.so_line_id, allocated_qty: packQty * (perPackQty > 0 ? perPackQty : 1) };
+        }),
+        row_indexes: entries.map(({ row }) => row.row_index),
+      });
+    }
+    notMapped.sort((left, right) => left.excel_row_number - right.excel_row_number);
+    return { groups, notMapped };
+  })();
+  const readyCount = saveAnalysis.groups.reduce((total, group) => total + group.row_indexes.length, 0);
+  const notMappedReasonByRow = new Map(saveAnalysis.notMapped.map((entry) => [entry.row_index, entry.reason]));
+  const reviewRows = prioritizeUploadReviewRows(reviewedRowsWithDuplicates, (row) => row.review_duplicate_kind ? -10 : notMappedReasonByRow.has(row.row_index));
 
   return (
     <DrawerBase
@@ -616,8 +750,34 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
             {uploading ? "Uploading…" : "Upload Excel"}
           </button>
           <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(event) => void handleFileChosen(event)} />
-          {removableDuplicateRows.length ? <button type="button" onClick={() => removeRows(removableDuplicateRows.map((row) => row.row_index))} className="border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">Remove {removableDuplicateRows.length} duplicate row(s)</button> : null}
+          {uploadDuplicateRows.length ? <button type="button" onClick={() => removeRows(uploadDuplicateRows.map((row) => row.row_index))} className="border border-amber-500 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">Remove {uploadDuplicateRows.length} duplicate row(s)</button> : null}
+          {rows && alreadyMappedCount ? <span className="text-xs text-slate-500">{alreadyMappedCount} row(s) already mapped — skipped automatically</span> : null}
+          {rows && saveAnalysis.notMapped.length ? <button type="button" onClick={() => setShowNotMapped((current) => !current)} className="border border-rose-400 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800">Not mapped rows ({saveAnalysis.notMapped.length})</button> : null}
         </div>
+
+        {rows && showNotMapped && saveAnalysis.notMapped.length ? (
+          <div className="grid gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+              <span>These Excel rows are not mapped. Correct them (in the Excel or in the grid below) and upload the exported &quot;Rows to re-upload&quot; sheet again.</span>
+              <button type="button" onClick={() => void exportNotMappedRows(saveAnalysis.notMapped)} className="border border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-900">Export Excel</button>
+            </div>
+            <ErpDenseGrid
+              cellNavigate
+              maxHeight="320px"
+              columns={[
+                { key: "excel_row_number", label: "Excel Row No.", width: "100px", align: "right" },
+                { key: "external_so_number", label: "External SO Number", width: "145px", render: (entry) => entry.raw.external_so_number || "—" },
+                { key: "fo_number", label: "FO Number", width: "120px", render: (entry) => entry.raw.fo_number || "—" },
+                { key: "sku", label: "SKU", width: "120px", render: (entry) => entry.raw.sku || "—" },
+                { key: "pack_qty", label: "Pack Qty", width: "80px", align: "right", render: (entry) => entry.raw.pack_qty ?? "—" },
+                { key: "reason", label: "Reason", width: "520px" },
+              ]}
+              rows={saveAnalysis.notMapped}
+              rowKey={(entry) => entry.row_index}
+              emptyMessage="No rows."
+            />
+          </div>
+        ) : null}
 
         {rows ? (
           <>
@@ -629,7 +789,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
                   key: "review_status", label: "Review Status", width: "260px", render: (row) => {
                     if (row.review_duplicate_kind === "ALREADY_MAPPED") return <span className="font-semibold text-slate-600">Already mapped — excluded from save</span>;
                     if (row.review_duplicate_kind === "UPLOAD_DUPLICATE") return <span className="font-semibold text-slate-600">Duplicate of Excel row {row.upload_duplicate_of}</span>;
-                    const reason = getRowBlockReason(row);
+                    const reason = notMappedReasonByRow.get(row.row_index);
                     return reason
                       ? <span className="font-semibold text-rose-700">Excel row {rawByIndex[row.row_index]?.excel_row_number ?? row.row_index}: {reason}</span>
                       : <span className="text-emerald-800">Ready</span>;
@@ -706,19 +866,15 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
               ]}
               rows={reviewRows}
               rowKey={(row) => row.row_index}
-              getRowProps={(row) => row.review_duplicate_kind ? { className: "bg-slate-100 text-slate-500" } : (getRowBlockReason(row) ? { className: "bg-amber-50" } : {})}
+              getRowProps={(row) => row.review_duplicate_kind ? { className: "bg-slate-100 text-slate-500" } : (notMappedReasonByRow.has(row.row_index) ? { className: "bg-amber-50" } : {})}
               emptyMessage="No rows."
             />
-            {blockingCount ? (
-              <div className="grid gap-1 border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-                <span>Resolve, confirm, or remove {blockingCount} highlighted row(s) before saving.</span>
-                {blockingRows.slice(0, 5).map((row) => (
-                  <span key={row.row_index}>Excel row {rawByIndex[row.row_index]?.excel_row_number ?? row.row_index}: {getRowBlockReason(row)}</span>
-                ))}
-                {blockingRows.length > 5 ? <span>…and {blockingRows.length - 5} more row(s).</span> : null}
+            {saveAnalysis.notMapped.length ? (
+              <div className="border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                {saveAnalysis.notMapped.length} row(s) will NOT be mapped by Save. Fix them here, or open &quot;Not mapped rows&quot; to see each reason and export them to Excel.
               </div>
             ) : null}
-            <button type="button" disabled={saving || readyCount === 0 || blockingCount > 0} onClick={() => void handleSaveAll()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+            <button type="button" disabled={saving || readyCount === 0} onClick={() => void handleSaveAll()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
               {saving ? "Saving…" : `Save ${readyCount} Mapping(s)`}
             </button>
           </>
