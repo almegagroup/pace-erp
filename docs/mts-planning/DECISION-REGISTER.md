@@ -1,0 +1,45 @@
+# PACE MTS Planning — Business Decision Register (Q-B01…Q-B14)
+**Owner decisions through 2026-10-13** · **Status: reconciled business-direction draft for Claude review; not technical contract signoff**  
+Read with `BUSINESS-REQUIREMENTS.md` (full rules), Claude Step 1B `OPEN-TECHNICAL-QUESTIONS.md` commit 582419a (PR #654), and `COLLABORATION-PROTOCOL.md` on agent/chatgpt.
+
+**Status legend**: `LOCKED-BUSINESS` means user explicitly agreed to business behaviour, **not** source/SQL/FE verification. `SCOPE-DEFINED / VERIFY` means design direction chosen but implementation data/source must be verified. Do not claim a technical blocker is solved because the owner defined intent.
+
+| Claude ID | Status | Decision locked or scoped | Remaining implementation evidence / issue |
+|---|---|---|---|
+| **B01** | **LOCKED-BUSINESS / SOURCE PENDING** | Build company-SKU-plan ERP page/schema first; ERP users enter Oct-2026 onward (initial Rolling Oct–Dec); backfill Sheet plans through **Sep 2026** as **Final**, same versioned register with source lineage; unknown Rolling = absent, no overwrite | Exact historical file/tab/columns/sample data, mapping, QA and approved DEV→PROD migration after schema |
+| **B02** | **LOCKED-BUSINESS / CONVERSION VERIFY** | One company-wise full SKU-list Dense Grid; Plan Qty with header-selectable UoM, base qty auto-conversion; SKU→Prodshade RM, SKU→Pack BOM PM; company-scoped current Stroke default, optional alternate periods with dates/quantity and pro-rata; other company production full or partial | Validate SKU→Prodshade, conversion UoM, Stroke applicability, period overlap/split and cross-company permission |
+| **B03** | **LOCKED-BUSINESS** | Urgent may be priority-only referenced existing Final/Additional, OR net-new. Only net-new raises total demand | Exact reference/demand dedup in schema/tests |
+| **B04** | **LOCKED-BUSINESS** | Planning currently company+month+SKU for one Asian Paints customer; no customer field in current UI; extensible future multi-customer model | Resolve Asian Paints customer master mapping; unmatched historic item handled in staging |
+| **B05** | **LOCKED-BUSINESS (REVISION)** | Earlier plan approval idea was REVOKED. Save by authorised user directly effective; versioned full edit audit; company VIEW/EDIT ACL | Specific edit roles/resource codes with ACL owner; no approval stages |
+| **B06** | **LOCKED-BUSINESS / SOURCE VERIFY** | Separate production estimate (principally Prodshade-wise) current-month remainder and next-month expected, direct authorised edit + audit; not customer demand | Past actuals before ERP start, forecast-vs-actual precedence and precise schedule granularity |
+| **B07** | **LOCKED-BUSINESS** | Transfer **recommendations only**, no auto execution. True surplus means after sending qty source does not face new shortage or premature repurchase before feasible replenishment; SLoc intra-company distinct from inter-company | Source SLoc eligibility, transfer lead-time; relevant owning execution module |
+| **B08** | **LOCKED-BUSINESS / INTEGRATION PENDING** | Asian MTS actual dispatch = Bill To Asian Paints. Internal FG transfer does not count. Cross-company full/partial production: RM consumption on producer, customer fulfilment on plan company. FG STO owned by FG Dispatch, unimplemented | Prove actual SO/invoice/dispatch read model and future FG STO cross-link |
+| **B09** | **LOCKED-BUSINESS / ALGORITHM PENDING** | No arbitrary historical allocation. Use current/alternate date-effective Stroke; include/exclude primary of material group; remaining eligible group members share one demand pool, exclusives protected dynamically by coverage & next consignment. Date-wise physical stock/CSN ETA/PO Lots/other product demand/approved conversions, MOQ constraints, vendor economics → optimise, propose only. Reallocation when production forecast genuinely changes. Stock visible eligible S/R/P, RM allocation to R, PM to P; location transfer suggestions. No forced per-day planning run | Detailed eligibility and dosage UoM, competing allocations, virtual protected floor, shortage-on-transfer proof, consignment reallocation, optimisation objective/constraints, double count tests |
+| **B10** | **SCOPE-DEFINED / FINANCIAL MODEL VERIFY** | Use AC01 landed cost, Purchase Order, **Legacy Purchase Order**, vendor payment terms, Dispatch billing and Asian payment terms to model stock investment, working capital, supplier cash out, customer receivables/expected collections and funding gap. Consider min/target/max coverage; net cost vs tax-inclusive cash flow distinguished | Verify legacy PO source, AC01 cost types and recoverable GST, current cost/FX, vendor terms, dispatch invoice/collection, authorised valuation. No invented finance numbers |
+| **B11** | **LOCKED-BUSINESS / TECH POLICY VERIFY** | Implement **smart full REQUIREMENT tab equivalent in purpose**, not sheet clone. One ERP Dense Grid: company/material/month, current and next month material requirement, cover, stock, ETA, alerts, source, target/critical days **per individual RM/PM** (not aggregate RDP/MHEC), MOQ manual/AI/PO inferred with source label; optional AI suggestions on SAME row, explicit accept/ignore; audit | Precise policy tables/effective-date priority, available cover formula, MOQ vendor/company precedence, source mappings, alert thresholds; longer horizon optional not agreed |
+| **B12** | **LOCKED-BUSINESS** | ~3 event-based runs/month + ad hoc; each future day projection, **not daily-run mandate**. User-selected posted-ledger date calibration opening; no future calibration, no ledger mutation; history | Verify stock get_stock_history opening and calibration constraints per SLoc |
+| **B13** | **LOCKED-BUSINESS** | Claude Haiku 5.5 planning AI **USD $5 monthly HARD cap**, concurrent pre-reservation, usage ledger; AI is optional advisory, no PO/CSN/stock mutations; deterministic planning continues on exhaustion | ACL setting-change role, reset timezone, provider cost reconciliation. Separate file `DECISION-B13-AI-BUDGET.md` |
+| **B14** | **LOCKED-BUSINESS** | Initial CMP003, CMP005, CMP011. Plant currently maps to **company**, track actual SLoc as independent dimension | ACL company scope, mapping to current company and applicable SKUs |
+
+## Not questions / explicit clarifications to preserve
+- Business goal: **procurement readiness**, not generating daily planning runs and not just cash savings.
+- Three monthly planning events: ~26th Rolling, receipt of next Final, receipt of subsequent Rolling; ad hoc optional. Per-day projection is within those runs.
+- Calibration triggered by user-selected past/present book opening, not blindly on every day. Current planning refresh with CSN changes does not overwrite saved history.
+- No separate manual RM selection for every product. Group membership does **not** mean duplicate total requirement per member.
+- Exclusive DA1100 etc. stock protection must be **time-phased and revisable** based on production forecast, next CSN, critical coverage, target/max and working capital.
+- Company ≠ SLoc. Stock eligibility includes S when appropriate; RM consumption/allocation destination R and PM P. Intra-company storage transfer ≠ STO.
+- Planning outputs are **suggestions** (transfer / PO / reschedule); transactional authority stays in owning modules.
+- Procurement Action/Follow-up Register belongs **CSN Tracker later**, not planning scope.
+- REQUIREMENT tab is business reference, **not identical UI build**; `ErpDenseGrid`, Excel-friendly, no cards/side panels.
+- Some MOQ set by supplier, some by Procurement, or no fixed MOQ; recorded policy can change. Existing PO size is evidence, **not proof** of MOQ.
+- Existing `plan_feed` is not MTS customer demand; ERP actual MTS history is short; PO12 now CRCP Discrepancy + Returnable Transfer per Claude verified discovery. Do not resurrect superseded assumptions.
+
+## Claude review instructions / delivery gate
+1. Fetch these two ChatGPT files from `agent/chatgpt` at their latest commit. Avoid assuming locally present until fetch.
+2. Cross-reference **every** B01–B14 row against technical discovery and old PR #654; label VERIFIED / CONFLICT / OPEN and link exact schema/handler/route.
+3. Propose technical decisions for T01–T12 with evidence; do not convert business decisions into invented DB/SQL.
+4. Draft actual page-vs-tab-vs-service map ensuring Customer Plan, Production Estimate, Requirement & Alerts, Material Daily Projection (within periodic run), Calibration, Procurement/Distribution Suggestions, Policy & Commercial compare, saved scenarios all represented. Do not force 19 menu pages or make a generic copy of spreadsheet.
+5. Update `PAGE-MAP.md` and separate technical gaps via your Claude branch/PR; stop for owner functional signoff.
+6. No migration, BE, FE, PROD change or merge before review. Preserve branch SHA/source references and audit trail.
+
+**Pending exact source/algorithm mapping is not a request for the owner to repeat confirmed rules.** Escalate only genuine contradictions requiring new business choice.
