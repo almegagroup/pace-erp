@@ -544,6 +544,20 @@ export async function findCustomerByGstHandler(
   }
 }
 
+// A company's customer mapping list is far past PostgREST's 1000-row response
+// cap (CMP003 alone had 1565 on 2026-10-13). A plain read silently returned
+// only 1000, so ~565 CMP003 customers — newest ones included — were missing
+// from every non-admin customer list/search. fetchInChunks pages each chunk.
+async function fetchCompanyCustomerMapRows(companyIds: string[]): Promise<Record<string, unknown>[]> {
+  try {
+    return await fetchInChunks<Record<string, unknown>>(companyIds, (chunk) =>
+      serviceRoleClient.schema("erp_master").from("customer_company_map")
+        .select("customer_id").in("company_id", chunk).eq("active", true).order("customer_id"));
+  } catch {
+    throw new Error("OM_CUSTOMER_LIST_FAILED");
+  }
+}
+
 export async function listCustomersHandler(
   req: Request,
   ctx: OmHandlerContext,
@@ -584,16 +598,8 @@ export async function listCustomersHandler(
           return customerErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
         }
       }
-      const { data: priorityMapRows, error: priorityMapError } = await serviceRoleClient
-        .schema("erp_master")
-        .from("customer_company_map")
-        .select("customer_id")
-        .eq("company_id", priorityCompanyId)
-        .eq("active", true);
-      if (priorityMapError) {
-        throw new Error("OM_CUSTOMER_LIST_FAILED");
-      }
-      for (const row of priorityMapRows ?? []) {
+      const priorityMapRows = await fetchCompanyCustomerMapRows([priorityCompanyId]);
+      for (const row of priorityMapRows) {
         priorityCustomerIds.add(String((row as Record<string, unknown>).customer_id));
       }
     }
@@ -614,16 +620,8 @@ export async function listCustomersHandler(
       }
     }
     if (scopeCompanyIds) {
-      const { data: mapRows, error: mapError } = await serviceRoleClient
-        .schema("erp_master")
-        .from("customer_company_map")
-        .select("customer_id")
-        .in("company_id", scopeCompanyIds)
-        .eq("active", true);
-      if (mapError) {
-        throw new Error("OM_CUSTOMER_LIST_FAILED");
-      }
-      const mappedIds: string[] = (mapRows ?? []).map((row: Record<string, unknown>) => String(row.customer_id));
+      const mapRows = await fetchCompanyCustomerMapRows(scopeCompanyIds);
+      const mappedIds: string[] = mapRows.map((row: Record<string, unknown>) => String(row.customer_id));
       scopedCustomerIds = [...new Set(mappedIds)];
       if (scopedCustomerIds.length === 0) {
         return okResponse({ data: [], total: 0 }, ctx.request_id, req);
