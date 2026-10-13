@@ -241,11 +241,22 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     if (!companyId) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_COMPANY_REQUIRED", 400, "company_id is required.");
     const rows = Array.isArray(body.rows) ? (body.rows as RawUploadRow[]) : [];
     if (rows.length === 0) return soMapBulkErrorResponse(req, ctx, "SO_MAP_BULK_ROWS_REQUIRED", 400, "At least one row is required.");
-    const uploadKeyCounts = new Map<string, number>();
+    // The same (External SO, FO, SKU) repeated in one workbook is a pasted
+    // duplicate. The FIRST occurrence stays a normal row; only later copies
+    // are marked, so removing them leaves a usable row behind. If the copies
+    // disagree on Pack Qty, the intended quantity is unknowable — then every
+    // copy is a conflict the user must resolve in the Excel.
+    const firstRowByUploadKey = new Map<string, RawUploadRow>();
+    const conflictingUploadKeys = new Set<string>();
+    const laterDuplicateRowIndexes = new Map<number, number>();
     for (const row of rows) {
       const key = [row.external_so_number, row.fo_number, row.sku].map(toUpperTrimmedString).join("::");
-      uploadKeyCounts.set(key, (uploadKeyCounts.get(key) ?? 0) + 1);
+      const first = firstRowByUploadKey.get(key);
+      if (!first) { firstRowByUploadKey.set(key, row); continue; }
+      laterDuplicateRowIndexes.set(Number(row.row_index), Number(first.row_index));
+      if (Math.abs(Number(first.pack_qty ?? 0) - Number(row.pack_qty ?? 0)) > QTY_TOL) conflictingUploadKeys.add(key);
     }
+    const uploadKeyOf = (row: RawUploadRow) => [row.external_so_number, row.fo_number, row.sku].map(toUpperTrimmedString).join("::");
 
     // Bulk-resolve every distinct External SO Number in one round (§8B/§8E).
     // The Excel value is the customer's external SO/PO reference, not PACE's
@@ -332,6 +343,8 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
     const batchRequestedByLine = new Map<string, number>();
     const batchReplacingByLine = new Map<string, number>();
     for (const row of rows) {
+      // A pasted duplicate must not consume the SO balance a second time.
+      if (laterDuplicateRowIndexes.has(Number(row.row_index)) || conflictingUploadKeys.has(uploadKeyOf(row))) continue;
       const so = resolveExternalSo(row.external_so_number);
       if (!so || toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)
         || toUpperTrimmedString(so.dispatch_type) !== "DEPENDENT_DIRECT" || so.is_dd_dispatch !== true) continue;
@@ -386,9 +399,13 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
         results.push({ row_index: row.row_index, status: "ERROR", error_code: "SITE_DETAILS_REQUIRED" });
         continue;
       }
-      const uploadKey = [row.external_so_number, row.fo_number, row.sku].map(toUpperTrimmedString).join("::");
-      if ((uploadKeyCounts.get(uploadKey) ?? 0) > 1) {
-        results.push({ row_index: row.row_index, status: "ERROR", error_code: "DUPLICATE_UPLOAD_ROW" });
+      if (conflictingUploadKeys.has(uploadKeyOf(row))) {
+        results.push({ row_index: row.row_index, status: "ERROR", error_code: "DUPLICATE_UPLOAD_ROW_QTY_CONFLICT" });
+        continue;
+      }
+      const duplicateOf = laterDuplicateRowIndexes.get(Number(row.row_index));
+      if (duplicateOf != null) {
+        results.push({ row_index: row.row_index, status: "ERROR", error_code: "DUPLICATE_UPLOAD_ROW", duplicate_of_row_index: duplicateOf });
         continue;
       }
       const soNumber = toTrimmedString(row.external_so_number);
