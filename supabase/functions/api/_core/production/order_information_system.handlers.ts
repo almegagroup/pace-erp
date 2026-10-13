@@ -71,6 +71,105 @@ export function scopeCompanyIds(allowed: string[] | null, requested: string[]): 
   return scoped; // deliberately NOT throwing on a denied id — see resolveAllowedCompanyIds' no-leak note
 }
 
+type PostingScopedOrderIds = {
+  processOrderIds: string[];
+  packingOrderIds: string[];
+};
+
+/**
+ * PR24 is a posting-date report. Resolve its candidate orders from the
+ * movements in the selected period before applying the normal PO filters.
+ * Selecting the newest created POs first is incorrect for a historical date
+ * range: an August report can otherwise only see September/October orders.
+ */
+async function resolvePostingScopedOrderIds(
+  companyIds: string[] | null,
+  dateFrom: string,
+  dateTo: string,
+): Promise<PostingScopedOrderIds> {
+  const pageSize = 1000;
+  const ledgerKeys: JsonRecord[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    let query = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+      .select("stock_document_id, batch_number, company_id")
+      .gte("posting_date", dateFrom)
+      .lte("posting_date", dateTo)
+      .order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (companyIds) query = query.in("company_id", companyIds);
+    const { data, error } = await query;
+    if (error) throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
+    const page = (data ?? []) as JsonRecord[];
+    ledgerKeys.push(...page);
+    if (page.length < pageSize) break;
+  }
+
+  const stockDocumentIds = [...new Set(
+    ledgerKeys.map((row) => toTrimmedString(row.stock_document_id)).filter(Boolean),
+  )];
+  const batchNumbers = [...new Set(
+    ledgerKeys.map((row) => toTrimmedString(row.batch_number)).filter(Boolean),
+  )];
+  const ledgerCompanyIds = [...new Set(
+    ledgerKeys.map((row) => toTrimmedString(row.company_id)).filter(Boolean),
+  )];
+  const effectiveCompanyIds = companyIds ?? ledgerCompanyIds;
+
+  const processOrderIds = new Set<string>();
+  const packingOrderIds = new Set<string>();
+  if (stockDocumentIds.length > 0) {
+    const documents = await fetchInChunks<JsonRecord>(stockDocumentIds, (idChunk) =>
+      serviceRoleClient.schema("erp_inventory").from("stock_document")
+        .select("reference_document_type, reference_document_id")
+        .in("id", idChunk),
+    ).catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
+    for (const document of documents) {
+      const id = toTrimmedString(document.reference_document_id);
+      if (!id) continue;
+      if (toUpperTrimmedString(document.reference_document_type) === "PROC_PO") processOrderIds.add(id);
+      if (toUpperTrimmedString(document.reference_document_type) === "PACK_PO") packingOrderIds.add(id);
+    }
+  }
+
+  // PID and other linked movements can be tagged to another document type but
+  // still carry the Process PO batch. Include their owning process/packing POs.
+  if (batchNumbers.length > 0) {
+    const batchProcessRows = await fetchInChunks<JsonRecord>(batchNumbers, (batchChunk) => {
+      let query = serviceRoleClient.schema("erp_production").from("process_order")
+        .select("id")
+        .in("batch_number", batchChunk);
+      if (effectiveCompanyIds.length > 0) query = query.in("company_id", effectiveCompanyIds);
+      return query;
+    }).catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
+    for (const row of batchProcessRows) processOrderIds.add(String(row.id));
+  }
+
+  // A Process-tab report with linked packing must include parents of directly
+  // posted Packing POs; the Packing tab needs POs belonging to a batch-matched
+  // Process PO as well.
+  if (packingOrderIds.size > 0) {
+    const directPackingRows = await fetchInChunks<JsonRecord>([...packingOrderIds], (idChunk) =>
+      serviceRoleClient.schema("erp_production").from("packing_order")
+        .select("process_order_id")
+        .in("id", idChunk),
+    ).catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
+    for (const row of directPackingRows) {
+      const processOrderId = toTrimmedString(row.process_order_id);
+      if (processOrderId) processOrderIds.add(processOrderId);
+    }
+  }
+  if (processOrderIds.size > 0) {
+    const linkedPackingRows = await fetchInChunks<JsonRecord>([...processOrderIds], (idChunk) =>
+      serviceRoleClient.schema("erp_production").from("packing_order")
+        .select("id")
+        .in("process_order_id", idChunk),
+    ).catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
+    for (const row of linkedPackingRows) packingOrderIds.add(String(row.id));
+  }
+
+  return { processOrderIds: [...processOrderIds], packingOrderIds: [...packingOrderIds] };
+}
+
 // GET /api/production/order-information-system
 export async function getOrderInformationReportHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
@@ -116,6 +215,10 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       }
     }
 
+    const postingScopedOrderIds = bypassDateRange
+      ? null
+      : await resolvePostingScopedOrderIds(companyIds, dateFrom, dateTo);
+
     // ── Step 1: resolve which Process/Packing Orders are in scope ─────────────────────────
     let processOrders: JsonRecord[] = [];
     let packingOrdersDirect: JsonRecord[] = []; // only populated by a direct PACK_PO po_number lookup
@@ -149,9 +252,13 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         processOrders = (data ?? []) as JsonRecord[];
       }
     } else if (tab === "PROCESS") {
+      if (!postingScopedOrderIds?.processOrderIds.length) {
+        return okResponse({ data: [], meta: { order_count: 0, movement_count: 0 } }, ctx.request_id, req);
+      }
       let pq = serviceRoleClient.schema("erp_production").from("process_order")
         .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, segment_code, stroke_master_id, has_unapproved_deviation")
         .order("created_at", { ascending: false })
+        .in("id", postingScopedOrderIds.processOrderIds)
         .limit(MAX_ORDERS_MATCHED);
       if (companyIds) pq = pq.in("company_id", companyIds);
       if (orderType) pq = pq.eq("po_type", orderType);
@@ -166,9 +273,13 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       if (error) throw new Error("PROD_OIS_LOOKUP_FAILED");
       processOrders = (data ?? []) as JsonRecord[];
     } else {
+      if (!postingScopedOrderIds?.packingOrderIds.length) {
+        return okResponse({ data: [], meta: { order_count: 0, movement_count: 0 } }, ctx.request_id, req);
+      }
       let pq = serviceRoleClient.schema("erp_production").from("packing_order")
         .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, material_id, segment_code, num_packs, fill_qty_per_pack")
         .order("created_at", { ascending: false })
+        .in("id", postingScopedOrderIds.packingOrderIds)
         .limit(MAX_ORDERS_MATCHED);
       if (companyIds) pq = pq.in("company_id", companyIds);
       if (orderType) pq = pq.eq("po_type", orderType);
