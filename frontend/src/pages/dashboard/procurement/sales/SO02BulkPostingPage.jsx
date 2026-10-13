@@ -77,6 +77,20 @@ function compareWithQueue(excelRows, queueRows) {
   return results;
 }
 
+const CHECK_LABEL = {
+  TALLY_INVOICE_REUSED: "Tally Invoice used twice",
+  TALLY_INVOICE_MISSING: "Tally Invoice blank",
+  LR_REUSED: "LR used twice",
+  IBN_REUSED: "IBN used twice",
+  INVOICE_DATE_NOT_DO_DATE: "Invoice Date ≠ DO Date",
+  LR_BEFORE_DO: "LR before DO",
+  DISPATCH_BEFORE_LR: "Dispatch before LR",
+  TRUCK_TWO_TRANSPORTERS: "Truck under 2 transporters",
+  INVOICE_PREFIX_UNUSUAL: "Unusual invoice series",
+  INVOICE_OUT_OF_ORDER: "Invoice no. out of date order",
+  QTY_UNUSUAL: "Unusual Pack Qty",
+};
+
 const STATUS_LABEL = { MATCHED: "Matched", DIFFERENT: "Different", NOT_IN_QUEUE: "Not in queue", ONLY_IN_SYSTEM: "Only in system" };
 const STATUS_TONE = { MATCHED: "text-emerald-800", DIFFERENT: "font-semibold text-rose-700", NOT_IN_QUEUE: "font-semibold text-amber-700", ONLY_IN_SYSTEM: "font-semibold text-amber-700" };
 
@@ -99,13 +113,14 @@ async function exportQueue(rows) {
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Bulk Posting Queue");
-  sheet.addRow([...TEMPLATE_HEADERS, "DO Number", "SO Number", "Document Name", "Base Qty", "SO02 Action", "Rate", "Value", "Bill To", "Ship To"]);
+  sheet.addRow([...TEMPLATE_HEADERS, "DO Number", "SO Number", "Document Name", "Base Qty", "SO02 Action", "Rate", "Value", "Bill To", "Ship To", "Checks"]);
   for (const row of rows) {
     sheet.addRow([
       row.fo_number || row.so_number, row.dc_date, row.transporter, row.lr_number, row.lr_date, row.sku_code,
       Number(row.pack_qty ?? 0), row.storage_location_code, row.pre_invoice_tally_invoice_number, row.pre_invoice_tally_invoice_date,
       row.pre_invoice_inbound_number, row.vehicle_number, row.dispatch_date,
       row.dc_number, row.so_number, row.document_name, Number(row.base_qty ?? 0), row.posting_action, Number(row.rate ?? 0), Number(row.value ?? 0), row.bill_to, row.ship_to,
+      (row.checks ?? []).map((check) => check.message).join(" | "),
     ]);
   }
   sheet.getRow(1).font = { bold: true };
@@ -135,17 +150,38 @@ export default function SO02BulkPostingPage() {
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [comparison, setComparison] = useState(null);
+  const [checkFilter, setCheckFilter] = useState("");
   const [showAllComparison, setShowAllComparison] = useState(false);
   const compareInputRef = useRef(null);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   const query = useQuery({ queryKey: ["so02-bulk-posting", effectiveCompanyId], queryFn: () => listBulkPostingQueue(effectiveCompanyId), enabled: Boolean(effectiveCompanyId) });
   const rows = useMemo(() => Array.isArray(query.data?.items) ? query.data.items : [], [query.data]);
+  // Suspicious-data checks come per DO from the server; a DO is "flagged"
+  // when any check fired for it.
+  const checkSummary = useMemo(() => {
+    const byCode = new Map();
+    const flaggedDoIds = new Set();
+    const seen = new Set();
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      for (const check of row.checks ?? []) {
+        flaggedDoIds.add(row.id);
+        byCode.set(check.code, (byCode.get(check.code) ?? new Set()).add(row.id));
+      }
+    }
+    const cleanDoIds = [...seen].filter((id) => !flaggedDoIds.has(id));
+    return { byCode, flaggedDoIds, cleanDoIds };
+  }, [rows]);
   const visibleRows = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) => [row.dc_number, row.fo_number, row.so_number, row.external_so_number, row.sku_code, row.document_name, row.pre_invoice_tally_invoice_number, row.pre_invoice_inbound_number, row.lr_number, row.vehicle_number, row.transporter]
+    const byCheck = checkFilter
+      ? rows.filter((row) => (checkFilter === "ANY" ? checkSummary.flaggedDoIds.has(row.id) : (checkSummary.byCode.get(checkFilter)?.has(row.id))))
+      : rows;
+    if (!needle) return byCheck;
+    return byCheck.filter((row) => [row.dc_number, row.fo_number, row.so_number, row.external_so_number, row.sku_code, row.document_name, row.pre_invoice_tally_invoice_number, row.pre_invoice_inbound_number, row.lr_number, row.vehicle_number, row.transporter]
       .some((value) => String(value ?? "").toLowerCase().includes(needle)));
-  }, [rows, search]);
+  }, [rows, search, checkFilter, checkSummary]);
   const allIds = [...new Set(visibleRows.filter((row) => row.postable !== false).map((row) => row.id).filter(Boolean))];
   const totalDoCount = new Set(rows.map((row) => row.id)).size;
   const displayNumber = (value) => (value === null || value === undefined || value === "" ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
@@ -223,6 +259,17 @@ export default function SO02BulkPostingPage() {
       title: `${totalDoCount} delivery order${totalDoCount === 1 ? "" : "s"}${search.trim() ? ` · ${new Set(visibleRows.map((row) => row.id)).size} shown` : ""}`,
       children: (
         <div className="grid gap-3">
+          {rows.length ? (
+            <div className="flex flex-wrap items-center gap-2 border border-amber-300 bg-amber-50 px-3 py-2 text-xs">
+              <span className="font-semibold text-amber-900">Data checks:</span>
+              <button type="button" onClick={() => setCheckFilter("")} className={`border px-2 py-0.5 font-semibold ${checkFilter === "" ? "border-slate-700 bg-slate-800 text-white" : "border-slate-300 bg-white text-slate-700"}`}>All DOs ({totalDoCount})</button>
+              <button type="button" onClick={() => setCheckFilter("ANY")} className={`border px-2 py-0.5 font-semibold ${checkFilter === "ANY" ? "border-rose-700 bg-rose-700 text-white" : "border-rose-300 bg-white text-rose-800"}`}>Flagged ({checkSummary.flaggedDoIds.size})</button>
+              {[...checkSummary.byCode.entries()].map(([code, ids]) => (
+                <button key={code} type="button" onClick={() => setCheckFilter(code)} className={`border px-2 py-0.5 font-semibold ${checkFilter === code ? "border-rose-700 bg-rose-700 text-white" : "border-rose-300 bg-white text-rose-800"}`}>{CHECK_LABEL[code] ?? code} ({ids.size})</button>
+              ))}
+              <button type="button" disabled={checkSummary.cleanDoIds.length === 0} onClick={() => setSelected(new Set(checkSummary.cleanDoIds.slice(0, MAX_DOS_PER_POST)))} className="border border-sky-700 bg-sky-100 px-2 py-0.5 font-semibold text-sky-950 disabled:opacity-50">Select DOs with no flags ({Math.min(checkSummary.cleanDoIds.length, MAX_DOS_PER_POST)} of {checkSummary.cleanDoIds.length})</button>
+            </div>
+          ) : null}
           {comparison ? (
             <div className="grid gap-2 border border-slate-300 bg-slate-50 px-3 py-2 text-xs">
               <div className="flex flex-wrap items-center gap-3">
@@ -258,6 +305,9 @@ export default function SO02BulkPostingPage() {
             columns={[
               { key: "select", label: <input aria-label="Select all" type="checkbox" checked={allIds.length > 0 && allIds.every((id) => selected.has(id))} onChange={(event) => setSelected(event.target.checked ? new Set(allIds) : new Set())} />, width: "52px", render: (row) => <input aria-label={`Select ${row.dc_number}`} type="checkbox" disabled={row.postable === false} checked={selected.has(row.id)} onChange={() => toggle(row.id)} /> },
               { key: "dc_number", label: "DO Number", width: "120px", render: (row) => row.dc_number || "—" },
+              { key: "checks", label: "Checks", width: "320px", render: (row) => (row.checks?.length
+                ? <span className="font-semibold text-rose-700">{row.checks.map((check) => check.message).join(" | ")}</span>
+                : <span className="text-emerald-800">OK</span>) },
               { key: "dc_date", label: "DO Date", width: "100px", render: (row) => row.dc_date || "—" },
               { key: "posting_action", label: "SO02 Action", width: "130px", render: (row) => row.posting_action || "—" },
               { key: "fo_number", label: "FO Number", width: "120px", render: (row) => row.fo_number || "—" },

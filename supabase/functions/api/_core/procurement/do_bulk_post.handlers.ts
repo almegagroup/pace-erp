@@ -6,6 +6,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { canMaintainSalesInvoice, computeInvoiceGroups, postPgiInvoiceGroupsHandler } from "./do_unified.handlers.ts";
 import { completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "./vdc_invoice.handlers.ts";
+import { computeBulkPostChecks, type BulkPostCheck } from "./bulk_post_checks.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = { context: Extract<ContextResolution, { status: "RESOLVED" }>; request_id: string; auth_user_id: string; roleCode: string; };
@@ -154,6 +155,10 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
       return {
         ...doc,
         ...rawLine,
+        // The line's own `id` must not replace the DO id: the page selects
+        // and posts DOs by `id` (a line id here made Bulk Post 404).
+        id: text(doc.id),
+        line_id: text(rawLine.id),
         dd_flag: doc.pgi_deferred === true,
         posting_action: postingAction,
         postable: true,
@@ -183,7 +188,18 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
         transporter: transporter ? [text(transporter.transporter_code), text(transporter.transporter_name)].filter(Boolean).join(" — ") : text(doc.transporter_name_freetext) || null,
       };
     });
-    return okResponse({ items }, ctx.request_id, req);
+    let checksByDc = new Map<string, BulkPostCheck[]>();
+    try {
+      const transporterLabelById = new Map([...transporterById.entries()].map(([id, row]) => [id, [text(row.transporter_code), text(row.transporter_name)].filter(Boolean).join(" — ")]));
+      checksByDc = await computeBulkPostChecks(companyId,
+        rows.map((doc) => ({ ...doc, transporter_label: transporterLabelById.get(text(doc.transporter_id)) ?? null })),
+        items);
+    } catch (checkError) {
+      // The checks are advisory; a failure must not hide the queue itself.
+      console.error("[bulk_post] suspicious-data checks failed", checkError);
+    }
+    const itemsWithChecks = items.map((item) => ({ ...item, checks: checksByDc.get(text(item.id)) ?? [] }));
+    return okResponse({ items: itemsWithChecks }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "BULK_POST_QUEUE_FAILED"; return fail(req, ctx, code, 500, code); }
 }
 
