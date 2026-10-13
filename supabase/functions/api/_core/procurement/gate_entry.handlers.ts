@@ -340,6 +340,20 @@ async function resolveGePersonName(
   return { personName: ownName || personNameInput };
 }
 
+/**
+ * Gate Exit may happen in a later shift and must therefore record the
+ * physically present person explicitly. Unlike Gate Entry, it must never
+ * derive the value from the logged-in account.
+ */
+function resolveGateExitPersonName(
+  personNameInput: string,
+): { personName: string } | { error: string } {
+  if (!personNameInput) {
+    return { error: "GEX_PERSON_NAME_REQUIRED" };
+  }
+  return { personName: personNameInput };
+}
+
 // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — resolves a Bulk
 // document's own validity window: [effective_start_date, upper bound), where
 // the upper bound is whichever comes first of (a) the next PO/STO's own
@@ -1821,9 +1835,9 @@ export async function createGateExitInboundHandler(
     const netOverride = parseNullableNumber(body.net_weight_override);
     const effectiveNet = netOverride ?? netCalculated;
 
-    // Same Security-department manual-vs-auto-resolve mechanism as Gate Entry
-    // (resolveGePersonName) — mirrored here for Gate Exit's own person_name.
-    const personNameResult = await resolveGePersonName(ctx, toTrimmedString(body.person_name));
+    // Exit may occur in a different shift from entry. Require its actual
+    // person explicitly; do not inherit GE or logged-in-account person data.
+    const personNameResult = resolveGateExitPersonName(toTrimmedString(body.person_name));
     if ("error" in personNameResult) {
       return procurementErrorResponse(req, ctx, personNameResult.error, 400, "Person Name is required.");
     }
