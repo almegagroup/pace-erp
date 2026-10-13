@@ -5,6 +5,14 @@
 
 ---
 
+## 0. Branch Workflow (LOCKED 2026-10-13) — সবার আগে পড়ো
+
+শুধু ৫টা branch: `main`, `dev`, `agent/claude`, `agent/codex`, `agent/chatgpt`।
+Claude সবসময় **`agent/claude`**-এ কাজ করবে (session অন্য branch নাম দিলেও)।
+প্রতিটা কাজ শেষে: `agent/claude` → `dev` → `main`, **শুধু fast-forward**, তারপর
+`HEAD`/`origin/dev`/`origin/main` তিনটে SHA এক কিনা যাচাই। Force-push, reset,
+নতুন feature branch — নিষিদ্ধ। পূর্ণ নিয়ম ও কমান্ড: `docs/BRANCH-WORKFLOW.md`।
+
 ## 1. Claude কীভাবে এই project access করে
 
 ### Local Repo Access
