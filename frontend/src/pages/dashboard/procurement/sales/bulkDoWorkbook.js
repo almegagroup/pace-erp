@@ -82,3 +82,75 @@ export async function parseUploadedWorkbook(file) {
   });
   return rows;
 }
+
+// SO02 Bulk Posting review sheet: the exported queue with DO Number first,
+// then the upload template's own columns (correctable), then read-only
+// reference columns. The same sheet, corrected, is uploaded back.
+export const REVIEW_SHEET_NAME = "Bulk Posting Review";
+export const REVIEW_HEADERS = [
+  "DO Number", ...TEMPLATE_HEADERS,
+  "SO Number", "External SO Number", "Party", "Party GST", "Site", "Site Address", "Site State",
+  "Document Name", "Pack UOM", "Base Qty", "Rate", "Value", "SO02 Action", "Checks",
+];
+
+function normalizeHeader(value) {
+  return String(value ?? "").replace(/\u00a0/g, " ").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+// Reads a corrected review sheet by column NAME (never by position), so a
+// user who reorders or hides columns in Excel cannot shift the values.
+export async function parseReviewWorkbook(file) {
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await file.arrayBuffer());
+  const sheet = workbook.getWorksheet(REVIEW_SHEET_NAME) ?? workbook.worksheets[0];
+  const fields = {
+    dc_number: "donumber", fo_or_so_number: "fosonumber", do_date: "dodate", transporter_name: "transporter",
+    lr_number: "lrnumber", lr_date: "lrdate", sku: "sku", pack_qty: "packqty", storage_location_code: "storagelocation",
+    tally_invoice_number: "tallyinvoicenumber", tally_invoice_date: "tallyinvoicedate", inbound_number: "inboundnumber",
+    truck_number: "trucknumber", dispatch_date: "dispatchdate",
+  };
+  const columnByField = {};
+  sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, columnNumber) => {
+    const header = normalizeHeader(cell.text || cell.value);
+    for (const [field, accepted] of Object.entries(fields)) if (header === accepted) columnByField[field] = columnNumber;
+  });
+  if (!columnByField.dc_number || !columnByField.sku) {
+    throw new Error("This is not a Bulk Posting review sheet: the \"DO Number\" and \"SKU\" columns are required. Export the sheet from this page, correct it, and upload it back.");
+  }
+  const rows = [];
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const value = (field) => {
+      if (!columnByField[field]) return "";
+      const raw = row.getCell(columnByField[field]).value;
+      if (raw == null) return "";
+      if (raw instanceof Date) return raw;
+      if (typeof raw === "object" && "text" in raw) return String(raw.text ?? "").trim();
+      if (typeof raw === "object" && "result" in raw) return raw.result;
+      return raw;
+    };
+    const dcNumber = String(value("dc_number") ?? "").trim();
+    const sku = String(value("sku") ?? "").trim();
+    if (!dcNumber && !sku) return;
+    rows.push({
+      excel_row: rowNumber,
+      dc_number: dcNumber,
+      fo_or_so_number: String(value("fo_or_so_number") ?? "").trim(),
+      do_date: toIsoDate(value("do_date")),
+      transporter_name: String(value("transporter_name") ?? "").trim(),
+      lr_number: String(value("lr_number") ?? "").trim(),
+      lr_date: toIsoDate(value("lr_date")),
+      sku,
+      // Blank Pack Qty means "unchanged", not zero.
+      pack_qty: String(value("pack_qty") ?? "").trim() === "" ? null : Number(value("pack_qty")),
+      storage_location_code: String(value("storage_location_code") ?? "").trim(),
+      tally_invoice_number: String(value("tally_invoice_number") ?? "").trim(),
+      tally_invoice_date: toIsoDate(value("tally_invoice_date")),
+      inbound_number: String(value("inbound_number") ?? "").trim(),
+      truck_number: String(value("truck_number") ?? "").trim(),
+      dispatch_date: toIsoDate(value("dispatch_date")),
+    });
+  });
+  return rows;
+}

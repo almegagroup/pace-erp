@@ -277,6 +277,9 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // Accounts action, so it deliberately uses the existing Invoice/PGI ACL.
   "GET:/api/procurement/delivery-orders-v2/bulk/posting":        { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
   "POST:/api/procurement/delivery-orders-v2/bulk/post":          { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
+  // Bulk Posting "Upload Corrections" edits unposted bulk DOs' header details
+  // before posting; same authority as posting them.
+  "POST:/api/procurement/delivery-orders-v2/bulk/posting/corrections": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
   "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
   "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },

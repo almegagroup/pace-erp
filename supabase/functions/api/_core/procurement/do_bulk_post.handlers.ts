@@ -2,6 +2,8 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { isManualDocumentDateWithinWindow } from "../../_shared/manualDocumentDateWindow.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { canMaintainSalesInvoice, computeInvoiceGroups, postPgiInvoiceGroupsHandler } from "./do_unified.handlers.ts";
@@ -184,7 +186,12 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
         round_off: group?.so_round_off_amount ?? null,
         parent_company: group?.parent_company_display ?? null,
         bill_to: group?.bill_to?.name ?? null,
+        bill_to_address: group?.bill_to?.address ?? null,
+        bill_to_gst_number: group?.bill_to?.gst_number ?? null,
         ship_to: group?.ship_to?.name ?? null,
+        ship_to_address: group?.ship_to?.address ?? null,
+        ship_to_state: group?.ship_to?.state ?? null,
+        ship_to_gst_number: group?.ship_to?.gst_number ?? null,
         transporter: transporter ? [text(transporter.transporter_code), text(transporter.transporter_name)].filter(Boolean).join(" — ") : text(doc.transporter_name_freetext) || null,
       };
     });
@@ -263,4 +270,187 @@ export async function bulkPostDeliveryOrdersHandler(req: Request, ctx: Procureme
     }
     return okResponse({ results }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "BULK_POST_FAILED"; return fail(req, ctx, code, 500, code); }
+}
+
+
+// ---------------------------------------------------------------------------
+// Corrections. The user exports the queue, checks it against Tally, edits the
+// sheet and uploads it back. Header details are corrected in place on the
+// still-unposted DO; an item-level change (SKU, Pack Qty, Storage Location,
+// FO/SO) is not edited here -- it changes stock, allocation and value, so that
+// DO must be cancelled and uploaded again through SO03's Bulk DO Upload.
+// ---------------------------------------------------------------------------
+type CorrectionRow = {
+  excel_row?: number;
+  dc_number?: string;
+  fo_or_so_number?: string;
+  do_date?: string;
+  transporter_name?: string;
+  lr_number?: string;
+  lr_date?: string;
+  sku?: string;
+  pack_qty?: number | string;
+  storage_location_code?: string;
+  tally_invoice_number?: string;
+  tally_invoice_date?: string;
+  inbound_number?: string;
+  truck_number?: string;
+  dispatch_date?: string;
+};
+
+const HEADER_FIELDS: Array<{ key: keyof CorrectionRow; column: string; label: string; kind?: "date" }> = [
+  { key: "do_date", column: "dc_date", label: "DO Date", kind: "date" },
+  { key: "lr_number", column: "lr_number", label: "LR Number" },
+  { key: "lr_date", column: "lr_date", label: "LR Date", kind: "date" },
+  { key: "tally_invoice_number", column: "pre_invoice_tally_invoice_number", label: "Tally Invoice Number" },
+  { key: "tally_invoice_date", column: "pre_invoice_tally_invoice_date", label: "Tally Invoice Date", kind: "date" },
+  { key: "inbound_number", column: "pre_invoice_inbound_number", label: "Inbound Number" },
+  { key: "truck_number", column: "vehicle_number", label: "Truck Number" },
+  { key: "dispatch_date", column: "dispatch_date", label: "Dispatch Date", kind: "date" },
+];
+const isIso = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+const sameText = (a: unknown, b: unknown) => text(a).replace(/\s+/g, " ").toUpperCase() === text(b).replace(/\s+/g, " ").toUpperCase();
+
+export async function bulkPostingCorrectionsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const payload = await body(req);
+    const companyId = text(payload.company_id);
+    const apply = payload.apply === true;
+    if (!companyId) return fail(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required.");
+    const denied = await assertInvoiceAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;
+    const rows = (Array.isArray(payload.rows) ? payload.rows : []) as CorrectionRow[];
+    if (!rows.length) return fail(req, ctx, "BULK_CORRECTION_ROWS_REQUIRED", 400, "The correction file has no rows.");
+
+    const dcNumbers = [...new Set(rows.map((row) => text(row.dc_number)).filter(Boolean))];
+    const docs = await fetchInChunks<JsonRecord>(dcNumbers, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .select("id, dc_number, status, is_bulk_uploaded, selling_company_id, dc_date, transporter_id, lr_number, lr_date, vehicle_number, dispatch_date, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number")
+      .in("dc_number", chunk));
+    const docByNumber = new Map(docs.filter((doc) => text(doc.selling_company_id) === companyId).map((doc) => [text(doc.dc_number), doc]));
+    const dcIds = [...docByNumber.values()].map((doc) => text(doc.id));
+    const lines = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+      .select("id, dc_id, material_id, pack_qty, storage_location_id, so_map_allocation_id").in("dc_id", chunk));
+    const materialIds = [...new Set(lines.map((line) => text(line.material_id)).filter(Boolean))];
+    const locationIds = [...new Set(lines.map((line) => text(line.storage_location_id)).filter(Boolean))];
+    const allocationIds = [...new Set(lines.map((line) => text(line.so_map_allocation_id)).filter(Boolean))];
+    const [materials, locations, allocations, transporters] = await Promise.all([
+      fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, external_code, material_name").in("id", chunk)),
+      fetchInChunks<JsonRecord>(locationIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code").in("id", chunk)),
+      fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+        .select("id, map_group:map_group_id(external_fo_number, revised_external_fo_number)").in("id", chunk)),
+      serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_code, transporter_name").eq("active", true)
+        .then(({ data }) => (data ?? []) as JsonRecord[]),
+    ]);
+    const skuByMaterial = new Map(materials.map((row) => [text(row.id), text(row.external_code) || text(row.material_name)]));
+    const locationCodeById = new Map(locations.map((row) => [text(row.id), text(row.code)]));
+    const foByAllocation = new Map(allocations.map((row) => {
+      const group = (row.map_group ?? {}) as JsonRecord;
+      return [text(row.id), [text(group.external_fo_number), text(group.revised_external_fo_number)].filter(Boolean)];
+    }));
+    const linesByDc = new Map<string, JsonRecord[]>();
+    for (const line of lines) linesByDc.set(text(line.dc_id), [...(linesByDc.get(text(line.dc_id)) ?? []), line]);
+    const transporterById = new Map(transporters.map((row) => [text(row.id), row]));
+    const resolveTransporter = (name: string): JsonRecord | null | "AMBIGUOUS" => {
+      const target = text(name).toUpperCase();
+      if (!target) return null;
+      const exact = transporters.filter((row) => text(row.transporter_code).toUpperCase() === target || text(row.transporter_name).toUpperCase() === target);
+      if (exact.length === 1) return exact[0];
+      const partial = transporters.filter((row) => text(row.transporter_name).toUpperCase().includes(target));
+      if (partial.length === 1) return partial[0];
+      return partial.length > 1 || exact.length > 1 ? "AMBIGUOUS" : null;
+    };
+
+    const rowsByDc = new Map<string, CorrectionRow[]>();
+    for (const row of rows) {
+      const key = text(row.dc_number);
+      rowsByDc.set(key, [...(rowsByDc.get(key) ?? []), row]);
+    }
+    const results: JsonRecord[] = [];
+    const today = todayIsoInKolkata();
+    for (const [dcNumber, dcRows] of rowsByDc) {
+      const excelRows = dcRows.map((row) => row.excel_row).filter((value) => value != null);
+      const base = { dc_number: dcNumber || null, excel_rows: excelRows, fo_or_so_number: text(dcRows[0].fo_or_so_number) || null };
+      const doc = docByNumber.get(dcNumber);
+      if (!dcNumber || !doc) { results.push({ ...base, status: "NOT_FOUND", message: dcNumber ? "DO Number not found in this company." : "DO Number column is blank — keep the exported DO Number on every row." }); continue; }
+      if (doc.is_bulk_uploaded !== true || upper(doc.status) !== "CREATED") {
+        results.push({ ...base, status: "NOT_EDITABLE", message: `DO is ${text(doc.status)} — only an unposted Bulk-DO-Upload DO can be corrected here.` });
+        continue;
+      }
+      const errors: string[] = [];
+      // Item-level comparison: the sheet's lines must be exactly this DO's lines.
+      const currentLines = (linesByDc.get(text(doc.id)) ?? []).map((line) => ({
+        sku: skuByMaterial.get(text(line.material_id)) ?? "",
+        pack_qty: Number(line.pack_qty ?? 0),
+        location: locationCodeById.get(text(line.storage_location_id)) ?? "",
+        fos: foByAllocation.get(text(line.so_map_allocation_id)) ?? [],
+      }));
+      const itemChanges: string[] = [];
+      const unmatched = [...currentLines];
+      for (const row of dcRows) {
+        const index = unmatched.findIndex((line) => sameText(line.sku, row.sku));
+        if (index < 0) { itemChanges.push(`SKU ${text(row.sku) || "(blank)"} is not on this DO`); continue; }
+        const line = unmatched.splice(index, 1)[0];
+        if (text(row.pack_qty) && Math.abs(line.pack_qty - (Number(row.pack_qty) || 0)) > 0.0001) itemChanges.push(`SKU ${line.sku}: Pack Qty ${line.pack_qty} → ${text(row.pack_qty)}`);
+        if (text(row.storage_location_code) && !sameText(line.location, row.storage_location_code)) itemChanges.push(`SKU ${line.sku}: Storage Location ${line.location} → ${text(row.storage_location_code)}`);
+        if (text(row.fo_or_so_number) && line.fos.length && !line.fos.some((fo) => sameText(fo, row.fo_or_so_number))) itemChanges.push(`SKU ${line.sku}: FO ${line.fos[0]} → ${text(row.fo_or_so_number)}`);
+      }
+      for (const line of unmatched) itemChanges.push(`SKU ${line.sku} of this DO is missing from the file`);
+
+      // Header fields: every row of one DO must agree.
+      const header = dcRows[0];
+      for (const field of [...HEADER_FIELDS.map((entry) => entry.key), "transporter_name" as keyof CorrectionRow]) {
+        const values = new Set(dcRows.map((row) => text(row[field]).toUpperCase()));
+        if (values.size > 1) errors.push(`Rows of this DO disagree on ${field.replace(/_/g, " ")}`);
+      }
+      const patch: JsonRecord = {};
+      const changes: string[] = [];
+      for (const field of HEADER_FIELDS) {
+        const next = text(header[field.key]);
+        const current = text(doc[field.column]);
+        if (!next) continue; // a blank cell never erases existing data
+        if (field.kind === "date" && !isIso(next)) { errors.push(`${field.label} "${next}" is not a valid date`); continue; }
+        if (field.kind === "date" ? next !== current.slice(0, 10) : !sameText(next, current)) {
+          patch[field.column] = next;
+          changes.push(`${field.label}: ${current || "—"} → ${next}`);
+        }
+      }
+      const transporterName = text(header.transporter_name);
+      if (transporterName) {
+        const currentTransporter = transporterById.get(text(doc.transporter_id));
+        const currentLabel = currentTransporter ? text(currentTransporter.transporter_name) : "";
+        const sameAsCurrent = currentTransporter && (sameText(currentTransporter.transporter_code, transporterName) || text(currentTransporter.transporter_name).toUpperCase().includes(transporterName.toUpperCase()));
+        if (!sameAsCurrent) {
+          const resolved = resolveTransporter(transporterName);
+          if (resolved === "AMBIGUOUS") errors.push(`Transporter "${transporterName}" matches more than one Transporter Master entry`);
+          else if (!resolved) errors.push(`Transporter "${transporterName}" is not in Transporter Master`);
+          else { patch.transporter_id = text(resolved.id); changes.push(`Transporter: ${currentLabel || "—"} → ${text(resolved.transporter_name)}`); }
+        }
+      }
+      const effective = (column: string) => text(patch[column] ?? doc[column]).slice(0, 10);
+      for (const column of ["dc_date", "lr_date", "pre_invoice_tally_invoice_date"]) {
+        if (patch[column] && !isManualDocumentDateWithinWindow(text(patch[column]))) errors.push(`${column === "dc_date" ? "DO Date" : column === "lr_date" ? "LR Date" : "Tally Invoice Date"} must be within three months of today`);
+      }
+      if (effective("dispatch_date") && effective("lr_date") && effective("dispatch_date") < effective("lr_date")) errors.push("Dispatch Date is before LR Date");
+      if (patch.dispatch_date && text(patch.dispatch_date) > today) errors.push("Dispatch Date is in the future");
+      if (patch.vehicle_number && text(patch.vehicle_number).length < 4) errors.push("Truck Number must have at least 4 characters");
+
+      if (itemChanges.length) {
+        results.push({ ...base, status: "NEEDS_REUPLOAD", changes, message: `Item change — cancel this DO and upload it again in SO03: ${itemChanges.join("; ")}` });
+        continue;
+      }
+      if (errors.length) { results.push({ ...base, status: "ERROR", changes, message: errors.join("; ") }); continue; }
+      if (!changes.length) { results.push({ ...base, status: "UNCHANGED", changes: [], message: "No change" }); continue; }
+      if (apply) {
+        const { error } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+          .update(patch).eq("id", text(doc.id)).eq("status", "CREATED");
+        if (error) { results.push({ ...base, status: "ERROR", changes, message: "Unable to save this DO's correction." }); continue; }
+        results.push({ ...base, status: "UPDATED", changes, message: changes.join("; ") });
+      } else {
+        results.push({ ...base, status: "WILL_UPDATE", changes, message: changes.join("; ") });
+      }
+    }
+    return okResponse({ results, applied: apply }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "BULK_CORRECTION_FAILED";
+    return fail(req, ctx, code, 500, code);
+  }
 }

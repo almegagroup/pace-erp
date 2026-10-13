@@ -1265,6 +1265,9 @@ export function listBulkPostingQueue(companyId) {
 export function bulkPostDeliveryOrders(dcIds) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/post", { dc_ids: dcIds });
 }
+export function bulkPostingCorrections(companyId, rows, apply) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/posting/corrections", { company_id: companyId, rows, apply: apply === true });
+}
 export function listVdcTruckDispatchPending(companyId) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch", undefined, { company_id: companyId });
 }
