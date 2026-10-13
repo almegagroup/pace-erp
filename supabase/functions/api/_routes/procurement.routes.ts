@@ -668,6 +668,12 @@ export async function dispatchProcurementRoutes(
       return await getGateEntryByNumberHandler(req, ctx);
     case "POST:/api/procurement/gate-exits/inbound":
       return await createGateExitInboundHandler(req, ctx);
+    // Gate Exit's own Person Name prefill — identical Security-department
+    // manual-vs-auto-resolve mechanism as Gate Entry, so it reuses the same
+    // handler (the logic is keyed on the logged-in user's own work context,
+    // not on GE-specific data).
+    case "GET:/api/procurement/gate-exits/person-name-context":
+      return await getGePersonNameContextHandler(req, ctx);
     case "GET:/api/procurement/qa-documents":
       return await listQADocumentsHandler(req, ctx);
     case "GET:/api/procurement/qa-test-methods":

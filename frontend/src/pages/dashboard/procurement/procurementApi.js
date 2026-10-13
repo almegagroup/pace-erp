@@ -520,6 +520,10 @@ export function getGePersonNameContext() {
   return fetchProcurement("GET", "/api/procurement/gate-entries/person-name-context");
 }
 
+export function getGexPersonNameContext() {
+  return fetchProcurement("GET", "/api/procurement/gate-exits/person-name-context");
+}
+
 export function createGateExitInbound(data) {
   return fetchProcurement("POST", "/api/procurement/gate-exits/inbound", data);
 }

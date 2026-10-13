@@ -51,7 +51,8 @@ export default function GateReportPage() {
     const q = search.toLowerCase();
     return allRows.filter((r) =>
       [r.ge_number, r.material_code, r.material_name, r.vendor_name, r.vendor_code,
-       r.grn_number, r.gex_number, r.ge_type, r.ge_status, r.vehicle_number, r.invoice_number]
+       r.grn_number, r.gex_number, r.ge_type, r.ge_status, r.vehicle_number, r.invoice_number,
+       r.ge_person_name, r.gex_person_name]
         .some((v) => String(v ?? "").toLowerCase().includes(q))
     );
   }, [allRows, search]);
@@ -129,6 +130,8 @@ export default function GateReportPage() {
               { key: "ge_number",       label: "GE Number",     width: "120px" },
               { key: "company_code",    label: "Company",       width: "90px",  render: (r) => r.company_code || "—" },
               { key: "vehicle_number",  label: "Vehicle No.",   width: "110px", render: (r) => r.vehicle_number || "—" },
+              { key: "ge_person_name",  label: "GE Person Name",  width: "140px", render: (r) => r.ge_person_name || "—" },
+              { key: "gex_person_name", label: "GEX Person Name", width: "140px", render: (r) => r.gex_person_name || "—" },
               { key: "vendor",          label: "Vendor",        width: "180px", render: (r) => r.vendor_name ? `${r.vendor_code || ""} — ${r.vendor_name}`.replace(/^ — /, "") : "—" },
               { key: "material_code",   label: "Material Code", width: "120px", render: (r) => r.material_code || "—" },
               { key: "material_name",   label: "Material Name", render: (r) => r.material_name || "—" },

@@ -1795,6 +1795,14 @@ export async function createGateExitInboundHandler(
     const netOverride = parseNullableNumber(body.net_weight_override);
     const effectiveNet = netOverride ?? netCalculated;
 
+    // Same Security-department manual-vs-auto-resolve mechanism as Gate Entry
+    // (resolveGePersonName) — mirrored here for Gate Exit's own person_name.
+    const personNameResult = await resolveGePersonName(ctx, toTrimmedString(body.person_name));
+    if ("error" in personNameResult) {
+      return procurementErrorResponse(req, ctx, personNameResult.error, 400, "Person Name is required.");
+    }
+    const personName = personNameResult.personName;
+
     const exitNumber = await generateProcurementDocNumber("GEX");
     const { data: gateExit, error: gateExitError } = await serviceRoleClient
       .schema("erp_procurement")
@@ -1808,6 +1816,7 @@ export async function createGateExitInboundHandler(
         vehicle_number: toTrimmedString(body.vehicle_number) || gateEntry.vehicle_number,
         driver_name: toTrimmedString(body.driver_name) || gateEntry.driver_name || null,
         gate_staff_id: toTrimmedString(body.gate_staff_id) || ctx.auth_user_id,
+        person_name: personName,
         rst_number_tare: toTrimmedString(body.rst_number_tare) || null,
         tare_weight: tareWeight,
         net_weight_calculated: netCalculated,
@@ -2029,7 +2038,7 @@ export async function gateReportHandler(
     let geQuery = serviceRoleClient
       .schema("erp_procurement")
       .from("gate_entry")
-      .select("id, ge_number, ge_date, company_id, ge_type, status, remarks, vehicle_number")
+      .select("id, ge_number, ge_date, company_id, ge_type, status, remarks, vehicle_number, person_name")
       .order("ge_date", { ascending: false });
 
     if (companyId) geQuery = geQuery.eq("company_id", companyId);
@@ -2062,7 +2071,7 @@ export async function gateReportHandler(
     const { data: gexRows } = await serviceRoleClient
       .schema("erp_procurement")
       .from("gate_exit_inbound")
-      .select("id, gate_entry_id, exit_number, exit_date, tare_weight, net_weight_calculated, remarks")
+      .select("id, gate_entry_id, exit_number, exit_date, tare_weight, net_weight_calculated, remarks, person_name")
       .in("gate_entry_id", geIds);
     const gexMap = new Map(
       ((gexRows ?? []) as JsonRecord[]).map((g) => [String(g.gate_entry_id), g])
@@ -2128,6 +2137,7 @@ export async function gateReportHandler(
         ge_type: ge.ge_type,
         ge_status: ge.status,
         ge_remarks: ge.remarks ?? null,
+        ge_person_name: ge.person_name ?? null,
         vehicle_number: ge.vehicle_number ?? null,
         line_number: line.line_number,
         material_code: mat?.pace_code ?? null,
@@ -2146,6 +2156,7 @@ export async function gateReportHandler(
         tare_weight: gex ? (gex as JsonRecord).tare_weight : null,
         net_weight_calculated: gex ? (gex as JsonRecord).net_weight_calculated : null,
         gex_remarks: gex ? (gex as JsonRecord).remarks : null,
+        gex_person_name: gex ? (gex as JsonRecord).person_name ?? null : null,
         days_ge_to_gex: daysBetween(geDate, gexDate),
         days_ge_to_grn: daysBetween(geDate, grnDate),
       });

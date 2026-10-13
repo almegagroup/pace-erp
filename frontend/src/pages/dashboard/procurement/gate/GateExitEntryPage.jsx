@@ -6,7 +6,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { createGateExitInbound, getGateEntryByNumber } from "../procurementApi.js";
+import { createGateExitInbound, getGateEntryByNumber, getGexPersonNameContext } from "../procurementApi.js";
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -75,6 +75,32 @@ export default function GateExitEntryPage() {
   const [remarks, setRemarks] = useState("");
   const [successExit, setSuccessExit] = useState(null);
 
+  // Same Security-department manual-vs-auto-resolve Person Name mechanism as
+  // Gate Entry's Create page.
+  const [personName, setPersonName] = useState("");
+  const [isSecurityUser, setIsSecurityUser] = useState(false);
+  const [personNameLoading, setPersonNameLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setPersonNameLoading(true);
+    getGexPersonNameContext()
+      .then((res) => {
+        if (!active) return;
+        setIsSecurityUser(Boolean(res?.is_security));
+        setPersonName(res?.is_security ? "" : (res?.person_name || ""));
+      })
+      .catch(() => {
+        if (!active) return;
+        setIsSecurityUser(false);
+        setPersonName("");
+      })
+      .finally(() => {
+        if (active) setPersonNameLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
   const hasGateExit = Boolean(detail?.gate_exit_inbound?.id);
   const geStatus = String(detail?.status || "").toUpperCase();
   const canGateExit = Boolean(detail) && !hasGateExit && !["PRUNED", "CANCELLED"].includes(geStatus);
@@ -138,6 +164,10 @@ export default function GateExitEntryPage() {
       setError(`Exit is ${detentionDays} days after entry. Detention remarks are mandatory.`);
       return;
     }
+    if (isSecurityUser && !personName.trim()) {
+      setError("Person Name is required.");
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -148,6 +178,7 @@ export default function GateExitEntryPage() {
         exit_time: time12to24(exitTime, ampm),
         tare_weight: tareWeight ? Number(tareWeight) : null,
         remarks: remarks.trim() || null,
+        person_name: personName.trim(),
       });
       setDetail((current) => ({ ...current, gate_exit_inbound: result }));
       setSuccessExit({ number: result.exit_number || "—", geNumber: detail.ge_number });
@@ -236,6 +267,7 @@ export default function GateExitEntryPage() {
                 <ErpFieldPreview label="Driver" value={detail.driver_name || "—"} />
                 <ErpFieldPreview label="Status" value={detail.status || "—"} tone={statusTone(detail.status)} />
                 <ErpFieldPreview label="GE Type" value={detail.ge_type || "—"} />
+                <ErpFieldPreview label="Person Name" value={detail.person_name || "—"} />
                 <ErpFieldPreview label="Remarks" value={detail.remarks || "—"} />
               </div>
             </ErpSectionCard>
@@ -250,6 +282,7 @@ export default function GateExitEntryPage() {
                   <ErpFieldPreview label="Tare Weight" value={detail.gate_exit_inbound.tare_weight ?? "—"} />
                   <ErpFieldPreview label="Net Calculated" value={detail.gate_exit_inbound.net_weight_calculated ?? "—"} />
                   <ErpFieldPreview label="Effective Net" value={detail.gate_exit_inbound.effective_net_weight ?? "—"} tone="sky" />
+                  <ErpFieldPreview label="Person Name" value={detail.gate_exit_inbound.person_name || "—"} />
                   {detail.gate_exit_inbound.remarks ? (
                     <div className="md:col-span-3 xl:col-span-6">
                       <ErpFieldPreview label="Remarks" value={detail.gate_exit_inbound.remarks} />
@@ -373,6 +406,27 @@ export default function GateExitEntryPage() {
                     </ErpDenseFormRow>
                   </div>
 
+                  {/* Person Name — same Security-dept manual/auto-resolve mechanism as Gate Entry. */}
+                  <label className="grid max-w-md gap-1 text-xs font-semibold text-slate-700">
+                    Person name <span className="font-normal text-red-500">*</span>
+                    <input
+                      type="text"
+                      value={personNameLoading ? "Loading…" : personName}
+                      readOnly={!isSecurityUser}
+                      placeholder={isSecurityUser ? "Type the gate user's name" : ""}
+                      className={[
+                        "h-9 border px-3 text-sm outline-none",
+                        isSecurityUser
+                          ? "border-slate-300 bg-white text-slate-900 focus:border-sky-500"
+                          : "border-slate-200 bg-slate-50 text-slate-500",
+                      ].join(" ")}
+                      onChange={(e) => { if (isSecurityUser) setPersonName(e.target.value); }}
+                    />
+                    <span className="text-[10px] font-normal text-slate-400">
+                      {isSecurityUser ? "Security department — enter the name manually every entry." : "Auto-filled from your login."}
+                    </span>
+                  </label>
+
                   <label className={`grid gap-1 text-xs font-semibold ${isDetention ? "text-amber-800" : "text-slate-700"}`}>
                     Remarks {isDetention && <span className="font-normal text-red-500">* (required — detention)</span>}
                     <textarea
@@ -388,7 +442,7 @@ export default function GateExitEntryPage() {
                     <button
                       type="button"
                       onClick={() => void handleSave()}
-                      disabled={saving}
+                      disabled={saving || (isSecurityUser && !personName.trim())}
                       className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50"
                     >
                       {saving ? "Saving…" : "Save (Gate Exit)"}

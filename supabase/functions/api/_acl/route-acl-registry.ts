@@ -77,6 +77,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/gate-entries/person-name-context": { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "VIEW"  },
   "GET:/api/procurement/gate-entries/by-number":      { skipAcl: false, resourceCode: "PROC_GATE_EXIT",         action: "VIEW"  },
   "POST:/api/procurement/gate-exits/inbound":         { skipAcl: false, resourceCode: "PROC_GATE_ENTRY_CREATE", action: "WRITE" },
+  "GET:/api/procurement/gate-exits/person-name-context": { skipAcl: false, resourceCode: "PROC_GATE_EXIT",      action: "VIEW"  },
   "GET:/api/procurement/gate-report":                 { skipAcl: false, resourceCode: "PROC_GATE_REPORT",       action: "VIEW"  },
 
   // ── Procurement: GRN ─────────────────────────────────────────────────────
