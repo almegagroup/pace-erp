@@ -25,9 +25,9 @@ Business answers below were recorded by ChatGPT after owner discussion on 2026-1
 
 ## T — Technical (Claude to resolve, may need owner confirmation)
 
-| ID | Question | Current evidence | Proposed default |
+| ID | Question | Current evidence | Proposed default | Owner resolution / remaining verification |
 |---|---|---|---|
-| Q-T01 | Meaning of `plant_id` in the contract — schema has no plant entity; plant = `company_id` in `storage_location_plant_map` and `material_plant_ext` | VERIFIED columns | Use company + optional planning SLoc group (PO11 `planning_sloc_group`) unless business defines a physical-site concept |
+| Q-T01 | Meaning of `plant_id` in the contract — schema has no plant entity; plant = `company_id` in `storage_location_plant_map` and `material_plant_ext` | VERIFIED columns | Use company + optional planning SLoc group (PO11 `planning_sloc_group`) unless business defines a physical-site concept | **OWNER CONFIRMED:** No Plant entity. Use company_id and storage_location_id, not plant_id. Procurement shortage calculated from company-level **net available eligible stock** pooled across relevant R/S/P locations (subject to QA/status/exclusions, reservations and no double-count). Planned material requirement/delivery destination: **RM → R locations**, **PM → P locations**. S location contributes eligible supply and may need timed internal transfer to R/P. Separate company-level purchase gap from storage-location-level distribution requirement. Exact net stock definition and SLoc eligibility must be audited before implementation. |
 | Q-T02 | Reuse PO11 `planning_sloc_group` / `planning_item_group` for MTS or create MTS-specific grouping? | PO11 tables are ADMIX/HPS-scoped (§35.6) but company-generic in shape | Reuse read-only for SLoc pools; keep MTS plan data separate |
 | Q-T03 | Extract a side-effect-free requirement explosion from `_core/production/mts_creation_session.handlers.ts` (+ `save_mts_material_plan_atomic`) | Logic is coupled to PO creation | Extract pure functions + parity tests on real VERIFIED POs; do not change PR09 behaviour |
 | Q-T04 | New schema (`erp_planning`) vs tables in `erp_production` | New schema requires PostgREST exposure in DEV+PROD Dashboards (CLAUDE.md §8) | Owner decision; new schema is cleaner for no-write guard scoping |
