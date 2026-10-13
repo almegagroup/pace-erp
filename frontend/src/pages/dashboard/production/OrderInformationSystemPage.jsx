@@ -58,6 +58,18 @@ function formatSignedQuantity(value) {
     : { text: `-${text}`, className: "text-rose-700 font-medium", fontArgb: NEGATIVE_FONT_ARGB };
 }
 
+function formatAplTrace(row) {
+  if (row.apl_trace_note) return String(row.apl_trace_note);
+  if (row.apl_qty == null) return "--";
+  const original = Number(row.apl_original_qty ?? row.apl_qty ?? 0);
+  const adjustment = Number(row.apl_adjustment_qty ?? 0);
+  const net = Number(row.apl_qty ?? 0);
+  const display = (value) => Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 3 });
+  const signed = (value) => `${value < 0 ? "−" : ""}${display(value)}`;
+  if (Math.abs(adjustment) < 0.000001) return `Net ${signed(net)}`;
+  return `${signed(original)} ${adjustment >= 0 ? "+" : "−"} ${display(adjustment)} = ${signed(net)}`;
+}
+
 // Shared by the column-filter row below and nothing else — reuses each column's
 // own copyValue (the same plain-text derivation Ctrl+C copy and Excel export
 // already use) so a badge/JSX-rendered cell (Dir, Ref. Document) still filters
@@ -135,10 +147,18 @@ const GRID_COLUMNS = [
     numFmt: "0.000;-0.000",
   },
   // Only ever populated on the Packing PO's own FG-101 row (tier 3) — every other
-  // row's num_packs/fill_qty_per_pack come back null from the backend and render blank.
-  { key: "num_packs", label: "Num Packs", align: "right", width: "90px", render: (r) => (r.num_packs == null ? "" : Number(r.num_packs).toLocaleString()) },
-  { key: "fill_qty_per_pack", label: "Per Pack", align: "right", width: "90px", render: (r) => (r.fill_qty_per_pack == null ? "" : Number(r.fill_qty_per_pack).toLocaleString(undefined, { maximumFractionDigits: 3 })) },
-  { key: "batch_number", label: "Batch #", width: "100px", render: (r) => r.batch_number || "--" },
+  // row is explicitly marked not-applicable rather than left as an ambiguous blank.
+  { key: "num_packs", label: "Num Packs", align: "right", width: "90px", render: (r) => (r.num_packs == null ? <span className="text-slate-300">--</span> : Number(r.num_packs).toLocaleString()) },
+  { key: "fill_qty_per_pack", label: "Per Pack", align: "right", width: "90px", render: (r) => (r.fill_qty_per_pack == null ? <span className="text-slate-300">--</span> : Number(r.fill_qty_per_pack).toLocaleString(undefined, { maximumFractionDigits: 3 })) },
+  {
+    key: "batch_number",
+    label: "Batch #",
+    width: "125px",
+    render: (r) => r.batch_number
+      ? <span className="inline-flex items-center gap-1.5"><span>{r.batch_number}</span>{r.batch_number_source === "ORDER" ? <span className="rounded bg-slate-100 px-1 py-0.5 text-[9px] font-semibold text-slate-500" title="Parent order batch; this non-batch-tracked material has no stock-lot batch">ORDER</span> : null}</span>
+      : <span className="text-slate-300">--</span>,
+    copyValue: (r) => r.batch_number ? `${r.batch_number}${r.batch_number_source === "ORDER" ? " (Order batch)" : ""}` : "--",
+  },
   {
     key: "reference_document_number",
     label: "Ref. Document",
@@ -173,7 +193,7 @@ const GRID_COLUMNS = [
   { key: "dosage_pct", label: "Dosage %", align: "right", width: "90px", render: (r) => (r.dosage_pct == null ? <span className="text-slate-300">--</span> : `${Number(r.dosage_pct).toLocaleString(undefined, { maximumFractionDigits: 4 })}%`) },
   {
     key: "apl_qty",
-    label: "APL Qty",
+    label: "Net APL Qty",
     align: "right",
     width: "100px",
     render: (r) => {
@@ -187,6 +207,17 @@ const GRID_COLUMNS = [
     },
     excelValue: (r) => Number(r.apl_qty ?? 0),
     numFmt: "0.000;-0.000",
+  },
+  {
+    key: "apl_trace",
+    label: "APL Trace",
+    width: "180px",
+    render: (r) => {
+      const trace = formatAplTrace(r);
+      return trace === "--" ? <span className="text-slate-300">--</span> : <span className="font-mono text-[11px] text-slate-600">{trace}</span>;
+    },
+    copyValue: (r) => formatAplTrace(r),
+    excelValue: (r) => formatAplTrace(r),
   },
   {
     key: "variance_qty",

@@ -124,7 +124,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       const isPackingNumber = poNumber.startsWith("94");
       if (isPackingNumber || tab === "PACKING") {
         let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-          .select("id, company_id, po_number, po_type, process_order_id, status, num_packs, fill_qty_per_pack")
+          .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, num_packs, fill_qty_per_pack")
           .eq("po_number", poNumber);
         if (companyIds) pq = pq.in("company_id", companyIds);
         const { data, error } = await pq;
@@ -167,7 +167,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       processOrders = (data ?? []) as JsonRecord[];
     } else {
       let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, status, material_id, segment_code, num_packs, fill_qty_per_pack")
+        .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, material_id, segment_code, num_packs, fill_qty_per_pack")
         .order("created_at", { ascending: false })
         .limit(MAX_ORDERS_MATCHED);
       if (companyIds) pq = pq.in("company_id", companyIds);
@@ -202,7 +202,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     if (showLinkedPacking && processOrderIds.length > 0) {
       const { data: linked, error: linkedErr } = await serviceRoleClient
         .schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, status, num_packs, fill_qty_per_pack")
+        .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, num_packs, fill_qty_per_pack")
         .in("process_order_id", processOrderIds);
       if (linkedErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
       const seen = new Set(linkedPackingOrders.map((r) => String(r.id)));
@@ -342,38 +342,56 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       processOrderIds.length > 0
         ? fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
             serviceRoleClient.schema("erp_production").from("process_order_line")
-              .select("id, stock_ledger_id").in("process_order_id", idChunk).not("stock_ledger_id", "is", null))
+              .select("id, process_order_id, material_id, actual_material_id, stock_ledger_id").in("process_order_id", idChunk).not("stock_ledger_id", "is", null))
             .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
         : Promise.resolve([]),
       packingOrderIds.length > 0
         ? fetchInChunks<JsonRecord>(packingOrderIds, (idChunk) =>
             serviceRoleClient.schema("erp_production").from("packing_order_line")
-              .select("id, stock_ledger_id").in("packing_order_id", idChunk).not("stock_ledger_id", "is", null))
+              .select("id, packing_order_id, material_id, actual_material_id, stock_ledger_id").in("packing_order_id", idChunk).not("stock_ledger_id", "is", null))
             .catch(() => { throw new Error("PROD_OIS_ENRICH_FAILED"); })
         : Promise.resolve([]),
     ]);
     const [procRecoResp, packRecoResp] = await Promise.all([
       processOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("process_order_line_reco")
-            .select("process_order_line_id, ap_approved_qty, variance_qty, dosage_pct, standard_qty")
+            .select("process_order_line_id, ap_approved_qty, variance_qty, dosage_pct, standard_qty, source_txn_type")
             .in("process_order_id", processOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
       packingOrderIds.length > 0
         ? serviceRoleClient.schema("erp_production").from("packing_order_line_reco")
-            .select("packing_order_line_id, ap_approved_qty, variance_qty, standard_qty")
+            .select("packing_order_line_id, ap_approved_qty, variance_qty, standard_qty, source_txn_type")
             .in("packing_order_id", packingOrderIds).eq("is_voided", false)
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (procRecoResp.error || packRecoResp.error) throw new Error("PROD_OIS_ENRICH_FAILED");
 
-    type RecoAgg = { apl: number; variance: number; dosagePct: number | null; standardQty: number | null };
+    // `ap_approved_qty` is append-only: the original Verify/Final row is followed
+    // by signed COR6 correction rows.  Keeping the two pieces separately lets the
+    // report show both the final, usable number and the audit trail which produced
+    // it.  A single "APL Qty" number without that trail made an original issue look
+    // active even after a P262 reversal (for example: 339 - 319 = 20).
+    type RecoAgg = {
+      apl: number;
+      originalApl: number;
+      adjustmentApl: number;
+      variance: number;
+      dosagePct: number | null;
+      standardQty: number | null;
+    };
     const recoByProcLineId = new Map<string, RecoAgg>();
     for (const row of (procRecoResp.data ?? []) as JsonRecord[]) {
       const key = String(row.process_order_line_id);
-      const prev = recoByProcLineId.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
+      const prev = recoByProcLineId.get(key) ?? {
+        apl: 0, originalApl: 0, adjustmentApl: 0, variance: 0, dosagePct: null, standardQty: null,
+      };
       const rowDosagePct = row.dosage_pct != null ? Number(row.dosage_pct) : null;
+      const approvedQty = Number(row.ap_approved_qty) || 0;
+      const isCorrection = toUpperTrimmedString(row.source_txn_type) === "COR6_CORRECTION";
       recoByProcLineId.set(key, {
-        apl: prev.apl + (Number(row.ap_approved_qty) || 0),
+        apl: prev.apl + approvedQty,
+        originalApl: prev.originalApl + (isCorrection ? 0 : approvedQty),
+        adjustmentApl: prev.adjustmentApl + (isCorrection ? approvedQty : 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
         // A correction row against this same line (e.g. COR6_CORRECTION) may have no
         // dosage_pct of its own — add nothing rather than resetting the running total.
@@ -384,9 +402,15 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     const recoByPackLineId = new Map<string, RecoAgg>();
     for (const row of (packRecoResp.data ?? []) as JsonRecord[]) {
       const key = String(row.packing_order_line_id);
-      const prev = recoByPackLineId.get(key) ?? { apl: 0, variance: 0, dosagePct: null, standardQty: null };
+      const prev = recoByPackLineId.get(key) ?? {
+        apl: 0, originalApl: 0, adjustmentApl: 0, variance: 0, dosagePct: null, standardQty: null,
+      };
+      const approvedQty = Number(row.ap_approved_qty) || 0;
+      const isCorrection = toUpperTrimmedString(row.source_txn_type) === "COR6_CORRECTION";
       recoByPackLineId.set(key, {
-        apl: prev.apl + (Number(row.ap_approved_qty) || 0),
+        apl: prev.apl + approvedQty,
+        originalApl: prev.originalApl + (isCorrection ? 0 : approvedQty),
+        adjustmentApl: prev.adjustmentApl + (isCorrection ? approvedQty : 0),
         variance: prev.variance + (Number(row.variance_qty) || 0),
         // Corrected 2026-08-26: packing_order_line_reco.standard_qty IS a real, populated
         // column (qty_per_pack x num_packs at Final) -- this was previously discarded as
@@ -398,13 +422,41 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     }
 
     const recoByStockLedgerId = new Map<string, RecoAgg>();
+    // This secondary index does not try to guess which one of several identical
+    // recipe lines a correction belongs to.  It is used only when one and exactly
+    // one approved line matches a non-anchor P261/P262 ledger event, so the report
+    // can explicitly say that the reversal is included in that line's net APL.
+    const recoByReferenceMaterial = new Map<string, RecoAgg[]>();
+    function addReferenceMaterialReco(referenceType: "PROC_PO" | "PACK_PO", referenceId: string, materialId: string, reco: RecoAgg): void {
+      if (!referenceId || !materialId) return;
+      const key = `${referenceType}|${referenceId}|${materialId}`;
+      const existing = recoByReferenceMaterial.get(key) ?? [];
+      existing.push(reco);
+      recoByReferenceMaterial.set(key, existing);
+    }
     for (const line of procLineRows) {
       const reco = recoByProcLineId.get(String(line.id));
-      if (reco) recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
+      if (reco) {
+        recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
+        addReferenceMaterialReco(
+          "PROC_PO",
+          toTrimmedString(line.process_order_id),
+          toTrimmedString(line.actual_material_id) || toTrimmedString(line.material_id),
+          reco,
+        );
+      }
     }
     for (const line of packLineRows) {
       const reco = recoByPackLineId.get(String(line.id));
-      if (reco) recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
+      if (reco) {
+        recoByStockLedgerId.set(String(line.stock_ledger_id), reco);
+        addReferenceMaterialReco(
+          "PACK_PO",
+          toTrimmedString(line.packing_order_id),
+          toTrimmedString(line.actual_material_id) || toTrimmedString(line.material_id),
+          reco,
+        );
+      }
     }
 
     // §122.1, refined 2026-08-26 — every row is tagged with the Process Order it ultimately
@@ -488,6 +540,14 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       // matches (see the recoByStockLedgerId build above); a later reversal/correction
       // posting against the same material is a different stock_ledger row and gets null.
       const reco = recoByStockLedgerId.get(String(row.id));
+      const matchingLineRecos = (refType === "PROC_PO" || refType === "PACK_PO")
+        ? recoByReferenceMaterial.get(`${refType}|${refId}|${toTrimmedString(row.material_id)}`) ?? []
+        : [];
+      const uniqueMatchingReco = !reco && matchingLineRecos.length === 1 ? matchingLineRecos[0] : null;
+      const isIssueOrReversal = ["P261", "P262"].includes(toUpperTrimmedString(row.movement_type_code));
+      const aplTraceNote = uniqueMatchingReco && isIssueOrReversal && Math.abs(uniqueMatchingReco.adjustmentApl) > 0.000001
+        ? `Correction/reversal included in Net APL ${uniqueMatchingReco.apl.toFixed(3)}`
+        : null;
 
       let owningOrder: JsonRecord | undefined;
       if (refType === "PROC_PO") owningOrder = processOrderById.get(refId);
@@ -501,6 +561,18 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       // (tier 3) -- every other row leaves these null, not zero, since "not applicable"
       // and "zero packs" are different facts.
       const packingOrder = tier === 3 ? packingOrderById.get(refId) : undefined;
+      // RM/PM/INT stock can legitimately be non-batch-tracked, so older P261
+      // ledger rows have no batch tag of their own.  The parent Production/Packing
+      // Order still has the batch which that consumption belongs to.  This is a
+      // display fallback only: an actual ledger batch always wins and we surface its
+      // source so exports never pretend an order-level trace tag was a stock-lot.
+      const ledgerBatchNumber = toTrimmedString(row.batch_number);
+      const orderBatchNumber = refType === "PACK_PO"
+        ? toTrimmedString(packingOrderById.get(refId)?.batch_number)
+        : toTrimmedString(owningOrder?.batch_number);
+      const resolvedBatchNumber = ledgerBatchNumber || orderBatchNumber || null;
+      const batchNumberSource = ledgerBatchNumber ? "LEDGER" : orderBatchNumber ? "ORDER" : null;
+
       return {
         id: row.id,
         company_id: row.company_id,
@@ -520,12 +592,20 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
         // on stock_ledger -- see feasibility doc Section 124).
         quantity: row.posted_quantity,
         base_uom_code: row.base_uom_code,
-        batch_number: row.batch_number,
+        batch_number: resolvedBatchNumber,
+        batch_number_source: batchNumberSource,
         reference_document_type: refType || null,
         reference_document_number: toTrimmedString(doc?.reference_document_number) || null,
         dosage_pct: reco ? reco.dosagePct : null,
         standard_qty: reco ? reco.standardQty : null,
+        // Final approved quantity, after every signed correction/reversal.  The
+        // original issue row is the one unambiguous home for this line-level value;
+        // the adjacent trace makes the netting explicit instead of leaving users to
+        // infer it from a later P262 movement with blank approval columns.
         apl_qty: reco ? reco.apl : null,
+        apl_original_qty: reco ? reco.originalApl : null,
+        apl_adjustment_qty: reco ? reco.adjustmentApl : null,
+        apl_trace_note: aplTraceNote,
         variance_qty: reco ? reco.variance : null,
         num_packs: packingOrder ? packingOrder.num_packs ?? null : null,
         fill_qty_per_pack: packingOrder ? packingOrder.fill_qty_per_pack ?? null : null,
