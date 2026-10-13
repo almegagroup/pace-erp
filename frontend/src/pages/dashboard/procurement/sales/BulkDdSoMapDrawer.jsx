@@ -59,6 +59,19 @@ function uploadKey(raw) {
     .map((value) => String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "")).join("::");
 }
 
+function collapseSpaces(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+// Source exports append the town to the address after a wide gap
+// ("...742151  DWANSARAI") although TOWN is its own column. Drop only that
+// exact trailing copy, so the address does not carry the town twice.
+function stripTrailingTown(rawAddress, town) {
+  const match = String(rawAddress ?? "").match(/^([\s\S]*\S)\s{2,}(\S[\s\S]*?)\s*$/);
+  if (match && town && collapseSpaces(match[2]).toUpperCase() === town.toUpperCase()) return collapseSpaces(match[1]);
+  return collapseSpaces(rawAddress);
+}
+
 // Server preview error codes, in words a user can act on in the Excel.
 const UPLOAD_ERROR_TEXT = {
   INVALID_UPLOAD_ROW: "A required column is blank or invalid (SO, FO, Customer Name/Address, SKU, Pack Qty, or Has Site not Yes/No)",
@@ -166,7 +179,12 @@ async function parseUploadedWorkbook(file) {
   let rowIndexSeq = 0;
   sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
     if (rowNumber <= headerRowNumber) return;
-    const cell = (field) => (columnByField[field] ? cellText(row, columnByField[field]) : "");
+    // Raw text keeps internal spacing so the address/town separator below can
+    // still be seen; every value stored on the row is whitespace-normalized
+    // (non-breaking spaces, tabs, repeated spaces -> one space, trimmed), so a
+    // cell holding only spaces is simply blank.
+    const rawCell = (field) => (columnByField[field] ? cellText(row, columnByField[field]).replace(/\u00a0/g, " ") : "");
+    const cell = (field) => collapseSpaces(rawCell(field));
     const externalSoNumber = cell("external_so_number");
     if (!externalSoNumber) return;
     rowIndexSeq += 1;
@@ -183,7 +201,7 @@ async function parseUploadedWorkbook(file) {
       fo_number: cell("fo_number"),
       customer_gst: cell("customer_gst").toUpperCase(),
       customer_name: cell("customer_name"),
-      customer_address: cell("customer_address"),
+      customer_address: stripTrailingTown(rawCell("customer_address"), cell("town")),
       town: cell("town"),
       has_site: hasSiteValue === "YES" || hasSiteValue === "Y",
       has_site_valid: ["YES", "Y", "NO", "N"].includes(hasSiteValue),

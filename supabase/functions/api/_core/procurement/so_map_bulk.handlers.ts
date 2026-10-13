@@ -552,6 +552,40 @@ export async function previewSoMapBulkUploadHandler(req: Request, ctx: Procureme
   }
 }
 
+// One GST can arrive under several spellings in one workbook (e.g. "MA TARA
+// BUILDERS" and "MA TARA BUILDERS LUB A/c"). Business rule (2026-10-13): the
+// customer name always comes from the Excel, never the GST portal; if one
+// Excel spelling matches the GST trade/legal name, that spelling wins,
+// otherwise the most professional spelling is chosen.
+const ACCOUNT_QUALIFIER = /\b(?:LUB|PROJECT|PROJ)\b|\bA\s*\/\s*C\b|\bACCOUNT\b/i;
+function nameKey(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]+/g, "");
+}
+function professionalNameScore(name: string): number {
+  let score = 0;
+  if (ACCOUNT_QUALIFIER.test(name)) score -= 100; // a sub-account label, not the business name
+  if (name === name.toUpperCase()) score += 10; // the customer master convention is upper case
+  if (/\bPRIVATE LIMITED\b|\bLIMITED\b/i.test(name)) score += 5; // full legal form over "PVT.LTD"
+  if (/\b(?:CO|LTD|PVT|BROS)\.(?:\s|$)/i.test(name)) score += 2; // abbreviation written properly
+  return score;
+}
+export function chooseCustomerName(excelNames: string[], gstNames: Array<string | null | undefined>): string {
+  const counts = new Map<string, number>();
+  for (const raw of excelNames) {
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const candidates = [...counts.keys()];
+  if (candidates.length <= 1) return candidates[0] ?? "";
+  const gstKeys = new Set(gstNames.filter((value): value is string => Boolean(value)).map(nameKey));
+  return candidates.sort((left, right) =>
+    Number(gstKeys.has(nameKey(right))) - Number(gstKeys.has(nameKey(left)))
+    || professionalNameScore(right) - professionalNameScore(left)
+    || (counts.get(right) ?? 0) - (counts.get(left) ?? 0)
+    || right.length - left.length
+    || left.localeCompare(right))[0];
+}
+
 // A large upload may contain hundreds of customers. The old frontend loop
 // made an HTTP call to MM04 for each row, which triggered the ERP action
 // blocker over and over again. Resolve candidates server-side first, then use
@@ -586,6 +620,7 @@ export async function createMissingGstCustomersForSoMapHandler(req: Request, ctx
       vdcId: string;
       gstNumber: string;
       seed: RawUploadRow;
+      excelNames: string[];
       rowIndexes: number[];
       siteRows: RawUploadRow[];
     };
@@ -601,10 +636,11 @@ export async function createMissingGstCustomersForSoMapHandler(req: Request, ctx
       const key = `${vdcId}::${gstNumber}`;
       let group = groupsByKey.get(key);
       if (!group) {
-        group = { vdcId, gstNumber, seed: raw, rowIndexes: [], siteRows: [] };
+        group = { vdcId, gstNumber, seed: raw, excelNames: [], rowIndexes: [], siteRows: [] };
         groupsByKey.set(key, group);
       }
       group.rowIndexes.push(rowIndex);
+      group.excelNames.push(toTrimmedString(raw.customer_name));
       if (raw.has_site) group.siteRows.push(raw);
     }
 
@@ -617,11 +653,12 @@ export async function createMissingGstCustomersForSoMapHandler(req: Request, ctx
         const resolved = await resolveGstProfileWithSource(group.gstNumber);
         const profile = deriveCompanyFieldsFromGstProfile(resolved.profile);
         if (!profile.full_address || !profile.state_name) throw new Error("SO_MAP_GST_PROFILE_REQUIRED");
+        const customerName = chooseCustomerName(group.excelNames, [resolved.profile.trade_name, resolved.profile.legal_name]);
 
         const createdCustomer = await unwrapInternalHandlerResponse(await createCustomerHandler(
           makeInternalJsonRequest(req, {
             company_id: companyId,
-            customer_name: group.seed.customer_name,
+            customer_name: customerName,
             customer_type: "DOMESTIC",
             currency_code: "INR",
             // GST legal names are often proprietor names. The consignee name
@@ -630,7 +667,7 @@ export async function createMissingGstCustomersForSoMapHandler(req: Request, ctx
             delivery_address: profile.full_address,
             billing_state: profile.state_name,
             town: group.seed.town,
-            site_name: group.seed.customer_name,
+            site_name: customerName,
             gst_number: group.gstNumber,
             gst_category: "REGISTERED",
             pin_code: profile.pin_code || undefined,
