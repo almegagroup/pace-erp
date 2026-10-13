@@ -2301,7 +2301,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
         [String(poRow.material_id ?? "")],
         "[process_order.getProcessOrder]",
         "PROD_PO_FETCH_FAILED",
-        "id, pace_code, material_name, shade_code, base_uom_code",
+        "id, pace_code, material_name, document_name, shade_code, base_uom_code",
       ),
       strokeMasterId
         ? serviceRoleClient
@@ -2417,7 +2417,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
           packingLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
           "[process_order.getProcessOrder]",
           "PROD_PO_FETCH_FAILED",
-          "id, pace_code, material_name, shade_code, base_uom_code",
+          "id, pace_code, material_name, document_name, shade_code, base_uom_code",
         ),
         packCodeIds.length > 0
           ? serviceRoleClient.schema("erp_production").from("pack_code_master").select("id, pack_code, pack_name, pack_type").in("id", packCodeIds)
