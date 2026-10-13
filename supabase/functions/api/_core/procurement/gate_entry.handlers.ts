@@ -71,6 +71,26 @@ function todayIsoDate(): string {
   return todayIsoInKolkata();
 }
 
+function addDaysIso(isoDate: string, days: number): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return null;
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  const normalized = date.toISOString().slice(0, 10);
+  return normalized === isoDate || days !== 0 ? normalized : null;
+}
+
+function isAllowedGeDate(geDate: string): boolean {
+  const today = todayIsoDate();
+  const minimum = addDaysIso(today, -20);
+  return Boolean(
+    minimum
+    && /^\d{4}-\d{2}-\d{2}$/.test(geDate)
+    && addDaysIso(geDate, 0) === geDate
+    && geDate >= minimum
+    && geDate <= today,
+  );
+}
+
 function getPathSegments(req: Request): string[] {
   return new URL(req.url).pathname.split("/").filter(Boolean);
 }
@@ -672,6 +692,9 @@ export async function createGateEntryHandler(
     if (!companyId || !vehicleNumber || !gateStaffId || lines.length === 0) {
       return procurementErrorResponse(req, ctx, "GE_CREATE_INVALID", 400, "Company, vehicle, gate staff, and lines are required.");
     }
+    if (!isAllowedGeDate(geDate)) {
+      return procurementErrorResponse(req, ctx, "GE_DATE_OUT_OF_RANGE", 400, "GE date must be between today and the previous 20 calendar days.");
+    }
     try {
       await assertCompanyScope(ctx, companyId);
     } catch {
@@ -1191,6 +1214,9 @@ export async function updateGateEntryHandler(
     const vehicleNumber = toTrimmedString(body.vehicle_number);
     const driverName = toTrimmedString(body.driver_name);
     const remarks = toTrimmedString(body.remarks);
+    if (geDate && !isAllowedGeDate(geDate)) {
+      return procurementErrorResponse(req, ctx, "GE_DATE_OUT_OF_RANGE", 400, "GE date must be between today and the previous 20 calendar days.");
+    }
     if (geDate) headerPatch.ge_date = geDate;
     if (vehicleNumber) headerPatch.vehicle_number = vehicleNumber;
     if (driverName || body.driver_name === null) headerPatch.driver_name = driverName || null;

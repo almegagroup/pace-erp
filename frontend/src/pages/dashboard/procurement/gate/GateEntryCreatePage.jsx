@@ -19,7 +19,26 @@ import {
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map(({ type, value: partValue }) => [type, partValue]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function addDaysIso(isoDate, days) {
+  const [year, month, day] = String(isoDate || "").split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return date.toISOString().slice(0, 10);
+}
+
+function isAllowedGeEntryDate(value) {
+  const today = todayIso();
+  const minimum = addDaysIso(today, -20);
+  return /^\d{4}-\d{2}-\d{2}$/.test(value || "") && value >= minimum && value <= today;
 }
 
 function currentTime12() {
@@ -576,6 +595,10 @@ export default function GateEntryCreatePage() {
       setError("Company, entry date, and vehicle number are required.");
       return;
     }
+    if (!isAllowedGeEntryDate(entryDate)) {
+      setError(`GE date must be between ${addDaysIso(todayIso(), -20)} and ${todayIso()}.`);
+      return;
+    }
     if (!grossWeight || Number(grossWeight) <= 0) {
       setError("Gross weight (KG) is required.");
       return;
@@ -1117,8 +1140,17 @@ export default function GateEntryCreatePage() {
                   ref={dateRef}
                   type="date"
                   value={entryDate}
+                  min={addDaysIso(todayIso(), -20)}
                   max={todayIso()}
-                  onChange={(e) => setEntryDate(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setEntryDate(value);
+                    if (value && !isAllowedGeEntryDate(value)) {
+                      setError(`GE date must be between ${addDaysIso(todayIso(), -20)} and ${todayIso()}.`);
+                    } else {
+                      setError("");
+                    }
+                  }}
                   className="h-9 flex-1 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
                 />
                 <button
