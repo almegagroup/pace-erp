@@ -207,7 +207,7 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
   const qaDocument = await fetchQaDocument(qaDocumentId);
   await assertQaCompanyScope(ctx, qaDocument);
 
-  const [testLinesResp, decisionLines, materialFields] = await Promise.all([
+  const [testLinesResp, decisionLines, materialFields, grnContext] = await Promise.all([
     serviceRoleClient
       .schema("erp_procurement")
       .from("inward_qa_test_line")
@@ -216,6 +216,7 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
       .order("line_number", { ascending: true }),
     fetchDecisionLines(qaDocumentId),
     fetchQaMaterialFields(String(qaDocument.material_id ?? "")),
+    fetchGrnContextForQa(qaDocument),
   ]);
 
   if (testLinesResp.error) {
@@ -225,6 +226,8 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
 
   const totalQty = roundQty(Number(qaDocument.qa_stock_qty) || 0);
   const decidedQty = sumDecidedQty(decisionLines);
+  const grn = grnContext.grn;
+  const grnReversed = toUpperTrimmedString(grn.status) === "REVERSED";
 
   return {
     ...qaDocument,
@@ -233,7 +236,11 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
     decided_qty: decidedQty,
     remaining_qty: roundQty(totalQty - decidedQty),
     created_at: qaDocument.qa_created_at,
-    public_status: mapQaStatusForResponse(qaDocument.status),
+    grn_status: grn.status ?? null,
+    grn_reversed: grnReversed,
+    grn_reversal_at: grn.reversal_approved_at ?? null,
+    grn_reversal_reason: grn.reversal_reason ?? null,
+    public_status: grnReversed ? "REVERSED" : mapQaStatusForResponse(qaDocument.status),
     test_lines: testLinesResp.data ?? [],
     decision_lines: decisionLines,
     pace_code: materialFields.pace_code,
@@ -454,15 +461,15 @@ export async function listQADocumentsHandler(
       ? await serviceRoleClient
           .schema("erp_procurement")
           .from("goods_receipt")
-          .select("id, grn_number")
+          .select("id, grn_number, status, reversal_approved_at, reversal_reason")
           .in("id", grnIdsForRows)
       : { data: [] as JsonRecord[], error: null };
     if (grnError) {
       logDbError("listQADocumentsHandler GRN resolve", grnError);
       throw new ApiError(500, grnError.message || "Unable to resolve GRN numbers");
     }
-    const grnNumberById = new Map(
-      (grnRows ?? []).map((row: JsonRecord) => [String(row.id), row.grn_number ?? null]),
+    const grnById = new Map<string, JsonRecord>(
+      (grnRows ?? []).map((row: JsonRecord) => [String(row.id), row]),
     );
 
     // Bulk-fetch decision lines for all listed docs in one query (no per-row N+1)
@@ -517,15 +524,23 @@ export async function listQADocumentsHandler(
       const totalQty = roundQty(Number(row.qa_stock_qty) || 0);
       const decidedQty = decidedByDoc.get(String(row.id)) ?? 0;
       const material = materialById.get(String(row.material_id));
+      const grn = grnById.get(String(row.grn_id));
+      const grnReversed = toUpperTrimmedString(grn?.status) === "REVERSED";
       return {
         ...row,
         qa_doc_number: row.qa_number,
-        grn_number: grnNumberById.get(String(row.grn_id)) ?? null,
+        grn_number: grn?.grn_number ?? null,
+        grn_status: grn?.status ?? null,
+        grn_reversed: grnReversed,
+        grn_reversal_at: grn?.reversal_approved_at ?? null,
+        grn_reversal_reason: grn?.reversal_reason ?? null,
         created_at: row.qa_created_at,
         total_qty: totalQty,
         decided_qty: decidedQty,
         remaining_qty: roundQty(totalQty - decidedQty),
-        public_status: mapQaStatusForResponse(row.status),
+        // QA history is retained after GRN reversal, but it must not look like
+        // an active usage decision once the source receipt has been reversed.
+        public_status: grnReversed ? "REVERSED" : mapQaStatusForResponse(row.status),
         pace_code: material?.pace_code ?? null,
         material_name: material?.material_name ?? null,
         material_category: material?.material_category ?? null,

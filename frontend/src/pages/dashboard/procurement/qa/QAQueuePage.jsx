@@ -31,6 +31,8 @@ const LIMIT = 50;
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
+    case "REVERSED":
+      return "bg-rose-100 text-rose-800";
     case "IN_PROGRESS":
       return "bg-sky-100 text-sky-800";
     case "DECISION_MADE":
@@ -438,6 +440,9 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
   const totalQty = Number(detail?.total_qty ?? row.total_qty ?? 0);
   const remainingQty = Number(detail?.remaining_qty ?? row.remaining_qty ?? totalQty);
   const publicStatus = String(detail?.public_status ?? row.public_status ?? "").toUpperCase();
+  const grnReversed = Boolean(detail?.grn_reversed ?? row.grn_reversed) || String(grn?.status || "").toUpperCase() === "REVERSED";
+  const grnReversalReason = detail?.grn_reversal_reason ?? row.grn_reversal_reason ?? grn?.reversal_reason ?? "";
+  const grnReversalAt = detail?.grn_reversal_at ?? row.grn_reversal_at ?? grn?.reversal_approved_at ?? "";
   const isMutable = remainingQty > 0.000001 && ["PENDING", "IN_PROGRESS"].includes(publicStatus);
 
   const mctConfigs = useMemo(() => categoryConfigs.filter((c) => c.qa_test_method?.test_group === "MCT"), [categoryConfigs]);
@@ -918,6 +923,15 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
               </div>
             </ErpDenseFormRow>
           </div>
+
+          {grnReversed ? (
+            <section className="grid gap-1 rounded border border-rose-300 bg-rose-50 p-2.5 text-[12px] text-rose-900">
+              <p className="font-semibold uppercase tracking-[0.08em]">Reversed with GRN</p>
+              <p>This QA decision is retained only as audit history. Its GRN receipt and related QA stock release have been reversed, so no further QA action is allowed.</p>
+              {grnReversalAt ? <p><span className="font-semibold">Reversed at:</span> {grnReversalAt}</p> : null}
+              {grnReversalReason ? <p><span className="font-semibold">Reason:</span> {grnReversalReason}</p> : null}
+            </section>
+          ) : null}
 
           <section className="grid gap-2 rounded border border-sky-200 bg-sky-50 p-2.5">
             <div>
