@@ -311,6 +311,78 @@ const HEADER_FIELDS: Array<{ key: keyof CorrectionRow; column: string; label: st
 const isIso = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
 const sameText = (a: unknown, b: unknown) => text(a).replace(/\s+/g, " ").toUpperCase() === text(b).replace(/\s+/g, " ").toUpperCase();
 
+type PendingCorrection = { base: JsonRecord; doc: JsonRecord; patch: JsonRecord; changes: string[] };
+
+async function findCorrectionDuplicates(companyId: string, pending: PendingCorrection[]): Promise<Map<string, { errors: string[]; warnings: string[] }>> {
+  const out = new Map<string, { errors: string[]; warnings: string[] }>();
+  const add = (id: string, kind: "errors" | "warnings", message: string) => {
+    const entry = out.get(id) ?? { errors: [], warnings: [] };
+    if (!entry[kind].includes(message)) entry[kind].push(message);
+    out.set(id, entry);
+  };
+  const key = (value: unknown) => text(value).replace(/\s+/g, " ").toUpperCase();
+  // Value each corrected DO will have after this upload (patch wins over current).
+  const after = (entry: PendingCorrection, column: string) => key(column in entry.patch ? entry.patch[column] : entry.doc[column]);
+  const pendingById = new Map(pending.map((entry) => [text(entry.doc.id), entry]));
+  const changing = (column: string) => pending.filter((entry) => column in entry.patch && key(entry.patch[column]));
+  const tallyChanges = changing("pre_invoice_tally_invoice_number");
+  const inboundChanges = changing("pre_invoice_inbound_number");
+  const lrChanges = pending.filter((entry) => ("lr_number" in entry.patch || "transporter_id" in entry.patch) && after(entry, "lr_number"));
+  if (!tallyChanges.length && !inboundChanges.length && !lrChanges.length) return out;
+
+  const rawValues = (list: PendingCorrection[], column: string) => [...new Set(list.map((entry) => text(column in entry.patch ? entry.patch[column] : entry.doc[column])).filter(Boolean))];
+  const doSelect = "id, dc_number, status, transporter_id, lr_number, pre_invoice_tally_invoice_number, pre_invoice_inbound_number";
+  const doQuery = (column: string) => (chunk: string[]) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+    .select(doSelect).eq("selling_company_id", companyId).neq("status", "CANCELLED").in(column, chunk);
+  const invoiceQuery = (column: string) => (chunk: string[]) => serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+    .select(`id, dc_id, invoice_number, ${column}`).neq("status", "CANCELLED").in(column, chunk);
+  const [doByTally, doByInbound, doByLr, invByTally, invByInbound] = await Promise.all([
+    fetchInChunks<JsonRecord>(rawValues(tallyChanges, "pre_invoice_tally_invoice_number"), doQuery("pre_invoice_tally_invoice_number")),
+    fetchInChunks<JsonRecord>(rawValues(inboundChanges, "pre_invoice_inbound_number"), doQuery("pre_invoice_inbound_number")),
+    fetchInChunks<JsonRecord>(rawValues(lrChanges, "lr_number"), doQuery("lr_number")),
+    fetchInChunks<JsonRecord>(rawValues(tallyChanges, "pre_invoice_tally_invoice_number"), invoiceQuery("tally_invoice_number")),
+    fetchInChunks<JsonRecord>(rawValues(inboundChanges, "pre_invoice_inbound_number"), invoiceQuery("inbound_number")),
+  ]);
+  // Invoices can belong to another company — keep only this company's DOs.
+  const invoiceDcIds = [...new Set([...invByTally, ...invByInbound].map((row) => text(row.dc_id)).filter(Boolean))];
+  const invoiceDcs = await fetchInChunks<JsonRecord>(invoiceDcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+    .select("id, dc_number, selling_company_id").in("id", chunk));
+  const invoiceDcById = new Map(invoiceDcs.filter((row) => text(row.selling_company_id) === companyId).map((row) => [text(row.id), row]));
+
+  const check = (list: PendingCorrection[], column: string, label: string, dbRows: JsonRecord[], invoices: JsonRecord[], invoiceColumn: string | null, kind: "errors" | "warnings", sameScope: (a: PendingCorrection, other: JsonRecord) => boolean) => {
+    for (const entry of list) {
+      const id = text(entry.doc.id);
+      const value = after(entry, column);
+      // Other DOs in this same file, using their corrected values.
+      for (const other of pending) {
+        if (text(other.doc.id) === id || after(other, column) !== value || !sameScope(entry, other.doc)) continue;
+        add(id, kind, `${label} ${value} is also given to DO ${text(other.doc.dc_number)} in this file`);
+      }
+      // DOs already in the system (a DO in this file is judged by its corrected value instead).
+      for (const row of dbRows) {
+        if (text(row.id) === id || pendingById.has(text(row.id)) || key(row[column]) !== value || !sameScope(entry, row)) continue;
+        add(id, kind, `${label} ${value} is already on DO ${text(row.dc_number)} (${text(row.status)})`);
+      }
+      if (!invoiceColumn) continue;
+      for (const invoice of invoices) {
+        const dc = invoiceDcById.get(text(invoice.dc_id));
+        if (!dc || text(invoice.dc_id) === id || key(invoice[invoiceColumn]) !== value) continue;
+        add(id, kind, `${label} ${value} is already on invoice ${text(invoice.invoice_number)} (DO ${text(dc.dc_number)})`);
+      }
+    }
+  };
+  const anyScope = () => true;
+  const transporterOf = (entry: PendingCorrection) => text("transporter_id" in entry.patch ? entry.patch.transporter_id : entry.doc.transporter_id);
+  const sameTransporter = (entry: PendingCorrection, other: JsonRecord) => {
+    const otherPending = pendingById.get(text(other.id));
+    return transporterOf(entry) === (otherPending ? transporterOf(otherPending) : text(other.transporter_id));
+  };
+  check(tallyChanges, "pre_invoice_tally_invoice_number", "Tally Invoice", doByTally, invByTally, "tally_invoice_number", "errors", anyScope);
+  check(inboundChanges, "pre_invoice_inbound_number", "Inbound Number", doByInbound, invByInbound, "inbound_number", "errors", anyScope);
+  check(lrChanges, "lr_number", "LR (same transporter)", doByLr, [], null, "warnings", sameTransporter);
+  return out;
+}
+
 export async function bulkPostingCorrectionsHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const payload = await body(req);
@@ -365,6 +437,7 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
       rowsByDc.set(key, [...(rowsByDc.get(key) ?? []), row]);
     }
     const results: JsonRecord[] = [];
+    const pending: PendingCorrection[] = [];
     const today = todayIsoInKolkata();
     for (const [dcNumber, dcRows] of rowsByDc) {
       const excelRows = dcRows.map((row) => row.excel_row).filter((value) => value != null);
@@ -385,7 +458,20 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
       }));
       const itemChanges: string[] = [];
       const unmatched = [...currentLines];
+      // The same SKU twice for one DO: identical copies are ignored, differing copies are an error.
+      const seenSku = new Map<string, string>();
+      const uniqueRows: CorrectionRow[] = [];
       for (const row of dcRows) {
+        const skuKey = text(row.sku).toUpperCase();
+        const signature = JSON.stringify({ ...row, excel_row: null });
+        if (seenSku.has(skuKey)) {
+          if (seenSku.get(skuKey) !== signature) errors.push(`SKU ${text(row.sku)} appears more than once for this DO with different values (Excel row ${text(row.excel_row)})`);
+          continue;
+        }
+        seenSku.set(skuKey, signature);
+        uniqueRows.push(row);
+      }
+      for (const row of uniqueRows) {
         const index = unmatched.findIndex((line) => sameText(line.sku, row.sku));
         if (index < 0) { itemChanges.push(`SKU ${text(row.sku) || "(blank)"} is not on this DO`); continue; }
         const line = unmatched.splice(index, 1)[0];
@@ -440,13 +526,26 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
       }
       if (errors.length) { results.push({ ...base, status: "ERROR", changes, message: errors.join("; ") }); continue; }
       if (!changes.length) { results.push({ ...base, status: "UNCHANGED", changes: [], message: "No change" }); continue; }
+      pending.push({ base, doc, patch, changes });
+    }
+
+    // Duplicate check on the values a correction would write: the same Tally
+    // Invoice / Inbound Number on another DO or invoice blocks the correction
+    // (1 DO = 1 invoice); the same LR of the same transporter is a warning.
+    const duplicates = await findCorrectionDuplicates(companyId, pending);
+    for (const entry of pending) {
+      const found = duplicates.get(text(entry.doc.id)) ?? { errors: [], warnings: [] };
+      if (found.errors.length) {
+        results.push({ ...entry.base, status: "ERROR", changes: entry.changes, message: `Duplicate: ${found.errors.join("; ")}` });
+        continue;
+      }
       if (apply) {
         const { error } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-          .update(patch).eq("id", text(doc.id)).eq("status", "CREATED");
-        if (error) { results.push({ ...base, status: "ERROR", changes, message: "Unable to save this DO's correction." }); continue; }
-        results.push({ ...base, status: "UPDATED", changes, message: changes.join("; ") });
+          .update(entry.patch).eq("id", text(entry.doc.id)).eq("status", "CREATED");
+        if (error) { results.push({ ...entry.base, status: "ERROR", changes: entry.changes, message: "Unable to save this DO's correction." }); continue; }
+        results.push({ ...entry.base, status: "UPDATED", changes: entry.changes, warnings: found.warnings, message: entry.changes.join("; ") });
       } else {
-        results.push({ ...base, status: "WILL_UPDATE", changes, message: changes.join("; ") });
+        results.push({ ...entry.base, status: "WILL_UPDATE", changes: entry.changes, warnings: found.warnings, message: entry.changes.join("; ") });
       }
     }
     return okResponse({ results, applied: apply }, ctx.request_id, req);

@@ -102,6 +102,7 @@ async function exportReviewSheet(rows) {
     ["7. If a DO has several lines, write a corrected value on any one of its lines (or all of them, the same value). Two different values for one DO is an error."],
     ["8. Upload shows a preview first; nothing is saved until you click \"Apply\". Only DOs not yet posted can be corrected."],
     ["9. If everything is already correct, no upload is needed — go straight to Bulk Post."],
+    ["10. Duplicates: a Tally Invoice Number or Inbound Number already used on another DO / invoice (or given to two DOs in this file) is rejected. The same LR of the same transporter is allowed but shown as a warning. The same SKU twice for one DO is ignored if both rows are identical, otherwise it is an error."],
   ].forEach((line) => notes.addRow(line));
   notes.getColumn(1).width = 140;
   await saveWorkbook(workbook, `so02_bulk_posting_review_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -270,7 +271,12 @@ export default function SO02BulkPostingPage() {
                   { key: "dc_number", label: "DO Number", width: "120px", render: (row) => row.dc_number || "—" },
                   { key: "fo_or_so_number", label: "FO/SO", width: "120px", render: (row) => row.fo_or_so_number || "—" },
                   { key: "excel_rows", label: "Excel Rows", width: "100px", render: (row) => (row.excel_rows ?? []).join(", ") || "—" },
-                  { key: "message", label: "What changes / why", width: "760px", render: (row) => row.message || "—" },
+                  { key: "message", label: "What changes / why", width: "760px", render: (row) => (
+                    <span>
+                      {row.message || "—"}
+                      {row.warnings?.length ? <span className="ml-1 font-semibold text-amber-700">Warning: {row.warnings.join("; ")}</span> : null}
+                    </span>
+                  ) },
                 ]}
               />
             </div>
