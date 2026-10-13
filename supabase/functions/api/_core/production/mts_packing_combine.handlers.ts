@@ -248,9 +248,6 @@ async function resolvePage5Rows(po: JsonRecord): Promise<ResolvedPage5Row[] | { 
     const numberOfBatches = fromIdx >= 0 && toIdx >= fromIdx ? toIdx - fromIdx + 1 : 0;
     const outerUnitPerBatch = Number(row.outer_unit_per_batch ?? 0);
     const totalOuterUnit = numberOfBatches * outerUnitPerBatch;
-    const fillQty = Number(pack.fill_qty ?? 0);
-    const volume = Number((totalOuterUnit * fillQty).toFixed(6));
-
     const sku = await resolveSkuMaterialForPackCode(
       toTrimmedString(prodshade.external_code), toTrimmedString(prodshade.material_name), String(pack.pack_code),
     );
@@ -267,6 +264,15 @@ async function resolvePage5Rows(po: JsonRecord): Promise<ResolvedPage5Row[] | { 
     if (!outputLine || !sfgLine) {
       return { errorCode: "PROD_PACK_COMBINE_BOM_INCOMPLETE", detail: `Pack BOM for SKU "${sku.pace_code ?? sku.material_name}" is missing its OUTPUT or SFG row` };
     }
+    // A blank Prodshade Pack Config fill qty (found for every pack 209
+    // carton in prod, 2026-10-13) silently produced a 0-KG Packing PO and a
+    // "loss" equal to the whole batch. Page 5's loss and the Packing PO must
+    // use the same fill, so block here instead of guessing a different one.
+    const fillQty = Number(pack.fill_qty ?? 0);
+    if (!(fillQty > 0)) {
+      return { errorCode: "PROD_PACK_COMBINE_FILL_QTY_MISSING", detail: `Fill qty per pack is not set for pack size "${pack.description}" in Prodshade Pack Config` };
+    }
+    const volume = Number((totalOuterUnit * fillQty).toFixed(6));
 
     resolved.push({
       id: String(row.id),

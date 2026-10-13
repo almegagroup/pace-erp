@@ -254,6 +254,9 @@ export async function saveMtsPackingPlanHandler(req: Request, ctx: ProdHandlerCo
       if (!pack) {
         return planErr(req, ctx, "PROD_PO_MTS_PACKING_PLAN_PACK_SIZE_INVALID", 422, `Row ${index + 1}: pack size is not configured for this Prodshade`);
       }
+      if (!(Number(pack.fill_qty) > 0)) {
+        return planErr(req, ctx, "PROD_PO_MTS_PACKING_PLAN_FILL_QTY_MISSING", 422, `Row ${index + 1}: fill qty per pack is not set for this pack size in Prodshade Pack Config`);
+      }
       const numberOfBatches = toIdx - fromIdx + 1;
       const volume = Number((numberOfBatches * outerUnitPerBatch * Number(pack.fill_qty)).toFixed(6));
       runningVolume = Number((runningVolume + volume).toFixed(6));

@@ -340,7 +340,6 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
     if (!pack) throw new Error("PROD_MTS_PACKING_PLAN_PACK_SIZE_INVALID");
     const numberOfBatches = toIndex - fromIndex + 1;
     const totalOuterUnit = Number((numberOfBatches * outerPerBatch).toFixed(6));
-    const volume = Number((totalOuterUnit * Number(pack.fill_qty ?? 0)).toFixed(6));
     const sku = await resolveSkuMaterial(session.prodshade, String(pack.pack_code));
     if (!sku) throw new Error("PROD_MTS_PACKING_SKU_NOT_FOUND");
     const bom = await getActivePackBom(session.companyId, String(sku.id));
@@ -348,10 +347,17 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
     const outputLine = bom.lines.find((line) => toTrimmedString(line.line_type) === "OUTPUT");
     const sfgLine = bom.lines.find((line) => toTrimmedString(line.line_type) === "SFG");
     if (!outputLine || !sfgLine || !toTrimmedString(sfgLine.storage_location_id)) throw new Error("PROD_MTS_PACKING_BOM_INCOMPLETE");
+    // A blank Prodshade Pack Config fill qty (found for every pack 209
+    // carton in prod, 2026-10-13) silently produced a 0-KG Packing PO and a
+    // "loss" equal to the whole batch. Page 5's loss and the Packing PO must
+    // use the same fill, so block here instead of guessing a different one.
+    const fillQty = Number(pack.fill_qty ?? 0);
+    if (!(fillQty > 0)) throw new Error("PROD_MTS_PACKING_FILL_QTY_MISSING");
+    const volume = Number((totalOuterUnit * fillQty).toFixed(6));
     resolved.push({
       id: toTrimmedString(row.client_row_id) || `row-${index + 1}`,
       plan: { batch_number_from: from, batch_number_to: to, pack_code_id: packCodeId, outer_unit_per_batch: outerPerBatch, storage_location_id: locationId, display_order: index },
-      packCodeId, packSizeLabel: String(pack.description ?? pack.pack_code), fillQty: Number(pack.fill_qty ?? 0),
+      packCodeId, packSizeLabel: String(pack.description ?? pack.pack_code), fillQty,
       numberOfBatches, totalOuterUnit, volume, fgStorageLocationId: locationId,
       skuMaterialId: String(sku.id), skuBaseUom: toTrimmedString(sku.base_uom_code) || "KG",
       outputLine, sfgLine, pmLines: bom.lines.filter((line) => toTrimmedString(line.line_type) === "INPUT"),
