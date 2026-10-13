@@ -28,23 +28,32 @@ import VdcTruckDispatchUploadDrawer from "./VdcTruckDispatchUploadDrawer.jsx";
 const LIMIT = 50;
 
 // §133.16-A UI standard.
+// Every dispatch detail a user enters -- on Create DO or Bulk DO Upload --
+// is shown here, in front of the wide Bill-To/Ship-To text so it is visible
+// without horizontal scrolling.
 const DO_EXPORT_COLUMNS = [
   { key: "dc_number", label: "DO Number" },
-  { key: "source_display", label: "Source" },
+  { key: "fo_number_display", label: "FO Number" },
   { key: "source_document_number", label: "SO / STO Number" },
-  { key: "customer_display", label: "Bill-To" },
-  { key: "ship_to_display", label: "Ship-To" },
   { key: "dc_date", label: "DO Date" },
-  { key: "vehicle_number", label: "Vehicle Number" },
   { key: "transporter_display", label: "Transporter" },
   { key: "lr_number", label: "LR Number" },
+  { key: "lr_date", label: "LR Date" },
+  { key: "vehicle_number", label: "Truck Number" },
+  { key: "dispatch_date", label: "Dispatch Date" },
+  { key: "tally_invoice_number", label: "Tally Invoice Number" },
+  { key: "tally_invoice_date", label: "Tally Invoice Date" },
+  { key: "inbound_number", label: "Inbound Number" },
   { key: "status", label: "Status" },
+  { key: "customer_display", label: "Bill-To" },
+  { key: "ship_to_display", label: "Ship-To" },
+  { key: "source_display", label: "Source" },
   { key: "dispatch_category", label: "Dispatch Category" },
   { key: "total_qty", label: "Total Qty" },
   { key: "total_value", label: "Total Value" },
 ];
 
-const DO_SEARCH_COLUMN_KEYS = ["dc_number", "source_display", "source_document_number", "customer_display", "ship_to_display", "dc_date", "vehicle_number", "transporter_display", "lr_number", "status", "dispatch_category", "total_qty", "total_value"];
+const DO_SEARCH_COLUMN_KEYS = DO_EXPORT_COLUMNS.map((column) => column.key);
 
 function doStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -195,21 +204,27 @@ export default function DOListPage() {
               <ErpDenseGrid
                 cellNavigate
                 columns={[
-                  { key: "dc_number", label: "DO Number", width: "140px" },
-                  { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
-                  { key: "source_document_number", label: "SO / STO Number", width: "140px", render: (row) => row.source_document_number || "—" },
-                  { key: "customer_display", label: "Bill-To", render: (row) => row.customer_display || "—" },
-                  { key: "ship_to_display", label: "Ship-To", render: (row) => row.ship_to_display || "—" },
-                  { key: "dc_date", label: "DO Date", width: "110px" },
-                  { key: "vehicle_number", label: "Vehicle Number", width: "130px", render: (row) => row.vehicle_number || "—" },
-                  { key: "transporter_display", label: "Transporter", render: (row) => row.transporter_display || "—" },
+                  { key: "dc_number", label: "DO Number", width: "120px" },
+                  { key: "fo_number_display", label: "FO Number", width: "120px", render: (row) => row.fo_number_display || "—" },
+                  { key: "source_document_number", label: "SO / STO Number", width: "130px", render: (row) => row.source_document_number || "—" },
+                  { key: "dc_date", label: "DO Date", width: "100px" },
+                  { key: "transporter_display", label: "Transporter", width: "180px", render: (row) => row.transporter_display || "—" },
                   { key: "lr_number", label: "LR Number", width: "120px", render: (row) => row.lr_number || "—" },
+                  { key: "lr_date", label: "LR Date", width: "100px", render: (row) => row.lr_date || "—" },
+                  { key: "vehicle_number", label: "Truck Number", width: "120px", render: (row) => row.vehicle_number || "—" },
+                  { key: "dispatch_date", label: "Dispatch Date", width: "110px", render: (row) => row.dispatch_date || "—" },
+                  { key: "tally_invoice_number", label: "Tally Invoice Number", width: "150px", render: (row) => row.tally_invoice_number || "—" },
+                  { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px", render: (row) => row.tally_invoice_date || "—" },
+                  { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => row.inbound_number || "—" },
                   {
                     key: "status",
                     label: "Status",
                     width: "130px",
                     render: (row) => <span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${doStatusTone(row.status)}`}>{row.status}</span>,
                   },
+                  { key: "customer_display", label: "Bill-To", width: "240px", render: (row) => row.customer_display || "—" },
+                  { key: "ship_to_display", label: "Ship-To", width: "240px", render: (row) => row.ship_to_display || "—" },
+                  { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
                   { key: "dispatch_category", label: "Dispatch Category", width: "140px", render: (row) => row.dispatch_category || "—" },
                   { key: "total_qty", label: "Total Qty", width: "100px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
                   { key: "total_value", label: "Total Value", width: "120px", render: (row) => (Number.isFinite(Number(row.total_value)) ? Number(row.total_value).toFixed(2) : "-") },
