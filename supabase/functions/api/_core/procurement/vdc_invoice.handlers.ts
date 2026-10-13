@@ -146,9 +146,9 @@ function isValidDeferredDispatchDate(lrDate: string, dispatchDate: string): bool
   if (!isIsoDate(lrDate) || !isIsoDate(dispatchDate)) return false;
   const today = todayIsoInKolkata();
   if (dispatchDate < lrDate || dispatchDate > today) return false;
-  // The design's narrower Today-2 window starts on 14 October 2026. Keeping
+  // The design's narrower Today-2 window starts on 31 October 2026 (moved from 14 October by the business owner, 2026-10-13). Keeping
   // the decision date explicit makes the temporary backlog rule auditable.
-  if (today >= "2026-10-14") {
+  if (today >= "2026-10-31") {
     const floor = new Date(`${today}T00:00:00Z`);
     floor.setUTCDate(floor.getUTCDate() - 2);
     return dispatchDate >= floor.toISOString().slice(0, 10);
