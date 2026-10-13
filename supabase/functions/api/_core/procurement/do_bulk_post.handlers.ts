@@ -3,11 +3,13 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { errorResponse, okResponse } from "../response.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { canMaintainSalesInvoice, computeInvoiceGroups, postPgiInvoiceGroupsHandler } from "./do_unified.handlers.ts";
 import { completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "./vdc_invoice.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = { context: Extract<ContextResolution, { status: "RESOLVED" }>; request_id: string; auth_user_id: string; roleCode: string; };
+const BULK_POST_MAX_DOS = 100;
 const text = (value: unknown) => String(value ?? "").trim();
 const upper = (value: unknown) => text(value).toUpperCase();
 const body = (req: Request) => req.json().catch(() => ({} as JsonRecord));
@@ -40,46 +42,64 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
     const companyId = text(new URL(req.url).searchParams.get("company_id"));
     if (!companyId) return fail(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required.");
     const denied = await assertInvoiceAccess(req, ctx, companyId, "VIEW"); if (denied) return denied;
-    const { data: docs, error } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .select("id, dc_number, dc_date, status, pgi_deferred, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number, transporter_id, transporter_name_freetext, lr_number, lr_date, vehicle_number, dispatch_date")
-      .eq("selling_company_id", companyId).eq("is_bulk_uploaded", true).eq("status", "CREATED").order("dc_date", { ascending: true });
-    if (error) return fail(req, ctx, "BULK_POST_QUEUE_FETCH_FAILED", 500, error.message || "Unable to load the Bulk Posting queue.");
-    const rows = (docs ?? []) as JsonRecord[];
+    // §8E — CMP003 alone queued 803 bulk DOs on 2026-10-13: every id list
+    // below is chunked (a single .in() overflowed the GET URL) and the DO
+    // read itself is paged past PostgREST's 1000-row cap.
+    let docs: JsonRecord[];
+    try {
+      docs = await fetchInChunks<JsonRecord>([companyId], (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .select("id, dc_number, dc_date, status, pgi_deferred, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number, transporter_id, transporter_name_freetext, lr_number, lr_date, vehicle_number, dispatch_date")
+        .in("selling_company_id", chunk).eq("is_bulk_uploaded", true).eq("status", "CREATED").order("dc_date", { ascending: true }).order("id"));
+    } catch {
+      return fail(req, ctx, "BULK_POST_QUEUE_FETCH_FAILED", 500, "Unable to load the Bulk Posting queue.");
+    }
+    const rows = docs;
     const ids = rows.map((row) => text(row.id)).filter(Boolean);
-    const { data: lines, error: lineError } = ids.length ? await serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
-      .select("id, dc_id, line_number, material_id, quantity, pack_qty, pack_uom_code, uom_code, unit_value, display_rate, display_rate_basis, display_uom_code, gst_rate, gst_amount, line_total, so_line_id, so_map_allocation_id")
-      .in("dc_id", ids).order("line_number") : { data: [], error: null };
-    if (lineError) return fail(req, ctx, "BULK_POST_QUEUE_LINES_FETCH_FAILED", 500, "Unable to load Bulk Posting lines.");
-    const lineRows = (lines ?? []) as JsonRecord[];
+    let lineRows: JsonRecord[];
+    try {
+      lineRows = await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+        .select("id, dc_id, line_number, material_id, quantity, pack_qty, pack_uom_code, uom_code, unit_value, display_rate, display_rate_basis, display_uom_code, gst_rate, gst_amount, line_total, so_line_id, so_map_allocation_id")
+        .in("dc_id", chunk).order("line_number").order("id"));
+    } catch {
+      return fail(req, ctx, "BULK_POST_QUEUE_LINES_FETCH_FAILED", 500, "Unable to load Bulk Posting lines.");
+    }
 
     // The SO02 grid is commercial data, not merely a DO-line dump. Reuse the
     // same fresh grouping calculation that posting uses, so party/GST/rate
     // display can never drift from the eventual Invoice/PGI document.
     const groupsByDcLine = new Map<string, { group: Awaited<ReturnType<typeof computeInvoiceGroups>>["groups"][number]; line: Awaited<ReturnType<typeof computeInvoiceGroups>>["groups"][number]["lines"][number] }>();
-    for (const doc of rows) {
-      const { groups } = await computeInvoiceGroups(text(doc.id));
-      for (const group of groups) for (const groupLine of group.lines) {
-        groupsByDcLine.set(text(groupLine.dc_line_id), { group, line: groupLine });
+    // INDEPENDENT per DO (§8B) — bounded parallelism instead of one DO after
+    // another, which took minutes for a full bulk upload.
+    let nextDoc = 0;
+    const groupWorker = async () => {
+      while (nextDoc < rows.length) {
+        const doc = rows[nextDoc];
+        nextDoc += 1;
+        const { groups } = await computeInvoiceGroups(text(doc.id));
+        for (const group of groups) for (const groupLine of group.lines) {
+          groupsByDcLine.set(text(groupLine.dc_line_id), { group, line: groupLine });
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(10, rows.length) }, groupWorker));
 
     const allocationIds = [...new Set(lineRows.map((line) => text(line.so_map_allocation_id)).filter(Boolean))];
-    const { data: allocationRows, error: allocationError } = allocationIds.length
-      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, map_group_id").in("id", allocationIds)
-      : { data: [] as JsonRecord[], error: null };
+    const { data: allocationRows, error: allocationError } = await fetchInChunks<JsonRecord>(allocationIds, (chunk) =>
+      serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("id, map_group_id").in("id", chunk))
+      .then((data) => ({ data, error: null as unknown }), (err) => ({ data: [] as JsonRecord[], error: err as unknown }));
     if (allocationError) return fail(req, ctx, "BULK_POST_QUEUE_MAP_FETCH_FAILED", 500, "Unable to load SO Map references.");
     const allocationById = new Map(((allocationRows ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
     const mapGroupIds = [...new Set(((allocationRows ?? []) as JsonRecord[]).map((row) => text(row.map_group_id)).filter(Boolean))];
-    const { data: mapGroups, error: mapGroupError } = mapGroupIds.length
-      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").select("id, external_fo_number, revised_external_fo_number").in("id", mapGroupIds)
-      : { data: [] as JsonRecord[], error: null };
+    const { data: mapGroups, error: mapGroupError } = await fetchInChunks<JsonRecord>(mapGroupIds, (chunk) =>
+      serviceRoleClient.schema("erp_procurement").from("sales_order_map_group").select("id, external_fo_number, revised_external_fo_number").in("id", chunk))
+      .then((data) => ({ data, error: null as unknown }), (err) => ({ data: [] as JsonRecord[], error: err as unknown }));
     if (mapGroupError) return fail(req, ctx, "BULK_POST_QUEUE_FO_FETCH_FAILED", 500, "Unable to load External FO numbers.");
     const mapGroupById = new Map(((mapGroups ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
 
     const soIds = [...new Set([...groupsByDcLine.values()].map(({ group }) => text(group.so_id)).filter(Boolean))];
-    const { data: soRows, error: soError } = soIds.length
-      ? await serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, vendor_code_id").in("id", soIds)
-      : { data: [] as JsonRecord[], error: null };
+    const { data: soRows, error: soError } = await fetchInChunks<JsonRecord>(soIds, (chunk) =>
+      serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, vendor_code_id").in("id", chunk))
+      .then((data) => ({ data, error: null as unknown }), (err) => ({ data: [] as JsonRecord[], error: err as unknown }));
     if (soError) return fail(req, ctx, "BULK_POST_QUEUE_SO_FETCH_FAILED", 500, "Unable to load Sales Order references.");
     const soById = new Map(((soRows ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
     const vendorCodeIds = [...new Set(((soRows ?? []) as JsonRecord[]).map((row) => text(row.vendor_code_id)).filter(Boolean))];
@@ -148,13 +168,19 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
 export async function bulkPostDeliveryOrdersHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const payload = await body(req);
-    const ids = [...new Set((Array.isArray(payload.dc_ids) ? payload.dc_ids : []).map(text).filter(Boolean))];
+    const ids: string[] = [...new Set((Array.isArray(payload.dc_ids) ? payload.dc_ids as unknown[] : []).map((value) => text(value)).filter(Boolean))];
     if (!ids.length) return fail(req, ctx, "BULK_POST_SELECTION_REQUIRED", 400, "Select at least one delivery order.");
-    const { data: docs, error } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+    // Each DO posts atomically one after another (stock checks must see the
+    // previous DO's issue), so one request must stay bounded or it outlives
+    // the HTTP timeout part-way through. 100 DOs per click.
+    if (ids.length > BULK_POST_MAX_DOS) return fail(req, ctx, "BULK_POST_LIMIT", 400, `Select at most ${BULK_POST_MAX_DOS} delivery orders per Bulk Post.`);
+    const { data: docs, error } = await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
       .select("id, selling_company_id, pgi_deferred, is_bulk_uploaded, status, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number, vehicle_number, dispatch_date")
-      .in("id", ids);
+      .in("id", chunk))
+      .then((data) => ({ data, error: null as unknown }), (err) => ({ data: [] as JsonRecord[], error: err as unknown }));
     if (error || (docs ?? []).length !== ids.length) return fail(req, ctx, "BULK_POST_DO_NOT_FOUND", 404, "One or more selected delivery orders no longer exist.");
     const results: JsonRecord[] = [];
+    // DEPENDENT: each DO's PGI stock check must see the previous DO's issue.
     for (const doc of (docs ?? []) as JsonRecord[]) {
       const dcId = text(doc.id); const companyId = text(doc.selling_company_id);
       const denied = await assertInvoiceAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;

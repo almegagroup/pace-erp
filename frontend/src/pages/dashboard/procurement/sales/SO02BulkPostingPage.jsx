@@ -8,6 +8,8 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { bulkPostDeliveryOrders, listBulkPostingQueue } from "../procurementApi.js";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
 
+const MAX_DOS_PER_POST = 100;
+
 export default function SO02BulkPostingPage() {
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
@@ -22,13 +24,18 @@ export default function SO02BulkPostingPage() {
   function toggle(id) { setSelected((current) => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; }); }
   async function post() {
     if (!selected.size) return;
+    // Server posts DOs one by one and accepts at most 100 per request.
+    if (selected.size > MAX_DOS_PER_POST) { setNotice(`Select at most ${MAX_DOS_PER_POST} delivery orders per Bulk Post (${selected.size} selected).`); return; }
     setPosting(true); setNotice("");
     try {
       const result = await bulkPostDeliveryOrders([...selected]);
       const outcomes = Array.isArray(result?.results) ? result.results : [];
       const failed = outcomes.filter((row) => row.ok === false);
+      // Name each failed DO and its reason, so the user knows what to fix.
+      const dcNumberById = new Map(rows.map((row) => [row.id, row.dc_number]));
+      const failedText = failed.slice(0, 10).map((row) => `${dcNumberById.get(row.dc_id) || row.dc_id}: ${row.message || row.code}`).join(" | ");
       setNotice(failed.length
-        ? `${outcomes.length - failed.length} posted; ${failed.length} remain in the queue.`
+        ? `${outcomes.length - failed.length} posted; ${failed.length} remain in the queue. ${failedText}${failed.length > 10 ? ` …and ${failed.length - 10} more` : ""}`
         : `Posted ${outcomes.length || selected.size} delivery order(s).`);
       setSelected(new Set()); await query.refetch();
     }
