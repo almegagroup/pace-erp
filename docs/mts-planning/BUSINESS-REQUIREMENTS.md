@@ -1,0 +1,83 @@
+# PACE MTS Intelligent Procurement Planning — Business Requirements Baseline
+**Owner:** ChatGPT functional coordination; **Reviewer:** Claude Code; **Business owner:** user  
+**Recorded:** 2026-10-13; **Status:** BUSINESS BASELINE (not implementation approval)  
+**Companion:** DECISION-REGISTER.md, Claude Step 1B discovery PR #654 and four audit files on agent/claude.  
+**Handoff:** Claude must fetch agent/chatgpt, review these decisions against technical discovery, record exact contradictions and implementation contracts. No migrations/BE/FE, merge or PROD writes at this stage.
+
+## Governing objective
+Keep the procurement team fully prepared so no material procurement requirement or necessary procurement action is overlooked. Outputs must say which material, company, target R/P storage location, quantity, required date, source/ETA, risk, and feasible procurement/redistribution options. Detailed action/follow-up register belongs later to CSN Tracker, **not** a new planning follow-up register now.
+
+The business operates **three primary planning exercises per month**, plus ad hoc:
+1. Around the current month's 26th, rolling-plan-based planning for coming months.
+2. When next month's Final Plan arrives, replan against it.
+3. When new Rolling Plan arrives for later months, replan again.
+These are **event-based saved planning runs**, NOT a daily required planning run. Every run may project stock and requirement **day by day** across a forward horizon; run date, demand version, assumptions and actual/forecast source should be recorded. User-selected ledger-backed **calibration date** resets projected opening using that date's actual start-of-day Book Opening (within available historical/current ledger). No future unposted opening, no stock ledger write. Saved run/scenario immutable or versioned for comparison. Between runs current PO/CSN/production data may change, and refreshed working projection must show changes without silently overwriting historical saved versions.
+
+## B01 — New entry and historical backfill
+- **Build page/target schema first**; users will maintain plans beginning October 2026, including October–December Rolling.
+- ChatGPT-coordinated historical Google Sheets backfill is **through September 2026**, month-by-month, as **FINAL** in the SAME canonical register/schema as ERP-entered plans; source system/batch/row provenance mandatory.
+- Source Sheets/tabs/columns/sample rows remain to be mapped **after precise target page/data contract**; do not hold page concept hostage to source mapping, but validate mapping and source evidence before backfill. Original absent historical Rolling is **Not Available**, never invented. Never overwrite October-onward user entries; idempotent import/reconciliation.
+- No direct PROD backfill without separately approved dry run/validation.
+
+## B02 — Planning grain, SKU, units and stroke timeline
+- One **company-wise Asian Paints** customer planning page; select authorised company and plan month/type; load its **full applicable SKU list** in existing `ErpDenseGrid` Excel-like editable rows, user primarily enters Plan Qty.
+- Header Plan Input UoM is selectable; base qty auto-derives by actual SKU/Prodshade master conversions. E.g. standard 1 MT = 1000 KG when base is KG. For non-base UoM show validated conversion field, never invent conversion; base quantities always auditable.
+- SKU → Prodshade automatically via ERP mappings. RM derives from Prodshade + effective Stroke; PM from SKU Pack BOM. Bulk RM (white cement/dolomite etc.) initially stays within same SKU plan workflow; advanced bulk treatment may be refined later.
+- Default effective stroke is the company-scoped **current Stroke**; dropdown may select another valid approved/company-scoped Stroke. **Stroke period schedule** per SKU allows From/To dates, different strokes in same month, optional period quantities and pro-rata; edits to dates/stroke/quantity recalculate future material requirement. Default month uses current stroke; quantity distribution by calendar-day pro-rata initially, user override permitted; prevent overlaps, preserve override or request review rather than silently rewriting. Period quantities reconcile with SKU planned quantity. Planning-only assumption: do not mutate actual Stroke Master.
+- Cross-company production: plan remains on plan company but a SKU quantity may be produced fully or partially by other company (including multiple allocations); RM/PM requirement attributed to the **production company**, not automatically plan company. Allocation sums cannot exceed effective SKU plan; remainder belongs to owning company; history retained.
+
+## B03 — Urgent semantics
+Urgent entries may (1) re-prioritise a referenced existing FINAL/ADDITIONAL quantity (no incremental demand) or (2) add net-new demand (increases requirement). Store mode, date, quantity and reference/basis; double-count protection; audit revisions.
+
+## B04 — Customer dimension
+Current go-live scope has a single customer **Asian Paints**, but distinct plans by **company**, month and SKU. Do not show customer selector in current UI; future company/customer-wise business may be supported extensibly later. Resolve real ERP customer reference, no invented ID and no free-text master creation. Historical mappings primarily company+SKU; mismatches staged for explicit resolution, never guessed or auto-master-created.
+
+## B05 — Edit permissions, activation and audit
+**NO plan approval workflow** (earlier proposal explicitly revoked). ACL-authorised users may create/edit Rolling, Final, Additional, Urgent plans; saves/revisions become current plan per selected type and scope, with immutable or robust versioned audit trail: actor, time, prior/new quantities, reason and related stroke/period/company allocation changes. ACL VIEW/EDIT separate and company-scoped; no everyone-can-edit assumption. Proposed purchase/CSN/ledger modifications are never autonomous.
+
+## B06 — Production estimates
+Separate concept/document from customer plans and management target, for current month's remaining and future month's expected production (Prodshade-wise principally, SKU-wise where available). Authorised user **direct save**, no approval; audit revisions and provenance. Actual verified production/consumption and dispatch are distinct signals; avoid double counting with plan, remaining estimate or management assumption. Actual MTS ERP history only from 2026-10-02 per Claude discovery; older actual comparisons require verified historical sources.
+
+## B07 — Transfer recommendations
+Planning **suggestions only**; no new STO/PTO/IN10 write from planning. Intra-company stock transfers are **between storage locations within a company**, not company transfer. A source SLoc/company is transferable surplus ONLY if removing proposed qty does not trigger own future shortage or premature repurchase before feasible replenishment and safety requirements. Inter-company transfers and FG STO are separate transaction modules. Cost and feasibility considered.
+
+## B08 — MTS dispatch & cross-company FG movement
+For actual **Asian Paints dispatch**, MTS dispatch with **Bill To = Asian Paints** is the criterion. Internal FG STO/company transfer is NOT customer dispatch. Example: CMP005 owns plan; CMP003 manufactures; FG moves CMP003→CMP005; CMP005 bills Asian Paints: plan fulfilment on CMP005, physical RM/PM consumption on CMP003. FG STO design exists but **implementation pending** and owned by FG Dispatch module, not duplicated here; integration later. Actual dispatch read model needs schema/transaction proof, never count both internal FG STO and external invoice as customer dispatch.
+
+## B09 — Deterministic intelligent material & logistics allocation
+- A Stroke may contain material groups (RDP/MHEC etc.), primary Stroke item and other group members. Existing original item is not guaranteed used; no guessing from short ERP production history nor simplistic historic Sheets' group percentages. For multi-member group, user may specify **Use Primary Stroke Item = Yes** (primary + all other applicable members) or **No** (exclude primary; use other members); single fixed item has no toggle. Candidate members form **one common group requirement pool**, not full requirement duplicated on each item. Mandatory/exclusive item constraints by Prodshade must hold. Verify approved technical eligibility and UoM/dosage conversion; incompatible item is not fungible just by group membership.
+- Engine sees across all products: SKU/Prodshade date-wise future consumption (including competing/exclusive demand), actual stock, permitted alternatives, existing open PO, PO lots, CSN/partial receipts and **latest ETA TO PLANT**, supplier/vendor MOQ, lot/dispatch logistics, lead times, commercial/cash constraints and stock coverage.
+- **Protect mandatory/exclusive demand dynamically and date-wise**, but not blindly 75 days if target 40/max 45. Project actual and anticipated stock to next consignment, preserve minimum/critical coverage subject to feasible supply, use future arrivals, release unneeded virtual protection when production estimate changes/cancels (not merely a delayed unproduced job). Subsequent consignment is also distributed. Reoptimise at every planning run and when working inputs refresh; virtual planning allocation is not posted reservation.
+- Same physical stock/in-transit PO must never be double-counted across Prodshades, group members, lots, CSNs, transfers, days or locations. No blanket assumption every member consumes same ratio; calculate feasible allocation using approved conversion.
+- Stock **visibility** includes eligible stock in S and R/P locations; **planned RM target allocation is R locations**, **PM target P locations**. S locations provide eligible available stock as possible transfer sources, subject to QA/blocked/excluded storage rules, not automatic consumption destinations. Produce **when, where, how many** internal S→R/P or R↔R/P location distribution suggestions. Confirm actual destination and eligibility through master/movement data; no unverified sloc pooling.
+- **MOQ not uniformly set by user**: some supplier-defined, some company-defined, some no fixed MOQ. Maintain planning MOQ and source in Requirement page; allow edits/history, read current/legacy PO, ordered/open quantities and lot schedules. PO historic sizes can suggest MOQ but do not prove contract MOQ. MOQ applies to feasible net *new* vendor/PO procurement, not to each R/P storage location; vendor-specific constraints if applicable. Order MOQ separate from shipment/dispatch lot (can be smaller when vendor permits).
+- PO existence alone does NOT imply available stock: use actual on-time ETA to plant, most mature authoritative CSN ETA over superseded PO planned dates, received portion separately. Planner updates CSN Tracker outside planning; current projection refreshes/latest ETA and reassesses future closure/shortage. Saved snapshots stable. Not every scenario recommendation feasible: flag constraints, no false certainty.
+- Commercial optimisation is constrained by mandatory production, safety, lead-time, stock and MOQ; should minimise excess stock and premature working-capital tie-up while keeping procurement team ready. AI can explain verified deterministic feasible options; not invent quantities.
+
+## B10 — Cost, working capital, cash-to-cash
+Business wants combine **AC01 actual landed cost**, current **Purchase Orders**, **Legacy Purchase Orders**, payment terms, actual/expected MTS dispatch and **Asian Paints customer payment terms** to estimate per-material inventory investment, pending PO cost, purchase funding timing, dispatch-related receivables, cash conversion/working capital. Coverage policy + forward consumption establish **stock quantities**; cost/terms provide valuations/cash timing. Distinguish recoverable taxes/ITC from unrecoverable economic cost and from temporary cash outflow; distinguish actual collections vs expected contractual due date. Historical landed cost is observed benchmark, not guaranteed future rate; verify accounting sources, FX/duties, AC01 components, legacy PO schema, customer receipt availability and valuation authority before final formula. Missing components explicit, never fabricated. Vendor comparisons use landed economics, feasible supply, terms, working capital and risk. All decisions advisory.
+
+## B11 — Material Requirement & Alerts, coverage policy
+- Build **new smart Requirement & Alerts page** based on full business functionality of existing Google Sheet `[SURFACE] REPORTS_ALL` tab `REQUIREMENT`; **NOT identical visual/formula copy**. Existing `ErpDenseGrid`, dense Excel-like filters/inline editing. Existing sheet has target/critical cover, CM/NM requirement/pro-rata, stock, consumption, in-transit CM/NM, projected cover, below-target/critical alerts, MOQ/active, lead time and calculated safety/lead-time stock. Use verified ERP live values, correct legacy deficiencies, retain needed decisions. Current+next month default, longer horizon design optional (not owner-approved).
+- Coverage target and critical days are **per individual RM/PM item**, not generic group RDP/MHEC. Import initial settings from Sheet `REQUIREMENT`; manual edits allowed, AI suggested target/critical days appear **in same grid row** alongside existing policy and reasons, Accept/Ignore/Custom controls, batch acceptance, audit and effective dates. Do not silently change policy by AI. Distinguish calculated live coverage indicators from stored policy days.
+- MOQ same Requirement page (see B09).
+- Alert on projected critical/target breach, ETA risk, next-month demand, overstock/capital; requirement and PO/in-transit shown date-wise, not PO qty as available regardless ETA. Detailed follow-up/action register deferred to CSN Tracker as expressly instructed by owner.
+
+## B12 — Calibration
+Each planning exercise allows user-selected ledger-backed calibration date. ERP day-opening for that date from posted ledger is opening baseline; future projected movements roll onward. Historical/current only; cannot calibrate to unposted future Book Opening. User does not edit ledger, snapshots and recalculation source/reason/audit retained. Google `PLANNING` columns C BOOK OPENING; D Date; E OPENING; F ETA TO PLANT; H PRO-RATA; I CLOSING; Q > 0 calibration flag (Google formula `IF(Q>0,C,I_previous)`). ERP implementation must avoid resetting from blank future Book Opening (legacy sheet risk).
+
+## B13 — AI cost cap
+**USD 5 / month HARD cap** for Claude Haiku 5.5 planning AI; ledger by usage/user/month; concurrency-safe server-side pre-call reservation + settlement; no calls beyond cap, deterministic planning still works; advisory-only, no direct transactions. Change authority/timezone/provider pricing details technical/ACL review pending. See `DECISION-B13-AI-BUDGET.md`.
+
+## B14 — Initial scope
+CMP003, CMP005, CMP011 for MTS planning. Company-scoped permissions and cross-company production allocation as above. Current PACE schema has no distinct plant entity, so use company + actual storage-location dimensions; don't invent `plant_id`.
+
+## UI / non-negotiable engineering
+- All main planning and Requirement screens use ERP `ErpDenseGrid` dense Excel-style layout, keyboard navigation, bulk edits/paste as supported; **no material cards, side panels**. Small inline expanded stroke schedule allowed, not separate page.
+- Planning calculations deterministic/non-AI. AI optional explanation and recommendations with user acceptance.
+- All planning suggestions read-only to stock/PO/CSN/FG dispatch; execution stays owning module.
+- Exact menu/page count remains OPEN until reconcile Claude's proposed MP## page inventory with requirements. Do not treat 19 logical workspaces as 19 navigation pages.
+- Audit and accessible source fields for every policy/user change; strict ACL and company scope; no PROD changes before explicit user approval.
+
+## Verification / unresolved technical contracts (NOT permission to guess)
+Historical Sheets precise mapping; actual product/company SKU applicability and SKU UoM conversion; eligible members/dosage; effective stroke precedence; period production scheduling; source SLoc eligibility and consumption SLoc; zero/delayed or missing CSN ETA semantics; PO vs lot vs CSN dedup; legacy PO fields; FG STO status; AC01 and customer payment/collection data; MOQ by supplier; replenishment/cash computation; group-level optimisation solver constraints; AI concurrency cap; menu/schema/ACL. Claude must turn these into explicit evidence-based contracts/tests and mark OPEN if no ground truth.
