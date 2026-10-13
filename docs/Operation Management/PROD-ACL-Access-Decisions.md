@@ -2550,3 +2550,39 @@ action-only resource):** creating the `acl.menu_master` row (needed for `capabil
 does **not** mean an `erp_menu.menu_master` row is also needed — that second insert is the mistake.
 Only add an `erp_menu.menu_master` row when the resource is a real, independently-navigable page
 with its own frontend route.
+
+---
+
+## 2026-10-13 — Second ACL-MASTER, L3 Manager subordinate scope, Procurement exclusivity (business owner)
+
+**Rules (locked):**
+1. **Bijon Kanabar (P0074) = second ACL-MASTER, permanently.** Given exactly P0076's
+   company set (CMP003/005/006/010/011) and work contexts (ACL-MASTER as primary +
+   DIRECTOR in each company). P0076's power comes only from the ACL-MASTER work context
+   (no personal overrides), so anything granted to ACL-MASTER later reaches both.
+   Verified: identical `precomputed_acl_view` (1580 rows, 0 differences).
+2. **L3 Manager = everything their subordinates do in their own company, and approves
+   subordinates' work — never their own.** Implemented as: MANAGEMENT work context gets
+   every capability of the company's department work contexts (excluding ACL-MASTER,
+   DIRECTOR, DIRECTOR-REPORTS, AUDIT — audit stays independent — and SUPPLY CHAIN, see
+   rule 3); the L3_MANAGER role gets the same capabilities (effective access = role ∩
+   work context); `acl.approver_map` gets L3_MANAGER/MANAGEMENT rules for every
+   subordinate rank (L1_USER…L2_MANAGER) on Stroke, Pack BOM and Change Pack BOM.
+   Auditor-owned approvals (PID, Opening Stock, Costing Group) are not given to L3.
+   Future grants are mirrored automatically by migration
+   `20261013090000_l3_manager_subordinate_scope_sync.sql` (two triggers).
+3. **Procurement (GRP_ACL_PROCUREMENT) = Supply Chain + ACL-MASTER only**, except a
+   page's explicit dependency access (e.g. Stores/Quality/Accounts/L3 `PROC_PO_LIST:VIEW`
+   for GRN/QA). L3 Managers carry DENY overrides for the rest (same pattern as the
+   2026-07-27 "Mgmt managers: no Procurement section" overrides).
+4. **Rupankar (P0065) = L3 Manager of CMP011 (primary) and CMP005.**
+
+**Self-approval (code, same commit):** true maker-checker steps that lacked a creator
+check now have one — Process PO QA Approve/Reject, Manager Approve/Reject (creator),
+Verify (creator or finalizer), Stroke Change Request Approve/Reject (requester).
+SA/GA/DIRECTOR/ACL-MASTER keep the system-wide blanket override. Steps that are the
+actor's own action by design (GRN post, Inward QA usage decision, SFG result, RTV,
+Debit Note, invoice post) are unchanged — they are not maker-checker.
+
+**Pending in prod:** `implementation-specs/L3-MANAGER-SUBORDINATE-SCOPE-MCP-ROLLOUT.sql`
+(DELETEs the MCP could not run).

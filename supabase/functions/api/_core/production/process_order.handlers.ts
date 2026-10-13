@@ -18,6 +18,7 @@ import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -188,6 +189,15 @@ async function getMaterialGroupMemberIdsByGroupIds(
     memberMap.set(groupId, existing);
   }
   return memberMap;
+}
+
+// No one approves their own work (business owner 2026-10-13): the person who
+// created/finalized a Process PO cannot also take its QA, Manager or Verify
+// decision.  SA/GA/DIRECTOR/ACL-MASTER keep the same blanket override every
+// other maker-checker in this codebase grants them.
+function isSelfDecision(ctx: ProdHandlerContext, ...makerIds: unknown[]): boolean {
+  if (hasBlanketApprovalOverride(ctx)) return false;
+  return makerIds.some((makerId) => toTrimmedString(makerId) !== "" && toTrimmedString(makerId) === ctx.auth_user_id);
 }
 
 async function fetchProcessOrder(id: string): Promise<JsonRecord | null> {
@@ -3766,6 +3776,9 @@ export async function qaApproveProcessOrderHandler(req: Request, ctx: ProdHandle
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "APPROVE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have QA approval access for this company.");
     }
+    if (isSelfDecision(ctx, po.created_by)) {
+      return poErr(req, ctx, "PROD_PO_SELF_APPROVAL_FORBIDDEN", 403, "You created this Process PO — another person must take the QA decision.");
+    }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
     }
@@ -3906,6 +3919,9 @@ export async function managerApproveProcessOrderHandler(req: Request, ctx: ProdH
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "MANAGER_APPROVE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Manager Approval access for this company.");
     }
+    if (isSelfDecision(ctx, po.created_by)) {
+      return poErr(req, ctx, "PROD_PO_SELF_APPROVAL_FORBIDDEN", 403, "You created this Process PO — another person must take the Manager decision.");
+    }
     if (po.priority !== "URGENT") {
       return poErr(req, ctx, "PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE", 422, "Manager Approval only applies to Urgent Process Orders.");
     }
@@ -3968,6 +3984,9 @@ export async function managerRejectProcessOrderHandler(req: Request, ctx: ProdHa
     }
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "MANAGER_APPROVE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have Manager Approval access for this company.");
+    }
+    if (isSelfDecision(ctx, po.created_by)) {
+      return poErr(req, ctx, "PROD_PO_SELF_APPROVAL_FORBIDDEN", 403, "You created this Process PO — another person must take the Manager decision.");
     }
     if (po.priority !== "URGENT") {
       return poErr(req, ctx, "PROD_PO_MANAGER_APPROVAL_NOT_APPLICABLE", 422, "Manager Reject only applies to Urgent Process Orders.");
@@ -4038,6 +4057,9 @@ export async function qaRejectProcessOrderHandler(req: Request, ctx: ProdHandler
     }
     if (!(await canMaintainCompanyResource(ctx, String(po.company_id ?? ""), "PROD_QA_QUEUE", "APPROVE"))) {
       return poErr(req, ctx, "PROD_PO_COMPANY_ACCESS_DENIED", 403, "You do not have QA approval access for this company.");
+    }
+    if (isSelfDecision(ctx, po.created_by)) {
+      return poErr(req, ctx, "PROD_PO_SELF_APPROVAL_FORBIDDEN", 403, "You created this Process PO — another person must take the QA decision.");
     }
     if (po.status !== "STANDARD") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, `Expected STANDARD, got ${po.status}`);
@@ -4815,6 +4837,9 @@ export async function verifyProcessOrderHandler(req: Request, ctx: ProdHandlerCo
     }
     if (po.status !== "FINAL") {
       return poErr(req, ctx, "PROD_PO_STATUS_INVALID", 422, "Must be at FINAL to verify");
+    }
+    if (isSelfDecision(ctx, po.created_by, po.finalized_by)) {
+      return poErr(req, ctx, "PROD_PO_SELF_APPROVAL_FORBIDDEN", 403, "You created or finalized this Process PO — another person must Verify it.");
     }
 
     const body = await parseBody(req);

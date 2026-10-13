@@ -15,6 +15,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
+import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -411,7 +412,7 @@ export async function approveStrokeChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_change_request")
-      .select("id, status, stroke_master_id, company_id")
+      .select("id, status, stroke_master_id, company_id, created_by")
       .eq("id", id)
       .maybeSingle();
 
@@ -423,6 +424,12 @@ export async function approveStrokeChangeRequestHandler(
     await assertCompanyScope(ctx, String((cr as JsonRecord).company_id ?? ""));
     if ((cr as JsonRecord).status !== "DRAFT") {
       return crError(req, ctx, "PROD_SCR_NOT_DRAFT", 422, "Only DRAFT change requests can be approved");
+    }
+    // No one approves their own change request (business owner 2026-10-13);
+    // SA/GA/DIRECTOR/ACL-MASTER keep the system-wide blanket override.
+    const crCreatedBy = toTrimmedString((cr as JsonRecord).created_by);
+    if (crCreatedBy && crCreatedBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
+      return crError(req, ctx, "PROD_SCR_SELF_APPROVAL_FORBIDDEN", 403, "You raised this change request — another person must decide it.");
     }
 
     let linesToApply: JsonRecord[] = editedLines;
@@ -527,7 +534,7 @@ export async function rejectStrokeChangeRequestHandler(
     const { data: cr, error: crFetchErr } = await serviceRoleClient
       .schema("erp_production")
       .from("stroke_change_request")
-      .select("id, status, company_id")
+      .select("id, status, company_id, created_by")
       .eq("id", id)
       .maybeSingle();
 
@@ -539,6 +546,12 @@ export async function rejectStrokeChangeRequestHandler(
     await assertCompanyScope(ctx, String((cr as JsonRecord).company_id ?? ""));
     if ((cr as JsonRecord).status !== "DRAFT") {
       return crError(req, ctx, "PROD_SCR_NOT_DRAFT", 422, "Only DRAFT change requests can be rejected");
+    }
+    // No one approves their own change request (business owner 2026-10-13);
+    // SA/GA/DIRECTOR/ACL-MASTER keep the system-wide blanket override.
+    const crCreatedBy = toTrimmedString((cr as JsonRecord).created_by);
+    if (crCreatedBy && crCreatedBy === ctx.auth_user_id && !hasBlanketApprovalOverride(ctx)) {
+      return crError(req, ctx, "PROD_SCR_SELF_APPROVAL_FORBIDDEN", 403, "You raised this change request — another person must decide it.");
     }
 
     const { error: updateErr } = await serviceRoleClient
