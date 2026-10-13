@@ -98,6 +98,10 @@ async function exportReviewSheet(rows) {
     ["3. DO Date, Transporter, LR Number/Date, Tally Invoice Number/Date, Inbound Number, Truck Number and Dispatch Date are corrected in place."],
     ["4. A change in SKU, Pack Qty, Storage Location or FO/SO is NOT corrected here: cancel that DO in SO03 and upload it again with Bulk DO Upload."],
     ["5. A blank cell never erases existing data. Save, then use \"Upload Corrections\" on the Bulk Posting page."],
+    ["6. You may delete rows that need no correction — DOs and lines not in the file stay exactly as they are."],
+    ["7. If a DO has several lines, write a corrected value on any one of its lines (or all of them, the same value). Two different values for one DO is an error."],
+    ["8. Upload shows a preview first; nothing is saved until you click \"Apply\". Only DOs not yet posted can be corrected."],
+    ["9. If everything is already correct, no upload is needed — go straight to Bulk Post."],
   ].forEach((line) => notes.addRow(line));
   notes.getColumn(1).width = 140;
   await saveWorkbook(workbook, `so02_bulk_posting_review_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -236,6 +240,10 @@ export default function SO02BulkPostingPage() {
       title: `${totalDoCount} delivery order${totalDoCount === 1 ? "" : "s"}${visibleRows.length !== rows.length ? ` · ${new Set(visibleRows.map((row) => row.id)).size} shown` : ""}`,
       children: (
         <div className="grid gap-3">
+          <div className="border border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            <span className="font-semibold text-slate-800">How to check: </span>
+            1. Export for Review → 2. match it with Tally → 3. if anything is wrong, fix the yellow columns (rows with no correction can be deleted) → 4. Upload Corrections, check the preview, Apply → 5. Bulk Post. If everything already matches, go straight to Bulk Post.
+          </div>
           {correction ? (
             <div className="grid gap-2 border border-sky-300 bg-sky-50 px-3 py-2 text-xs">
               <div className="flex flex-wrap items-center gap-3">

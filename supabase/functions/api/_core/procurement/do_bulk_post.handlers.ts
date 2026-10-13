@@ -393,13 +393,14 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
         if (text(row.storage_location_code) && !sameText(line.location, row.storage_location_code)) itemChanges.push(`SKU ${line.sku}: Storage Location ${line.location} → ${text(row.storage_location_code)}`);
         if (text(row.fo_or_so_number) && line.fos.length && !line.fos.some((fo) => sameText(fo, row.fo_or_so_number))) itemChanges.push(`SKU ${line.sku}: FO ${line.fos[0]} → ${text(row.fo_or_so_number)}`);
       }
-      for (const line of unmatched) itemChanges.push(`SKU ${line.sku} of this DO is missing from the file`);
+      // Lines left out of the file are simply untouched — users may delete rows they do not need to correct.
 
-      // Header fields: every row of one DO must agree.
-      const header = dcRows[0];
+      // Header fields: the filled-in rows of one DO must agree (a blank cell means "unchanged", never a conflict).
+      const header = {} as CorrectionRow;
       for (const field of [...HEADER_FIELDS.map((entry) => entry.key), "transporter_name" as keyof CorrectionRow]) {
-        const values = new Set(dcRows.map((row) => text(row[field]).toUpperCase()));
-        if (values.size > 1) errors.push(`Rows of this DO disagree on ${field.replace(/_/g, " ")}`);
+        const filled = dcRows.map((row) => text(row[field])).filter(Boolean);
+        if (new Set(filled.map((value) => value.toUpperCase())).size > 1) errors.push(`Rows of this DO disagree on ${field.replace(/_/g, " ")}`);
+        (header as Record<string, unknown>)[field] = filled[0] ?? "";
       }
       const patch: JsonRecord = {};
       const changes: string[] = [];
