@@ -58,7 +58,7 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
     let lineRows: JsonRecord[];
     try {
       lineRows = await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
-        .select("id, dc_id, line_number, material_id, quantity, pack_qty, pack_uom_code, uom_code, unit_value, display_rate, display_rate_basis, display_uom_code, gst_rate, gst_amount, line_total, so_line_id, so_map_allocation_id")
+        .select("id, dc_id, line_number, material_id, quantity, pack_qty, pack_uom_code, uom_code, unit_value, display_rate, display_rate_basis, display_uom_code, gst_rate, gst_amount, line_total, so_line_id, so_map_allocation_id, storage_location_id")
         .in("dc_id", chunk).order("line_number").order("id"));
     } catch {
       return fail(req, ctx, "BULK_POST_QUEUE_LINES_FETCH_FAILED", 500, "Unable to load Bulk Posting lines.");
@@ -115,6 +115,24 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
       : { data: [] as JsonRecord[], error: null };
     if (transporterError) return fail(req, ctx, "BULK_POST_QUEUE_TRANSPORTER_FETCH_FAILED", 500, "Unable to load Transporter details.");
     const transporterById = new Map(((transporterRows ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
+    // Cross-check fields: the upload sheet identifies the item by its SKU
+    // (external) code and the location by its code, so show exactly those.
+    const materialIds = [...new Set(lineRows.map((line) => text(line.material_id)).filter(Boolean))];
+    const locationIds = [...new Set(lineRows.map((line) => text(line.storage_location_id)).filter(Boolean))];
+    let materialById = new Map<string, JsonRecord>();
+    let locationById = new Map<string, JsonRecord>();
+    try {
+      const [materialRows, locationRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id, pace_code, external_code, material_name, document_name").in("id", chunk)),
+        fetchInChunks<JsonRecord>(locationIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("storage_location_master")
+          .select("id, code, name").in("id", chunk)),
+      ]);
+      materialById = new Map(materialRows.map((row) => [text(row.id), row]));
+      locationById = new Map(locationRows.map((row) => [text(row.id), row]));
+    } catch {
+      return fail(req, ctx, "BULK_POST_QUEUE_MATERIAL_FETCH_FAILED", 500, "Unable to load SKU / storage location details.");
+    }
     const { data: companyRow, error: companyError } = await serviceRoleClient.schema("erp_master").from("companies").select("company_code").eq("id", companyId).maybeSingle();
     if (companyError) return fail(req, ctx, "BULK_POST_QUEUE_COMPANY_FETCH_FAILED", 500, "Unable to load Company Code.");
     const companyCode = text(companyRow?.company_code) || null;
@@ -145,6 +163,10 @@ export async function listBulkPostingQueueHandler(req: Request, ctx: Procurement
         company_code: companyCode,
         vendor_code: vendor ? [text(vendor.vendor_code), text(vendor.description)].filter(Boolean).join(" — ") : null,
         sku: line?.document_name || line?.material_display || null,
+        sku_code: text(materialById.get(text(rawLine.material_id))?.external_code) || text(materialById.get(text(rawLine.material_id))?.material_name) || null,
+        pace_code: text(materialById.get(text(rawLine.material_id))?.pace_code) || null,
+        document_name: text(materialById.get(text(rawLine.material_id))?.document_name) || text(materialById.get(text(rawLine.material_id))?.material_name) || null,
+        storage_location_code: text(locationById.get(text(rawLine.storage_location_id))?.code) || null,
         pack_qty: line?.pack_qty ?? rawLine.pack_qty ?? null,
         pack_uom_code: line?.pack_uom_code ?? rawLine.pack_uom_code ?? null,
         base_qty: line?.quantity ?? rawLine.quantity ?? null,
