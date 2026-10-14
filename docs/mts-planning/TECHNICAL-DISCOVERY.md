@@ -1,6 +1,6 @@
 # MTS Intelligent Procurement Planning — Technical Discovery (Step 1B)
 
-Date: 2026-10-13 · Author: Claude Code (technical architect) · Tracks: almegagroup/pace-erp#649
+Date: 2026-10-13, Step 1C update 2026-10-14 · Author: Claude Code (technical architect) · Tracks: almegagroup/pace-erp#649
 Status: **DISCOVERY ONLY.** No migration, backend, frontend, PROD or DEV data change was made.
 Next gate: ChatGPT business/functional reconciliation → business owner approval → implementation.
 
@@ -25,7 +25,7 @@ Sources read: `CLAUDE.md` (§3 15 bug patterns, §8A–8E), `docs/PACE_ERP_MASTE
 1. **No customer-plan / demand / forecast data model exists anywhere** (VERIFIED: no table matching `%forecast%`, `%demand%`, `%customer_plan%` in any schema on PROD). Rolling/Final/Additional/Urgent plans are **NEW REQUIRED**.
 2. **`erp_production.plan_feed` is not an MTS demand source.** PROD: 502 FOs, party `fo_customer_type` = MTO_HPS 409 / MTEST 93 / **MTS 0**; `plan_feed_packing_order_allocation` against PMTS = 0; `sales_order_line.fg_type='MTS'` with `plan_feed_id` = 0 (VERIFIED). Reusing it would mix MTO order-feeds with MTS forecasts → double count risk (CLAUDE.md pattern #6-shape).
 3. **ERP MTS production history is ~10 days long.** VERIFIED MTS process orders in PROD: 108 VERIFIED, production_date 2026-10-02 → 2026-10-12, companies CMP003 / CMP005 / CMP011. Any plan-vs-actual for earlier periods must come from historical Google Sheets/Excel → Historical Import is a hard prerequisite for comparison pages.
-4. **MTS dispatch is not in `dispatch_reco`.** PROD `dispatch_reco` categories: PMTO 5192, PTEST 1345, PHPS 37, RPS 99 — **no PMTS** (VERIFIED). MTS dispatch actuals must come from `erp_procurement.sales_order_line` (`fg_type='MTS'`, 176 lines) / `sales_invoice_line` / `stock_ledger` P601/P602.
+4. **MTS dispatch is not in `dispatch_reco`.** PROD `dispatch_reco` categories: PMTO 5192, PTEST 1345, PHPS 37, RPS 99 — **no PMTS** (VERIFIED). MTS dispatch actuals must come from `erp_procurement.sales_order_line` (`fg_type='MTS'`, 176 lines) / `sales_invoice_line` / `stock_ledger` P601/P602. **Step 1C:** none of these has posted MTS data yet — all 15 MTS SOs are CREATED, 0 P601/P602 and 0 invoice lines on PMTS SKUs; MTS SOs bill Asian Paints via `sales_order.bill_to_type` DEPOT/VDC (`fg_depot_code`/`fg_parent_company`), with `customer_id` NULL.
 5. **PO11 is reusable as an engine pattern, not as the MTS planner.** `procurement_monthly_plan*` is a monthly reorder-point model (daily requirement = monthly ÷ days; safety + (processing + lead) × daily; netting Unrestricted − OPEN reservations + QA + TRN-CSN + open GE). It has no daily time-phasing, no PO/PO-lot open quantity, no stroke explosion (VERIFIED `planning.handlers.ts:1090-1250`).
 6. **PO12 is no longer a Plant Transfer Order page.** VERIFIED `frontend/src/pages/dashboard/procurement/transfer/PlantTransferPage.jsx` header: PO12 = Tab 1 CRCP Discrepancy + Tab 2 Returnable Material Transfer; the Gate-23 PTO list is "no longer reachable", `erp_procurement.plant_transfer_order` = 0 rows PROD. The earlier note "PO12 maps to PTO" in `MTS-PLANNING-PAGE-INVENTORY…md` is **superseded** by this evidence.
 7. **AC01 = "GRN Landed Cost Hub"** under resource `PROC_IV_LIST` (menu title still "Invoice Verifications"); separate AC03 `PROC_LC_LIST` "Landed Costs" page also exists. Atomic RPCs `erp_procurement.save_ac01_grn_cost` and `save_ac01_grn_cost_with_verification` (VERIFIED pg_proc). AC01 data is per GRN — usable for historical landed cost, not a forward cost forecast.
@@ -129,3 +129,24 @@ PROPOSED shape (names illustrative, final DDL after business sign-off):
 - Google Sheets source structure (no file in repo) — Q-B01.
 - PROD RLS policies on candidate tables (not inspected; all API writes use service role per existing pattern).
 - Whether business "plant" means company, a storage-location group (as PO11's `planning_sloc_group` does), or a physical site spanning companies — Q-T01.
+
+## 7. Step 1C update (2026-10-14)
+
+Owner decisions B01–B14 and T01–T07 were reconciled against PROD (read-only) and code. Full table: `OPEN-TECHNICAL-QUESTIONS.md` §1C. Summary of what changed in this discovery:
+
+| # | Finding | Evidence | Status |
+|---|---|---|---|
+| 1 | Asian Paints is not in `customer_master`; MTS billing identity is `fg_parent_company` / `fg_depot_code` via `sales_order.bill_to_type` DEPOT/VDC | PROD SELECT; 15 MTS SOs with `customer_id` NULL | CONFLICT with B04 wording → owner confirm key |
+| 2 | No MTS dispatch has been posted yet (0 P601, 0 invoice lines) | PROD SELECT | GAP for B08 plan-vs-actual |
+| 3 | SKU↔Prodshade has no FK; production uses name/code match (`resolveSkuMaterial`, `mts_creation_session.handlers.ts:288`); 59/59 go-live pairs unique today | PROD SELECT + code | Technical risk; per-run uniqueness check |
+| 4 | 9 of 22 CMP005 MTS SKUs have no ACTIVE company Pack BOM | PROD SELECT | Data GAP (PM requirement missing) |
+| 5 | R/S/P SLoc codes span PUTTY (001), TLA (002), ADMIX (003); no segment attribute; `production_segment_location_config` empty | PROD SELECT | CONFLICT with T01 "R+S / P" as written → MTS SLoc eligibility map |
+| 6 | "Primary item" in groups: `member.is_primary` used 3 times in total; `alternate_material_id` unused in MTS strokes | PROD SELECT | CONFLICT (definition) for B09 |
+| 7 | Book Opening must be a strict ledger sum, and must be stored at capture because back-dated postings exist (667 in 30 days) | PROD SELECT, `get_stock_history` source | B12 implementation rule |
+| 8 | 41/75 ORD CSNs have no ETA to plant | PROD SELECT | T05: UNKNOWN-ETA presentation needed in owner spec |
+| 9 | `po_line_available_qty` / `po_lot_balances` exist in PROD and implement GE-not-GRN netting | PROD `pg_proc` | T06 source confirmed |
+| 10 | No receivable/collection table; USD POs without FX source; AC01 has DRAFT rows | PROD catalogue + SELECT | B10 GAP |
+| 11 | Pack BOM PM rows are `line_type='INPUT'` | PROD SELECT | Correction to wording elsewhere |
+| 12 | Procurement group `GRP_ACL_PROCUREMENT` verified; free tx codes PO15, PO20+ | PROD menu | T08 still OPEN |
+
+Owner instruction recorded: the business owner designs every Planning page; all pages go under the Procurement menu group; T08 codes and page count stay OPEN; `PAGE-DEPENDENCY-MAP.md` is provisional and not approved.

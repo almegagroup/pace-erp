@@ -1,5 +1,7 @@
 # MTS Planning — Technical Page Inventory & Dependency Map
 
+> **⚠️ PROVISIONAL — NOT APPROVED (status updated 2026-10-14, Step 1C).** The business owner will design and define every Planning page personally. This file is a **technical dependency aid only**: it does not define, merge or finalise any page, and the `MP##` / `PLAN_*` labels are **withdrawn** as code proposals. All Planning pages will sit under the Procurement menu group (`GRP_ACL_PROCUREMENT`); tx codes and page count stay OPEN (T08). The dependency facts (which source tables, services and DB units each capability needs) remain valid inputs for when the owner's page specs arrive. Step 1C blockers are listed in `OPEN-TECHNICAL-QUESTIONS.md` §1C.3.
+
 Date: 2026-10-13 · Status: **PROPOSED** (technical), awaiting ChatGPT business reconciliation.
 This does **not** treat the earlier 19-workspace list (`docs/MTS-PLANNING-PAGE-INVENTORY-AND-BUILD-SEQUENCE-2026-10-13.md`) as the final menu. Each workspace there is mapped below to a proposed page, a tab/drawer of another page, or a backend-only service. Tx codes and resource codes are placeholders (`MP##`, `PLAN_*`) until approved — the `MP` prefix itself is OPEN (Q-T08).
 
@@ -22,7 +24,7 @@ Legend — Mode: M manual / S semi-auto / A auto. Type: PAGE (menu node, own ACL
 | SVC-SUP | Inbound supply normaliser (PO open qty, lots, CSN + Mother/Sub, GE, STO, bulk arrival) | SVC | 12, 13 (data part) | A | `purchase_order_line`, `purchase_order_lot`, `consignment_note`, `csn_field_history`, `gate_entry_line`, `stock_transfer_order_line` | — | Q-T05 status semantics, Q-T06 dedupe |
 | MP08 | Supply Adjustment Proposals (prepone/defer/bridge, CSN/STO allocation) | PAGE | 12, 13 | S | MP07, SVC-SUP | proposals only | MP07 |
 | MP09 | Transfer & Alternative Decision | PAGE (or TAB of MP08) | 14 | S | `location_transfer_request*`, STO, feeder rules, `material_category_group*` | feeder rule (NEW) + proposals | MP-DB6, Q-B07 |
-| MP10 | Safety Stock & Vendor Sourcing Policy | PAGE (master-like) | 15 | M/S | `material_plant_ext`, PO11 config, lead-time masters, `vendor_material_info` | policy rows with effective history | Q-B11 |
+| MP10 | Safety Stock & Vendor Sourcing Policy | PAGE (master-like) | 15 | M/S | `material_plant_ext`, lead-time masters (PO11 config excluded per T02), `vendor_material_info` | policy rows with effective history | Q-B11 |
 | MP11 | Vendor Share & Commercial Analysis | PAGE (report) | 16 | S | AC01 `landed_cost*`, `purchase_order_line.unit_rate`, `payment_terms_master`, `vendor_material_payment_term` | — | MP10, Q-B10 |
 | MP12 | Scenario Review & Decision Log | PAGE | 18 | S | all proposal tables | approve/reject decisions (no transaction posting) | MP08/MP09, approval authority Q-B05 |
 | SVC-AI | AI explanation / scenario assistant | SVC + contextual panel on MP04/MP07/MP08 | 17 | A/S | redacted deterministic outputs only | usage ledger | **AI budget ledger + hard cap (NEW)** |
