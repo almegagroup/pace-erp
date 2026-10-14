@@ -6073,6 +6073,11 @@ pre-existingly out of sync with this branch: local-only `20261012130000` and `20
 and remote-only `20261014120000` and `20261014150000`. Those unrelated migrations were not
 rewritten or deleted.
 
+**CLI compatibility correction:** the pinned `supabase db push` parser rejects a direct
+`*_atomic` PL/pgSQL function body as multiple prepared statements. The cancellation function is
+therefore wrapped in the established `DO ... EXECUTE $sql$` migration pattern; its SQL logic is
+unchanged.
+
 **Verification so far:** targeted Deno checks and touched-frontend ESLint pass; Vite build passes
 (with the pre-existing GRN duplicate-attribute warning). All CI Basic guard commands pass,
 including stock-posting baseline 12/12, route ACL 0-missing, company scope/write ACL 0 gaps and
