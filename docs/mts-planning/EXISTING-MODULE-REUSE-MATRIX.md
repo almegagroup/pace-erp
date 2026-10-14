@@ -23,7 +23,7 @@ PROD = `bsjpvkigpllichlknmah`, counts = estimates on 2026-10-13. Code paths rela
 |---|---|---|---|---|
 | B1 | MTS production actuals | **REUSE** | `process_order` (MTS VERIFIED 108, 2026-10-02→12), `packing_order` PMTS 118, `mts_packing_plan_row`, `mts_batch_yield_variance`; PR24 `GET /api/production/order-information-system/mts-register` (`_core/production/mts_production_register.handlers.ts`) | ERP history only ~10 days |
 | B2 | Pre-ERP production history | **NEW (import)** | not in DB | via A3 importer |
-| B3 | MTS dispatch actuals | **EXTEND** (new read model) — **no posted data yet** | `sales_order_line.fg_type='MTS'` 176 (all SOs CREATED), MTS DO lines 932 all CREATED, **0** P601/P602 and **0** invoice lines on PMTS SKUs (Step 1C); `dispatch_reco` has no PMTS | Bill-To criterion = `sales_order.bill_to_type` DEPOT/VDC + `sales_invoice` once PGI exists |
+| B3 | MTS dispatch actuals | **EXTEND** (new read model) — **no posted data yet** | company = `sales_order.company_id`, SKU = `sales_order_line.material_id` (`fg_type='MTS'`), qty = posted P601−P602 or POSTED `sales_invoice_line`, exclude `sales_invoice.sto_id` not null; 0 posted so far | SO line quantities (e.g. 20,000,000 KG ceilings) must never be used; Dispatch keys read-only only (B04) |
 | B4 | Depot STO dispatch of MTS FG | **NOT VERIFIED** | design open in `docs/FG-STO-MTS-DISPATCH-DESIGN-DOC.md` §2 | Q-B08 |
 | B5 | Material consumption actuals | **REUSE** | `process_order_line` (actual material + `stock_ledger_id`), IN14 `get_stock_history` CONS bucket (P261/P262) | |
 
@@ -34,9 +34,9 @@ PROD = `bsjpvkigpllichlknmah`, counts = estimates on 2026-10-13. Code paths rela
 | C1 | Default MTS stroke | **REUSE** | `erp_production.mts_current_stroke` (40 rows, 3 companies), `GET/POST /api/production/mts-current-stroke` (`PROD_STROKE_MASTER`) | No effective dating |
 | C2 | Date-effective planning stroke override | **NEW** | none | Must not mutate C1 (contract) |
 | C3 | Stroke recipe | **REUSE** | `stroke_master` (APPROVED/MTS 45; `revision_no`, `conversion_factor`), `stroke_line` (`dosage_pct`, `alternate_material_id`, `material_group_id`) | |
-| C4 | Material groups / substitutes | **REUSE** | `material_category_group` 58 / `_member` 132 | Substitution priority rule OPEN Q-B09 |
+| C4 | Material groups / substitutes | **REUSE** (Step 1C closure) | `material_category_group` (company-scoped) / `_member` (`active`, `is_primary` — not read by production); RM primary = `stroke_line.material_id` (`process_order.handlers.ts:302-332, 651`); PM pairs AWP/NTA/TOT/BARREL | Artwork authorisation not stored (owner decision §C7) |
 | C5 | SKU ↔ Prodshade ↔ pack | **REUSE rule, no FK** | `prodshade_pack_config` 476 (global, no company); production resolves SKU by name/code match `resolveSkuMaterial()` `mts_creation_session.handlers.ts:288`; PROD: 59/59 go-live pairs unique (Step 1C) | Planning needs reverse lookup + uniqueness check per run |
-| C6 | Pack BOM (PM explosion) | **REUSE** | `pack_bom` 482 (company-scoped), `pack_bom_line` 1407 (`is_primary_container`) | |
+| C6 | Pack BOM (PM explosion + required PM SLoc) | **REUSE** | `pack_bom` 482 (company-scoped), `pack_bom_line` (`line_type='INPUT'` for PM, `storage_location_id` 224/224 populated for MTS PMTS SKUs, `material_group_id`, `has_alternate`) | 9/22 CMP005 MTS SKUs lack ACTIVE Pack BOM |
 | C7 | Requirement explosion engine | **EXTEND** | Shared core `buildMtsMaterialPlanGroupsForOrder()` `_core/production/process_order.handlers.ts:3231`, called from `mts_creation_session.handlers.ts:196`; golden data `mts_creation_snapshot.page4_material_plan` (125) | T03: extract pure requirement calc, separate from availability (`fetchLocationNetAvailability` :420) |
 
 ## D. Inventory
@@ -44,11 +44,11 @@ PROD = `bsjpvkigpllichlknmah`, counts = estimates on 2026-10-13. Code paths rela
 | # | Capability | Class | Evidence | Note |
 |---|---|---|---|---|
 | D1 | Current stock by company/SLoc/stock type | **REUSE** | `stock_snapshot` 1085, IN03 `GET /api/procurement/current-stock` (`PROC_CURRENT_STOCK`) | snapshot not batch-split |
-| D2 | Open reservations | **REUSE** | `erp_production.reservation_document` (`status='OPEN'`, `balance_qty`) | Same netting as IN03/PO11 |
+| D2 | Open reservations | **REUSE** | `erp_production.reservation_document` with `status IN ('OPEN','PARTIAL')` (code constant in `mts_creation_session.handlers.ts:22`); PROD: OPEN 117, PARTIAL 0 | PO11 uses OPEN only — planning must use both |
 | D3 | Book stock as of date | **EXTEND** | `erp_inventory.get_stock_history(...)` (STABLE) folds `is_opening_source` movements into opening; 667/36,647 ledger rows in last 30 days back-dated (Step 1C) | Calibration needs strict `posting_date < D` sum + stored captured value (B12) |
 | D4 | Batch-level stock | **REUSE (derive)** | `stock_ledger.batch_number` sum | Expensive at scale (§8E) |
 | D5 | Calibration (book vs planner/physical) history | **NEW** | none; PID tables are physical-count source only | Never writes ledger |
-| D6 | SLoc grouping for planning | **Do NOT reuse PO11 groups** (owner T02) + **NEW eligibility map** | Go-live SLocs R/S/P001 = PUTTY, 002 = TLA, 003 = ADMIX; `location_type` WAREHOUSE for all; `production_segment_location_config` 0 rows (Step 1C) | B09/T01 CONFLICT: owner-maintained MTS SLoc eligibility needed |
+| D6 | Required SLoc per material | **REUSE (owner T01, closure)** | RM `stroke_line.default_storage_location_id` (406/408 populated); PM `pack_bom_line.storage_location_id`; no PO11 groups and no R/S/P whitelist | 2 RM lines missing location; inbound arrival SLoc unknown (PO `receiving_location_id` NULL) → INFERRED from last GRN |
 
 ## E. Inbound supply
 

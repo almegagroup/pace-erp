@@ -85,3 +85,12 @@ Branching: per `docs/BRANCH-WORKFLOW.md`, Claude works on `agent/claude`; promot
 
 ## 4. Planning no-write invariant (PROPOSED)
 A new `scripts/planning-no-write-guard.mjs` (Playbook pattern, CLAUDE.md §3) should fail CI if any file under the planning handler folder calls `post_stock_movement`/`post_document` or writes to `purchase_order*`, `consignment_note`, `stock_transfer_order*`, `location_transfer_*`. Enforces contract step 7 mechanically.
+
+## 5. Technical dependencies added at Step 1C closure (2026-10-14) — still PROVISIONAL
+
+These are data dependencies only. They do not define pages.
+- **Required-location dependency:** any requirement, projection or transfer calculation depends on `stroke_line.default_storage_location_id` (RM) and `pack_bom_line.storage_location_id` (PM), plus `stock_snapshot` and `reservation_document` (`OPEN`/`PARTIAL`) per SLoc. No R/S/P list.
+- **Inbound-location dependency:** inbound supply has no recorded arrival SLoc; it depends on last posted `goods_receipt.storage_location_id` per company + material (INFERRED) until PO lines carry `receiving_location_id`.
+- **PM allocation dependency:** artwork-aware allocation depends on the owner's §C7 decision in `OPEN-TECHNICAL-QUESTIONS.md`. Without it only active-member allocation is possible.
+- **Actual-dispatch dependency:** plan-vs-actual depends on posted P601/P602 / POSTED invoices; none exist yet for MTS.
+- **No Dispatch keys:** company plans do not depend on `fg_parent_company` / `fg_depot_code` (owner B04).

@@ -133,3 +133,120 @@ Items 2–4 are the only genuine business choices raised by Step 1C; everything 
 - **T01/B09 location conflict CLOSED at business level, technical mapping VERIFY:** Required location derives from MTS Stroke/Pack BOM configuration and stock elsewhere triggers transfer feasibility suggestions, not blanket company-wide SLoc codes. Verify actual schema.
 - **B09 Primary conflict CLOSED at business level:** RM uses Stroke-line source material for Primary Yes/No; PM Artwork groups have no Primary toggle, instead date-wise eligible approved artwork allocations. Verify existing artwork approval and compatibility data.
 - **Remaining:** owner page specifications and T08 codes/page count OPEN; historical source import mapping, missing Pack BOM, dispatch history, collections, FX and ETA are existing data/source gaps. No migration, backend/frontend, PROD write or merge authorised.
+
+---
+
+# Step 1C Closure — technical verification of owner resolutions (Claude, 2026-10-14)
+
+Inputs: owner resolutions in this file (agent/claude `c0dd03c`) and `DECISION-REGISTER.md` (agent/chatgpt `891bd6c`). Method: read-only `SELECT` on PROD `bsjpvkigpllichlknmah` plus code at `c0dd03c`. No write, migration, BE/FE change, deploy or merge.
+Labels: **VERIFIED** (code/PROD evidence) · **GAP** (missing data or linkage) · **PROPOSED** (Claude technical suggestion, not approved) · **OPEN**.
+
+## C1. B04 — company plan vs actual dispatch (business: CLOSED)
+
+VERIFIED reconciliation path that needs **no** Dispatch-owned distribution key:
+
+| Plan key | Actual-dispatch source | Evidence |
+|---|---|---|
+| company | `sales_order.company_id` (the billing company = the plan company in the owner's CMP005 example) | `erp_procurement.sales_order` |
+| SKU | `sales_order_line.material_id` where `fg_type='MTS'` | 176 MTS lines in PROD |
+| month | posting / invoice date of the actual dispatch | `stock_ledger.posting_date` (P601/P602) or `sales_invoice.invoice_date` |
+| quantity | **posted** quantity only: net P601 − P602 in `stock_ledger`, or POSTED `sales_invoice_line` | movement types in `stock_history_bucket_map` bucket SALE_DISPATCH |
+| exclusion | invoices with `sales_invoice.sto_id IS NOT NULL` (internal transfer billing) are not customer dispatch | `sales_invoice.sto_id` column |
+
+- `bill_to_type` / `fg_parent_company` / `fg_depot_code` / `dispatch_type` (DEPENDENT_DEPOT, DEPENDENT_DIRECT) / `is_dd_dispatch` are **not needed** for this join; they may be shown read-only later. VERIFIED values on the 15 PROD MTS SOs: DEPOT 4 SOs, VDC (DD) 11 SOs.
+- **GAP (data quality, VERIFIED):** MTS SO line quantities are not dispatch evidence. Example: several CMP003 DD lines carry `quantity = 20,000,000 KG` (`pack_qty = 500,000` BAG × 40 KG). These look like open ceiling quantities. Summed MTS SO `base_qty` = 1.83 billion KG. Planning must never read SO quantity as demand or dispatch.
+- **GAP (no data yet):** 0 posted P601/P602 and 0 invoice lines on MTS SKUs in PROD (Step 1C §1C.1). Reconciliation code can be specified now but cannot be validated on PROD until the first MTS PGI is posted.
+
+## C2. T01/B09 — required storage location and transfer logic (business: CLOSED; technical: VERIFIED with gaps)
+
+**Where production takes the location from (VERIFIED code):**
+- **RM:** `erp_production.stroke_line.default_storage_location_id`, per stroke line. `buildMtsMaterialPlanGroupsForOrder()` `_core/production/process_order.handlers.ts:3231-3309` puts each line into a group at `line.default_storage_location_id`. The only exception is a production-time "foreign machine" choice, which uses the machine's location; planning has no machine selection, so it uses the stroke line location.
+- **PM:** `erp_production.pack_bom_line.storage_location_id` on `line_type='INPUT'` rows. `buildPmGroups()` `_core/production/mts_creation_session.handlers.ts:391-418`. If the same PM has different locations on different SKUs' Pack BOMs, production blanks the location and asks the user. If none is set, it falls back to `production_segment_location_config.pm_sloc_id` (`defaultPmLocation()`, same file :436), which has **0 rows in PROD**.
+- So the location linkage **does exist** on Stroke and Pack BOM. No new column and no R/S/P whitelist are needed.
+
+**How complete it is in PROD (VERIFIED, APPROVED MTS strokes / ACTIVE Pack BOMs of PMTS SKUs, CMP003/005/011):**
+
+| Source | Lines | Missing location | Locations used |
+|---|---|---|---|
+| RM `stroke_line` | 408 | **2** — METOLAT P871 on current stroke 0002 of prodshade 54297431, in CMP003 and in CMP005 | CMP003 R001, R002, R003, S001, S002, T003; CMP005 R001, R002, S001, S002; CMP011 R001, S001 |
+| PM `pack_bom_line` INPUT | 224 | 0 | P001, P002 (all three companies) |
+
+- Actual issue locations on the 108 VERIFIED MTS POs (`process_order_line.issue_sloc_id`) are R001/R002/S001/S002 (CMP003, CMP005) and R001/S001 (CMP011). This is consistent with the stroke lines.
+- Note: some CMP003 MTS stroke lines point at R003 (ADMIX RM godown) and T003 (ADMIX tank). This shows why a code-prefix whitelist would have been wrong.
+
+**Stock calculation that matches production (VERIFIED code; PROPOSED as planning rule):**
+- *Usable at the required location* = `stock_snapshot.quantity` (`stock_type_code='UNRESTRICTED'`) at that company + SLoc + material, minus `reservation_document.balance_qty` with `status IN ('OPEN','PARTIAL')` at the same company + SLoc + material. Same rule as `fetchLocationNetAvailability()` (`mts_creation_session.handlers.ts:420`). The OPEN/PARTIAL constant is defined in `mts_creation_session.handlers.ts:22`, `packing_order.handlers.ts:37` and `delivery_order.handlers.ts:44`.
+  - Note: PO11 uses only `status='OPEN'` (`planning.handlers.ts`). That is harmless today (PROD has 0 PARTIAL), but planning must use OPEN + PARTIAL.
+- *Machine buckets* (`erp_production.machine_stock_log`, read by `fetchNetMachineBucketBalances()` `process_order.handlers.ts:563`) are a **split of the shop-floor stock**, not extra stock. Planning reads location-level stock only and never adds bucket balances on top.
+- *Transfer candidates* = the same net UNRESTRICTED calculation at every other SLoc of the same company where the material is held. These are shown separately and never counted as available at the required location.
+- *QUALITY_INSPECTION / BLOCKED* stock is shown separately and is never usable or transferable.
+- *Competing future demand* across Prodshades is planning's own projection; existing reservations only cover already-created production orders.
+
+**GAPs found:**
+1. **Inbound arrival location is unknown.** All **129** open, CONFIRMED PO lines have `purchase_order_line.receiving_location_id = NULL`. No company has `storage_location_plant_map.is_default_grn_location` set for CMP003/005/011. The GRN location is chosen at GRN time (`grn.handlers.ts:993`, `body.storage_location_id`). Historical posted GRNs show one consistent location per material (RM → R001/R002/R003/T003, PM → P001/P002/P003; CMP005 also receives some PM into R001). Only one go-live material landed in more than one location.
+   PROPOSED: planning shows inbound as *expected location = last posted GRN location for that company + material*, labelled **INFERRED**. Where there is no history it shows *location unknown*. If the inferred location differs from the required location, planning proposes a transfer after the arrival date. No new master field is required for this.
+2. **Transfer lead time between storage locations is not stored anywhere** (`location_transfer_rule` 0 rows, and no time column). PROPOSED: transfers are proposed for the requirement date with zero lead time, and the output says so. A transfer-time value would need an owner decision only if same-day movement is not realistic.
+3. **Data fix:** 2 RM stroke lines with no location (above). Planning shows them as "location missing in Stroke Master" and does not guess.
+
+## C3. B09 — RM primary material (business: CLOSED; technical: VERIFIED)
+
+- **Primary = `stroke_line.material_id`.** Production calls it the *formulation* material. Group members come from `stroke_line.material_group_id` → `material_category_group_member`. A direct `stroke_line.alternate_material_id` is also supported in code (`buildAllowedAlternateIdsByStrokeLines()`, `process_order.handlers.ts:302-332`) but is used 0 times in PROD MTS strokes.
+- `material_category_group_member.is_primary` is **not read** by any production allocation code: member lookups select only `group_id, material_id` (`mts_creation_session.handlers.ts:376-389`). This confirms the owner's definition.
+- **Single allocation (VERIFIED):** `computeMtsAutoDeriveRowsForGroup()` (`process_order.handlers.ts:651`) allocates each stroke line's standard quantity once across [formulation material, then alternates smallest-available-first]. It subtracts what it drew from the shared pool before the next group (`process_order.handlers.ts:3283-3292`). Planning's group pool must keep the same "count once" property.
+- **Execution vs. recommendation (note, not a conflict):** "Use Primary = No" is a planning-only setting. At production time PR09 still draws the formulation material first if it has stock. Planning's "No" therefore affects procurement recommendations, not what production will issue from existing stock.
+- **GAP:** production member lookups do not filter `material_category_group_member.active` or `material_master.status`. Today every member of a stroke/PM group is active (VERIFIED for PM groups). PROPOSED: planning excludes inactive members and INACTIVE materials, and flags any group whose stroke would pick them.
+
+## C4. B09 — PM artwork alternatives (business: CLOSED; technical: master-data GAP)
+
+VERIFIED representation in PROD:
+- PM groups used by MTS Pack BOMs:
+  - AWP_20_KG (CMP003, CMP005), AWP_TC_20KG (CMP011), NTA_30_KG, TOT_30KG (CMP003, CMP005): two members each.
+  - EXT_40_KG: one member.
+  - BARREL (CMP003): two members.
+  - Example pair: "AP EXT WALL PUTTY 20KG WOVENSACK RP-P53784P" and "EXT PUTTY 20 KG NEW - P53494Z". **The artwork identity exists only inside the material name.**
+- Not every PM group is an artwork pair: BARREL holds "BARREL HMHDPE BLUE 210 L" and "… 230 L", which is a size alternative.
+- Available controls: `material_category_group_member.active` (boolean), `material_master.status` (ACTIVE/INACTIVE; 84 PM ACTIVE, 1 INACTIVE), `pack_bom_line.has_alternate` / `material_group_id`, and the Pack BOM change-request workflow (`pack_bom_change_request` / `_line`, 24 / 72 rows), which can swap a BOM line's material.
+- **Not stored anywhere:** artwork code, old/new marker, artwork approval, effective-from date, last-permitted-use date, phase-out or "deplete-only" state, prohibition. No code references "artwork" (`grep -ril artwork` over `supabase/functions/api/_core`, `supabase/migrations`, `frontend/src` → none).
+- Production PM allocation uses the same function as RM: BOM-line material first, then group members smallest-available-first. It has no authorisation check.
+
+Consequence: the owner's rule "excess old stock does not imply permission to use obsolete artwork" **cannot be enforced from current data**. This is reported, not solved by an invented field. Technically grounded options for the owner (see §C7):
+- (a) express "no longer authorised" by deactivating the group member or material — this exists today, but it is a hard stop with no date and no "use up remaining stock" state;
+- (b) add an artwork-validity attribute (for example last-permitted-use date) to group membership — a master-data change that needs owner approval;
+- (c) planning treats every active member as authorised and labels each artwork allocation "authorisation not recorded in ERP".
+
+## C5. T09–T12 and supply items re-checked
+
+| Item | Still valid? | Evidence added at closure |
+|---|---|---|
+| T09 PO-lot VIEW access | Yes | `po_line_available_qty()` and `po_lot_balances()` are plain read functions in PROD (`erp_procurement`); planning calls them server-side under its own VIEW resource. |
+| T10 AI + USD 5 cap | Yes, unchanged | `ai.provider.ts` limits as recorded. Budget ledger and pre-call reservation are still NEW; the smoke route stays admin-only. Reset timezone still OPEN (B13). |
+| T11 selection / grid | Yes | No change. |
+| T12 performance | Yes | No change (~230 RM/PM materials × horizon, set-based). |
+| T05 missing ETA | Yes | 41/75 ORD CSNs have NULL `eta_to_plant_calculated`; 0 NULL on TRN/GED. Planning shows these as ETA UNKNOWN and never invents a date. |
+| T06 PO / lot / CSN / GE / GRN | Yes, one data case found | PROD read-only check on 129 open CONFIRMED PO lines: 40 have no open (ORD/TRN) CSN, 7 have a PO remainder not covered by CSNs, and **1 has open CSN `dispatch_qty` greater than `po_line_available_qty`**. Planning must cap inbound at the PO-side available quantity so the excess is never counted twice. GRN-posted quantity is counted only in stock (`goods_receipt.status='POSTED'`, `stock_ledger_id`). REVERSED GRNs (6) are excluded. |
+| B12 calibration | Yes | Strict `posting_date < D` ledger sum, stored when captured (667 back-dated postings in 30 days). |
+
+## C6. Remaining technical / master-data gaps (no owner choice needed unless noted)
+
+1. 2 RM stroke lines without a storage location (CMP003 and CMP005, METOLAT P871, prodshade 54297431, stroke 0002).
+2. 9/22 CMP005 MTS SKUs without an ACTIVE Pack BOM (Step 1C).
+3. Inbound arrival location not recorded on PO lines; planning uses INFERRED last-GRN location (§C2).
+4. No storage-location transfer lead time (§C2).
+5. Group-member `active` and material status are not checked by production allocation (§C3).
+6. Artwork authorisation not represented (§C4) — **owner decision, see C7**.
+7. No posted MTS dispatch; MTS SO quantities are not usable as demand or dispatch (§C1).
+8. Collections and FX sources absent; 60 AC01 DRAFT rows (Step 1C, unchanged).
+9. SKU↔Prodshade name/code match (Step 1C) — per-run uniqueness check.
+
+## C7. Genuine owner decision still open
+
+- **PM artwork authorisation (§C4):** choose (a) member/material deactivation only, (b) approve adding an artwork validity attribute to group membership, or (c) planning labels artwork allocation as unverified. No other business conflict remains from Step 1C.
+- T08 (page count and tx codes) stays OPEN by owner instruction. It is not a technical blocker.
+
+## C8. Readiness for the owner's first page specification
+
+**READY**, with these conditions:
+- Every source table and code path a Customer-Plan, Estimate, Requirement, Projection or Transfer page would read is identified and verified above.
+- A page spec that touches PM artwork allocation needs the §C7 answer first.
+- A page that shows actual dispatch can be specified, but it shows no rows until MTS PGI exists.
+- No page, mockup, tx code or migration has been created.

@@ -150,3 +150,28 @@ Owner decisions B01–B14 and T01–T07 were reconciled against PROD (read-only)
 | 12 | Procurement group `GRP_ACL_PROCUREMENT` verified; free tx codes PO15, PO20+ | PROD menu | T08 still OPEN |
 
 Owner instruction recorded: the business owner designs every Planning page; all pages go under the Procurement menu group; T08 codes and page count stay OPEN; `PAGE-DEPENDENCY-MAP.md` is provisional and not approved.
+
+## 8. Step 1C closure — verified technical evidence (2026-10-14)
+
+Owner resolutions recorded on 2026-10-14 (B04, T01/B09 location, B09 RM primary, B09 PM artwork) were verified against code and read-only PROD. Full detail and labels: `OPEN-TECHNICAL-QUESTIONS.md` § "Step 1C Closure".
+
+**Decisions (owner, authoritative):** company-wise Asian Paints plans with no Dispatch distribution key; required location derived from MTS Stroke / Pack BOM, with stock elsewhere shown as transfer suggestions; RM primary = original material on the effective Stroke line, with Use Primary Yes/No; PM groups have no Use Primary toggle and use date-wise authorised artwork allocation.
+
+**Verified facts:**
+
+| Topic | Fact | Evidence |
+|---|---|---|
+| RM required SLoc | `stroke_line.default_storage_location_id`; 406/408 go-live MTS lines populated | `process_order.handlers.ts:3231-3309`; PROD SELECT |
+| PM required SLoc | `pack_bom_line.storage_location_id` (`line_type='INPUT'`); 224/224 populated; segment fallback table empty | `mts_creation_session.handlers.ts:391-418, 436`; PROD SELECT |
+| Usable stock | UNRESTRICTED snapshot at SLoc − reservations `OPEN`/`PARTIAL` at SLoc; machine buckets are a split, not additive | `mts_creation_session.handlers.ts:22, 420`; `process_order.handlers.ts:563` |
+| Primary RM | formulation material = `stroke_line.material_id`; `member.is_primary` never read | `process_order.handlers.ts:302-332, 651`; `mts_creation_session.handlers.ts:376-389` |
+| Group allocation once | standard qty allocated once; pool decremented across groups | `process_order.handlers.ts:651, 3283-3292` |
+| PM artwork | old/new pairs exist only as names in groups; no artwork, approval, effective or phase-out data; BARREL group is a size alternative | PROD SELECT; no `artwork` reference in code |
+| Dispatch reconciliation | company = `sales_order.company_id`, SKU = `sales_order_line.material_id`, qty = posted P601 − P602 / POSTED invoice; STO-billed invoices excluded | PROD columns |
+| SO quantity | MTS DD lines with 20,000,000 KG ceilings — not demand or dispatch | PROD SELECT |
+| Inbound location | 129/129 open PO lines `receiving_location_id` NULL; no default GRN location; GRN location chosen at GRN | PROD SELECT; `grn.handlers.ts:993` |
+| PO vs CSN | 1 open PO line where open CSN qty > PO available; inbound must be capped at PO-side available | PROD SELECT using `po_line_available_qty()` |
+
+**Known data / master-data gaps:** 2 RM stroke lines without location; 9 CMP005 SKUs without Pack BOM; no SLoc transfer lead time; production does not check group-member `active` or material status; artwork authorisation not represented; no posted MTS dispatch; no collections/FX source.
+
+**Assumptions (PROPOSED, not approved):** inbound expected location = last posted GRN location, labelled INFERRED; zero-day SLoc transfer lead time, stated in output; inactive members excluded by planning.
