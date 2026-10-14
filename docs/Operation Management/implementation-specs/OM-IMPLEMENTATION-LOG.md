@@ -6075,8 +6075,8 @@ rewritten or deleted.
 
 **CLI compatibility correction:** the pinned `supabase db push` parser rejects a direct
 `*_atomic` PL/pgSQL function body as multiple prepared statements. The cancellation function is
-therefore wrapped in the established `DO ... EXECUTE $sql$` migration pattern; its SQL logic is
-unchanged.
+therefore wrapped in the established `DO ... EXECUTE $sql$` migration pattern, with its grants
+and schema-reload notification inside that same block; its SQL logic is unchanged.
 
 **Verification so far:** targeted Deno checks and touched-frontend ESLint pass; Vite build passes
 (with the pre-existing GRN duplicate-attribute warning). All CI Basic guard commands pass,

@@ -192,11 +192,10 @@ END;
 $fn$;
 
   $sql$;
+  REVOKE ALL ON FUNCTION erp_procurement.cancel_apl_sales_delivery_order_atomic(uuid, uuid, text, uuid) FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION erp_procurement.cancel_apl_sales_delivery_order_atomic(uuid, uuid, text, uuid) TO service_role;
+  PERFORM pg_notify('pgrst', 'reload schema');
 END;
 $outer$;
 
-REVOKE ALL ON FUNCTION erp_procurement.cancel_apl_sales_delivery_order_atomic(uuid, uuid, text, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION erp_procurement.cancel_apl_sales_delivery_order_atomic(uuid, uuid, text, uuid) TO service_role;
-
-NOTIFY pgrst, 'reload schema';
 COMMIT;
