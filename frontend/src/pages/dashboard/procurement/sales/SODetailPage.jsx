@@ -18,13 +18,13 @@ import {
   knockOffSOLine,
   listSalesInvoices,
   listSalesOrderAddressOptions,
-  listSalesOrderFgSkuOptions,
   listSalesOrderStrokeCheckOptions,
   updateSalesOrderUnified,
 } from "../procurementApi.js";
 import { listFgDepotCodes, listFgParentCompanies } from "../../om/omApi.js";
 import { listAc06ApprovedMonths, listCompanyVendorCodesForSalesOrder } from "../../production/prodApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
+import SalesOrderFgSkuPicker from "./SalesOrderFgSkuPicker.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 import { openActionPrompt } from "../../../../store/actionPrompt.js";
 import {
@@ -360,18 +360,12 @@ export default function SODetailPage() {
   // mechanism so a new FG line added here gets the same picker + the same
   // reconciliation signal as one added at Create.
   const materialTypesForDetail = Array.isArray(detail?.material_types) ? detail.material_types : [];
-  const fgSkuQuery = useQuery({
-    queryKey: ["procurement", "so01-fg-sku-options", detail?.company_id],
-    queryFn: () => listSalesOrderFgSkuOptions({ company_id: detail?.company_id }),
-    enabled: Boolean(detail?.company_id && materialTypesForDetail.includes("FG")),
-    staleTime: 60_000,
-  });
-  const fgSkusByType = useMemo(() => Object.fromEntries(
-    FG_TYPE_OPTIONS.map((fgType) => [fgType, (fgSkuQuery.data ?? []).filter((entry) => entry.fg_type === fgType)]),
-  ), [fgSkuQuery.data]);
-  const fgSkuMap = useMemo(() => new Map(
-    Object.values(fgSkusByType).flat().map((entry) => [entry.id, entry]),
-  ), [fgSkusByType]);
+  // The FG SKU endpoint is a searched, paged picker (fg_type + at least 3
+  // characters + cursor) -- the same SalesOrderFgSkuPicker SO01 uses. The
+  // old "load every SKU" call here was rejected with 400 on every render.
+  // SKUs the user picks are kept so the Stroke check can read their Prodshade.
+  const [selectedFgSkus, setSelectedFgSkus] = useState({});
+  const fgSkuMap = useMemo(() => new Map(Object.entries(selectedFgSkus)), [selectedFgSkus]);
   const strokeCheckQuery = useQuery({
     queryKey: ["procurement", "so01-stroke-check-options", detail?.company_id],
     queryFn: () => listSalesOrderStrokeCheckOptions({ company_id: detail?.company_id }),
@@ -504,8 +498,9 @@ export default function SODetailPage() {
   function removeNewLine(key) {
     setNewLines((current) => current.filter((line) => line.__key !== key));
   }
-  function handleNewLineMaterialSelect(key, materialId) {
-    const material = fgSkuMap.get(materialId) ?? materialMap.get(materialId);
+  function handleNewLineMaterialSelect(key, materialId, pickedSku) {
+    if (pickedSku?.id) setSelectedFgSkus((current) => ({ ...current, [pickedSku.id]: pickedSku }));
+    const material = pickedSku ?? fgSkuMap.get(materialId) ?? materialMap.get(materialId);
     updateNewLine(key, {
       material_id: materialId,
       hsn_code: material?.hsn_code || "",
@@ -513,12 +508,6 @@ export default function SODetailPage() {
     });
   }
   function materialOptionsForNewLine(line) {
-    if (line.line_material_type === "FG") {
-      return (fgSkusByType[line.fg_type] ?? []).map((entry) => ({
-        value: entry.id,
-        label: [entry.material_name, entry.document_name].filter(Boolean).join(" — "),
-      }));
-    }
     return materialOptionsForType.get(line.line_material_type) ?? [];
   }
 
@@ -1129,6 +1118,22 @@ export default function SODetailPage() {
                             Item
                             {isFg && line.__manualSku ? (
                               <input placeholder="Type SKU name" value={line.manual_sku_name} onChange={(event) => updateNewLine(line.__key, { manual_sku_name: event.target.value })} className="h-8 w-40 border border-amber-400 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500" />
+                            ) : isFg ? (
+                              line.fg_type ? (
+                                <div className="w-56">
+                                  <SalesOrderFgSkuPicker
+                                    key={`${detail?.company_id}|${line.fg_type}|${detail?.vendor_code_id || ""}`}
+                                    companyId={detail?.company_id}
+                                    fgType={line.fg_type}
+                                    vendorCodeId={detail?.vendor_code_id || ""}
+                                    value={line.material_id}
+                                    selectedSku={fgSkuMap.get(line.material_id)}
+                                    onChange={(value, sku) => handleNewLineMaterialSelect(line.__key, value, sku)}
+                                  />
+                                </div>
+                              ) : (
+                                <span className="flex h-8 w-40 items-center border border-slate-200 bg-slate-50 px-2 text-xs text-slate-400">Select FG Type first</span>
+                              )
                             ) : (
                               <select value={line.material_id} onChange={(event) => handleNewLineMaterialSelect(line.__key, event.target.value)} className="h-8 w-40 border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500">
                                 <option value="">{isFg && !line.fg_type ? "Select FG Type first" : "Select item"}</option>
