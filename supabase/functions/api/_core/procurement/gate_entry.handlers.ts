@@ -341,17 +341,18 @@ async function resolveGePersonName(
 }
 
 /**
- * Gate Exit may happen in a later shift and must therefore record the
- * physically present person explicitly. Unlike Gate Entry, it must never
- * derive the value from the logged-in account.
+ * Gate Exit person = the user who records the exit (business owner,
+ * 2026-10-14), same rule as Gate Entry: a named login gets its own name
+ * automatically; a Security-department (shared) login types the name of the
+ * person present, mandatory.
  */
-function resolveGateExitPersonName(
+async function resolveGateExitPersonName(
+  ctx: ProcurementHandlerContext,
   personNameInput: string,
-): { personName: string } | { error: string } {
-  if (!personNameInput) {
-    return { error: "GEX_PERSON_NAME_REQUIRED" };
-  }
-  return { personName: personNameInput };
+): Promise<{ personName: string } | { error: string }> {
+  const result = await resolveGePersonName(ctx, personNameInput);
+  if ("error" in result || !result.personName) return { error: "GEX_PERSON_NAME_REQUIRED" };
+  return result;
 }
 
 // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — resolves a Bulk
@@ -1846,9 +1847,9 @@ export async function createGateExitInboundHandler(
     const netOverride = parseNullableNumber(body.net_weight_override);
     const effectiveNet = netOverride ?? netCalculated;
 
-    // Exit may occur in a different shift from entry. Require its actual
-    // person explicitly; do not inherit GE or logged-in-account person data.
-    const personNameResult = resolveGateExitPersonName(toTrimmedString(body.person_name));
+    // The exit's own creator (or, for a shared Security login, the typed
+    // name) -- never inherited from the Gate Entry.
+    const personNameResult = await resolveGateExitPersonName(ctx, toTrimmedString(body.person_name));
     if ("error" in personNameResult) {
       return procurementErrorResponse(req, ctx, personNameResult.error, 400, "Person Name is required.");
     }
