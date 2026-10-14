@@ -355,11 +355,15 @@ function resolveGateExitPersonName(
 }
 
 // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — resolves a Bulk
-// document's own validity window: [effective_start_date, upper bound), where
-// the upper bound is whichever comes first of (a) the next PO/STO's own
-// effective_start_date for the same grouping key, or (b) this document's own
-// cutoff_date if it was knocked off/cancelled with no successor. Returns null
-// upper bound when the window is still open (no successor, no cutoff yet).
+// document's own validity window: [effective_start_date, upper bound).
+//
+// Rule (business owner, 2026-10-14): a later PO/STO for the same grouping key
+// + material ends this document's window at its own effective_start_date ONLY
+// while that successor is still live. A successor that is CANCELLED (header)
+// or whose line(s) for this material are all KNOCKED_OFF / CANCELLED no longer
+// counts -- a small stop-gap PO must not permanently end a continuous Bulk PO.
+// With no live successor the window ends at this document's own cutoff_date,
+// or stays open (null) when it has none.
 async function resolveBulkDocumentWindowUpperBound(
   table: "purchase_order" | "stock_transfer_order",
   documentId: string,
@@ -372,16 +376,23 @@ async function resolveBulkDocumentWindowUpperBound(
   let query = serviceRoleClient
     .schema("erp_procurement")
     .from(table)
-    .select(`id, effective_start_date, ${lineTable}!inner(material_id)`)
+    .select(`id, status, effective_start_date, ${lineTable}!inner(material_id, line_status)`)
     .neq("id", documentId)
     .not("effective_start_date", "is", null)
+    .gt("effective_start_date", currentEffectiveDate)
     .eq(`${lineTable}.material_id`, materialId)
-    .limit(50);
+    .limit(200);
   for (const [column, value] of Object.entries(groupingFilters)) {
     query = query.eq(column, value);
   }
   const { data: candidates } = await query;
+  const ENDED_LINE_STATUSES = new Set(["KNOCKED_OFF", "CANCELLED"]);
   const successorDates = ((candidates ?? []) as JsonRecord[])
+    .filter((row) => {
+      if (toUpperTrimmedString(row.status) === "CANCELLED") return false;
+      const lines = (Array.isArray(row[lineTable]) ? row[lineTable] : []) as JsonRecord[];
+      return lines.some((line) => !ENDED_LINE_STATUSES.has(toUpperTrimmedString(line.line_status)));
+    })
     .map((row) => toTrimmedString(row.effective_start_date))
     .filter((date) => date && date > currentEffectiveDate)
     .sort();
