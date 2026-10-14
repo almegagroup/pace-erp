@@ -1108,6 +1108,11 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const key = toTrimmedString(row.dc_id);
       if (key && !invoiceMap.has(key)) invoiceMap.set(key, row);
     }
+    const aplCases = dcIds.length
+      ? await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_order_apl_invoice_case")
+        .select("dc_id, status, received_date").in("dc_id", chunk))
+      : [] as JsonRecord[];
+    const aplCaseByDc = new Map(aplCases.map((row) => [toTrimmedString(row.dc_id), row]));
 
     const items = rows.map((row) => {
       const customer = customerMap.get(toTrimmedString(row.customer_id));
@@ -1138,6 +1143,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const shipTo = [...new Set(lineSnapshots.map((line) => [line.ship_to_name, line.ship_to_address, line.ship_to_state].filter(Boolean).join(" — ")).filter(Boolean))].join(" | ") || null;
       const transporter = transporterMap.get(toTrimmedString(row.transporter_id));
       const invoice = invoiceMap.get(String(row.id));
+      const aplCase = aplCaseByDc.get(String(row.id));
       // Business owner ask (2026-09-04) -- Dispatch Category comes from the
       // DO's own source SO(s) (a plain STO-sourced DO has none, since §133.14
       // is Sales-Order-scoped); Total Qty/Total Pack are this DO's own line
@@ -1192,6 +1198,10 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         tally_invoice_number: invoice?.tally_invoice_number ?? row.pre_invoice_tally_invoice_number ?? null,
         tally_invoice_date: invoice?.tally_invoice_date ?? row.pre_invoice_tally_invoice_date ?? null,
         inbound_number: invoice?.inbound_number ?? row.pre_invoice_inbound_number ?? null,
+        apl_invoice: !aplCase ? "Not recorded"
+          : toUpperTrimmedString(aplCase.status) === "YES" ? `Yes ${toTrimmedString(aplCase.received_date)}`
+          : toUpperTrimmedString(aplCase.status) === "CANCELLED" ? "Cancelled"
+          : "No",
         fo_number_display: [...new Set(lineSnapshots.map((line) => foNumberByAllocationId.get(toTrimmedString(line.so_map_allocation_id))).filter(Boolean))].join(" | ") || null,
         total_value: row.total_value ?? lineSnapshots.reduce((sum, line) => sum + Number(line.line_total ?? 0), 0),
         dispatch_category: dispatchCategoryDisplay,

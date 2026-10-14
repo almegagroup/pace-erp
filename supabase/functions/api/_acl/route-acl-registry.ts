@@ -273,6 +273,9 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/delivery-orders-v2/bulk/submission-status": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+  "GET:/api/procurement/delivery-orders-v2/apl-invoice-case": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },
+  "POST:/api/procurement/delivery-orders-v2/apl-invoice-case": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+  "POST:/api/procurement/delivery-orders-v2/apl-invoice-case/cancel": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
   // SO02 Bulk Posting reads/posts only Bulk-DO-Upload records. It is an
   // Accounts action, so it deliberately uses the existing Invoice/PGI ACL.
   "GET:/api/procurement/delivery-orders-v2/bulk/posting":        { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },

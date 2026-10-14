@@ -5725,7 +5725,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/DOListPage.jsx",
-    "dependencyCount": 1,
+    "dependencyCount": 4,
     "deps": [
       {
         "fn": "listDeliveryOrders",
@@ -5733,6 +5733,30 @@
         "path": "/api/procurement/delivery-orders",
         "resourceCode": "PROC_DO_LIST",
         "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "lookupAplInvoiceCase",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/apl-invoice-case",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "saveAplInvoiceCase",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/apl-invoice-case",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "cancelAplInvoiceCase",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/apl-invoice-case/cancel",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "EDIT",
         "skipAcl": false
       }
     ]
