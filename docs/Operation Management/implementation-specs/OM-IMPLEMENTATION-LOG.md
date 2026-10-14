@@ -163,6 +163,23 @@
 
 ---
 
+### 2026-10-14 — DD Invoice-only PGI lookup correction (DONE in code; rollout pending)
+
+- Root cause: the deferred-PGI completion handler selected
+  `line_material_type` from `delivery_challan_line`, where that column does
+  not exist. The commercial invoice succeeded first, then PGI returned
+  `Unable to load delivery-order lines`.
+- The handler now reads only real DO-line fields and bulk-resolves each
+  material's type from `erp_master.material_master`. FG/SFG retain the
+  batch-specific PID block check; RM/PM/INT retain the blended check. No new
+  stock-posting call, route, ACL decision, or schema change was added.
+- Verification: production read-only query confirms the affected CMP003 draft
+  invoices join to real material-master type data; `deno check` and diff
+  validation pass. The existing 399 `INVOICED` DD records remain untouched
+  until an authorised SO03 PGI retry after rollout.
+
+---
+
 ### 2026-09-11 — SO01 FG SKU search: remove truncated master-list dependency
 
 - **Root cause verified in prod, CMP006:** active SKU `6765SS06599` (`FG-00379`) and its active mapping/configuration/approved MTO applicability exist. The old unpaged all-company `material_company_ext` lookup stopped at PostgREST's 1,000 rows, excluding this mapping before FG eligibility ran. Packing PO finalization was not the failing condition.
