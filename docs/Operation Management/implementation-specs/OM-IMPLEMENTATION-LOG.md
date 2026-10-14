@@ -6027,3 +6027,14 @@ lines, and zero blank active non-`INPUT` lines before updating only those 27 row
 **Verification:** Post-write audit confirms blank active Pack BOM lines are zero for `INPUT`,
 `SFG`, and `OUTPUT`. The previously identified Prodshade line for `RM-00119` remains unchanged:
 it is an RM line and no RM-to-location instruction was provided.
+
+## 2026-10-14 — CMP003 METOLAT P871 Prodshade storage-location assignment — DONE
+
+**Scope:** Production operational data only. The one remaining blank approved Stroke-line
+location was `RM-00119` / `METOLAT P871`, on Prodshade `54297431`, MTS Stroke `0002`, line 6.
+
+**R-04:** Applied directly to Production with a guarded MCP transaction, not a migration. The
+transaction required exactly one active CMP003 `S002` mapping and exactly one matching blank
+Stroke line before assigning `S002`.
+
+**Verification:** The exact target row now resolves to `S002`; no other Stroke line was changed.
