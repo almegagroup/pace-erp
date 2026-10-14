@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpSummaryChips from "../../../../components/data/ErpSummaryChips.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
-import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { createAutomationSettingsAction } from "../../../../components/communication/AutomationSettingsAction.js";
 import AutomationSettingsDrawer from "../../../../components/communication/AutomationSettingsDrawer.jsx";
@@ -496,12 +496,16 @@ function flattenBlocksForGrid(blocks) {
 // same read-only report shape in both places, one definition so a fix here
 // can't land in one and be missed in the other (§35.18).
 function buildReportGridColumns() {
+  // `excelValue` is what the Excel export writes: the raw number (so Excel
+  // can add it up), never the formatted on-screen string.
   const numericColumn = (key, label, width, formatter = formatQty) => ({
     key,
     label,
     width,
     align: "right",
     render: (row) => formatter(row[key]),
+    excelValue: (row) => (row[key] == null || row[key] === "" || !Number.isFinite(Number(row[key])) ? "" : Number(row[key])),
+    numFmt: "#,##0.###",
   });
   const optionalNumericColumn = (key, label, width) =>
     numericColumn(key, label, width, (value) => (value == null ? "-" : formatQty(value)));
@@ -512,24 +516,28 @@ function buildReportGridColumns() {
       label: "Group",
       width: "90px",
       render: (row) => row.__groupName,
+      excelValue: (row) => row.__groupName ?? "",
     },
     {
       key: "source_sloc_group_name",
       label: "Source SLOC Group",
       width: "140px",
       render: (row) => row.source_sloc_group_name || (row.__isGroupTotal ? "Mixed scope" : "Not assigned"),
+      excelValue: (row) => row.source_sloc_group_name || (row.__isGroupTotal ? "Mixed scope" : "Not assigned"),
     },
     {
       key: "material_name",
       label: "Material Name",
       width: "260px",
       render: (row) => (row.__isGroupTotal ? "Group Total" : row.material_name),
+      excelValue: (row) => (row.__isGroupTotal ? "Group Total" : row.material_name ?? ""),
     },
     {
       key: "material_external_code",
       label: "External Code",
       width: "130px",
       render: (row) => (row.__isGroupTotal ? "-" : row.material_external_code || "-"),
+      excelValue: (row) => (row.__isGroupTotal ? "" : row.material_external_code || ""),
     },
     numericColumn("monthly_requirement_qty", "Requirement", "110px"),
     numericColumn("safety_days", "Safety Days", "100px"),
@@ -549,6 +557,7 @@ function buildReportGridColumns() {
       label: "Status",
       width: "100px",
       render: (row) => getStatusLabel(row.status_tone),
+      excelValue: (row) => getStatusLabel(row.status_tone),
     },
   ];
 }
@@ -638,7 +647,10 @@ function DashboardTable({
   groupConfigs,
   companyControls,
   gridMaxHeight,
+  exportMeta,
 }) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
   const filteredRows = useMemo(() => {
     return rows.filter((row) => {
       if (!matchesSearch(row, filters.query)) return false;
@@ -654,6 +666,51 @@ function DashboardTable({
   const summary = useMemo(() => summarizeDecisionBlocks(blocks), [blocks]);
   const gridRows = useMemo(() => flattenBlocksForGrid(blocks), [blocks]);
   const columns = useMemo(() => buildReportGridColumns(), []);
+
+  // Full report Excel export (same coloured export as Stock History): exactly
+  // the rows on screen for this company/month and the current filters, with
+  // the report context and the export date/time written above the header.
+  async function handleExportExcel() {
+    setExporting(true);
+    setExportError("");
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      const now = new Date();
+      const exportStamp = now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+      const fileStamp = now.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+      const slocGroup = filters.slocGroups.find((group) => group.id === filters.slocGroupId);
+      const companyCode = String(exportMeta?.companyCode || "company").replace(/[^A-Za-z0-9_-]+/g, "_");
+      await downloadColoredExcelFile({
+        fileName: `po11_planning_${companyCode}_${monthValue}_exported_${fileStamp}.xlsx`,
+        sheetName: "Planning Dashboard",
+        columns,
+        rows: gridRows,
+        preambleRows: [
+          ["Report", "PO11 — Procurement Planning Dashboard"],
+          ["Company", exportMeta?.companyLabel || "-"],
+          ["Plan Month", monthValue],
+          ["Plan Status", exportMeta?.planStatus || "-"],
+          ["SLOC Group", slocGroup?.group_name || "All SLOC groups"],
+          ["Material Type", filters.materialType === "ALL" ? "All" : filters.materialType],
+          ...(filters.query ? [["Search", filters.query]] : []),
+          ["Rows", gridRows.length],
+          ["Export Date", `${exportStamp} IST`],
+        ],
+        getCellValue: (row, column) =>
+          typeof column.excelValue === "function" ? column.excelValue(row) : (row?.[column.key] ?? ""),
+        getCellColor: (row) => {
+          const fontArgb = row.status_tone === "CRITICAL" ? "FF9F1239" : row.status_tone === "WARNING" ? "FF92400E" : undefined;
+          return fontArgb || row.__isGroupTotal ? { fontArgb, bold: Boolean(row.__isGroupTotal) } : null;
+        },
+        getRowFillArgb: (row) =>
+          row.status_tone === "CRITICAL" ? "FFFFF1F2" : row.status_tone === "WARNING" ? "FFFFFBEB" : row.__isGroupTotal ? "FFF1F5F9" : null,
+      });
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "PO11_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="grid gap-3">
@@ -702,6 +759,8 @@ function DashboardTable({
           />
         </label>
       </div>
+      {exportError ? <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">{exportError}</div> : null}
+      <div className="flex flex-wrap items-center justify-between gap-2">
       <ErpSummaryChips
         items={[
           { label: "Visible Decisions", value: summary.total },
@@ -720,6 +779,15 @@ function DashboardTable({
           { label: "Normal", value: summary.normal },
         ]}
       />
+        <button
+          type="button"
+          onClick={() => void handleExportExcel()}
+          disabled={exporting || gridRows.length === 0}
+          className="border border-emerald-700 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-900 disabled:opacity-50"
+        >
+          {exporting ? "Exporting..." : "Export Excel"}
+        </button>
+      </div>
       <ErpDenseGrid
         columns={columns}
         rows={gridRows}
@@ -1278,6 +1346,17 @@ export default function ProcurementPlanningPage() {
   const historyRows = historyData.rows;
   const historyGroupConfigs = historyData.group_configs;
   const historyMeta = historyData.archive;
+  const reportExportMeta = useMemo(() => {
+    const company = buildTransactionCompanyList(runtimeContext).find((entry) => String(entry.id) === String(effectiveCompanyId));
+    const companyCode = company?.company_code || "";
+    return {
+      companyCode,
+      companyLabel: company ? [companyCode, company.company_name].filter(Boolean).join(" — ") : "-",
+      planStatus: planIsClosed
+        ? `CLOSED${historyMeta?.archived_at ? ` (archived ${historyMeta.archived_at})` : ""}`
+        : workspace.plan?.status || "OPEN",
+    };
+  }, [effectiveCompanyId, historyMeta, planIsClosed, runtimeContext, workspace.plan?.status]);
   const queryError =
     (workspaceQuery.error instanceof Error ? workspaceQuery.error.message : "") ||
     (storageLocationsQuery.error instanceof Error ? storageLocationsQuery.error.message : "") ||
@@ -2134,6 +2213,7 @@ export default function ProcurementPlanningPage() {
                   onFilterChange={handleDashboardFilterChange}
                   groupConfigs={displayedPlanningGroupConfigs}
                   gridMaxHeight="calc(100vh - 260px)"
+                  exportMeta={reportExportMeta}
                   companyControls={
                     <>
                       <TransactionCompanySelector
