@@ -110,7 +110,7 @@ const GRID_COLUMNS = [
   { key: "company_code", label: "Company Code", width: "100px", render: (r) => r.company_code || "—" },
   { key: "month_year", label: "Month-Year", width: "90px" },
   { key: "invoice_number", label: "PACE Invoice #", width: "130px", render: (r) => r.invoice_number || "—" },
-  { key: "apl_invoice_status", label: "APL Invoice", width: "270px", render: (r) => r.apl_invoice_status || "Not recorded" },
+  { key: "apl_invoice_status", label: "APL Invoice", width: "270px", render: (r) => r.apl_invoice_status || "" },
   { key: "stock_movement", label: "Stock Movement", width: "135px", render: (r) => <span className={r.stock_movement === "Yes" ? "font-semibold text-emerald-800" : r.stock_movement === "Reversed" ? "font-semibold text-rose-700" : "font-semibold text-amber-800"}>{r.stock_movement || "No"}</span> },
   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px" },
   { key: "tally_invoice_number", label: "Tally Invoice #", width: "130px" },

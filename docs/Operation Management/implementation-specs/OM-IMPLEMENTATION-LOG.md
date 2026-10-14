@@ -161,6 +161,13 @@
   Vite build, migration/ACL/CI guards and diff validation passed (aside from
   existing GRN duplicate-prop and Vite chunk-size warnings).
 
+### 2026-10-14 — SO04 APL blank-by-default clarification (DONE in code; rollout pending)
+
+- The SO04 APL Invoice cell is blank until an authorised user records a
+  decision in the DO's APL Invoice Case. It displays only recorded `No`,
+  `Yes` (with received date), or `Cancelled` outcomes; it never infers an
+  APL decision from an Invoice-only or PGI state.
+
 ---
 
 ### 2026-10-14 — DD Invoice-only PGI lookup correction (DONE in code; rollout pending)

@@ -336,7 +336,7 @@ export async function getDispatchReportHandler(
         ? "APL Invoice Not Received — Cancelled"
         : aplCaseStatus === "YES"
         ? `APL Invoice Received — ${textValue(aplCase?.received_date) || "Received date not recorded"}`
-        : "Not recorded";
+        : "";
       const stockMovement = upperValue(invoice.status) === "POSTED"
         ? "Yes"
         : upperValue(invoice.status) === "CANCELLED"
