@@ -98,7 +98,7 @@ async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyI
 // do_unified.handlers.ts's own canMaintainDoCreate() is not exported (file
 // header note there: "small enough to duplicate rather than widen that
 // file's export surface for one Set") — same call here, same reasoning.
-async function canMaintainDoBulkAccess(
+export async function canMaintainDoBulkAccess(
   ctx: ProcurementHandlerContext,
   companyId: string,
   actionCode: "VIEW" | "WRITE" | "EDIT",

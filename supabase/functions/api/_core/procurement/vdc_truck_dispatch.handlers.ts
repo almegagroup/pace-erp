@@ -9,7 +9,8 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
-import { canMaintainSalesInvoice, computeInvoiceGroups } from "./do_unified.handlers.ts";
+import { computeInvoiceGroups } from "./do_unified.handlers.ts";
+import { canMaintainDoBulkAccess } from "./do_bulk.handlers.ts";
 import { completeVdcPgiOnlyHandler } from "./vdc_invoice.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -18,9 +19,12 @@ const text = (value: unknown) => String(value ?? "").trim();
 const upper = (value: unknown) => text(value).toUpperCase();
 const body = (req: Request) => req.json().catch(() => ({} as JsonRecord));
 function fail(req: Request, ctx: ProcurementHandlerContext, code: string, status: number, message: string) { return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req); }
-async function assertAccess(req: Request, ctx: ProcurementHandlerContext, companyId: string, action: "VIEW" | "WRITE") {
+// Truck + Dispatch Date entry is the physical-dispatch step of a DO (the
+// invoice already exists), so it belongs to Stores / Logistics: gated on the
+// DO resource (PROC_DO_CREATE), not on Invoice/PGI access.
+async function assertAccess(req: Request, ctx: ProcurementHandlerContext, companyId: string, action: "VIEW" | "EDIT") {
   try { await assertCompanyScope(ctx, companyId); } catch { return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
-  if (!(await canMaintainSalesInvoice(ctx, companyId, action))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, `You do not have Invoice/PGI ${action === "VIEW" ? "view" : "create"} access at this company.`);
+  if (!(await canMaintainDoBulkAccess(ctx, companyId, action))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, `You do not have Delivery Order ${action === "VIEW" ? "view" : "edit"} access at this company.`);
   return null;
 }
 function validIsoDate(value: string) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)); }
@@ -121,7 +125,7 @@ export async function postVdcTruckDispatchUploadHandler(req: Request, ctx: Procu
     const results: JsonRecord[] = [];
     for (const dc of (docs ?? []) as JsonRecord[]) {
       const dcId = text(dc.id); const row = byDcId.get(dcId)!; const companyId = text(dc.selling_company_id);
-      const denied = await assertAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;
+      const denied = await assertAccess(req, ctx, companyId, "EDIT"); if (denied) return denied;
       const truckNumber = text(row.truck_number); const dispatchDate = text(row.dispatch_date);
       if (dc.pgi_deferred !== true || upper(dc.status) !== "INVOICED") {
         results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_DO_NOT_PENDING", message: "Delivery order is not a pending DD Invoice-only row." }); continue;
@@ -138,7 +142,7 @@ export async function postVdcTruckDispatchUploadHandler(req: Request, ctx: Procu
       let reused = false;
       for (const invoice of (invoices ?? []) as JsonRecord[]) {
         const internal = new Request(`http://internal/api/procurement/sales-invoices/${text(invoice.id)}/vdc-pgi-only`, { method: "POST" });
-        const response = await completeVdcPgiOnlyHandler(internal, ctx);
+        const response = await completeVdcPgiOnlyHandler(internal, ctx, { doAccessChecked: true });
         if (!response.ok) { failed = (await response.json().catch(() => ({}))) as JsonRecord; break; }
       }
       // `complete_vdc_pgi_only_action` atomically changes DRAFT -> POSTED in
