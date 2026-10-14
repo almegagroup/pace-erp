@@ -73,3 +73,8 @@ The 2026-10-14 owner clarification above supersedes the Step 1C request for an o
 - Effective monthly demand concept: latest Final if present else latest Rolling, plus Additional, plus Extra Urgent. Urgent From Plan is a dated scheduling constraint *within* that quantity, not another addition. Historical plan source preserved.
 - Plan entry/edit actions extend beyond Procurement to appropriately authorised **Plant Managers and Stores & Logistics** users, company-scoped and action-scoped. Record who changed what and when, including revisions; no plan-approval workflow.
 - Do not fold stroke/producing-company allocation, AI Procurement suggestions or material planning into this Plan Entry page without a later explicit page-specific owner choice. No implementation or PROD write authorised by this documentation.
+
+### Owner decision — Tab 2 Use Primary scope (2026-10-14)
+- **OPTION A CONFIRMED:** `Use Primary = Yes/No` is configured **per effective Stroke and RM Material Group**, not once per Prodshade/month. A Prodshade may have different Stroke periods within the same month; each Stroke's groups have their own independent Primary toggle.
+- Primary identity derives from that Stroke's own `stroke_line.material_id` and group association. Do not apply an override selected for one Stroke to another Stroke; resolve by Company + Prodshade + effective Stroke + RM group (+ applicable period). PM has no Primary toggle.
+- The selected settings are planning-only assumptions; they do not silently change Stroke Master or actual Process Order material issue logic. Exact Tab 2 column/layout remains subject to owner page design review.
