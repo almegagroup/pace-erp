@@ -6013,3 +6013,17 @@ duplicated.
 **Verification:** Post-write comparison returned zero remaining eligible missing Strokes and Pack
 BOMs. All 8 Stroke headers have an active MTS applicability row; source and CMP005 line sets match
 in both directions (51/51 Stroke lines and 90/90 Pack BOM lines).
+
+## 2026-10-14 — CMP003 Production Pack BOM packing-location completion — DONE
+
+**Scope:** Production operational data only. The active CMP003 Pack BOM audit found 27 active
+`INPUT` (packing-material) lines with no storage location, across three Pack BOMs. No `SFG` or
+`OUTPUT` (FG) line was missing a storage location.
+
+**R-04:** Applied directly to Production with a guarded MCP transaction, not a migration. The
+transaction required exactly one active CMP003 `P001` mapping, exactly 27 blank active `INPUT`
+lines, and zero blank active non-`INPUT` lines before updating only those 27 rows to `P001`.
+
+**Verification:** Post-write audit confirms blank active Pack BOM lines are zero for `INPUT`,
+`SFG`, and `OUTPUT`. The previously identified Prodshade line for `RM-00119` remains unchanged:
+it is an RM line and no RM-to-location instruction was provided.
