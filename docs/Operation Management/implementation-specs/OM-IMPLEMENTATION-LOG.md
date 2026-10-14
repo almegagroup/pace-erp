@@ -5992,3 +5992,24 @@ client. Read-only Prod inspection of CMP003 Apex GRN `2000000160` confirmed the 
 35,000 × 3.20 = 112,000 taxable and 5% GST = 5,600; the row has `rate_confirmed=true`,
 `invoice_rate=3.20`, `confirmed_rate=NULL` and `grn_rate=0`, exactly the legacy shape covered by
 the fallback.
+
+## 2026-10-14 — CMP003 → CMP005 Production Stroke and Pack BOM operational parity — DONE
+
+**Scope:** Production operational data only. CMP005 was compared with CMP003 using its active
+`material_company_ext` catalogue as the eligibility boundary; unrelated CMP003 products were not
+copied.
+
+**R-04:** Per the operational-data rule, this was applied directly to the Production database via
+a guarded MCP transaction, not a migration. The transaction required exactly 8 missing approved
+MTS Stroke headers and 9 missing active Pack BOM headers, and aborted if a required CMP005 storage
+location or global Prodshade Pack Config was absent.
+
+**Applied:** 8 approved MTS Strokes with 51 formulation lines, and 9 active Pack BOMs with 90
+lines. All storage references were resolved to CMP005's own mapped location by code. Six missing
+PM `material_company_ext` records needed by those BOM lines were copied from CMP003 in the same
+transaction. Existing global Prodshade Pack Config rows were already complete and were not
+duplicated.
+
+**Verification:** Post-write comparison returned zero remaining eligible missing Strokes and Pack
+BOMs. All 8 Stroke headers have an active MTS applicability row; source and CMP005 line sets match
+in both directions (51/51 Stroke lines and 90/90 Pack BOM lines).
