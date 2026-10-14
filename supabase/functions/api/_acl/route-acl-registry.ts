@@ -345,6 +345,18 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/opening-stock/recalculate-valuation": { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" },
 
   // ── Procurement: Reports ──────────────────────────────────────────────────
+  // MTS Customer Plan (3-tab page). Two resources = two different actions
+  // (bug pattern #6): page VIEW + Additional/Urgent WRITE on the page resource;
+  // Rolling/Final + Tab 2 stroke setup on the MAINTAIN companion resource.
+  // Handlers re-check the page-selected company (company-scope-write-acl-guard).
+  "GET:/api/procurement/mts-plan/access":            { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  "GET:/api/procurement/mts-plan/entry-grid":        { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  "GET:/api/procurement/mts-plan/history":           { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  "GET:/api/procurement/mts-plan/stroke-settings":   { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  "GET:/api/procurement/mts-plan/report":            { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  "POST:/api/procurement/mts-plan/addon-lines":      { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "WRITE" },
+  "POST:/api/procurement/mts-plan/base-lines":       { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
+  "POST:/api/procurement/mts-plan/stroke-settings":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
   "POST:/api/procurement/planning/lines/bulk-upsert": { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
   "GET:/api/procurement/planning/sloc-groups":        { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },

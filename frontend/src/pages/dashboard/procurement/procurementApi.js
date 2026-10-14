@@ -875,6 +875,42 @@ export function getProcurementPlanningHistory(params) {
   return fetchProcurement("GET", "/api/procurement/planning/history", undefined, params);
 }
 
+// ── MTS Customer Plan (3-tab page) ─────────────────────────────────────────
+// Responses deliberately carry no top-level `data` key (rows/prodshades/...),
+// so fetchProcurement returns them unchanged — no shape-dependent unwrap
+// (CLAUDE.md bug pattern #15).
+export function getMtsPlanAccess(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-plan/access", undefined, params);
+}
+
+export function getMtsPlanEntryGrid(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-plan/entry-grid", undefined, params);
+}
+
+export function getMtsPlanHistory(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-plan/history", undefined, params);
+}
+
+export function saveMtsPlanBaseLines(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-plan/base-lines", data);
+}
+
+export function saveMtsPlanAddonLines(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-plan/addon-lines", data);
+}
+
+export function getMtsPlanStrokeSettings(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-plan/stroke-settings", undefined, params);
+}
+
+export function saveMtsPlanStrokeSetting(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-plan/stroke-settings", data);
+}
+
+export function getMtsPlanReport(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-plan/report", undefined, params);
+}
+
 export function listPTOs(params) {
   return fetchProcurement("GET", "/api/procurement/ptos", undefined, params);
 }

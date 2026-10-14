@@ -419,6 +419,16 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // MTS Customer Plan (3 tabs: Plan Entry / Stroke & RM Primary / Plan Report).
+  // Procurement menu group; tx code PO21 (owner approved 2026-10-14).
+  PROC_MTS_CUSTOMER_PLAN: {
+    screen_code: "PROC_MTS_CUSTOMER_PLAN",
+    route: "/dashboard/procurement/mts-customer-plan",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PLANT_TRANSFER_LIST: {
     screen_code: "PROC_PLANT_TRANSFER_LIST",
     route: "/dashboard/procurement/transfer",
