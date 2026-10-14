@@ -79,6 +79,12 @@ GRANT EXECUTE ON FUNCTION erp_procurement.save_apl_invoice_case(uuid, uuid, text
 
 -- This composes the established cancellation/reversal primitives inside one
 -- database transaction. It never calls post_stock_movement directly.
+-- The pinned Supabase CLI splits a direct *_atomic function body incorrectly.
+-- Keep this identical function inside one dynamic statement (the established
+-- SO02/VDC migration compatibility pattern).
+DO $outer$
+BEGIN
+  EXECUTE $sql$
 CREATE OR REPLACE FUNCTION erp_procurement.cancel_apl_sales_delivery_order_atomic(
   p_dc_id uuid,
   p_company_id uuid,
@@ -184,6 +190,10 @@ BEGIN
   VALUES (v_case_id, 'CANCELLED', p_reason, p_actor);
 END;
 $fn$;
+
+  $sql$;
+END;
+$outer$;
 
 REVOKE ALL ON FUNCTION erp_procurement.cancel_apl_sales_delivery_order_atomic(uuid, uuid, text, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION erp_procurement.cancel_apl_sales_delivery_order_atomic(uuid, uuid, text, uuid) TO service_role;
