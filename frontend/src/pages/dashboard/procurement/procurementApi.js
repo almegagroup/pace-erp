@@ -1265,11 +1265,17 @@ export function listBulkPostingQueue(companyId) {
 export function bulkPostDeliveryOrders(dcIds) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/post", { dc_ids: dcIds });
 }
+export function bulkPostingCorrections(companyId, rows, apply) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/posting/corrections", { company_id: companyId, rows, apply: apply === true });
+}
 export function listVdcTruckDispatchPending(companyId) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch", undefined, { company_id: companyId });
 }
 export function postVdcTruckDispatch(rows) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post", { rows });
+}
+export function checkVdcTruckDispatchUpload(companyId, foNumbers, dcNumbers) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check", { company_id: companyId, fo_numbers: foNumbers, dc_numbers: dcNumbers });
 }
 
 // §133.13 -- IBN-driven multi-invoice preview + post, per DO.

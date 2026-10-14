@@ -712,6 +712,17 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // SO02 "Bulk Posting" (Invoice + PGI for Bulk-DO-Upload DOs). It was
+  // routed in AppRouter but never registered here, so opening it bounced
+  // the user back to the dashboard as an unknown screen.
+  PROC_INV_BULK_POSTING: {
+    screen_code: "PROC_INV_BULK_POSTING",
+    route: "/dashboard/procurement/sales-invoices/bulk-posting",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_OPENING_STOCK_LIST: {
     screen_code: "PROC_OPENING_STOCK_LIST",
     route: "/dashboard/procurement/opening-stock",

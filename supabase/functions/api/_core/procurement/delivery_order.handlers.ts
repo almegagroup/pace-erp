@@ -998,7 +998,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const dcIds = rows.map((row) => String(row.id));
     const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
       dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total, material_id, so_line_id, quantity, pack_qty").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total, material_id, so_line_id, quantity, pack_qty, so_map_allocation_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
     ]);
     if (sourceLinksError) return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to load delivery order sources.");
     if (dispatchLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
@@ -1014,14 +1014,23 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     // pages that share this one handler.
     const lineMaterialIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
     const lineSoLineIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.so_line_id)).filter(Boolean))];
-    const [lineMaterialRows, lineSoLineRows] = await Promise.all([
+    // A Dependent Direct DO is created against an FO's SO-Map allocation; the
+    // register shows that FO (revised number when one was given).
+    const lineAllocationIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.so_map_allocation_id)).filter(Boolean))];
+    const [lineMaterialRows, lineSoLineRows, lineAllocationRows] = await Promise.all([
       lineMaterialIds.length
         ? fetchInChunks<JsonRecord>(lineMaterialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, material_type").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
       lineSoLineIds.length
         ? fetchInChunks<JsonRecord>(lineSoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, fg_type").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(lineAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+        .select("id, map_group:map_group_id(external_fo_number, revised_external_fo_number)").in("id", chunk)),
     ]);
+    const foNumberByAllocationId = new Map(lineAllocationRows.map((row) => {
+      const group = (row.map_group ?? {}) as JsonRecord;
+      return [String(row.id), toTrimmedString(group.revised_external_fo_number) || toTrimmedString(group.external_fo_number)];
+    }));
     const materialTypeById = new Map(lineMaterialRows.map((row) => [String(row.id), toTrimmedString(row.material_type)]));
     const fgTypeBySoLineId = new Map(lineSoLineRows.map((row) => [String(row.id), toTrimmedString(row.fg_type)]));
     const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
@@ -1175,9 +1184,12 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         invoice_number: invoice?.invoice_number ?? null,
         invoice_date: invoice?.invoice_date ?? null,
         invoice_status: invoice?.status ?? null,
-        tally_invoice_number: invoice?.tally_invoice_number ?? null,
-        tally_invoice_date: invoice?.tally_invoice_date ?? null,
-        inbound_number: invoice?.inbound_number ?? null,
+        // Before PGI the Tally/Inbound details live on the DO itself (Bulk DO
+        // Upload / VDC pre-invoice); after PGI the invoice carries them.
+        tally_invoice_number: invoice?.tally_invoice_number ?? row.pre_invoice_tally_invoice_number ?? null,
+        tally_invoice_date: invoice?.tally_invoice_date ?? row.pre_invoice_tally_invoice_date ?? null,
+        inbound_number: invoice?.inbound_number ?? row.pre_invoice_inbound_number ?? null,
+        fo_number_display: [...new Set(lineSnapshots.map((line) => foNumberByAllocationId.get(toTrimmedString(line.so_map_allocation_id))).filter(Boolean))].join(" | ") || null,
         total_value: row.total_value ?? lineSnapshots.reduce((sum, line) => sum + Number(line.line_total ?? 0), 0),
         dispatch_category: dispatchCategoryDisplay,
         total_qty: Number(totalQty.toFixed(4)),

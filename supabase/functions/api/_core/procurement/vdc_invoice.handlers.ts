@@ -146,9 +146,9 @@ function isValidDeferredDispatchDate(lrDate: string, dispatchDate: string): bool
   if (!isIsoDate(lrDate) || !isIsoDate(dispatchDate)) return false;
   const today = todayIsoInKolkata();
   if (dispatchDate < lrDate || dispatchDate > today) return false;
-  // The design's narrower Today-2 window starts on 14 October 2026. Keeping
+  // The design's narrower Today-2 window starts on 31 October 2026 (moved from 14 October by the business owner, 2026-10-13). Keeping
   // the decision date explicit makes the temporary backlog rule auditable.
-  if (today >= "2026-10-14") {
+  if (today >= "2026-10-31") {
     const floor = new Date(`${today}T00:00:00Z`);
     floor.setUTCDate(floor.getUTCDate() - 2);
     return dispatchDate >= floor.toISOString().slice(0, 10);
@@ -163,7 +163,14 @@ function isValidDeferredDispatchDate(lrDate: string, dispatchDate: string): bool
  * the DO status change; this handler never writes those business tables on
  * its own.
  */
-export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+/**
+ * `options.doAccessChecked` is set only by the SO03 Truck & Dispatch upload,
+ * which has already authorised the caller on the DO itself (Stores /
+ * Logistics, PROC_DO_CREATE:EDIT). That upload only records the physical
+ * dispatch; the invoice was already made by Accounts, so it must not also
+ * demand Invoice access. The direct /vdc-pgi-only route never sets it.
+ */
+export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHandlerContext, options: { doAccessChecked?: boolean } = {}): Promise<Response> {
   try {
     const invoiceId = idFromPath(req);
     if (!invoiceId) return fail(req, ctx, "INVOICE_ID_REQUIRED", 400, "Invoice id is required.");
@@ -178,7 +185,7 @@ export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHa
 
     const companyId = text(invoice.company_id);
     try { await assertCompanyScope(ctx, companyId); } catch { return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
-    if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
+    if (!options.doAccessChecked && !(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
     if (upper(invoice.status) !== "DRAFT") return fail(req, ctx, "VDC_PGI_ONLY_INVOICE_NOT_DRAFT", 409, "Only a draft VDC Invoice-only invoice can be posted.");
 
     const dcId = text(invoice.dc_id);
