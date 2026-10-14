@@ -395,7 +395,7 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
 
     const dcNumbers = [...new Set(rows.map((row) => text(row.dc_number)).filter(Boolean))];
     const docs = await fetchInChunks<JsonRecord>(dcNumbers, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .select("id, dc_number, status, is_bulk_uploaded, selling_company_id, dc_date, transporter_id, lr_number, lr_date, vehicle_number, dispatch_date, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number")
+      .select("id, dc_number, status, is_bulk_uploaded, selling_company_id, dc_date, transporter_id, transporter_name_freetext, lr_number, lr_date, vehicle_number, dispatch_date, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number")
       .in("dc_number", chunk));
     const docByNumber = new Map(docs.filter((doc) => text(doc.selling_company_id) === companyId).map((doc) => [text(doc.dc_number), doc]));
     const dcIds = [...docByNumber.values()].map((doc) => text(doc.id));
@@ -421,10 +421,15 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
     const linesByDc = new Map<string, JsonRecord[]>();
     for (const line of lines) linesByDc.set(text(line.dc_id), [...(linesByDc.get(text(line.dc_id)) ?? []), line]);
     const transporterById = new Map(transporters.map((row) => [text(row.id), row]));
+    // The review sheet exports a master transporter as "CODE — NAME"; a user
+    // may also type just the code or just the name. All three resolve.
+    const transporterLabel = (row: JsonRecord) => [text(row.transporter_code), text(row.transporter_name)].filter(Boolean).join(" — ");
     const resolveTransporter = (name: string): JsonRecord | null | "AMBIGUOUS" => {
-      const target = text(name).toUpperCase();
+      const target = text(name).replace(/\s+/g, " ").toUpperCase();
       if (!target) return null;
-      const exact = transporters.filter((row) => text(row.transporter_code).toUpperCase() === target || text(row.transporter_name).toUpperCase() === target);
+      const exact = transporters.filter((row) => text(row.transporter_code).toUpperCase() === target
+        || text(row.transporter_name).toUpperCase() === target
+        || transporterLabel(row).replace(/\s+/g, " ").toUpperCase() === target);
       if (exact.length === 1) return exact[0];
       const partial = transporters.filter((row) => text(row.transporter_name).toUpperCase().includes(target));
       if (partial.length === 1) return partial[0];
@@ -503,8 +508,14 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
       const transporterName = text(header.transporter_name);
       if (transporterName) {
         const currentTransporter = transporterById.get(text(doc.transporter_id));
-        const currentLabel = currentTransporter ? text(currentTransporter.transporter_name) : "";
-        const sameAsCurrent = currentTransporter && (sameText(currentTransporter.transporter_code, transporterName) || text(currentTransporter.transporter_name).toUpperCase().includes(transporterName.toUpperCase()));
+        const currentLabel = currentTransporter ? text(currentTransporter.transporter_name) : text(doc.transporter_name_freetext);
+        // Unchanged when the cell still holds what the sheet exported: the
+        // master "CODE — NAME" label, its code or name, or the free-text name.
+        const sameAsCurrent = currentTransporter
+          ? (sameText(currentTransporter.transporter_code, transporterName)
+            || sameText(transporterLabel(currentTransporter), transporterName)
+            || text(currentTransporter.transporter_name).toUpperCase().includes(transporterName.toUpperCase()))
+          : sameText(doc.transporter_name_freetext, transporterName);
         if (!sameAsCurrent) {
           const resolved = resolveTransporter(transporterName);
           if (resolved === "AMBIGUOUS") errors.push(`Transporter "${transporterName}" matches more than one Transporter Master entry`);
