@@ -6,8 +6,8 @@
  *          DO/FO reference to reconcile against, so a sheet mistake cannot be
  *          proven wrong from outside. These checks look for internal
  *          inconsistencies -- the same Tally invoice / LR / IBN used twice,
- *          dates that contradict each other, invoice numbers out of date
- *          order, unusual quantities -- across the queue AND every other
+ *          dates that contradict each other, invoice-series date order --
+ *          across the queue AND every other
  *          non-cancelled DO / invoice of the company. A flag is a prompt to
  *          look, never a block: posting stays the user's decision.
  * Authority: Backend
@@ -47,12 +47,6 @@ function addCheck(map: Map<string, BulkPostCheck[]>, dcId: string, code: string,
 function splitInvoiceNumber(value: string): { prefix: string; serial: number } | null {
   const match = norm(value).match(/^(.*?)(\d+)$/);
   return match ? { prefix: match[1], serial: Number(match[2]) } : null;
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /**
@@ -182,31 +176,15 @@ export async function computeBulkPostChecks(companyId: string, docs: JsonRecord[
   }
   for (const series of bySeries.values()) {
     series.sort((a, b) => a.serial - b.serial);
-    // A higher invoice number dated before a lower one is out of order.
+    // This is an advisory date-order comparison only. Tally can legitimately
+    // contain back-dated entries, so it must never imply that the invoice is
+    // invalid or stop posting.
     let latest = series[0];
     for (const current of series.slice(1)) {
       if (current.entry.tally_invoice_date < latest.entry.tally_invoice_date) {
-        addCheck(checks, current.entry.id, "INVOICE_OUT_OF_ORDER", `Tally Invoice ${current.entry.tally_invoice_number} (${current.entry.tally_invoice_date}) is dated before a lower number, ${latest.entry.tally_invoice_number} (${latest.entry.tally_invoice_date})`);
+        addCheck(checks, current.entry.id, "INVOICE_OUT_OF_ORDER", `Invoice date of lower series ${latest.entry.tally_invoice_number} (${latest.entry.tally_invoice_date}) is higher than this invoice ${current.entry.tally_invoice_number} (${current.entry.tally_invoice_date}).`);
       }
       if (current.entry.tally_invoice_date >= latest.entry.tally_invoice_date) latest = current;
-    }
-  }
-
-  // ---- Pack Qty far from what this SKU usually ships ------------------------
-  const qtyBySku = new Map<string, number[]>();
-  for (const line of lines) {
-    const qty = Number(line.pack_qty ?? 0);
-    const sku = text(line.sku_code);
-    if (sku && qty > 0) qtyBySku.set(sku, [...(qtyBySku.get(sku) ?? []), qty]);
-  }
-  for (const line of lines) {
-    const sku = text(line.sku_code);
-    const values = qtyBySku.get(sku) ?? [];
-    const qty = Number(line.pack_qty ?? 0);
-    if (values.length < 5 || !(qty > 0)) continue;
-    const typical = median(values);
-    if (qty > typical * 5 || qty < typical / 5) {
-      addCheck(checks, text(line.id), "QTY_UNUSUAL", `Pack Qty ${qty} of SKU ${sku} is far from its usual ${typical} in this queue`);
     }
   }
 

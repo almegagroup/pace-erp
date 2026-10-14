@@ -30,8 +30,7 @@ const CHECK_LABEL = {
   DISPATCH_BEFORE_LR: "Dispatch before LR",
   TRUCK_TWO_TRANSPORTERS: "Truck under 2 transporters",
   INVOICE_PREFIX_UNUSUAL: "Unusual invoice series",
-  INVOICE_OUT_OF_ORDER: "Invoice no. out of date order",
-  QTY_UNUSUAL: "Unusual Pack Qty",
+  INVOICE_OUT_OF_ORDER: "Invoice series date order",
 };
 
 const CORRECTION_LABEL = {
@@ -149,9 +148,22 @@ export default function SO02BulkPostingPage() {
       .some((value) => String(value ?? "").toLowerCase().includes(needle)));
   }, [rows, search, checkFilter, checkSummary]);
   const allIds = [...new Set(visibleRows.filter((row) => row.postable !== false).map((row) => row.id).filter(Boolean))];
+  const selectableVisibleIds = allIds.slice(0, MAX_DOS_PER_POST);
   const totalDoCount = new Set(rows.map((row) => row.id)).size;
+  const actionCounts = useMemo(() => {
+    const actions = new Map();
+    const seen = new Set();
+    for (const row of rows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      const action = row.posting_action || "Posting action unavailable";
+      actions.set(action, (actions.get(action) ?? 0) + 1);
+    }
+    return [...actions.entries()];
+  }, [rows]);
   const displayNumber = (value) => (value === null || value === undefined || value === "" ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
   function toggle(id) { setSelected((current) => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; }); }
+  function selectVisible() { setSelected(new Set(selectableVisibleIds)); }
 
   async function handleCorrectionFile(event) {
     const file = event.target.files?.[0];
@@ -283,7 +295,7 @@ export default function SO02BulkPostingPage() {
           ) : null}
           {rows.length ? (
             <div className="flex flex-wrap items-center gap-2 border border-amber-300 bg-amber-50 px-3 py-2 text-xs">
-              <span className="font-semibold text-amber-900">Data checks:</span>
+              <span className="font-semibold text-amber-900">Review warnings:</span>
               <button type="button" onClick={() => setCheckFilter("")} className={`border px-2 py-0.5 font-semibold ${checkFilter === "" ? "border-slate-700 bg-slate-800 text-white" : "border-slate-300 bg-white text-slate-700"}`}>All DOs ({totalDoCount})</button>
               <button type="button" onClick={() => setCheckFilter("ANY")} className={`border px-2 py-0.5 font-semibold ${checkFilter === "ANY" ? "border-rose-700 bg-rose-700 text-white" : "border-rose-300 bg-white text-rose-800"}`}>Flagged ({checkSummary.flaggedDoIds.size})</button>
               {[...checkSummary.byCode.entries()].map(([code, ids]) => (
@@ -292,10 +304,22 @@ export default function SO02BulkPostingPage() {
               <button type="button" disabled={checkSummary.cleanDoIds.length === 0} onClick={() => setSelected(new Set(checkSummary.cleanDoIds.slice(0, MAX_DOS_PER_POST)))} className="border border-sky-700 bg-sky-100 px-2 py-0.5 font-semibold text-sky-950 disabled:opacity-50">Select DOs with no flags ({Math.min(checkSummary.cleanDoIds.length, MAX_DOS_PER_POST)} of {checkSummary.cleanDoIds.length})</button>
             </div>
           ) : null}
-          <ErpDenseGrid cellNavigate rows={visibleRows} rowKey={(row) => `${row.id}-${row.line_number}`} emptyMessage={query.isLoading ? "Loading Bulk Posting queue..." : "No Bulk DO Upload records are pending."}
+          {rows.length ? (
+            <div className="flex flex-wrap items-center gap-2 border border-sky-300 bg-sky-50 px-3 py-2 text-xs">
+              <span className="font-semibold text-sky-950">Posting actions:</span>
+              {actionCounts.map(([action, count]) => <span key={action} className="border border-sky-300 bg-white px-2 py-0.5 font-semibold text-slate-800">{action}: {count}</span>)}
+              <span className="ml-auto font-semibold text-slate-700">{selected.size} selected (maximum {MAX_DOS_PER_POST})</span>
+              <button type="button" onClick={selectVisible} disabled={selectableVisibleIds.length === 0} className="border border-sky-700 bg-sky-100 px-2 py-0.5 font-semibold text-sky-950 disabled:opacity-50">{allIds.length > MAX_DOS_PER_POST ? `Select first ${MAX_DOS_PER_POST} displayed` : `Select all displayed (${allIds.length})`}</button>
+              <button type="button" onClick={() => setSelected(new Set())} disabled={selected.size === 0} className="border border-slate-400 bg-white px-2 py-0.5 font-semibold text-slate-700 disabled:opacity-50">Clear selection</button>
+            </div>
+          ) : null}
+          <ErpDenseGrid cellNavigate stickyFirstColumn rows={visibleRows} rowKey={(row) => `${row.id}-${row.line_number}`} emptyMessage={query.isLoading ? "Loading Bulk Posting queue..." : "No Bulk DO Upload records are pending."}
             columns={[
-              { key: "select", label: <input aria-label="Select all" type="checkbox" checked={allIds.length > 0 && allIds.every((id) => selected.has(id))} onChange={(event) => setSelected(event.target.checked ? new Set(allIds) : new Set())} />, width: "52px", render: (row) => <input aria-label={`Select ${row.dc_number}`} type="checkbox" disabled={row.postable === false} checked={selected.has(row.id)} onChange={() => toggle(row.id)} /> },
-              { key: "dc_number", label: "DO Number", width: "120px", render: (row) => row.dc_number || "—" },
+              { key: "dc_number", label: <label className="flex items-center gap-2 normal-case tracking-normal"><input aria-label="Select displayed DOs" type="checkbox" checked={selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selected.has(id))} onChange={(event) => setSelected(event.target.checked ? new Set(selectableVisibleIds) : new Set())} /><span>DO Number</span></label>, width: "170px", render: (row) => <label className="flex items-center gap-2 font-medium text-slate-900"><input aria-label={`Select ${row.dc_number}`} type="checkbox" disabled={row.postable === false} checked={selected.has(row.id)} onChange={() => toggle(row.id)} /><span>{row.dc_number || "—"}</span></label> },
+              { key: "vehicle_number", label: "Truck Number", width: "130px", render: (row) => row.vehicle_number || "—" },
+              { key: "dispatch_date", label: "Dispatch Date", width: "120px", render: (row) => row.dispatch_date || "—" },
+              { key: "posting_action", label: "SO02 Action", width: "145px", render: (row) => <span className={row.posting_action === "Invoice only" ? "font-semibold text-amber-800" : "font-semibold text-emerald-800"}>{row.posting_action || "—"}</span> },
+              { key: "dd_flag", label: "DD", width: "70px", render: (row) => row.dd_flag ? "YES" : "NO" },
               { key: "checks", label: "Checks", width: "300px", render: (row) => (row.checks?.length
                 ? <span className="font-semibold text-rose-700">{row.checks.map((check) => check.message).join(" | ")}</span>
                 : <span className="text-emerald-800">OK</span>) },
@@ -320,10 +344,6 @@ export default function SO02BulkPostingPage() {
               { key: "transporter", label: "Transporter", width: "170px", render: (row) => row.transporter || "—" },
               { key: "lr_number", label: "LR Number", width: "120px", render: (row) => row.lr_number || "—" },
               { key: "lr_date", label: "LR Date", width: "100px", render: (row) => row.lr_date || "—" },
-              { key: "vehicle_number", label: "Truck Number", width: "120px", render: (row) => row.vehicle_number || "—" },
-              { key: "dispatch_date", label: "Dispatch Date", width: "110px", render: (row) => row.dispatch_date || "—" },
-              { key: "posting_action", label: "SO02 Action", width: "130px", render: (row) => row.posting_action || "—" },
-              { key: "dd_flag", label: "DD Flag", width: "70px", render: (row) => row.dd_flag ? "YES" : "NO" },
               { key: "rate", label: "Rate", width: "100px", align: "right", render: (row) => displayNumber(row.rate) },
               { key: "gst_split", label: "GST Split", width: "110px", render: (row) => row.gst_split ? `${row.gst_split}${row.gst_rate ? ` (${row.gst_rate}%)` : ""}` : "—" },
               { key: "value", label: "Value", width: "110px", align: "right", render: (row) => displayNumber(row.value) },

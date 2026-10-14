@@ -112,6 +112,25 @@
 
 ---
 
+### 2026-10-14 — SO02 bulk-posting clarity correction (DONE in code; rollout pending)
+
+- User-visible SO02 action columns are moved beside the selected DO and made
+  visible without horizontal scrolling: Truck Number, Dispatch Date, DD flag,
+  and actual posting action. The selection control is now a sticky first
+  column containing both the checkbox and DO number, with explicit Select all
+  displayed / Clear selection controls above the grid.
+- The queue summary distinguishes the real execution paths: VDC/DD rows with
+  both physical fields run Invoice + PGI; VDC/DD rows missing either field run
+  Invoice only; DC rows remain the pre-existing atomic PGI + Invoice path.
+- Removed the Pack Qty outlier heuristic at the business owner's request.
+  Invoice-series date comparison wording now says the lower-series invoice
+  date is higher, rather than implying an invoice error.
+- Verification: `deno check` for the check engine, focused frontend ESLint,
+  frontend production build, and `git diff --check` pass. The frontend build
+  retains only the pre-existing GRN duplicate-attribute and chunk-size warnings.
+
+---
+
 ### 2026-09-11 — SO01 FG SKU search: remove truncated master-list dependency
 
 - **Root cause verified in prod, CMP006:** active SKU `6765SS06599` (`FG-00379`) and its active mapping/configuration/approved MTO applicability exist. The old unpaged all-company `material_company_ext` lookup stopped at PostgREST's 1,000 rows, excluding this mapping before FG eligibility ran. Packing PO finalization was not the failing condition.
