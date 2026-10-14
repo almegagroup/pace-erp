@@ -104,15 +104,30 @@ export async function getDispatchReportHandler(
     if (companyErr) throw new Error("DISPATCH_REPORT_COMPANY_LOOKUP_FAILED");
     const companyCode = textValue((companyRow as JsonRecord | null)?.company_code);
 
-    const invoices = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
+    const candidateInvoices = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_procurement").from("sales_invoice")
       .select("id, invoice_number, invoice_date, company_id, dc_id, so_id, sto_id, status, tally_invoice_number, tally_invoice_date, inbound_number, fo_id, fo_number, bill_to_name, ship_to_name")
-      // APL cancellation changes the invoice to CANCELLED. Keep that original
-      // dispatch row in SO04 so reconciliation can see why it was cancelled,
-      // instead of making it disappear from the report altogether.
-      .eq("company_id", companyId).in("status", ["POSTED", "CANCELLED"])
+      // SO04 is the commercial invoice/dispatch report: a DD Invoice-only
+      // row is visible before its physical PGI, while normal drafts remain
+      // excluded below. CANCELLED remains for APL reconciliation.
+      .eq("company_id", companyId).in("status", ["DRAFT", "POSTED", "CANCELLED"])
       .gte("tally_invoice_date", dateFrom).lte("tally_invoice_date", dateTo)
       .order("tally_invoice_date", { ascending: true }).order("id", { ascending: true }).range(from, to));
+    if (candidateInvoices.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    // Only DD/deferred invoices use DRAFT as the intentional Invoice-only
+    // state. Do not allow an unrelated incomplete draft into SO04.
+    const draftDcIds = uniqueValues(candidateInvoices
+      .filter((row) => upperValue(row.status) === "DRAFT")
+      .map((row) => row.dc_id));
+    const draftHeaders = await fetchInChunks<JsonRecord>(draftDcIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("delivery_challan")
+      .select("id, pgi_deferred").in("id", chunk));
+    const deferredDraftDcIds = new Set(draftHeaders
+      .filter((row) => row.pgi_deferred === true)
+      .map((row) => textValue(row.id)));
+    const invoices = candidateInvoices.filter((row) =>
+      upperValue(row.status) !== "DRAFT" || deferredDraftDcIds.has(textValue(row.dc_id)));
     if (invoices.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     const invoiceIds = invoices.map((row) => textValue(row.id));
@@ -322,6 +337,11 @@ export async function getDispatchReportHandler(
         : aplCaseStatus === "YES"
         ? `APL Invoice Received — ${textValue(aplCase?.received_date) || "Received date not recorded"}`
         : "Not recorded";
+      const stockMovement = upperValue(invoice.status) === "POSTED"
+        ? "Yes"
+        : upperValue(invoice.status) === "CANCELLED"
+        ? "Reversed"
+        : "No";
       return {
         row_key: rowKey,
         company_code: companyCode,
@@ -336,6 +356,7 @@ export async function getDispatchReportHandler(
         tally_invoice_date: tallyDate,
         inbound_number: textValue(invoice.inbound_number),
         apl_invoice_status: aplInvoiceStatus,
+        stock_movement: stockMovement,
         pack_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.pack_qty ?? dcLineById.get(textValue(line.dc_line_id))?.pack_qty), 0), 6),
         pack_uom: joined(lines.map((line) => line.pack_uom_code || dcLineById.get(textValue(line.dc_line_id))?.pack_uom_code)),
         base_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.quantity), 0), 6),

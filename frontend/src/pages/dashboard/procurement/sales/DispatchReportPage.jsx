@@ -2,7 +2,7 @@
  * File-Path: frontend/src/pages/dashboard/procurement/sales/DispatchReportPage.jsx
  * Domain: PROCUREMENT / Sales
  * Purpose: SO04 -- item-wise Dispatch Report (Tally reconciliation view). One
- *          row per posted or cancelled invoice + material; a mandatory Tally
+ *          row per posted, DD Invoice-only, or cancelled invoice + material; a mandatory Tally
  *          Invoice Date range drives the query, same Page 1 (Filters) / Page 2 (Output
  *          Grid) split as IN02/PR24. Business owner ask (2026-09-05): the
  *          list must read in Tally Invoice Date order -- getDispatchReportHandler
@@ -111,6 +111,7 @@ const GRID_COLUMNS = [
   { key: "month_year", label: "Month-Year", width: "90px" },
   { key: "invoice_number", label: "PACE Invoice #", width: "130px", render: (r) => r.invoice_number || "—" },
   { key: "apl_invoice_status", label: "APL Invoice", width: "270px", render: (r) => r.apl_invoice_status || "Not recorded" },
+  { key: "stock_movement", label: "Stock Movement", width: "135px", render: (r) => <span className={r.stock_movement === "Yes" ? "font-semibold text-emerald-800" : r.stock_movement === "Reversed" ? "font-semibold text-rose-700" : "font-semibold text-amber-800"}>{r.stock_movement || "No"}</span> },
   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px" },
   { key: "tally_invoice_number", label: "Tally Invoice #", width: "130px" },
   { key: "inbound_number", label: "IBN", width: "110px", render: (r) => r.inbound_number || "—" },

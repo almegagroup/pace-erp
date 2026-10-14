@@ -146,6 +146,23 @@
 
 ---
 
+### 2026-10-14 — SO04 Invoice-only visibility and stock-movement state (DONE in code; rollout pending)
+
+- SO04 now includes an intentional DD `Invoice only` invoice (`DRAFT` invoice
+  plus deferred-PGI DO), so its frozen quantity, value, GST and APL columns
+  remain visible before physical dispatch. Unrelated non-DD draft invoices
+  remain excluded.
+- New `Stock Movement` column reports `No` for Invoice only, `Yes` after the
+  normal PGI/invoice posting reaches `POSTED`, and `Reversed` for a cancelled
+  invoice whose stock movement was reversed. The same data is exported to
+  Excel with the report.
+- Verification: CMP003 production read-only check found 399 deferred-PGI
+  invoice-only drafts and 135 posted invoices. `deno check`, focused ESLint,
+  Vite build, migration/ACL/CI guards and diff validation passed (aside from
+  existing GRN duplicate-prop and Vite chunk-size warnings).
+
+---
+
 ### 2026-09-11 — SO01 FG SKU search: remove truncated master-list dependency
 
 - **Root cause verified in prod, CMP006:** active SKU `6765SS06599` (`FG-00379`) and its active mapping/configuration/approved MTO applicability exist. The old unpaged all-company `material_company_ext` lookup stopped at PostgREST's 1,000 rows, excluding this mapping before FG eligibility ran. Packing PO finalization was not the failing condition.
