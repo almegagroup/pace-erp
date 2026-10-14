@@ -1,7 +1,8 @@
 /*
  * File-Path: supabase/functions/api/_core/procurement/dispatch_report.handlers.ts
- * Purpose: SO04 item-wise dispatch report. One row per posted invoice + item;
- *          invoice references repeat when an invoice contains multiple items.
+ * Purpose: SO04 item-wise dispatch report. One row per posted or cancelled
+ *          invoice + item; invoice references repeat when an invoice contains
+ *          multiple items.
  * Authority: Backend
  */
 
@@ -106,7 +107,10 @@ export async function getDispatchReportHandler(
     const invoices = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_procurement").from("sales_invoice")
       .select("id, invoice_number, invoice_date, company_id, dc_id, so_id, sto_id, status, tally_invoice_number, tally_invoice_date, inbound_number, fo_id, fo_number, bill_to_name, ship_to_name")
-      .eq("company_id", companyId).eq("status", "POSTED")
+      // APL cancellation changes the invoice to CANCELLED. Keep that original
+      // dispatch row in SO04 so reconciliation can see why it was cancelled,
+      // instead of making it disappear from the report altogether.
+      .eq("company_id", companyId).in("status", ["POSTED", "CANCELLED"])
       .gte("tally_invoice_date", dateFrom).lte("tally_invoice_date", dateTo)
       .order("tally_invoice_date", { ascending: true }).order("id", { ascending: true }).range(from, to));
     if (invoices.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
@@ -132,6 +136,16 @@ export async function getDispatchReportHandler(
       .select("id, transporter_id, transporter_name_freetext, vehicle_number, lr_number, lr_date, gross_weight, net_weight, driver_name, driver_number, driver_contact_number")
       .in("id", chunk));
     const dcHeaderById = new Map(dcHeaders.map((row) => [textValue(row.id), row]));
+
+    // The APL case is owned by the DO, while SO04 is invoice-line based. Load
+    // it once for all DOs so every invoice row can state the current APL
+    // condition without a per-row query. CANCELLED is deliberately distinct
+    // from a normal cancelled invoice: only this workflow earns the APL text.
+    const aplCases = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("delivery_order_apl_invoice_case")
+      .select("dc_id, status")
+      .eq("company_id", companyId).in("dc_id", chunk));
+    const aplCaseByDcId = new Map(aplCases.map((row) => [textValue(row.dc_id), upperValue(row.status)]));
     const transporterIds = uniqueValues(dcHeaders.map((row) => row.transporter_id));
     const transporters = await fetchInChunks<JsonRecord>(transporterIds, (chunk) => serviceRoleClient
       .schema("erp_master").from("transporter_master")
@@ -299,6 +313,14 @@ export async function getDispatchReportHandler(
       }
       const soStrokeEntries = [...strokeEntryMap.values()];
       const tallyDate = textValue(invoice.tally_invoice_date);
+      const aplCaseStatus = aplCaseByDcId.get(textValue(invoice.dc_id));
+      const aplInvoiceStatus = aplCaseStatus === "NO"
+        ? "APL Invoice Not Received"
+        : aplCaseStatus === "CANCELLED"
+        ? "Invoice Cancelled due to APL Invoice not received"
+        : aplCaseStatus === "YES"
+        ? "APL Invoice Received"
+        : "Not recorded";
       return {
         row_key: rowKey,
         company_code: companyCode,
@@ -312,6 +334,7 @@ export async function getDispatchReportHandler(
         tally_invoice_number: textValue(invoice.tally_invoice_number),
         tally_invoice_date: tallyDate,
         inbound_number: textValue(invoice.inbound_number),
+        apl_invoice_status: aplInvoiceStatus,
         pack_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.pack_qty ?? dcLineById.get(textValue(line.dc_line_id))?.pack_qty), 0), 6),
         pack_uom: joined(lines.map((line) => line.pack_uom_code || dcLineById.get(textValue(line.dc_line_id))?.pack_uom_code)),
         base_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.quantity), 0), 6),

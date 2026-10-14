@@ -2,8 +2,8 @@
  * File-Path: frontend/src/pages/dashboard/procurement/sales/DispatchReportPage.jsx
  * Domain: PROCUREMENT / Sales
  * Purpose: SO04 -- item-wise Dispatch Report (Tally reconciliation view). One
- *          row per posted invoice + material; a mandatory Tally Invoice Date
- *          range drives the query, same Page 1 (Filters) / Page 2 (Output
+ *          row per posted or cancelled invoice + material; a mandatory Tally
+ *          Invoice Date range drives the query, same Page 1 (Filters) / Page 2 (Output
  *          Grid) split as IN02/PR24. Business owner ask (2026-09-05): the
  *          list must read in Tally Invoice Date order -- getDispatchReportHandler
  *          already sorts server-side by tally_invoice_date, then
@@ -113,6 +113,7 @@ const GRID_COLUMNS = [
   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px" },
   { key: "tally_invoice_number", label: "Tally Invoice #", width: "130px" },
   { key: "inbound_number", label: "IBN", width: "110px", render: (r) => r.inbound_number || "—" },
+  { key: "apl_invoice_status", label: "APL Invoice Status", width: "270px", render: (r) => r.apl_invoice_status || "Not recorded" },
   { key: "type", label: "Type", width: "70px" },
   { key: "fg_type", label: "FG Type", width: "80px", render: (r) => r.fg_type || "—" },
   { key: "dispatch_type", label: "Dispatch Type", width: "170px", render: (r) => r.dispatch_type || "—" },

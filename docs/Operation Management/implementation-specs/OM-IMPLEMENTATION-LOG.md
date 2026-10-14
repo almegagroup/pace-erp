@@ -6061,10 +6061,11 @@ drawn-qty query counts only `delivery_challan.status <> 'CANCELLED'`; therefore 
 DO contributes zero drawn quantity while SO/SO-Map records themselves remain unchanged.
 
 **Access:** all three routes are registered on `PROC_DO_CREATE` (lookup VIEW; save/cancel EDIT),
-and each handler checks `assertCompanyScope` plus the existing scoped DO ACL helper. CMP003,
-CMP005, CMP006 and CMP011 have Accounts, Stores and Logistics through
-`CAP_STORES_LOGISTICS_DO`; other active companies have no equivalent department context and were
-reported rather than changed.
+and each handler checks `assertCompanyScope` plus the existing scoped DO ACL helper. A subsequent
+active-version production snapshot re-check found Accounts and Stores with VIEW+EDIT in CMP003,
+CMP005, CMP006 and CMP011, but **no Logistics ALLOW** in those companies; CMP014 and the other
+active companies lack an equivalent operational department context. This is an ACL business-data
+gap, reported rather than silently changed.
 
 **R-04:** `20261014120558_so03_apl_invoice_case.sql` creates the case/history tables and secured
 service-role RPCs; it was applied to Dev, PostgREST was reloaded, and the MCP-generated ledger
@@ -6086,3 +6087,26 @@ invoice, one P602 reversal and CANCELLED APL history, then rolled back. A rolled
 shape (including VDC bulk guard) also cancelled its DO/reservation and APL case. Dev currently
 has no DD invoice-without-PGI fixture, so that specific live case remains pending rather than
 fabricated.
+
+## 2026-10-14 — SO04 APL Invoice condition visibility — DONE
+
+**Scope:** SO04's existing company-scoped `PROC_DISPATCH_REPORT:VIEW` endpoint and report grid
+now retain both POSTED and CANCELLED sales-invoice rows in the selected Tally Invoice Date range.
+The prior POSTED-only filter made an APL cancellation disappear from the reconciliation report.
+
+**Display:** a new `APL Invoice Status` column (and the matching Excel column) is populated from
+the DO-owned APL case in one chunked, company-scoped read: `APL Invoice Not Received` while the
+case is NO, `APL Invoice Received` after confirmation, and `Invoice Cancelled due to APL Invoice
+not received` only when that APL case reaches CANCELLED. An unrelated cancelled invoice is never
+mislabelled as an APL cancellation. The report retains existing human-readable invoice/FO/item
+fields and never exposes ids.
+
+**Rules / wiring:** no schema, migration, stock posting, new route, or ACL-data change is needed.
+The existing route registry entry and handler company-scope check remain authoritative. The
+SO04 manifest entry now records its existing `getDispatchReport` dependency, and the handler uses
+`fetchInChunks` for the unbounded DO-id list rather than a per-row lookup.
+
+**Verification:** Dev confirms the APL case table is present. `deno check` on the touched handler,
+targeted ESLint, Vite build, `git diff --check`, JSON parsing, and every command in
+`ci-basic.yml` (including strict SU24 manifest) pass. Vite retains only its pre-existing GRN
+duplicate-attribute and chunk-size warnings.

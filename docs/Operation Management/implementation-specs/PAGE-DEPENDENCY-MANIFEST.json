@@ -9267,8 +9267,17 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/DispatchReportPage.jsx",
-    "dependencyCount": 0,
-    "deps": []
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "getDispatchReport",
+        "method": "GET",
+        "path": "/api/procurement/dispatch-report",
+        "resourceCode": "PROC_DISPATCH_REPORT",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/accounts/ManualCostingRatePage.jsx",
