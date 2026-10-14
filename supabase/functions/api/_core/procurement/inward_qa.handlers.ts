@@ -16,6 +16,7 @@ import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { hasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { errorResponse, okResponse } from "../response.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -457,20 +458,33 @@ export async function listQADocumentsHandler(
     const docIds = rows.map((row) => row.id);
     const grnIdsForRows = [...new Set(rows.map((row: JsonRecord) => String(row.grn_id)).filter(Boolean))];
 
-    const { data: grnRows, error: grnError } = grnIdsForRows.length > 0
-      ? await serviceRoleClient
-          .schema("erp_procurement")
-          .from("goods_receipt")
-          .select("id, grn_number, status, reversal_approved_at, reversal_reason")
-          .in("id", grnIdsForRows)
-      : { data: [] as JsonRecord[], error: null };
-    if (grnError) {
+    // The queue row shows the GRN receipt context at a glance (same fields as
+    // the expanded "GRN Receipt Details" panel), so it is resolved here in
+    // bulk rather than per row.
+    let grnRows: JsonRecord[];
+    try {
+      grnRows = await fetchInChunks<JsonRecord>(grnIdsForRows, (chunk) => serviceRoleClient
+        .schema("erp_procurement")
+        .from("goods_receipt")
+        .select("id, grn_number, grn_date, status, reversal_approved_at, reversal_reason, gate_entry_id, vendor_id, transporter_id, invoice_number, invoice_date, bulk_challan_number, bulk_challan_date, lr_number, lr_date, bulk_ewaybill_number, batch_lot_number")
+        .in("id", chunk));
+    } catch (grnError) {
       logDbError("listQADocumentsHandler GRN resolve", grnError);
-      throw new ApiError(500, grnError.message || "Unable to resolve GRN numbers");
+      throw new ApiError(500, "Unable to resolve GRN numbers");
     }
-    const grnById = new Map<string, JsonRecord>(
-      (grnRows ?? []).map((row: JsonRecord) => [String(row.id), row]),
-    );
+    const grnById = new Map<string, JsonRecord>(grnRows.map((row: JsonRecord) => [String(row.id), row]));
+    const uniqueIds = (key: string) => [...new Set(grnRows.map((row) => String(row[key] ?? "")).filter(Boolean))];
+    const [gateEntryRows, vendorRows, transporterRows] = await Promise.all([
+      fetchInChunks<JsonRecord>(uniqueIds("gate_entry_id"), (chunk) => serviceRoleClient.schema("erp_procurement").from("gate_entry")
+        .select("id, ge_number, ge_date, vehicle_number").in("id", chunk)).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(uniqueIds("vendor_id"), (chunk) => serviceRoleClient.schema("erp_master").from("vendor_master")
+        .select("id, vendor_code, vendor_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(uniqueIds("transporter_id"), (chunk) => serviceRoleClient.schema("erp_master").from("transporter_master")
+        .select("id, transporter_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
+    ]);
+    const gateEntryById = new Map(gateEntryRows.map((row) => [String(row.id), row]));
+    const vendorById = new Map(vendorRows.map((row) => [String(row.id), row]));
+    const transporterById = new Map(transporterRows.map((row) => [String(row.id), row]));
 
     // Bulk-fetch decision lines for all listed docs in one query (no per-row N+1)
     // so the queue can show an accurate "remaining qty" without a detail fetch per row.
@@ -544,6 +558,23 @@ export async function listQADocumentsHandler(
         pace_code: material?.pace_code ?? null,
         material_name: material?.material_name ?? null,
         material_category: material?.material_category ?? null,
+        grn_date: grn?.grn_date ?? null,
+        ge_number: gateEntryById.get(String(grn?.gate_entry_id ?? ""))?.ge_number ?? null,
+        ge_date: gateEntryById.get(String(grn?.gate_entry_id ?? ""))?.ge_date ?? null,
+        truck_number: gateEntryById.get(String(grn?.gate_entry_id ?? ""))?.vehicle_number ?? null,
+        vendor_display: (() => {
+          const vendor = vendorById.get(String(grn?.vendor_id ?? row.vendor_id ?? ""));
+          return vendor ? `${vendor.vendor_code ?? ""} — ${vendor.vendor_name ?? ""}`.replace(/^ — /, "") : null;
+        })(),
+        transporter_name: transporterById.get(String(grn?.transporter_id ?? ""))?.transporter_name ?? null,
+        invoice_number: grn?.invoice_number ?? null,
+        invoice_date: grn?.invoice_date ?? null,
+        challan_number: grn?.bulk_challan_number ?? null,
+        challan_date: grn?.bulk_challan_date ?? null,
+        lr_number: grn?.lr_number ?? null,
+        lr_date: grn?.lr_date ?? null,
+        ewaybill_number: grn?.bulk_ewaybill_number ?? null,
+        batch_lot_number: grn?.batch_lot_number ?? null,
       };
     });
 

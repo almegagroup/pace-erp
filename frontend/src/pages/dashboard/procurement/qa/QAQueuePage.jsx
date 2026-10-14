@@ -145,12 +145,31 @@ export default function QAQueuePage() {
     setExpandedRowId((current) => (current === rowId ? "" : rowId));
   }
 
+  // The GRN receipt context (also shown in the expanded panel) sits on the
+  // row itself so the queue can be read at a glance.
+  const receiptColumns = [
+    { key: "grn_date", label: "GRN Date", width: "100px" },
+    { key: "vendor_display", label: "Vendor", width: "220px" },
+    { key: "ge_number", label: "GE Number", width: "110px" },
+    { key: "ge_date", label: "GE Date", width: "100px" },
+    { key: "invoice_number", label: "Invoice No.", width: "130px" },
+    { key: "invoice_date", label: "Invoice Date", width: "100px" },
+    { key: "challan_number", label: "Challan No.", width: "110px" },
+    { key: "challan_date", label: "Challan Date", width: "100px" },
+    { key: "truck_number", label: "Truck No.", width: "110px" },
+    { key: "transporter_name", label: "Transporter", width: "150px" },
+    { key: "lr_number", label: "LR No.", width: "100px" },
+    { key: "lr_date", label: "LR Date", width: "100px" },
+    { key: "ewaybill_number", label: "E-way Bill", width: "120px" },
+    { key: "batch_lot_number", label: "Batch / Lot", width: "110px" },
+  ];
   const columns = [
-    { key: "grn_number", label: "GRN Number", width: "140px" },
-    { key: "material", label: "Material" },
-    { key: "category", label: "Category", width: "140px" },
-    { key: "qty", label: "Quantity", width: "170px" },
+    { key: "grn_number", label: "GRN Number", width: "120px" },
+    { key: "material", label: "Material", width: "220px" },
+    { key: "qty", label: "Quantity", width: "150px" },
     { key: "status", label: "Status", width: "130px" },
+    ...receiptColumns,
+    { key: "category", label: "Category", width: "120px" },
     { key: "expand", label: "", width: "40px" },
   ];
 
@@ -258,7 +277,7 @@ export default function QAQueuePage() {
                 <thead className="bg-slate-100 text-left text-[10px] uppercase tracking-[0.08em] text-slate-600">
                   <tr>
                     {columns.map((column) => (
-                      <th key={column.key} className="border-b border-slate-200 px-2 py-1.5 font-semibold" style={{ width: column.width }}>
+                      <th key={column.key} className="whitespace-nowrap border-b border-slate-200 px-2 py-1.5 font-semibold" style={{ width: column.width, minWidth: column.width }}>
                         {column.label}
                       </th>
                     ))}
@@ -279,7 +298,7 @@ export default function QAQueuePage() {
                         <Fragment key={row.id}>
                           <tr
                             onClick={() => toggleExpand(row.id)}
-                            className="cursor-pointer border-b border-slate-100 bg-white hover:bg-sky-50"
+                            className="cursor-pointer whitespace-nowrap border-b border-slate-100 bg-white hover:bg-sky-50"
                           >
                             <td className="px-2 py-1.5 font-mono font-semibold text-sky-700">
                               {row.grn_number || row.grn_id || "—"}
@@ -287,7 +306,6 @@ export default function QAQueuePage() {
                             <td className="px-2 py-1.5">
                               {row.material_name || row.pace_code || "—"}
                             </td>
-                            <td className="px-2 py-1.5">{row.material_category || "—"}</td>
                             <td className="px-2 py-1.5">
                               {Number(row.total_qty ?? 0).toLocaleString()} {row.uom_code || ""}
                               {remaining > 0 && remaining !== Number(row.total_qty ?? 0) ? (
@@ -303,11 +321,18 @@ export default function QAQueuePage() {
                                 {row.public_status}
                               </span>
                             </td>
+                            {receiptColumns.map((column) => (
+                              <td key={column.key} className="px-2 py-1.5">{row[column.key] || "—"}</td>
+                            ))}
+                            <td className="px-2 py-1.5">{row.material_category || "—"}</td>
                             <td className="px-2 py-1.5 text-center text-slate-400">{isExpanded ? "▲" : "▼"}</td>
                           </tr>
                           {isExpanded ? (
                             <tr className="bg-slate-50">
                               <td colSpan={columns.length} className="border-t border-slate-200 p-0">
+                                {/* The table is wider than the screen now; keep the panel
+                                    screen-wide and pinned left so it reads without scrolling. */}
+                                <div className="sticky left-0" style={{ width: "calc(100vw - 96px)", maxWidth: "100%" }}>
                                 <QaExpandedPanel
                                   row={row}
                                   companyId={effectiveCompanyId}
@@ -316,6 +341,7 @@ export default function QAQueuePage() {
                                   }}
                                   onCollapse={() => setExpandedRowId("")}
                                 />
+                                </div>
                               </td>
                             </tr>
                           ) : null}
