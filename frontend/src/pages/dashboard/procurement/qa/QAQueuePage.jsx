@@ -1,10 +1,10 @@
-import { Fragment, useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
-import ErpPaginationStrip from "../../../../components/ErpPaginationStrip.jsx";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -27,7 +27,9 @@ import {
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
-const LIMIT = 50;
+// The queue is loaded whole (server pages of 200, joined) so the grid's own
+// column filters work across every row, not one page.
+const FETCH_PAGE_SIZE = 200;
 
 function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -57,13 +59,20 @@ function computePassFail(resultValue, lsl, usl) {
   return belowLsl || aboveUsl ? "FAIL" : "PASS";
 }
 
-function newDecisionRow(defaultDecision) {
+// Quantity defaults to what is still undecided (the GRN qty on the first
+// row); the user can change it or split it across more rows.
+function qtyText(value) {
+  const qty = Number(value);
+  return Number.isFinite(qty) && qty > 0 ? String(Number(qty.toFixed(6))) : "";
+}
+
+function newDecisionRow(defaultDecision, defaultQty) {
   return {
     key:
       typeof crypto?.randomUUID === "function"
         ? crypto.randomUUID()
         : `split-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    quantity: "",
+    quantity: qtyText(defaultQty),
     usage_decision: defaultDecision || "RELEASE",
     remarks: "",
   };
@@ -81,21 +90,31 @@ export default function QAQueuePage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [page, setPage] = useState(1);
   const [expandedRowId, setExpandedRowId] = useState("");
 
   const queueQuery = useQuery({
-    queryKey: ["procurement", "qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo, debouncedSearch, page],
-    queryFn: () =>
-      listQADocuments({
-        company_id: effectiveCompanyId || undefined,
-        status: statusFilter === "ALL" ? undefined : statusFilter,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        search: debouncedSearch || undefined,
-        limit: LIMIT,
-        offset: (page - 1) * LIMIT,
-      }),
+    queryKey: ["procurement", "qa-queue", effectiveCompanyId || null, statusFilter, dateFrom, dateTo, debouncedSearch],
+    queryFn: async () => {
+      const items = [];
+      let total = 0;
+      // DEPENDENT: each request's offset follows the rows already received.
+      for (let offset = 0; ; offset += FETCH_PAGE_SIZE) {
+        const result = await listQADocuments({
+          company_id: effectiveCompanyId || undefined,
+          status: statusFilter === "ALL" ? undefined : statusFilter,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          search: debouncedSearch || undefined,
+          limit: FETCH_PAGE_SIZE,
+          offset,
+        });
+        const pageItems = Array.isArray(result?.items) ? result.items : [];
+        total = Number(result?.total ?? pageItems.length);
+        items.push(...pageItems);
+        if (pageItems.length < FETCH_PAGE_SIZE || items.length >= total) break;
+      }
+      return { items, total };
+    },
     enabled: Boolean(effectiveCompanyId),
   });
 
@@ -134,12 +153,8 @@ export default function QAQueuePage() {
     }
   }, [deepLinkQaId, rows, setSearchParams]);
 
-  const total = Number(queueQuery.data?.total ?? 0);
-  const totalPages = Math.max(1, Math.ceil(total / LIMIT));
-  const safePage = Math.min(page, totalPages);
-  const pageRows = rows;
-  const startIndex = total === 0 ? 0 : (safePage - 1) * LIMIT + 1;
-  const endIndex = total === 0 ? 0 : Math.min(safePage * LIMIT, total);
+  const total = rows.length;
+  const [gridRows, setGridRows] = useState([]);
 
   function toggleExpand(rowId) {
     setExpandedRowId((current) => (current === rowId ? "" : rowId));
@@ -163,14 +178,74 @@ export default function QAQueuePage() {
     { key: "ewaybill_number", label: "E-way Bill", width: "120px" },
     { key: "batch_lot_number", label: "Batch / Lot", width: "110px" },
   ];
-  const columns = [
-    { key: "grn_number", label: "GRN Number", width: "120px" },
-    { key: "material", label: "Material", width: "220px" },
-    { key: "qty", label: "Quantity", width: "150px" },
-    { key: "status", label: "Status", width: "130px" },
-    ...receiptColumns,
-    { key: "category", label: "Category", width: "120px" },
-    { key: "expand", label: "", width: "40px" },
+  const dateKeys = new Set(["grn_date", "ge_date", "invoice_date", "challan_date", "lr_date"]);
+  const gridColumns = [
+    {
+      key: "grn_number", label: "GRN Number", width: "120px",
+      render: (row) => <span className="font-mono font-semibold text-sky-700">{row.grn_number || "—"}</span>,
+      copyValue: (row) => row.grn_number || "",
+      filterValue: (row) => row.grn_number || "—",
+    },
+    {
+      key: "material", label: "Material", width: "220px",
+      render: (row) => row.material_name || row.pace_code || "—",
+      copyValue: (row) => row.material_name || row.pace_code || "",
+      filterValue: (row) => row.material_name || row.pace_code || "—",
+    },
+    {
+      key: "qty", label: "Quantity", width: "160px", align: "right",
+      render: (row) => {
+        const remaining = Number(row.remaining_qty ?? row.total_qty ?? 0);
+        return (
+          <>
+            {Number(row.total_qty ?? 0).toLocaleString()} {row.uom_code || ""}
+            {remaining > 0 && remaining !== Number(row.total_qty ?? 0) ? (
+              <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                {remaining} pending
+              </span>
+            ) : null}
+          </>
+        );
+      },
+      copyValue: (row) => row.total_qty ?? "",
+      filterValue: (row) => `${Number(row.total_qty ?? 0)} ${row.uom_code || ""}`.trim(),
+    },
+    {
+      key: "status", label: "Status", width: "130px",
+      render: (row) => (
+        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.public_status)}`}>
+          {row.public_status}
+        </span>
+      ),
+      copyValue: (row) => row.public_status || "",
+      filterValue: (row) => row.public_status || "—",
+    },
+    ...receiptColumns.map((column) => ({
+      ...column,
+      render: (row) => row[column.key] || "—",
+      filterValue: (row) => row[column.key] || "—",
+      ...(dateKeys.has(column.key) ? { filterType: "date" } : {}),
+    })),
+    {
+      key: "category", label: "Category", width: "120px",
+      render: (row) => row.material_category || "—",
+      copyValue: (row) => row.material_category || "",
+      filterValue: (row) => row.material_category || "—",
+    },
+    {
+      key: "expand", label: "", width: "44px", filterable: false, align: "center",
+      render: (row) => (
+        <button
+          type="button"
+          onClick={() => toggleExpand(row.id)}
+          title={expandedRowId === row.id ? "Collapse" : "Expand"}
+          className="px-1 text-slate-500 hover:text-sky-700"
+        >
+          {expandedRowId === row.id ? "▲" : "▼"}
+        </button>
+      ),
+      copyValue: () => "",
+    },
   ];
 
   return (
@@ -206,7 +281,6 @@ export default function QAQueuePage() {
               value={search}
               onChange={(value) => {
                 setSearch(value);
-                setPage(1);
               }}
               primaryFocus
               placeholder="Search QA, GRN or material"
@@ -218,7 +292,6 @@ export default function QAQueuePage() {
                 value={statusFilter}
                 onChange={(event) => {
                   setStatusFilter(event.target.value);
-                  setPage(1);
                 }}
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
@@ -235,7 +308,6 @@ export default function QAQueuePage() {
                 value={dateFrom}
                 onChange={(event) => {
                   setDateFrom(event.target.value);
-                  setPage(1);
                 }}
                 className="h-10 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
@@ -247,7 +319,6 @@ export default function QAQueuePage() {
                 value={dateTo}
                 onChange={(event) => {
                   setDateTo(event.target.value);
-                  setPage(1);
                 }}
                 className="h-10 border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
               />
@@ -257,102 +328,46 @@ export default function QAQueuePage() {
       }}
       listSection={{
         eyebrow: "QA Work Queue",
-        title: loading ? "Loading QA queue" : `${total} QA document row${total === 1 ? "" : "s"}`,
+        title: loading ? "Loading QA queue" : `${gridRows.length} QA document row${gridRows.length === 1 ? "" : "s"}${gridRows.length !== total ? ` (filtered from ${total})` : ""}`,
         children: !effectiveCompanyId ? (
           <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
             No company resolved for this session.
           </div>
         ) : (
-          <div className="grid gap-3">
-            <ErpPaginationStrip
-              page={safePage}
-              setPage={setPage}
-              totalPages={totalPages}
-              startIndex={startIndex}
-              endIndex={endIndex}
-              totalItems={total}
-            />
-            <div className="overflow-auto border border-slate-300 bg-white">
-              <table className="min-w-full border-collapse text-[12px]">
-                <thead className="bg-slate-100 text-left text-[10px] uppercase tracking-[0.08em] text-slate-600">
-                  <tr>
-                    {columns.map((column) => (
-                      <th key={column.key} className="whitespace-nowrap border-b border-slate-200 px-2 py-1.5 font-semibold" style={{ width: column.width, minWidth: column.width }}>
-                        {column.label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={columns.length} className="px-3 py-6 text-left text-sm text-slate-500">
-                        {loading ? "Loading QA queue..." : "No QA document matched the current filter."}
-                      </td>
-                    </tr>
-                  ) : (
-                    pageRows.map((row) => {
-                      const isExpanded = expandedRowId === row.id;
-                      const remaining = Number(row.remaining_qty ?? row.total_qty ?? 0);
-                      return (
-                        <Fragment key={row.id}>
-                          <tr
-                            onClick={() => toggleExpand(row.id)}
-                            className="cursor-pointer whitespace-nowrap border-b border-slate-100 bg-white hover:bg-sky-50"
-                          >
-                            <td className="px-2 py-1.5 font-mono font-semibold text-sky-700">
-                              {row.grn_number || row.grn_id || "—"}
-                            </td>
-                            <td className="px-2 py-1.5">
-                              {row.material_name || row.pace_code || "—"}
-                            </td>
-                            <td className="px-2 py-1.5">
-                              {Number(row.total_qty ?? 0).toLocaleString()} {row.uom_code || ""}
-                              {remaining > 0 && remaining !== Number(row.total_qty ?? 0) ? (
-                                <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                                  {remaining} pending
-                                </span>
-                              ) : null}
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <span
-                                className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${statusTone(row.public_status)}`}
-                              >
-                                {row.public_status}
-                              </span>
-                            </td>
-                            {receiptColumns.map((column) => (
-                              <td key={column.key} className="px-2 py-1.5">{row[column.key] || "—"}</td>
-                            ))}
-                            <td className="px-2 py-1.5">{row.material_category || "—"}</td>
-                            <td className="px-2 py-1.5 text-center text-slate-400">{isExpanded ? "▲" : "▼"}</td>
-                          </tr>
-                          {isExpanded ? (
-                            <tr className="bg-slate-50">
-                              <td colSpan={columns.length} className="border-t border-slate-200 p-0">
-                                {/* The table is wider than the screen now; keep the panel
-                                    screen-wide and pinned left so it reads without scrolling. */}
-                                <div className="sticky left-0" style={{ width: "calc(100vw - 96px)", maxWidth: "100%" }}>
-                                <QaExpandedPanel
-                                  row={row}
-                                  companyId={effectiveCompanyId}
-                                  onChanged={() => {
-                                    void queueQuery.refetch();
-                                  }}
-                                  onCollapse={() => setExpandedRowId("")}
-                                />
-                                </div>
-                              </td>
-                            </tr>
-                          ) : null}
-                        </Fragment>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <ErpDenseGrid
+            // Excel-style: arrow-key cell navigation, range select + Ctrl+C,
+            // and a per-column AutoFilter (funnel in every header).
+            rangeSelect
+            columnFilter
+            stickyFirstColumn
+            maxHeight="calc(100vh - 300px)"
+            onFilteredRowsChange={setGridRows}
+            columns={gridColumns}
+            rows={rows}
+            rowKey={(row) => row.id}
+            // Enter / double-click / the ▼ button expand a row; the panel
+            // itself is unchanged.
+            onRowActivate={(row) => toggleExpand(row.id)}
+            getRowProps={(row) => ({
+              onDoubleClick: () => toggleExpand(row.id),
+              className: expandedRowId === row.id ? "!bg-sky-50" : "",
+            })}
+            renderExpandedRow={(row) => (expandedRowId === row.id ? (
+              // The table is wider than the screen; keep the panel
+              // screen-wide and pinned left so it reads without scrolling.
+              <div className="sticky left-0" style={{ width: "calc(100vw - 96px)", maxWidth: "100%" }}>
+                <QaExpandedPanel
+                  row={row}
+                  companyId={effectiveCompanyId}
+                  onChanged={() => {
+                    void queueQuery.refetch();
+                  }}
+                  onCollapse={() => setExpandedRowId("")}
+                />
+              </div>
+            ) : null)}
+            emptyMessage={loading ? "Loading QA queue..." : "No QA document matched the current filter."}
+          />
         ),
       }}
     />
@@ -535,10 +550,11 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
 
   useEffect(() => {
     if (decisionRows.length === 0 && isMutable) {
-      setDecisionRows([newDecisionRow(anyMctFail ? "BLOCK" : "RELEASE")]);
+      setDecisionRows([newDecisionRow(anyMctFail ? "BLOCK" : "RELEASE", remainingQty)]);
     }
+    // remainingQty: after a partial decision the next row starts at what is left.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMutable, mctConfigs.length]);
+  }, [isMutable, mctConfigs.length, remainingQty]);
 
   function toast(msg, tone = "success") {
     pushToast({ message: msg, tone });
@@ -659,7 +675,10 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
   }
 
   function addSplitRow() {
-    setDecisionRows((current) => [...current, newDecisionRow(anyMctFail ? "BLOCK" : "RELEASE")]);
+    setDecisionRows((current) => {
+      const allocated = current.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+      return [...current, newDecisionRow(anyMctFail ? "BLOCK" : "RELEASE", remainingQty - allocated)];
+    });
   }
 
   function removeSplitRow(key) {
