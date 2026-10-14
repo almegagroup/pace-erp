@@ -6038,3 +6038,46 @@ transaction required exactly one active CMP003 `S002` mapping and exactly one ma
 Stroke line before assigning `S002`.
 
 **Verification:** The exact target row now resolves to `S002`; no other Stroke line was changed.
+
+## 2026-10-14 — SO03 APL Invoice Case — IMPLEMENTED / DEV VERIFICATION PENDING
+
+**Scope:** Sales Delivery Orders only. Read-only CMP003 inspection found DD Sales DOs in
+`CREATED` and non-DD Sales DOs in `DISPATCHED` with posted invoices; the only other invoice
+shape was STO, which has no FO/SO-Map lifecycle. The business owner therefore confirmed that
+APL Invoice Case excludes STO.
+
+**Implemented:** SO03 has an **APL Invoice Case** drawer beside Edit Transporter Details. It
+looks up original/revised external FO plus ERP and Tally invoice numbers, presents an
+unambiguous human-readable DO chooser/details, records NO/YES (YES requires received date),
+and displays the saved state in both the SO03 grid and Excel export. A NO case can either be
+marked received later or Cancel Posting with a mandatory reason and confirmation.
+
+**Cancellation:** the new Sales-only atomic RPC composes the existing VDC and non-DD cancellation
+primitives. DD Created and draft-invoice cascades reuse their VDC atomic functions; posted DD
+uses the existing `post_document` VDC reversal completion. Non-DD reuses
+`reverse_sales_invoice_groups_atomic` (P602 at original rate) then
+`cancel_delivery_order_atomic`. It never calls `post_stock_movement` directly. The existing
+drawn-qty query counts only `delivery_challan.status <> 'CANCELLED'`; therefore the cancelled
+DO contributes zero drawn quantity while SO/SO-Map records themselves remain unchanged.
+
+**Access:** all three routes are registered on `PROC_DO_CREATE` (lookup VIEW; save/cancel EDIT),
+and each handler checks `assertCompanyScope` plus the existing scoped DO ACL helper. CMP003,
+CMP005, CMP006 and CMP011 have Accounts, Stores and Logistics through
+`CAP_STORES_LOGISTICS_DO`; other active companies have no equivalent department context and were
+reported rather than changed.
+
+**R-04:** `20261014120558_so03_apl_invoice_case.sql` creates the case/history tables and secured
+service-role RPCs; it was applied to Dev, PostgREST was reloaded, and the MCP-generated ledger
+timestamp was reconciled to the local filename version. The broader Dev migration ledger remains
+pre-existingly out of sync with this branch: local-only `20261012130000` and `20261013090000`,
+and remote-only `20261014120000` and `20261014150000`. Those unrelated migrations were not
+rewritten or deleted.
+
+**Verification so far:** targeted Deno checks and touched-frontend ESLint pass; Vite build passes
+(with the pre-existing GRN duplicate-attribute warning). All CI Basic guard commands pass,
+including stock-posting baseline 12/12, route ACL 0-missing, company scope/write ACL 0 gaps and
+strict SU24 manifest. A rollback Dev test of the posted non-DD path produced a cancelled DO and
+invoice, one P602 reversal and CANCELLED APL history, then rolled back. A rolled-back Created-DD
+shape (including VDC bulk guard) also cancelled its DO/reservation and APL case. Dev currently
+has no DD invoice-without-PGI fixture, so that specific live case remains pending rather than
+fabricated.

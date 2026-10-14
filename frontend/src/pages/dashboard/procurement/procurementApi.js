@@ -1259,6 +1259,15 @@ export function findDoByFoNumber(params) {
 export function editTransporterDetails(data) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/edit-transporter", data);
 }
+export function lookupAplInvoiceCase(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/apl-invoice-case", undefined, params);
+}
+export function saveAplInvoiceCase(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/apl-invoice-case", data);
+}
+export function cancelAplInvoiceCase(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/apl-invoice-case/cancel", data);
+}
 export function listBulkPostingQueue(companyId) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/posting", undefined, { company_id: companyId });
 }

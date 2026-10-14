@@ -428,6 +428,7 @@ import {
   findDoByFoNumberHandler,
   editTransporterDetailsHandler,
 } from "../_core/procurement/do_bulk.handlers.ts";
+import { cancelAplInvoiceCaseHandler, lookupAplInvoiceCaseHandler, saveAplInvoiceCaseHandler } from "../_core/procurement/apl_invoice_case.handlers.ts";
 import {
   bulkPostDeliveryOrdersHandler,
   bulkPostingCorrectionsHandler,
@@ -938,6 +939,12 @@ export async function dispatchProcurementRoutes(
       return await findDoByFoNumberHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter":
       return await editTransporterDetailsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/apl-invoice-case":
+      return await lookupAplInvoiceCaseHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/apl-invoice-case":
+      return await saveAplInvoiceCaseHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/apl-invoice-case/cancel":
+      return await cancelAplInvoiceCaseHandler(req, ctx);
 
     case "GET:/api/procurement/delivery-orders":
       return await listDeliveryOrdersHandler(req, ctx);

@@ -23,6 +23,7 @@ import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { listDeliveryOrders } from "../procurementApi.js";
 import BulkDoUploadDrawer from "./BulkDoUploadDrawer.jsx";
 import EditTransporterDetailsDrawer from "./EditTransporterDetailsDrawer.jsx";
+import AplInvoiceCaseDrawer from "./AplInvoiceCaseDrawer.jsx";
 import VdcTruckDispatchUploadDrawer from "./VdcTruckDispatchUploadDrawer.jsx";
 
 const LIMIT = 50;
@@ -44,6 +45,7 @@ const DO_EXPORT_COLUMNS = [
   { key: "tally_invoice_number", label: "Tally Invoice Number" },
   { key: "tally_invoice_date", label: "Tally Invoice Date" },
   { key: "inbound_number", label: "Inbound Number" },
+  { key: "apl_invoice", label: "APL Invoice" },
   { key: "status", label: "Status" },
   { key: "customer_display", label: "Bill-To" },
   { key: "ship_to_display", label: "Ship-To" },
@@ -79,6 +81,7 @@ export default function DOListPage() {
   const [page, setPage] = useState(1);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(Boolean(restoredBulkUploadDraft));
   const [editTransporterOpen, setEditTransporterOpen] = useState(false);
+  const [aplInvoiceCaseOpen, setAplInvoiceCaseOpen] = useState(false);
   const [vdcTruckDispatchOpen, setVdcTruckDispatchOpen] = useState(false);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
@@ -156,6 +159,7 @@ export default function DOListPage() {
         { key: "create", label: "Create DO", tone: "primary", onClick: openCreateDO },
         { key: "bulk-upload", label: "Bulk DO Upload", tone: "neutral", onClick: () => setBulkUploadOpen(true), disabled: !effectiveCompanyId },
         { key: "edit-transporter", label: "Edit Transporter Details", tone: "neutral", onClick: () => setEditTransporterOpen(true), disabled: !effectiveCompanyId },
+        { key: "apl-invoice-case", label: "APL Invoice Case", tone: "neutral", onClick: () => setAplInvoiceCaseOpen(true), disabled: !effectiveCompanyId },
         { key: "truck-dispatch-upload", label: "Truck & Dispatch Upload", tone: "neutral", onClick: () => setVdcTruckDispatchOpen(true), disabled: !effectiveCompanyId },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}
@@ -216,6 +220,7 @@ export default function DOListPage() {
                   { key: "tally_invoice_number", label: "Tally Invoice Number", width: "150px", render: (row) => row.tally_invoice_number || "—" },
                   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px", render: (row) => row.tally_invoice_date || "—" },
                   { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => row.inbound_number || "—" },
+                  { key: "apl_invoice", label: "APL Invoice", width: "130px", render: (row) => row.apl_invoice || "Not recorded" },
                   {
                     key: "status",
                     label: "Status",
@@ -254,6 +259,13 @@ export default function DOListPage() {
       <EditTransporterDetailsDrawer
         companyId={effectiveCompanyId}
         onClose={() => setEditTransporterOpen(false)}
+        onSaved={() => void doQuery.refetch()}
+      />
+    ) : null}
+    {aplInvoiceCaseOpen ? (
+      <AplInvoiceCaseDrawer
+        companyId={effectiveCompanyId}
+        onClose={() => setAplInvoiceCaseOpen(false)}
         onSaved={() => void doQuery.refetch()}
       />
     ) : null}
