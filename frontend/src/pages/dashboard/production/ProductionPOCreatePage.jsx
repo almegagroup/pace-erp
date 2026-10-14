@@ -2874,6 +2874,10 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
   const runningVolume = rowMetrics.reduce((sum, m) => sum + m.volume, 0);
   const totalQty = Number(header?.total_qty ?? 0);
   const shortfall = Math.max(0, Number((totalQty - runningVolume).toFixed(6)));
+  // Declared output across every pack-size row may not exceed machine
+  // capacity x number of batches + 10% (checked again on the server).
+  const maxOutputQty = header?.max_output_qty != null ? Number(header.max_output_qty) : null;
+  const outputExceedsCapacity = maxOutputQty !== null && runningVolume > maxOutputQty + 0.000001;
   // Yield may vary, but every physical batch must still appear exactly once.
   // Keep this guard on Page 5 and in Page 6 so an overlap/gap never looks
   // like a valid plan.
@@ -2928,7 +2932,7 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
     }
   }
 
-  function handleSaveClick() { if (batchCoverage.complete) doSave(); }
+  function handleSaveClick() { if (batchCoverage.complete && !outputExceedsCapacity) doSave(); }
 
   if (planQ.isLoading) {
     return <div className="max-w-6xl px-1 py-6 text-sm text-slate-500">Loading packing plan...</div>;
@@ -2947,7 +2951,7 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
         <span className="inline-flex rounded bg-slate-900 px-3 py-1 text-xs font-semibold tracking-wide text-white">CREATION SESSION</span>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
         <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
           <div className="text-xs font-medium text-slate-500">PO Number</div>
           <div className="mt-1 text-sm font-medium text-slate-900">Created only after Page 6</div>
@@ -2968,7 +2972,21 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
           <div className="text-xs font-medium text-slate-500">Remaining</div>
           <div className="mt-1 text-sm font-medium text-slate-900">{formatPreciseNumber(shortfall, "0.###")} KG</div>
         </div>
+        <div className={`rounded border px-3 py-2 ${outputExceedsCapacity ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50"}`}>
+          <div className="text-xs font-medium text-slate-500">Max Output (Machine)</div>
+          <div className={`mt-1 text-sm font-medium ${outputExceedsCapacity ? "text-rose-700" : "text-slate-900"}`}>
+            {maxOutputQty !== null ? `${formatPreciseNumber(maxOutputQty, "0.###")} KG` : "Not configured"}
+          </div>
+        </div>
       </div>
+
+      {outputExceedsCapacity && (
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          Declared output {formatPreciseNumber(runningVolume, "0.###")} KG is more than the machine allows:{" "}
+          {formatPreciseNumber(maxOutputQty, "0.###")} KG (Machine Capacity {header?.machine_capacity_label || "-"} x {header?.number_of_batches} batches + 10%).
+          Reduce the Outer Units per batch before continuing.
+        </div>
+      )}
 
       {!batchCoverage.complete && effectiveRows.length > 0 && (
         <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
@@ -3089,7 +3107,7 @@ function MtsPackingPlanStep({ session, onBack, onContinue }) {
         <button type="button" onClick={onBack} className="rounded border border-slate-300 px-4 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50">Back</button>
         <button
           type="button"
-          disabled={saving || !batchCoverage.complete}
+          disabled={saving || !batchCoverage.complete || outputExceedsCapacity}
           onClick={handleSaveClick}
           className="rounded bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
         >
