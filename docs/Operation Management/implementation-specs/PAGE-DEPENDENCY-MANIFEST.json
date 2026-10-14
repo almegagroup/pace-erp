@@ -5920,6 +5920,36 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SO02BulkPostingPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
+      {
+        "fn": "listBulkPostingQueue",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/bulk/posting",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "bulkPostDeliveryOrders",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/bulk/post",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "bulkPostingCorrections",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/bulk/posting/corrections",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/sales/SO01Page.jsx",
     "dependencyCount": 16,
     "deps": [
