@@ -13,7 +13,7 @@ Scope: one Procurement page, exactly three tabs. **No historical import, no Prod
 | Backend API | `supabase/functions/api/_core/procurement/mts_customer_plan.handlers.ts` | 8 routes under `/api/procurement/mts-plan/*`; routes + registry wired. |
 | Frontend | `frontend/src/pages/dashboard/procurement/planning/MtsCustomerPlanPage.jsx` | 3 tabs; every table = `ErpDenseGrid` with Excel cell navigation + column filter; Excel-paste into qty column; history drawer; Excel export of the report (only visible columns/rows). |
 | Registration | `operationScreens.js` (`PROC_MTS_CUSTOMER_PLAN`, `/dashboard/procurement/mts-customer-plan`), `AppRouter.jsx`, `procurementApi.js`, `PAGE-DEPENDENCY-MANIFEST.json` | |
-| ACL data | `docs/mts-planning/acl/MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` | **Prepared, not applied.** Guarded: refuses to run until the TX code placeholder is replaced. |
+| ACL data | `docs/mts-planning/acl/MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` | **Prepared, not applied.** Uses TX code PO21; refuses to run if PO21 is already taken by another menu. |
 
 ## Business rules implemented (owner)
 
@@ -56,12 +56,12 @@ Resources: `PROC_MTS_CUSTOMER_PLAN` (VIEW, WRITE) and companion `PROC_MTS_CUSTOM
 
 ## Blockers before anyone can click through the page
 
-1. **TX code approval** (proposal below). Until then the menu row and ACL grants are not provisioned, so the page is not in anyone's sidebar.
+1. ~~TX code approval~~ — **PO21 approved** (2026-10-14). The menu row and ACL grants are still not provisioned until the provisioning SQL runs on DEV.
 2. **`erp_planning` must be added to Exposed schemas** in the Supabase Dashboard (DEV now, PROD later) — platform config, cannot be done by migration or MCP. Until then every `/mts-plan` API call returns a PostgREST schema error.
 3. Then run the provisioning SQL on DEV + ACL version bump/capture/snapshot (steps in the SQL header), and test with SCM, Stores and Plant Head users.
 4. PROD: migration + Exposed schemas + provisioning only with separate explicit owner approval.
 
-## TX code recommendation (not registered)
+## TX code — PO21 (owner approved 2026-10-14; registered by the provisioning SQL when it is run)
 
 PROD `PO` codes in use: PO01–PO14, PO16–PO19. **Recommend `PO21`.**
 - `PO15` is free but was "previously retired/skipped" (feasibility doc, PO19 tx-code note: "PO15 previously retired/skipped") — reusing it risks confusion with old references.

@@ -1,5 +1,5 @@
 -- MTS Customer Plan — ACL / menu provisioning (DATA CONFIG, run via MCP).
--- Status: PREPARED, NOT APPLIED anywhere. Blocked on owner approval of the TX code.
+-- Status: PREPARED, NOT APPLIED anywhere. TX code PO21 approved by owner (2026-10-14).
 --
 -- Owner access rule (2026-10-14):
 --   * Page sits in the Procurement menu group (GRP_ACL_PROCUREMENT).
@@ -41,8 +41,8 @@ BEGIN;
 
 DO $$
 BEGIN
-  IF '<<TX_CODE>>' LIKE '<<%' THEN
-    RAISE EXCEPTION 'Replace <<TX_CODE>> with the owner-approved transaction code before running.';
+  IF EXISTS (SELECT 1 FROM erp_menu.menu_master WHERE tx_code = 'PO21' AND menu_code <> 'PROC_MTS_CUSTOMER_PLAN') THEN
+    RAISE EXCEPTION 'TX code PO21 is already used by another menu in this database.';
   END IF;
 END $$;
 
@@ -50,7 +50,7 @@ END $$;
 INSERT INTO erp_menu.menu_master (menu_code, resource_code, title, description, route_path, menu_type, universe, is_system, display_order, is_active, created_by, tx_code)
 SELECT 'PROC_MTS_CUSTOMER_PLAN', 'PROC_MTS_CUSTOMER_PLAN', 'MTS Customer Plan',
        'Asian Paints MTS customer plan: Plan Entry, Stroke & RM Primary, Plan Report',
-       '/dashboard/procurement/mts-customer-plan', 'PAGE', 'ACL', false, 20, true, 'MTS_PLANNING_SETUP', '<<TX_CODE>>'
+       '/dashboard/procurement/mts-customer-plan', 'PAGE', 'ACL', false, 20, true, 'MTS_PLANNING_SETUP', 'PO21'
 WHERE NOT EXISTS (SELECT 1 FROM erp_menu.menu_master WHERE menu_code = 'PROC_MTS_CUSTOMER_PLAN');
 
 INSERT INTO erp_menu.menu_tree (parent_menu_id, child_menu_id, display_order)
