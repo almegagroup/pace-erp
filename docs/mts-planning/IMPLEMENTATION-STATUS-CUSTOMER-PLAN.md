@@ -1,0 +1,73 @@
+# MTS Customer Plan (three-tab page) — Implementation Status
+
+Date: 2026-10-14 · Branch: `agent/claude` · Owner authorisation: PR #654 comment 6166365454; specs on `agent/chatgpt` (31dbfee, a718f34).
+Scope: one Procurement page, exactly three tabs. **No historical import, no Production/Dispatch integration, no PROD write, no deploy, no merge.**
+
+## What is built
+
+| Layer | File | Notes |
+|---|---|---|
+| DB migration | `supabase/migrations/20261014150000_erp_planning_mts_customer_plan.sql` | New `erp_planning` schema (owner T04). `customer_plan_line` (append-only, versioned), `stroke_plan_setting` / `_period` / `_group_primary`, triggers that forbid delete/edit, `mts_company_skus()`, `customer_plan_effective()`, atomic `save_customer_plan_lines()` and `save_stroke_plan_setting()`. RLS on, service-role only. |
+| DB tests | `supabase/tests/erp_planning_customer_plan.test.sql` | 13 scenario checks; always rolls back. |
+| Backend logic | `supabase/functions/api/_core/procurement/mts_customer_plan.logic.ts` (+ `.logic.test.ts`) | Month parsing, entry UoM (base, MT only for KG base, fixed material conversions only), line validation, report pivot. |
+| Backend API | `supabase/functions/api/_core/procurement/mts_customer_plan.handlers.ts` | 8 routes under `/api/procurement/mts-plan/*`; routes + registry wired. |
+| Frontend | `frontend/src/pages/dashboard/procurement/planning/MtsCustomerPlanPage.jsx` | 3 tabs; every table = `ErpDenseGrid` with Excel cell navigation + column filter; Excel-paste into qty column; history drawer; Excel export of the report (only visible columns/rows). |
+| Registration | `operationScreens.js` (`PROC_MTS_CUSTOMER_PLAN`, `/dashboard/procurement/mts-customer-plan`), `AppRouter.jsx`, `procurementApi.js`, `PAGE-DEPENDENCY-MANIFEST.json` | |
+| ACL data | `docs/mts-planning/acl/MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` | **Prepared, not applied.** Guarded: refuses to run until the TX code placeholder is replaced. |
+
+## Business rules implemented (owner)
+
+- Grain: company × month × SKU × plan type, versioned. No customer/depot field.
+- Effective plan = latest **Final** if entered for that SKU-month, else latest **Rolling**, plus every **Additional**, plus every **Urgent Extra**. Final replaces Rolling only for the SKU-months it covers.
+- **Urgent From Existing Plan** re-phases existing quantity, never adds; its total may not exceed (Final or Rolling) + Additional for that SKU-month. A Final/Rolling reduction that would strand an existing From-Plan allocation is rejected too.
+- Every save creates a new version; cancel = new cancelled version; nothing is overwritten or deleted (enforced by DB triggers).
+- Blank (no plan) stays blank; an entered 0 is a real 0.
+- Tab 2: per company × month × Prodshade, versioned stroke periods (inside the month, no overlap, APPROVED MTS strokes of that company/Prodshade only) and Use Primary Y/N per **Stroke × RM group** (only groups on that stroke's own lines). Default = current MTS stroke, whole month, Use Primary = Yes. Stroke Master is never changed. No PM primary control.
+- Tab 3: non-contiguous year/month selection, PLAN row per SKU, month columns in chronological order. Show Production / Show Dispatch checkboxes exist but stay disabled with a "not available yet" reason (owner has not designed the sources) — no zeros are shown.
+
+## Access (owner, 2026-10-14) — enforced by ACL, not code
+
+| Who | View | Additional / Urgent | Rolling / Final + Tab 2 |
+|---|---|---|---|
+| SCM (SUPPLY CHAIN), DIRECTOR, ACL-MASTER | ✓ | ✓ | ✓ |
+| STORES, LOGISTICS (users + their managers, not L4_MANAGER) | ✓ | ✓ | — (shown disabled) |
+| Plant Head (L3_MANAGER under MANAGEMENT) | ✓ | ✓ | — (shown disabled) |
+| Everyone else | — | — | — |
+
+Resources: `PROC_MTS_CUSTOMER_PLAN` (VIEW, WRITE) and companion `PROC_MTS_CUSTOMER_PLAN_MAINTAIN` (WRITE). Each handler re-checks the page-selected company's grant.
+
+## Tests run (2026-10-14)
+
+| Check | Result |
+|---|---|
+| DB scenario tests on DEV (rolled back) | 13/13 pass; 0 rows left behind |
+| Deno unit tests (`mts_customer_plan.logic.test.ts`) | 7/7 pass |
+| `deno check` new handlers | clean |
+| `deno check` procurement routes | 96 errors before = 96 after (all pre-existing, none in new files) |
+| `eslint` page + touched frontend files | clean |
+| `vite build` | succeeds |
+| CI guards: route-ACL registry, company scope, company-scope write ACL, hardcoded role, resource-code domain, wrong company source, frontend payload, JSX no-undef, stock posting, approver chain, dependency manifest (strict) | all pass |
+| SKU resolver vs PROD (read-only, same SQL) | CMP003 33, CMP005 22, CMP011 4 unique SKUs; 0 ambiguous |
+
+## DEV state
+
+- Migration applied to DEV and history reconciled to version `20261014150000`; `NOTIFY pgrst` sent.
+- DEV migration history also contains `20261014120000_do_list_dispatch_date_filter`, which is not on this branch (someone else's work) — `migration-integrity-check` will report it as drift until that branch lands.
+
+## Blockers before anyone can click through the page
+
+1. **TX code approval** (proposal below). Until then the menu row and ACL grants are not provisioned, so the page is not in anyone's sidebar.
+2. **`erp_planning` must be added to Exposed schemas** in the Supabase Dashboard (DEV now, PROD later) — platform config, cannot be done by migration or MCP. Until then every `/mts-plan` API call returns a PostgREST schema error.
+3. Then run the provisioning SQL on DEV + ACL version bump/capture/snapshot (steps in the SQL header), and test with SCM, Stores and Plant Head users.
+4. PROD: migration + Exposed schemas + provisioning only with separate explicit owner approval.
+
+## TX code recommendation (not registered)
+
+PROD `PO` codes in use: PO01–PO14, PO16–PO19. **Recommend `PO21`.**
+- `PO15` is free but was "previously retired/skipped" (feasibility doc, PO19 tx-code note: "PO15 previously retired/skipped") — reusing it risks confusion with old references.
+- `PO20` is already earmarked in planning docs for "Credit Notes (Vendor)" (Returns & Claims slice).
+- `PO21` is the first code with no history and no reservation, and keeps the page inside the Procurement `PO` family where PO11 Procurement Planning already sits.
+
+## Not done (by instruction)
+
+Historical Google Sheet import (`LEGACY_GOOGLE_SHEETS` source value is reserved in the schema), Production / Dispatch rows in the report, requirement explosion, PROD writes, deployment, merge.

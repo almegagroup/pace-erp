@@ -83,6 +83,16 @@ import {
   updatePlanningSlocGroupHandler,
   upsertProcurementPlanningLinesHandler,
 } from "../_core/procurement/planning.handlers.ts";
+import {
+  getMtsPlanAccessHandler,
+  getMtsPlanEntryGridHandler,
+  getMtsPlanHistoryHandler,
+  getMtsPlanReportHandler,
+  getMtsPlanStrokeSettingsHandler,
+  saveMtsPlanAddonLinesHandler,
+  saveMtsPlanBaseLinesHandler,
+  saveMtsPlanStrokeSettingHandler,
+} from "../_core/procurement/mts_customer_plan.handlers.ts";
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
 import {
   createReportLayoutHandler,
@@ -732,6 +742,22 @@ export async function dispatchProcurementRoutes(
       return await closeProcurementPlanningMonthHandler(req, ctx);
     case "GET:/api/procurement/planning/history":
       return await getProcurementPlanningHistoryHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/access":
+      return await getMtsPlanAccessHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/entry-grid":
+      return await getMtsPlanEntryGridHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/history":
+      return await getMtsPlanHistoryHandler(req, ctx);
+    case "POST:/api/procurement/mts-plan/base-lines":
+      return await saveMtsPlanBaseLinesHandler(req, ctx);
+    case "POST:/api/procurement/mts-plan/addon-lines":
+      return await saveMtsPlanAddonLinesHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/stroke-settings":
+      return await getMtsPlanStrokeSettingsHandler(req, ctx);
+    case "POST:/api/procurement/mts-plan/stroke-settings":
+      return await saveMtsPlanStrokeSettingHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/report":
+      return await getMtsPlanReportHandler(req, ctx);
     case "GET:/api/procurement/document-flow":
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":
