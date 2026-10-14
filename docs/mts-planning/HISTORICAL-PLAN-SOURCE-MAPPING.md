@@ -18,7 +18,7 @@ All three sheets contain `PLAN` and `PLAN/PRD`.
 
 ## Proposed extraction & reconciliation contract (not yet implemented)
 1. Read `PLAN/PRD` rows with column C exactly `PLAN`; resolve SKU from H/I against existing company-appropriate SKU masters, preserving exact strings including leading zeros; J = Prodshade reference; K = pack, L = description. Flag H/I mismatch and duplicate SKU keys rather than guessing. Preserve original cell provenance (Drive ID, tab, row, month column, extraction timestamp, raw quantity).
-2. Historical window at most 2024-01 through **2026-09 inclusive**, and only months with real source entries. Per B01 import as historical `FINAL` with `source=LEGACY_GOOGLE_SHEETS`; do not synthesise historical Rolling or overwrite Oct 2026 onward ERP plans. Distinguish true `0` from source `blank`.
+2. Historical window at most 2024-01 through **2026-10 inclusive**, and only months with real source entries. Per B01 import as historical `FINAL` with `source=LEGACY_GOOGLE_SHEETS`; do not synthesise historical Rolling or overwrite Oct 2026 onward ERP plans. Distinguish true `0` from source `blank`.
 3. `PRD` rows are **historical production actuals**, not customer-plan quantities; stage separately for plan-vs-production calibration/history. Do NOT insert PRD values in customer-plan table, do NOT replace posted ERP actuals and do NOT double count in overlap periods.
 4. Verify quantities' UoM in source (values appear possibly MT; **not confirmed**), SKU identity (H vs I sometimes differ in leading zeros), Prodshade linkage and multi-row SUMs before any import.
 5. Validate against `PLAN` totals by company/month/Prodshade, recording discrepancies and unmapped rows; avoid accidental aggregation across Segment/Area and zero/blank ambiguity.
@@ -26,3 +26,5 @@ All three sheets contain `PLAN` and `PLAN/PRD`.
 
 ## No-write gate
 This document is source discovery only. No Supabase insert/update, migration, Google Sheet edit, deployment or PR merge is authorised.
+
+**Import sequencing (owner 2026-10-14):** First implement/approve the three-tab Plan page. Only afterwards stage and validate/import legacy sources. Source may have Jan 2027 column; include future month only if a real Plan cell is populated. Production/dispatch source integrations remain out of scope for this first page build.
