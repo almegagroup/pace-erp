@@ -66,7 +66,7 @@ export default function EditTransporterDetailsDrawer({ companyId, onClose, onSav
         lr_number: lrNumber || undefined,
         lr_date: lrDate || undefined,
         truck_number: truckNumber || undefined,
-        dispatch_date: dispatchDate || undefined,
+        dispatch_date: found.dispatch_date_locked ? undefined : (dispatchDate || undefined),
       });
       setNotice("Dispatch details updated.");
       onSaved?.();
@@ -123,7 +123,8 @@ export default function EditTransporterDetailsDrawer({ companyId, onClose, onSav
               <input value={truckNumber} onChange={(event) => setTruckNumber(event.target.value)} className="h-8 border border-slate-300 bg-white px-2" />
             </label>
             <label className="grid gap-1 text-xs text-slate-600">Dispatch Date
-              <input type="date" value={dispatchDate} onChange={(event) => setDispatchDate(event.target.value)} className="h-8 border border-slate-300 bg-white px-2" />
+              <input type="date" value={dispatchDate} disabled={found.dispatch_date_locked} onChange={(event) => setDispatchDate(event.target.value)} className="h-8 border border-slate-300 bg-white px-2 disabled:bg-slate-100 disabled:text-slate-500" />
+              {found.dispatch_date_locked ? <span className="text-[11px] text-amber-800">PGI is already posted for this DD DO — Dispatch Date is locked.</span> : null}
             </label>
             <button type="button" disabled={saving} onClick={() => void handleSave()} className="mt-1 border border-sky-700 bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-950 disabled:opacity-50">
               {saving ? "Saving…" : "Save"}

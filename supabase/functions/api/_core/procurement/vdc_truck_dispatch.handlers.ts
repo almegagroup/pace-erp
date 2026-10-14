@@ -7,6 +7,7 @@
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { computeInvoiceGroups } from "./do_unified.handlers.ts";
@@ -45,44 +46,62 @@ export async function listVdcTruckDispatchPendingHandler(req: Request, ctx: Proc
     const companyId = text(new URL(req.url).searchParams.get("company_id"));
     if (!companyId) return fail(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required.");
     const denied = await assertAccess(req, ctx, companyId, "VIEW"); if (denied) return denied;
-    const { data: invoices, error: invoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
-      .select("id, dc_id, invoice_number").eq("company_id", companyId).eq("status", "DRAFT");
-    if (invoiceError) return fail(req, ctx, "VDC_UPLOAD_INVOICE_FETCH_FAILED", 500, "Unable to load pending VDC invoices.");
-    const invoiceRows = (invoices ?? []) as JsonRecord[];
+    // Paged: PostgREST caps one response at 1000 rows.
+    const invoiceRows: JsonRecord[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+        .select("id, dc_id, invoice_number").eq("company_id", companyId).eq("status", "DRAFT").order("id").range(from, from + 999);
+      if (error) return fail(req, ctx, "VDC_UPLOAD_INVOICE_FETCH_FAILED", 500, "Unable to load pending VDC invoices.");
+      invoiceRows.push(...((data ?? []) as JsonRecord[]));
+      if ((data ?? []).length < 1000) break;
+    }
     const dcIds = [...new Set(invoiceRows.map((row) => text(row.dc_id)).filter(Boolean))];
-    const { data: docs, error: docError } = dcIds.length ? await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .select("id, dc_number, lr_date, vehicle_number, dispatch_date, pgi_deferred, is_bulk_uploaded, status").in("id", dcIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (docError) return fail(req, ctx, "VDC_UPLOAD_DO_FETCH_FAILED", 500, "Unable to load pending VDC delivery orders.");
-    const docById = new Map(((docs ?? []) as JsonRecord[])
+    let docs: JsonRecord[];
+    try {
+      docs = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .select("id, dc_number, lr_date, vehicle_number, dispatch_date, pgi_deferred, is_bulk_uploaded, status").in("id", chunk));
+    } catch { return fail(req, ctx, "VDC_UPLOAD_DO_FETCH_FAILED", 500, "Unable to load pending VDC delivery orders."); }
+    // DD (VDC) only: a normal DO never reaches this deferred-PGI state.
+    const docById = new Map(docs
       .filter((row) => row.pgi_deferred === true && upper(row.status) === "INVOICED")
       .map((row) => [text(row.id), row]));
-    const { data: dcLines, error: dcLineError } = docById.size ? await serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
-      .select("id, so_map_allocation_id").in("dc_id", [...docById.keys()])
-      : { data: [] as JsonRecord[], error: null };
-    if (dcLineError) return fail(req, ctx, "VDC_UPLOAD_DO_LINE_FETCH_FAILED", 500, "Unable to load VDC delivery-order lines.");
-    const allocationIds = [...new Set(((dcLines ?? []) as JsonRecord[]).map((line) => text(line.so_map_allocation_id)).filter(Boolean))];
-    const { data: allocations, error: allocationError } = allocationIds.length ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
-      .select("id, map_group_id").in("id", allocationIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (allocationError) return fail(req, ctx, "VDC_UPLOAD_MAP_FETCH_FAILED", 500, "Unable to load VDC FO references.");
-    const allocationById = new Map(((allocations ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
-    const groupIds = [...new Set(((allocations ?? []) as JsonRecord[]).map((row) => text(row.map_group_id)).filter(Boolean))];
-    const { data: mapGroups, error: mapGroupError } = groupIds.length ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
-      .select("id, external_fo_number, revised_external_fo_number").in("id", groupIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (mapGroupError) return fail(req, ctx, "VDC_UPLOAD_FO_FETCH_FAILED", 500, "Unable to load VDC FO numbers.");
-    const mapGroupById = new Map(((mapGroups ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
-    const externalFoByDcLine = new Map(((dcLines ?? []) as JsonRecord[]).map((line) => {
+    let dcLines: JsonRecord[];
+    try {
+      dcLines = await fetchInChunks<JsonRecord>([...docById.keys()], (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+        .select("id, so_map_allocation_id").in("dc_id", chunk));
+    } catch { return fail(req, ctx, "VDC_UPLOAD_DO_LINE_FETCH_FAILED", 500, "Unable to load VDC delivery-order lines."); }
+    const allocationIds = [...new Set(dcLines.map((line) => text(line.so_map_allocation_id)).filter(Boolean))];
+    let allocations: JsonRecord[];
+    try {
+      allocations = await fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+        .select("id, map_group_id").in("id", chunk));
+    } catch { return fail(req, ctx, "VDC_UPLOAD_MAP_FETCH_FAILED", 500, "Unable to load VDC FO references."); }
+    const allocationById = new Map(allocations.map((row) => [text(row.id), row]));
+    const groupIds = [...new Set(allocations.map((row) => text(row.map_group_id)).filter(Boolean))];
+    let mapGroups: JsonRecord[];
+    try {
+      mapGroups = await fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+        .select("id, external_fo_number, revised_external_fo_number").in("id", chunk));
+    } catch { return fail(req, ctx, "VDC_UPLOAD_FO_FETCH_FAILED", 500, "Unable to load VDC FO numbers."); }
+    const mapGroupById = new Map(mapGroups.map((row) => [text(row.id), row]));
+    const externalFoByDcLine = new Map(dcLines.map((line) => {
       const allocation = allocationById.get(text(line.so_map_allocation_id));
       const mapGroup = allocation ? mapGroupById.get(text(allocation.map_group_id)) : undefined;
       return [text(line.id), text(mapGroup?.revised_external_fo_number) || text(mapGroup?.external_fo_number) || null];
     }));
+    const pendingInvoices = invoiceRows.filter((invoice) => docById.has(text(invoice.dc_id)));
+    // INDEPENDENT read-only grouping per DO; 10 at a time keeps a few hundred
+    // pending DOs well inside the request budget.
+    const groupsByInvoice = new Map<string, Awaited<ReturnType<typeof computeInvoiceGroups>>["groups"]>();
+    for (let index = 0; index < pendingInvoices.length; index += 10) {
+      const slice = pendingInvoices.slice(index, index + 10);
+      const computed = await Promise.all(slice.map((invoice) => computeInvoiceGroups(text(invoice.dc_id))));
+      slice.forEach((invoice, offset) => groupsByInvoice.set(text(invoice.id), computed[offset].groups));
+    }
     const rows: JsonRecord[] = [];
-    for (const invoice of invoiceRows) {
-      const dcId = text(invoice.dc_id); const dc = docById.get(dcId); if (!dc) continue;
-      const { groups } = await computeInvoiceGroups(dcId);
-      for (const group of groups) for (const line of group.lines) rows.push({
+    for (const invoice of pendingInvoices) {
+      const dcId = text(invoice.dc_id); const dc = docById.get(dcId)!;
+      for (const group of groupsByInvoice.get(text(invoice.id)) ?? []) for (const line of group.lines) rows.push({
         invoice_id: invoice.id, invoice_number: invoice.invoice_number, dc_id: dcId, dc_number: dc.dc_number,
         so_number: group.document_number, fo_number: externalFoByDcLine.get(text(line.dc_line_id)) || group.fo_number || null,
         ship_to: group.ship_to.name, sku: line.document_name || line.material_display || line.material_id,
@@ -91,17 +110,81 @@ export async function listVdcTruckDispatchPendingHandler(req: Request, ctx: Proc
       });
     }
     const storageLocationIds = [...new Set(rows.map((row) => text(row.storage_location_id)).filter(Boolean))];
-    const { data: storageLocations, error: storageLocationError } = storageLocationIds.length
-      ? await serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", storageLocationIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (storageLocationError) return fail(req, ctx, "VDC_UPLOAD_STORAGE_LOCATION_FETCH_FAILED", 500, "Unable to load Storage Locations.");
-    const storageById = new Map(((storageLocations ?? []) as JsonRecord[]).map((row) => [text(row.id), row]));
+    let storageLocations: JsonRecord[];
+    try {
+      storageLocations = await fetchInChunks<JsonRecord>(storageLocationIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("storage_location_master")
+        .select("id, code, name").in("id", chunk));
+    } catch { return fail(req, ctx, "VDC_UPLOAD_STORAGE_LOCATION_FETCH_FAILED", 500, "Unable to load Storage Locations."); }
+    const storageById = new Map(storageLocations.map((row) => [text(row.id), row]));
     for (const row of rows) {
       const storage = storageById.get(text(row.storage_location_id));
       row.storage_location = storage ? [text(storage.code), text(storage.name)].filter(Boolean).join(" — ") : null;
     }
     return okResponse({ items: rows }, ctx.request_id, req);
   } catch (error) { const code = error instanceof Error ? error.message : "VDC_UPLOAD_PENDING_FAILED"; return fail(req, ctx, code, 500, code); }
+}
+
+/**
+ * Upload guard: for every FO / DO Number in the uploaded sheet, return the
+ * Delivery Orders it resolves to and their state, so the drawer can tell the
+ * user exactly why a row was not loaded (already dispatched, invoice not made
+ * yet, not a DD DO, cancelled, not found) instead of silently ignoring it.
+ */
+export async function checkVdcTruckDispatchUploadHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const payload = await body(req);
+    const companyId = text(payload.company_id);
+    if (!companyId) return fail(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required.");
+    const denied = await assertAccess(req, ctx, companyId, "VIEW"); if (denied) return denied;
+    const foNumbers: string[] = [...new Set((Array.isArray(payload.fo_numbers) ? payload.fo_numbers as unknown[] : []).map((value) => text(value)).filter(Boolean))];
+    const dcNumbers: string[] = [...new Set((Array.isArray(payload.dc_numbers) ? payload.dc_numbers as unknown[] : []).map((value) => text(value)).filter(Boolean))];
+
+    const groupSelect = "id, external_fo_number, revised_external_fo_number, so:so_id(company_id)";
+    const [byOriginal, byRevised, directDocs] = await Promise.all([
+      fetchInChunks<JsonRecord>(foNumbers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+        .select(groupSelect).eq("status", "ACTIVE").in("external_fo_number", chunk)),
+      fetchInChunks<JsonRecord>(foNumbers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+        .select(groupSelect).eq("status", "ACTIVE").in("revised_external_fo_number", chunk)),
+      fetchInChunks<JsonRecord>(dcNumbers, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .select("id, dc_number").eq("selling_company_id", companyId).in("dc_number", chunk)),
+    ]);
+    const groups = new Map<string, JsonRecord>();
+    for (const group of [...byOriginal, ...byRevised]) {
+      if (text((group.so as JsonRecord | null)?.company_id) === companyId) groups.set(text(group.id), group);
+    }
+    const allocations = await fetchInChunks<JsonRecord>([...groups.keys()], (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+      .select("id, map_group_id").in("map_group_id", chunk));
+    const groupByAllocation = new Map(allocations.map((row) => [text(row.id), text(row.map_group_id)]));
+    const lines = await fetchInChunks<JsonRecord>([...groupByAllocation.keys()], (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
+      .select("dc_id, so_map_allocation_id").in("so_map_allocation_id", chunk));
+    const dcIds = [...new Set([...lines.map((line) => text(line.dc_id)), ...directDocs.map((doc) => text(doc.id))].filter(Boolean))];
+    const docs = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .select("id, dc_number, status, pgi_deferred, vehicle_number, dispatch_date, selling_company_id").in("id", chunk));
+    const docById = new Map(docs.filter((doc) => text(doc.selling_company_id) === companyId).map((doc) => [text(doc.id), doc]));
+    const view = (doc: JsonRecord) => ({
+      dc_id: text(doc.id), dc_number: text(doc.dc_number), status: upper(doc.status), dd_flag: doc.pgi_deferred === true,
+      truck_number: text(doc.vehicle_number) || null, dispatch_date: text(doc.dispatch_date) || null,
+    });
+
+    const foDocs = new Map<string, Map<string, JsonRecord>>();
+    for (const line of lines) {
+      const group = groups.get(groupByAllocation.get(text(line.so_map_allocation_id)) ?? "");
+      const doc = docById.get(text(line.dc_id));
+      if (!group || !doc) continue;
+      for (const fo of [text(group.external_fo_number), text(group.revised_external_fo_number)].filter(Boolean)) {
+        const bucket = foDocs.get(fo.toUpperCase()) ?? new Map<string, JsonRecord>();
+        bucket.set(text(doc.id), view(doc));
+        foDocs.set(fo.toUpperCase(), bucket);
+      }
+    }
+    const fo_results = foNumbers.map((fo) => ({ fo_number: fo, delivery_orders: [...(foDocs.get(fo.toUpperCase())?.values() ?? [])] }));
+    const do_results = dcNumbers.map((dcNumber) => {
+      const doc = directDocs.find((row) => text(row.dc_number) === dcNumber);
+      const full = doc ? docById.get(text(doc.id)) : undefined;
+      return { dc_number: dcNumber, delivery_orders: full ? [view(full)] : [] };
+    });
+    return okResponse({ fo_results, do_results }, ctx.request_id, req);
+  } catch (error) { const code = error instanceof Error ? error.message : "VDC_UPLOAD_CHECK_FAILED"; return fail(req, ctx, code, 500, code); }
 }
 
 /**
@@ -118,17 +201,27 @@ export async function postVdcTruckDispatchUploadHandler(req: Request, ctx: Procu
     for (const row of requested) { const dcId = text(row.dc_id); if (dcId) byDcId.set(dcId, row); }
     if (!byDcId.size) return fail(req, ctx, "VDC_UPLOAD_ROWS_REQUIRED", 400, "At least one completed Truck and Dispatch Date row is required.");
     const dcIds = [...byDcId.keys()];
-    const { data: docs, error: docError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
-      .select("id, selling_company_id, status, pgi_deferred, is_bulk_uploaded, lr_date").in("id", dcIds);
-    if (docError || (docs ?? []).length !== dcIds.length) return fail(req, ctx, "VDC_UPLOAD_DO_NOT_FOUND", 404, "One or more pending VDC delivery orders no longer exist.");
+    let docs: JsonRecord[];
+    try {
+      docs = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .select("id, selling_company_id, status, pgi_deferred, is_bulk_uploaded, lr_date, dispatch_date").in("id", chunk));
+    } catch { return fail(req, ctx, "VDC_UPLOAD_DO_NOT_FOUND", 404, "One or more pending VDC delivery orders no longer exist."); }
+    if (docs.length !== dcIds.length) return fail(req, ctx, "VDC_UPLOAD_DO_NOT_FOUND", 404, "One or more pending VDC delivery orders no longer exist.");
 
     const results: JsonRecord[] = [];
-    for (const dc of (docs ?? []) as JsonRecord[]) {
+    // DEPENDENT: each DO's PGI stock check must see the previous DO's issue.
+    for (const dc of docs) {
       const dcId = text(dc.id); const row = byDcId.get(dcId)!; const companyId = text(dc.selling_company_id);
       const denied = await assertAccess(req, ctx, companyId, "EDIT"); if (denied) return denied;
       const truckNumber = text(row.truck_number); const dispatchDate = text(row.dispatch_date);
-      if (dc.pgi_deferred !== true || upper(dc.status) !== "INVOICED") {
-        results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_DO_NOT_PENDING", message: "Delivery order is not a pending DD Invoice-only row." }); continue;
+      if (dc.pgi_deferred !== true) {
+        results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_NOT_DD", message: "Truck & Dispatch upload is only for DD delivery orders." }); continue;
+      }
+      if (upper(dc.status) === "DISPATCHED") {
+        results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_ALREADY_DISPATCHED", message: `Already dispatched on ${text(dc.dispatch_date) || "an earlier date"}; the posted Dispatch Date cannot change.` }); continue;
+      }
+      if (upper(dc.status) !== "INVOICED") {
+        results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_DO_NOT_PENDING", message: "Invoice is not made yet for this DO — post it in SO02 first." }); continue;
       }
       if (truckNumber.length < 4) { results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_TRUCK_INVALID", message: "Truck Number must contain at least 4 characters." }); continue; }
       if (!validDispatchDate(text(dc.lr_date), dispatchDate)) { results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_DISPATCH_DATE_INVALID", message: "Dispatch Date must be on/after LR Date and within the allowed posting window." }); continue; }

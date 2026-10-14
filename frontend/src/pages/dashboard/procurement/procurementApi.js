@@ -1274,6 +1274,9 @@ export function listVdcTruckDispatchPending(companyId) {
 export function postVdcTruckDispatch(rows) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post", { rows });
 }
+export function checkVdcTruckDispatchUpload(companyId, foNumbers, dcNumbers) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check", { company_id: companyId, fo_numbers: foNumbers, dc_numbers: dcNumbers });
+}
 
 // §133.13 -- IBN-driven multi-invoice preview + post, per DO.
 export function previewInvoiceGroups(dcId) {

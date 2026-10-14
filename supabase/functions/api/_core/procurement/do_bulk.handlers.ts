@@ -977,6 +977,8 @@ export async function findDoByFoNumberHandler(req: Request, ctx: ProcurementHand
       lr_date: dcRow.lr_date,
       truck_number: dcRow.vehicle_number,
       dispatch_date: dcRow.dispatch_date,
+      dd_flag: dcRow.pgi_deferred === true,
+      dispatch_date_locked: dcRow.pgi_deferred === true && toUpperTrimmedString(dcRow.status) === "DISPATCHED",
     }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_BULK_FO_LOOKUP_FAILED";
@@ -1002,7 +1004,7 @@ export async function editTransporterDetailsHandler(req: Request, ctx: Procureme
     }
 
     const { data: dc, error: dcError } = await serviceRoleClient
-      .schema("erp_procurement").from("delivery_challan").select("id, status, selling_company_id, lr_date").eq("id", dcId).maybeSingle();
+      .schema("erp_procurement").from("delivery_challan").select("id, status, selling_company_id, lr_date, dispatch_date, pgi_deferred").eq("id", dcId).maybeSingle();
     if (dcError || !dc) return doBulkErrorResponse(req, ctx, "DO_BULK_DO_NOT_FOUND", 404, "Delivery order not found.");
     const companyId = toTrimmedString((dc as JsonRecord).selling_company_id);
     try {
@@ -1022,6 +1024,12 @@ export async function editTransporterDetailsHandler(req: Request, ctx: Procureme
       return doBulkErrorResponse(req, ctx, "DO_BULK_TRUCK_INVALID", 400, "Truck Number must contain at least 4 characters.");
     }
     const dispatchDate = toTrimmedString(body.dispatch_date);
+    // DD DO: once PGI is posted (DISPATCHED) the stock movement already carries
+    // this Dispatch Date, so it can no longer change.
+    if (dispatchDate && (dc as JsonRecord).pgi_deferred === true && toUpperTrimmedString((dc as JsonRecord).status) === "DISPATCHED"
+      && dispatchDate !== toTrimmedString((dc as JsonRecord).dispatch_date).slice(0, 10)) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_DISPATCH_DATE_LOCKED", 400, "PGI is already posted for this DO; its Dispatch Date cannot change.");
+    }
     if (dispatchDate) {
       const effectiveLrDate = lrDate || toTrimmedString((dc as JsonRecord).lr_date);
       if (!isIsoDate(dispatchDate) || !isIsoDate(effectiveLrDate) || dispatchDate < effectiveLrDate || dispatchDate > todayIsoInKolkata()) {

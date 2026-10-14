@@ -11,7 +11,7 @@ export const TEMPLATE_HEADERS = [
   "Inbound Number", "Truck Number", "Dispatch Date",
 ];
 
-function toIsoDate(value) {
+export function toIsoDate(value) {
   if (!value) return "";
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   // ExcelJS may expose a date-formatted cell as its numeric serial instead

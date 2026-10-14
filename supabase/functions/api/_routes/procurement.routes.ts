@@ -434,7 +434,7 @@ import {
   listBulkPostingQueueHandler,
 } from "../_core/procurement/do_bulk_post.handlers.ts";
 import { cancelVdcDeliveryOrderHandler, completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "../_core/procurement/vdc_invoice.handlers.ts";
-import { listVdcTruckDispatchPendingHandler, postVdcTruckDispatchUploadHandler } from "../_core/procurement/vdc_truck_dispatch.handlers.ts";
+import { listVdcTruckDispatchPendingHandler, postVdcTruckDispatchUploadHandler, checkVdcTruckDispatchUploadHandler } from "../_core/procurement/vdc_truck_dispatch.handlers.ts";
 import {
   cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
@@ -932,6 +932,8 @@ export async function dispatchProcurementRoutes(
       return await listVdcTruckDispatchPendingHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post":
       return await postVdcTruckDispatchUploadHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check":
+      return await checkVdcTruckDispatchUploadHandler(req, ctx);
     case "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":
       return await findDoByFoNumberHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter":

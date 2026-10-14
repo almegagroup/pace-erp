@@ -282,6 +282,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/delivery-orders-v2/bulk/posting/corrections": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
   "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },
   "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+  "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
