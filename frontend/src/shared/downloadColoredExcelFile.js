@@ -37,6 +37,10 @@ function pxWidthToExcelWidth(width) {
  *   colored signal in one spot (e.g. two status dots) that a single
  *   getCellColor can't represent. Takes precedence over getCellValue/
  *   getCellColor for that cell when it returns a non-empty array.
+ * @param {Array<[string, (string|number)]>} [params.preambleRows] — optional
+ *   "Label: value" lines written above the column header (e.g. Company,
+ *   Month, Export Date), followed by one blank row. Omit for the plain
+ *   header-on-row-1 layout every existing caller uses.
  */
 export async function downloadColoredExcelFile({
   fileName,
@@ -47,6 +51,7 @@ export async function downloadColoredExcelFile({
   getCellColor,
   getRowFillArgb,
   getCellRichText,
+  preambleRows,
 }) {
   const safeColumns = Array.isArray(columns) ? columns : [];
   const safeRows = Array.isArray(rows) ? rows : [];
@@ -113,6 +118,14 @@ export async function downloadColoredExcelFile({
       }
     });
   });
+
+  const preamble = Array.isArray(preambleRows) ? preambleRows.filter((entry) => Array.isArray(entry)) : [];
+  if (preamble.length > 0) {
+    // Shift the header + data down; ExcelJS moves the cells with their styles.
+    sheet.spliceRows(1, 0, ...preamble.map((entry) => [entry[0], entry[1] ?? ""]), []);
+    preamble.forEach((_, index) => { sheet.getRow(index + 1).getCell(1).font = { bold: true }; });
+    sheet.views = [{ state: "frozen", ySplit: preamble.length + 2 }];
+  }
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
