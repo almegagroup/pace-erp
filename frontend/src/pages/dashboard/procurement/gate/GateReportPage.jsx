@@ -12,6 +12,8 @@ import { getGateReport } from "../procurementApi.js";
 const GE_TYPE_OPTIONS = ["INBOUND_PO", "INBOUND_STO"];
 const STATUS_OPTIONS = ["OPEN", "GRN_POSTED", "CANCELLED", "PRUNED"];
 
+const vendorLabel = (r) => (r.vendor_name ? `${r.vendor_code || ""} — ${r.vendor_name}`.replace(/^ — /, "") : "");
+
 // Excel export columns: same order and headings as the grid, raw values (so
 // quantities, weights and day counts stay numbers in Excel).
 const num = (value) => (value == null || value === "" || !Number.isFinite(Number(value)) ? "" : Number(value));
@@ -23,7 +25,7 @@ const EXPORT_COLUMNS = [
   { key: "vehicle_number", label: "Vehicle No.", width: "110px" },
   { key: "ge_person_name", label: "GE Person Name", width: "140px" },
   { key: "gex_person_name", label: "GEX Person Name", width: "140px" },
-  { key: "vendor", label: "Vendor", width: "220px", value: (r) => (r.vendor_name ? `${r.vendor_code || ""} — ${r.vendor_name}`.replace(/^ — /, "") : "") },
+  { key: "vendor", label: "Vendor", width: "220px", value: (r) => vendorLabel(r) },
   { key: "material_code", label: "Material Code", width: "120px" },
   { key: "material_name", label: "Material Name", width: "260px" },
   { key: "ge_qty", label: "Qty", width: "90px", align: "right", numFmt: "#,##0.###", value: (r) => num(r.ge_qty) },
@@ -60,6 +62,8 @@ export default function GateReportPage() {
   const [search, setSearch] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+  // Rows left after the grid's own column filters (funnel in each header).
+  const [gridRows, setGridRows] = useState([]);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
 
   const params = useMemo(
@@ -94,7 +98,7 @@ export default function GateReportPage() {
   // Exports exactly the rows on screen (criteria + search) with the report
   // context and the export date-time above the header.
   async function handleExport() {
-    if (rows.length === 0) return;
+    if (gridRows.length === 0) return;
     setExporting(true);
     setExportError("");
     try {
@@ -108,7 +112,7 @@ export default function GateReportPage() {
         fileName: `gate_entry_report_${companyCode}_exported_${fileStamp}.xlsx`,
         sheetName: "Gate Entry Report",
         columns: EXPORT_COLUMNS,
-        rows,
+        rows: gridRows,
         preambleRows: [
           ["Report", "Gate Entry Report (ZGATE)"],
           ["Company", company ? [company.company_code, company.company_name].filter(Boolean).join(" — ") : "-"],
@@ -116,7 +120,8 @@ export default function GateReportPage() {
           ["GE Type", geType || "All"],
           ["Status", status || "All"],
           ...(search.trim() ? [["Search", search.trim()]] : []),
-          ["Rows", rows.length],
+          ...(gridRows.length !== rows.length ? [["Column Filters", "Applied (only the filtered rows are exported)"]] : []),
+          ["Rows", gridRows.length],
           ["Export Date", `${exportStamp} IST`],
         ],
         getCellValue: (row, column) => (typeof column.value === "function" ? column.value(row) : (row?.[column.key] ?? "")),
@@ -157,7 +162,7 @@ export default function GateReportPage() {
           label: exporting ? "Exporting…" : "Export Excel",
           tone: "neutral",
           onClick: () => void handleExport(),
-          disabled: exporting || rows.length === 0,
+          disabled: exporting || gridRows.length === 0,
         },
       ]}
       notices={[
@@ -207,31 +212,41 @@ export default function GateReportPage() {
       }}
       listSection={{
         eyebrow: "Report",
-        title: loading ? "Loading…" : `${rows.length} row${rows.length === 1 ? "" : "s"}${allRows.length !== rows.length ? ` (filtered from ${allRows.length})` : ""}`,
+        title: loading ? "Loading…" : `${gridRows.length} row${gridRows.length === 1 ? "" : "s"}${allRows.length !== gridRows.length ? ` (filtered from ${allRows.length})` : ""}`,
         children: (
           <ErpDenseGrid
+            // Excel-style: arrow-key cell navigation, range select + Ctrl+C,
+            // and a per-column AutoFilter (funnel in each header).
+            rangeSelect
+            columnFilter
+            virtualize
+            stickyFirstColumn
+            maxHeight="calc(100vh - 330px)"
+            onFilteredRowsChange={setGridRows}
             columns={[
               { key: "ge_number",       label: "GE Number",     width: "120px" },
-              { key: "company_code",    label: "Company",       width: "90px",  render: (r) => r.company_code || "—" },
-              { key: "vehicle_number",  label: "Vehicle No.",   width: "110px", render: (r) => r.vehicle_number || "—" },
-              { key: "ge_person_name",  label: "GE Person Name",  width: "140px", render: (r) => r.ge_person_name || "—" },
-              { key: "gex_person_name", label: "GEX Person Name", width: "140px", render: (r) => r.gex_person_name || "—" },
-              { key: "vendor",          label: "Vendor",        width: "180px", render: (r) => r.vendor_name ? `${r.vendor_code || ""} — ${r.vendor_name}`.replace(/^ — /, "") : "—" },
-              { key: "material_code",   label: "Material Code", width: "120px", render: (r) => r.material_code || "—" },
-              { key: "material_name",   label: "Material Name", render: (r) => r.material_name || "—" },
-              { key: "ge_qty",          label: "Qty",           width: "90px",  render: (r) => r.ge_qty != null ? `${Number(r.ge_qty).toFixed(3)} ${r.uom_code || ""}`.trim() : "—" },
-              { key: "grn_number",      label: "GRN No.",       width: "110px", render: (r) => r.grn_number || "—" },
-              { key: "invoice_number",  label: "Invoice No.",   width: "120px", render: (r) => r.invoice_number || "—" },
-              { key: "gex_number",      label: "GEX No.",       width: "110px", render: (r) => r.gex_number || "—" },
-              { key: "ge_date",         label: "GE Date",       width: "100px" },
-              { key: "grn_date",        label: "GRN Date",      width: "100px", render: (r) => r.grn_date || "—" },
-              { key: "gex_date",        label: "GEX Date",      width: "100px", render: (r) => r.gex_date || "—" },
-              { key: "ge_remarks",      label: "Remarks",       width: "140px", render: (r) => r.gex_remarks || r.ge_remarks || "—" },
-              { key: "gross_weight",    label: "Gross Wt",      width: "90px",  render: (r) => r.gross_weight ?? "—" },
-              { key: "tare_weight",     label: "Tare Wt",       width: "90px",  render: (r) => r.tare_weight ?? "—" },
-              { key: "net_weight_calc", label: "Net Wt (Calc)", width: "100px", render: (r) => r.net_weight_calculated ?? "—" },
-              { key: "days_gex",        label: "GEX−GE (days)", width: "110px", render: (r) => daysBadge(r.days_ge_to_gex) },
-              { key: "days_grn",        label: "GRN−GE (days)", width: "110px", render: (r) => daysBadge(r.days_ge_to_grn) },
+              { key: "company_code",    label: "Company",       width: "90px",  render: (r) => r.company_code || "—", filterValue: (r) => r.company_code || "—" },
+              { key: "ge_type",         label: "GE Type",       width: "110px", render: (r) => r.ge_type || "—", filterValue: (r) => r.ge_type || "—" },
+              { key: "ge_status",       label: "Status",        width: "100px", render: (r) => r.ge_status || "—", filterValue: (r) => r.ge_status || "—" },
+              { key: "vehicle_number",  label: "Vehicle No.",   width: "110px", render: (r) => r.vehicle_number || "—", filterValue: (r) => r.vehicle_number || "—" },
+              { key: "ge_person_name",  label: "GE Person Name",  width: "140px", render: (r) => r.ge_person_name || "—", filterValue: (r) => r.ge_person_name || "—" },
+              { key: "gex_person_name", label: "GEX Person Name", width: "140px", render: (r) => r.gex_person_name || "—", filterValue: (r) => r.gex_person_name || "—" },
+              { key: "vendor",          label: "Vendor",        width: "180px", render: (r) => vendorLabel(r) || "—", copyValue: (r) => vendorLabel(r), filterValue: (r) => vendorLabel(r) || "—" },
+              { key: "material_code",   label: "Material Code", width: "120px", render: (r) => r.material_code || "—", filterValue: (r) => r.material_code || "—" },
+              { key: "material_name",   label: "Material Name", width: "240px", render: (r) => r.material_name || "—", filterValue: (r) => r.material_name || "—" },
+              { key: "ge_qty",          label: "Qty",           width: "90px",  align: "right", render: (r) => r.ge_qty != null ? `${Number(r.ge_qty).toFixed(3)} ${r.uom_code || ""}`.trim() : "—", copyValue: (r) => r.ge_qty ?? "", filterValue: (r) => (r.ge_qty != null ? String(Number(r.ge_qty)) : "—") },
+              { key: "grn_number",      label: "GRN No.",       width: "110px", render: (r) => r.grn_number || "—", filterValue: (r) => r.grn_number || "—" },
+              { key: "invoice_number",  label: "Invoice No.",   width: "120px", render: (r) => r.invoice_number || "—", filterValue: (r) => r.invoice_number || "—" },
+              { key: "gex_number",      label: "GEX No.",       width: "110px", render: (r) => r.gex_number || "—", filterValue: (r) => r.gex_number || "—" },
+              { key: "ge_date",         label: "GE Date",       width: "100px", filterType: "date" },
+              { key: "grn_date",        label: "GRN Date",      width: "100px", render: (r) => r.grn_date || "—", filterValue: (r) => r.grn_date || "—", filterType: "date" },
+              { key: "gex_date",        label: "GEX Date",      width: "100px", render: (r) => r.gex_date || "—", filterValue: (r) => r.gex_date || "—", filterType: "date" },
+              { key: "ge_remarks",      label: "Remarks",       width: "140px", render: (r) => r.gex_remarks || r.ge_remarks || "—", copyValue: (r) => r.gex_remarks || r.ge_remarks || "", filterValue: (r) => r.gex_remarks || r.ge_remarks || "—" },
+              { key: "gross_weight",    label: "Gross Wt",      width: "90px",  align: "right", render: (r) => r.gross_weight ?? "—", filterValue: (r) => (r.gross_weight == null ? "—" : String(r.gross_weight)) },
+              { key: "tare_weight",     label: "Tare Wt",       width: "90px",  align: "right", render: (r) => r.tare_weight ?? "—", filterValue: (r) => (r.tare_weight == null ? "—" : String(r.tare_weight)) },
+              { key: "net_weight_calc", label: "Net Wt (Calc)", width: "100px", align: "right", render: (r) => r.net_weight_calculated ?? "—", copyValue: (r) => r.net_weight_calculated ?? "", filterValue: (r) => (r.net_weight_calculated == null ? "—" : String(r.net_weight_calculated)) },
+              { key: "days_gex",        label: "GEX−GE (days)", width: "110px", align: "right", render: (r) => daysBadge(r.days_ge_to_gex), copyValue: (r) => r.days_ge_to_gex ?? "", filterValue: (r) => (r.days_ge_to_gex == null ? "—" : String(r.days_ge_to_gex)) },
+              { key: "days_grn",        label: "GRN−GE (days)", width: "110px", align: "right", render: (r) => daysBadge(r.days_ge_to_grn), copyValue: (r) => r.days_ge_to_grn ?? "", filterValue: (r) => (r.days_ge_to_grn == null ? "—" : String(r.days_ge_to_grn)) },
             ]}
             rows={rows}
             rowKey={(r, i) => `${r.ge_number}-${r.line_number ?? i}`}

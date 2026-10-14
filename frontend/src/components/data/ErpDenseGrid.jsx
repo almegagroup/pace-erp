@@ -463,6 +463,10 @@ export default function ErpDenseGrid({
   // `filterValue`/`copyValue`, anything else falls into an "Other" bucket
   // rather than being silently dropped.
   columnFilter = false,
+  // Opt-in only — omitted by every existing caller. Called with the rows the
+  // grid is currently showing after its own column filters, so a page can
+  // export exactly what the user sees (the filter state lives in here).
+  onFilteredRowsChange,
 }) {
   const effectiveCellNavigate = cellNavigate || rangeSelect;
   const rowRefs = useRef([]);
@@ -531,6 +535,12 @@ export default function ErpDenseGrid({
   // filtered result means virtualizer/focus/selection/copy/render logic
   // needs zero further changes to respect an active column filter.
   const rows = filteredRows;
+
+  const onFilteredRowsChangeRef = useRef(onFilteredRowsChange);
+  useEffect(() => { onFilteredRowsChangeRef.current = onFilteredRowsChange; }, [onFilteredRowsChange]);
+  useEffect(() => {
+    if (typeof onFilteredRowsChangeRef.current === "function") onFilteredRowsChangeRef.current(filteredRows);
+  }, [filteredRows]);
 
   function applyColumnFilter(column, draftSet) {
     const allValues = getAllValuesForColumn(column);
