@@ -131,6 +131,21 @@
 
 ---
 
+### 2026-10-14 — SO04 APL invoice column clarification (DONE in code; rollout pending)
+
+- SO04 now places the APL Invoice column immediately after PACE Invoice #. It
+  shows `APL Invoice Not Received`, `APL Invoice Received — <received date>`,
+  or `APL Invoice Not Received — Cancelled` from the existing DO-scoped APL
+  case. The report does not change the pre-existing cancellation cascade.
+- The list response bulk-loads the existing `received_date` with the APL case;
+  no schema, route, ACL, or operational-data change is required.
+- Verification: production confirms the existing APL-case table and
+  `received_date` column are present; `deno check`, focused frontend ESLint,
+  frontend production build, and `git diff --check` pass. The build retains
+  only its unrelated GRN duplicate-attribute and chunk-size warnings.
+
+---
+
 ### 2026-09-11 — SO01 FG SKU search: remove truncated master-list dependency
 
 - **Root cause verified in prod, CMP006:** active SKU `6765SS06599` (`FG-00379`) and its active mapping/configuration/approved MTO applicability exist. The old unpaged all-company `material_company_ext` lookup stopped at PostgREST's 1,000 rows, excluding this mapping before FG eligibility ran. Packing PO finalization was not the failing condition.

@@ -143,9 +143,9 @@ export async function getDispatchReportHandler(
     // from a normal cancelled invoice: only this workflow earns the APL text.
     const aplCases = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("delivery_order_apl_invoice_case")
-      .select("dc_id, status")
+      .select("dc_id, status, received_date")
       .eq("company_id", companyId).in("dc_id", chunk));
-    const aplCaseByDcId = new Map(aplCases.map((row) => [textValue(row.dc_id), upperValue(row.status)]));
+    const aplCaseByDcId = new Map(aplCases.map((row) => [textValue(row.dc_id), row]));
     const transporterIds = uniqueValues(dcHeaders.map((row) => row.transporter_id));
     const transporters = await fetchInChunks<JsonRecord>(transporterIds, (chunk) => serviceRoleClient
       .schema("erp_master").from("transporter_master")
@@ -313,13 +313,14 @@ export async function getDispatchReportHandler(
       }
       const soStrokeEntries = [...strokeEntryMap.values()];
       const tallyDate = textValue(invoice.tally_invoice_date);
-      const aplCaseStatus = aplCaseByDcId.get(textValue(invoice.dc_id));
+      const aplCase = aplCaseByDcId.get(textValue(invoice.dc_id));
+      const aplCaseStatus = upperValue(aplCase?.status);
       const aplInvoiceStatus = aplCaseStatus === "NO"
         ? "APL Invoice Not Received"
         : aplCaseStatus === "CANCELLED"
-        ? "Invoice Cancelled due to APL Invoice not received"
+        ? "APL Invoice Not Received — Cancelled"
         : aplCaseStatus === "YES"
-        ? "APL Invoice Received"
+        ? `APL Invoice Received — ${textValue(aplCase?.received_date) || "Received date not recorded"}`
         : "Not recorded";
       return {
         row_key: rowKey,
