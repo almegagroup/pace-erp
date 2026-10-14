@@ -159,7 +159,8 @@ function rawUnresolvedTransporterRows(previewRows, rawByIndex, transporterName =
 // The raw codes mean nothing to the person reading the review grid.  Say
 // what is wrong with the uploaded FO/SO and where to fix it.
 const BULK_DO_SOURCE_ERROR_TEXT = {
-  FO_SO_NOT_FOUND: "FO/SO not found — this FO is not mapped in SO Map (or SO number does not exist in this company)",
+  FO_SO_NOT_FOUND: "FO/SO not found — this FO is not mapped in SO Map, and no SO in this company has this SO Number or External SO Number",
+  DO_BULK_EXTERNAL_SO_AMBIGUOUS: "More than one SO in this company has this External SO Number — use the PACE SO Number instead",
   FO_SO_NUMBER_REQUIRED: "FO/SO number is blank in the Excel",
   DO_BULK_VDC_MUST_USE_FO_NUMBER: "Dependent Direct SO — enter the FO number, not the SO number",
   DO_BULK_SO_WRONG_DISPATCH_TYPE: "This SO is not a Dependent Depot/Direct SO",
@@ -732,7 +733,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
         {error ? <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">{error}</div> : null}
         {notice ? <div className="border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">{notice}</div> : null}
         <p className="text-xs text-slate-600">
-          One column takes either an FO Number (VDC rows — resolved against this SO's already-mapped SO Map allocation) or a plain SO Number (DC rows — Customer/Site resolution not required). Each distinct FO/SO Number becomes one Delivery Order.
+          One column takes either an FO Number (VDC rows — resolved against this SO's already-mapped SO Map allocation) or an SO Number / External SO Number (DC rows — Customer/Site resolution not required). Each distinct FO/SO Number becomes one Delivery Order.
         </p>
 
         <div className="flex items-center gap-2">

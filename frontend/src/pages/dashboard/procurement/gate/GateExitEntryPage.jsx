@@ -6,7 +6,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { createGateExitInbound, getGateEntryByNumber } from "../procurementApi.js";
+import { createGateExitInbound, getGateEntryByNumber, getGePersonNameContext } from "../procurementApi.js";
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -75,9 +75,29 @@ export default function GateExitEntryPage() {
   const [remarks, setRemarks] = useState("");
   const [successExit, setSuccessExit] = useState(null);
 
-  // Gate Exit is a separate shift event: never inherit the Gate Entry person
-  // or auto-fill the logged-in account's name.
+  // Gate Exit person = whoever records the exit (same rule as Gate Entry):
+  // a named login is filled in and locked; a Security (shared) login types
+  // the person's name. Never inherited from the Gate Entry.
   const [personName, setPersonName] = useState("");
+  const [isSecurityUser, setIsSecurityUser] = useState(true);
+  const [personNameLoading, setPersonNameLoading] = useState(true);
+  useEffect(() => {
+    let active = true;
+    getGePersonNameContext()
+      .then((res) => {
+        if (!active) return;
+        const security = Boolean(res?.is_security) || !res?.person_name;
+        setIsSecurityUser(security);
+        setPersonName(security ? "" : res.person_name);
+      })
+      .catch(() => {
+        if (!active) return;
+        setIsSecurityUser(true);
+        setPersonName("");
+      })
+      .finally(() => { if (active) setPersonNameLoading(false); });
+    return () => { active = false; };
+  }, []);
 
   const hasGateExit = Boolean(detail?.gate_exit_inbound?.id);
   const geStatus = String(detail?.status || "").toUpperCase();
@@ -387,18 +407,24 @@ export default function GateExitEntryPage() {
                     </ErpDenseFormRow>
                   </div>
 
-                  {/* Gate Exit person must be recorded for this exit/shift, not Gate Entry. */}
+                  {/* Gate Exit person = the exit's creator; Security (shared) logins type it. */}
                   <label className="grid max-w-md gap-1 text-xs font-semibold text-slate-700">
                     Person name <span className="font-normal text-red-500">*</span>
                     <input
                       type="text"
-                      value={personName}
-                      placeholder="Type the person present at Gate Exit"
-                      className="h-9 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
-                      onChange={(e) => setPersonName(e.target.value)}
+                      value={personNameLoading ? "Loading…" : personName}
+                      readOnly={!isSecurityUser}
+                      placeholder={isSecurityUser ? "Type the person present at Gate Exit" : ""}
+                      className={[
+                        "h-9 border px-3 text-sm outline-none",
+                        isSecurityUser
+                          ? "border-slate-300 bg-white text-slate-900 focus:border-sky-500"
+                          : "border-slate-200 bg-slate-50 text-slate-500",
+                      ].join(" ")}
+                      onChange={(e) => { if (isSecurityUser) setPersonName(e.target.value); }}
                     />
                     <span className="text-[10px] font-normal text-slate-400">
-                      Mandatory for every exit. Enter the person physically present for this shift.
+                      {isSecurityUser ? "Security department — enter the name manually every exit." : "Auto-filled from your login."}
                     </span>
                   </label>
 
@@ -417,7 +443,7 @@ export default function GateExitEntryPage() {
                     <button
                       type="button"
                       onClick={() => void handleSave()}
-                      disabled={saving || !personName.trim()}
+                      disabled={saving || personNameLoading || !personName.trim()}
                       className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50"
                     >
                       {saving ? "Saving…" : "Save (Gate Exit)"}

@@ -341,25 +341,30 @@ async function resolveGePersonName(
 }
 
 /**
- * Gate Exit may happen in a later shift and must therefore record the
- * physically present person explicitly. Unlike Gate Entry, it must never
- * derive the value from the logged-in account.
+ * Gate Exit person = the user who records the exit (business owner,
+ * 2026-10-14), same rule as Gate Entry: a named login gets its own name
+ * automatically; a Security-department (shared) login types the name of the
+ * person present, mandatory.
  */
-function resolveGateExitPersonName(
+async function resolveGateExitPersonName(
+  ctx: ProcurementHandlerContext,
   personNameInput: string,
-): { personName: string } | { error: string } {
-  if (!personNameInput) {
-    return { error: "GEX_PERSON_NAME_REQUIRED" };
-  }
-  return { personName: personNameInput };
+): Promise<{ personName: string } | { error: string }> {
+  const result = await resolveGePersonName(ctx, personNameInput);
+  if ("error" in result || !result.personName) return { error: "GEX_PERSON_NAME_REQUIRED" };
+  return result;
 }
 
 // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — resolves a Bulk
-// document's own validity window: [effective_start_date, upper bound), where
-// the upper bound is whichever comes first of (a) the next PO/STO's own
-// effective_start_date for the same grouping key, or (b) this document's own
-// cutoff_date if it was knocked off/cancelled with no successor. Returns null
-// upper bound when the window is still open (no successor, no cutoff yet).
+// document's own validity window: [effective_start_date, upper bound).
+//
+// Rule (business owner, 2026-10-14): a later PO/STO for the same grouping key
+// + material ends this document's window at its own effective_start_date ONLY
+// while that successor is still live. A successor that is CANCELLED (header)
+// or whose line(s) for this material are all KNOCKED_OFF / CANCELLED no longer
+// counts -- a small stop-gap PO must not permanently end a continuous Bulk PO.
+// With no live successor the window ends at this document's own cutoff_date,
+// or stays open (null) when it has none.
 async function resolveBulkDocumentWindowUpperBound(
   table: "purchase_order" | "stock_transfer_order",
   documentId: string,
@@ -372,16 +377,23 @@ async function resolveBulkDocumentWindowUpperBound(
   let query = serviceRoleClient
     .schema("erp_procurement")
     .from(table)
-    .select(`id, effective_start_date, ${lineTable}!inner(material_id)`)
+    .select(`id, status, effective_start_date, ${lineTable}!inner(material_id, line_status)`)
     .neq("id", documentId)
     .not("effective_start_date", "is", null)
+    .gt("effective_start_date", currentEffectiveDate)
     .eq(`${lineTable}.material_id`, materialId)
-    .limit(50);
+    .limit(200);
   for (const [column, value] of Object.entries(groupingFilters)) {
     query = query.eq(column, value);
   }
   const { data: candidates } = await query;
+  const ENDED_LINE_STATUSES = new Set(["KNOCKED_OFF", "CANCELLED"]);
   const successorDates = ((candidates ?? []) as JsonRecord[])
+    .filter((row) => {
+      if (toUpperTrimmedString(row.status) === "CANCELLED") return false;
+      const lines = (Array.isArray(row[lineTable]) ? row[lineTable] : []) as JsonRecord[];
+      return lines.some((line) => !ENDED_LINE_STATUSES.has(toUpperTrimmedString(line.line_status)));
+    })
     .map((row) => toTrimmedString(row.effective_start_date))
     .filter((date) => date && date > currentEffectiveDate)
     .sort();
@@ -1835,9 +1847,9 @@ export async function createGateExitInboundHandler(
     const netOverride = parseNullableNumber(body.net_weight_override);
     const effectiveNet = netOverride ?? netCalculated;
 
-    // Exit may occur in a different shift from entry. Require its actual
-    // person explicitly; do not inherit GE or logged-in-account person data.
-    const personNameResult = resolveGateExitPersonName(toTrimmedString(body.person_name));
+    // The exit's own creator (or, for a shared Security login, the typed
+    // name) -- never inherited from the Gate Entry.
+    const personNameResult = await resolveGateExitPersonName(ctx, toTrimmedString(body.person_name));
     if ("error" in personNameResult) {
       return procurementErrorResponse(req, ctx, personNameResult.error, 400, "Person Name is required.");
     }
@@ -2063,95 +2075,79 @@ export async function gateReportHandler(
     const geType = toUpperTrimmedString(url.searchParams.get("ge_type"));
     const status = toUpperTrimmedString(url.searchParams.get("status"));
     const vendorId = toTrimmedString(url.searchParams.get("vendor_id"));
-    const limit = parsePositiveInt(url.searchParams.get("limit"), 200);
-    const offset = Math.max(0, Number(url.searchParams.get("offset") ?? 0));
-
-    // 1. Gate entry lines with GE header
-    let lineQuery = serviceRoleClient
-      .schema("erp_procurement")
-      .from("gate_entry_line")
-      .select("id, gate_entry_id, line_number, material_id, ge_qty, uom_code, gross_weight, net_weight, csn_id, po_id")
-      .range(offset, offset + limit - 1);
-
-    // Subfilter via gate_entry using inner join approach
-    // We'll fetch gate_entries first, then filter lines
-    let geQuery = serviceRoleClient
-      .schema("erp_procurement")
-      .from("gate_entry")
-      .select("id, ge_number, ge_date, company_id, ge_type, status, remarks, vehicle_number, person_name")
-      .order("ge_date", { ascending: false });
-
-    if (companyId) geQuery = geQuery.eq("company_id", companyId);
-    if (dateFrom) geQuery = geQuery.gte("ge_date", dateFrom);
-    if (dateTo) geQuery = geQuery.lte("ge_date", dateTo);
-    if (geType) geQuery = geQuery.eq("ge_type", geType);
-    if (status) geQuery = geQuery.eq("status", status);
-
-    const { data: geRows, error: geError } = await geQuery;
-    if (geError) return procurementErrorResponse(req, ctx, "GATE_REPORT_GE_FAILED", 500, "Unable to fetch gate entries.");
-
-    const geList = (geRows ?? []) as JsonRecord[];
+    // 1. Gate entries matching the criteria. Read in pages: PostgREST returns
+    // at most 1000 rows per request, and the report (and its Excel export)
+    // must hold every gate entry in range, not just the first page.
+    const geList: JsonRecord[] = [];
+    for (let from = 0; ; from += 1000) {
+      let geQuery = serviceRoleClient
+        .schema("erp_procurement")
+        .from("gate_entry")
+        .select("id, ge_number, ge_date, company_id, ge_type, status, remarks, vehicle_number, person_name")
+        .order("ge_date", { ascending: false })
+        .order("id", { ascending: true });
+      if (companyId) geQuery = geQuery.eq("company_id", companyId);
+      if (dateFrom) geQuery = geQuery.gte("ge_date", dateFrom);
+      if (dateTo) geQuery = geQuery.lte("ge_date", dateTo);
+      if (geType) geQuery = geQuery.eq("ge_type", geType);
+      if (status) geQuery = geQuery.eq("status", status);
+      const { data: geRows, error: geError } = await geQuery.range(from, from + 999);
+      if (geError) return procurementErrorResponse(req, ctx, "GATE_REPORT_GE_FAILED", 500, "Unable to fetch gate entries.");
+      geList.push(...((geRows ?? []) as JsonRecord[]));
+      if ((geRows ?? []).length < 1000) break;
+    }
     if (geList.length === 0) return okResponse({ items: [], total: 0 }, ctx.request_id, req);
 
     const geIds = geList.map((g) => String(g.id));
     const geMap = new Map(geList.map((g) => [String(g.id), g]));
 
-    // 2. Lines for these GEs
-    const { data: lineRows, error: lineError } = await serviceRoleClient
-      .schema("erp_procurement")
-      .from("gate_entry_line")
-      .select("id, gate_entry_id, line_number, material_id, ge_qty, uom_code, gross_weight, net_weight")
-      .in("gate_entry_id", geIds);
-
-    if (lineError) return procurementErrorResponse(req, ctx, "GATE_REPORT_LINE_FAILED", 500, "Unable to fetch gate entry lines.");
-    const lines = (lineRows ?? []) as JsonRecord[];
+    // 2. Lines for these GEs. Every id-list read below is chunked (§8E): a
+    // few hundred GE ids in one URL is past the request-length limit.
+    let lines: JsonRecord[];
+    try {
+      lines = await fetchInChunks<JsonRecord>(geIds, (chunk) => serviceRoleClient
+        .schema("erp_procurement")
+        .from("gate_entry_line")
+        .select("id, gate_entry_id, line_number, material_id, ge_qty, uom_code, gross_weight, net_weight")
+        .in("gate_entry_id", chunk));
+    } catch {
+      return procurementErrorResponse(req, ctx, "GATE_REPORT_LINE_FAILED", 500, "Unable to fetch gate entry lines.");
+    }
     const lineIds = lines.map((l) => String(l.id));
 
     // 3. Gate exits (one per GE)
-    const { data: gexRows } = await serviceRoleClient
+    const gexRows = await fetchInChunks<JsonRecord>(geIds, (chunk) => serviceRoleClient
       .schema("erp_procurement")
       .from("gate_exit_inbound")
       .select("id, gate_entry_id, exit_number, exit_date, tare_weight, net_weight_calculated, remarks, person_name")
-      .in("gate_entry_id", geIds);
-    const gexMap = new Map(
-      ((gexRows ?? []) as JsonRecord[]).map((g) => [String(g.gate_entry_id), g])
-    );
+      .in("gate_entry_id", chunk)).catch(() => [] as JsonRecord[]);
+    const gexMap = new Map(gexRows.map((g) => [String(g.gate_entry_id), g]));
 
     // 4. GRNs per line
-    const { data: grnRows } = lineIds.length > 0
-      ? await serviceRoleClient
-          .schema("erp_procurement")
-          .from("goods_receipt")
-          .select("id, gate_entry_line_id, grn_number, grn_date, vendor_id, invoice_number")
-          .in("gate_entry_line_id", lineIds)
-      : { data: [] };
-    const grnByLineMap = new Map(
-      ((grnRows ?? []) as JsonRecord[]).map((g) => [String(g.gate_entry_line_id), g])
-    );
+    const grnRows = await fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement")
+      .from("goods_receipt")
+      .select("id, gate_entry_line_id, grn_number, grn_date, vendor_id, invoice_number")
+      .in("gate_entry_line_id", chunk)).catch(() => [] as JsonRecord[]);
+    const grnByLineMap = new Map(grnRows.map((g) => [String(g.gate_entry_line_id), g]));
 
     // 5. Bulk resolve
     const materialIds = [...new Set(lines.map((l) => String(l.material_id ?? "")).filter(Boolean))];
-    const vendorIds = [...new Set(((grnRows ?? []) as JsonRecord[]).map((g) => String(g.vendor_id ?? "")).filter(Boolean))];
+    const vendorIds = [...new Set(grnRows.map((g) => String(g.vendor_id ?? "")).filter(Boolean))];
     const companyIds = [...new Set(geList.map((g) => String(g.company_id ?? "")).filter(Boolean))];
 
-    const [matResp, vendorResp, companyResp] = await Promise.all([
-      materialIds.length > 0
-        ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name").in("id", materialIds)
-        : { data: [] },
-      vendorIds.length > 0
-        ? serviceRoleClient.schema("erp_master").from("vendor_master")
-            .select("id, vendor_code, vendor_name").in("id", vendorIds)
-        : { data: [] },
-      companyIds.length > 0
-        ? serviceRoleClient.schema("erp_master").from("companies")
-            .select("id, company_code, company_name").in("id", companyIds)
-        : { data: [] },
+    const [materials, vendors, companies] = await Promise.all([
+      fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
+        .select("id, pace_code, material_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(vendorIds, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_master")
+        .select("id, vendor_code, vendor_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(companyIds, (chunk) => serviceRoleClient.schema("erp_master").from("companies")
+        .select("id, company_code, company_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
     ]);
 
-    const matMap = new Map(((matResp.data ?? []) as JsonRecord[]).map((m) => [String(m.id), m]));
-    const vendorMap = new Map(((vendorResp.data ?? []) as JsonRecord[]).map((v) => [String(v.id), v]));
-    const companyMap = new Map(((companyResp.data ?? []) as JsonRecord[]).map((c) => [String(c.id), c]));
+    const matMap = new Map(materials.map((m) => [String(m.id), m]));
+    const vendorMap = new Map(vendors.map((v) => [String(v.id), v]));
+    const companyMap = new Map(companies.map((c) => [String(c.id), c]));
 
     // 6. Vendor filter (post-resolve, since vendor comes from GRN)
     const items: JsonRecord[] = [];

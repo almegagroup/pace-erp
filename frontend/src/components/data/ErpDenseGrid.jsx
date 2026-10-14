@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
@@ -463,6 +463,15 @@ export default function ErpDenseGrid({
   // `filterValue`/`copyValue`, anything else falls into an "Other" bucket
   // rather than being silently dropped.
   columnFilter = false,
+  // Opt-in only — omitted by every existing caller. Called with the rows the
+  // grid is currently showing after its own column filters, so a page can
+  // export exactly what the user sees (the filter state lives in here).
+  onFilteredRowsChange,
+  // Opt-in only — omitted by every existing caller. Return a node to show a
+  // full-width panel directly under that row (e.g. an expandable detail
+  // section), or null for none. Not supported together with `virtualize`
+  // (virtual rows assume a fixed row height); it is ignored there.
+  renderExpandedRow,
 }) {
   const effectiveCellNavigate = cellNavigate || rangeSelect;
   const rowRefs = useRef([]);
@@ -531,6 +540,12 @@ export default function ErpDenseGrid({
   // filtered result means virtualizer/focus/selection/copy/render logic
   // needs zero further changes to respect an active column filter.
   const rows = filteredRows;
+
+  const onFilteredRowsChangeRef = useRef(onFilteredRowsChange);
+  useEffect(() => { onFilteredRowsChangeRef.current = onFilteredRowsChange; }, [onFilteredRowsChange]);
+  useEffect(() => {
+    if (typeof onFilteredRowsChangeRef.current === "function") onFilteredRowsChangeRef.current(filteredRows);
+  }, [filteredRows]);
 
   function applyColumnFilter(column, draftSet) {
     const allValues = getAllValuesForColumn(column);
@@ -903,6 +918,22 @@ export default function ErpDenseGrid({
                   </tr>
                 ) : null}
               </>
+            ) : typeof renderExpandedRow === "function" ? (
+              rows.map((row, index) => {
+                const expanded = renderExpandedRow(row, index);
+                return (
+                  <Fragment key={rowKey ? rowKey(row, index) : `${index}`}>
+                    {renderRow(row, index)}
+                    {expanded ? (
+                      <tr className="bg-slate-50">
+                        <td colSpan={Math.max(columns.length, 1)} className="border-b border-slate-200 p-0">
+                          {expanded}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })
             ) : (
               rows.map((row, index) => renderRow(row, index))
             )}
