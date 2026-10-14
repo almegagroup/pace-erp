@@ -28,6 +28,11 @@ Read with `BUSINESS-REQUIREMENTS.md` (full rules), Claude Step 1B `OPEN-TECHNICA
 - **Known limitations (Claude Step 1C, recorded not owner-approved remediation):** 9/22 CMP005 MTS SKUs lack ACTIVE Pack BOM; no MTS posted dispatch yet (0 P601, 0 invoices); no ERP customer collections table; no FX source for 13 USD PO lines; 41/75 ORD CSNs have no ETA to plant; book-opening calibration must store ledger result on capture because 667 backdated postings in 30 days. Treat missing inputs as explicit UNKNOWN/NOT AVAILABLE, never zero or fabricated values.
 - **T08:** Procurement menu group confirmed; exact page specifications owned by business owner; transaction code and page count remain OPEN. No page/mockup authorisation implied.
 
+### B09 RM versus PM group clarification — OWNER 2026-10-14
+- **RM:** Use Primary Yes/No applies to RM Stroke material groups. Primary means the original material on the effective Stroke line (technical source mapping to verify).
+- **PM:** No Use Primary Yes/No selection. Pack BOM compatible PM artwork alternatives are allocated based on date-wise stock, expected PO/CSN supply, availability at the required location and approved artwork usage eligibility. Old artwork can be suggested for depletion only while authorised; new artwork can be suggested as its stock becomes available. No duplicated group demand, no automatic stock movement or Pack BOM master mutation.
+- **OPEN implementation input:** How artwork approval/effective or last-use date is recorded and how compatibility is proved in current ERP must be audited; do not assume excess old stock means authorised use.
+
 ### Explicit supersession: location rule
 The 2026-10-14 owner clarification above supersedes the Step 1C request for an owner-maintained blanket list of MTS-eligible storage-location codes. T01/B09 technical mapping remains **VERIFY**, not a new business question. Derive location from the actual Stroke / Pack BOM-linked configuration, check available stock elsewhere separately and recommend feasible movements only.
 
