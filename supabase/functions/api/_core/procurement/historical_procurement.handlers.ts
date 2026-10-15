@@ -118,10 +118,18 @@ export async function getHistoricalLeadTimesHandler(req: Request, ctx: Historica
     const groupBy = text(url.searchParams.get("group_by")).toUpperCase() || "COMPANY";
     if (!["COMPANY", "VENDOR", "MATERIAL"].includes(groupBy)) return fail(req, ctx, "HISTORY_LEAD_TIME_GROUP_INVALID", 400, "group_by must be COMPANY, VENDOR or MATERIAL.");
 
-    const { data: movements, error: movementError } = await serviceRoleClient.schema("erp_history").from("consignment_movement")
-      .select("purchase_order_line_id, supply_type, dispatch_date, etd_date, atd_date, ata_port_date, boe_date, lr_date, inward_date, cancellation_flag, validation_status")
-      .eq("company_id", companyId).eq("validation_status", "VALIDATED").eq("cancellation_flag", false);
-    if (movementError) throw new Error("HISTORY_LEAD_TIME_MOVEMENT_READ_FAILED");
+    // Paginate: PostgREST may return only the first 1,000 source rows.
+    const movements: JsonRecord[] = [];
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await serviceRoleClient.schema("erp_history").from("consignment_movement")
+        .select("purchase_order_line_id, supply_type, dispatch_date, etd_date, atd_date, ata_port_date, boe_date, lr_date, inward_date, cancellation_flag, validation_status")
+        .eq("company_id", companyId).eq("validation_status", "VALIDATED").eq("cancellation_flag", false)
+        .order("id", { ascending: true }).range(offset, offset + pageSize - 1);
+      if (error) throw new Error("HISTORY_LEAD_TIME_MOVEMENT_READ_FAILED");
+      movements.push(...asRows(data));
+      if (asRows(data).length < pageSize) break;
+    }
     const lineIds = [...new Set(asRows(movements).map((row) => text(row.purchase_order_line_id)).filter(Boolean))];
     const lines = lineIds.length ? await fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient.schema("erp_history").from("purchase_order_line").select("id, purchase_order_id, material_id").in("id", chunk)) : [];
     const lineById = new Map(lines.map((row) => [text(row.id), row]));
