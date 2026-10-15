@@ -72,21 +72,22 @@ its identity level (`SKU` or `PRODSHADE`).
   business boundary follows the ERP Asia/Kolkata calendar date rather than a
   browser timestamp.
 - Every endpoint resolves and checks the selected company before query or
-  write.  The existing MTS planning page resource is the route gate.  Import
-  commit/dry-run is further limited to the existing
-  `PROC_MTS_CUSTOMER_PLAN_MAINTAIN:WRITE` companion resource.
-- No ACL data is changed by this feature: all new routes use existing,
-  company-scoped resources.  The dependency manifest is updated to make the
-  added routes visible to CI.
+  write. PO21 actuals remain gated by the MTS planning page resource. POTMP
+  import commit/dry-run uses the separate
+  `PROC_HISTORICAL_OPERATIONS_IMPORT:WRITE` resource, so a planning-maintenance
+  grant cannot accidentally authorise historical ingestion.
+- `docs/mts-planning/acl/HISTORICAL-OPERATIONS-IMPORT-ACL-PROVISIONING.sql`
+  contains the required operational ACL/menu configuration. The dependency
+  manifest records the POTMP routes for CI verification.
 
 ### Access verification on 2026-10-15
 
-Read-only production ACL checks confirm that the existing MTS Planning
+Read-only production ACL checks confirmed that the existing MTS Planning
 resources are active for all three companies: CMP003 has 18 `VIEW` and 18
 `WRITE` grants on `PROC_MTS_CUSTOMER_PLAN` and 8 maintain-write grants;
-CMP005 has 10/10/7 respectively; CMP011 has 13/13/7 respectively.  The new
-routes reuse those resources and still perform company-scope checks before
-every read or write.
+CMP005 has 10/10/7 respectively; CMP011 has 13/13/7 respectively. POTMP does
+not reuse those broader grants: apply its dedicated provisioning script and
+generate fresh ACL snapshots before enabling its import routes for a user.
 
 The DEV ACL data is not equivalent: CMP003/CMP005 have no MTS resource
 grants, and CMP011 is absent.  This blocks an authenticated human-role DEV

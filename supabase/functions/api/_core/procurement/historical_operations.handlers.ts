@@ -36,7 +36,9 @@ type HistoricalContext = {
 };
 
 const RESOURCE_PAGE = "PROC_MTS_CUSTOMER_PLAN";
-const RESOURCE_MAINTAIN = "PROC_MTS_CUSTOMER_PLAN_MAINTAIN";
+// POTMP is deliberately a separate authority from PO21. Importing analytical
+// history is not a planning-maintenance action (CLAUDE.md pattern #6).
+const RESOURCE_IMPORT = "PROC_HISTORICAL_OPERATIONS_IMPORT";
 const MAX_MONTHS = 60;
 
 function historyError(req: Request, ctx: HistoricalContext, code: string, status: number, message: string): Response {
@@ -50,7 +52,7 @@ async function runImport(req: Request, ctx: HistoricalContext, commit: boolean):
     const companyId = text(body.company_id);
     if (!companyId) return historyError(req, ctx, "HISTORY_IMPORT_INVALID", 400, "company_id is required.");
     await assertCompanyScope(ctx, companyId);
-    if (!await canMaintainCompanyResource(ctx, companyId, RESOURCE_MAINTAIN, "WRITE")) {
+    if (!await canMaintainCompanyResource(ctx, companyId, RESOURCE_IMPORT, "WRITE")) {
       return historyError(req, ctx, "HISTORY_IMPORT_FORBIDDEN", 403, "You do not have permission to import historical actuals for this company.");
     }
     const request = {

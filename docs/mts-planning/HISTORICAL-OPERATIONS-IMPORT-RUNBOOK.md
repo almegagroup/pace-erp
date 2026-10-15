@@ -15,10 +15,11 @@ then updates the one historical source row rather than creating a duplicate.
 Never use an invoice number as the row identity: a single invoice can have
 multiple dispatch lines.
 
-The authenticated caller needs `PROC_MTS_CUSTOMER_PLAN_MAINTAIN:WRITE` in the
-selected company.  The API does not use browser Google Sheets access and has
-no hardcoded secret; an approved server-side extraction process supplies the
-parsed JSON payload.
+The authenticated caller needs
+`PROC_HISTORICAL_OPERATIONS_IMPORT:WRITE` in the selected company. This is the
+separate POTMP authority; it is not inherited from PO21 planning maintenance.
+The API does not use browser Google Sheets access and has no hardcoded secret;
+an approved server-side extraction process supplies the parsed JSON payload.
 
 ## Required payload contract
 

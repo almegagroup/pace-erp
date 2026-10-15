@@ -1749,6 +1749,56 @@ async function callRecalculateAtRow(
   return { data: data as JsonRecord, error: null };
 }
 
+async function callRecalculateAtRows(
+  nodes: CascadeNode[],
+  actor: string,
+  reason: string,
+): Promise<{ data: JsonRecord | null; error: string | null }> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_inventory")
+    .rpc("recalculate_valuation_at_rows", {
+      p_corrections: nodes.map((node) => ({ stock_ledger_id: node.ledgerId, new_rate: node.newRate })),
+      p_actor: actor,
+      p_reason: reason,
+    });
+  if (error) return { data: null, error: error.message };
+  return { data: data as JsonRecord, error: null };
+}
+
+type CascadeNodeGroup = { nodes: CascadeNode[]; error?: string };
+
+// A correction replay starts from immutable stock-ledger values. Therefore,
+// every corrected receipt in the SAME snapshot bucket must be replayed in one
+// RPC. Sequential calls silently discard the prior root's substitute rate.
+async function groupCascadeNodes(nodes: CascadeNode[]): Promise<CascadeNodeGroup[]> {
+  const uniqueNodes = [...new Map(nodes.map((node) => [node.ledgerId, node])).values()];
+  const ledgerById = new Map<string, JsonRecord>();
+  for (let index = 0; index < uniqueNodes.length; index += 100) {
+    const ids = uniqueNodes.slice(index, index + 100).map((node) => node.ledgerId);
+    const { data, error } = await serviceRoleClient
+      .schema("erp_inventory").from("stock_ledger")
+      .select("id, company_id, material_id, storage_location_id, stock_type_code")
+      .in("id", ids);
+    if (error) return uniqueNodes.map((node) => ({ nodes: [node], error: "VALUATION_RECALC_LEDGER_LOOKUP_FAILED" }));
+    for (const row of (data ?? []) as JsonRecord[]) ledgerById.set(toTrimmedString(row.id), row);
+  }
+
+  const grouped = new Map<string, CascadeNode[]>();
+  const unresolved: CascadeNodeGroup[] = [];
+  for (const node of uniqueNodes) {
+    const ledger = ledgerById.get(node.ledgerId);
+    if (!ledger) {
+      unresolved.push({ nodes: [node], error: "VALUATION_RECALC_TARGET_NOT_FOUND" });
+      continue;
+    }
+    const key = [ledger.company_id, ledger.material_id, ledger.storage_location_id, ledger.stock_type_code].map(toTrimmedString).join("|");
+    const group = grouped.get(key) ?? [];
+    group.push(node);
+    grouped.set(key, group);
+  }
+  return [...grouped.values()].map((group) => ({ nodes: group })).concat(unresolved);
+}
+
 // §109 — one Process PO line or one Packing PO line's stock_ledger_id may be
 // the impacted row; whichever it is determines whether the downstream cost
 // recompute is §104-2's (SFG) or §104-3's (FG) formula. A third case (found
@@ -1767,6 +1817,7 @@ async function findDownstreamGroup(
 ): Promise<
   | { kind: "PROCESS_PO"; documentId: string; fgLedgerId: string | null }
   | { kind: "PACKING_PO"; documentId: string; fgLedgerId: string | null }
+  | { kind: "MTS_PROCESS_PO"; documentId: string; fgLedgerIds: string[] }
   | { kind: "PASSTHROUGH"; targetLedgerId: string }
   | null
 > {
@@ -1782,9 +1833,24 @@ async function findDownstreamGroup(
     const { data: po } = await serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select("fg_stock_ledger_id")
+      .select("fg_stock_ledger_id, po_type")
       .eq("id", poLine.process_order_id)
       .maybeSingle();
+    if (toUpperTrimmedString(po?.po_type) === "MTS") {
+      const { data: packingOrders } = await serviceRoleClient
+        .schema("erp_production").from("packing_order").select("id")
+        .eq("process_order_id", poLine.process_order_id);
+      const packingIds = ((packingOrders ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean);
+      const { data: fgLines } = packingIds.length > 0
+        ? await serviceRoleClient.schema("erp_production").from("packing_order_line")
+          .select("stock_ledger_id").in("packing_order_id", packingIds).eq("line_type", "FG").not("stock_ledger_id", "is", null)
+        : { data: [] as JsonRecord[] };
+      return {
+        kind: "MTS_PROCESS_PO",
+        documentId: String(poLine.process_order_id),
+        fgLedgerIds: [...new Set(((fgLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.stock_ledger_id)).filter(Boolean))],
+      };
+    }
     return { kind: "PROCESS_PO", documentId: String(poLine.process_order_id), fgLedgerId: (po?.fg_stock_ledger_id as string | null) ?? null };
   }
 
@@ -1809,9 +1875,25 @@ async function findDownstreamGroup(
     const { data: po } = await serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select("qi_release_stock_ledger_id")
+      .select("qi_release_stock_ledger_id, po_type")
       .eq("id", toTrimmedString(impacted.reference_document_id))
       .maybeSingle();
+    if (toUpperTrimmedString(po?.po_type) === "MTS") {
+      const processOrderId = toTrimmedString(impacted.reference_document_id);
+      const { data: packingOrders } = await serviceRoleClient
+        .schema("erp_production").from("packing_order").select("id")
+        .eq("process_order_id", processOrderId);
+      const packingIds = ((packingOrders ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean);
+      const { data: fgLines } = packingIds.length > 0
+        ? await serviceRoleClient.schema("erp_production").from("packing_order_line")
+          .select("stock_ledger_id").in("packing_order_id", packingIds).eq("line_type", "FG").not("stock_ledger_id", "is", null)
+        : { data: [] as JsonRecord[] };
+      return {
+        kind: "MTS_PROCESS_PO",
+        documentId: processOrderId,
+        fgLedgerIds: [...new Set(((fgLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.stock_ledger_id)).filter(Boolean))],
+      };
+    }
     if (po?.qi_release_stock_ledger_id) {
       return { kind: "PASSTHROUGH", targetLedgerId: String(po.qi_release_stock_ledger_id) };
     }
@@ -1849,6 +1931,44 @@ async function findDownstreamGroup(
 // Exported for reuse by other modules whose own posting can land at rate=0
 // pending a later correction (e.g. GRN Invoice Mapping, §3.9.2) -- this is
 // the generic §109 RM->SFG->FG cascade engine, not Opening-Stock-specific.
+async function applyCascadeNodes(
+  nodes: CascadeNode[],
+  actor: string,
+  reason: string,
+  results: CascadeStepResult[],
+  // Downstream levels can legitimately reach a row a sibling correction in this
+  // same batch already fixed (e.g. two Packing POs sharing one Process PO batch).
+  // That is "nothing further to do", not a failure -- same as the pre-grouping code.
+  tolerateAlreadyDone = false,
+): Promise<JsonRecord[]> {
+  const impacted: JsonRecord[] = [];
+  for (const group of await groupCascadeNodes(nodes)) {
+    if (group.error) {
+      for (const node of group.nodes) results.push({ ledgerId: node.ledgerId, ok: false, error: group.error });
+      continue;
+    }
+    const response = group.nodes.length === 1
+      ? await callRecalculateAtRow(group.nodes[0].ledgerId, group.nodes[0].newRate, actor, reason)
+      : await callRecalculateAtRows(group.nodes, actor, reason);
+    if (response.error) {
+      const alreadyDone = tolerateAlreadyDone && response.error === "VALUATION_RECALC_ALREADY_DONE";
+      for (const node of group.nodes) results.push({ ledgerId: node.ledgerId, ok: alreadyDone, error: response.error });
+      continue;
+    }
+    for (const node of group.nodes) {
+      results.push({
+        ledgerId: node.ledgerId,
+        ok: true,
+        materialId: toTrimmedString(response.data?.material_id),
+        oldRate: Number(response.data?.old_rate),
+        newRate: Number(response.data?.new_rate),
+      });
+    }
+    impacted.push(...((response.data?.impacted_rows as JsonRecord[]) ?? []));
+  }
+  return impacted;
+}
+
 export async function cascadeRecalculate(
   roots: CascadeNode[],
   actor: string,
@@ -1858,21 +1978,12 @@ export async function cascadeRecalculate(
   const visited = new Set<string>();
   let levelImpacted: JsonRecord[] = [];
 
-  for (const root of roots) {
-    if (visited.has(root.ledgerId)) continue;
+  const rootNodes = roots.filter((root) => {
+    if (visited.has(root.ledgerId)) return false;
     visited.add(root.ledgerId);
-    const { data, error } = await callRecalculateAtRow(root.ledgerId, root.newRate, actor, reason);
-    if (error) {
-      results.push({ ledgerId: root.ledgerId, ok: false, error });
-      continue;
-    }
-    results.push({
-      ledgerId: root.ledgerId, ok: true,
-      materialId: toTrimmedString(data?.material_id),
-      oldRate: Number(data?.old_rate), newRate: Number(data?.new_rate),
-    });
-    levelImpacted.push(...((data?.impacted_rows as JsonRecord[]) ?? []));
-  }
+    return true;
+  });
+  levelImpacted = await applyCascadeNodes(rootNodes, actor, reason, results);
 
   let level = 0;
   while (levelImpacted.length > 0) {
@@ -1886,6 +1997,7 @@ export async function cascadeRecalculate(
     }
     const processGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
     const packGroups = new Map<string, { fgLedgerId: string | null; corrections: JsonRecord[] }>();
+    const mtsGroups = new Map<string, { fgLedgerIds: string[]; corrections: JsonRecord[] }>();
     const nextRoots: CascadeNode[] = [];
 
     for (const impacted of levelImpacted) {
@@ -1900,6 +2012,11 @@ export async function cascadeRecalculate(
         continue;
       }
       const correction = { stock_ledger_id: impactedLedgerId, corrected_rate: Number(impacted.corrected_rate) };
+      if (group.kind === "MTS_PROCESS_PO") {
+        if (!mtsGroups.has(group.documentId)) mtsGroups.set(group.documentId, { fgLedgerIds: group.fgLedgerIds, corrections: [] });
+        mtsGroups.get(group.documentId)!.corrections.push(correction);
+        continue;
+      }
       const target = group.kind === "PROCESS_PO" ? processGroups : packGroups;
       if (!target.has(group.documentId)) target.set(group.documentId, { fgLedgerId: group.fgLedgerId, corrections: [] });
       target.get(group.documentId)!.corrections.push(correction);
@@ -1921,26 +2038,21 @@ export async function cascadeRecalculate(
       if (error || rate == null) continue;
       nextRoots.push({ ledgerId: group.fgLedgerId, newRate: Number(rate) });
     }
-
-    levelImpacted = [];
-    for (const node of nextRoots) {
-      if (visited.has(node.ledgerId)) continue;
-      visited.add(node.ledgerId);
-      const { data, error } = await callRecalculateAtRow(node.ledgerId, node.newRate, actor, reason);
-      if (error) {
-        // ALREADY_DONE here means a sibling correction in this same batch already
-        // reached this exact SFG/FG row (e.g. two Packing POs sharing one Process
-        // PO batch) — not a real failure, just nothing further to do from here.
-        results.push({ ledgerId: node.ledgerId, ok: error === "VALUATION_RECALC_ALREADY_DONE", error });
-        continue;
-      }
-      results.push({
-        ledgerId: node.ledgerId, ok: true,
-        materialId: toTrimmedString(data?.material_id),
-        oldRate: Number(data?.old_rate), newRate: Number(data?.new_rate),
-      });
-      levelImpacted.push(...((data?.impacted_rows as JsonRecord[]) ?? []));
+    for (const [processOrderId, group] of mtsGroups) {
+      if (group.fgLedgerIds.length === 0) continue;
+      const { data: rate, error } = await serviceRoleClient
+        .schema("erp_production")
+        .rpc("recompute_mts_fg_cost", { p_process_order_id: processOrderId, p_corrections: group.corrections });
+      if (error || rate == null) continue;
+      for (const fgLedgerId of group.fgLedgerIds) nextRoots.push({ ledgerId: fgLedgerId, newRate: Number(rate) });
     }
+
+    const uniqueNextRoots = nextRoots.filter((node) => {
+      if (visited.has(node.ledgerId)) return false;
+      visited.add(node.ledgerId);
+      return true;
+    });
+    levelImpacted = await applyCascadeNodes(uniqueNextRoots, actor, reason, results, true);
   }
 
   return results;

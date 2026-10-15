@@ -11,7 +11,7 @@ or writes live PO / CSN / GRN / stock / GL records.
 
 | Item | Rule |
 |---|---|
-| Auth | Normal ERP session cookie. ACL: `PROC_MTS_CUSTOMER_PLAN_MAINTAIN` / WRITE for dry-run and commit; `PROC_MTS_CUSTOMER_PLAN` / VIEW for reads. Company scope is enforced. |
+| Auth | Normal ERP session cookie. POTMP dry-run and commit require `PROC_HISTORICAL_OPERATIONS_IMPORT` / WRITE; PO21 actuals reads require `PROC_MTS_CUSTOMER_PLAN` / VIEW. Company scope is enforced. |
 | Company | `company_id` (uuid) must be a company in the caller's scope. |
 | Identity | Send **codes**, never ids. `vendor_id` / `material_id` in a payload are rejected (`HISTORY_RAW_ID_NOT_ACCEPTED`). |
 | Codes | Send SKU / material codes as JSON **strings** (leading zeros are significant). |
