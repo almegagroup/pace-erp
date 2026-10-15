@@ -643,15 +643,24 @@ function buildListRow(
   // due-date math below means nothing once the receipt itself has been
   // undone. The frontend uses `status`/`is_reversed` to grey the row out and
   // `split_into_grn_numbers` to show which new GRNs it was split into.
+  // SPLIT (2026-10-15): the physical receipt still stands but its invoices are the child
+  // GRNs -- not payable itself, and not a reversal either.
   const isReversed = toTrimmedString(grn.status).toUpperCase() === "REVERSED";
+  const isSplit = toTrimmedString(grn.status).toUpperCase() === "SPLIT";
+  const isNonPayable = isReversed || isSplit;
 
   return {
     grn_id: grn.id,
     grn_number: grn.grn_number,
     status: grn.status ?? null,
     is_reversed: isReversed,
+    is_split: isSplit,
     split_source_grn_id: grn.split_source_grn_id ?? null,
     split_into_grn_numbers: splitIntoGrnNumbersMap.get(String(grn.id)) ?? null,
+    // The physical document the truck came with -- kept on every invoice GRN of a split so the
+    // GE / challan -> GRN -> invoice chain stays visible.
+    challan_number: grn.bulk_challan_number ?? null,
+    challan_date: grn.bulk_challan_date ?? null,
     csn_number: csn?.csn_display_number ?? csn?.csn_number ?? null,
     company_id: grn.company_id,
     company_code: company?.company_code ?? null,
@@ -718,7 +727,7 @@ function buildListRow(
     // payment_status below, not this.
     // REVERSED (incl. §3.9.5 Split originals) is never payment-relevant —
     // the receipt itself no longer stands, so no due date applies.
-    actual_payment_date: isReversed ? null : computeActualPaymentDate(
+    actual_payment_date: isNonPayable ? null : computeActualPaymentDate(
       grn,
       toUpperTrimmedString(referenceTypeCode),
       Number(paymentTerms?.credit_days ?? 0),
@@ -907,7 +916,7 @@ export async function listAC01GRNsHandler(
       // other bulk fetches here (§8B), keyed purely off the page's own ids.
       fetchInChunks<JsonRecord>(grnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("goods_receipt")
-          .select("grn_number, split_source_grn_id").in("split_source_grn_id", chunk)),
+          .select("grn_number, split_source_grn_id, invoice_number, invoice_date, received_qty").in("split_source_grn_id", chunk)),
     ]);
 
     const paymentTermIds = uniqueRelationIds(purchaseOrders.map((po) => po.payment_term_id));
@@ -1027,6 +1036,29 @@ export async function listAC01GRNsHandler(
       if (!splitIntoGrnNumbersMap.has(key)) splitIntoGrnNumbersMap.set(key, []);
       splitIntoGrnNumbersMap.get(key)!.push(grnNumber);
     }
+    const splitIntoInvoicesMap = new Map<string, string[]>();
+    for (const row of splitIntoRows) {
+      const key = String(row.split_source_grn_id);
+      const invoiceNumber = toTrimmedString(row.invoice_number);
+      if (!invoiceNumber) continue;
+      if (!splitIntoInvoicesMap.has(key)) splitIntoInvoicesMap.set(key, []);
+      splitIntoInvoicesMap.get(key)!.push(invoiceNumber);
+    }
+
+    // Physical-document chain for every row: the Gate Entry number, and for an invoice GRN of a
+    // split, the split source (physical receipt) GRN number. INDEPENDENT lookups (§8B).
+    const splitSourceIds = uniqueRelationIds(rows.map((row) => row.split_source_grn_id));
+    const gateEntryIds = uniqueRelationIds(rows.map((row) => row.gate_entry_id));
+    const [splitSourceRows, gateEntryRows] = await Promise.all([
+      fetchInChunks<JsonRecord>(splitSourceIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+          .select("id, grn_number").in("id", chunk)),
+      fetchInChunks<JsonRecord>(gateEntryIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("gate_entry")
+          .select("id, ge_number").in("id", chunk)),
+    ]);
+    const splitSourceNumberById = new Map(splitSourceRows.map((row) => [String(row.id), toTrimmedString(row.grn_number)]));
+    const geNumberById = new Map(gateEntryRows.map((row) => [String(row.id), toTrimmedString(row.ge_number)]));
 
     const settlementInvoiceIds = uniqueRelationIds(rows.map((row) => row.settlement_invoice_id));
     const settlementInvoiceRows = settlementInvoiceIds.length > 0
@@ -1091,6 +1123,9 @@ export async function listAC01GRNsHandler(
         udStatusMap, transporterMap, costLinesByLc, deductionLinesByLc, deductionTypeNameMap,
         splitIntoGrnNumbersMap, settlementInvoiceMap, crcpMirrorOwnerByGrnId, companyId,
       ),
+      split_source_grn_number: splitSourceNumberById.get(toRelationId(row.split_source_grn_id)) || null,
+      split_into_invoice_numbers: splitIntoInvoicesMap.get(String(row.id)) ?? null,
+      ge_number: geNumberById.get(toRelationId(row.gate_entry_id)) || null,
       invoice_verified_by: toTrimmedString(row.invoice_verified_by) || null,
       invoice_verified_by_display: verifierDisplayNames.get(toTrimmedString(row.invoice_verified_by)) || null,
       invoice_verified_at: row.invoice_verified_at ?? null,
@@ -1236,12 +1271,13 @@ export async function getAC01GRNHandler(
     // §3.9.5 "GRN Split" (2026-10-02) — same REVERSED guard as buildListRow's
     // list-row version: a reversed receipt is never payment-relevant.
     const isReversed = toTrimmedString(grn.status).toUpperCase() === "REVERSED";
+    const isSplit = toTrimmedString(grn.status).toUpperCase() === "SPLIT";
 
     // freight_type (for the FOR-aware party UI hint) + the payment-terms
     // reference date, same source buildListRow's list-row version uses.
     let freightType: string | null = null;
     let actualPaymentDate: string | null = null;
-    if (!isReversed && grn.po_id) {
+    if (!isReversed && !isSplit && grn.po_id) {
       const { data: po } = await serviceRoleClient
         .schema("erp_procurement").from("purchase_order")
         .select("freight_term, payment_term_id")
@@ -1316,15 +1352,33 @@ export async function getAC01GRNHandler(
 
     // §3.9.5 "GRN Split" — if this GRN was the original that got split, show
     // which new GRN(s) it became. Same reverse-lookup as the list endpoint.
-    const { data: splitIntoRows } = await serviceRoleClient
-      .schema("erp_procurement").from("goods_receipt")
-      .select("grn_number").eq("split_source_grn_id", grnId);
+    // And the reverse for an invoice GRN: which split source (physical receipt) it came from.
+    const [{ data: splitIntoRows }, { data: splitSourceRow }] = await Promise.all([
+      serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt")
+        .select("grn_number, invoice_number, invoice_date, received_qty").eq("split_source_grn_id", grnId)
+        .order("grn_number", { ascending: true }),
+      grn.split_source_grn_id
+        ? serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+          .select("grn_number").eq("id", String(grn.split_source_grn_id)).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
     const splitIntoGrnNumbers = ((splitIntoRows ?? []) as JsonRecord[])
       .map((row) => toTrimmedString(row.grn_number)).filter(Boolean);
 
     return okResponse({
       ...grn,
       is_reversed: isReversed,
+      is_split: isSplit,
+      split_into_invoices: ((splitIntoRows ?? []) as JsonRecord[]).map((row) => ({
+        grn_number: row.grn_number ?? null,
+        invoice_number: row.invoice_number ?? null,
+        invoice_date: row.invoice_date ?? null,
+        received_qty: row.received_qty ?? null,
+      })),
+      split_source_grn_number: toTrimmedString((splitSourceRow as JsonRecord | null)?.grn_number) || null,
+      challan_number: grn.bulk_challan_number ?? null,
+      challan_date: grn.bulk_challan_date ?? null,
       // CRCP mirrored-view flag (locked 2026-10-04) -- false only when this
       // viewer reached the drawer via the itc_owner_company_id fallback
       // above, never via direct GRN-company ownership. Frontend uses this to
@@ -1375,9 +1429,14 @@ export async function saveAC01GRNCostHandler(
     const body = await parseBody(req);
 
     const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement").from("goods_receipt").select("id, company_id").eq("id", grnId).single();
+      .schema("erp_procurement").from("goods_receipt").select("id, company_id, status").eq("id", grnId).single();
     if (grnError || !grn) {
       return ac01ErrorResponse(req, ctx, "AC01_GRN_NOT_FOUND", 404, "GRN not found.");
+    }
+    // A SPLIT GRN's invoices, landed cost and payables live on its invoice (child) GRNs; the
+    // split source itself only carries the physical receipt and is revalued from them.
+    if (toTrimmedString(grn.status).toUpperCase() === "SPLIT") {
+      return ac01ErrorResponse(req, ctx, "AC01_GRN_SPLIT_READ_ONLY", 422, "This GRN was split into invoice GRNs. Enter cost and payable on those invoice GRNs instead.");
     }
     try {
       await assertCompanyScope(ctx, String(grn.company_id));

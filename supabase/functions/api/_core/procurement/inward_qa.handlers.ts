@@ -229,6 +229,21 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
   const decidedQty = sumDecidedQty(decisionLines);
   const grn = grnContext.grn;
   const grnReversed = toUpperTrimmedString(grn.status) === "REVERSED";
+  // SPLIT: the receipt (and this QA) still stands; its invoices are separate invoice GRNs.
+  let grnSplitInvoices: JsonRecord[] = [];
+  if (toUpperTrimmedString(grn.status) === "SPLIT") {
+    const { data: splitRows, error: splitError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("goods_receipt")
+      .select("grn_number, invoice_number, invoice_date, received_qty, uom_code")
+      .eq("split_source_grn_id", String(grn.id))
+      .order("grn_number", { ascending: true });
+    if (splitError) {
+      logDbError("fetchQaDocumentDetails split invoices", splitError);
+      throw new ApiError(500, splitError.message || "Unable to fetch split invoices");
+    }
+    grnSplitInvoices = (splitRows ?? []) as JsonRecord[];
+  }
 
   return {
     ...qaDocument,
@@ -241,6 +256,7 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
     grn_reversed: grnReversed,
     grn_reversal_at: grn.reversal_approved_at ?? null,
     grn_reversal_reason: grn.reversal_reason ?? null,
+    grn_split_invoices: grnSplitInvoices,
     public_status: grnReversed ? "REVERSED" : mapQaStatusForResponse(qaDocument.status),
     test_lines: testLinesResp.data ?? [],
     decision_lines: decisionLines,
@@ -916,7 +932,14 @@ export async function submitUsageDecisionHandler(
     }
 
     const baseUom = toTrimmedString(qaDocument.uom_code || grn.uom_code);
-    const unitValue = Number(grn.grn_rate ?? 0);
+    // grn_rate is per GRN (PO) UOM, but QA moves base-UOM quantity -- convert exactly as GRN posting
+    // valued its P101 (createAndPostGRNFromLineHandler's baseUomRate). Without this a GRN taken in MT
+    // with per_pack_qty 1000 released its KG stock at the per-MT rate: 1000x the real value.
+    const grnPerPackQty = Number(grn.per_pack_qty ?? 0);
+    const grnUomMismatch = Boolean(toTrimmedString(grn.uom_code)) && toTrimmedString(grn.uom_code) !== baseUom;
+    const unitValue = grnUomMismatch && grnPerPackQty > 0
+      ? Number((Number(grn.grn_rate ?? 0) / grnPerPackQty).toFixed(6))
+      : Number(grn.grn_rate ?? 0);
     const companyId = String(qaDocument.company_id);
     let nextLineNumber = await getNextDecisionLineNumber(qaDocumentId);
     const createdDecisionLines: JsonRecord[] = [];

@@ -978,6 +978,18 @@ function QaExpandedPanel({ row, companyId, onChanged, onCollapse }) {
             </section>
           ) : null}
 
+          {Array.isArray(detail?.grn_split_invoices) && detail.grn_split_invoices.length > 0 ? (
+            <section className="grid gap-1 rounded border border-slate-300 bg-slate-50 p-2.5 text-[12px] text-slate-700">
+              <p className="font-semibold uppercase tracking-[0.08em]">Invoice split</p>
+              <p>This receipt&apos;s invoices were split into separate invoice GRNs. QA decides on the whole receipt here as usual.</p>
+              {detail.grn_split_invoices.map((entry) => (
+                <p key={entry.grn_number}>
+                  GRN {entry.grn_number} — Invoice {entry.invoice_number || "—"} — {Number(entry.received_qty ?? 0)} {entry.uom_code || ""}
+                </p>
+              ))}
+            </section>
+          ) : null}
+
           <section className="grid gap-2 rounded border border-sky-200 bg-sky-50 p-2.5">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-sky-900">GRN receipt details</p>

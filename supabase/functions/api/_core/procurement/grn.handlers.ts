@@ -34,7 +34,8 @@ type PurchaseOrderRow = Record<string, unknown>;
 type PurchaseOrderLineRow = Record<string, unknown>;
 type MaterialRow = Record<string, unknown>;
 
-const GRN_STATUSES = new Set(["DRAFT", "POSTED", "REVERSED"]);
+// SPLIT = a Bulk GRN whose invoices were split into child GRNs; its physical receipt still stands.
+const GRN_STATUSES = new Set(["DRAFT", "POSTED", "REVERSED", "SPLIT"]);
 const EXPIRY_TYPES = new Set(["DATE", "SPAN", "N_A"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
@@ -846,7 +847,7 @@ export async function createAndPostGRNFromLineHandler(
     const { data: existing } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
       .select("id, status").eq("gate_entry_line_id", gateEntryLineId)
-      .in("status", ["DRAFT", "POSTED"]).maybeSingle();
+      .in("status", ["DRAFT", "POSTED", "SPLIT"]).maybeSingle();
     if (existing) {
       return procurementErrorResponse(req, ctx, "GRN_ALREADY_EXISTS", 400, "A GRN already exists for this gate entry line.");
     }
@@ -1618,8 +1619,16 @@ export async function reverseGRNHandler(
     } catch {
       return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
+    if (toUpperTrimmedString(grn.status) === "SPLIT") {
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_CANNOT_REVERSE", 422, "This GRN's invoices were split into separate invoice GRNs. A split GRN cannot be reversed.");
+    }
     if (toUpperTrimmedString(grn.status) !== "POSTED") {
       return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be reversed.");
+    }
+    // An invoice GRN of a split carries no stock of its own -- the physical receipt is the
+    // SPLIT source GRN -- so reversing it alone would break the receipt-to-invoice chain.
+    if (toTrimmedString(grn.split_source_grn_id)) {
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_CHILD_CANNOT_REVERSE", 422, "This is an invoice GRN created by an invoice split. It cannot be reversed on its own.");
     }
 
     const isNewStyle = Boolean(grn.gate_entry_line_id);

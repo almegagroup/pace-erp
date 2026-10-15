@@ -18,6 +18,8 @@ function statusTone(status) {
   switch (String(status || "").toUpperCase()) {
     case "POSTED": return "bg-emerald-100 text-emerald-800";
     case "REVERSED": return "bg-rose-100 text-rose-800";
+    // Invoice split: the receipt stands, its invoices are separate invoice GRNs.
+    case "SPLIT": return "bg-violet-100 text-violet-800";
     case "DRAFT": default: return "bg-sky-100 text-sky-800";
   }
 }
@@ -133,7 +135,7 @@ export default function GRNListPage() {
                 className="h-10 border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-sky-500"
               >
                 <option value="">ALL</option>
-                {["DRAFT", "POSTED", "REVERSED"].map((s) => (
+                {["DRAFT", "POSTED", "SPLIT", "REVERSED"].map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
