@@ -11,7 +11,7 @@
  * Authority: Frontend
  */
 
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -141,9 +141,9 @@ export default function SalesInvoiceListPage() {
       eyebrow="Procurement"
       title="PGI & Invoice — Select Delivery Order"
       actions={[
-        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => setReloadTick((tick) => tick + 1) },
+        { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => listQuery.refetch() },
         { key: "do-list", label: "All DOs", tone: "neutral", onClick: () => { openScreen(OPERATION_SCREENS.PROC_DO_LIST.screen_code); navigate("/dashboard/procurement/delivery-orders"); } },
-        { key: "bulk-posting", label: "Bulk Posting", tone: "primary", onClick: () => navigate("/dashboard/procurement/sales-invoices/bulk-posting") },
+        { key: "bulk-posting", label: "Bulk Posting", tone: "primary", onClick: () => { openScreen(OPERATION_SCREENS.PROC_INV_BULK_POSTING.screen_code); navigate("/dashboard/procurement/sales-invoices/bulk-posting"); } },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: pagedRows.length === 0 },
       ]}
       notices={error ? [{ key: "do-queue-error", tone: "error", message: error }] : []}
@@ -188,6 +188,7 @@ export default function SalesInvoiceListPage() {
             <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={pageTotal} />
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 { key: "dc_number", label: "DO Number", width: "140px" },
                 { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },

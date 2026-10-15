@@ -5730,7 +5730,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/DOListPage.jsx",
-    "dependencyCount": 1,
+    "dependencyCount": 4,
     "deps": [
       {
         "fn": "listDeliveryOrders",
@@ -5738,6 +5738,30 @@
         "path": "/api/procurement/delivery-orders",
         "resourceCode": "PROC_DO_LIST",
         "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "lookupAplInvoiceCase",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/apl-invoice-case",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "saveAplInvoiceCase",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/apl-invoice-case",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "cancelAplInvoiceCase",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/apl-invoice-case/cancel",
+        "resourceCode": "PROC_DO_CREATE",
+        "action": "EDIT",
         "skipAcl": false
       }
     ]
@@ -5920,6 +5944,58 @@
         "path": "/api/procurement/delivery-orders",
         "resourceCode": "PROC_DO_LIST",
         "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/SO02BulkPostingPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
+      {
+        "fn": "listBulkPostingQueue",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/bulk/posting",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "bulkPostDeliveryOrders",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/bulk/post",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "bulkPostingCorrections",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/bulk/posting/corrections",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/ScheduledInvoiceCancellationPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "listScheduledDdInvoiceCancellation",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "postScheduledDdInvoiceCancellation",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "EDIT",
         "skipAcl": false
       }
     ]
@@ -9213,8 +9289,17 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/DispatchReportPage.jsx",
-    "dependencyCount": 0,
-    "deps": []
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "getDispatchReport",
+        "method": "GET",
+        "path": "/api/procurement/dispatch-report",
+        "resourceCode": "PROC_DISPATCH_REPORT",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/accounts/ManualCostingRatePage.jsx",

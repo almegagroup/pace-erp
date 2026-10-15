@@ -7,6 +7,7 @@
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
@@ -146,9 +147,9 @@ function isValidDeferredDispatchDate(lrDate: string, dispatchDate: string): bool
   if (!isIsoDate(lrDate) || !isIsoDate(dispatchDate)) return false;
   const today = todayIsoInKolkata();
   if (dispatchDate < lrDate || dispatchDate > today) return false;
-  // The design's narrower Today-2 window starts on 14 October 2026. Keeping
+  // The design's narrower Today-2 window starts on 31 October 2026 (moved from 14 October by the business owner, 2026-10-13). Keeping
   // the decision date explicit makes the temporary backlog rule auditable.
-  if (today >= "2026-10-14") {
+  if (today >= "2026-10-31") {
     const floor = new Date(`${today}T00:00:00Z`);
     floor.setUTCDate(floor.getUTCDate() - 2);
     return dispatchDate >= floor.toISOString().slice(0, 10);
@@ -163,7 +164,14 @@ function isValidDeferredDispatchDate(lrDate: string, dispatchDate: string): bool
  * the DO status change; this handler never writes those business tables on
  * its own.
  */
-export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+/**
+ * `options.doAccessChecked` is set only by the SO03 Truck & Dispatch upload,
+ * which has already authorised the caller on the DO itself (Stores /
+ * Logistics, PROC_DO_CREATE:EDIT). That upload only records the physical
+ * dispatch; the invoice was already made by Accounts, so it must not also
+ * demand Invoice access. The direct /vdc-pgi-only route never sets it.
+ */
+export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHandlerContext, options: { doAccessChecked?: boolean } = {}): Promise<Response> {
   try {
     const invoiceId = idFromPath(req);
     if (!invoiceId) return fail(req, ctx, "INVOICE_ID_REQUIRED", 400, "Invoice id is required.");
@@ -178,7 +186,7 @@ export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHa
 
     const companyId = text(invoice.company_id);
     try { await assertCompanyScope(ctx, companyId); } catch { return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company."); }
-    if (!(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
+    if (!options.doAccessChecked && !(await canMaintainSalesInvoice(ctx, companyId, "WRITE"))) return fail(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have Invoice/PGI create access at this company.");
     if (upper(invoice.status) !== "DRAFT") return fail(req, ctx, "VDC_PGI_ONLY_INVOICE_NOT_DRAFT", 409, "Only a draft VDC Invoice-only invoice can be posted.");
 
     const dcId = text(invoice.dc_id);
@@ -215,10 +223,26 @@ export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHa
     const dcLineIds = [...new Set(invoiceLines.map((line) => text(line.dc_line_id)).filter(Boolean))];
     const { data: dcLineData, error: dcLineError } = await serviceRoleClient
       .schema("erp_procurement").from("delivery_challan_line")
-      .select("id, material_id, storage_location_id, batch_number, line_material_type")
+      .select("id, material_id, storage_location_id, batch_number")
       .in("id", dcLineIds);
     if (dcLineError) return fail(req, ctx, "VDC_PGI_ONLY_DO_LINE_FETCH_FAILED", 500, "Unable to load delivery-order lines.");
     const dcLines = new Map(((dcLineData ?? []) as JsonRecord[]).map((line) => [text(line.id), line]));
+    // `line_material_type` is a Sales Order / computed-line field, not a
+    // delivery_challan_line column. Resolve the physical stock rule from the
+    // material master, as the regular PGI flow does. This keeps FG/SFG batch
+    // checks precise while RM/PM/INT remain blended.
+    let materials: JsonRecord[];
+    try {
+      const materialIds = [...new Set([...dcLines.values()].map((line) => text(line.material_id)).filter(Boolean))];
+      materials = materialIds.length
+        ? await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
+          .schema("erp_master").from("material_master")
+          .select("id, material_type").in("id", chunk))
+        : [];
+    } catch {
+      return fail(req, ctx, "VDC_PGI_ONLY_MATERIAL_FETCH_FAILED", 500, "Unable to load material details for PGI.");
+    }
+    const materialTypeById = new Map(materials.map((material) => [text(material.id), upper(material.material_type)]));
 
     const matDoc = await generateMaterialDocNumber(companyId);
     const movements: JsonRecord[] = [];
@@ -233,7 +257,7 @@ export async function completeVdcPgiOnlyHandler(req: Request, ctx: ProcurementHa
         return fail(req, ctx, "VDC_PGI_ONLY_LINE_INVALID", 400, "Invoice contains an invalid delivery-order line.");
       }
       const batchNumber = text(dcLine.batch_number) || null;
-      const isBatchTracked = ["FG", "SFG"].includes(upper(dcLine.line_material_type));
+      const isBatchTracked = ["FG", "SFG"].includes(materialTypeById.get(materialId) || "");
       const physicalBlock = isBatchTracked
         ? await hasPhysicalInventoryBlockForBatch(companyId, materialId, storageLocationId, "UNRESTRICTED", batchNumber)
         : await hasPhysicalInventoryBlock(companyId, materialId, storageLocationId, "UNRESTRICTED");

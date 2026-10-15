@@ -266,6 +266,8 @@ export default function DraftSoExcelUploadPage() {
             <p className="text-slate-400 text-sm py-6 text-center">Select a company to view draft sales orders.</p>
           ) : (
             <ErpDenseGrid
+              cellNavigate
+              columnFilter
               columns={[
                 ...DRAFT_LIST_COLUMNS,
                 { key: "actions", label: "", width: "110px", render: (row) => (
@@ -306,6 +308,8 @@ export default function DraftSoExcelUploadPage() {
           <p className="mb-2 text-xs font-semibold text-rose-700">Resolve every duplicate row (remove one of each pair) before submitting.</p>
         ) : null}
         <ErpDenseGrid
+          cellNavigate
+          columnFilter
           columns={[
             { key: "so_number", label: "SO Number", width: "110px" },
             { key: "external_so_number", label: "External SO Number", width: "140px" },

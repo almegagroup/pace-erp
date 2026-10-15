@@ -280,6 +280,7 @@ export default function SalesInvoiceDetailPage() {
           <ErpSectionCard eyebrow="Preview Lines" title="DC-driven invoice lines">
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 {
                   key: "material_name",
@@ -360,6 +361,7 @@ export default function SalesInvoiceDetailPage() {
               {(detail.additional_cost_lines ?? []).length > 0 ? (
                 <ErpDenseGrid
                   cellNavigate
+                  columnFilter
                   columns={[
                     { key: "category_name", label: "Category", render: (row) => row.category_name || "—" },
                     { key: "amount", label: "Amount", width: "100px", align: "right", render: (row) => formatMoney(row.amount) },
@@ -396,6 +398,7 @@ export default function SalesInvoiceDetailPage() {
           <ErpSectionCard eyebrow="Lines" title="Invoice lines">
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 {
                   key: "material_name",
@@ -450,6 +453,7 @@ export default function SalesInvoiceDetailPage() {
               </p>
               <ErpDenseGrid
                 cellNavigate
+                columnFilter
                 columns={[
                   { key: "so_number", label: "SO", width: "120px", render: (row) => row.so_number || "—" },
                   { key: "fo_number", label: "FO", width: "120px", render: (row) => row.fo_number || "—" },

@@ -1,7 +1,8 @@
 /*
  * File-Path: supabase/functions/api/_core/procurement/dispatch_report.handlers.ts
- * Purpose: SO04 item-wise dispatch report. One row per posted invoice + item;
- *          invoice references repeat when an invoice contains multiple items.
+ * Purpose: SO04 item-wise dispatch report. One row per posted or cancelled
+ *          invoice + item; invoice references repeat when an invoice contains
+ *          multiple items.
  * Authority: Backend
  */
 
@@ -103,12 +104,30 @@ export async function getDispatchReportHandler(
     if (companyErr) throw new Error("DISPATCH_REPORT_COMPANY_LOOKUP_FAILED");
     const companyCode = textValue((companyRow as JsonRecord | null)?.company_code);
 
-    const invoices = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
+    const candidateInvoices = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
       .schema("erp_procurement").from("sales_invoice")
       .select("id, invoice_number, invoice_date, company_id, dc_id, so_id, sto_id, status, tally_invoice_number, tally_invoice_date, inbound_number, fo_id, fo_number, bill_to_name, ship_to_name")
-      .eq("company_id", companyId).eq("status", "POSTED")
+      // SO04 is the commercial invoice/dispatch report: a DD Invoice-only
+      // row is visible before its physical PGI, while normal drafts remain
+      // excluded below. CANCELLED remains for APL reconciliation.
+      .eq("company_id", companyId).in("status", ["DRAFT", "POSTED", "CANCELLED"])
       .gte("tally_invoice_date", dateFrom).lte("tally_invoice_date", dateTo)
       .order("tally_invoice_date", { ascending: true }).order("id", { ascending: true }).range(from, to));
+    if (candidateInvoices.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    // Only DD/deferred invoices use DRAFT as the intentional Invoice-only
+    // state. Do not allow an unrelated incomplete draft into SO04.
+    const draftDcIds = uniqueValues(candidateInvoices
+      .filter((row) => upperValue(row.status) === "DRAFT")
+      .map((row) => row.dc_id));
+    const draftHeaders = await fetchInChunks<JsonRecord>(draftDcIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("delivery_challan")
+      .select("id, pgi_deferred").in("id", chunk));
+    const deferredDraftDcIds = new Set(draftHeaders
+      .filter((row) => row.pgi_deferred === true)
+      .map((row) => textValue(row.id)));
+    const invoices = candidateInvoices.filter((row) =>
+      upperValue(row.status) !== "DRAFT" || deferredDraftDcIds.has(textValue(row.dc_id)));
     if (invoices.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
 
     const invoiceIds = invoices.map((row) => textValue(row.id));
@@ -132,6 +151,16 @@ export async function getDispatchReportHandler(
       .select("id, transporter_id, transporter_name_freetext, vehicle_number, lr_number, lr_date, gross_weight, net_weight, driver_name, driver_number, driver_contact_number")
       .in("id", chunk));
     const dcHeaderById = new Map(dcHeaders.map((row) => [textValue(row.id), row]));
+
+    // The APL case is owned by the DO, while SO04 is invoice-line based. Load
+    // it once for all DOs so every invoice row can state the current APL
+    // condition without a per-row query. CANCELLED is deliberately distinct
+    // from a normal cancelled invoice: only this workflow earns the APL text.
+    const aplCases = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("delivery_order_apl_invoice_case")
+      .select("dc_id, status, received_date")
+      .eq("company_id", companyId).in("dc_id", chunk));
+    const aplCaseByDcId = new Map(aplCases.map((row) => [textValue(row.dc_id), row]));
     const transporterIds = uniqueValues(dcHeaders.map((row) => row.transporter_id));
     const transporters = await fetchInChunks<JsonRecord>(transporterIds, (chunk) => serviceRoleClient
       .schema("erp_master").from("transporter_master")
@@ -147,9 +176,15 @@ export async function getDispatchReportHandler(
     const soIds = uniqueValues([...invoices.map((row) => row.so_id), ...soLines.map((row) => row.so_id)]);
     const salesOrders = await fetchInChunks<JsonRecord>(soIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("sales_order")
-      .select("id, customer_po_number, dispatch_type, dispatch_category, bill_to_parent_company_id")
+      .select("id, customer_po_number, dispatch_type, dispatch_category, bill_to_parent_company_id, vendor_code_id")
       .in("id", chunk));
     const soById = new Map(salesOrders.map((row) => [textValue(row.id), row]));
+
+    const vendorCodeIds = uniqueValues(salesOrders.map((row) => row.vendor_code_id));
+    const vendorCodes = await fetchInChunks<JsonRecord>(vendorCodeIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("vendor_code_master")
+      .select("id, vendor_code").in("id", chunk));
+    const vendorCodeById = new Map(vendorCodes.map((row) => [textValue(row.id), textValue(row.vendor_code)]));
 
     const materialIds = uniqueValues(invoiceLines.map((row) => row.material_id));
     const materials = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
@@ -212,9 +247,22 @@ export async function getDispatchReportHandler(
     const allocationIds = uniqueValues(dcLines.map((row) => row.so_map_allocation_id));
     const allocations = await fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("sales_order_map_allocation")
-      .select("id, fo_id, customer_address_id").in("id", chunk));
+      .select("id, fo_id, customer_address_id, map_group_id").in("id", chunk));
     const allocationById = new Map(allocations.map((row) => [textValue(row.id), row]));
-    const foIds = uniqueValues([...invoices.map((row) => row.fo_id), ...allocations.map((row) => row.fo_id)]);
+    // MTS allocations deliberately have no plan-feed id of their own. Their
+    // customer FO is owned by the SO Map Group's external/revised external FO.
+    // Resolve that group in the same bulk pass instead of showing a false blank
+    // FO # in SO04 (or adding a per-row report lookup).
+    const mapGroupIds = uniqueValues(allocations.map((row) => row.map_group_id));
+    const mapGroups = await fetchInChunks<JsonRecord>(mapGroupIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_group")
+      .select("id, fo_id, external_fo_number, revised_external_fo_number").in("id", chunk));
+    const mapGroupById = new Map(mapGroups.map((row) => [textValue(row.id), row]));
+    const foIds = uniqueValues([
+      ...invoices.map((row) => row.fo_id),
+      ...allocations.map((row) => row.fo_id),
+      ...mapGroups.map((row) => row.fo_id),
+    ]);
     const feeds = await fetchInChunks<JsonRecord>(foIds, (chunk) => serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select("id, fo_number, customer_address_id").in("id", chunk));
@@ -252,7 +300,8 @@ export async function getDispatchReportHandler(
         const packing = packingById.get(textValue(dcLine.packing_order_id)) ?? {};
         const process = processById.get(textValue(packing.process_order_id)) ?? {};
         const allocation = allocationById.get(textValue(dcLine.so_map_allocation_id)) ?? {};
-        const feed = feedById.get(textValue(allocation.fo_id || invoice.fo_id)) ?? {};
+        const mapGroup = mapGroupById.get(textValue(allocation.map_group_id)) ?? {};
+        const feed = feedById.get(textValue(allocation.fo_id || mapGroup.fo_id || invoice.fo_id)) ?? {};
         const address = addressById.get(textValue(allocation.customer_address_id || feed.customer_address_id)) ?? {};
         const dc = dcHeaderById.get(textValue(dcLine.dc_id || invoice.dc_id)) ?? {};
         const transporter = transporterById.get(textValue(dc.transporter_id));
@@ -283,7 +332,7 @@ export async function getDispatchReportHandler(
         const mismatchStroke = Boolean(
           declaredStroke && actualStroke && upperValue(declaredStroke) !== upperValue(actualStroke),
         );
-        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke, mismatchStroke };
+        return { line, dcLine, soLine, so, packing, process, allocation, mapGroup, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke, mismatchStroke };
       });
 
       const strokeEntryMap = new Map<string, StrokeEntry>();
@@ -299,9 +348,24 @@ export async function getDispatchReportHandler(
       }
       const soStrokeEntries = [...strokeEntryMap.values()];
       const tallyDate = textValue(invoice.tally_invoice_date);
+      const aplCase = aplCaseByDcId.get(textValue(invoice.dc_id));
+      const aplCaseStatus = upperValue(aplCase?.status);
+      const aplInvoiceStatus = aplCaseStatus === "NO"
+        ? "APL Invoice Not Received"
+        : aplCaseStatus === "CANCELLED"
+        ? "APL Invoice Not Received — Cancelled"
+        : aplCaseStatus === "YES"
+        ? `APL Invoice Received — ${textValue(aplCase?.received_date) || "Received date not recorded"}`
+        : "";
+      const stockMovement = upperValue(invoice.status) === "POSTED"
+        ? "Yes"
+        : upperValue(invoice.status) === "CANCELLED"
+        ? "Reversed"
+        : "No";
       return {
         row_key: rowKey,
         company_code: companyCode,
+        vendor_code: joined(lineDetails.map((entry) => vendorCodeById.get(textValue(entry.so.vendor_code_id)))),
         month_year: monthYear(tallyDate),
         type: joined(lineDetails.map((entry) => entry.soLine.line_material_type || material.material_type)),
         fg_type: joined(lineDetails.map((entry) => entry.soLine.fg_type)),
@@ -312,11 +376,16 @@ export async function getDispatchReportHandler(
         tally_invoice_number: textValue(invoice.tally_invoice_number),
         tally_invoice_date: tallyDate,
         inbound_number: textValue(invoice.inbound_number),
+        apl_invoice_status: aplInvoiceStatus,
+        stock_movement: stockMovement,
         pack_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.pack_qty ?? dcLineById.get(textValue(line.dc_line_id))?.pack_qty), 0), 6),
         pack_uom: joined(lines.map((line) => line.pack_uom_code || dcLineById.get(textValue(line.dc_line_id))?.pack_uom_code)),
         base_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.quantity), 0), 6),
         base_uom: joined(lines.map((line) => line.uom_code || material.base_uom_code)),
-        fo_number: joined([invoice.fo_number, ...lineDetails.map((entry) => entry.feed.fo_number)]),
+        fo_number: joined([
+          invoice.fo_number,
+          ...lineDetails.map((entry) => entry.mapGroup.revised_external_fo_number || entry.mapGroup.external_fo_number || entry.feed.fo_number),
+        ]),
         batch_number: joined(lineDetails.map((entry) => entry.dcLine.batch_number)),
         packing_po_number: joined(lineDetails.map((entry) => entry.packing.po_number)),
         item: [textValue(material.pace_code), textValue(material.material_name)].filter(Boolean).join(" — "),

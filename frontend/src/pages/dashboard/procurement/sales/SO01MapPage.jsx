@@ -255,6 +255,7 @@ function MapDrawer({ so, onClose, onChanged, onOpenMtsFoList }) {
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">SO Lines — mapped / remaining</h4>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               maxHeight="none"
               columns={[
                 { key: "material", label: "Item", width: "300px", render: (line) => `${line.line_material_type}${line.fg_type ? ` / ${line.fg_type}` : ""} — ${line.material_display || "—"}` },
@@ -301,6 +302,7 @@ function MapDrawer({ so, onClose, onChanged, onOpenMtsFoList }) {
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Existing Mappings</h4>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               maxHeight="none"
               columns={[
                 { key: "external_fo_number", label: "FO Number", width: "125px", render: (group) => group.external_fo_number || "—" },
@@ -328,11 +330,18 @@ function MapDrawer({ so, onClose, onChanged, onOpenMtsFoList }) {
 // Show both sources without conflating them: Plan Feed FOs are internal
 // production sources (and may have Packing POs), while a Bulk DD SO Map
 // carries an external Sales/Dispatch FO on its mapping group.
-function FoPackingPoCell({ groups }) {
+function FoPackingPoCell({ groups, searchNeedle = "" }) {
   if (!groups || groups.length === 0) return <span className="text-slate-400">—</span>;
+  // A DD SO can carry hundreds of FOs. While searching, show only the FOs
+  // that match so the searched FO is visible instead of buried in the cell.
+  const matching = searchNeedle
+    ? groups.filter((group) => `${group.fo_number} ${group.po_numbers.join(" ")}`.toLowerCase().includes(searchNeedle))
+    : [];
+  const visible = matching.length ? matching : groups;
+  const hiddenCount = groups.length - visible.length;
   return (
     <div className="grid gap-0.5 py-0.5">
-      {groups.map((group) => {
+      {visible.map((group) => {
         const isSalesDispatchFo = group.kind === "SALES_DISPATCH";
         return (
           <div key={`${group.kind ?? "PLAN_FEED"}:${group.fo_number}`} className="whitespace-nowrap">
@@ -341,6 +350,7 @@ function FoPackingPoCell({ groups }) {
           </div>
         );
       })}
+      {hiddenCount > 0 ? <div className="text-[11px] text-slate-500">+{hiddenCount} other FO(s) on this SO</div> : null}
     </div>
   );
 }
@@ -356,7 +366,7 @@ const SO_MAP_COLUMNS = [
   { key: "customer_po_number", label: "External SO Number", width: "150px", render: (row) => row.customer_po_number || "—" },
   { key: "so_date", label: "SO Date", width: "100px", render: (row) => row.so_date },
   { key: "dispatch_type", label: "Dispatch Type", width: "180px", render: (row) => row.dispatch_type },
-  { key: "fo_packing_po", label: "Sales/Dispatch FO / Packing PO", width: "280px", render: (row) => <FoPackingPoCell groups={row.fo_packing_po_groups} />, copyValue: foPackingPoFilterText },
+  { key: "fo_packing_po", label: "Sales/Dispatch FO / Packing PO", width: "280px", render: (row) => <FoPackingPoCell groups={row.fo_packing_po_groups} searchNeedle={row.fo_search_needle} />, copyValue: foPackingPoFilterText },
   { key: "total", label: "Total Qty", width: "90px", align: "right", render: (row) => Number(row.total_qty ?? 0).toFixed(2) },
   { key: "mapped", label: "Mapped Qty", width: "90px", align: "right", render: (row) => Number(row.mapped_qty ?? 0).toFixed(2) },
   { key: "status", label: "Status", width: "120px", render: (row) => <StatusPill status={row.map_status} />, copyValue: (row) => row.map_status },
@@ -397,9 +407,15 @@ export default function SO01MapPage() {
     const values = new Set();
     outer: for (const row of rows) {
       for (const column of SO_MAP_COLUMNS) {
-        const text = getColumnFilterText(column, row);
-        if (text) values.add(text);
-        if (values.size >= 500) break outer;
+        // The FO column is one long text per SO; suggest each FO number
+        // on its own instead, so an FO can be picked from the list.
+        if (column.key === "fo_packing_po") {
+          for (const group of row.fo_packing_po_groups ?? []) if (group.fo_number) values.add(String(group.fo_number));
+        } else {
+          const text = getColumnFilterText(column, row);
+          if (text) values.add(text);
+        }
+        if (values.size >= 3000) break outer;
       }
     }
     return [...values].sort();
@@ -408,7 +424,9 @@ export default function SO01MapPage() {
   const filteredRows = useMemo(() => {
     const needle = globalSearch.trim().toLowerCase();
     if (!needle) return rows;
-    return rows.filter((row) => SO_MAP_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)));
+    return rows
+      .filter((row) => SO_MAP_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle)))
+      .map((row) => ({ ...row, fo_search_needle: needle }));
   }, [rows, globalSearch]);
 
   useErpScreenHotkeys({
@@ -478,6 +496,7 @@ export default function SO01MapPage() {
               </div>
               <ErpDenseGrid
                 cellNavigate
+                columnFilter
                 columns={[
                   ...SO_MAP_COLUMNS,
                   { key: "actions", label: "", width: "170px", render: (row) => (
@@ -486,7 +505,7 @@ export default function SO01MapPage() {
                 ]}
                 rows={filteredRows}
                 rowKey={(row) => row.id}
-                emptyMessage={hasActiveSearch ? "No rows match this search." : "No SOs pending mapping."}
+                emptyMessage={hasActiveSearch ? `"${globalSearch.trim()}" is not on any SO in this company — if it is an FO, it has not been mapped yet.` : "No SOs pending mapping."}
               />
             </ErpSectionCard>
           </div>

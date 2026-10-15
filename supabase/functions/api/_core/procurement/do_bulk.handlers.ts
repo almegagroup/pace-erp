@@ -98,7 +98,7 @@ async function getCompanyScope(ctx: ProcurementHandlerContext, requestedCompanyI
 // do_unified.handlers.ts's own canMaintainDoCreate() is not exported (file
 // header note there: "small enough to duplicate rather than widen that
 // file's export surface for one Set") — same call here, same reasoning.
-async function canMaintainDoBulkAccess(
+export async function canMaintainDoBulkAccess(
   ctx: ProcurementHandlerContext,
   companyId: string,
   actionCode: "VIEW" | "WRITE" | "EDIT",
@@ -210,7 +210,7 @@ function resolveTransporterFromRows(name: string, rows: JsonRecord[]): {
 // against sales_order.so_number). A value that resolves to the WRONG type
 // is a type-mismatch error, not a silent fallback.
 async function resolveFoOrSo(value: string, companyId: string): Promise<{
-  status: "VDC" | "DC" | "VDC_WRONG_FIELD" | "DC_WRONG_FIELD" | "NOT_FOUND";
+  status: "VDC" | "DC" | "VDC_WRONG_FIELD" | "DC_WRONG_FIELD" | "NOT_FOUND" | "EXTERNAL_SO_AMBIGUOUS";
   so_id?: string;
   so_number?: string;
   map_group_id?: string;
@@ -249,8 +249,20 @@ async function resolveFoOrSo(value: string, companyId: string): Promise<{
     .schema("erp_procurement").from("sales_order")
     .select("id, so_number, company_id, dispatch_type, is_dd_dispatch")
     .eq("so_number", value).maybeSingle();
-  if (!soError && soRow) {
-    const so = soRow as JsonRecord;
+  // Depot users often type the External SO Number (the customer's own SO
+  // number, stored as sales_order.customer_po_number) instead of the PACE SO
+  // Number. Accept it when it identifies exactly one SO in this company.
+  let externalSoRow: JsonRecord | null = null;
+  if (!soRow) {
+    const { data: externalRows, error: externalError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order")
+      .select("id, so_number, company_id, dispatch_type, is_dd_dispatch")
+      .eq("customer_po_number", value).eq("company_id", companyId).neq("status", "CANCELLED").limit(2);
+    if (!externalError && (externalRows ?? []).length > 1) return { status: "EXTERNAL_SO_AMBIGUOUS" };
+    externalSoRow = ((externalRows ?? []) as JsonRecord[])[0] ?? null;
+  }
+  if (!soError && (soRow || externalSoRow)) {
+    const so = (soRow ?? externalSoRow) as JsonRecord;
     if (toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)) return { status: "NOT_FOUND" };
     const dispatchType = toUpperTrimmedString(so.dispatch_type);
     if (dispatchType === "DEPENDENT_DEPOT") return { status: "DC", so_id: toTrimmedString(so.id), so_number: toTrimmedString(so.so_number), is_dd_dispatch: false };
@@ -295,7 +307,7 @@ type DrawnDeliveryOrderLookup = {
 // invoice/PGI lifecycle, never which Direct allocation is valid.
 async function buildBulkPreviewLookup(rows: RawUploadRow[], companyId: string): Promise<BulkPreviewLookup> {
   const identifiers = [...new Set(rows.map((row) => toTrimmedString(row.fo_or_so_number)).filter(Boolean))];
-  const [originalGroups, revisedGroups, soByNumberRows, finishedGoodsLocations, transporters] = await Promise.all([
+  const [originalGroups, revisedGroups, soByNumberRows, finishedGoodsLocations, externalSoRows, transporters] = await Promise.all([
     fetchInChunks<JsonRecord>(identifiers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
       .select("id, so_id, external_fo_number, revised_external_fo_number").in("external_fo_number", chunk).eq("status", "ACTIVE")),
     fetchInChunks<JsonRecord>(identifiers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
@@ -303,6 +315,10 @@ async function buildBulkPreviewLookup(rows: RawUploadRow[], companyId: string): 
     fetchInChunks<JsonRecord>(identifiers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order")
       .select("id, so_number, company_id, dispatch_type, is_dd_dispatch").in("so_number", chunk)),
     listFinishedGoodsStorageLocations(),
+    // External SO Number (customer_po_number) — same company only.
+    fetchInChunks<JsonRecord>(identifiers, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order")
+      .select("id, so_number, customer_po_number, company_id, dispatch_type, is_dd_dispatch")
+      .eq("company_id", companyId).neq("status", "CANCELLED").in("customer_po_number", chunk)),
     listActiveTransporters(),
   ]);
   const mapGroupByIdentifier = new Map<string, JsonRecord>();
@@ -315,6 +331,11 @@ async function buildBulkPreviewLookup(rows: RawUploadRow[], companyId: string): 
     .select("id, so_number, company_id, dispatch_type, is_dd_dispatch").in("id", chunk));
   const soById = new Map([...soByNumberRows, ...mappedSoRows].map((so) => [toTrimmedString(so.id), so]));
   const soByNumber = new Map(soByNumberRows.map((so) => [toTrimmedString(so.so_number), so]));
+  const externalSosByNumber = new Map<string, JsonRecord[]>();
+  for (const so of externalSoRows) {
+    const key = toTrimmedString(so.customer_po_number);
+    externalSosByNumber.set(key, [...(externalSosByNumber.get(key) ?? []), so]);
+  }
   const resolvedByIdentifier = new Map<string, Awaited<ReturnType<typeof resolveFoOrSo>>>();
   for (const identifier of identifiers) {
     const group = mapGroupByIdentifier.get(identifier);
@@ -324,7 +345,12 @@ async function buildBulkPreviewLookup(rows: RawUploadRow[], companyId: string): 
       resolvedByIdentifier.set(identifier, { status: "VDC", so_id: toTrimmedString(mappedSo.id), so_number: toTrimmedString(mappedSo.so_number), map_group_id: toTrimmedString(group?.id), is_dd_dispatch: mappedSo.is_dd_dispatch === true });
       continue;
     }
-    const so = soByNumber.get(identifier);
+    const externalMatches = externalSosByNumber.get(identifier) ?? [];
+    if (!soByNumber.has(identifier) && externalMatches.length > 1) {
+      resolvedByIdentifier.set(identifier, { status: "EXTERNAL_SO_AMBIGUOUS" });
+      continue;
+    }
+    const so = soByNumber.get(identifier) ?? externalMatches[0];
     if (!so || toUpperTrimmedString(so.company_id) !== toUpperTrimmedString(companyId)) {
       resolvedByIdentifier.set(identifier, { status: "NOT_FOUND" });
     } else if (toUpperTrimmedString(so.dispatch_type) === "DEPENDENT_DEPOT") {
@@ -412,6 +438,7 @@ export async function previewDoBulkUploadHandler(req: Request, ctx: ProcurementH
       if (resolved.status === "NOT_FOUND") { results.push({ ...previewIdentity, status: "ERROR", error_code: "FO_SO_NOT_FOUND" }); continue; }
       if (resolved.status === "VDC_WRONG_FIELD") { results.push({ ...previewIdentity, status: "ERROR", error_code: "DO_BULK_VDC_MUST_USE_FO_NUMBER" }); continue; }
       if (resolved.status === "DC_WRONG_FIELD") { results.push({ ...previewIdentity, status: "ERROR", error_code: "DO_BULK_SO_WRONG_DISPATCH_TYPE" }); continue; }
+      if (resolved.status === "EXTERNAL_SO_AMBIGUOUS") { results.push({ ...previewIdentity, status: "ERROR", error_code: "DO_BULK_EXTERNAL_SO_AMBIGUOUS" }); continue; }
       const isVdc = resolved.status === "VDC";
       const ddFlag = resolved.is_dd_dispatch === true;
       const soId = toTrimmedString(resolved.so_id);
@@ -977,6 +1004,8 @@ export async function findDoByFoNumberHandler(req: Request, ctx: ProcurementHand
       lr_date: dcRow.lr_date,
       truck_number: dcRow.vehicle_number,
       dispatch_date: dcRow.dispatch_date,
+      dd_flag: dcRow.pgi_deferred === true,
+      dispatch_date_locked: dcRow.pgi_deferred === true && toUpperTrimmedString(dcRow.status) === "DISPATCHED",
     }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_BULK_FO_LOOKUP_FAILED";
@@ -1002,7 +1031,7 @@ export async function editTransporterDetailsHandler(req: Request, ctx: Procureme
     }
 
     const { data: dc, error: dcError } = await serviceRoleClient
-      .schema("erp_procurement").from("delivery_challan").select("id, status, selling_company_id, lr_date").eq("id", dcId).maybeSingle();
+      .schema("erp_procurement").from("delivery_challan").select("id, status, selling_company_id, lr_date, dispatch_date, pgi_deferred").eq("id", dcId).maybeSingle();
     if (dcError || !dc) return doBulkErrorResponse(req, ctx, "DO_BULK_DO_NOT_FOUND", 404, "Delivery order not found.");
     const companyId = toTrimmedString((dc as JsonRecord).selling_company_id);
     try {
@@ -1022,6 +1051,12 @@ export async function editTransporterDetailsHandler(req: Request, ctx: Procureme
       return doBulkErrorResponse(req, ctx, "DO_BULK_TRUCK_INVALID", 400, "Truck Number must contain at least 4 characters.");
     }
     const dispatchDate = toTrimmedString(body.dispatch_date);
+    // DD DO: once PGI is posted (DISPATCHED) the stock movement already carries
+    // this Dispatch Date, so it can no longer change.
+    if (dispatchDate && (dc as JsonRecord).pgi_deferred === true && toUpperTrimmedString((dc as JsonRecord).status) === "DISPATCHED"
+      && dispatchDate !== toTrimmedString((dc as JsonRecord).dispatch_date).slice(0, 10)) {
+      return doBulkErrorResponse(req, ctx, "DO_BULK_DISPATCH_DATE_LOCKED", 400, "PGI is already posted for this DO; its Dispatch Date cannot change.");
+    }
     if (dispatchDate) {
       const effectiveLrDate = lrDate || toTrimmedString((dc as JsonRecord).lr_date);
       if (!isIsoDate(dispatchDate) || !isIsoDate(effectiveLrDate) || dispatchDate < effectiveLrDate || dispatchDate > todayIsoInKolkata()) {

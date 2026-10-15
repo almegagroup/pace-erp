@@ -77,7 +77,7 @@ export default function SO05ListPage() {
   return <ErpScreenScaffold title="Sales Return" eyebrow="SO05" subtitle="Return receipts posted into Blocked stock." actions={[{ label: "Invoice Posting", tone: "neutral", onClick: openInvoicePosting }, { label: "Create Return", tone: "primary", onClick: openCreate }]}>
     <ErpSectionCard title="Return receipts">
       <div className="grid md:grid-cols-2 gap-3 mb-3"><TransactionCompanySelector runtimeContext={runtimeContext} value={effectiveCompanyId} onChange={setCompanyId} /><QuickFilterInput value={search} onChange={setSearch} placeholder="Search any column…" /></div>
-      <ErpDenseGrid columns={columns} rows={filtered} emptyMessage={query.isLoading ? "Loading Sales Returns…" : "No Sales Return receipts found."} rowKey={(row) => row.item_id} />
+      <ErpDenseGrid cellNavigate columnFilter columns={columns} rows={filtered} emptyMessage={query.isLoading ? "Loading Sales Returns…" : "No Sales Return receipts found."} rowKey={(row) => row.item_id} />
     </ErpSectionCard>
   </ErpScreenScaffold>;
 }

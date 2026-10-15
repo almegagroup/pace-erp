@@ -1391,10 +1391,11 @@ export default function SO01CreatePage() {
                 </button>
               </div>
               <ErpDenseGrid
+                cellNavigate
+                columnFilter
                 columns={columnsFor(materialType)}
                 rows={lines.filter((line) => line.line_material_type === materialType)}
                 rowKey={(line) => line.__key}
-                cellNavigate
                 fitColumnWidths
                 emptyMessage={`No ${materialType} lines yet.`}
               />

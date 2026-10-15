@@ -15,6 +15,7 @@ import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE }
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { hasPhysicalInventoryBlock as sharedHasPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
 import { INDIAN_STATE_NAMES } from "../../_shared/indianStates.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
@@ -917,10 +918,17 @@ export async function listSOsHandler(
     // Direct SOs acquire their consignee only when SO Map is completed. Read
     // both manual map addresses and FO-selected MM04 addresses so the register
     // always shows the latest resolved customer and Ship-To address.
-    const { data: allocationData, error: allocationError } = soIds.length
-      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
-        .select("so_id, customer_address_id, fo_id").in("so_id", soIds).eq("status", "ACTIVE")
-      : { data: [], error: null };
+    // §8E — one DD SO can carry hundreds of FO allocations, so this read can
+    // exceed PostgREST's 1000-row cap; fetchInChunks also pages each chunk.
+    let allocationData: JsonRecord[] = [];
+    let allocationError: unknown = null;
+    try {
+      allocationData = await fetchInChunks<JsonRecord>(soIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+          .select("so_id, customer_address_id, fo_id").in("so_id", chunk).eq("status", "ACTIVE"));
+    } catch (error) {
+      allocationError = error;
+    }
     // Mapping is display enrichment only. A temporarily unavailable map read
     // must never hide an otherwise valid SO register or block its detail page.
     if (allocationError) {
@@ -974,9 +982,17 @@ export async function listSOsHandler(
     }
 
     const foIds = [...new Set(allocationRows.map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
-    const { data: foRows, error: foError } = foIds.length
-      ? await serviceRoleClient.schema("erp_production").from("plan_feed").select("id, customer_address_id").in("id", foIds)
-      : { data: [], error: null };
+    // §8E — the FO, address and customer id lists grow with the number of
+    // mapped FOs (a single DD SO here had 671), which overflowed the GET URL
+    // and failed the whole register with SO_LIST_DISPLAY_LOOKUP_FAILED.
+    let foRows: JsonRecord[] = [];
+    let foError: unknown = null;
+    try {
+      foRows = await fetchInChunks<JsonRecord>(foIds, (chunk) =>
+        serviceRoleClient.schema("erp_production").from("plan_feed").select("id, customer_address_id").in("id", chunk));
+    } catch (error) {
+      foError = error;
+    }
     if (foError) return salesErrorResponse(req, ctx, "SO_LIST_FO_LOOKUP_FAILED", 500, "Unable to load SO mapping details.");
     const foAddressById = new Map(((foRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.customer_address_id)]));
 
@@ -986,10 +1002,9 @@ export async function listSOsHandler(
     const addressIds = [...new Set(mappedAddressIds)];
 
     const [addressResp, companyResp, parentResp, depotResp] = await Promise.all([
-      addressIds.length
-        ? serviceRoleClient.schema("erp_master").from("customer_address")
-          .select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", addressIds)
-        : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+      fetchInChunks<JsonRecord>(addressIds, (chunk) => serviceRoleClient.schema("erp_master").from("customer_address")
+        .select("id, customer_id, site_name, address_line, town, state, pin_code").in("id", chunk))
+        .then((data) => ({ data, error: null }), (error) => ({ data: [] as JsonRecord[], error })),
       companyIds.length
         ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", companyIds)
         : Promise.resolve({ data: [] as JsonRecord[], error: null }),
@@ -1006,9 +1021,14 @@ export async function listSOsHandler(
 
     const addressRows = (addressResp.data ?? []) as JsonRecord[];
     const customerIds = [...new Set([...headerCustomerIds, ...addressRows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean)])];
-    const { data: customerRows, error: customerError } = customerIds.length
-      ? await serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
-      : { data: [], error: null };
+    let customerRows: JsonRecord[] = [];
+    let customerError: unknown = null;
+    try {
+      customerRows = await fetchInChunks<JsonRecord>(customerIds, (chunk) =>
+        serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", chunk));
+    } catch (error) {
+      customerError = error;
+    }
     if (customerError) return salesErrorResponse(req, ctx, "SO_LIST_CUSTOMER_LOOKUP_FAILED", 500, "Unable to load SO customer details.");
 
     const customerMap = new Map(((customerRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));

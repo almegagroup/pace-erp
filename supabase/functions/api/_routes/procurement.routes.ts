@@ -440,12 +440,16 @@ import {
   findDoByFoNumberHandler,
   editTransporterDetailsHandler,
 } from "../_core/procurement/do_bulk.handlers.ts";
+import { cancelAplInvoiceCaseHandler, lookupAplInvoiceCaseHandler, saveAplInvoiceCaseHandler } from "../_core/procurement/apl_invoice_case.handlers.ts";
 import {
   bulkPostDeliveryOrdersHandler,
+  bulkPostingCorrectionsHandler,
+  cancelScheduledDdInvoiceOnlyHandler,
   listBulkPostingQueueHandler,
+  listScheduledDdInvoiceCancellationHandler,
 } from "../_core/procurement/do_bulk_post.handlers.ts";
 import { cancelVdcDeliveryOrderHandler, completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "../_core/procurement/vdc_invoice.handlers.ts";
-import { listVdcTruckDispatchPendingHandler, postVdcTruckDispatchUploadHandler } from "../_core/procurement/vdc_truck_dispatch.handlers.ts";
+import { listVdcTruckDispatchPendingHandler, postVdcTruckDispatchUploadHandler, checkVdcTruckDispatchUploadHandler } from "../_core/procurement/vdc_truck_dispatch.handlers.ts";
 import {
   cancelDeliveryOrderHandler,
   createDeliveryOrderHandler,
@@ -957,14 +961,28 @@ export async function dispatchProcurementRoutes(
       return await listBulkPostingQueueHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/post":
       return await bulkPostDeliveryOrdersHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/posting/corrections":
+      return await bulkPostingCorrectionsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation":
+      return await listScheduledDdInvoiceCancellationHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post":
+      return await cancelScheduledDdInvoiceOnlyHandler(req, ctx);
     case "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch":
       return await listVdcTruckDispatchPendingHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post":
       return await postVdcTruckDispatchUploadHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check":
+      return await checkVdcTruckDispatchUploadHandler(req, ctx);
     case "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":
       return await findDoByFoNumberHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter":
       return await editTransporterDetailsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/apl-invoice-case":
+      return await lookupAplInvoiceCaseHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/apl-invoice-case":
+      return await saveAplInvoiceCaseHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/apl-invoice-case/cancel":
+      return await cancelAplInvoiceCaseHandler(req, ctx);
 
     case "GET:/api/procurement/delivery-orders":
       return await listDeliveryOrdersHandler(req, ctx);

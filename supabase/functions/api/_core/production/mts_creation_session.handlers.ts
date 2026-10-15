@@ -68,7 +68,28 @@ type SessionHeader = {
   strokeNumber: string;
   machineLabel: string;
   prodshade: JsonRecord;
+  // Page 5 output ceiling: machine capacity (KG) x number of batches + 10%.
+  // null when the machine has no usable capacity (Page 3 blocks that case).
+  maxOutputQty: number | null;
+  machineCapacityLabel: string;
 };
+
+const KG_UOM_CODES = new Set(["KG", "KGS", "KILOGRAM", "KILOGRAMS"]);
+const LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+// Same tolerance as the Page 3 batch-size check (process_order.handlers.ts).
+const MACHINE_CAPACITY_TOLERANCE = 1.1;
+
+function machineCapacityKg(machine: JsonRecord, stroke: JsonRecord): number | null {
+  const capacity = Number(machine.capacity_per_batch ?? 0);
+  const uom = toTrimmedString(machine.capacity_uom_code).toUpperCase();
+  if (!Number.isFinite(capacity) || capacity <= 0 || !uom) return null;
+  if (KG_UOM_CODES.has(uom)) return capacity;
+  if (LITRE_UOM_CODES.has(uom)) {
+    const factor = Number(stroke.conversion_factor ?? 0);
+    return Number.isFinite(factor) && factor > 0 ? capacity * factor : null;
+  }
+  return null;
+}
 
 async function resolveSessionHeader(body: JsonRecord, ctx: ProdHandlerContext, action: "VIEW" | "WRITE"): Promise<SessionHeader> {
   const header = (body.header && typeof body.header === "object" && !Array.isArray(body.header))
@@ -102,10 +123,10 @@ async function resolveSessionHeader(body: JsonRecord, ctx: ProdHandlerContext, a
 
   const [{ data: stroke, error: strokeErr }, { data: machine, error: machineErr }, { data: shift, error: shiftErr }, { data: prodshade, error: prodshadeErr }] = await Promise.all([
     serviceRoleClient.schema("erp_production").from("stroke_master")
-      .select("id, company_id, prodshade_material_id, status, stroke_number, default_storage_location_id")
+      .select("id, company_id, prodshade_material_id, status, stroke_number, default_storage_location_id, conversion_factor")
       .eq("id", strokeMasterId).maybeSingle(),
     serviceRoleClient.schema("erp_master").from("machine_master")
-      .select("id, company_id, active, machine_code, machine_name, storage_location_id")
+      .select("id, company_id, active, machine_code, machine_name, storage_location_id, capacity_per_batch, capacity_uom_code")
       .eq("id", machineId).maybeSingle(),
     serviceRoleClient.schema("erp_production").from("shift_master")
       .select("id, company_id, active").eq("id", shiftId).maybeSingle(),
@@ -143,6 +164,13 @@ async function resolveSessionHeader(body: JsonRecord, ctx: ProdHandlerContext, a
     strokeNumber: toTrimmedString(strokeRow.stroke_number),
     machineLabel: [toTrimmedString(machineRow.machine_code), toTrimmedString(machineRow.machine_name)].filter(Boolean).join(" - "),
     prodshade: prodshade as JsonRecord,
+    ...(() => {
+      const capacityKg = machineCapacityKg(machineRow, strokeRow);
+      return {
+        maxOutputQty: capacityKg === null ? null : Number((capacityKg * range.numbers.length * MACHINE_CAPACITY_TOLERANCE).toFixed(6)),
+        machineCapacityLabel: `${toTrimmedString(machineRow.capacity_per_batch)} ${toTrimmedString(machineRow.capacity_uom_code)}`.trim(),
+      };
+    })(),
   };
 }
 
@@ -250,7 +278,7 @@ async function resolveInnerUnitsPerOuterUnit(companyId: string, prodshade: JsonR
 }
 
 async function buildPackingPlanPreview(session: SessionHeader): Promise<JsonRecord> {
-  const [packSizeOptions, locations] = await Promise.all([fetchPackSizeOptions(session.materialId), fetchCompanyLocations(session.companyId, true)]);
+  const [packSizeOptions, locations] = await Promise.all([fetchPackSizeOptions(session.materialId, session.companyId), fetchCompanyLocations(session.companyId, true)]);
   // §8B INDEPENDENT: each pack option's inner-unit ratio comes from its own, unrelated SKU +
   // Pack BOM -- resolved in parallel, not one-by-one.
   const enrichedPackSizeOptions = await Promise.all(packSizeOptions.map(async (option) => {
@@ -271,6 +299,8 @@ async function buildPackingPlanPreview(session: SessionHeader): Promise<JsonReco
       number_of_batches: session.batchNumbers.length,
       batch_number_from: session.batchNumbers[0] ?? null,
       batch_number_to: session.batchNumbers[session.batchNumbers.length - 1] ?? null,
+      max_output_qty: session.maxOutputQty,
+      machine_capacity_label: session.machineCapacityLabel,
     },
     pack_size_options: enrichedPackSizeOptions,
     storage_location_options: orderedLocations.map((row) => ({ id: String(row.id), code: String(row.code), name: String(row.name) })),
@@ -314,7 +344,7 @@ async function getActivePackBom(companyId: string, skuMaterialId: string): Promi
 async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Promise<ResolvedPackingRow[]> {
   const rows = Array.isArray(rawRows) ? rawRows as JsonRecord[] : [];
   if (rows.length === 0) throw new Error("PROD_MTS_PACKING_PLAN_EMPTY");
-  const packOptions = await fetchPackSizeOptions(session.materialId);
+  const packOptions = await fetchPackSizeOptions(session.materialId, session.companyId);
   const packById = new Map(packOptions.map((row) => [String(row.pack_code_id), row]));
   const locationIds = new Set((await fetchCompanyLocations(session.companyId, true)).map((row) => String(row.id)));
   const batchIndex = new Map(session.batchNumbers.map((number, index) => [number, index]));
@@ -340,7 +370,6 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
     if (!pack) throw new Error("PROD_MTS_PACKING_PLAN_PACK_SIZE_INVALID");
     const numberOfBatches = toIndex - fromIndex + 1;
     const totalOuterUnit = Number((numberOfBatches * outerPerBatch).toFixed(6));
-    const volume = Number((totalOuterUnit * Number(pack.fill_qty ?? 0)).toFixed(6));
     const sku = await resolveSkuMaterial(session.prodshade, String(pack.pack_code));
     if (!sku) throw new Error("PROD_MTS_PACKING_SKU_NOT_FOUND");
     const bom = await getActivePackBom(session.companyId, String(sku.id));
@@ -348,10 +377,16 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
     const outputLine = bom.lines.find((line) => toTrimmedString(line.line_type) === "OUTPUT");
     const sfgLine = bom.lines.find((line) => toTrimmedString(line.line_type) === "SFG");
     if (!outputLine || !sfgLine || !toTrimmedString(sfgLine.storage_location_id)) throw new Error("PROD_MTS_PACKING_BOM_INCOMPLETE");
+    // fetchPackSizeOptions already falls back to the SKU's Pack BOM SFG qty
+    // when Prodshade Pack Config's fill is blank; if both are blank, stop
+    // rather than create a 0-KG Packing PO (seen in prod 2026-10-13).
+    const fillQty = Number(pack.fill_qty ?? 0);
+    if (!(fillQty > 0)) throw new Error("PROD_MTS_PACKING_FILL_QTY_MISSING");
+    const volume = Number((totalOuterUnit * fillQty).toFixed(6));
     resolved.push({
       id: toTrimmedString(row.client_row_id) || `row-${index + 1}`,
       plan: { batch_number_from: from, batch_number_to: to, pack_code_id: packCodeId, outer_unit_per_batch: outerPerBatch, storage_location_id: locationId, display_order: index },
-      packCodeId, packSizeLabel: String(pack.description ?? pack.pack_code), fillQty: Number(pack.fill_qty ?? 0),
+      packCodeId, packSizeLabel: String(pack.description ?? pack.pack_code), fillQty,
       numberOfBatches, totalOuterUnit, volume, fgStorageLocationId: locationId,
       skuMaterialId: String(sku.id), skuBaseUom: toTrimmedString(sku.base_uom_code) || "KG",
       outputLine, sfgLine, pmLines: bom.lines.filter((line) => toTrimmedString(line.line_type) === "INPUT"),
@@ -363,6 +398,12 @@ async function resolvePackingRows(session: SessionHeader, rawRows: unknown): Pro
   // deterministic.  The atomic Page-6 database trigger records the variance.
   if (claimed.some((used) => !used)) {
     throw new Error("PROD_MTS_PACKING_PLAN_TOTAL_MISMATCH");
+  }
+  // Declared output (all pack sizes together) may not exceed machine
+  // capacity x number of batches + 10% (business owner, 2026-10-14).
+  const declaredOutput = resolved.reduce((sum, row) => sum + row.volume, 0);
+  if (session.maxOutputQty !== null && declaredOutput > session.maxOutputQty + 0.000001) {
+    throw new Error("PROD_MTS_PACKING_OUTPUT_EXCEEDS_MACHINE_CAPACITY");
   }
   return resolved;
 }

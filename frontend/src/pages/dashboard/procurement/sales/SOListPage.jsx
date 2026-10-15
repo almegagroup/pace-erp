@@ -218,6 +218,8 @@ export default function SOListPage() {
               <p className="text-slate-400 text-sm py-6 text-center">Select a company to view sales orders.</p>
             ) : (
               <ErpDenseGrid
+                cellNavigate
+                columnFilter
                 columns={[
                   { key: "so_number", label: "SO Number", width: "140px" },
                   { key: "customer_po_number", label: "External SO Number", width: "145px", render: (row) => row.customer_po_number || "—" },

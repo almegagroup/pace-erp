@@ -273,12 +273,24 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/delivery-orders-v2/bulk/submission-status": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/delivery-orders-v2/bulk/find-by-fo":    { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW"  },
   "POST:/api/procurement/delivery-orders-v2/bulk/edit-transporter": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+  "GET:/api/procurement/delivery-orders-v2/apl-invoice-case": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },
+  "POST:/api/procurement/delivery-orders-v2/apl-invoice-case": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+  "POST:/api/procurement/delivery-orders-v2/apl-invoice-case/cancel": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
   // SO02 Bulk Posting reads/posts only Bulk-DO-Upload records. It is an
   // Accounts action, so it deliberately uses the existing Invoice/PGI ACL.
   "GET:/api/procurement/delivery-orders-v2/bulk/posting":        { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
   "POST:/api/procurement/delivery-orders-v2/bulk/post":          { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
-  "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
-  "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
+  // Bulk Posting "Upload Corrections" edits unposted bulk DOs' header details
+  // before posting; same authority as posting them.
+  "POST:/api/procurement/delivery-orders-v2/bulk/posting/corrections": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
+  // Quarter-close cancellation is the existing Invoice/PGI cancellation
+  // authority (EDIT), not a second posting resource. The handler additionally
+  // enforces company scope and the exact unposted DD invoice-only state.
+  "GET:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
+  "POST:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "EDIT" },
+  "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },
+  "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
+  "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },

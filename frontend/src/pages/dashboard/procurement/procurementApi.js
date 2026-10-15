@@ -1303,17 +1303,38 @@ export function findDoByFoNumber(params) {
 export function editTransporterDetails(data) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/edit-transporter", data);
 }
+export function lookupAplInvoiceCase(params) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/apl-invoice-case", undefined, params);
+}
+export function saveAplInvoiceCase(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/apl-invoice-case", data);
+}
+export function cancelAplInvoiceCase(data) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/apl-invoice-case/cancel", data);
+}
 export function listBulkPostingQueue(companyId) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/posting", undefined, { company_id: companyId });
 }
 export function bulkPostDeliveryOrders(dcIds) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/post", { dc_ids: dcIds });
 }
+export function bulkPostingCorrections(companyId, rows, apply) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/posting/corrections", { company_id: companyId, rows, apply: apply === true });
+}
+export function listScheduledDdInvoiceCancellation(companyId) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation", undefined, { company_id: companyId });
+}
+export function postScheduledDdInvoiceCancellation(companyId, dcIds, reason) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post", { company_id: companyId, dc_ids: dcIds, reason });
+}
 export function listVdcTruckDispatchPending(companyId) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch", undefined, { company_id: companyId });
 }
 export function postVdcTruckDispatch(rows) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post", { rows });
+}
+export function checkVdcTruckDispatchUpload(companyId, foNumbers, dcNumbers) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check", { company_id: companyId, fo_numbers: foNumbers, dc_numbers: dcNumbers });
 }
 
 // §133.13 -- IBN-driven multi-invoice preview + post, per DO.

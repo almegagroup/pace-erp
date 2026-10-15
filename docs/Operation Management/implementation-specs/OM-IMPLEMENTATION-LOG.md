@@ -112,6 +112,81 @@
 
 ---
 
+### 2026-10-14 — SO02 bulk-posting clarity correction (DONE in code; rollout pending)
+
+- User-visible SO02 action columns are moved beside the selected DO and made
+  visible without horizontal scrolling: Truck Number, Dispatch Date, DD flag,
+  and actual posting action. The selection control is now a sticky first
+  column containing both the checkbox and DO number, with explicit Select all
+  displayed / Clear selection controls above the grid.
+- The queue summary distinguishes the real execution paths: VDC/DD rows with
+  both physical fields run Invoice + PGI; VDC/DD rows missing either field run
+  Invoice only; DC rows remain the pre-existing atomic PGI + Invoice path.
+- Removed the Pack Qty outlier heuristic at the business owner's request.
+  Invoice-series date comparison wording now says the lower-series invoice
+  date is higher, rather than implying an invoice error.
+- Verification: `deno check` for the check engine, focused frontend ESLint,
+  frontend production build, and `git diff --check` pass. The frontend build
+  retains only the pre-existing GRN duplicate-attribute and chunk-size warnings.
+
+---
+
+### 2026-10-14 — SO04 APL invoice column clarification (DONE in code; rollout pending)
+
+- SO04 now places the APL Invoice column immediately after PACE Invoice #. It
+  shows `APL Invoice Not Received`, `APL Invoice Received — <received date>`,
+  or `APL Invoice Not Received — Cancelled` from the existing DO-scoped APL
+  case. The report does not change the pre-existing cancellation cascade.
+- The list response bulk-loads the existing `received_date` with the APL case;
+  no schema, route, ACL, or operational-data change is required.
+- Verification: production confirms the existing APL-case table and
+  `received_date` column are present; `deno check`, focused frontend ESLint,
+  frontend production build, and `git diff --check` pass. The build retains
+  only its unrelated GRN duplicate-attribute and chunk-size warnings.
+
+---
+
+### 2026-10-14 — SO04 Invoice-only visibility and stock-movement state (DONE in code; rollout pending)
+
+- SO04 now includes an intentional DD `Invoice only` invoice (`DRAFT` invoice
+  plus deferred-PGI DO), so its frozen quantity, value, GST and APL columns
+  remain visible before physical dispatch. Unrelated non-DD draft invoices
+  remain excluded.
+- New `Stock Movement` column reports `No` for Invoice only, `Yes` after the
+  normal PGI/invoice posting reaches `POSTED`, and `Reversed` for a cancelled
+  invoice whose stock movement was reversed. The same data is exported to
+  Excel with the report.
+- Verification: CMP003 production read-only check found 399 deferred-PGI
+  invoice-only drafts and 135 posted invoices. `deno check`, focused ESLint,
+  Vite build, migration/ACL/CI guards and diff validation passed (aside from
+  existing GRN duplicate-prop and Vite chunk-size warnings).
+
+### 2026-10-14 — SO04 APL blank-by-default clarification (DONE in code; rollout pending)
+
+- The SO04 APL Invoice cell is blank until an authorised user records a
+  decision in the DO's APL Invoice Case. It displays only recorded `No`,
+  `Yes` (with received date), or `Cancelled` outcomes; it never infers an
+  APL decision from an Invoice-only or PGI state.
+
+---
+
+### 2026-10-14 — DD Invoice-only PGI lookup correction (DONE in code; rollout pending)
+
+- Root cause: the deferred-PGI completion handler selected
+  `line_material_type` from `delivery_challan_line`, where that column does
+  not exist. The commercial invoice succeeded first, then PGI returned
+  `Unable to load delivery-order lines`.
+- The handler now reads only real DO-line fields and bulk-resolves each
+  material's type from `erp_master.material_master`. FG/SFG retain the
+  batch-specific PID block check; RM/PM/INT retain the blended check. No new
+  stock-posting call, route, ACL decision, or schema change was added.
+- Verification: production read-only query confirms the affected CMP003 draft
+  invoices join to real material-master type data; `deno check` and diff
+  validation pass. The existing 399 `INVOICED` DD records remain untouched
+  until an authorised SO03 PGI retry after rollout.
+
+---
+
 ### 2026-09-11 — SO01 FG SKU search: remove truncated master-list dependency
 
 - **Root cause verified in prod, CMP006:** active SKU `6765SS06599` (`FG-00379`) and its active mapping/configuration/approved MTO applicability exist. The old unpaged all-company `material_company_ext` lookup stopped at PostgREST's 1,000 rows, excluding this mapping before FG eligibility ran. Packing PO finalization was not the failing condition.
@@ -5992,3 +6067,233 @@ client. Read-only Prod inspection of CMP003 Apex GRN `2000000160` confirmed the 
 35,000 × 3.20 = 112,000 taxable and 5% GST = 5,600; the row has `rate_confirmed=true`,
 `invoice_rate=3.20`, `confirmed_rate=NULL` and `grn_rate=0`, exactly the legacy shape covered by
 the fallback.
+
+## 2026-10-14 — CMP003 → CMP005 Production Stroke and Pack BOM operational parity — DONE
+
+**Scope:** Production operational data only. CMP005 was compared with CMP003 using its active
+`material_company_ext` catalogue as the eligibility boundary; unrelated CMP003 products were not
+copied.
+
+**R-04:** Per the operational-data rule, this was applied directly to the Production database via
+a guarded MCP transaction, not a migration. The transaction required exactly 8 missing approved
+MTS Stroke headers and 9 missing active Pack BOM headers, and aborted if a required CMP005 storage
+location or global Prodshade Pack Config was absent.
+
+**Applied:** 8 approved MTS Strokes with 51 formulation lines, and 9 active Pack BOMs with 90
+lines. All storage references were resolved to CMP005's own mapped location by code. Six missing
+PM `material_company_ext` records needed by those BOM lines were copied from CMP003 in the same
+transaction. Existing global Prodshade Pack Config rows were already complete and were not
+duplicated.
+
+**Verification:** Post-write comparison returned zero remaining eligible missing Strokes and Pack
+BOMs. All 8 Stroke headers have an active MTS applicability row; source and CMP005 line sets match
+in both directions (51/51 Stroke lines and 90/90 Pack BOM lines).
+
+## 2026-10-14 — CMP003 Production Pack BOM packing-location completion — DONE
+
+**Scope:** Production operational data only. The active CMP003 Pack BOM audit found 27 active
+`INPUT` (packing-material) lines with no storage location, across three Pack BOMs. No `SFG` or
+`OUTPUT` (FG) line was missing a storage location.
+
+**R-04:** Applied directly to Production with a guarded MCP transaction, not a migration. The
+transaction required exactly one active CMP003 `P001` mapping, exactly 27 blank active `INPUT`
+lines, and zero blank active non-`INPUT` lines before updating only those 27 rows to `P001`.
+
+**Verification:** Post-write audit confirms blank active Pack BOM lines are zero for `INPUT`,
+`SFG`, and `OUTPUT`. The previously identified Prodshade line for `RM-00119` remains unchanged:
+it is an RM line and no RM-to-location instruction was provided.
+
+## 2026-10-14 — CMP003 METOLAT P871 Prodshade storage-location assignment — DONE
+
+**Scope:** Production operational data only. The one remaining blank approved Stroke-line
+location was `RM-00119` / `METOLAT P871`, on Prodshade `54297431`, MTS Stroke `0002`, line 6.
+
+**R-04:** Applied directly to Production with a guarded MCP transaction, not a migration. The
+transaction required exactly one active CMP003 `S002` mapping and exactly one matching blank
+Stroke line before assigning `S002`.
+
+**Verification:** The exact target row now resolves to `S002`; no other Stroke line was changed.
+
+## 2026-10-14 — SO03 APL Invoice Case — IMPLEMENTED / DEV VERIFICATION PENDING
+
+**Scope:** Sales Delivery Orders only. Read-only CMP003 inspection found DD Sales DOs in
+`CREATED` and non-DD Sales DOs in `DISPATCHED` with posted invoices; the only other invoice
+shape was STO, which has no FO/SO-Map lifecycle. The business owner therefore confirmed that
+APL Invoice Case excludes STO.
+
+**Implemented:** SO03 has an **APL Invoice Case** drawer beside Edit Transporter Details. It
+looks up original/revised external FO plus ERP and Tally invoice numbers, presents an
+unambiguous human-readable DO chooser/details, records NO/YES (YES requires received date),
+and displays the saved state in both the SO03 grid and Excel export. A NO case can either be
+marked received later or Cancel Posting with a mandatory reason and confirmation.
+
+**Cancellation:** the new Sales-only atomic RPC composes the existing VDC and non-DD cancellation
+primitives. DD Created and draft-invoice cascades reuse their VDC atomic functions; posted DD
+uses the existing `post_document` VDC reversal completion. Non-DD reuses
+`reverse_sales_invoice_groups_atomic` (P602 at original rate) then
+`cancel_delivery_order_atomic`. It never calls `post_stock_movement` directly. The existing
+drawn-qty query counts only `delivery_challan.status <> 'CANCELLED'`; therefore the cancelled
+DO contributes zero drawn quantity while SO/SO-Map records themselves remain unchanged.
+
+**Access:** all three routes are registered on `PROC_DO_CREATE` (lookup VIEW; save/cancel EDIT),
+and each handler checks `assertCompanyScope` plus the existing scoped DO ACL helper. A subsequent
+active-version production snapshot re-check found Accounts and Stores with VIEW+EDIT in CMP003,
+CMP005, CMP006 and CMP011, but **no Logistics ALLOW** in those companies; CMP014 and the other
+active companies lack an equivalent operational department context. This is an ACL business-data
+gap, reported rather than silently changed.
+
+**R-04:** `20261014120558_so03_apl_invoice_case.sql` creates the case/history tables and secured
+service-role RPCs; it was applied to Dev, PostgREST was reloaded, and the MCP-generated ledger
+timestamp was reconciled to the local filename version. The broader Dev migration ledger remains
+pre-existingly out of sync with this branch: local-only `20261012130000` and `20261013090000`,
+and remote-only `20261014120000` and `20261014150000`. Those unrelated migrations were not
+rewritten or deleted.
+
+**CLI compatibility correction:** the pinned `supabase db push` parser rejects a direct
+`*_atomic` PL/pgSQL function body as multiple prepared statements. The cancellation function is
+therefore wrapped in the established `DO ... EXECUTE $sql$` migration pattern, with its grants
+and schema-reload notification inside that same block; its SQL logic is unchanged.
+
+**Verification so far:** targeted Deno checks and touched-frontend ESLint pass; Vite build passes
+(with the pre-existing GRN duplicate-attribute warning). All CI Basic guard commands pass,
+including stock-posting baseline 12/12, route ACL 0-missing, company scope/write ACL 0 gaps and
+strict SU24 manifest. A rollback Dev test of the posted non-DD path produced a cancelled DO and
+invoice, one P602 reversal and CANCELLED APL history, then rolled back. A rolled-back Created-DD
+shape (including VDC bulk guard) also cancelled its DO/reservation and APL case. Dev currently
+has no DD invoice-without-PGI fixture, so that specific live case remains pending rather than
+fabricated.
+
+## 2026-10-14 — SO04 APL Invoice condition visibility — DONE
+
+**Scope:** SO04's existing company-scoped `PROC_DISPATCH_REPORT:VIEW` endpoint and report grid
+now retain both POSTED and CANCELLED sales-invoice rows in the selected Tally Invoice Date range.
+The prior POSTED-only filter made an APL cancellation disappear from the reconciliation report.
+
+**Display:** a new `APL Invoice Status` column (and the matching Excel column) is populated from
+the DO-owned APL case in one chunked, company-scoped read: `APL Invoice Not Received` while the
+case is NO, `APL Invoice Received` after confirmation, and `Invoice Cancelled due to APL Invoice
+not received` only when that APL case reaches CANCELLED. An unrelated cancelled invoice is never
+mislabelled as an APL cancellation. The report retains existing human-readable invoice/FO/item
+fields and never exposes ids.
+
+**Rules / wiring:** no schema, migration, stock posting, new route, or ACL-data change is needed.
+The existing route registry entry and handler company-scope check remain authoritative. The
+SO04 manifest entry now records its existing `getDispatchReport` dependency, and the handler uses
+`fetchInChunks` for the unbounded DO-id list rather than a per-row lookup.
+
+**Verification:** Dev confirms the APL case table is present. `deno check` on the touched handler,
+targeted ESLint, Vite build, `git diff --check`, JSON parsing, and every command in
+`ci-basic.yml` (including strict SU24 manifest) pass. Vite retains only its pre-existing GRN
+duplicate-attribute and chunk-size warnings.
+
+## 2026-10-15 — CMP003 SO02 deferred-invoice recovery backfill — DONE
+
+**Scope:** The business owner explicitly requested recovery of the unintended CMP003 DD
+Invoice-only rows to the pre-posting SO02 state, rather than cancellation. The scope was limited
+to the two 2026-10-14 production Invoice-only waves: 399 bulk DD delivery orders, each still
+`INVOICED` with exactly one `DRAFT` sales invoice.
+
+**R-04:** This was a guarded Production operational-data correction executed directly in one
+database transaction, not a schema migration. The transaction locked the exact timestamp-bounded
+target set and aborted unless it contained exactly 399 DOs, 399 DRAFT invoices and 460 invoice
+lines. It also required zero stock documents and zero open reservations; therefore no stock
+reversal or reservation release was performed.
+
+**Applied:** The 460 unposted draft invoice lines and their 399 draft invoice headers were
+removed, then the corresponding 399 delivery orders were restored from `INVOICED` to `CREATED`.
+No SO, SO Map, delivery-order line, stock, reservation, truck or dispatch-date data was changed.
+The removed draft invoice numbers remain unused; a later fresh SO02 posting will allocate new
+numbers.
+
+**Verification:** The post-write target-invoice count is zero. CMP003's bulk DD population now
+has 828 `CREATED` delivery orders and no remaining `INVOICED` row in this recovered set; those DOs
+are again eligible for fresh SO02 selection and posting. With the draft invoice headers removed,
+the recovered records no longer appear in SO04.
+
+## 2026-10-15 — SO04 MTS FO-number resolution — DONE
+
+**Scope:** SO04 showed a blank FO # for MTS dispatches even when their SO Map Group carried the
+customer FO. MTS allocations intentionally have no direct `fo_id`; the number is stored as the
+group's revised external FO, or its original external FO.
+
+**Implemented:** The existing SO04 bulk allocation lookup now also resolves each allocation's SO
+Map Group in one chunked request. FO display prioritizes revised external FO, then external FO,
+then the existing plan-feed/invoice fallback. No data was changed and no new route or per-row
+lookup was added.
+
+**Verification:** Production read-only inspection of displayed MTS invoice `9200000958` found no
+invoice/allocation FO but found SO Map Group external FO `5159971994`; the repaired path now
+returns that value. `deno check` of the dispatch-report handler and `git diff --check` pass.
+
+## 2026-10-15 — SO03/SO04 APL blank state, SO04 APL filter and Vendor Code — DONE
+
+**Scope:** An unrecorded APL case was incorrectly rendered as `Not recorded` in SO03, despite the
+explicit requirement that an APL value remains blank until a case is saved. SO04 also needed a
+review checkbox for only recorded APL cases and the selected SO Company Vendor Code beside its
+Company Code.
+
+**Implemented:** The SO03 list endpoint returns `null` for an absent APL case and the grid/export
+render it blank. SO04 now has an `APL Invoice Cases only` checkbox, composable with text search
+and Stroke Mismatch; its count and Excel export use the same filtered rows. SO04 resolves
+`sales_order.vendor_code_id` through `vendor_code_master` in one chunked lookup and returns the
+human-readable Vendor Code column; no internal UUID is exposed.
+
+**Verification:** Production read-only inspection of SO04 invoice `9200000958` resolves Vendor
+Code `YAL09V`. Both touched backend handlers pass `deno check`; both touched frontend files pass
+ESLint; Vite build passes. The build retains only the pre-existing GRN duplicate `emptyMessage`
+warning.
+
+## 2026-10-15 — Sales dense-grid Excel navigation and column filters — DONE
+
+**Scope:** Every `ErpDenseGrid` in Sales, including SO01, SO02, SO03/Delivery Order, SO04 and
+their nested drawers/detail/create/posting screens, now uses the grid's existing Excel-style
+keyboard navigation and per-column filter capability. The inventory contains 39 grids across 23
+Sales screen and drawer files.
+
+**Implemented:** Each Sales grid now opts into `cellNavigate` and `columnFilter`. Arrow keys move
+the active grid cell, while fields, checkboxes and buttons retain their normal keyboard behavior.
+Each meaningful text-headed data column has its existing Excel AutoFilter control. Blank,
+checkbox/select-all and action headers deliberately do not receive a meaningless filter control.
+No API request, database data, posting path or ACL behavior changed.
+
+**Verification:** A source inventory confirms that all 39 Sales `ErpDenseGrid` instances enable
+both capabilities; `git diff --check` passes. Targeted ESLint has no errors introduced by this
+change; it continues to report three pre-existing synchronous-state-in-effect errors in the
+three SO05 files and four pre-existing hook/library warnings. Vite production build passes; its
+remaining GRN duplicate `emptyMessage` and chunk-size warnings are pre-existing.
+
+## 2026-10-15 — SO02 scheduled DD Invoice-only cancellation — DONE
+
+**Scope:** SO02 now has a `Scheduled Invoice Cancellation` companion workbench for the
+quarter-close decision. It shows only Bulk-DO-upload Sales DD Direct delivery orders that are
+still `INVOICED`, have only DRAFT invoice(s), have no `VDC_SALES_INVOICE` stock document, and
+whose **Tally Invoice Date** is before the first day of the current quarter. The date rule is
+therefore commercial/Tally-based, not the system-created invoice date.
+
+**Manual review:** The workbench has company scope, search, Excel export, select-all/row
+checkboxes (bounded to 100), mandatory cancellation reason and an explicit confirmation. Its
+database batch function re-checks every selected row under lock and then calls the established
+`cancel_vdc_invoice_only_atomic` primitive. Invoice cancellation, DO cancellation and reservation
+release remain one transaction; no new stock-posting path was introduced.
+
+**Automatic close:** `20261015023815_scheduled_dd_invoice_cancellation.sql` adds secured helper,
+batch and scheduled functions, then registers `so02-auto-cancel-overdue-dd-invoices` at `0 19 * * *`
+(00:30 Asia/Kolkata while this project's pg_cron timezone is GMT). It does nothing until day 11 of
+January, April, July or October. Thus an Oct–Dec Tally Invoice Date is reviewable through January
+10 and any still-unposted invoice-only record is auto-cancelled from January 11. Per-row failures
+are isolated for the nightly retry; the manual selected batch remains all-or-nothing.
+
+**ACL / wiring:** Both new API routes are registered on SO02's existing `PROC_INV_LIST` resource
+(VIEW list, EDIT cancellation), matching the existing invoice-cancellation authority rather than
+creating a parallel resource. The handlers additionally enforce company scope and the existing
+Invoice/PGI company access helper. Production active ACL inspection confirms Accounts has
+VIEW/WRITE/EDIT for that resource in CMP003, CMP005, CMP006 and CMP011; no broad grant or ACL data
+mutation was made. The companion page's two dependencies are recorded in the strict SU24 manifest.
+
+**Dev / verification:** The migration was applied to Dev, PostgREST reloaded, and MCP's generated
+migration ledger timestamp was reconciled to local version `20261015023815`. The function and cron
+job exist; a rolled-back Dev scheduled invocation returned zero cancelled/failed candidates (Dev
+has no qualifying prior-quarter DD fixture). `git diff --check`, targeted ESLint, Vite build and all
+CI Basic guard commands pass. Repo-wide Deno check still reports 96 pre-existing type errors in
+unrelated handlers; none are in this change. Migration-integrity confirms this migration itself
+matches, while the pre-existing repository/Dev ledger drift remains: local count 665 vs remote 666.

@@ -6,7 +6,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { createGateExitInbound, getGateEntryByNumber, getGexPersonNameContext } from "../procurementApi.js";
+import { createGateExitInbound, getGateEntryByNumber, getGePersonNameContext } from "../procurementApi.js";
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -75,29 +75,27 @@ export default function GateExitEntryPage() {
   const [remarks, setRemarks] = useState("");
   const [successExit, setSuccessExit] = useState(null);
 
-  // Same Security-department manual-vs-auto-resolve Person Name mechanism as
-  // Gate Entry's Create page.
+  // Gate Exit person = whoever records the exit (same rule as Gate Entry):
+  // a named login is filled in and locked; a Security (shared) login types
+  // the person's name. Never inherited from the Gate Entry.
   const [personName, setPersonName] = useState("");
-  const [isSecurityUser, setIsSecurityUser] = useState(false);
+  const [isSecurityUser, setIsSecurityUser] = useState(true);
   const [personNameLoading, setPersonNameLoading] = useState(true);
-
   useEffect(() => {
     let active = true;
-    setPersonNameLoading(true);
-    getGexPersonNameContext()
+    getGePersonNameContext()
       .then((res) => {
         if (!active) return;
-        setIsSecurityUser(Boolean(res?.is_security));
-        setPersonName(res?.is_security ? "" : (res?.person_name || ""));
+        const security = Boolean(res?.is_security) || !res?.person_name;
+        setIsSecurityUser(security);
+        setPersonName(security ? "" : res.person_name);
       })
       .catch(() => {
         if (!active) return;
-        setIsSecurityUser(false);
+        setIsSecurityUser(true);
         setPersonName("");
       })
-      .finally(() => {
-        if (active) setPersonNameLoading(false);
-      });
+      .finally(() => { if (active) setPersonNameLoading(false); });
     return () => { active = false; };
   }, []);
 
@@ -129,6 +127,8 @@ export default function GateExitEntryPage() {
     setError("");
     setNotice("");
     setDetail(null);
+    // A previous exit must never supply the name for the newly loaded GE.
+    setPersonName("");
     try {
       const result = await getGateEntryByNumber(trimmed);
       setDetail(result);
@@ -150,6 +150,7 @@ export default function GateExitEntryPage() {
     setAmpm(t.ampm);
     setTareWeight("");
     setRemarks("");
+    setPersonName("");
     setSuccessExit(null);
     geInputRef.current?.focus();
   }
@@ -164,7 +165,7 @@ export default function GateExitEntryPage() {
       setError(`Exit is ${detentionDays} days after entry. Detention remarks are mandatory.`);
       return;
     }
-    if (isSecurityUser && !personName.trim()) {
+    if (!personName.trim()) {
       setError("Person Name is required.");
       return;
     }
@@ -406,14 +407,14 @@ export default function GateExitEntryPage() {
                     </ErpDenseFormRow>
                   </div>
 
-                  {/* Person Name — same Security-dept manual/auto-resolve mechanism as Gate Entry. */}
+                  {/* Gate Exit person = the exit's creator; Security (shared) logins type it. */}
                   <label className="grid max-w-md gap-1 text-xs font-semibold text-slate-700">
                     Person name <span className="font-normal text-red-500">*</span>
                     <input
                       type="text"
                       value={personNameLoading ? "Loading…" : personName}
                       readOnly={!isSecurityUser}
-                      placeholder={isSecurityUser ? "Type the gate user's name" : ""}
+                      placeholder={isSecurityUser ? "Type the person present at Gate Exit" : ""}
                       className={[
                         "h-9 border px-3 text-sm outline-none",
                         isSecurityUser
@@ -423,7 +424,7 @@ export default function GateExitEntryPage() {
                       onChange={(e) => { if (isSecurityUser) setPersonName(e.target.value); }}
                     />
                     <span className="text-[10px] font-normal text-slate-400">
-                      {isSecurityUser ? "Security department — enter the name manually every entry." : "Auto-filled from your login."}
+                      {isSecurityUser ? "Security department — enter the name manually every exit." : "Auto-filled from your login."}
                     </span>
                   </label>
 
@@ -442,7 +443,7 @@ export default function GateExitEntryPage() {
                     <button
                       type="button"
                       onClick={() => void handleSave()}
-                      disabled={saving || (isSecurityUser && !personName.trim())}
+                      disabled={saving || personNameLoading || !personName.trim()}
                       className="border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900 disabled:opacity-50"
                     >
                       {saving ? "Saving…" : "Save (Gate Exit)"}

@@ -42,7 +42,7 @@ type ProcurementHandlerContext = {
 
 const DO_SOURCE_TYPES = new Set(["SALES_ORDER", "STO"]);
 const RESERVATION_OPEN_STATUSES = ["OPEN", "PARTIAL"];
-const DELIVERY_ORDER_DATE_FILTER_FIELDS = new Set(["DC_DATE", "LR_DATE", "INVOICE_DATE", "TALLY_INVOICE_DATE"]);
+const DELIVERY_ORDER_DATE_FILTER_FIELDS = new Set(["DC_DATE", "LR_DATE", "INVOICE_DATE", "TALLY_INVOICE_DATE", "DISPATCH_DATE"]);
 
 function parseBody(req: Request): Promise<JsonRecord> {
   return req.json().catch(() => ({} as JsonRecord));
@@ -982,26 +982,33 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const orderedIds = ((pageRows ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.delivery_order_id)).filter(Boolean);
     const orderedTotal = orderedIds.length > 0 ? Number((pageRows as JsonRecord[])[0].total_count ?? 0) : 0;
 
-    let query = serviceRoleClient
-      .schema("erp_procurement")
-      .from("delivery_challan")
-      .select("*", { count: "exact" })
-      .in("dc_type", ["SALES", "STO", "MIXED"]);
-    const { data, error, count } = orderedIds.length > 0
-      ? await query.in("id", orderedIds)
-      : { data: [] as JsonRecord[], error: null, count: 0 };
-    if (error) return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
+    // Every id-list read below is chunked (§8E): the register is loaded in
+    // pages of up to 200 DOs, which is past the safe single-URL id count.
+    let data: JsonRecord[];
+    try {
+      data = await fetchInChunks<JsonRecord>(orderedIds, (chunk) => serviceRoleClient
+        .schema("erp_procurement")
+        .from("delivery_challan")
+        .select("*")
+        .in("dc_type", ["SALES", "STO", "MIXED"])
+        .in("id", chunk));
+    } catch {
+      return doErrorResponse(req, ctx, "DO_LIST_FAILED", 500, "Unable to list delivery orders.");
+    }
+    const count = data.length;
 
-    let rows = (data ?? []) as JsonRecord[];
+    let rows = data;
     const rowsById = new Map(rows.map((row) => [toTrimmedString(row.id), row]));
     rows = orderedIds.map((id) => rowsById.get(id)).filter(Boolean) as JsonRecord[];
     const dcIds = rows.map((row) => String(row.id));
-    const [{ data: sourceLinks, error: sourceLinksError }, { data: dispatchLines, error: dispatchLinesError }] = await Promise.all([
-      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      dcIds.length ? serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total, material_id, so_line_id, quantity, pack_qty").in("dc_id", dcIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
+    const [sourceLinksResult, dispatchLinesResult] = await Promise.allSettled([
+      fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan_source").select("dc_id, source_type, source_id").in("dc_id", chunk)),
+      fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan_line").select("dc_id, ship_to_name, ship_to_address, ship_to_state, line_total, material_id, so_line_id, quantity, pack_qty, so_map_allocation_id").in("dc_id", chunk)),
     ]);
-    if (sourceLinksError) return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to load delivery order sources.");
-    if (dispatchLinesError) return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
+    if (sourceLinksResult.status === "rejected") return doErrorResponse(req, ctx, "DO_SOURCE_FETCH_FAILED", 500, "Unable to load delivery order sources.");
+    if (dispatchLinesResult.status === "rejected") return doErrorResponse(req, ctx, "DO_LINE_FETCH_FAILED", 500, "Unable to load delivery order lines.");
+    const sourceLinks = sourceLinksResult.value;
+    const dispatchLines = dispatchLinesResult.value;
     const sourceByDc = new Map<string, JsonRecord[]>();
     for (const link of (sourceLinks ?? []) as JsonRecord[]) sourceByDc.set(toTrimmedString(link.dc_id), [...(sourceByDc.get(toTrimmedString(link.dc_id)) ?? []), link]);
     const linesByDc = new Map<string, JsonRecord[]>();
@@ -1014,14 +1021,23 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     // pages that share this one handler.
     const lineMaterialIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
     const lineSoLineIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.so_line_id)).filter(Boolean))];
-    const [lineMaterialRows, lineSoLineRows] = await Promise.all([
+    // A Dependent Direct DO is created against an FO's SO-Map allocation; the
+    // register shows that FO (revised number when one was given).
+    const lineAllocationIds = [...new Set(((dispatchLines ?? []) as JsonRecord[]).map((line) => toTrimmedString(line.so_map_allocation_id)).filter(Boolean))];
+    const [lineMaterialRows, lineSoLineRows, lineAllocationRows] = await Promise.all([
       lineMaterialIds.length
         ? fetchInChunks<JsonRecord>(lineMaterialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, material_type").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
       lineSoLineIds.length
         ? fetchInChunks<JsonRecord>(lineSoLineIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, fg_type").in("id", chunk))
         : Promise.resolve([] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(lineAllocationIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+        .select("id, map_group:map_group_id(external_fo_number, revised_external_fo_number)").in("id", chunk)),
     ]);
+    const foNumberByAllocationId = new Map(lineAllocationRows.map((row) => {
+      const group = (row.map_group ?? {}) as JsonRecord;
+      return [String(row.id), toTrimmedString(group.revised_external_fo_number) || toTrimmedString(group.external_fo_number)];
+    }));
     const materialTypeById = new Map(lineMaterialRows.map((row) => [String(row.id), toTrimmedString(row.material_type)]));
     const fgTypeBySoLineId = new Map(lineSoLineRows.map((row) => [String(row.id), toTrimmedString(row.fg_type)]));
     const customerIds = [...new Set(rows.map((row) => toTrimmedString(row.customer_id)).filter(Boolean))];
@@ -1032,22 +1048,20 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       ...rows.map((row) => toTrimmedString(row.sto_id)),
       ...(sourceLinks ?? []).filter((link: JsonRecord) => link.source_type === "STO").map((link: JsonRecord) => toTrimmedString(link.source_id)),
     ].filter(Boolean))];
-    const { data: linkedStoCounterparties, error: linkedStoCounterpartiesError } = linkedStoIds.length
-      ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, receiving_company_id").in("id", linkedStoIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (linkedStoCounterpartiesError) return doErrorResponse(req, ctx, "DO_STO_COUNTERPARTY_LOOKUP_FAILED", 500, "Unable to resolve STO receiving company.");
+    let linkedStoCounterparties: JsonRecord[];
+    try {
+      linkedStoCounterparties = await fetchInChunks<JsonRecord>(linkedStoIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, receiving_company_id").in("id", chunk));
+    } catch {
+      return doErrorResponse(req, ctx, "DO_STO_COUNTERPARTY_LOOKUP_FAILED", 500, "Unable to resolve STO receiving company.");
+    }
     const receivingCompanyIdByStoId = new Map(((linkedStoCounterparties ?? []) as JsonRecord[]).map((row) => [String(row.id), toTrimmedString(row.receiving_company_id)]));
     const receivingCompanyIds = [...new Set([
       ...rows.map((row) => toTrimmedString(row.receiving_company_id)),
       ...[...receivingCompanyIdByStoId.values()],
     ].filter(Boolean))];
-    const [{ data: customers }, { data: receivingCompanies }] = await Promise.all([
-      customerIds.length
-        ? serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", customerIds)
-        : Promise.resolve({ data: [] as JsonRecord[] }),
-      receivingCompanyIds.length
-        ? serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, full_address").in("id", receivingCompanyIds)
-        : Promise.resolve({ data: [] as JsonRecord[] }),
+    const [customers, receivingCompanies] = await Promise.all([
+      fetchInChunks<JsonRecord>(customerIds, (chunk) => serviceRoleClient.schema("erp_master").from("customer_master").select("id, customer_code, customer_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(receivingCompanyIds, (chunk) => serviceRoleClient.schema("erp_master").from("companies").select("id, company_name, full_address").in("id", chunk)).catch(() => [] as JsonRecord[]),
     ]);
     const customerMap = new Map(((customers ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
     const receivingCompanyMap = new Map(((receivingCompanies ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
@@ -1062,16 +1076,10 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     const soIds = [...new Set([...rows.map((row) => toTrimmedString(row.sales_order_id)), ...(sourceLinks ?? []).filter((link: JsonRecord) => link.source_type === "SALES_ORDER").map((link: JsonRecord) => toTrimmedString(link.source_id))].filter(Boolean))];
     const stoIds = [...new Set([...rows.map((row) => toTrimmedString(row.sto_id)), ...(sourceLinks ?? []).filter((link: JsonRecord) => link.source_type === "STO").map((link: JsonRecord) => toTrimmedString(link.source_id))].filter(Boolean))];
     const transporterIds = [...new Set(rows.map((row) => toTrimmedString(row.transporter_id)).filter(Boolean))];
-    const [{ data: sos }, { data: stos }, { data: transporters }] = await Promise.all([
-      soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, customer_po_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required, dispatch_category").in("id", soIds)
-        : Promise.resolve({ data: [] as JsonRecord[] }),
-      stoIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, receiving_company_id").in("id", stoIds)
-        : Promise.resolve({ data: [] as JsonRecord[] }),
-      transporterIds.length
-        ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_code, transporter_name").in("id", transporterIds)
-        : Promise.resolve({ data: [] as JsonRecord[] }),
+    const [sos, stos, transporters] = await Promise.all([
+      fetchInChunks<JsonRecord>(soIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, customer_po_number, bill_to_name, bill_to_address, bill_to_parent_company_id, bill_to_vdc_id, ibn_required, dispatch_category").in("id", chunk)).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(stoIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, receiving_company_id").in("id", chunk)).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(transporterIds, (chunk) => serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_code, transporter_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
     ]);
     const soMap = new Map(((sos ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
     const stoMap = new Map(((stos ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
@@ -1082,20 +1090,29 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
     // dc_id can have more than one invoice row over time (reversal + a
     // fresh retry), so this keeps only the most recent per dc_id --
     // ordering desc then only setting on first-seen does that in one pass.
-    const { data: invoices, error: invoicesError } = dcIds.length
-      ? await serviceRoleClient
-          .schema("erp_procurement")
-          .from("sales_invoice")
-          .select("id, dc_id, invoice_number, invoice_date, status, tally_invoice_number, tally_invoice_date, inbound_number")
-          .in("dc_id", dcIds)
-          .order("created_at", { ascending: false })
-      : { data: [] as JsonRecord[], error: null };
-    if (invoicesError) return doErrorResponse(req, ctx, "DO_INVOICE_LOOKUP_FAILED", 500, "Unable to load invoice references.");
+    // Chunked by dc_id, so every invoice of one DO lands in the same chunk
+    // and the per-chunk newest-first order still picks its latest invoice.
+    let invoices: JsonRecord[];
+    try {
+      invoices = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient
+        .schema("erp_procurement")
+        .from("sales_invoice")
+        .select("id, dc_id, invoice_number, invoice_date, status, tally_invoice_number, tally_invoice_date, inbound_number")
+        .in("dc_id", chunk)
+        .order("created_at", { ascending: false }));
+    } catch {
+      return doErrorResponse(req, ctx, "DO_INVOICE_LOOKUP_FAILED", 500, "Unable to load invoice references.");
+    }
     const invoiceMap = new Map<string, JsonRecord>();
-    for (const row of (invoices ?? []) as JsonRecord[]) {
+    for (const row of invoices) {
       const key = toTrimmedString(row.dc_id);
       if (key && !invoiceMap.has(key)) invoiceMap.set(key, row);
     }
+    const aplCases = dcIds.length
+      ? await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_order_apl_invoice_case")
+        .select("dc_id, status, received_date").in("dc_id", chunk))
+      : [] as JsonRecord[];
+    const aplCaseByDc = new Map(aplCases.map((row) => [toTrimmedString(row.dc_id), row]));
 
     const items = rows.map((row) => {
       const customer = customerMap.get(toTrimmedString(row.customer_id));
@@ -1126,6 +1143,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
       const shipTo = [...new Set(lineSnapshots.map((line) => [line.ship_to_name, line.ship_to_address, line.ship_to_state].filter(Boolean).join(" — ")).filter(Boolean))].join(" | ") || null;
       const transporter = transporterMap.get(toTrimmedString(row.transporter_id));
       const invoice = invoiceMap.get(String(row.id));
+      const aplCase = aplCaseByDc.get(String(row.id));
       // Business owner ask (2026-09-04) -- Dispatch Category comes from the
       // DO's own source SO(s) (a plain STO-sourced DO has none, since §133.14
       // is Sales-Order-scoped); Total Qty/Total Pack are this DO's own line
@@ -1175,14 +1193,23 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         invoice_number: invoice?.invoice_number ?? null,
         invoice_date: invoice?.invoice_date ?? null,
         invoice_status: invoice?.status ?? null,
-        tally_invoice_number: invoice?.tally_invoice_number ?? null,
-        tally_invoice_date: invoice?.tally_invoice_date ?? null,
-        inbound_number: invoice?.inbound_number ?? null,
+        // Before PGI the Tally/Inbound details live on the DO itself (Bulk DO
+        // Upload / VDC pre-invoice); after PGI the invoice carries them.
+        tally_invoice_number: invoice?.tally_invoice_number ?? row.pre_invoice_tally_invoice_number ?? null,
+        tally_invoice_date: invoice?.tally_invoice_date ?? row.pre_invoice_tally_invoice_date ?? null,
+        inbound_number: invoice?.inbound_number ?? row.pre_invoice_inbound_number ?? null,
+        apl_invoice: !aplCase ? null
+          : toUpperTrimmedString(aplCase.status) === "YES" ? `Yes ${toTrimmedString(aplCase.received_date)}`
+          : toUpperTrimmedString(aplCase.status) === "CANCELLED" ? "Cancelled"
+          : "No",
+        fo_number_display: [...new Set(lineSnapshots.map((line) => foNumberByAllocationId.get(toTrimmedString(line.so_map_allocation_id))).filter(Boolean))].join(" | ") || null,
         total_value: row.total_value ?? lineSnapshots.reduce((sum, line) => sum + Number(line.line_total ?? 0), 0),
         dispatch_category: dispatchCategoryDisplay,
         total_qty: Number(totalQty.toFixed(4)),
         total_pack_qty: Number(totalPackQty.toFixed(4)),
         fg_type_display: fgTypeDisplay,
+        // MTO / HPS / MTEST / MTS of this DO's FG lines (from their SO line).
+        production_type_display: [...new Set(lineSnapshots.map((line) => fgTypeBySoLineId.get(toTrimmedString(line.so_line_id))).filter(Boolean))].join(" + ") || null,
       };
     });
 

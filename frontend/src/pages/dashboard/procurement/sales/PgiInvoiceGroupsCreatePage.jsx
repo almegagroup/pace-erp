@@ -177,13 +177,16 @@ function makeKey() {
   return Math.random().toString(36).slice(2);
 }
 
-function defaultGroupInput(group) {
+function defaultGroupInput(group, dc) {
   const posted = group.posted_invoice || {};
   const postedTaxByDcLineId = new Map((posted.lines || []).map((line) => [line.dc_line_id, line]));
+  // A Bulk-DO-Upload DO already carries the Tally Invoice / IBN the user
+  // entered in the upload sheet; prefill them so posting one DO here does
+  // not ask for (or silently overwrite) the same values again.
   return {
-    tally_invoice_number: posted.tally_invoice_number || "",
-    tally_invoice_date: posted.tally_invoice_date || "",
-    inbound_number: posted.inbound_number || "",
+    tally_invoice_number: posted.tally_invoice_number || dc?.pre_invoice_tally_invoice_number || "",
+    tally_invoice_date: posted.tally_invoice_date || dc?.pre_invoice_tally_invoice_date || "",
+    inbound_number: posted.inbound_number || dc?.pre_invoice_inbound_number || "",
     e_way_bill_applicable: posted.e_way_bill_applicable === true,
     e_way_bill_number: posted.e_way_bill_number || "",
     freight: { to_pay: posted.freight_to_pay === true, included: posted.freight_included === true, mode: posted.freight_mode || "AD_HOC", amount: posted.freight_amount ?? "", rate: posted.freight_rate ?? "", gst_included: posted.freight_gst_included === true, gst_treatment: posted.freight_gst_treatment || "EXCLUSIVE", gst_rate: posted.freight_gst_rate ?? "", tax_method: posted.freight_tax_method || "" },
@@ -719,15 +722,16 @@ export default function PgiInvoiceGroupsCreatePage() {
   const isViewMode = groupsQuery.data?.view_only === true;
 
   useEffect(() => {
-    if (groups.length === 0) return;
+    // Wait for the DO too, so its pre-invoice Tally/IBN can seed the inputs.
+    if (groups.length === 0 || !dc) return;
     setGroupInputs((current) => {
       const next = { ...current };
       for (const group of groups) {
-        if (!next[group.group_key]) next[group.group_key] = defaultGroupInput(group);
+        if (!next[group.group_key]) next[group.group_key] = defaultGroupInput(group, dc);
       }
       return next;
     });
-  }, [groups]);
+  }, [groups, dc]);
 
   function updateGroupInput(groupKey, patch) {
     setGroupInputs((current) => ({ ...current, [groupKey]: { ...current[groupKey], ...patch } }));
@@ -763,7 +767,7 @@ export default function PgiInvoiceGroupsCreatePage() {
     setNotice("");
     try {
       const payloadGroups = groups.filter((group) => !groupKeys || groupKeys.includes(group.group_key)).map((group) => {
-        const input = groupInputs[group.group_key] || defaultGroupInput(group);
+        const input = groupInputs[group.group_key] || defaultGroupInput(group, dc);
         const freightEligible = Boolean(group.freight_term && EXCLUSIVE_FREIGHT_TERMS.has(group.freight_term));
         const isStoGroup = group.source_type === "STO";
         return {
@@ -900,6 +904,7 @@ export default function PgiInvoiceGroupsCreatePage() {
             </div>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 { key: "dc_number", label: "DO Number", width: "140px" },
                 { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
@@ -951,6 +956,7 @@ export default function PgiInvoiceGroupsCreatePage() {
               ) : (
                 <ErpDenseGrid
                   cellNavigate
+                  columnFilter
                   columns={[
                     ...(isViewMode ? [{ key: "select", label: <input type="checkbox" aria-label="Select all posted invoices" checked={groups.filter((group) => group.posted_invoice?.id).length > 0 && selectedInvoiceIds.length === groups.filter((group) => group.posted_invoice?.id).length} onChange={toggleSelectAllPosted} />, width: "52px", render: (row) => row.posted_invoice?.id ? <input type="checkbox" aria-label={`Select invoice ${row.posted_invoice.invoice_number || ""}`} checked={selectedInvoiceIds.includes(row.posted_invoice.id)} onChange={() => toggleInvoiceSelection(row.posted_invoice.id)} /> : null }] : []),
                     { key: "source_type", label: "Type", width: "80px", render: (row) => (row.source_type === "SALES_ORDER" ? "SO" : "STO") },
@@ -990,7 +996,7 @@ export default function PgiInvoiceGroupsCreatePage() {
                       return <input name={`pgi-tally-date-${row.group_key}`} autoComplete="off" disabled={isViewMode && !row.cancelled_invoice} type="date" min={MANUAL_DATE_BOUNDS.min} max={MANUAL_DATE_BOUNDS.max} value={input?.tally_invoice_date || ""} onChange={(event) => updateGroupInput(row.group_key, { tally_invoice_date: event.target.value })} className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs outline-none focus:border-sky-500 disabled:bg-slate-100" />;
                     } },
                     { key: "total", label: "Invoice Total", width: "120px", align: "right", render: (row) => {
-                      const input = groupInputs[row.group_key] || defaultGroupInput(row);
+                      const input = groupInputs[row.group_key] || defaultGroupInput(row, dc);
                       return formatFixed(isViewMode && row.posted_invoice?.total_invoice_value != null ? row.posted_invoice.total_invoice_value : computeGroupPreviewTotal(row, input).total);
                     } },
                     { key: "actions", label: "", width: "90px", render: (row) => (
@@ -1013,7 +1019,7 @@ export default function PgiInvoiceGroupsCreatePage() {
       {activeGroup ? (
         <InvoiceGroupDrawer
           group={activeGroup}
-          input={groupInputs[activeGroup.group_key] || defaultGroupInput(activeGroup)}
+          input={groupInputs[activeGroup.group_key] || defaultGroupInput(activeGroup, dc)}
           dc={dc}
           paymentTermLabel={activeGroup.payment_term_id ? (paymentTermMap.get(activeGroup.payment_term_id) || "As per Sales Order") : null}
           onChange={(patch) => updateGroupInput(activeGroup.group_key, patch)}

@@ -212,21 +212,22 @@ export async function listSoForMapHandler(req: Request, ctx: ProcurementHandlerC
 
     const soRows = (sos ?? []) as JsonRecord[];
     const soIds = soRows.map((row) => String(row.id));
+    // §8E — CMP003's DD SOs alone carry ~900 allocations and ~700 FO groups,
+    // past PostgREST's 1000-row response cap; fetchInChunks also pages.
+    const asResult = (promise: Promise<JsonRecord[]>) =>
+      promise.then((data) => ({ data, error: null as unknown }), (error) => ({ data: [] as JsonRecord[], error: error as unknown }));
     const [lineResp, allocResp, externalFoGroupResp] = await Promise.all([
-      soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, quantity, base_qty").in("so_id", soIds)
-        : Promise.resolve({ data: [], error: null }),
-      soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("so_id, so_line_id, allocated_qty, fo_id").in("so_id", soIds).eq("status", "ACTIVE")
-        : Promise.resolve({ data: [], error: null }),
+      asResult(fetchInChunks<JsonRecord>(soIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("sales_order_line").select("id, so_id, quantity, base_qty").in("so_id", chunk).order("id"))),
+      asResult(fetchInChunks<JsonRecord>(soIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation").select("so_id, so_line_id, allocated_qty, fo_id").in("so_id", chunk).eq("status", "ACTIVE").order("id"))),
       // A Bulk DD SO Map's FO is the customer's Sales/Dispatch FO, not a
       // production Plan Feed. It lives on the map group, so it must be read
       // separately from allocation.fo_id to make it visible in this register.
-      soIds.length
-        ? serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+      asResult(fetchInChunks<JsonRecord>(soIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
           .select("so_id, external_fo_number, revised_external_fo_number")
-          .in("so_id", soIds).eq("status", "ACTIVE").not("external_fo_number", "is", null)
-        : Promise.resolve({ data: [], error: null }),
+          .in("so_id", chunk).eq("status", "ACTIVE").not("external_fo_number", "is", null).order("id"))),
     ]);
     if (lineResp.error) return soMapErrorResponse(req, ctx, "SO_MAP_LINE_FETCH_FAILED", 500, "Unable to load SO lines.");
     if (allocResp.error) return soMapErrorResponse(req, ctx, "SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load allocations.");

@@ -102,7 +102,7 @@ async function fetchFLocationOptions(companyId: string, sfgLocationCode: string 
   return unique;
 }
 
-export async function fetchPackSizeOptions(materialId: string): Promise<JsonRecord[]> {
+export async function fetchPackSizeOptions(materialId: string, companyId?: string): Promise<JsonRecord[]> {
   const { data, error } = await serviceRoleClient
     .schema("erp_production")
     .from("prodshade_pack_config")
@@ -114,7 +114,7 @@ export async function fetchPackSizeOptions(materialId: string): Promise<JsonReco
     console.error("[mts_packing_plan.fetchPackSizeOptions] query failed:", JSON.stringify(error));
     throw new Error("PROD_PO_MTS_PACKING_PLAN_FAILED");
   }
-  return ((data ?? []) as JsonRecord[]).map((row) => {
+  const options = ((data ?? []) as JsonRecord[]).map((row) => {
     const pc = row.pack_code_master as JsonRecord;
     return {
       pack_code_id: String(pc.id),
@@ -123,8 +123,47 @@ export async function fetchPackSizeOptions(materialId: string): Promise<JsonReco
       outer_uom_code: toTrimmedString(pc.outer_uom_code) || "NOS",
       inner_uom_code: toTrimmedString(pc.inner_uom_code) || null,
       fill_qty: Number(row.fill_qty ?? 0),
+      fill_qty_source: "PACK_CONFIG",
     };
   });
+  if (!companyId) return options;
+  // Base KG per outer unit must never silently be 0. Prodshade Pack Config's
+  // fill qty is optional and was blank for every pack 209 carton in prod
+  // (2026-10-13): 160 cartons x 0 created a 0-KG Packing PO and a "loss" of
+  // the whole batch. The SKU's ACTIVE Pack BOM already states the SFG KG per
+  // outer unit (20 for 1 KG x 20 carton) -- the same qty Final will issue --
+  // so it fills the gap. Every MTS caller passes companyId and gets one
+  // consistent fill for Page 5's volume/loss and the Packing PO itself.
+  const missing = options.filter((option) => !(option.fill_qty > 0));
+  if (missing.length === 0) return options;
+  const { data: prodshade, error: prodshadeError } = await serviceRoleClient
+    .schema("erp_master").from("material_master")
+    .select("external_code, material_name").eq("id", materialId).maybeSingle();
+  if (prodshadeError) throw new Error("PROD_PO_MTS_PACKING_PLAN_FAILED");
+  const bases = [toTrimmedString((prodshade as JsonRecord | null)?.external_code), toTrimmedString((prodshade as JsonRecord | null)?.material_name)].filter(Boolean);
+  // §8B INDEPENDENT: each pack size resolves its own SKU + Pack BOM.
+  await Promise.all(missing.map(async (option) => {
+    const keys = [...new Set(bases.map((base) => `${base}${option.pack_code}`.toUpperCase()))];
+    if (keys.length === 0) return;
+    const orFilter = keys.flatMap((key) => [`external_code.ilike.${key}`, `material_name.ilike.${key}`]).join(",");
+    const { data: skus, error: skuError } = await serviceRoleClient.schema("erp_master").from("material_master")
+      .select("id").eq("material_type", "FG").or(orFilter);
+    if (skuError) throw new Error("PROD_PO_MTS_PACKING_PLAN_FAILED");
+    if ((skus ?? []).length !== 1) return;
+    const { data: bom, error: bomError } = await serviceRoleClient.schema("erp_production").from("pack_bom")
+      .select("id").eq("company_id", companyId).eq("sku_material_id", String((skus as JsonRecord[])[0].id)).eq("status", "ACTIVE").maybeSingle();
+    if (bomError) throw new Error("PROD_PO_MTS_PACKING_PLAN_FAILED");
+    if (!bom) return;
+    const { data: sfgLine, error: lineError } = await serviceRoleClient.schema("erp_production").from("pack_bom_line")
+      .select("qty").eq("pack_bom_id", String((bom as JsonRecord).id)).eq("line_type", "SFG").limit(1).maybeSingle();
+    if (lineError) throw new Error("PROD_PO_MTS_PACKING_PLAN_FAILED");
+    const bomFill = Number((sfgLine as JsonRecord | null)?.qty ?? 0);
+    if (bomFill > 0) {
+      option.fill_qty = bomFill;
+      option.fill_qty_source = "PACK_BOM";
+    }
+  }));
+  return options;
 }
 
 export async function fetchOrderedBatchNumbers(processOrderId: string): Promise<string[]> {
@@ -167,7 +206,7 @@ export async function getMtsPackingPlanHandler(req: Request, ctx: ProdHandlerCon
 
     const [sfgLocationCode, packSizeOptions, batchNumbers] = await Promise.all([
       resolveSfgLocationCode(po),
-      fetchPackSizeOptions(String(po.material_id)),
+      fetchPackSizeOptions(String(po.material_id), String(po.company_id)),
       fetchOrderedBatchNumbers(id),
     ]);
     const storageLocationOptions = await fetchFLocationOptions(String(po.company_id), sfgLocationCode);
@@ -220,7 +259,7 @@ export async function saveMtsPackingPlanHandler(req: Request, ctx: ProdHandlerCo
 
     const batchNumbers = await fetchOrderedBatchNumbers(id);
     const batchIndex = new Map(batchNumbers.map((bn, i) => [bn, i]));
-    const packSizeOptions = await fetchPackSizeOptions(String(po.material_id));
+    const packSizeOptions = await fetchPackSizeOptions(String(po.material_id), String(po.company_id));
     const packSizeById = new Map(packSizeOptions.map((p) => [p.pack_code_id, p]));
 
     const claimed = new Array<boolean>(batchNumbers.length).fill(false);
@@ -253,6 +292,9 @@ export async function saveMtsPackingPlanHandler(req: Request, ctx: ProdHandlerCo
       const pack = packSizeById.get(packCodeId);
       if (!pack) {
         return planErr(req, ctx, "PROD_PO_MTS_PACKING_PLAN_PACK_SIZE_INVALID", 422, `Row ${index + 1}: pack size is not configured for this Prodshade`);
+      }
+      if (!(Number(pack.fill_qty) > 0)) {
+        return planErr(req, ctx, "PROD_PO_MTS_PACKING_PLAN_FILL_QTY_MISSING", 422, `Row ${index + 1}: fill qty per pack is not set for this pack size in Prodshade Pack Config or its Pack BOM SFG row`);
       }
       const numberOfBatches = toIdx - fromIdx + 1;
       const volume = Number((numberOfBatches * outerUnitPerBatch * Number(pack.fill_qty)).toFixed(6));

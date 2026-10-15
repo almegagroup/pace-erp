@@ -245,6 +245,8 @@ export default function PgiInvoiceCreatePage() {
 
           <ErpSectionCard eyebrow="Lines" title={`${lines.length} line${lines.length === 1 ? "" : "s"} — GST breakup`}>
             <ErpDenseGrid
+              cellNavigate
+              columnFilter
               columns={[
                 { key: "material_id", label: "Material", render: (row) => row.material_display || row.material_id },
                 { key: "quantity", label: "Qty", width: "90px", render: (row) => `${row.quantity} ${row.uom_code || ""}` },

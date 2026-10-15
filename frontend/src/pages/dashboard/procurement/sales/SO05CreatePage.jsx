@@ -1420,6 +1420,8 @@ export default function SO05CreatePage() {
                   )}
               </div>
               <ErpDenseGrid
+                cellNavigate
+                columnFilter
                 columns={itemColumns(invoice)}
                 rows={invoice.items}
                 rowKey={(item) => item.__key}

@@ -717,6 +717,8 @@ export default function SOCreatePage() {
               actions={[{ key: "add-line", label: "+ Add Material", tone: "primary", onClick: addLine }]}
             >
               <ErpDenseGrid
+                cellNavigate
+                columnFilter
                 columns={lineColumns}
                 rows={lineRows}
                 rowKey={(row) => row.__index}
