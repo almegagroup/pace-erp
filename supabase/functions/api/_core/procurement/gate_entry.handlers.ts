@@ -851,7 +851,7 @@ export async function createGateEntryHandler(
               .select("gate_entry_line_id, status").in("gate_entry_line_id", activeGeLineIds)
             : { data: [] };
           const grnLineIds = new Set((linkedGrns ?? [])
-            .filter((grn: JsonRecord) => ["DRAFT", "POSTED"].includes(toUpperTrimmedString(grn.status)))
+            .filter((grn: JsonRecord) => ["DRAFT", "POSTED", "SPLIT"].includes(toUpperTrimmedString(grn.status)))
             .map((grn: JsonRecord) => toTrimmedString(grn.gate_entry_line_id)));
           const reservedQty = (activeGeLines ?? [])
             .filter((entry: JsonRecord) => liveHeaderIds.has(toTrimmedString(entry.gate_entry_id)) && !grnLineIds.has(toTrimmedString(entry.id)))
@@ -1536,7 +1536,7 @@ export async function listOpenPOsForGEHandler(
       .filter((header: JsonRecord) => !["CANCELLED", "PRUNED"].includes(toUpperTrimmedString(header.status)))
       .map((header: JsonRecord) => String(header.id)));
     const grnByGeLine = new Set((existingGrnResp as JsonRecord[])
-      .filter((grn) => ["DRAFT", "POSTED"].includes(toUpperTrimmedString(grn.status)))
+      .filter((grn) => ["DRAFT", "POSTED", "SPLIT"].includes(toUpperTrimmedString(grn.status)))
       .map((grn) => toTrimmedString(grn.gate_entry_line_id)));
     const reservedByPoLine = new Map<string, number>();
     for (const geLine of existingGeLines) {

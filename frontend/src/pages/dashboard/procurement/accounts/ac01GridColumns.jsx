@@ -120,6 +120,15 @@ export function buildComponentColumns(components) {
   });
 }
 
+// SPLIT GRN summary: "invoices OCT/253, OCT/254 (GRN 2000000502, 2000000503)".
+export function ac01SplitSummary(row) {
+  const invoices = row.split_into_invoice_numbers?.length ? row.split_into_invoice_numbers.join(", ") : "";
+  const grns = row.split_into_grn_numbers?.length ? row.split_into_grn_numbers.join(", ") : "";
+  if (invoices && grns) return `invoices ${invoices} (GRN ${grns})`;
+  if (grns) return `invoice GRNs ${grns}`;
+  return "split into invoice GRNs";
+}
+
 // AC01's real, full list column set (including the "smart" per-component
 // columns above). Reused as-is for the Bulk Component Mapper's AC01-origin
 // grid (2026-10-06) -- same table the real AC01 page shows, not a trimmed copy.
@@ -128,7 +137,14 @@ export function buildColumns(components) {
     {
       key: "status", label: "Status", width: "88px",
       render: (row) => (
-        row.is_reversed ? (
+        row.is_split ? (
+          <span
+            className="inline-block rounded bg-sky-100 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700"
+            title={`SPLIT — ${ac01SplitSummary(row)}. Stock and QA stay on this GRN; cost and payment are on the invoice GRNs.`}
+          >
+            SPLIT
+          </span>
+        ) : row.is_reversed ? (
           <span
             className="inline-block rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-700"
             title={
@@ -158,12 +174,16 @@ export function buildColumns(components) {
       // excelRichText below). A REVERSED row (§3.9.5 "GRN Split" included)
       // copies/exports as a plain text marker instead.
       copyValue: (row) => (
-        row.is_reversed
+        row.is_split
+          ? `SPLIT (${ac01SplitSummary(row)})`
+          : row.is_reversed
           ? `REVERSED${row.split_into_grn_numbers?.length ? ` (split into: ${row.split_into_grn_numbers.join(", ")})` : ""}`
           : `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"} Invoice verified:${row.invoice_verified_by ? "Yes" : "No"}`
       ),
       excelRichText: (row) => (
-        row.is_reversed
+        row.is_split
+          ? [{ text: `SPLIT (${ac01SplitSummary(row)})`, fontArgb: "FF0369A1", bold: true }]
+          : row.is_reversed
           ? [{ text: `REVERSED${row.split_into_grn_numbers?.length ? ` (split: ${row.split_into_grn_numbers.join(", ")})` : ""}`, fontArgb: "FFBE123C", bold: true }]
           : [
             { text: "●", fontArgb: dotFontArgb(row.ud_status) },
@@ -186,6 +206,12 @@ export function buildColumns(components) {
     { key: "supplier_name", label: "Supplier", width: "160px" },
     { key: "invoice_number", label: "Invoice No.", width: "120px" },
     { key: "invoice_date", label: "Invoice Date", width: "100px", render: (row) => toDDMMYYYY(row.invoice_date), copyValue: (row) => toDDMMYYYY(row.invoice_date) },
+    // Physical-document chain (2026-10-15): the challan the truck came with and its Gate Entry,
+    // kept on every invoice GRN of a split, plus the split source (physical receipt) GRN.
+    { key: "challan_number", label: "Challan No.", width: "110px", render: (row) => row.challan_number || "—" },
+    { key: "challan_date", label: "Challan Date", width: "100px", render: (row) => toDDMMYYYY(row.challan_date), copyValue: (row) => toDDMMYYYY(row.challan_date) },
+    { key: "ge_number", label: "GE Number", width: "110px", render: (row) => row.ge_number || "—" },
+    { key: "split_source_grn_number", label: "Split From GRN", width: "110px", render: (row) => row.split_source_grn_number || "—" },
     { key: "item_name", label: "Item Name", width: "160px" },
     { key: "external_code", label: "External Code", width: "110px" },
     { key: "grn_qty", label: "GRN Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty) },

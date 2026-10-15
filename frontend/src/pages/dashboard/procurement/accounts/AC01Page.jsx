@@ -41,6 +41,7 @@ import {
   udDotClass,
   dotFontArgb,
   paymentDotStatus,
+  ac01SplitSummary,
 } from "./ac01GridColumns.jsx";
 
 const DATE_FIELD_OPTIONS = [
@@ -243,7 +244,14 @@ function buildColumns(components) {
     {
       key: "status", label: "Status", width: "88px",
       render: (row) => (
-        row.is_reversed ? (
+        row.is_split ? (
+          <span
+            className="inline-block rounded bg-sky-100 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700"
+            title={`SPLIT — ${ac01SplitSummary(row)}. Stock and QA stay on this GRN; cost and payment are on the invoice GRNs.`}
+          >
+            SPLIT
+          </span>
+        ) : row.is_reversed ? (
           <span
             className="inline-block rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-700"
             title={
@@ -273,12 +281,16 @@ function buildColumns(components) {
       // excelRichText below). A REVERSED row (§3.9.5 "GRN Split" included)
       // copies/exports as a plain text marker instead.
       copyValue: (row) => (
-        row.is_reversed
+        row.is_split
+          ? `SPLIT (${ac01SplitSummary(row)})`
+          : row.is_reversed
           ? `REVERSED${row.split_into_grn_numbers?.length ? ` (split into: ${row.split_into_grn_numbers.join(", ")})` : ""}`
           : `UD:${row.ud_status || "—"} Payment:${paymentDotStatus(row) || "—"} Invoice verified:${row.invoice_verified_by ? "Yes" : "No"}`
       ),
       excelRichText: (row) => (
-        row.is_reversed
+        row.is_split
+          ? [{ text: `SPLIT (${ac01SplitSummary(row)})`, fontArgb: "FF0369A1", bold: true }]
+          : row.is_reversed
           ? [{ text: `REVERSED${row.split_into_grn_numbers?.length ? ` (split: ${row.split_into_grn_numbers.join(", ")})` : ""}`, fontArgb: "FFBE123C", bold: true }]
           : [
             { text: "●", fontArgb: dotFontArgb(row.ud_status) },
@@ -301,6 +313,12 @@ function buildColumns(components) {
     { key: "supplier_name", label: "Supplier", width: "160px" },
     { key: "invoice_number", label: "Invoice No.", width: "120px" },
     { key: "invoice_date", label: "Invoice Date", width: "100px", render: (row) => toDDMMYYYY(row.invoice_date), copyValue: (row) => toDDMMYYYY(row.invoice_date) },
+    // Physical-document chain (2026-10-15): the challan the truck came with and its Gate Entry,
+    // kept on every invoice GRN of a split, plus the split source (physical receipt) GRN.
+    { key: "challan_number", label: "Challan No.", width: "110px", render: (row) => row.challan_number || "—" },
+    { key: "challan_date", label: "Challan Date", width: "100px", render: (row) => toDDMMYYYY(row.challan_date), copyValue: (row) => toDDMMYYYY(row.challan_date) },
+    { key: "ge_number", label: "GE Number", width: "110px", render: (row) => row.ge_number || "—" },
+    { key: "split_source_grn_number", label: "Split From GRN", width: "110px", render: (row) => row.split_source_grn_number || "—" },
     { key: "item_name", label: "Item Name", width: "160px" },
     { key: "external_code", label: "External Code", width: "110px" },
     { key: "grn_qty_base", label: "GRN Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty_base) },
@@ -600,7 +618,9 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   // via direct GRN-company ownership. Defaults true while loading/absent so
   // the drawer doesn't flash locked before the detail query resolves.
   const rowEditable = grnDetailQuery.data?.is_editable_for_viewer ?? true;
-  const effectiveReadOnly = readOnly || !rowEditable;
+  // A SPLIT GRN's cost and payable are entered on its invoice GRNs (the server refuses a save here).
+  const isSplitGrn = grnDetailQuery.data?.is_split === true;
+  const effectiveReadOnly = readOnly || !rowEditable || isSplitGrn;
 
   const deductionTypesQuery = useQuery({
     queryKey: ["ac01", "deduction-types", companyId],
@@ -951,7 +971,30 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   : null}
               </div>
             ) : null}
-            {!readOnly && effectiveReadOnly && grnDetailQuery.data ? (
+            {isSplitGrn ? (
+              <div className="rounded border border-sky-300 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                <p className="font-semibold">
+                  Invoice split — stock and QA stay on this GRN; cost and payment are entered on its invoice GRNs.
+                </p>
+                <p className="mt-1">
+                  Challan {grnDetailQuery.data?.challan_number || "—"}
+                  {grnDetailQuery.data?.challan_date ? ` dated ${toDDMMYYYY(grnDetailQuery.data.challan_date)}` : ""}
+                </p>
+                {(grnDetailQuery.data?.split_into_invoices ?? []).map((entry) => (
+                  <p key={entry.grn_number} className="mt-0.5">
+                    GRN {entry.grn_number} — Invoice {entry.invoice_number || "—"}
+                    {entry.invoice_date ? ` (${toDDMMYYYY(entry.invoice_date)})` : ""} — Qty {formatNumberOrBlank(entry.received_qty)}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            {grnDetailQuery.data?.split_source_grn_number ? (
+              <div className="rounded border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                Invoice GRN of an invoice split — physical receipt GRN {grnDetailQuery.data.split_source_grn_number}
+                {grnDetailQuery.data?.challan_number ? `, challan ${grnDetailQuery.data.challan_number}` : ""}.
+              </div>
+            ) : null}
+            {!readOnly && !rowEditable && grnDetailQuery.data ? (
               // CRCP mirrored view (locked 2026-10-04) -- this company is the
               // ITC owner, not the Actual Receiver who created this GRN.
               <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
