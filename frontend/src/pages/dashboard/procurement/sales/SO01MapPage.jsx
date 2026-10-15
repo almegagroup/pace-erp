@@ -255,6 +255,7 @@ function MapDrawer({ so, onClose, onChanged, onOpenMtsFoList }) {
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">SO Lines — mapped / remaining</h4>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               maxHeight="none"
               columns={[
                 { key: "material", label: "Item", width: "300px", render: (line) => `${line.line_material_type}${line.fg_type ? ` / ${line.fg_type}` : ""} — ${line.material_display || "—"}` },
@@ -301,6 +302,7 @@ function MapDrawer({ so, onClose, onChanged, onOpenMtsFoList }) {
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-600">Existing Mappings</h4>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               maxHeight="none"
               columns={[
                 { key: "external_fo_number", label: "FO Number", width: "125px", render: (group) => group.external_fo_number || "—" },
@@ -494,6 +496,7 @@ export default function SO01MapPage() {
               </div>
               <ErpDenseGrid
                 cellNavigate
+                columnFilter
                 columns={[
                   ...SO_MAP_COLUMNS,
                   { key: "actions", label: "", width: "170px", render: (row) => (

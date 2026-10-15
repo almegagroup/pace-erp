@@ -274,6 +274,7 @@ export default function SO02BulkPostingPage() {
               <span className="text-slate-600">Only DO header details are corrected here. "Cancel &amp; re-upload" rows changed an item (SKU, Pack Qty, Storage Location or FO): cancel that DO in SO03 and upload it again.</span>
               <ErpDenseGrid
                 cellNavigate
+                columnFilter
                 maxHeight="320px"
                 rows={correctionRows}
                 rowKey={(row) => `${row.dc_number}-${(row.excel_rows ?? []).join(",")}`}
@@ -313,7 +314,7 @@ export default function SO02BulkPostingPage() {
               <button type="button" onClick={() => setSelected(new Set())} disabled={selected.size === 0} className="border border-slate-400 bg-white px-2 py-0.5 font-semibold text-slate-700 disabled:opacity-50">Clear selection</button>
             </div>
           ) : null}
-          <ErpDenseGrid cellNavigate stickyFirstColumn rows={visibleRows} rowKey={(row) => `${row.id}-${row.line_number}`} emptyMessage={query.isLoading ? "Loading Bulk Posting queue..." : "No Bulk DO Upload records are pending."}
+          <ErpDenseGrid cellNavigate columnFilter stickyFirstColumn rows={visibleRows} rowKey={(row) => `${row.id}-${row.line_number}`} emptyMessage={query.isLoading ? "Loading Bulk Posting queue..." : "No Bulk DO Upload records are pending."}
             columns={[
               { key: "dc_number", label: <label className="flex items-center gap-2 normal-case tracking-normal"><input aria-label="Select displayed DOs" type="checkbox" checked={selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selected.has(id))} onChange={(event) => setSelected(event.target.checked ? new Set(selectableVisibleIds) : new Set())} /><span>DO Number</span></label>, width: "170px", render: (row) => <label className="flex items-center gap-2 font-medium text-slate-900"><input aria-label={`Select ${row.dc_number}`} type="checkbox" disabled={row.postable === false} checked={selected.has(row.id)} onChange={() => toggle(row.id)} /><span>{row.dc_number || "—"}</span></label> },
               { key: "vehicle_number", label: "Truck Number", width: "130px", render: (row) => row.vehicle_number || "—" },

@@ -763,6 +763,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
             </div>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               maxHeight="320px"
               columns={[
                 { key: "excel_row_number", label: "Excel Row No.", width: "100px", align: "right" },
@@ -783,6 +784,7 @@ export default function BulkDdSoMapDrawer({ companyId, onClose, onSaved }) {
           <>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               maxHeight="520px"
               columns={[
                 {

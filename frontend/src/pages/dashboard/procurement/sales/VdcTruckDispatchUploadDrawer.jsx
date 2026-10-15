@@ -360,7 +360,7 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
             <button type="button" onClick={() => void exportNotLoaded()} className="border border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-900">Export Excel</button>
             <button type="button" onClick={() => setUploadReport(null)} className="border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold">Hide</button>
           </div>
-          <ErpDenseGrid rows={uploadReport.rows} rowKey={(row) => `${row.excel_row}-${row.result}`}
+          <ErpDenseGrid cellNavigate columnFilter rows={uploadReport.rows} rowKey={(row) => `${row.excel_row}-${row.result}`}
             columns={[
               { key: "excel_row", label: "Excel Row", width: "80px" },
               { key: "label", label: "FO / DO Number", width: "150px" },
@@ -377,7 +377,7 @@ export default function VdcTruckDispatchUploadDrawer({ companyId, onClose, onSav
           {postFailures.map((row) => <span key={row.dc_id}>DO {row.dc_number}: {row.message || row.code}</span>)}
         </div>
       ) : null}
-      <ErpDenseGrid cellNavigate rows={reviewRows} rowKey={(row) => `${row.dc_id}-${row.storage_location_id}-${row.sku}`} emptyMessage={query.isLoading ? "Loading pending DD rows…" : "No pending DD Invoice-only rows."}
+      <ErpDenseGrid cellNavigate columnFilter rows={reviewRows} rowKey={(row) => `${row.dc_id}-${row.storage_location_id}-${row.sku}`} emptyMessage={query.isLoading ? "Loading pending DD rows…" : "No pending DD Invoice-only rows."}
         columns={[
           { key: "dc_number", label: "DO Number", width: "120px", render: (row) => row.dc_number || "—" },
           { key: "fo_number", label: "FO Number", width: "145px", render: (row) => row.fo_number || "—" },

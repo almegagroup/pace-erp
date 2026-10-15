@@ -202,7 +202,7 @@ export default function DODetailPage() {
 
           {Array.isArray(data.dispatch_amendments) && data.dispatch_amendments.length > 0 ? (
             <ErpSectionCard eyebrow="Audit" title="Dispatch amendment history">
-              <ErpDenseGrid cellNavigate columns={[
+              <ErpDenseGrid cellNavigate columnFilter columns={[
                 { key: "amended_at", label: "When", width: "160px" },
                 { key: "amendment_reason", label: "Reason" },
                 { key: "old_lr_number", label: "Old LR", width: "110px" },
@@ -236,6 +236,7 @@ export default function DODetailPage() {
           <ErpSectionCard eyebrow="Source Documents" title="Every SO/STO this DO drew items from — Bill-To/Ship-To resolve fresh at Invoice/PGI time, not shown here (§133.12-addendum)">
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 { key: "source_type", label: "Type", width: "110px", render: (row) => (row.source_type === "SALES_ORDER" ? "Sales Order" : "STO") },
                 { key: "document_number", label: "Document Number", width: "160px", render: (row) => <span className="font-mono font-semibold">{row.document_number || "—"}</span> },
@@ -251,6 +252,7 @@ export default function DODetailPage() {
           <ErpSectionCard eyebrow="Lines" title={`${lines.length} line${lines.length === 1 ? "" : "s"}`}>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 { key: "line_number", label: "#", width: "50px" },
                 { key: "material_id", label: "Material", render: (row) => row.material_display || row.material_id },

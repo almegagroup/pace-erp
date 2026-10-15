@@ -854,7 +854,15 @@ export default function ErpDenseGrid({
             <tr>
               {columns.map((column, colIndex) => {
                 const isStickyFirst = stickyFirstColumn && colIndex === 0;
-                const canFilterColumn = columnFilter && column.filterable !== false;
+                // A column whose heading is an action control/checkbox (or
+                // intentionally blank) has no stable business value to filter.
+                // Keep its Excel AutoFilter hidden even when a screen enables
+                // column filters for every real data column.
+                const canFilterColumn = columnFilter
+                  && column.filterable !== false
+                  && typeof column.label === "string"
+                  && column.label.trim() !== ""
+                  && column.key !== "actions";
                 const isFilterActive = Boolean(columnFilters[column.key]);
                 return (
                   <th

@@ -788,6 +788,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
                 </div>
                 <ErpDenseGrid
                   cellNavigate
+                  columnFilter
                   maxHeight="520px"
                   columns={[
                     { key: "fo_or_so_number", label: "FO/SO Number", width: "130px" },
@@ -807,6 +808,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
             ) : (
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               maxHeight="520px"
               columns={[
                 { key: "excel_row", label: "Excel Row", width: "80px", align: "right", render: (row) => excelRowLabel(rawByIndex, row.row_index) },

@@ -548,6 +548,8 @@ export default function DOCreatePage() {
                 actions={[{ key: "add-item", label: "+ Add Item", tone: "primary", onClick: () => setShowItemPicker(true) }]}
               >
                 <ErpDenseGrid
+                  cellNavigate
+                  columnFilter
                   columns={lineColumns}
                   rows={lines.map((line, index) => ({ ...line, __index: index }))}
                   rowKey={(row) => row.__index}

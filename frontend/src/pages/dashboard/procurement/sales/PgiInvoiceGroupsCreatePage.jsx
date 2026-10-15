@@ -904,6 +904,7 @@ export default function PgiInvoiceGroupsCreatePage() {
             </div>
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 { key: "dc_number", label: "DO Number", width: "140px" },
                 { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },
@@ -955,6 +956,7 @@ export default function PgiInvoiceGroupsCreatePage() {
               ) : (
                 <ErpDenseGrid
                   cellNavigate
+                  columnFilter
                   columns={[
                     ...(isViewMode ? [{ key: "select", label: <input type="checkbox" aria-label="Select all posted invoices" checked={groups.filter((group) => group.posted_invoice?.id).length > 0 && selectedInvoiceIds.length === groups.filter((group) => group.posted_invoice?.id).length} onChange={toggleSelectAllPosted} />, width: "52px", render: (row) => row.posted_invoice?.id ? <input type="checkbox" aria-label={`Select invoice ${row.posted_invoice.invoice_number || ""}`} checked={selectedInvoiceIds.includes(row.posted_invoice.id)} onChange={() => toggleInvoiceSelection(row.posted_invoice.id)} /> : null }] : []),
                     { key: "source_type", label: "Type", width: "80px", render: (row) => (row.source_type === "SALES_ORDER" ? "SO" : "STO") },

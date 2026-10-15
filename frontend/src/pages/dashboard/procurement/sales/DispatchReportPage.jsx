@@ -492,6 +492,8 @@ export default function DispatchReportPage() {
               </label>
             </div>
             <ErpDenseGrid
+              cellNavigate
+              columnFilter
               columns={GRID_COLUMNS}
               rows={filteredRows}
               rowKey={(row) => row.row_key}

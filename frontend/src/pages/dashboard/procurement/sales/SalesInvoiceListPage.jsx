@@ -188,6 +188,7 @@ export default function SalesInvoiceListPage() {
             <ErpPaginationStrip page={page} setPage={setPage} totalPages={totalPages} startIndex={startIndex} endIndex={endIndex} totalItems={pageTotal} />
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 { key: "dc_number", label: "DO Number", width: "140px" },
                 { key: "source_display", label: "Source", width: "100px", render: (row) => (row.source_display === "SALES_ORDER" ? "Sales Order" : row.source_display === "STO" ? "STO" : "—") },

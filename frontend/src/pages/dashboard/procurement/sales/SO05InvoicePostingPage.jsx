@@ -66,7 +66,7 @@ export default function SO05InvoicePostingPage() {
           panel below the fold once a row is opened. Found live 2026-09-26
           (business owner): clicking "Open" looked like it did nothing --
           it actually rendered, just off-screen past a wall of empty space. */}
-      <ErpDenseGrid columns={columns} rows={filtered} rowKey={(row) => row.id} emptyMessage={query.isLoading ? "Loading invoices…" : "No matching invoices."} maxHeight="none" />
+      <ErpDenseGrid cellNavigate columnFilter columns={columns} rows={filtered} rowKey={(row) => row.id} emptyMessage={query.isLoading ? "Loading invoices…" : "No matching invoices."} maxHeight="none" />
     </ErpSectionCard>
     {edit && <ErpSectionCard title="Invoice details">
       <div className="grid md:grid-cols-4 gap-3">

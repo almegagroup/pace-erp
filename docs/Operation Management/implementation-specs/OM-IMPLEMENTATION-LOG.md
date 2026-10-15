@@ -6242,3 +6242,22 @@ human-readable Vendor Code column; no internal UUID is exposed.
 Code `YAL09V`. Both touched backend handlers pass `deno check`; both touched frontend files pass
 ESLint; Vite build passes. The build retains only the pre-existing GRN duplicate `emptyMessage`
 warning.
+
+## 2026-10-15 — Sales dense-grid Excel navigation and column filters — DONE
+
+**Scope:** Every `ErpDenseGrid` in Sales, including SO01, SO02, SO03/Delivery Order, SO04 and
+their nested drawers/detail/create/posting screens, now uses the grid's existing Excel-style
+keyboard navigation and per-column filter capability. The inventory contains 39 grids across 23
+Sales screen and drawer files.
+
+**Implemented:** Each Sales grid now opts into `cellNavigate` and `columnFilter`. Arrow keys move
+the active grid cell, while fields, checkboxes and buttons retain their normal keyboard behavior.
+Each meaningful text-headed data column has its existing Excel AutoFilter control. Blank,
+checkbox/select-all and action headers deliberately do not receive a meaningless filter control.
+No API request, database data, posting path or ACL behavior changed.
+
+**Verification:** A source inventory confirms that all 39 Sales `ErpDenseGrid` instances enable
+both capabilities; `git diff --check` passes. Targeted ESLint has no errors introduced by this
+change; it continues to report three pre-existing synchronous-state-in-effect errors in the
+three SO05 files and four pre-existing hook/library warnings. Vite production build passes; its
+remaining GRN duplicate `emptyMessage` and chunk-size warnings are pre-existing.

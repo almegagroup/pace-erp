@@ -293,6 +293,7 @@ export default function DOListPage() {
             ) : (
               <ErpDenseGrid
                 cellNavigate
+                columnFilter
                 columns={[
                   { key: "dc_number", label: "DO Number", width: "120px" },
                   { key: "fo_number_display", label: "FO Number", width: "120px", render: (row) => row.fo_number_display || "—" },

@@ -915,6 +915,7 @@ export default function SODetailPage() {
           <ErpSectionCard eyebrow="Lines" title="SO lines">
             <ErpDenseGrid
               cellNavigate
+              columnFilter
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
                 {
@@ -1312,6 +1313,7 @@ export default function SODetailPage() {
               </div>
               <ErpDenseGrid
                 cellNavigate
+                columnFilter
                 columns={[
                   { key: "invoice_number", label: "Invoice Number", width: "150px" },
                   { key: "invoice_date", label: "Invoice Date", width: "120px" },
