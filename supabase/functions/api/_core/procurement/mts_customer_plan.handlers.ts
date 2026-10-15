@@ -169,11 +169,11 @@ const NO_GROUP: ProdshadeGroup = { mother_group_id: null, mother_group_name: nul
 async function loadGroupLayout(companyId: string): Promise<GroupLayout> {
   const [mothersRes, childrenRes, membersRes] = await Promise.all([
     serviceRoleClient.schema("erp_planning").from("prodshade_mother_group")
-      .select("id, group_name").eq("company_id", companyId),
+      .select("id, group_name").eq("company_id", companyId).eq("is_active", true),
     serviceRoleClient.schema("erp_planning").from("prodshade_child_group")
-      .select("id, group_name, mother_group_id").eq("company_id", companyId),
+      .select("id, group_name, mother_group_id").eq("company_id", companyId).eq("is_active", true),
     serviceRoleClient.schema("erp_planning").from("prodshade_group_member")
-      .select("prodshade_material_id, child_group_id").eq("company_id", companyId),
+      .select("prodshade_material_id, child_group_id").eq("company_id", companyId).eq("is_active", true),
   ]);
   if (mothersRes.error || childrenRes.error || membersRes.error) throw new Error("MTS_PLAN_GROUP_LOOKUP_FAILED");
   const mothers = (mothersRes.data ?? []) as JsonRecord[];
