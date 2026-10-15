@@ -6,7 +6,7 @@ import ErpScreenScaffold, {
   ErpSectionCard,
 } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { createGateExitInbound, getGateEntryByNumber, getGePersonNameContext } from "../procurementApi.js";
+import { createGateExitInbound, getGateEntryByNumber, getGexPersonNameContext } from "../procurementApi.js";
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
@@ -83,7 +83,7 @@ export default function GateExitEntryPage() {
   const [personNameLoading, setPersonNameLoading] = useState(true);
   useEffect(() => {
     let active = true;
-    getGePersonNameContext()
+    getGexPersonNameContext()
       .then((res) => {
         if (!active) return;
         const security = Boolean(res?.is_security) || !res?.person_name;
@@ -127,8 +127,11 @@ export default function GateExitEntryPage() {
     setError("");
     setNotice("");
     setDetail(null);
-    // A previous exit must never supply the name for the newly loaded GE.
-    setPersonName("");
+    // A shared Security login records the person manually for each exit. A
+    // named login's person is its own authenticated name and must survive
+    // loading a Gate Entry; clearing it here previously left a read-only,
+    // required field blank and made saving impossible.
+    if (isSecurityUser) setPersonName("");
     try {
       const result = await getGateEntryByNumber(trimmed);
       setDetail(result);
@@ -150,7 +153,7 @@ export default function GateExitEntryPage() {
     setAmpm(t.ampm);
     setTareWeight("");
     setRemarks("");
-    setPersonName("");
+    if (isSecurityUser) setPersonName("");
     setSuccessExit(null);
     geInputRef.current?.focus();
   }
