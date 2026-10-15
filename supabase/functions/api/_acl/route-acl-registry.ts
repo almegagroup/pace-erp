@@ -179,6 +179,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   //    PROC_PLANT_TRANSFER_LIST:WRITE with Tab 1 meant a Logistics grant for
   //    Tab 2 silently also unlocked Tab 1's Accounts-only Settlement Invoice/
   //    Cost Component Entry actions (CLAUDE.md bug pattern #6).
+  "GET:/api/production/process-po-exclusion":        { skipAcl: false, resourceCode: "SA_PROD_PROCESS_PO_EXCLUSION", action: "VIEW"  },
+  "POST:/api/production/process-po-exclusion":       { skipAcl: false, resourceCode: "SA_PROD_PROCESS_PO_EXCLUSION", action: "WRITE" },
   "GET:/api/procurement/transfer-groups":             { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP",   action: "VIEW"  },
   "POST:/api/procurement/transfer-groups":            { skipAcl: false, resourceCode: "SA_PROC_TRANSFER_GROUP",   action: "WRITE" },
   "GET:/api/procurement/transfer-groups/partners":    { skipAcl: false, resourceCode: "PROC_PLANT_TRANSFER_LIST", action: "VIEW"  },

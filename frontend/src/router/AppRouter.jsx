@@ -71,6 +71,7 @@ import SAMaterialMaster from "../admin/sa/screens/SAMaterialMaster.jsx";
 import SAVendorMaster from "../admin/sa/screens/SAVendorMaster.jsx";
 import SAProductionBatchSeriesPage from "../admin/sa/screens/SAProductionBatchSeriesPage.jsx";
 import SAProcTransferGroupPage from "../admin/sa/screens/SAProcTransferGroupPage.jsx";
+import SAProcessPoExclusionPage from "../admin/sa/screens/SAProcessPoExclusionPage.jsx";
 import SAVendorCodeMasterPage from "../admin/sa/screens/SAVendorCodeMasterPage.jsx";
 import SAProductionSegmentLocationPage from "../admin/sa/screens/SAProductionSegmentLocationPage.jsx";
 import SAPackCodeMasterPage from "../admin/sa/screens/SAPackCodeMasterPage.jsx";
@@ -407,6 +408,10 @@ export default function AppRouter() {
                     <Route
                       path="procurement/transfer-groups"
                       element={<SAProcTransferGroupPage />}
+                    />
+                    <Route
+                      path="production/process-po-exclusion"
+                      element={<SAProcessPoExclusionPage />}
                     />
                     <Route
                       path="production/vendor-code-master"

@@ -12,6 +12,7 @@
  * Authority: Backend
  */
 
+import { loadProcessPoExcludedProdshadeIds } from "../../_shared/processPoExclusion.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
@@ -499,6 +500,9 @@ export async function listStrokeMastersHandler(
     const materialId = toTrimmedString(url.searchParams.get("material_id") ?? "");
     const status = toUpperTrimmedString(url.searchParams.get("status") ?? "");
     const usableForPoType = toUpperTrimmedString(url.searchParams.get("usable_for_po_type") ?? "");
+    // Sent only by Process PO create: hide Prodshades SA excluded for that
+    // company (OM13). Every other caller of this list is unaffected.
+    const forProcessPoCreate = url.searchParams.get("for_process_po_create") === "1";
     if (usableForPoType && !USABLE_PO_TYPES.has(usableForPoType)) {
       return strokeError(req, ctx, "PROD_STROKE_SHARE_TYPE_INVALID", 400, "PO Type must be MTO, HPS, MTS, MTEST, or INT");
     }
@@ -549,7 +553,11 @@ export async function listStrokeMastersHandler(
       throw new Error("PROD_STROKE_LIST_FAILED");
     }
 
-    const rows = (data ?? []) as JsonRecord[];
+    let rows = (data ?? []) as JsonRecord[];
+    if (forProcessPoCreate && companyId) {
+      const excluded = await loadProcessPoExcludedProdshadeIds(companyId);
+      if (excluded.size > 0) rows = rows.filter((row) => !excluded.has(String(row.prodshade_material_id ?? "")));
+    }
     const [materialMap, slocMap, userDisplayMap, applicabilityByStrokeId] = await Promise.all([
       getMaterialMapByIds(rows.map((r) => String(r.prodshade_material_id ?? ""))),
       getStorageLocationMapByIds(rows.map((r) =>

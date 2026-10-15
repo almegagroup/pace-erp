@@ -10,6 +10,7 @@
  * DB column names: material_id, planned_qty, actual_qty, qa_decided_by/at, issue_sloc_id
  */
 
+import { isProdshadeExcludedFromProcessPo } from "../../_shared/processPoExclusion.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
@@ -2625,6 +2626,10 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       const strokeRow = stroke as JsonRecord;
       if (String(strokeRow.company_id ?? "") !== companyId || String(strokeRow.prodshade_material_id ?? "") !== materialId) {
         return poErr(req, ctx, "PROD_PO_STROKE_MATERIAL_MISMATCH", 422, "Stroke master must belong to the selected company and Prodshade");
+      }
+      // SA OM13: this Prodshade is excluded from Process PO creation for this company.
+      if (await isProdshadeExcludedFromProcessPo(companyId, materialId)) {
+        return poErr(req, ctx, "PROD_PO_PRODSHADE_EXCLUDED", 422, "This Prodshade is excluded from Process PO for this company (SA → Process PO Exclusion).");
       }
       // MTS Current-vs-Non-Current Stroke policy (2026-09-17 lock) — server-side
       // truth, never trusted from the client. Current Stroke = Policy 1 (skips

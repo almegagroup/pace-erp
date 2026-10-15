@@ -287,6 +287,8 @@ export default function ProductionPOCreatePage() {
       company_id: effectiveCompanyId || undefined,
       status: "APPROVED",
       usable_for_po_type: processForm.po_type || undefined,
+      // SA OM13: Prodshades excluded for this company are not offered here.
+      for_process_po_create: "1",
     }),
     enabled: Boolean(effectiveCompanyId),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
@@ -324,6 +326,8 @@ export default function ProductionPOCreatePage() {
       material_id: processForm.prodshade_material_id || undefined,
       status: "APPROVED",
       usable_for_po_type: processForm.po_type || undefined,
+      // SA OM13: Prodshades excluded for this company are not offered here.
+      for_process_po_create: "1",
     }),
     enabled: Boolean(effectiveCompanyId && processForm.prodshade_material_id),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],

@@ -89,6 +89,13 @@ PROD `PO` codes in use: PO01–PO14, PO16–PO19. **Recommend `PO21`.**
 - Product Group edit allowed: CMP003 P0004, P0005, P0006, P0074, P0076, P0077; CMP005 / CMP011 P0004, P0005, P0006, P0074, P0076.
 - The code that uses these must still be merged and deployed.
 
+## SA OM13 — Process PO Exclusion (owner 2026-10-15)
+
+- SA → Operation Masters → "Process PO Exclusion" (`/sa/production/process-po-exclusion`, resource `SA_PROD_PROCESS_PO_EXCLUSION`, SA/GA only). Per company: tick "Exclude from Process PO" on a Mother group (covers all Child groups and Prodshades under it, including later ones), a Child group, or single Prodshades.
+- Effect is only on Process PO creation: the Prodshade/Stroke dropdowns on Process PO create hide them (`for_process_po_create=1` on the stroke-master list), and the normal create plus the MTS Page 4-6 previews and commit reject them server-side. The Prodshade still exists for everything else (plan, stock, reports). Old Process PO (opening history) is not affected.
+- A Prodshade in no group is never excluded; to exclude it, put it in a group first (listed separately on the page).
+- Migration `20261015130000` (table `process_po_exclusion`, `process_po_excluded_prodshades()`, `save_process_po_exclusions()`, SA menu row OM13). Soft delete only. Applied DEV (7 rolled-back checks pass) and PROD; PROD SA menu snapshots rebuilt (2 SA users).
+
 ## Not done (by instruction)
 
 Historical Google Sheet import (`LEGACY_GOOGLE_SHEETS` source value is reserved in the schema), Production / Dispatch rows in the report, requirement explosion, PROD writes, deployment, merge.

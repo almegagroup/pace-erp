@@ -146,6 +146,8 @@ export const listExcessConsumptionReport = (p) => fetchProd("GET", "/api/product
 // ── Stroke Masters ────────────────────────────────────────────────────────────
 export const listStrokeMasters = (p) => fetchProd("GET", "/api/production/stroke-masters", undefined, p);
 export const getStrokeMaster = (id) => fetchProd("GET", `/api/production/stroke-masters/${id}`);
+export const getProcessPoExclusion = (companyId) => fetchProd("GET", "/api/production/process-po-exclusion", undefined, { company_id: companyId });
+export const saveProcessPoExclusion = (body) => fetchProd("POST", "/api/production/process-po-exclusion", body);
 export const createStrokeMaster = (body) => fetchProd("POST", "/api/production/stroke-masters", body);
 export const shareStrokeMaster = (body) => fetchProd("POST", "/api/production/stroke-shares", body);
 export const listMtsCurrentStroke = (companyId) => fetchProd("GET", "/api/production/mts-current-stroke", undefined, { company_id: companyId });
