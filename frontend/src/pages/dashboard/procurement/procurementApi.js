@@ -1313,6 +1313,12 @@ export function bulkPostDeliveryOrders(dcIds) {
 export function bulkPostingCorrections(companyId, rows, apply) {
   return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/posting/corrections", { company_id: companyId, rows, apply: apply === true });
 }
+export function listScheduledDdInvoiceCancellation(companyId) {
+  return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation", undefined, { company_id: companyId });
+}
+export function postScheduledDdInvoiceCancellation(companyId, dcIds, reason) {
+  return fetchProcurement("POST", "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post", { company_id: companyId, dc_ids: dcIds, reason });
+}
 export function listVdcTruckDispatchPending(companyId) {
   return fetchProcurement("GET", "/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch", undefined, { company_id: companyId });
 }

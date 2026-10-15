@@ -6261,3 +6261,39 @@ both capabilities; `git diff --check` passes. Targeted ESLint has no errors intr
 change; it continues to report three pre-existing synchronous-state-in-effect errors in the
 three SO05 files and four pre-existing hook/library warnings. Vite production build passes; its
 remaining GRN duplicate `emptyMessage` and chunk-size warnings are pre-existing.
+
+## 2026-10-15 — SO02 scheduled DD Invoice-only cancellation — DONE
+
+**Scope:** SO02 now has a `Scheduled Invoice Cancellation` companion workbench for the
+quarter-close decision. It shows only Bulk-DO-upload Sales DD Direct delivery orders that are
+still `INVOICED`, have only DRAFT invoice(s), have no `VDC_SALES_INVOICE` stock document, and
+whose **Tally Invoice Date** is before the first day of the current quarter. The date rule is
+therefore commercial/Tally-based, not the system-created invoice date.
+
+**Manual review:** The workbench has company scope, search, Excel export, select-all/row
+checkboxes (bounded to 100), mandatory cancellation reason and an explicit confirmation. Its
+database batch function re-checks every selected row under lock and then calls the established
+`cancel_vdc_invoice_only_atomic` primitive. Invoice cancellation, DO cancellation and reservation
+release remain one transaction; no new stock-posting path was introduced.
+
+**Automatic close:** `20261015023815_scheduled_dd_invoice_cancellation.sql` adds secured helper,
+batch and scheduled functions, then registers `so02-auto-cancel-overdue-dd-invoices` at `0 19 * * *`
+(00:30 Asia/Kolkata while this project's pg_cron timezone is GMT). It does nothing until day 11 of
+January, April, July or October. Thus an Oct–Dec Tally Invoice Date is reviewable through January
+10 and any still-unposted invoice-only record is auto-cancelled from January 11. Per-row failures
+are isolated for the nightly retry; the manual selected batch remains all-or-nothing.
+
+**ACL / wiring:** Both new API routes are registered on SO02's existing `PROC_INV_LIST` resource
+(VIEW list, EDIT cancellation), matching the existing invoice-cancellation authority rather than
+creating a parallel resource. The handlers additionally enforce company scope and the existing
+Invoice/PGI company access helper. Production active ACL inspection confirms Accounts has
+VIEW/WRITE/EDIT for that resource in CMP003, CMP005, CMP006 and CMP011; no broad grant or ACL data
+mutation was made. The companion page's two dependencies are recorded in the strict SU24 manifest.
+
+**Dev / verification:** The migration was applied to Dev, PostgREST reloaded, and MCP's generated
+migration ledger timestamp was reconciled to local version `20261015023815`. The function and cron
+job exist; a rolled-back Dev scheduled invocation returned zero cancelled/failed candidates (Dev
+has no qualifying prior-quarter DD fixture). `git diff --check`, targeted ESLint, Vite build and all
+CI Basic guard commands pass. Repo-wide Deno check still reports 96 pre-existing type errors in
+unrelated handlers; none are in this change. Migration-integrity confirms this migration itself
+matches, while the pre-existing repository/Dev ledger drift remains: local count 665 vs remote 666.

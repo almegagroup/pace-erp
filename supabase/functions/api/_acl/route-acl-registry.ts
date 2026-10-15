@@ -283,6 +283,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // Bulk Posting "Upload Corrections" edits unposted bulk DOs' header details
   // before posting; same authority as posting them.
   "POST:/api/procurement/delivery-orders-v2/bulk/posting/corrections": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "WRITE" },
+  // Quarter-close cancellation is the existing Invoice/PGI cancellation
+  // authority (EDIT), not a second posting resource. The handler additionally
+  // enforces company scope and the exact unposted DD invoice-only state.
+  "GET:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "VIEW" },
+  "POST:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post": { skipAcl: false, resourceCode: "PROC_INV_LIST", action: "EDIT" },
   "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },
   "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "EDIT" },
   "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/check": { skipAcl: false, resourceCode: "PROC_DO_CREATE", action: "VIEW" },

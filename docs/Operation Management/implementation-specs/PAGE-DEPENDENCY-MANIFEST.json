@@ -5979,6 +5979,28 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/ScheduledInvoiceCancellationPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "listScheduledDdInvoiceCancellation",
+        "method": "GET",
+        "path": "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "postScheduledDdInvoiceCancellation",
+        "method": "POST",
+        "path": "/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post",
+        "resourceCode": "PROC_INV_LIST",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/sales/SO01Page.jsx",
     "dependencyCount": 16,
     "deps": [

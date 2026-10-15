@@ -8,6 +8,7 @@
  */
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -15,7 +16,8 @@ import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { bulkPostDeliveryOrders, bulkPostingCorrections, listBulkPostingQueue } from "../procurementApi.js";
-import { popScreen } from "../../../../navigation/screenStackEngine.js";
+import { openScreenWithContext, popScreen } from "../../../../navigation/screenStackEngine.js";
+import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { REVIEW_HEADERS, REVIEW_SHEET_NAME, parseReviewWorkbook } from "./bulkDoWorkbook.js";
 
 const MAX_DOS_PER_POST = 100;
@@ -109,6 +111,7 @@ async function exportReviewSheet(rows) {
 
 export default function SO02BulkPostingPage() {
   const { runtimeContext } = useMenu();
+  const navigate = useNavigate();
   const [companyId, setCompanyId] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [posting, setPosting] = useState(false);
@@ -232,6 +235,10 @@ export default function SO02BulkPostingPage() {
     title="Bulk Posting — PGI & Invoice"
     actions={[
       { key: "back", label: "SO02 Queue", tone: "neutral", onClick: () => popScreen() },
+      { key: "scheduled-cancellation", label: "Scheduled Invoice Cancellation", tone: "danger", onClick: () => {
+        openScreenWithContext(OPERATION_SCREENS.PROC_INV_SCHEDULED_CANCELLATION.screen_code, { companyId: effectiveCompanyId });
+        navigate(OPERATION_SCREENS.PROC_INV_SCHEDULED_CANCELLATION.route);
+      } },
       { key: "refresh", label: "Refresh", tone: "neutral", onClick: () => query.refetch(), disabled: query.isFetching },
       { key: "export", label: "Export for Review", tone: "neutral", onClick: () => void exportReviewSheet(visibleRows), disabled: visibleRows.length === 0 },
       { key: "corrections", label: correctionBusy ? "Reading..." : "Upload Corrections", tone: "neutral", onClick: () => correctionInputRef.current?.click(), disabled: correctionBusy || rows.length === 0 },

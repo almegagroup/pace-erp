@@ -442,7 +442,9 @@ import { cancelAplInvoiceCaseHandler, lookupAplInvoiceCaseHandler, saveAplInvoic
 import {
   bulkPostDeliveryOrdersHandler,
   bulkPostingCorrectionsHandler,
+  cancelScheduledDdInvoiceOnlyHandler,
   listBulkPostingQueueHandler,
+  listScheduledDdInvoiceCancellationHandler,
 } from "../_core/procurement/do_bulk_post.handlers.ts";
 import { cancelVdcDeliveryOrderHandler, completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "../_core/procurement/vdc_invoice.handlers.ts";
 import { listVdcTruckDispatchPendingHandler, postVdcTruckDispatchUploadHandler, checkVdcTruckDispatchUploadHandler } from "../_core/procurement/vdc_truck_dispatch.handlers.ts";
@@ -955,6 +957,10 @@ export async function dispatchProcurementRoutes(
       return await bulkPostDeliveryOrdersHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/posting/corrections":
       return await bulkPostingCorrectionsHandler(req, ctx);
+    case "GET:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation":
+      return await listScheduledDdInvoiceCancellationHandler(req, ctx);
+    case "POST:/api/procurement/delivery-orders-v2/bulk/scheduled-invoice-cancellation/post":
+      return await cancelScheduledDdInvoiceOnlyHandler(req, ctx);
     case "GET:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch":
       return await listVdcTruckDispatchPendingHandler(req, ctx);
     case "POST:/api/procurement/delivery-orders-v2/bulk/vdc-truck-dispatch/post":

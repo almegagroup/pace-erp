@@ -196,6 +196,7 @@ import DO01CreatePage from "../pages/dashboard/procurement/sales/DO01CreatePage.
 import PgiInvoiceCreatePage from "../pages/dashboard/procurement/sales/PgiInvoiceCreatePage.jsx";
 import PgiInvoiceGroupsCreatePage from "../pages/dashboard/procurement/sales/PgiInvoiceGroupsCreatePage.jsx";
 import SO02BulkPostingPage from "../pages/dashboard/procurement/sales/SO02BulkPostingPage.jsx";
+import ScheduledInvoiceCancellationPage from "../pages/dashboard/procurement/sales/ScheduledInvoiceCancellationPage.jsx";
 import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx";
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
@@ -911,6 +912,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-invoices/bulk-posting"
                     element={<SO02BulkPostingPage />}
+                  />
+                  <Route
+                    path="procurement/sales-invoices/scheduled-cancellation"
+                    element={<ScheduledInvoiceCancellationPage />}
                   />
                   <Route
                     path="procurement/sales-invoices/:id"

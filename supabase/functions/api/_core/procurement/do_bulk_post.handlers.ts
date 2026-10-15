@@ -272,6 +272,92 @@ export async function bulkPostDeliveryOrdersHandler(req: Request, ctx: Procureme
   } catch (error) { const code = error instanceof Error ? error.message : "BULK_POST_FAILED"; return fail(req, ctx, code, 500, code); }
 }
 
+function currentQuarterStartInKolkata(): string {
+  const today = todayIsoInKolkata();
+  const [year, month] = today.split("-").map(Number);
+  const quarterStartMonth = Math.floor((month - 1) / 3) * 3 + 1;
+  return `${year}-${String(quarterStartMonth).padStart(2, "0")}-01`;
+}
+
+// SO02's quarter-close workbench deliberately lists only the exact deferred-DD
+// shape that the database cancellation primitive accepts. The function remains
+// authoritative because a row can change between this read and the user's post.
+export async function listScheduledDdInvoiceCancellationHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const companyId = text(new URL(req.url).searchParams.get("company_id"));
+    if (!companyId) return fail(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required.");
+    const denied = await assertInvoiceAccess(req, ctx, companyId, "VIEW"); if (denied) return denied;
+    const cutoffDate = currentQuarterStartInKolkata();
+    const docs = await fetchInChunks<JsonRecord>([companyId], (chunk) => serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+      .select("id, dc_number, dc_date, selling_company_id, status, vehicle_number, dispatch_date, pre_invoice_tally_invoice_number, pre_invoice_tally_invoice_date, pre_invoice_inbound_number")
+      .in("selling_company_id", chunk).eq("dc_type", "SALES").eq("pgi_deferred", true).eq("is_bulk_uploaded", true).eq("status", "INVOICED")
+      .order("dc_date", { ascending: true }).order("id"));
+    const dcIds = docs.map((row) => text(row.id)).filter(Boolean);
+    if (!dcIds.length) return okResponse({ items: [], cutoff_date: cutoffDate }, ctx.request_id, req);
+    const invoices = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_invoice")
+      .select("id, dc_id, invoice_number, status, tally_invoice_number, tally_invoice_date, inbound_number, total_invoice_value")
+      .in("dc_id", chunk).neq("status", "CANCELLED"));
+    const invoiceIds = invoices.map((row) => text(row.id)).filter(Boolean);
+    const stockDocuments = invoiceIds.length
+      ? await fetchInChunks<JsonRecord>(invoiceIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_document")
+        .select("reference_document_id").eq("reference_document_type", "VDC_SALES_INVOICE").in("reference_document_id", chunk))
+      : [];
+    const stockPostedInvoiceIds = new Set(stockDocuments.map((row) => text(row.reference_document_id)));
+    const invoicesByDc = new Map<string, JsonRecord[]>();
+    for (const invoice of invoices) {
+      const dcId = text(invoice.dc_id);
+      invoicesByDc.set(dcId, [...(invoicesByDc.get(dcId) ?? []), invoice]);
+    }
+    const items = docs.flatMap((doc) => {
+      const activeInvoices = invoicesByDc.get(text(doc.id)) ?? [];
+      const tallyDates = activeInvoices.map((invoice) => text(invoice.tally_invoice_date)).filter(Boolean);
+      const invoiceOnly = activeInvoices.length > 0 && activeInvoices.every((invoice) => upper(invoice.status) === "DRAFT");
+      const stockPosted = activeInvoices.some((invoice) => stockPostedInvoiceIds.has(text(invoice.id)));
+      const isPriorQuarter = tallyDates.length === activeInvoices.length && tallyDates.every((date) => date < cutoffDate);
+      if (!invoiceOnly || stockPosted || !isPriorQuarter) return [];
+      return [{
+        id: text(doc.id),
+        dc_number: text(doc.dc_number),
+        do_date: text(doc.dc_date),
+        truck_number: text(doc.vehicle_number),
+        dispatch_date: text(doc.dispatch_date),
+        tally_invoice_number: activeInvoices.map((invoice) => text(invoice.tally_invoice_number) || text(invoice.invoice_number)).filter(Boolean).join(", "),
+        tally_invoice_date: tallyDates.join(", "),
+        inbound_number: activeInvoices.map((invoice) => text(invoice.inbound_number)).filter(Boolean).join(", "),
+        invoice_value: activeInvoices.reduce((sum, invoice) => sum + Number(invoice.total_invoice_value ?? 0), 0),
+        stock_movement: "No",
+        status: "Invoice only — quarter passed",
+      }];
+    });
+    return okResponse({ items, cutoff_date: cutoffDate }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SCHEDULED_DD_CANCEL_QUEUE_FAILED";
+    return fail(req, ctx, code, 500, "Unable to load the scheduled invoice cancellation queue.");
+  }
+}
+
+export async function cancelScheduledDdInvoiceOnlyHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const payload = await body(req);
+    const companyId = text(payload.company_id);
+    const ids = [...new Set((Array.isArray(payload.dc_ids) ? payload.dc_ids as unknown[] : []).map(text).filter(Boolean))];
+    const reason = text(payload.reason);
+    if (!companyId) return fail(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required.");
+    if (!ids.length) return fail(req, ctx, "SCHEDULED_DD_CANCEL_SELECTION_REQUIRED", 400, "Select at least one delivery order.");
+    if (ids.length > BULK_POST_MAX_DOS) return fail(req, ctx, "SCHEDULED_DD_CANCEL_LIMIT", 400, `Select at most ${BULK_POST_MAX_DOS} delivery orders per cancellation.`);
+    if (!reason) return fail(req, ctx, "SCHEDULED_DD_CANCEL_REASON_REQUIRED", 400, "Cancellation reason is required.");
+    const denied = await assertInvoiceAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;
+    const { data, error } = await serviceRoleClient.schema("erp_procurement").rpc("cancel_overdue_vdc_invoice_only_batch", {
+      p_company_id: companyId, p_dc_ids: ids, p_reason: reason, p_actor: ctx.auth_user_id,
+    });
+    if (error) return fail(req, ctx, "SCHEDULED_DD_CANCEL_FAILED", 400, error.message || "The selected delivery orders are no longer eligible for cancellation.");
+    return okResponse({ result: data ?? {} }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "SCHEDULED_DD_CANCEL_FAILED";
+    return fail(req, ctx, code, 500, "Unable to cancel the selected invoice-only delivery orders.");
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Corrections. The user exports the queue, checks it against Tally, edits the
