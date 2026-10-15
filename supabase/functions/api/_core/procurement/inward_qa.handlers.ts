@@ -271,6 +271,54 @@ async function fetchGrnContextForQa(qaDocument: QaDocumentRow): Promise<{ grn: R
   return { grn: data };
 }
 
+// A GRN's rate remains in its commercial/receipt UOM for audit display (for
+// example, INR per MT).  QA stock movements, however, always carry the
+// material's base UOM quantity (for example, KG).  Reusing the GRN's stored
+// conversion factor keeps the rate and the quantity in the same UOM.  Without
+// this, a 1 MT = 1,000 KG receipt would release stock at a rate 1,000 times
+// too high.
+async function resolveQaBaseUomAndRate(
+  qaDocument: QaDocumentRow,
+  grn: JsonRecord,
+): Promise<{ baseUom: string; unitValue: number }> {
+  const materialId = toTrimmedString(qaDocument.material_id);
+  const { data: material, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("base_uom_code")
+    .eq("id", materialId)
+    .single();
+  if (error || !material) {
+    logDbError("resolveQaBaseUomAndRate material", error);
+    throw new ApiError(500, "Unable to resolve the material base UOM for QA posting");
+  }
+
+  const baseUom = toTrimmedString(material.base_uom_code)
+    || toTrimmedString(qaDocument.uom_code)
+    || toTrimmedString(grn.uom_code);
+  const grnUom = toTrimmedString(grn.uom_code) || baseUom;
+  if (!baseUom) {
+    throw new ApiError(422, "Material base UOM is required before QA stock can be posted");
+  }
+
+  const grnRate = Number(grn.grn_rate ?? 0);
+  const uomMismatch = grnUom !== baseUom;
+  const conversionFactor = Number(grn.per_pack_qty ?? 0);
+  if (uomMismatch && (!Number.isFinite(conversionFactor) || conversionFactor <= 0)) {
+    // Do not silently post a commercially-denominated rate against a base-UOM
+    // quantity.  Correct the historic GRN conversion first, then retry QA.
+    throw new ApiError(
+      422,
+      `QA cannot post because GRN UOM ${grnUom} differs from base UOM ${baseUom} but has no valid conversion factor.`,
+    );
+  }
+
+  return {
+    baseUom,
+    unitValue: uomMismatch ? Number((grnRate / conversionFactor).toFixed(6)) : grnRate,
+  };
+}
+
 async function getNextTestLineNumber(qaDocumentId: string): Promise<number> {
   const { data, error } = await serviceRoleClient
     .schema("erp_procurement")
@@ -915,8 +963,7 @@ export async function submitUsageDecisionHandler(
       throw new ApiError(409, "This material/location is under an active Physical Inventory count — usage decision is blocked until the PID is posted or cancelled.");
     }
 
-    const baseUom = toTrimmedString(qaDocument.uom_code || grn.uom_code);
-    const unitValue = Number(grn.grn_rate ?? 0);
+    const { baseUom, unitValue } = await resolveQaBaseUomAndRate(qaDocument, grn);
     const companyId = String(qaDocument.company_id);
     let nextLineNumber = await getNextDecisionLineNumber(qaDocumentId);
     const createdDecisionLines: JsonRecord[] = [];

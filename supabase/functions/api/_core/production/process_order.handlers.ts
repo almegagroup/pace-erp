@@ -2526,6 +2526,34 @@ export async function getProcessOrderCreateCapabilityHandler(req: Request, ctx: 
   }
 }
 
+// A Process PO must never be created from a structurally invalid stroke.  The
+// Stroke approval flow validates dosage when a user edits it, but historical
+// direct SQL can bypass that flow.  In particular, duplicated formulation
+// rows double the real material issue while preserving the apparent recipe.
+// Keep the duplicate key independent of material_group_id: an erroneous
+// company-copy may carry a different group yet still be the same RM line.
+export function validateStrokeLinesForProcessCreation(strokeLines: JsonRecord[]): string | null {
+  if (strokeLines.length === 0) return "PROD_PO_STROKE_LINES_REQUIRED";
+
+  const duplicateKeys = new Set<string>();
+  for (const line of strokeLines) {
+    const dosage = Number(line.dosage_pct ?? 0);
+    if (!Number.isFinite(dosage) || dosage < 0) return "PROD_PO_STROKE_DOSAGE_INVALID";
+    const key = [
+      toTrimmedString(line.material_id),
+      toTrimmedString(line.alternate_material_id),
+      toUpperTrimmedString(line.line_material_type || "RM"),
+      dosage.toFixed(6),
+      toTrimmedString(line.default_storage_location_id),
+    ].join("|");
+    if (duplicateKeys.has(key)) return "PROD_PO_STROKE_DUPLICATE_LINE";
+    duplicateKeys.add(key);
+  }
+
+  const dosageTotal = strokeLines.reduce((sum, line) => sum + Number(line.dosage_pct ?? 0), 0);
+  return Math.abs(dosageTotal - 100) <= 0.01 ? null : "PROD_PO_STROKE_DOSAGE_INVALID";
+}
+
 export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
   try {
     assertProdReadRole(ctx);
@@ -2710,6 +2738,13 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       if (strokeLinesErr) {
         console.error("[process_order.createProcessOrder] stroke-line query failed:", JSON.stringify(strokeLinesErr));
         throw new Error("PROD_PO_CREATE_FAILED");
+      }
+      const strokeValidationError = validateStrokeLinesForProcessCreation((strokeLines ?? []) as JsonRecord[]);
+      if (strokeValidationError) {
+        return poErr(req, ctx, strokeValidationError, 422,
+          strokeValidationError === "PROD_PO_STROKE_DUPLICATE_LINE"
+            ? "Stroke master contains duplicate formulation lines and cannot create a Process PO."
+            : "Stroke master dosage must total exactly 100% before a Process PO can be created.");
       }
 
       const allowedAlternateMap = await buildAllowedAlternateIdsByStrokeLines(

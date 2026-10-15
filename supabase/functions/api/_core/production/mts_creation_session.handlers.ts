@@ -15,7 +15,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, parseBody, parseNonNegativeNumber, parsePositiveInt, parsePositiveNumber, toTrimmedString } from "./production.shared.ts";
 import { resolveMtsBatchRangeNumbers } from "./batch_series.handlers.ts";
-import { buildMtsMaterialPlanGroupsForOrder, computeMtsAutoDeriveRowsForGroup } from "./process_order.handlers.ts";
+import { buildMtsMaterialPlanGroupsForOrder, computeMtsAutoDeriveRowsForGroup, validateStrokeLinesForProcessCreation } from "./process_order.handlers.ts";
 import { fetchPackSizeOptions } from "./mts_packing_plan.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -49,7 +49,7 @@ function errorCode(err: unknown, fallback: string): string {
 }
 
 function isKnownClientError(code: string): boolean {
-  return code.startsWith("PROD_MTS_") || code.startsWith("PROD_BATCH_") || code.startsWith("COMPANY_");
+  return code.startsWith("PROD_MTS_") || code.startsWith("PROD_BATCH_") || code.startsWith("PROD_PO_") || code.startsWith("COMPANY_");
 }
 
 type SessionHeader = {
@@ -183,7 +183,9 @@ async function getStrokeLines(session: SessionHeader): Promise<JsonRecord[]> {
     .eq("stroke_master_id", session.strokeMasterId).order("display_order");
   if (error) throw new Error("PROD_MTS_SESSION_STROKE_LINES_FAILED");
   const rows = (data ?? []) as JsonRecord[];
-  if (rows.length === 0) throw new Error("PROD_PO_MTS_PLAN_NO_STROKE_LINES");
+  const validationError = validateStrokeLinesForProcessCreation(rows);
+  if (validationError === "PROD_PO_STROKE_LINES_REQUIRED") throw new Error("PROD_PO_MTS_PLAN_NO_STROKE_LINES");
+  if (validationError) throw new Error(validationError);
   return rows;
 }
 
