@@ -463,6 +463,20 @@ export default function ErpDenseGrid({
   // `filterValue`/`copyValue`, anything else falls into an "Other" bucket
   // rather than being silently dropped.
   columnFilter = false,
+  // Opt-in only (MTS Customer Plan, 2026-10-15) — default undefined, every
+  // existing caller unaffected. A function (rowsAfterColumnFilter) => rows
+  // that may sort the rows and insert derived rows (e.g. group subtotal
+  // rows). It runs AFTER the column filter, so derived totals always match
+  // what is visible, and derived rows never appear in the filter dropdowns
+  // (those are built from the raw `rows` prop only). Pass a stable
+  // (memoized) function.
+  decorateRows,
+  // Opt-in only (MTS Customer Plan, 2026-10-15) — default false, every
+  // existing caller unaffected. Shows one search box above the grid that
+  // keeps only rows where ANY column's value (same value the column filter
+  // uses) contains the typed text, case-insensitive. Works together with
+  // columnFilter and runs before decorateRows.
+  searchBar = false,
   // Opt-in only — omitted by every existing caller. Called with the rows the
   // grid is currently showing after its own column filters, so a page can
   // export exactly what the user sees (the filter state lives in here).
@@ -526,20 +540,31 @@ export default function ErpDenseGrid({
     [columnFilters, columns, rawRows],
   );
 
+  const [searchText, setSearchText] = useState("");
   const filteredRows = useMemo(() => {
-    if (!columnFilter) return rawRows;
+    let result = rawRows;
+    const needle = searchBar ? searchText.trim().toLowerCase() : "";
+    if (needle) {
+      const searchable = columns.filter((column) => column.filterable !== false);
+      result = result.filter((row) => searchable.some((column) => getColumnFilterValue(column, row).toLowerCase().includes(needle)));
+    }
+    if (!columnFilter) return result;
     const activeEntries = Object.entries(columnFilters);
-    if (activeEntries.length === 0) return rawRows;
-    return rawRows.filter((row) => activeEntries.every(([key, set]) => {
+    if (activeEntries.length === 0) return result;
+    return result.filter((row) => activeEntries.every(([key, set]) => {
       const column = columns.find((c) => c.key === key);
       return !column || set.has(getColumnFilterValue(column, row));
     }));
-  }, [columnFilter, rawRows, columns, columnFilters]);
+  }, [columnFilter, rawRows, columns, columnFilters, searchBar, searchText]);
 
   // Every reference below this point reads `rows` — shadowing it with the
   // filtered result means virtualizer/focus/selection/copy/render logic
   // needs zero further changes to respect an active column filter.
-  const rows = filteredRows;
+  const decoratedRows = useMemo(
+    () => (typeof decorateRows === "function" ? decorateRows(filteredRows) : filteredRows),
+    [decorateRows, filteredRows],
+  );
+  const rows = decoratedRows;
 
   const onFilteredRowsChangeRef = useRef(onFilteredRowsChange);
   useEffect(() => { onFilteredRowsChangeRef.current = onFilteredRowsChange; }, [onFilteredRowsChange]);
@@ -834,6 +859,21 @@ export default function ErpDenseGrid({
 
   return (
     <div className="grid gap-0">
+      {searchBar ? (
+        <div className="flex items-center gap-2 border border-b-0 border-slate-300 bg-slate-50 px-2 py-1">
+          <input
+            type="search"
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder="Search all columns…"
+            aria-label="Search all columns"
+            className="h-7 w-72 max-w-full border border-slate-300 bg-white px-2 text-xs outline-none focus:border-sky-500"
+          />
+          {searchText ? (
+            <span className="text-[11px] text-slate-500">{filteredRows.length} of {rawRows.length} row(s)</span>
+          ) : null}
+        </div>
+      ) : null}
       <div className={viewportClassName} style={viewportStyle} ref={scrollElementRef}>
         {/* min-w-full forces the table to at least fill its container -- correct
             for the default stretch layout, but it fights fitColumnWidths's own

@@ -13,7 +13,7 @@ Scope: one Procurement page, exactly three tabs. **No historical import, no Prod
 | Backend API | `supabase/functions/api/_core/procurement/mts_customer_plan.handlers.ts` | 8 routes under `/api/procurement/mts-plan/*`; routes + registry wired. |
 | Frontend | `frontend/src/pages/dashboard/procurement/planning/MtsCustomerPlanPage.jsx` | 3 tabs; every table = `ErpDenseGrid` with Excel cell navigation + column filter; Excel-paste into qty column; history drawer; Excel export of the report (only visible columns/rows). |
 | Registration | `operationScreens.js` (`PROC_MTS_CUSTOMER_PLAN`, `/dashboard/procurement/mts-customer-plan`), `AppRouter.jsx`, `procurementApi.js`, `PAGE-DEPENDENCY-MANIFEST.json` | |
-| ACL data | `docs/mts-planning/acl/MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` | **Prepared, not applied.** Uses TX code PO21; refuses to run if PO21 is already taken by another menu. |
+| ACL data | `docs/mts-planning/acl/MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` | **Applied to PROD 2026-10-14** (owner approval). Uses TX code PO21; refuses to run if PO21 is already taken by another menu. |
 
 ## Business rules implemented (owner)
 
@@ -22,6 +22,9 @@ Scope: one Procurement page, exactly three tabs. **No historical import, no Prod
 - **Urgent From Existing Plan** re-phases existing quantity, never adds; its total may not exceed (Final or Rolling) + Additional for that SKU-month. A Final/Rolling reduction that would strand an existing From-Plan allocation is rejected too.
 - Every save creates a new version; cancel = new cancelled version; nothing is overwritten or deleted (enforced by DB triggers).
 - Blank (no plan) stays blank; an entered 0 is a real 0.
+- **Tab 2 carry-forward (owner 2026-10-15, migration `20261015090000`):** Use Primary Y/N is stored in `stroke_group_primary_decision` with an `effective_month`; the value for a month = latest decision on or before it (none = Yes), so a change applies from that month onward until a later month changes it. Stroke periods stay month-only (a month with no setting uses the current stroke). Saving only Use Primary does not create a stroke setting for that month. Applied + tested on DEV (T13/T14); applied on PROD 2026-10-15.
+- **Product Group (owner 2026-10-15, migration `20261015100000`):** per company Mother group → Child group → Prodshade (one group per Prodshade, one Mother per Child; new Prodshades show "Not grouped"). Edited from the "Product Group" button (ACL companion `PROC_MTS_PLAN_GROUP_MAINTAIN` WRITE, granted to `CAP_MTS_PLAN_FULL`). All three tabs show Mother / Child group on the left, rows ordered Mother → Child → Prodshade → SKU ascending. Tab 1 and Tab 3 add Prodshade / Child / Mother / Grand total rows, computed from the visible (filtered) rows; KG and L are never added together. Soft delete (migration `20261015110000`): removed groups / ungrouped Prodshades become `is_active = false`, nothing is deleted. Applied on DEV (6 rolled-back checks pass) and PROD.
+- Every grid on the page: Excel cell navigation, per-column filter, and an all-column search box (new opt-in `searchBar` prop on ErpDenseGrid; `decorateRows` prop added for the total rows).
 - Tab 2: per company × month × Prodshade, versioned stroke periods (inside the month, no overlap, APPROVED MTS strokes of that company/Prodshade only) and Use Primary Y/N per **Stroke × RM group** (only groups on that stroke's own lines). Default = current MTS stroke, whole month, Use Primary = Yes. Stroke Master is never changed. No PM primary control.
 - Tab 3: non-contiguous year/month selection, PLAN row per SKU, month columns in chronological order. Show Production / Show Dispatch checkboxes exist but stay disabled with a "not available yet" reason (owner has not designed the sources) — no zeros are shown.
 
@@ -56,7 +59,7 @@ Resources: `PROC_MTS_CUSTOMER_PLAN` (VIEW, WRITE) and companion `PROC_MTS_CUSTOM
 
 ## Blockers before anyone can click through the page
 
-1. ~~TX code approval~~ — **PO21 approved** (2026-10-14). The menu row and ACL grants are still not provisioned until the provisioning SQL runs on DEV.
+1. ~~TX code approval~~ — **PO21 approved** (2026-10-14); provisioned on PROD (see PROD rollout).
 2. **`erp_planning` must be added to Exposed schemas** in the Supabase Dashboard (DEV now, PROD later) — platform config, cannot be done by migration or MCP. Until then every `/mts-plan` API call returns a PostgREST schema error.
 3. Then run the provisioning SQL on DEV + ACL version bump/capture/snapshot (steps in the SQL header), and test with SCM, Stores and Plant Head users.
 4. PROD: migration + Exposed schemas + provisioning only with separate explicit owner approval.
@@ -67,6 +70,24 @@ PROD `PO` codes in use: PO01–PO14, PO16–PO19. **Recommend `PO21`.**
 - `PO15` is free but was "previously retired/skipped" (feasibility doc, PO19 tx-code note: "PO15 previously retired/skipped") — reusing it risks confusion with old references.
 - `PO20` is already earmarked in planning docs for "Credit Notes (Vendor)" (Returns & Claims slice).
 - `PO21` is the first code with no history and no reservation, and keeps the page inside the Procurement `PO` family where PO11 Procurement Planning already sits.
+
+## PROD rollout (2026-10-14/15, owner approved)
+
+- Migration `20261014150000` applied to PROD (history shows the same version).
+- ACL provisioning SQL applied; menu PO21 under `GRP_ACL_PROCUREMENT`.
+- New active ACL versions: CMP003 v131, CMP005 v27, CMP011 v27 — captured, snapshot generated, menu snapshots rebuilt.
+- Verified in `precomputed_acl_view`:
+  - Full (VIEW + WRITE + MAINTAIN:WRITE): SCM P0004, P0005, P0006, P0077; Director / ACL-MASTER P0074, P0076.
+  - VIEW + WRITE only (Additional / Urgent): Stores — CMP003 P0009, P0013, P0014, P0024, P0055–P0059; CMP005 P0097; CMP011 P0084, P0088, P0090, P0092, P0094. Plant Head — P0003, P0065, P0100.
+  - No LOGISTICS users exist in these three companies today.
+- Exposed schemas: DEV's `authenticator` role override already lists `erp_planning`. PROD has **no** role override, so the PROD Dashboard → API → Exposed schemas list governs; `erp_planning` must be added there by hand (not verifiable from the agent container — outbound to the PROD API is blocked).
+
+## PROD rollout 2 (2026-10-15, owner approved)
+
+- Migrations `20261015090000`, `20261015100000`, `20261015110000` applied; history versions reconciled; `NOTIFY pgrst` sent.
+- `PROC_MTS_PLAN_GROUP_MAINTAIN` WRITE → `CAP_MTS_PLAN_FULL`; new active versions CMP003 v132, CMP005 v28, CMP011 v28 (captured, snapshot, menu rebuilt). Check confirmed no other ACL decision changed.
+- Product Group edit allowed: CMP003 P0004, P0005, P0006, P0074, P0076, P0077; CMP005 / CMP011 P0004, P0005, P0006, P0074, P0076.
+- The code that uses these must still be merged and deployed.
 
 ## Not done (by instruction)
 

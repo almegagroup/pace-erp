@@ -25,6 +25,7 @@ DECLARE
   v_checks  integer := 0;
   v_stroke  uuid;
   v_group   uuid;
+  v_entry_count integer;
 BEGIN
   SELECT c.id, s.sku_material_id, m.base_uom_code, s.prodshade_material_id
     INTO v_company, v_sku, v_uom, v_pid
@@ -199,7 +200,53 @@ BEGIN
   SELECT count(*) INTO v_n FROM erp_planning.stroke_plan_setting
    WHERE company_id = v_company AND plan_month = v_month AND prodshade_material_id = v_pid AND is_current;
   IF v_n <> 1 THEN RAISE EXCEPTION 'T13 FAIL: % current settings after rejected saves', v_n; END IF;
+  -- Stroke periods are month-only: December has no setting.
+  SELECT count(*) INTO v_n FROM erp_planning.stroke_plan_setting
+   WHERE company_id = v_company AND plan_month = DATE '2026-12-01' AND prodshade_material_id = v_pid;
+  IF v_n <> 0 THEN RAISE EXCEPTION 'T13 FAIL: stroke setting leaked into the next month'; END IF;
   v_checks := v_checks + 1;
+
+  -- T14 Use Primary carries forward month on month (owner 2026-10-15).
+  IF v_group IS NOT NULL THEN
+    -- Nov was set to No above (T13 first save). Dec, Jan inherit No.
+    SELECT d.use_primary INTO v_eff FROM erp_planning.stroke_group_primary_decision d
+     WHERE d.company_id = v_company AND d.stroke_master_id = v_stroke AND d.material_group_id = v_group
+       AND d.is_current AND d.effective_month <= DATE '2027-01-01' ORDER BY d.effective_month DESC LIMIT 1;
+    IF v_eff.use_primary IS DISTINCT FROM false THEN RAISE EXCEPTION 'T14 FAIL: Jan should inherit No from Nov'; END IF;
+    -- Jan changes back to Yes, primaries only (no periods): Jan stroke setting must not be created.
+    v_res := erp_planning.save_stroke_plan_setting(v_company, DATE '2027-01-01', v_pid, v_actor, '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('stroke_master_id', v_stroke, 'material_group_id', v_group, 'use_primary', true)));
+    IF (v_res->>'primaries_changed')::int <> 1 OR v_res->>'setting_id' IS NOT NULL THEN RAISE EXCEPTION 'T14 FAIL: %', v_res; END IF;
+    SELECT count(*) INTO v_n FROM erp_planning.stroke_plan_setting
+     WHERE company_id = v_company AND plan_month = DATE '2027-01-01' AND prodshade_material_id = v_pid;
+    IF v_n <> 0 THEN RAISE EXCEPTION 'T14 FAIL: primary-only save froze the month''s stroke'; END IF;
+    -- Saving Dec with the value it already inherits (No) stores nothing.
+    v_res := erp_planning.save_stroke_plan_setting(v_company, DATE '2026-12-01', v_pid, v_actor, '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('stroke_master_id', v_stroke, 'material_group_id', v_group, 'use_primary', false)));
+    IF (v_res->>'primaries_changed')::int <> 0 THEN RAISE EXCEPTION 'T14 FAIL: inherited value stored again %', v_res; END IF;
+    -- Mar inherits Yes from Jan; Dec still No.
+    SELECT d.use_primary INTO v_eff FROM erp_planning.stroke_group_primary_decision d
+     WHERE d.company_id = v_company AND d.stroke_master_id = v_stroke AND d.material_group_id = v_group
+       AND d.is_current AND d.effective_month <= DATE '2027-03-01' ORDER BY d.effective_month DESC LIMIT 1;
+    IF v_eff.use_primary IS DISTINCT FROM true THEN RAISE EXCEPTION 'T14 FAIL: Mar should inherit Yes from Jan'; END IF;
+    SELECT d.use_primary INTO v_eff FROM erp_planning.stroke_group_primary_decision d
+     WHERE d.company_id = v_company AND d.stroke_master_id = v_stroke AND d.material_group_id = v_group
+       AND d.is_current AND d.effective_month <= DATE '2026-12-01' ORDER BY d.effective_month DESC LIMIT 1;
+    IF v_eff.use_primary IS DISTINCT FROM false THEN RAISE EXCEPTION 'T14 FAIL: Dec should still be No'; END IF;
+    -- Setting Jan back to its inherited No retires Jan's own decision (history kept).
+    v_res := erp_planning.save_stroke_plan_setting(v_company, DATE '2027-01-01', v_pid, v_actor, '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object('stroke_master_id', v_stroke, 'material_group_id', v_group, 'use_primary', false)));
+    SELECT count(*) FILTER (WHERE is_current), count(*) INTO v_n, v_entry_count FROM erp_planning.stroke_group_primary_decision
+     WHERE company_id = v_company AND stroke_master_id = v_stroke AND material_group_id = v_group AND effective_month = DATE '2027-01-01';
+    IF v_n <> 0 OR v_entry_count <> 1 THEN RAISE EXCEPTION 'T14 FAIL: revert should retire Jan (current %, total %)', v_n, v_entry_count; END IF;
+    BEGIN
+      PERFORM erp_planning.save_stroke_plan_setting(v_company, DATE '2027-01-01', v_pid, v_actor, '[]'::jsonb, '[]'::jsonb);
+      RAISE EXCEPTION 'T14 FAIL: empty save accepted';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM NOT LIKE 'MTS_PLAN_NOTHING_TO_SAVE%' THEN RAISE EXCEPTION 'T14 FAIL: %', SQLERRM; END IF;
+    END;
+    v_checks := v_checks + 1;
+  END IF;
 
   RAISE EXCEPTION 'ERP_PLANNING_TESTS_PASSED (% checks, stroke group fixture: %)', v_checks, coalesce(v_group::text, 'none');
 END;

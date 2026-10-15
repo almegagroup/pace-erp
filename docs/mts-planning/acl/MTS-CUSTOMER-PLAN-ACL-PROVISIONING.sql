@@ -1,5 +1,8 @@
 -- MTS Customer Plan — ACL / menu provisioning (DATA CONFIG, run via MCP).
--- Status: PREPARED, NOT APPLIED anywhere. TX code PO21 approved by owner (2026-10-14).
+-- Status: applied to PROD 2026-10-14 (CMP003 v131, CMP005 v27, CMP011 v27).
+--         2026-10-15: PROC_MTS_PLAN_GROUP_MAINTAIN added (Product Group button);
+--         re-running this whole script is idempotent and adds only new rows.
+-- TX code PO21 approved by owner (2026-10-14).
 --
 -- Owner access rule (2026-10-14):
 --   * Page sits in the Procurement menu group (GRP_ACL_PROCUREMENT).
@@ -16,6 +19,8 @@
 --   PROC_MTS_CUSTOMER_PLAN           page resource: VIEW (all reads), WRITE (Additional/Urgent)
 --   PROC_MTS_CUSTOMER_PLAN_MAINTAIN  companion (acl.menu_master only, no menu row):
 --                                    WRITE (Rolling/Final + Tab 2)
+--   PROC_MTS_PLAN_GROUP_MAINTAIN     companion: WRITE (Product Group layout —
+--                                    Mother / Child group of Prodshades)
 --
 -- Capabilities (a capability takes effect only when granted to BOTH the role
 -- and the work context — PROD-ACL-Access-Decisions.md, generate_acl_snapshot note):
@@ -63,7 +68,8 @@ INSERT INTO acl.menu_master (menu_code, display_name, description, is_system)
 SELECT v.code, v.name, v.descr, true
 FROM (VALUES
   ('PROC_MTS_CUSTOMER_PLAN', 'MTS Customer Plan', 'Page view; Additional / Urgent plan entry'),
-  ('PROC_MTS_CUSTOMER_PLAN_MAINTAIN', 'MTS Customer Plan — Maintain', 'Rolling / Final plan entry and Tab 2 stroke setup (companion resource, no menu row)')
+  ('PROC_MTS_CUSTOMER_PLAN_MAINTAIN', 'MTS Customer Plan — Maintain', 'Rolling / Final plan entry and Tab 2 stroke setup (companion resource, no menu row)'),
+  ('PROC_MTS_PLAN_GROUP_MAINTAIN', 'MTS Customer Plan — Product Group', 'Mother / Child Product Group layout of Prodshades (companion resource, no menu row)')
 ) AS v(code, name, descr)
 WHERE NOT EXISTS (SELECT 1 FROM acl.menu_master m WHERE m.menu_code = v.code);
 
@@ -84,6 +90,7 @@ FROM (VALUES
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_CUSTOMER_PLAN',          'VIEW',  true),
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_CUSTOMER_PLAN',          'WRITE', true),
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_CUSTOMER_PLAN_MAINTAIN', 'WRITE', false),
+  ('CAP_MTS_PLAN_FULL',            'PROC_MTS_PLAN_GROUP_MAINTAIN',    'WRITE', false),
   ('CAP_MTS_PLAN_ADDON',           'PROC_MTS_CUSTOMER_PLAN',          'VIEW',  true),
   ('CAP_MTS_PLAN_ADDON',           'PROC_MTS_CUSTOMER_PLAN',          'WRITE', true),
   ('CAP_MTS_PLAN_ADDON_PLANTHEAD', 'PROC_MTS_CUSTOMER_PLAN',          'VIEW',  true),

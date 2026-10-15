@@ -87,10 +87,12 @@ import {
   getMtsPlanAccessHandler,
   getMtsPlanEntryGridHandler,
   getMtsPlanHistoryHandler,
+  getMtsPlanProductGroupsHandler,
   getMtsPlanReportHandler,
   getMtsPlanStrokeSettingsHandler,
   saveMtsPlanAddonLinesHandler,
   saveMtsPlanBaseLinesHandler,
+  saveMtsPlanProductGroupsHandler,
   saveMtsPlanStrokeSettingHandler,
 } from "../_core/procurement/mts_customer_plan.handlers.ts";
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
@@ -762,6 +764,10 @@ export async function dispatchProcurementRoutes(
       return await saveMtsPlanStrokeSettingHandler(req, ctx);
     case "GET:/api/procurement/mts-plan/report":
       return await getMtsPlanReportHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/product-groups":
+      return await getMtsPlanProductGroupsHandler(req, ctx);
+    case "POST:/api/procurement/mts-plan/product-groups":
+      return await saveMtsPlanProductGroupsHandler(req, ctx);
     case "GET:/api/procurement/document-flow":
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":
