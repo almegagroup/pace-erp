@@ -55,7 +55,37 @@ export async function historicalProcurementImportHandler(req: Request, ctx: Hist
     if (!await canMaintainCompanyResource(ctx, parsed.company_id, RESOURCE_MAINTAIN, "WRITE")) return fail(req, ctx, "HISTORY_PROCUREMENT_IMPORT_FORBIDDEN", 403, "You do not have Historical Import access for this company.");
     const issues = procurementIssues(parsed);
     const summary = { purchase_orders: parsed.purchase_orders.length, purchase_order_lines: parsed.purchase_order_lines.length, consignment_movements: parsed.consignment_movements.length, exception_count: issues.length };
+    // Source references must identify one and only one PO/line before any write.
+    // The current import path is multi-request, not an atomic DB transaction:
+    // fail closed on ambiguous or incomplete batches rather than silently
+    // associating lines/shipments with the wrong purchase order.
+    const headerCounts = new Map<string, number>();
+    for (const row of parsed.purchase_orders) {
+      const key = text(row.external_po_number);
+      if (key) headerCounts.set(key, (headerCounts.get(key) ?? 0) + 1);
+    }
+    for (const row of parsed.purchase_orders) {
+      if ((headerCounts.get(text(row.external_po_number)) ?? 0) > 1) {
+        issues.push({ record_kind: "PURCHASE_ORDER", source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_PO_AMBIGUOUS", exception_message: "Multiple source headers use this PO number; reconcile to one authoritative header before importing.", source_payload: row });
+      }
+    }
+    const lineCounts = new Map<string, number>();
+    for (const row of parsed.purchase_order_lines) {
+      const key = `${text(row.external_po_number)}|${text(row.external_line_reference)}`;
+      lineCounts.set(key, (lineCounts.get(key) ?? 0) + 1);
+      if (headerCounts.get(text(row.external_po_number)) !== 1) {
+        issues.push({ record_kind: "PURCHASE_ORDER", source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_PO_HEADER_UNRESOLVED", exception_message: "PO line has no unique header in this batch.", source_payload: row });
+      }
+    }
+    for (const row of parsed.consignment_movements) {
+      const key = `${text(row.external_po_number)}|${text(row.external_line_reference)}`;
+      if (lineCounts.get(key) !== 1) {
+        issues.push({ record_kind: "CONSIGNMENT_MOVEMENT", source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_PO_LINE_UNRESOLVED", exception_message: "Movement has no unique PO line in this batch.", source_payload: row });
+      }
+    }
+    summary.exception_count = issues.length;
     if (!commit) return okResponse({ dry_run: true, summary, issues }, ctx.request_id, req);
+    if (issues.length) return fail(req, ctx, "HISTORY_PROCUREMENT_REVIEW_REQUIRED", 409, "Import blocked: resolve dry-run exceptions before committing a procurement batch.");
     const { data: batch, error: batchError } = await serviceRoleClient.schema("erp_history").from("import_batch").insert({ company_id: parsed.company_id, record_kind: "PURCHASE_ORDER", source_system: parsed.source_system, source_file_key: parsed.source_file_key, source_file_name: parsed.source_file_name, source_sheet_name: parsed.source_sheet_name, submitted_row_count: summary.purchase_orders + summary.purchase_order_lines + summary.consignment_movements, created_by: ctx.auth_user_id, reconciliation: summary }).select("id").single();
     if (batchError || !batch?.id) throw new Error("HISTORY_PROCUREMENT_BATCH_FAILED");
     const batchId = text(batch.id); const invalidRows = new Set(issues.map((issue) => `${issue.record_kind}|${issue.source_row_number}`));
