@@ -23,7 +23,7 @@ export type LeadTimeMetrics = Record<string, number | null>;
 function dateValue(value: string | null): number | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const result = Date.parse(`${value}T00:00:00Z`);
-  return Number.isFinite(result) ? result : null;
+  return Number.isFinite(result) && new Date(result).toISOString().slice(0, 10) === value ? result : null;
 }
 
 export function wholeDays(from: string | null, to: string | null): number | null {
@@ -82,7 +82,9 @@ export function aggregateLeadTimes(rows: HistoricalLeadTimeInput[], groupBy: "CO
   for (const row of rows) {
     const calculated = leadTimeMetrics(row);
     if (!calculated) continue;
-    const key = groupBy === "VENDOR" ? (row.vendor_id || "UNMAPPED_VENDOR") : groupBy === "MATERIAL" ? (row.material_id || "UNMAPPED_MATERIAL") : row.company_id;
+    const dimension = groupBy === "VENDOR" ? (row.vendor_id || "UNMAPPED_VENDOR") : groupBy === "MATERIAL" ? (row.material_id || "UNMAPPED_MATERIAL") : row.company_id;
+    // Always separate local and import samples; they have different event chains.
+    const key = `${dimension}|${calculated.kind}`;
     const group = groups.get(key) ?? { kind: calculated.kind, values: {} };
     for (const [metric, value] of Object.entries(calculated.metrics)) {
       if (value !== null) group.values[metric] = [...(group.values[metric] ?? []), value];

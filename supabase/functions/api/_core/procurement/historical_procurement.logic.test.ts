@@ -22,3 +22,16 @@ Deno.test("distribution reports median, p80, p90 and variability", () => {
   if (stats.sample_count !== 5 || stats.median !== 3 || stats.p80 !== 4.2 || stats.p90 !== 4.6 || stats.variability === null) throw new Error("unexpected distribution");
   if (wholeDays("2026-09-02", "2026-09-01") !== null) throw new Error("negative duration accepted");
 });
+
+
+Deno.test("lead-time groups never mix domestic and imported consignments", () => {
+  const base = { company_id: "c", vendor_id: "v", material_id: "m", order_date: "2026-10-01", dispatch_date: "2026-10-03", etd_date: "2026-10-03", atd_date: "2026-10-04", ata_port_date: "2026-10-08", boe_date: "2026-10-09", lr_date: "2026-10-10", inward_date: "2026-10-12", cancellation_flag: false, validation_status: "VALIDATED" };
+  const rows = aggregateLeadTimes([{...base, supply_type: "LOCAL"}, {...base, supply_type: "IMPORT"}], "VENDOR");
+  if (rows.length !== 2) throw new Error("domestic/import mixed into one vendor group");
+  if (!rows.some((row) => row.supply_type === "DOMESTIC" && row.metrics.po_to_inward_days?.sample_count === 1)) throw new Error("domestic group missing");
+  if (!rows.some((row) => row.supply_type === "IMPORT" && row.metrics.sailing_days?.sample_count === 1)) throw new Error("import group missing");
+});
+
+Deno.test("impossible calendar dates are not accepted", () => {
+  if (wholeDays("2026-02-30", "2026-03-03") !== null) throw new Error("invalid date accepted");
+});

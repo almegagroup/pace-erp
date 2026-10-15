@@ -27,7 +27,7 @@ it would duplicate `MVT_TRACKER` movement facts.
   movement key.
 - `Dispatch Date`, `ATD`, `ATA`, `BOE`, `LR`, and `Inward Date` are distinct
   source fields. Scheduled ETA is never promoted to actual arrival.
-- Historical dates after 2026-09-30 are rejected. Historical cancelled rows
+- Procurement events are **not** date-cutoff restricted: ERP PO/CSN overlap must be reconciled by verified record identity. Production and FG dispatch actuals retain their separate 2026-09-30/2026-10-01 cutover. Historical cancelled rows
   remain traceable but are excluded from valid movement and lead-time totals.
 - Browser code never reads Google Sheets. An authorised server-side extractor
   sends a reviewed JSON payload through the historical import API; the actual

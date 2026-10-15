@@ -124,11 +124,11 @@ async function loadMaterialMap(companyId: string, skus: string[]): Promise<{ mat
   const uniqueSkus = [...new Set(skus.filter(Boolean))];
   if (uniqueSkus.length === 0) return { materials: new Map(), conversions: new Map() };
   const candidates = await fetchInChunks<JsonRecord>(uniqueSkus, (chunk) => serviceRoleClient.schema("erp_master")
-    .from("material_master").select("id, external_sku, material_name, base_uom_code, material_type")
-    .in("external_sku", chunk));
+    .from("material_master").select("id, external_code, material_name, base_uom_code, material_type")
+    .in("external_code", chunk));
   const bySku = new Map<string, JsonRecord[]>();
   for (const row of candidates) {
-    const sku = text(row.external_sku);
+    const sku = text(row.external_code);
     bySku.set(sku, [...(bySku.get(sku) ?? []), row]);
   }
   const candidateIds = [...new Set(candidates.map((row) => text(row.id)).filter(Boolean))];
