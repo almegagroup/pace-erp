@@ -905,7 +905,11 @@ function ReportTab({ companyId }) {
   function reportCell(row, month) {
     if (row.row_type === "PLAN") return row.plan?.[month]?.qty ?? null;
     const actual = row.actual?.[month];
-    return actualInReportUom(row, row.row_type === "PRODUCTION" ? actual?.production_kg : actual?.dispatch_kg);
+    const kg = row.row_type === "PRODUCTION" ? actual?.production_kg : actual?.dispatch_kg;
+    // A month the data source covers but with no movement for this SKU is a
+    // real zero; a month with no coverage (history not imported) stays blank.
+    const covered = (actuals?.coverage?.[row.row_type] ?? []).includes(month);
+    return actualInReportUom(row, kg ?? (covered ? 0 : null));
   }
   function reportCellSource(row, month) {
     if (row.row_type === "PLAN") return row.plan?.[month]?.base_source ?? "No Rolling/Final";

@@ -6297,3 +6297,164 @@ has no qualifying prior-quarter DD fixture). `git diff --check`, targeted ESLint
 CI Basic guard commands pass. Repo-wide Deno check still reports 96 pre-existing type errors in
 unrelated handlers; none are in this change. Migration-integrity confirms this migration itself
 matches, while the pre-existing repository/Dev ledger drift remains: local count 665 vs remote 666.
+
+---
+
+### 2026-10-15 — Historical procurement atomic import (DONE in code; verification pending)
+
+- Scope: analytical historical PO header, PO line and consignment movement only; no live procurement, GRN, stock or GL changes.
+- API import handler now invokes one service-role RPC rather than issuing independent insert/upsert requests.
+- New migration: `supabase/migrations/20261015150100_historical_procurement_atomic_import.sql` defines a single PostgreSQL transactional function and revokes public/anon/authenticated execute access.
+- The function verifies the selected company, vendor-company activity, material-company activity, source SKU against material external code, and unambiguous PO/line references. A failed statement rolls back the entire batch.
+- Repository rules consulted: `CLAUDE.md`, `docs/BRANCH-WORKFLOW.md`, this implementation log (R-00 through R-05), the mandatory `.mjs` CI guards, and SU24-style dependency verification instructions.
+- Verification: NOT YET VERIFIED. No migration applied to DEV or PROD; no live or historical business data mutated. Automated `.mjs`, SQL migration and integration tests must pass before promotion or import. Existing cross-batch PO/line linkage is not yet supported and requires an explicit import batching plan.
+- Branch: `agent/chatgpt` (no push to `dev` or `main`).
+
+---
+
+### 2026-10-15 — Historical Operations + PO21 audit and fixes (Claude) — CODE COMPLETE, NOT VERIFIED
+
+Audit of `agent/chatgpt` 365205b/f94c434/137a24c (originally 84f4f4c1/a257d998/426f7428) and Codex's
+Historical Operations / PO21 work. Commits were cherry-picked (`-x`) onto `agent/claude` after it was
+fast-forwarded to `main` 8a2b56d; no merge, reset or force-push.
+
+**Defects found**
+1. Migration version collision: `20261015150000` is already `po_hss_mother_company` on PROD.
+2. ChatGPT's `20261015150100_historical_procurement_atomic_import.sql` (never applied anywhere):
+   SECURITY DEFINER with a meaningless `current_user` check, plain-text errors, required raw
+   vendor/material UUIDs from the client, trusted client `normalized_kg`, no supply_type
+   normalisation, and no cross-batch PO→line→movement linkage (a 500-record cap made large POs
+   impossible to import without data loss).
+3. Production/FG-Dispatch commit (Codex) was several independent writes — a failure mid-way left a
+   partial batch.
+4. Actuals reads used plain PostgREST selects — silently truncated at 1,000 rows (PROD already has
+   2,537 MTS FG P101 and 770 MTS P601 rows since 2026-10-01).
+5. Live production was read from `process_order` at ProdShade level instead of the posted SKU-wise
+   FG stock ledger; historical identity_level was always "SKU".
+6. Procurement identity was source-row based (re-sorted sheets → duplicates).
+7. Lead-time groups returned raw UUIDs (R-01).
+8. PO21 showed blank for months that are covered but had no movement (should be 0).
+
+**Fixes**
+- `supabase/migrations/20261015180000_historical_procurement_and_lead_time.sql` (renamed from
+  150000, rewritten): business identities (PO number / line reference / source_record_key),
+  vendor_code/material_code columns, lineage columns kept, revision trigger, RLS, service-role grants.
+- `supabase/migrations/20261015150100_historical_procurement_atomic_import.sql` removed.
+- `supabase/migrations/20261015180100_historical_import_atomic_rpcs.sql` (new): SECURITY INVOKER,
+  service_role-only RPCs `import_historical_procurement`, `import_historical_operations` (validation
+  inside the transaction, dry-run = commit validation, checksum idempotent replay, cross-batch
+  linkage, server-side KG conversion, typed `HISTORY_IMPORT_*` errors), `history_planning_actuals`
+  (history < 2026-10-01 VALIDATED/not cancelled; live ≥ 2026-10-01 from posted FG ledger P101/P102
+  of MTS Process POs and P601/P602 of MTS invoice lines, KG only; month coverage),
+  `history_lead_time_samples`.
+- `supabase/functions/api/_core/procurement/historical_import.rpc.ts` (new),
+  `historical_operations.handlers.ts`, `historical_procurement.handlers.ts` rewritten to call the RPCs
+  (company scope + `canMaintainCompanyResource` unchanged; routes/ACL registry unchanged).
+- `frontend/src/pages/dashboard/procurement/planning/MtsCustomerPlanPage.jsx`: covered month → 0,
+  uncovered → blank. Toggles remain independent and OFF by default; export uses the same cell values.
+- `docs/mts-planning/HISTORICAL-IMPORT-API.md` (new): import contract for the importing agent.
+
+**Tests**
+- PASS: all 12 ci-basic guards incl. `dependency-provisioning-check.mjs --strict-manifest`;
+  `migration-order-scan`, `migration-column-scan`; `deno check` on all historical handlers (0 errors —
+  routes file shows only pre-existing grn/rtv errors); `deno test` historical logic 12/12; ESLint on
+  the page; `vite build`.
+- DEV: `20261015180000` applied, history version reconciled; helpers, `history_planning_actuals`,
+  `history_lead_time_samples` and grants applied; actuals RPC runs (DEV has no Oct MTS ledger data).
+- PROD read-only SELECTs: MTS FG receipts post only via `PROC_PO` (no PACK_PO MTS rows → no double
+  count); all KG; every P601 resolves to an SO `fg_type`; MTS filter keeps 2 SALES_INVOICE +
+  768 VDC_SALES_INVOICE rows and excludes MTO/HPS/MTEST.
+- **NOT RUN / BLOCKED:** `import_historical_procurement` and `import_historical_operations` could not
+  be created on DEV — the Supabase MCP asks for human confirmation for any SQL containing `DROP`
+  (here: per-call temp tables) and timed out unapproved. Therefore the rolled-back integration tests
+  (dry-run/commit, idempotency, cross-batch linkage, duplicates, invalid values, corrections,
+  company isolation) have NOT run, and `20261015180100` is not yet in the DEV history.
+
+**Status:** NOT VERIFIED. No PROD change, no business data imported, nothing merged or deployed.
+
+### 2026-10-15 — Historical Operations + PO21: code-level audit for PROD (Claude) — CODE CHECKS PASS, PROD DEPLOY BLOCKED
+
+Business owner decision: no further DEV work/testing; the target is PROD. Claude does not run any
+PROD migration or import. The owner raises the PR and deploys; ChatGPT then does mapping, dry-run and
+reconciliation per `docs/mts-planning/HISTORICAL-IMPORT-API.md`.
+
+**Code-level checks on `agent/claude` a37eac3 — all PASS:** the 12 ci-basic guards, SU24
+`--strict-manifest`, `migration-order-scan`, `migration-column-scan`, `deno check` on all
+`historical_*` handler/logic files (0 errors), `deno test` historical 12/12, ESLint on
+`MtsCustomerPlanPage.jsx`, `vite build`.
+
+**PROD compatibility (read-only SELECTs only):** all 23 columns referenced by
+`20261015180100` exist; `import_batch_status_check` contains COMMITTING / COMMITTED /
+COMMITTED_WITH_EXCEPTIONS; `service_role` has USAGE on `erp_history`; `erp_history` holds 0 batches and
+0 actual rows; `erp_history.purchase_order` does not yet exist (created by `20261015180000`).
+
+**Blockers before PROD deploy (not code defects in this branch):**
+1. `origin/main` (= `dev` = 9b27890) diverged from `agent/claude`. `main` still contains Codex's
+   `20261015150000_historical_procurement_and_lead_time.sql` (duplicate version with
+   `20261015150000_po_hss_mother_company`, already applied on PROD). A trial merge (throwaway
+   worktree, aborted) keeps that file alongside `20261015180000` → the same tables would be created
+   twice. It also conflicts in `historical_operations.handlers.ts`, `historical_procurement.handlers.ts`
+   and `MtsCustomerPlanPage.jsx`. Per BRANCH-WORKFLOW a diverged branch needs the business owner's
+   decision; nothing was merged.
+2. PROD `schema_migrations` has `20261015125642` named `20261015180000_multi_root_valuation_recalculation`
+   (applied by hand) with no migration file in any branch. `supabase db push` will reject PROD until
+   that file is committed under version `20261015125642` by its owner. If it is ever renumbered to
+   `20261015180000` it would collide with this branch's historical migration.
+3. Import RPCs `import_historical_procurement` / `import_historical_operations` have passed static
+   checks only; their first execution will be ChatGPT's PROD dry-run. Run dry-run before any commit.
+
+**Status:** code-level PASS; NOT runtime-verified; PROD deploy blocked by items 1–2.
+
+### 2026-10-15 — Deployment blockers: branch reconciliation, duplicate historical migration, PROD multi-root migration (Claude)
+
+**1. Duplicate `20261015150000_historical_procurement_and_lead_time.sql` (on `main`/`dev` 9b27890)**
+- Never applied anywhere (read-only evidence): PROD version `20261015150000` is
+  `po_hss_mother_company` (md5 of statements `223d01cd…`) and `erp_history.purchase_order` does not
+  exist on PROD. DEV version `20261015150000` is also `po_hss_mother_company`; DEV's procurement
+  history tables come only from the rewritten `20261015180000` (statements contain
+  `uq_history_purchase_order_identity` / `source_record_key`).
+- No other migration depends on it: on `main` only the file itself and
+  `docs/mts-planning/HISTORICAL-PROCUREMENT-SOURCE-MAPPING.md` mention `erp_history.purchase_order*`.
+- Safe to remove; it is superseded by `20261015180000` + `20261015180100`.
+
+**2. PROD migration `20261015125642` (`20261015180000_multi_root_valuation_recalculation`)**
+- Exact applied SQL recovered from PROD `supabase_migrations.schema_migrations.statements` (one
+  statement, 10,871 bytes, md5 `870b60cdaf31022db0b11cf030399ffe`; recorded by
+  keeperpconsole@gmail.com). Extracted in three base64 chunks, each chunk md5 verified against PROD,
+  reassembled byte-for-byte (including the trailing CRLF). Nothing approximated.
+- Committed as `supabase/migrations/20261015125642_20261015180000_multi_root_valuation_recalculation.sql`
+  so version **and** name equal the PROD record (integrity check compares `version|name`).
+- Creates `erp_inventory.recalculate_valuation_at_rows(jsonb, uuid, text)` and
+  `erp_production.recompute_mts_fg_cost(uuid, jsonb)` (both SECURITY DEFINER, service_role only);
+  both exist on PROD. No code on `main` or `agent/claude` calls them yet — the caller code appears to
+  be uncommitted by its author.
+- DEV differs: it has `20261015125500` `multi_root_valuation_recalculation` with different content
+  (9,902 bytes, md5 `99d0c98d…`). DEV was not touched (owner decision); DEV history needs separate
+  reconciliation later.
+
+**3. Branch reconciliation — BLOCKED by BRANCH-WORKFLOW (owner decision required)**
+- `origin/main` = `origin/dev` = 9b27890 is not an ancestor of `agent/claude`; `git merge --ff-only
+  origin/main` fails. Bringing them together needs either a merge commit or a non-fast-forward
+  update of `agent/claude`; both are forbidden without the owner's decision. Nothing was merged,
+  reset or force-pushed.
+- Overlap analysis (merge-base 8a2b56d): 17 files changed on both sides; 14 are byte-identical; only
+  `historical_operations.handlers.ts`, `historical_procurement.handlers.ts` and
+  `MtsCustomerPlanPage.jsx` differ, and `main` touched them only through the same Codex history
+  commits already contained in `agent/claude`, so the `agent/claude` versions supersede them without
+  losing any `main` change. `main`'s other unique changes (5fc7509, 2566e30: stroke master,
+  process order, MTS creation session, inward QA) are not on `agent/claude`.
+- A reconciled tree was built and checked in a throwaway detached worktree:
+  `origin/main` + the 3 files + `historical_import.rpc.ts` + `HISTORICAL-IMPORT-API.md` + this log +
+  `20261015180000`/`20261015180100` + the recovered multi-root file − the duplicate `150000` file.
+
+**Checks on the reconciled tree:** all 12 ci-basic guards PASS; SU24 `--strict-manifest` PASS;
+`migration-order-scan` / `migration-column-scan` PASS (677 files); migration list vs PROD: all 675
+PROD `version|name` pairs present (pre-2026-10-15 md5 `7bc25f59…` identical, 11 recent identical),
+LOCAL_ONLY = exactly `20261015180000`, `20261015180100`; `deno check` historical files 0 errors;
+`deno test` procurement 32 passed / 1 failed; `vite build` PASS.
+Pre-existing on pure `origin/main` (not introduced here): `deno check`
+`process_order.handlers.ts` 6 errors; ESLint `strokeShared.jsx` 8 `react-refresh/only-export-components`
+errors; `planning.readonly.test.ts` fails without `SUPABASE_URL` env (`--allow-env`).
+
+**Status:** code-level PASS on the reconciled tree; PROD deploy still waits for the owner's branch
+decision. No deploy, no PROD write, no historical import, no push to `dev`/`main`.
