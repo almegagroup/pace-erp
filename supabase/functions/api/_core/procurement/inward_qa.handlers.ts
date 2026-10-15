@@ -229,6 +229,21 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
   const decidedQty = sumDecidedQty(decisionLines);
   const grn = grnContext.grn;
   const grnReversed = toUpperTrimmedString(grn.status) === "REVERSED";
+  // SPLIT: the receipt (and this QA) still stands; its invoices are separate invoice GRNs.
+  let grnSplitInvoices: JsonRecord[] = [];
+  if (toUpperTrimmedString(grn.status) === "SPLIT") {
+    const { data: splitRows, error: splitError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("goods_receipt")
+      .select("grn_number, invoice_number, invoice_date, received_qty, uom_code")
+      .eq("split_source_grn_id", String(grn.id))
+      .order("grn_number", { ascending: true });
+    if (splitError) {
+      logDbError("fetchQaDocumentDetails split invoices", splitError);
+      throw new ApiError(500, splitError.message || "Unable to fetch split invoices");
+    }
+    grnSplitInvoices = (splitRows ?? []) as JsonRecord[];
+  }
 
   return {
     ...qaDocument,
@@ -241,6 +256,7 @@ async function fetchQaDocumentDetails(qaDocumentId: string, ctx: QAHandlerContex
     grn_reversed: grnReversed,
     grn_reversal_at: grn.reversal_approved_at ?? null,
     grn_reversal_reason: grn.reversal_reason ?? null,
+    grn_split_invoices: grnSplitInvoices,
     public_status: grnReversed ? "REVERSED" : mapQaStatusForResponse(qaDocument.status),
     test_lines: testLinesResp.data ?? [],
     decision_lines: decisionLines,

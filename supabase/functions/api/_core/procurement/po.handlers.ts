@@ -209,12 +209,14 @@ async function enrichPoReferenceDisplays(input: {
     defaultPaymentTermId,
     ...lineRows.map((row) => row.payment_term_id),
   ]);
+  const hssMotherVendorIds = uniqueTrimmedStrings(poRows.map((row) => row.hss_mother_vendor_id));
 
   const [
     { data: companyRows, error: companyError },
     { data: materialRows, error: materialError },
     { data: costCenterRows, error: costCenterError },
     { data: paymentTermRows, error: paymentTermError },
+    { data: hssMotherVendorRows, error: hssMotherVendorError },
   ] = await Promise.all([
     companyIds.length > 0
       ? serviceRoleClient
@@ -244,11 +246,22 @@ async function enrichPoReferenceDisplays(input: {
         .select("id, code, name")
         .in("id", paymentTermIds)
       : Promise.resolve({ data: [], error: null }),
+    hssMotherVendorIds.length > 0
+      ? serviceRoleClient
+        .schema("erp_master")
+        .from("vendor_master")
+        .select("id, vendor_code, vendor_name")
+        .in("id", hssMotherVendorIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
 
-  if (companyError || materialError || costCenterError || paymentTermError) {
+  if (companyError || materialError || costCenterError || paymentTermError || hssMotherVendorError) {
     throw new Error("PROCUREMENT_PO_REFERENCE_LOOKUP_FAILED");
   }
+  const hssMotherVendorNameById = new Map<string, string>(
+    ((hssMotherVendorRows ?? []) as Array<{ id: string; vendor_name: string | null }>)
+      .map((row) => [toTrimmedString(row.id), toTrimmedString(row.vendor_name)]),
+  );
 
   const companyNameById = new Map<string, string>(
     ((companyRows ?? []) as Array<{ id: string; company_code: string | null; company_name: string | null }>)
@@ -277,6 +290,7 @@ async function enrichPoReferenceDisplays(input: {
       return {
         ...row,
         company_name: companyNameById.get(companyId) ?? companyId ?? null,
+        hss_mother_vendor_name: hssMotherVendorNameById.get(toTrimmedString(row.hss_mother_vendor_id)) || null,
       };
     })
     : undefined;
@@ -286,6 +300,7 @@ async function enrichPoReferenceDisplays(input: {
       company_name: companyNameById.get(toTrimmedString(input.po.company_id))
         ?? toTrimmedString(input.po.company_id)
         ?? null,
+      hss_mother_vendor_name: hssMotherVendorNameById.get(toTrimmedString(input.po.hss_mother_vendor_id)) || null,
     }
     : undefined;
   const enrichedLines = input.lines
@@ -1101,6 +1116,7 @@ async function insertCsnRowForLine(
       csn_type: csnType,
       po_id: po.id,
       vendor_id: po.vendor_id,
+      hss_mother_vendor_id: toTrimmedString(po.hss_mother_vendor_id) || null,
       material_category_id: materialCategoryId,
       company_id: po.company_id,
       consignee_company_id: po.company_id,
@@ -1117,6 +1133,8 @@ async function insertCsnRowForLine(
       status: "ORD",
       company_id: po.company_id,
       vendor_id: po.vendor_id,
+      // HSS: the import lead time is read from the Mother Company, not vendor_id.
+      hss_mother_vendor_id: toTrimmedString(po.hss_mother_vendor_id) || null,
       material_id: line.material_id,
       material_category_id: materialCategoryId,
       po_id: po.id,
@@ -1509,6 +1527,27 @@ export async function createPOHandler(
       }
     }
 
+    // High Sea Sale with a Mother Company (2026-10-15): the PO stays on the vendor PACE pays
+    // (often a DOMESTIC vendor, sent here as vendor_type IMPORT), while the import lead time
+    // comes from the overseas Mother Company -- an IMPORT vendor in Vendor Master.
+    const hssMotherVendorId = toTrimmedString(body.hss_mother_vendor_id) || null;
+    if (hssMotherVendorId) {
+      if (vendorType !== "IMPORT" || importTradeType !== "HIGH_SEA_SALE") {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_HSS_MOTHER_REQUIRES_HSS", 400, "A Mother Company can only be set on a High Sea Sale PO.");
+      }
+      if (hssMotherVendorId === vendorId) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_HSS_MOTHER_SAME_AS_VENDOR", 400, "The Mother Company must be different from the PO vendor.");
+      }
+      const motherVendor = await getVendorRow(hssMotherVendorId);
+      if (!motherVendor) {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_HSS_MOTHER_NOT_FOUND", 404, "Mother Company not found");
+      }
+      if (toUpperTrimmedString(motherVendor.vendor_type) !== "IMPORT" || toUpperTrimmedString(motherVendor.status) !== "ACTIVE") {
+        return procurementErrorResponse(req, ctx, "PROCUREMENT_HSS_MOTHER_NOT_IMPORT", 422, "The Mother Company must be an active Import vendor.");
+      }
+    }
+    const leadTimeVendorId = hssMotherVendorId ?? vendorId;
+
     // Found live 2026-09-01 (CSN Tracker date-cascade audit, business owner): a CSN's ETD/ETA
     // cascade is computed once at creation time and frozen -- if the vendor's Lead Time Master
     // (Import: vendor + destination port; Domestic: vendor + company) doesn't exist yet, the
@@ -1523,7 +1562,7 @@ export async function createPOHandler(
         .schema("erp_master")
         .from("lead_time_master_import")
         .select("id")
-        .eq("vendor_id", vendorId)
+        .eq("vendor_id", leadTimeVendorId)
         .eq("port_of_discharge_id", destinationPortId)
         .eq("active", true)
         .limit(1)
@@ -1546,7 +1585,9 @@ export async function createPOHandler(
         return procurementErrorResponse(
           req, ctx, "PROCUREMENT_LEAD_TIME_MASTER_MISSING", 422,
           vendorType === "IMPORT"
-            ? "Import Lead Time Master is not set up for this vendor and destination port. Configure it before creating this PO."
+            ? hssMotherVendorId
+              ? "Import Lead Time Master is not set up for the Mother Company and destination port. Configure it before creating this PO."
+              : "Import Lead Time Master is not set up for this vendor and destination port. Configure it before creating this PO."
             : "Domestic Lead Time Master is not set up for this vendor and company. Configure it before creating this PO.",
         );
       }
@@ -1665,6 +1706,7 @@ export async function createPOHandler(
             shipment_mode: shipmentMode,
             import_trade_type: importTradeType,
             customs_movement_type: customsMovementType,
+            hss_mother_vendor_id: hssMotherVendorId,
             freight_term: freightTerm,
             payment_term_id: paymentTermId,
             lc_required: lcRequired,
@@ -1836,10 +1878,18 @@ export async function getPoFilterOptionsHandler(
     if (companyIds !== null && companyIds.length > 0) companyQuery = companyQuery.in("id", companyIds);
 
     let vendorQuery = serviceRoleClient.schema("erp_master").from("vendor_master")
-      .select("id, vendor_code, vendor_name, vendor_type, indent_number_required, gst_number, reg_address_state")
+      .select("id, vendor_code, vendor_name, vendor_type, indent_number_required, gst_number, reg_address_state, default_hss_mother_vendor_id")
       .eq("status", "ACTIVE")
       .order("vendor_name", { ascending: true });
     if (vendorIds !== null && vendorIds.length > 0) vendorQuery = vendorQuery.in("id", vendorIds);
+
+    // High Sea Sale Mother Company choices -- every active Import vendor, independent of the
+    // company/vendor/material cross-filter above (the Mother Company is never the PO vendor).
+    const hssMotherVendorQuery = serviceRoleClient.schema("erp_master").from("vendor_master")
+      .select("id, vendor_code, vendor_name")
+      .eq("status", "ACTIVE")
+      .eq("vendor_type", "IMPORT")
+      .order("vendor_name", { ascending: true });
 
     let materialQuery = serviceRoleClient.schema("erp_master").from("material_master")
       .select("id, pace_code, material_name, material_type")
@@ -1847,17 +1897,19 @@ export async function getPoFilterOptionsHandler(
       .order("material_name", { ascending: true });
     if (materialIds !== null && materialIds.length > 0) materialQuery = materialQuery.in("id", materialIds);
 
-    const [companiesResult, vendorsResult, materialsResult] = await Promise.all([
+    const [companiesResult, vendorsResult, materialsResult, hssMotherVendorsResult] = await Promise.all([
       companyEmpty ? Promise.resolve({ data: [] as unknown[], error: null }) : companyQuery,
       vendorEmpty ? Promise.resolve({ data: [] as unknown[], error: null }) : vendorQuery,
       materialEmpty ? Promise.resolve({ data: [] as unknown[], error: null }) : materialQuery,
+      hssMotherVendorQuery,
     ]);
 
-    if (companiesResult.error || vendorsResult.error || materialsResult.error) {
+    if (companiesResult.error || vendorsResult.error || materialsResult.error || hssMotherVendorsResult.error) {
       console.error("PO_FILTER_OPTIONS query errors", {
         companyError: companiesResult.error,
         vendorError: vendorsResult.error,
         materialError: materialsResult.error,
+        hssMotherVendorError: hssMotherVendorsResult.error,
       });
       throw new Error("PROCUREMENT_PO_FILTER_OPTIONS_FAILED");
     }
@@ -1884,6 +1936,7 @@ export async function getPoFilterOptionsHandler(
       companies: companiesResult.data ?? [],
       vendors: vendorsWithDisplayCode,
       materials: materialsResult.data ?? [],
+      hss_mother_vendors: hssMotherVendorsResult.data ?? [],
     }, ctx.request_id, req);
   } catch (err) {
     console.error("PO_FILTER_OPTIONS_HANDLER_ERROR", err);
@@ -2124,7 +2177,11 @@ export async function updatePOHandler(
 
     const vendorId = toTrimmedString(body.vendor_id || po.vendor_id);
     const paymentTermId = toTrimmedString(body.payment_term_id || po.payment_term_id);
-    const vendorType = toUpperTrimmedString(body.vendor_type || po.vendor_type);
+    // A High Sea Sale PO is an import PO even when its vendor is DOMESTIC in Vendor Master --
+    // an edit must never flip it back to domestic (that would drop its import lead time/CSN flow).
+    const vendorType = toUpperTrimmedString(po.import_trade_type) === "HIGH_SEA_SALE"
+      ? "IMPORT"
+      : toUpperTrimmedString(body.vendor_type || po.vendor_type);
     const deliveryType = toUpperTrimmedString(body.delivery_type || po.delivery_type);
     const freightTerm = toUpperTrimmedString(body.freight_term || po.freight_term);
     const gstTerms = toUpperTrimmedString(body.gst_terms ?? po.gst_terms);

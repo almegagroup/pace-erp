@@ -298,6 +298,9 @@ function POCopy({ po, from, to, portsById }) {
             <div className="row"><span className="lbl">Port</span><span>{portName || "--"}</span></div>
             <div className="row"><span className="lbl">Shipment</span><span>{SHIPMENT_MODE_LABELS[po?.shipment_mode] || po?.shipment_mode || "--"}</span></div>
             <div className="row"><span className="lbl">Trade Type</span><span>{IMPORT_TRADE_TYPE_LABELS[po?.import_trade_type] || po?.import_trade_type || "--"}</span></div>
+            {po?.hss_mother_vendor_name ? (
+              <div className="row"><span className="lbl">Original Supplier</span><span>{po.hss_mother_vendor_name}</span></div>
+            ) : null}
             <div className="row"><span className="lbl">Movement</span><span>{CUSTOMS_MOVEMENT_TYPE_LABELS[po?.customs_movement_type] || po?.customs_movement_type || "--"}</span></div>
           </div>
         ) : null}

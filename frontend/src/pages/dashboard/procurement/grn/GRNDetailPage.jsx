@@ -95,7 +95,8 @@ export default function GRNDetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        ...(detail?.status === "POSTED"
+        // An invoice GRN of a split has no stock of its own; the server refuses to reverse it.
+        ...(detail?.status === "POSTED" && !detail?.split_source_grn_id
           ? [{ key: "reverse", label: saving ? "Reversing…" : "Reverse GRN", tone: "danger", onClick: () => void handleReverse(), disabled: saving }]
           : []),
       ]}

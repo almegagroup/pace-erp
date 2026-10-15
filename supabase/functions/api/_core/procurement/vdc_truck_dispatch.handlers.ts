@@ -13,6 +13,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { computeInvoiceGroups } from "./do_unified.handlers.ts";
 import { canMaintainDoBulkAccess } from "./do_bulk.handlers.ts";
 import { completeVdcPgiOnlyHandler } from "./vdc_invoice.handlers.ts";
+import { syncDdDeliveryOrderReservation } from "./dd_reservation.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = { context: Extract<ContextResolution, { status: "RESOLVED" }>; request_id: string; auth_user_id: string; roleCode: string; };
@@ -228,6 +229,10 @@ export async function postVdcTruckDispatchUploadHandler(req: Request, ctx: Procu
       const { error: updateError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
         .update({ vehicle_number: truckNumber, dispatch_date: dispatchDate }).eq("id", dcId).eq("status", "INVOICED");
       if (updateError) { results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_SAVE_FAILED", message: "Unable to save Truck and Dispatch Date." }); continue; }
+      // Truck + Dispatch Date now both present: reserve before PGI (PGI then
+      // turns the reservation into FULLY_ISSUED).
+      const ddSync = await syncDdDeliveryOrderReservation(dcId, ctx.auth_user_id);
+      if (!ddSync.ok) { results.push({ dc_id: dcId, ok: false, code: "DD_RESERVATION_SYNC_FAILED", message: "Truck and Dispatch Date saved, but the reservation could not be created; post again." }); continue; }
       const { data: invoices, error: invoiceError } = await serviceRoleClient.schema("erp_procurement").from("sales_invoice")
         .select("id").eq("dc_id", dcId).eq("status", "DRAFT");
       if (invoiceError || !(invoices ?? []).length) { results.push({ dc_id: dcId, ok: false, code: "VDC_UPLOAD_INVOICE_NOT_FOUND", message: "No draft VDC invoice was found after saving the row." }); continue; }

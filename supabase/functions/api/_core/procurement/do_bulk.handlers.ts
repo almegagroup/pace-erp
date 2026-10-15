@@ -35,6 +35,7 @@ import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { createDeferredVdcBulkDeliveryOrder, createDeliveryOrderUnifiedHandler } from "./do_unified.handlers.ts";
 import { saveSoMapGroupHandler } from "./so_map.handlers.ts";
+import { syncDdDeliveryOrderReservation } from "./dd_reservation.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1075,6 +1076,10 @@ export async function editTransporterDetailsHandler(req: Request, ctx: Procureme
     const { error: patchError } = await serviceRoleClient
       .schema("erp_procurement").from("delivery_challan").update(patch).eq("id", dcId);
     if (patchError) return doBulkErrorResponse(req, ctx, "DO_BULK_EDIT_FAILED", 500, "Unable to update dispatch details.");
+    // DD reservation rule: adding the missing Truck / Dispatch Date reserves
+    // the DO's lines now (no-op for non-DD or already-dispatched DOs).
+    const ddSync = await syncDdDeliveryOrderReservation(dcId, ctx.auth_user_id);
+    if (!ddSync.ok) return doBulkErrorResponse(req, ctx, "DD_RESERVATION_SYNC_FAILED", 500, "Dispatch details saved, but the DD reservation could not be updated.");
 
     return okResponse({ dc_id: dcId, updated: true }, ctx.request_id, req);
   } catch (error) {

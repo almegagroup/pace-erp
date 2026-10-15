@@ -241,6 +241,8 @@ function buildColumnDefs() {
     { key: "company_label", label: "Company", width: "180px" },
     { key: "consignee_company_label", label: "Allotted Company", width: "180px" },
     { key: "vendor_name", label: "Vendor", width: "180px" },
+    // High Sea Sale: the overseas company whose Import Lead Time drives this CSN's ETA.
+    { key: "hss_mother_vendor_name", label: "HSS Mother Company", width: "180px" },
     { key: "material_code", label: "Material Code", width: "130px" },
     { key: "material_name", label: "Material", width: "180px" },
     { key: "material_group_name", label: "Material Group", width: "150px" },

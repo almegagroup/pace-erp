@@ -17713,6 +17713,27 @@ still genuinely unknown at PO-creation time** (§111.5) — no field added for t
 dimension-C "CFS movement" classification above is a yes/no *category* decided at PO time, distinct
 from the CFS *cost* which is only known much later at landed-cost stage.
 
+**High Sea Sale with a Mother Company — ✅ IMPLEMENTED (business owner, 2026-10-15):**
+Some suppliers sell on HSS through their Indian entity (e.g. Nouryon Asia bills Nouryon India, Nouryon
+India bills PACE). The PO must go to the Indian entity (the party PACE pays — often a DOMESTIC vendor),
+but the goods are imported (customs/CHA/Import CSN) and the lead time is the overseas company's.
+- PO Create + Legacy PO Create: a DOMESTIC vendor gets a **"High Sea Sale (HSS)?"** tick. Ticked → the PO
+  is saved as `vendor_type = IMPORT`, Trade Type locked to `HIGH_SEA_SALE`, all import fields required.
+  An IMPORT vendor reaches the same state by choosing Trade Type = HSS.
+- On any HSS PO: **"Has Mother Company?"** → pick an active IMPORT vendor
+  (`purchase_order.hss_mother_vendor_id`). The vendor's **Default Mother Company**
+  (`vendor_master.default_hss_mother_vendor_id`, set on SA Vendor Master / OM Vendor Detail, Domestic only)
+  pre-fills it **only when the PO is HSS** — a plain domestic PO never uses it.
+- Lead time: PO create's lead-time hard block and every CSN ETA calculation read
+  `lead_time_master_import` on **Mother Company + port** (falls back to the PO vendor + port when no Mother
+  Company). The CSN carries `hss_mother_vendor_id` (copied at creation, kept on balance splits; sub-CSNs
+  copy it via the existing mother spread). Domestic lead time is never used for an HSS PO.
+- PO Detail/edit now decides import vs domestic from the PO's own `vendor_type` (edit can never flip an
+  HSS PO back to domestic — enforced server-side too); PO print shows "Original Supplier"; CSN Tracker has
+  an "HSS Mother Company" column; Invoice Verification's GST type uses the PO's `vendor_type` (HSS = no
+  GST on the seller's invoice, IGST is paid on the Bill of Entry).
+Migration `20261015150000_po_hss_mother_company.sql`.
+
 ### 118.6 — Group Number: bulk print + reprint mechanism (LOCKED — 2026-08-05)
 
 **Purpose:** replaces the earlier separate "Reprint" idea entirely — one mechanism covers first

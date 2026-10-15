@@ -9,6 +9,7 @@ import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { canMaintainSalesInvoice, computeInvoiceGroups, postPgiInvoiceGroupsHandler } from "./do_unified.handlers.ts";
 import { completeVdcPgiOnlyHandler, createVdcInvoiceOnlyHandler } from "./vdc_invoice.handlers.ts";
 import { computeBulkPostChecks, type BulkPostCheck } from "./bulk_post_checks.ts";
+import { syncDdDeliveryOrderReservation } from "./dd_reservation.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = { context: Extract<ContextResolution, { status: "RESOLVED" }>; request_id: string; auth_user_id: string; roleCode: string; };
@@ -640,6 +641,9 @@ export async function bulkPostingCorrectionsHandler(req: Request, ctx: Procureme
         const { error } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
           .update(entry.patch).eq("id", text(entry.doc.id)).eq("status", "CREATED");
         if (error) { results.push({ ...entry.base, status: "ERROR", changes: entry.changes, message: "Unable to save this DO's correction." }); continue; }
+        // A corrected Truck / Dispatch Date on a DD DO reserves its lines now.
+        const ddSync = await syncDdDeliveryOrderReservation(text(entry.doc.id), ctx.auth_user_id);
+        if (!ddSync.ok) { results.push({ ...entry.base, status: "ERROR", changes: entry.changes, message: "Correction saved, but the DD reservation could not be updated — upload the correction again." }); continue; }
         results.push({ ...entry.base, status: "UPDATED", changes: entry.changes, warnings: found.warnings, message: entry.changes.join("; ") });
       } else {
         results.push({ ...entry.base, status: "WILL_UPDATE", changes: entry.changes, warnings: found.warnings, message: entry.changes.join("; ") });
