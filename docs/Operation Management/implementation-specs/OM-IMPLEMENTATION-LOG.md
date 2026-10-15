@@ -6185,3 +6185,27 @@ SO04 manifest entry now records its existing `getDispatchReport` dependency, and
 targeted ESLint, Vite build, `git diff --check`, JSON parsing, and every command in
 `ci-basic.yml` (including strict SU24 manifest) pass. Vite retains only its pre-existing GRN
 duplicate-attribute and chunk-size warnings.
+
+## 2026-10-15 — CMP003 SO02 deferred-invoice recovery backfill — DONE
+
+**Scope:** The business owner explicitly requested recovery of the unintended CMP003 DD
+Invoice-only rows to the pre-posting SO02 state, rather than cancellation. The scope was limited
+to the two 2026-10-14 production Invoice-only waves: 399 bulk DD delivery orders, each still
+`INVOICED` with exactly one `DRAFT` sales invoice.
+
+**R-04:** This was a guarded Production operational-data correction executed directly in one
+database transaction, not a schema migration. The transaction locked the exact timestamp-bounded
+target set and aborted unless it contained exactly 399 DOs, 399 DRAFT invoices and 460 invoice
+lines. It also required zero stock documents and zero open reservations; therefore no stock
+reversal or reservation release was performed.
+
+**Applied:** The 460 unposted draft invoice lines and their 399 draft invoice headers were
+removed, then the corresponding 399 delivery orders were restored from `INVOICED` to `CREATED`.
+No SO, SO Map, delivery-order line, stock, reservation, truck or dispatch-date data was changed.
+The removed draft invoice numbers remain unused; a later fresh SO02 posting will allocate new
+numbers.
+
+**Verification:** The post-write target-invoice count is zero. CMP003's bulk DD population now
+has 828 `CREATED` delivery orders and no remaining `INVOICED` row in this recovered set; those DOs
+are again eligible for fresh SO02 selection and posting. With the draft invoice headers removed,
+the recovered records no longer appear in SO04.
