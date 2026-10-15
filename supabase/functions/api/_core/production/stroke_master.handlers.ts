@@ -392,6 +392,23 @@ function buildLineRows(strokeMasterId: string, lines: JsonRecord[]) {
   }));
 }
 
+// A process-order line retains the originating Stroke-line id so the exact
+// formulation used for a production run remains auditable.  Do not implement
+// Stroke edits as "delete all then insert all": it replaces those ids and is
+// blocked (correctly) by process_order_line.stroke_line_id ON DELETE RESTRICT.
+// Existing line ids are instead updated in place; only genuinely new lines are
+// inserted and only unused, removed lines are deleted.
+function buildLinePatch(line: JsonRecord, displayOrder: number) {
+  return {
+    material_id: toTrimmedString(line.material_id),
+    line_material_type: toUpperTrimmedString(line.line_material_type || "RM"),
+    material_group_id: toTrimmedString(line.material_group_id) || null,
+    default_storage_location_id: toTrimmedString(line.default_storage_location_id) || null,
+    dosage_pct: Number(line.dosage_pct),
+    display_order: displayOrder,
+  };
+}
+
 // Find-or-create the SFG/INT Material Master for a Prod+Shade combo.
 // Per 83.3: one Material Master per Prodshade, global across companies —
 // only the plant/company extension is created per-company. Triggered at
@@ -1030,6 +1047,57 @@ export async function updateStrokeMasterHandler(
       if (body.shade_code !== undefined) patch.shade_code = toUpperTrimmedString(body.shade_code) || null;
     }
 
+    const { data: existingLineRows, error: existingLinesErr } = await serviceRoleClient
+      .schema("erp_production")
+      .from("stroke_line")
+      .select("id")
+      .eq("stroke_master_id", id);
+    if (existingLinesErr) {
+      console.error("[stroke_master.updateStrokeMaster] existing lines query failed:", JSON.stringify(existingLinesErr));
+      throw new Error("PROD_STROKE_LINES_FETCH_FAILED");
+    }
+
+    const existingLineIds = new Set<string>(
+      (existingLineRows ?? []).map((line: unknown) => String((line as JsonRecord).id ?? "")).filter(Boolean),
+    );
+    const submittedLineIds = lines
+      .map((line) => toTrimmedString(line.id))
+      .filter(Boolean);
+    if (new Set(submittedLineIds).size !== submittedLineIds.length) {
+      return strokeError(req, ctx, "PROD_STROKE_LINE_ID_DUPLICATE", 400, "Each existing Stroke line may occur only once");
+    }
+    if (submittedLineIds.some((lineId) => !existingLineIds.has(lineId))) {
+      return strokeError(req, ctx, "PROD_STROKE_LINE_ID_INVALID", 400, "A submitted Stroke line does not belong to this formulation");
+    }
+
+    const submittedLineIdSet = new Set(submittedLineIds);
+    const removedLineIds = [...existingLineIds].filter((lineId) => !submittedLineIdSet.has(lineId));
+    if (removedLineIds.length > 0) {
+      const { data: referencedRows, error: referencesErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("process_order_line")
+        .select("stroke_line_id")
+        .in("stroke_line_id", removedLineIds)
+        .limit(1);
+      if (referencesErr) {
+        console.error("[stroke_master.updateStrokeMaster] line reference check failed:", JSON.stringify(referencesErr));
+        throw new Error("PROD_STROKE_LINE_REFERENCE_CHECK_FAILED");
+      }
+      if ((referencedRows ?? []).length > 0) {
+        return strokeError(
+          req,
+          ctx,
+          "PROD_STROKE_LINE_IN_USE",
+          409,
+          "A formulation line already used by a Process Order cannot be removed",
+        );
+      }
+    }
+
+    // All rejection conditions have been checked before changing the header or
+    // lines. This preserves every referenced line identity while allowing a
+    // correction to material, dosage, alternate group, storage location, and
+    // display order for future Process Orders.
     const { error: updateErr } = await serviceRoleClient.schema("erp_production").from("stroke_master")
       .update(patch)
       .eq("id", id);
@@ -1038,19 +1106,46 @@ export async function updateStrokeMasterHandler(
       throw new Error("PROD_STROKE_UPDATE_FAILED");
     }
 
-    // Replace all lines
-    const { error: delErr } = await serviceRoleClient.schema("erp_production").from("stroke_line")
-      .delete().eq("stroke_master_id", id);
-    if (delErr) {
-      console.error("[stroke_master.updateStrokeMaster] line delete failed:", JSON.stringify(delErr));
-      throw new Error("PROD_STROKE_LINE_DELETE_FAILED");
-    }
-    if (lines.length > 0) {
-      const { error: lErr } = await serviceRoleClient.schema("erp_production").from("stroke_line")
-        .insert(buildLineRows(id, lines));
-      if (lErr) {
-        console.error("[stroke_master.updateStrokeMaster] line insert failed:", JSON.stringify(lErr));
+    for (const [displayOrder, line] of lines.entries()) {
+      const lineId = toTrimmedString(line.id);
+      if (!lineId) continue;
+      const { error: lineUpdateErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_line")
+        .update(buildLinePatch(line, displayOrder))
+        .eq("id", lineId)
+        .eq("stroke_master_id", id);
+      if (lineUpdateErr) {
+        console.error("[stroke_master.updateStrokeMaster] line update failed:", JSON.stringify(lineUpdateErr));
         throw new Error("PROD_STROKE_LINE_UPDATE_FAILED");
+      }
+    }
+
+    const newLines = lines.filter((line) => !toTrimmedString(line.id));
+    if (newLines.length > 0) {
+      const { error: lineInsertErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_line")
+        .insert(newLines.map((line) => ({
+          stroke_master_id: id,
+          ...buildLinePatch(line, lines.indexOf(line)),
+        })));
+      if (lineInsertErr) {
+        console.error("[stroke_master.updateStrokeMaster] line insert failed:", JSON.stringify(lineInsertErr));
+        throw new Error("PROD_STROKE_LINE_UPDATE_FAILED");
+      }
+    }
+
+    if (removedLineIds.length > 0) {
+      const { error: lineDeleteErr } = await serviceRoleClient
+        .schema("erp_production")
+        .from("stroke_line")
+        .delete()
+        .in("id", removedLineIds)
+        .eq("stroke_master_id", id);
+      if (lineDeleteErr) {
+        console.error("[stroke_master.updateStrokeMaster] unused line delete failed:", JSON.stringify(lineDeleteErr));
+        throw new Error("PROD_STROKE_LINE_DELETE_FAILED");
       }
     }
 
@@ -1457,7 +1552,7 @@ export async function listMtsCurrentStrokeHandler(
         ),
       };
     });
-    rows.sort((a, b) => (a.material_name ?? "").localeCompare(b.material_name ?? ""));
+    rows.sort((a, b) => String(a.material_name ?? "").localeCompare(String(b.material_name ?? "")));
 
     return okResponse({ data: { stroke_numbers: strokeNumbers, rows } }, ctx.request_id, req);
   } catch (err) {

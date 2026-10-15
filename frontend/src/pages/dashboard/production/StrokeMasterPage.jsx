@@ -365,6 +365,7 @@ export default function StrokeMasterPage() {
       setDetail(d);
       if (d.status === "DRAFT") {
         setDetailEditLines((d.lines ?? []).map((l) => ({
+          id: l.id,
           line_material_type: l.line_material_type ?? "RM",
           material_id: l.material_id,
           dosage_pct: String(l.dosage_pct),
@@ -502,6 +503,7 @@ export default function StrokeMasterPage() {
         communicator_name: detail.communicator_name,
         communication_reference: detail.communication_reference,
         lines: detailEditLines.map((l) => ({
+          id: l.id || undefined,
           material_id: l.material_id,
           line_material_type: l.line_material_type,
           dosage_pct: parseFloat(l.dosage_pct),
@@ -545,6 +547,7 @@ export default function StrokeMasterPage() {
         communicator_name: detail.communicator_name,
         communication_reference: detail.communication_reference,
         lines: detailEditLines.map((l) => ({
+          id: l.id || undefined,
           material_id: l.material_id,
           line_material_type: l.line_material_type,
           dosage_pct: parseFloat(l.dosage_pct),

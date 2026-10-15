@@ -47,6 +47,9 @@ export const STROKE_ERRORS = {
   PROD_STROKE_BASE_UOM_REQUIRED: "Base UOM is required.",
   PROD_STROKE_STORAGE_LOCATION_REQUIRED: "Default Storage Location is required.",
   PROD_STROKE_NO_LINES: "Cannot approve a stroke with no RM/INT lines.",
+  PROD_STROKE_LINE_IN_USE: "A line already used by a Process Order cannot be removed. Keep the line, or create a revised formulation.",
+  PROD_STROKE_LINE_ID_DUPLICATE: "A formulation line was sent more than once. Refresh and try again.",
+  PROD_STROKE_LINE_ID_INVALID: "This formulation was changed by another session. Refresh and try again.",
   PROD_MANAGER_OR_SA_REQUIRED: "Manager or SA access required for this action.",
 };
 

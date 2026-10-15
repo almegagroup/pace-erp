@@ -201,6 +201,7 @@ export default function StrokeApprovalPage() {
         communication_reference: detail.communication_reference ?? "",
       });
       setEditLines((detail.lines ?? []).map((l) => ({
+        id: l.id,
         line_material_type: l.line_material_type ?? "RM",
         material_id: l.material_id,
         dosage_pct: String(l.dosage_pct),
@@ -281,6 +282,7 @@ export default function StrokeApprovalPage() {
         communicator_name: editForm.communicator_name.trim(),
         communication_reference: editForm.communication_reference.trim(),
         lines: editLines.map((l) => ({
+          id: l.id || undefined,
           material_id: l.material_id,
           line_material_type: l.line_material_type,
           dosage_pct: parseFloat(l.dosage_pct),
