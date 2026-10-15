@@ -464,8 +464,11 @@ function buildCompanyScopeOrFilter(companyIds: string[]): string {
 // BEFORE this call, in a separate already-committed write) still went
 // through -- explaining "PO confirms but the request still 500s" and why
 // a bulk group approve needed one retry click per PO in the group.
+// High Sea Sale (2026-10-15): an HSS CSN is invoiced by an Indian entity (vendor_id) but
+// shipped by an overseas Mother Company -- the sail/clearance time is the Mother Company's,
+// so it wins over vendor_id whenever the PO named one.
 async function getImportLeadTime(csn: CsnRow): Promise<Record<string, unknown> | null> {
-  const vendorId = toTrimmedString(csn.vendor_id);
+  const vendorId = toTrimmedString(csn.hss_mother_vendor_id) || toTrimmedString(csn.vendor_id);
   const dischargePortId = toTrimmedString(csn.port_of_discharge_id);
   if (!vendorId || !dischargePortId) {
     return null;
@@ -666,6 +669,7 @@ const CSN_BALANCE_CLONE_REFERENCE_FIELDS = [
   "csn_type",
   "company_id",
   "vendor_id",
+  "hss_mother_vendor_id",
   "material_id",
   "material_category_id",
   "po_id",
@@ -966,7 +970,10 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
   const poIds = [...new Set(rows.map((row) => toTrimmedString(row.po_id)).filter(Boolean))];
   const stoIds = [...new Set(rows.map((row) => toTrimmedString(row.sto_id)).filter(Boolean))];
   const motherIds = [...new Set(rows.map((row) => toTrimmedString(row.mother_csn_id)).filter(Boolean))];
-  const vendorIds = [...new Set(rows.map((row) => toTrimmedString(row.vendor_id)).filter(Boolean))];
+  const vendorIds = [...new Set([
+    ...rows.map((row) => toTrimmedString(row.vendor_id)),
+    ...rows.map((row) => toTrimmedString(row.hss_mother_vendor_id)),
+  ].filter(Boolean))];
   const materialIds = [...new Set(rows.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
   const paymentTermIds = [...new Set(rows.map((row) => toTrimmedString(row.payment_term_id)).filter(Boolean))];
   const portIds = [...new Set([
@@ -1178,6 +1185,9 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       vendor_name: vendor?.vendor_name ?? vendor?.name ?? (vendorCompany
         ? `${toTrimmedString(vendorCompany.company_code)} | ${toTrimmedString(vendorCompany.company_name)}`
         : null),
+      hss_mother_vendor_name: row.hss_mother_vendor_id
+        ? toTrimmedString((vendorMap.get(toTrimmedString(row.hss_mother_vendor_id)) as Record<string, unknown> | undefined)?.vendor_name) || null
+        : null,
       material_name: material?.material_name ?? null,
       material_code: material?.pace_code ?? null,
       base_uom_code: material?.base_uom_code ?? null,

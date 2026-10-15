@@ -193,13 +193,15 @@ async function fetchGrnLine(grnLineId: string): Promise<JsonRecord> {
   return data as JsonRecord;
 }
 
-async function getCompanyAndVendorGstContext(companyId: string, vendorId: string): Promise<{
+// The PO's own vendor_type wins over Vendor Master's: a High Sea Sale PO is IMPORT (GST is paid
+// on the Bill of Entry, not on the seller's invoice) even when its vendor is DOMESTIC in the master.
+async function getCompanyAndVendorGstContext(companyId: string, vendorId: string, poId: string | null = null): Promise<{
   companyGstNumber: string | null;
   companyStateName: string | null;
   vendorGstNumber: string | null;
   vendorType: string | null;
 }> {
-  const [companyResp, vendorResp] = await Promise.all([
+  const [companyResp, vendorResp, poResp] = await Promise.all([
     serviceRoleClient
       .schema("erp_master")
       .from("companies")
@@ -212,9 +214,17 @@ async function getCompanyAndVendorGstContext(companyId: string, vendorId: string
       .select("gst_number, vendor_type")
       .eq("id", vendorId)
       .maybeSingle(),
+    poId
+      ? serviceRoleClient
+        .schema("erp_procurement")
+        .from("purchase_order")
+        .select("vendor_type")
+        .eq("id", poId)
+        .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
-  if (companyResp.error || vendorResp.error) {
+  if (companyResp.error || vendorResp.error || poResp.error) {
     throw new Error("IV_GST_CONTEXT_FETCH_FAILED");
   }
 
@@ -222,7 +232,7 @@ async function getCompanyAndVendorGstContext(companyId: string, vendorId: string
     companyGstNumber: toTrimmedString(companyResp.data?.gst_number) || null,
     companyStateName: toTrimmedString(companyResp.data?.state_name) || null,
     vendorGstNumber: toTrimmedString(vendorResp.data?.gst_number) || null,
-    vendorType: toUpperTrimmedString(vendorResp.data?.vendor_type) || null,
+    vendorType: toUpperTrimmedString(poResp.data?.vendor_type) || toUpperTrimmedString(vendorResp.data?.vendor_type) || null,
   };
 }
 
@@ -529,7 +539,7 @@ export async function runMatchHandler(
       return ivErrorResponse(req, ctx, "IV_NO_LINES", 400, "IV has no lines to match.");
     }
 
-    const gstContext = await getCompanyAndVendorGstContext(String(iv.company_id), String(iv.vendor_id));
+    const gstContext = await getCompanyAndVendorGstContext(String(iv.company_id), String(iv.vendor_id), toTrimmedString(iv.po_id) || null);
     let anyBlocked = false;
     let totalTaxableValue = 0;
     let totalGstAmount = 0;

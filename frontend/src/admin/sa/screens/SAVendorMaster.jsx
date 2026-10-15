@@ -109,6 +109,8 @@ const BLANK = {
   corr_address_line1: "", corr_address_city: "", corr_address_state: "", corr_address_pin: "",
   // Optional — not mandatory, can be filled in any time.
   msme_registered: null, msme_certificate_number: "",
+  // High Sea Sale: pre-fills the PO's Mother Company, only when that PO is marked HSS.
+  default_hss_mother_vendor_id: "",
 };
 
 function uid() { return Date.now() + Math.random(); }
@@ -133,6 +135,13 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
   const [similarMatches, setSimilarMatches] = useState([]);
   const [showSimilarWarning, setShowSimilarWarning] = useState(false);
   const [checkingDuplicate, setCheckingDuplicate] = useState(false);
+  const importVendorsQuery = useQuery({
+    queryKey: ["admin", "vendors", { vendor_type: "IMPORT", status: "ACTIVE", limit: 500 }],
+    queryFn: () => listVendors({ vendor_type: "IMPORT", status: "ACTIVE", limit: 500 }),
+    enabled: vendorType === "DOMESTIC",
+  });
+  const hssMotherOptions = (Array.isArray(importVendorsQuery.data?.data) ? importVendorsQuery.data.data : [])
+    .filter((vendor) => vendor.id !== initialVendor?.id);
 
 
   const patch = (key, val) => setFields((p) => ({ ...p, [key]: val }));
@@ -449,6 +458,33 @@ function VendorPanel({ vendorType, initialVendor, onClose, onSaved }) {
                     disabled={fields.msme_registered !== true}
                     placeholder={fields.msme_registered === true ? "" : "Set MSME Registered = Yes first"}
                   />
+                </div>
+              </div>
+            </Section>
+          )}
+
+          {/* High Sea Sale — Domestic only. The Indian entity is billed/paid here; the Mother
+              Company is the overseas Import vendor whose Import Lead Time an HSS PO uses. */}
+          {vendorType === "DOMESTIC" && (
+            <Section title="High Sea Sale (HSS)">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <div className={lbl}>Default Mother Company</div>
+                  <select
+                    value={fields.default_hss_mother_vendor_id ?? ""}
+                    onChange={(e) => patch("default_hss_mother_vendor_id", e.target.value)}
+                    className={inp}
+                  >
+                    <option value="">— None —</option>
+                    {hssMotherOptions.map((vendor) => (
+                      <option key={vendor.id} value={vendor.id}>
+                        {[vendor.vendor_code, vendor.vendor_name].filter(Boolean).join(" — ")}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    Filled in automatically on a PO only when that PO is marked High Sea Sale. Plain domestic POs ignore it.
+                  </p>
                 </div>
               </div>
             </Section>

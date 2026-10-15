@@ -26,6 +26,7 @@ import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
 import { hasPhysicalInventoryBlock, hasPhysicalInventoryBlockForBatch } from "../../_shared/physicalInventoryBlock.ts";
 import { getAvailableQty } from "./delivery_order.handlers.ts";
 import { deriveSalesInvoiceGstType, getSnapshotForIssue } from "./sales_order.handlers.ts";
+import { syncDdDeliveryOrderReservation } from "./dd_reservation.ts";
 import {
   assertPhase3PostingDateMatch,
   isHistoricalBackfillInvoiceDate,
@@ -1526,6 +1527,11 @@ export async function createDeferredVdcBulkDeliveryOrder(
         .update({ pgi_deferred: true, ...(dispatchDate ? { dispatch_date: dispatchDate } : {}) }).eq("id", dcId);
       if (deferredFlagError) return doErrorResponse(req, ctx, "DO_DD_LIFECYCLE_MARK_FAILED", 500, "Unable to set the DD dispatch lifecycle.");
     }
+    // DD reservation rule: reserve now only when Truck Number and Dispatch
+    // Date are both on the DO. The DO itself is already saved, and the sync
+    // is idempotent (re-run by every later Truck/Dispatch change and by PGI),
+    // so a failure here is logged rather than reported as a failed create.
+    await syncDdDeliveryOrderReservation(dcId, ctx.auth_user_id);
     const hydrated = await hydrateDeliveryOrderUnified(dcId);
     return okResponse(bulkSubmission ? { ...hydrated, bulk_submission: { reused: bulkReused, submission_id: bulkSubmission.submissionId, group_key: bulkSubmission.groupKey } } : hydrated, ctx.request_id, req);
   } catch (error) {
@@ -1588,6 +1594,11 @@ export async function updateDeliveryOrderUnifiedHandler(req: Request, ctx: Procu
     const { error: dispatchDateError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
       .update({ dispatch_date: dispatchDate || null }).eq("id", dcId);
     if (dispatchDateError) return doErrorResponse(req, ctx, "DO_DISPATCH_DATE_SAVE_FAILED", 500, "Unable to save Dispatch Date.");
+    // The edit re-creates a reservation for every line; for a DD DO the rule
+    // is "reserved only with Truck + Dispatch Date", so bring it back in line.
+    // No-op for a non-DD DO.
+    const ddSync = await syncDdDeliveryOrderReservation(dcId, ctx.auth_user_id);
+    if (!ddSync.ok) return doErrorResponse(req, ctx, "DD_RESERVATION_SYNC_FAILED", 500, "Delivery order saved, but its DD reservation could not be updated.");
     return okResponse(await hydrateDeliveryOrderUnified(dcId), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "DO_EDIT_FAILED";

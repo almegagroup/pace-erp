@@ -288,15 +288,16 @@ export default function PODetailPage() {
     () => new Map(costCenterOptions.map((entry) => [entry.value, entry.label])),
     [costCenterOptions]
   );
+  // The PO's own vendor_type decides import vs domestic, not Vendor Master: a High Sea Sale
+  // PO is IMPORT even when its vendor is DOMESTIC in the master, and stays IMPORT on edit.
+  const isHssPo = String(po?.import_trade_type || "").toUpperCase() === "HIGH_SEA_SALE";
   const isImportPo = useMemo(
-    () =>
-      String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT" ||
-      String(po?.delivery_type || "").toUpperCase() === "IMPORT",
-    [po?.delivery_type, selectedVendor]
+    () => String(po?.vendor_type || selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT",
+    [po?.vendor_type, selectedVendor]
   );
   const isImportEditPo = useMemo(
-    () => String(editVendor?.vendor_type || editForm.vendor_type || "").toUpperCase() === "IMPORT",
-    [editForm.vendor_type, editVendor]
+    () => isHssPo || String(editVendor?.vendor_type || editForm.vendor_type || "").toUpperCase() === "IMPORT",
+    [editForm.vendor_type, editVendor, isHssPo]
   );
   const deliveryDateLabel = isImportPo ? "ETA to Port" : "Delivery Date";
   const editDeliveryDateLabel = isImportEditPo ? "ETA to Port" : "Delivery Date";
@@ -545,7 +546,7 @@ export default function PODetailPage() {
   }
 
   function openEditModal() {
-    const vendorType = vendorMap.get(po?.vendor_id)?.vendor_type || po?.vendor_type || "";
+    const vendorType = isHssPo ? "IMPORT" : po?.vendor_type || vendorMap.get(po?.vendor_id)?.vendor_type || "";
     setEditForm(buildEditState(po, vendorType));
     setEditOpen(true);
     setError("");
@@ -590,7 +591,9 @@ export default function PODetailPage() {
     setError("");
     setNotice("");
     try {
-      const resolvedVendorType = String(editVendor?.vendor_type || editForm.vendor_type || "DOMESTIC").toUpperCase();
+      const resolvedVendorType = isHssPo
+        ? "IMPORT"
+        : String(editVendor?.vendor_type || editForm.vendor_type || "DOMESTIC").toUpperCase();
       await updatePurchaseOrder(id, {
         company_id: po.company_id,
         vendor_id: editForm.vendor_id,
@@ -732,8 +735,12 @@ export default function PODetailPage() {
               {po.order_in_lot ? <ErpFieldPreview label="Order in LOT" value="Yes" /> : null}
               <ErpFieldPreview label="GST Terms" value={po.gst_terms || "Not specified"} />
               <ErpFieldPreview label={deliveryDateLabel} value={po.expected_delivery_date || "—"} />
-              {po.delivery_type === "IMPORT" ? (
+              {isImportPo ? (
                 <ErpFieldPreview label="Incoterm" value={po.incoterm || "—"} />
+              ) : null}
+              {isHssPo ? <ErpFieldPreview label="Import Trade Type" value="High Sea Sale (HSS)" /> : null}
+              {isHssPo ? (
+                <ErpFieldPreview label="Mother Company" value={po.hss_mother_vendor_name || "None — PO vendor's own import lead time"} />
               ) : null}
               <ErpFieldPreview label="Freight Term" value={po.freight_term || "—"} />
               <ErpFieldPreview label="Remarks" value={po.remarks || "—"} />
@@ -1041,14 +1048,12 @@ export default function PODetailPage() {
                     value={editForm.vendor_id}
                     onChange={(event) => {
                       const nextVendor = vendorMap.get(event.target.value);
+                      const nextVendorType = isHssPo ? "IMPORT" : String(nextVendor?.vendor_type || "DOMESTIC").toUpperCase();
                       setEditForm((current) => ({
                         ...current,
                         vendor_id: event.target.value,
-                        vendor_type: String(nextVendor?.vendor_type || "DOMESTIC").toUpperCase(),
-                        incoterm:
-                          String(nextVendor?.vendor_type || "DOMESTIC").toUpperCase() === "IMPORT"
-                            ? current.incoterm
-                            : "",
+                        vendor_type: nextVendorType,
+                        incoterm: nextVendorType === "IMPORT" ? current.incoterm : "",
                       }));
                     }}
                     className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
