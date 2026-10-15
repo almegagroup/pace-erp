@@ -6209,3 +6209,18 @@ numbers.
 has 828 `CREATED` delivery orders and no remaining `INVOICED` row in this recovered set; those DOs
 are again eligible for fresh SO02 selection and posting. With the draft invoice headers removed,
 the recovered records no longer appear in SO04.
+
+## 2026-10-15 — SO04 MTS FO-number resolution — DONE
+
+**Scope:** SO04 showed a blank FO # for MTS dispatches even when their SO Map Group carried the
+customer FO. MTS allocations intentionally have no direct `fo_id`; the number is stored as the
+group's revised external FO, or its original external FO.
+
+**Implemented:** The existing SO04 bulk allocation lookup now also resolves each allocation's SO
+Map Group in one chunked request. FO display prioritizes revised external FO, then external FO,
+then the existing plan-feed/invoice fallback. No data was changed and no new route or per-row
+lookup was added.
+
+**Verification:** Production read-only inspection of displayed MTS invoice `9200000958` found no
+invoice/allocation FO but found SO Map Group external FO `5159971994`; the repaired path now
+returns that value. `deno check` of the dispatch-report handler and `git diff --check` pass.

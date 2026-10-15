@@ -241,9 +241,22 @@ export async function getDispatchReportHandler(
     const allocationIds = uniqueValues(dcLines.map((row) => row.so_map_allocation_id));
     const allocations = await fetchInChunks<JsonRecord>(allocationIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("sales_order_map_allocation")
-      .select("id, fo_id, customer_address_id").in("id", chunk));
+      .select("id, fo_id, customer_address_id, map_group_id").in("id", chunk));
     const allocationById = new Map(allocations.map((row) => [textValue(row.id), row]));
-    const foIds = uniqueValues([...invoices.map((row) => row.fo_id), ...allocations.map((row) => row.fo_id)]);
+    // MTS allocations deliberately have no plan-feed id of their own. Their
+    // customer FO is owned by the SO Map Group's external/revised external FO.
+    // Resolve that group in the same bulk pass instead of showing a false blank
+    // FO # in SO04 (or adding a per-row report lookup).
+    const mapGroupIds = uniqueValues(allocations.map((row) => row.map_group_id));
+    const mapGroups = await fetchInChunks<JsonRecord>(mapGroupIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_group")
+      .select("id, fo_id, external_fo_number, revised_external_fo_number").in("id", chunk));
+    const mapGroupById = new Map(mapGroups.map((row) => [textValue(row.id), row]));
+    const foIds = uniqueValues([
+      ...invoices.map((row) => row.fo_id),
+      ...allocations.map((row) => row.fo_id),
+      ...mapGroups.map((row) => row.fo_id),
+    ]);
     const feeds = await fetchInChunks<JsonRecord>(foIds, (chunk) => serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select("id, fo_number, customer_address_id").in("id", chunk));
@@ -281,7 +294,8 @@ export async function getDispatchReportHandler(
         const packing = packingById.get(textValue(dcLine.packing_order_id)) ?? {};
         const process = processById.get(textValue(packing.process_order_id)) ?? {};
         const allocation = allocationById.get(textValue(dcLine.so_map_allocation_id)) ?? {};
-        const feed = feedById.get(textValue(allocation.fo_id || invoice.fo_id)) ?? {};
+        const mapGroup = mapGroupById.get(textValue(allocation.map_group_id)) ?? {};
+        const feed = feedById.get(textValue(allocation.fo_id || mapGroup.fo_id || invoice.fo_id)) ?? {};
         const address = addressById.get(textValue(allocation.customer_address_id || feed.customer_address_id)) ?? {};
         const dc = dcHeaderById.get(textValue(dcLine.dc_id || invoice.dc_id)) ?? {};
         const transporter = transporterById.get(textValue(dc.transporter_id));
@@ -312,7 +326,7 @@ export async function getDispatchReportHandler(
         const mismatchStroke = Boolean(
           declaredStroke && actualStroke && upperValue(declaredStroke) !== upperValue(actualStroke),
         );
-        return { line, dcLine, soLine, so, packing, process, allocation, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke, mismatchStroke };
+        return { line, dcLine, soLine, so, packing, process, allocation, mapGroup, feed, address, dc, transporter, declaredStroke, actualStroke, invalidStroke, mismatchStroke };
       });
 
       const strokeEntryMap = new Map<string, StrokeEntry>();
@@ -361,7 +375,10 @@ export async function getDispatchReportHandler(
         pack_uom: joined(lines.map((line) => line.pack_uom_code || dcLineById.get(textValue(line.dc_line_id))?.pack_uom_code)),
         base_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.quantity), 0), 6),
         base_uom: joined(lines.map((line) => line.uom_code || material.base_uom_code)),
-        fo_number: joined([invoice.fo_number, ...lineDetails.map((entry) => entry.feed.fo_number)]),
+        fo_number: joined([
+          invoice.fo_number,
+          ...lineDetails.map((entry) => entry.mapGroup.revised_external_fo_number || entry.mapGroup.external_fo_number || entry.feed.fo_number),
+        ]),
         batch_number: joined(lineDetails.map((entry) => entry.dcLine.batch_number)),
         packing_po_number: joined(lineDetails.map((entry) => entry.packing.po_number)),
         item: [textValue(material.pace_code), textValue(material.material_name)].filter(Boolean).join(" — "),
