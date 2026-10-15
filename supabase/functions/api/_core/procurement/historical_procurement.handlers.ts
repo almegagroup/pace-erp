@@ -15,7 +15,9 @@ const text = (value: unknown) => String(value ?? "").trim();
 const asRows = (value: unknown): JsonRecord[] => Array.isArray(value) ? value as JsonRecord[] : [];
 const historicalDate = (value: unknown) => {
   const date = text(value);
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date <= "2026-09-30" ? date : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const parsed = Date.parse(`${date}T00:00:00Z`);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === date ? date : null;
 };
 
 function fail(req: Request, ctx: HistoricalContext, code: string, status: number, message: string) {
@@ -35,7 +37,7 @@ function procurementIssues(request: ProcurementImport) {
   for (const [kind, rows] of [["PURCHASE_ORDER", request.purchase_orders], ["PURCHASE_ORDER", request.purchase_order_lines], ["CONSIGNMENT_MOVEMENT", request.consignment_movements]] as const) for (const row of rows) {
     if (!sourceOk(row)) issues.push({ record_kind: kind, source_row_number: null, exception_code: "HISTORY_SOURCE_ROW_REQUIRED", exception_message: "A positive source_row_number is required.", source_payload: row });
     if (kind === "PURCHASE_ORDER" && !text(row.external_po_number)) issues.push({ record_kind: kind, source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_PO_NUMBER_REQUIRED", exception_message: "external_po_number is required.", source_payload: row });
-    for (const key of ["order_date", "dispatch_date", "etd_date", "atd_date", "eta_port_date", "ata_port_date", "boe_date", "lr_date", "inward_date"]) if (row[key] !== undefined && row[key] !== null && text(row[key]) && !historicalDate(row[key])) issues.push({ record_kind: kind, source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_DATE_INVALID", exception_message: `${key} must be a valid date through 2026-09-30.`, source_payload: row });
+    for (const key of ["order_date", "dispatch_date", "etd_date", "atd_date", "eta_port_date", "ata_port_date", "boe_date", "lr_date", "inward_date"]) if (row[key] !== undefined && row[key] !== null && text(row[key]) && !historicalDate(row[key])) issues.push({ record_kind: kind, source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_DATE_INVALID", exception_message: `${key} must be a valid ISO calendar date.`, source_payload: row });
   }
   for (const row of request.purchase_orders) if (text(row.supplier_name) && !text(row.vendor_id)) issues.push({ record_kind: "PURCHASE_ORDER", source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_VENDOR_UNMAPPED", exception_message: "Supplier has no verified ERP vendor_id; it was not guessed.", source_payload: row });
   for (const row of request.purchase_order_lines) if (text(row.external_sku) && !text(row.material_id)) issues.push({ record_kind: "PURCHASE_ORDER", source_row_number: Number(row.source_row_number) || null, exception_code: "HISTORY_MATERIAL_UNMAPPED", exception_message: "Source SKU has no verified ERP material_id; it was not guessed.", source_payload: row });
