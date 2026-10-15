@@ -527,7 +527,7 @@ function StrokeTab({ companyId, planMonth, access }) {
     { key: "strokes", label: "Approved Strokes", width: "160px", render: (r) => r.strokes.map((s) => s.stroke_number).join(", "), filterValue: (r) => r.strokes.map((s) => s.stroke_number).join(", ") },
     { key: "periods", label: "Planning Stroke Periods", width: "360px", render: periodSummary, copyValue: periodSummary, filterValue: periodSummary },
     { key: "primary", label: "RM Use Primary", width: "220px", render: primarySummary, copyValue: primarySummary, filterValue: primarySummary },
-    { key: "version", label: "Version", width: "80px", align: "right", render: (r) => (r.setting ? r.setting.version_no : "Default"), filterValue: (r) => (r.setting ? String(r.setting.version_no) : "Default") },
+    { key: "version", label: "Stroke Version", width: "110px", align: "right", render: (r) => (r.setting ? r.setting.version_no : "Default"), filterValue: (r) => (r.setting ? String(r.setting.version_no) : "Default") },
     { key: "saved_by", label: "Saved By", width: "180px", render: (r) => blankOr(r.setting?.saved_by) },
     {
       key: "edit", label: "", width: "80px", filterable: false,
@@ -542,8 +542,10 @@ function StrokeTab({ companyId, planMonth, access }) {
   return (
     <ErpSectionCard eyebrow="Tab 2" title="Stroke Periods & RM Group Use Primary (planning assumption only)">
       <p className="mb-2 text-xs text-slate-500">
-        Default is each Prodshade&apos;s current MTS stroke for the whole month with Use Primary = Yes for every RM group. Changes here are
-        planning assumptions only — Stroke Master and production are not changed. PM groups have no Use Primary setting.
+        Stroke periods apply only to the selected month — a month with no setting uses the Prodshade&apos;s current MTS stroke for the
+        whole month. Use Primary is carried forward: a change saved in a month applies from that month onward until a later month
+        changes it again (default Yes). Planning assumptions only — Stroke Master and production are not changed. PM groups have no
+        Use Primary setting.
       </p>
       <ErpDenseGrid
         {...GRID_PROPS}
@@ -568,6 +570,12 @@ function StrokeTab({ companyId, planMonth, access }) {
   );
 }
 
+function primarySetLabel(group, planMonth) {
+  if (!group.primary_set_month) return "Default";
+  const label = monthLabel(group.primary_set_month);
+  return group.primary_set_month.slice(0, 7) === planMonth ? `${label} (this month)` : label;
+}
+
 function monthBounds(planMonth) {
   const [year, month] = planMonth.split("-").map(Number);
   const last = new Date(year, month, 0).getDate();
@@ -588,6 +596,13 @@ function StrokeEditor({ prodshade, companyId, planMonth, canEdit, onClose }) {
   });
   const [remarks, setRemarks] = useState("");
   const [saving, setSaving] = useState(false);
+  const originalPrimary = useMemo(() => {
+    const map = {};
+    prodshade.strokes.forEach((s) => s.rm_groups.forEach((g) => { map[`${s.stroke_master_id}|${g.material_group_id}`] = g.use_primary !== false; }));
+    return map;
+  }, [prodshade]);
+  const periodKey = (list) => JSON.stringify(list.map((p) => [p.stroke_master_id, p.period_from, p.period_to, String(p.planned_base_qty ?? "").trim()]));
+  const periodsChanged = periodKey(periods) !== periodKey(initialPeriods);
 
   const usedStrokeIds = [...new Set(periods.map((p) => p.stroke_master_id).filter(Boolean))];
   const groupRows = prodshade.strokes
@@ -625,6 +640,10 @@ function StrokeEditor({ prodshade, companyId, planMonth, canEdit, onClose }) {
     { key: "primary_material_label", label: "Primary (Stroke line material)", width: "260px" },
     { key: "member_labels", label: "Other Group Members", width: "320px", render: (g) => g.member_labels.join("; ") || "—", filterValue: (g) => g.member_labels.join("; ") },
     {
+      key: "set_from", label: "Decided In", width: "130px",
+      render: (g) => primarySetLabel(g, planMonth), copyValue: (g) => primarySetLabel(g, planMonth), filterValue: (g) => primarySetLabel(g, planMonth),
+    },
+    {
       key: "use_primary", label: "Use Primary", width: "110px", filterable: false,
       render: (g) => (
         <select disabled={!canEdit} value={primaryDraft[g.key] === false ? "NO" : "YES"} onChange={(e) => setPrimaryDraft((current) => ({ ...current, [g.key]: e.target.value === "YES" }))} className="h-7 border border-slate-300 px-1 text-xs">
@@ -641,22 +660,31 @@ function StrokeEditor({ prodshade, companyId, planMonth, canEdit, onClose }) {
       pushToast({ message: "Every period needs a stroke and a From ≤ To date.", tone: "error" });
       return;
     }
+    // Only changed Use Primary values are sent; unchanged ones keep carrying forward.
+    const changedPrimaries = groupRows
+      .filter((g) => (primaryDraft[g.key] !== false) !== originalPrimary[g.key])
+      .map((g) => ({ stroke_master_id: g.stroke_master_id, material_group_id: g.material_group_id, use_primary: primaryDraft[g.key] !== false }));
+    if (!periodsChanged && changedPrimaries.length === 0) {
+      pushToast({ message: "Nothing changed.", tone: "error" });
+      return;
+    }
     setSaving(true);
     try {
       await saveMtsPlanStrokeSetting({
         company_id: companyId,
         plan_month: planMonth,
         prodshade_material_id: prodshade.prodshade_material_id,
-        periods: periods.map((p) => ({
+        // Unchanged periods are not re-saved, so this month keeps following the current stroke.
+        periods: !periodsChanged ? [] : periods.map((p) => ({
           stroke_master_id: p.stroke_master_id,
           period_from: p.period_from,
           period_to: p.period_to,
           planned_base_qty: String(p.planned_base_qty ?? "").trim() === "" ? null : Number(p.planned_base_qty),
         })),
-        primaries: groupRows.map((g) => ({ stroke_master_id: g.stroke_master_id, material_group_id: g.material_group_id, use_primary: primaryDraft[g.key] !== false })),
+        primaries: changedPrimaries,
         remarks: remarks || null,
       });
-      pushToast({ message: "Stroke setting saved as a new version.", tone: "success" });
+      pushToast({ message: "Saved.", tone: "success" });
       await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-plan", "stroke-settings"] });
       onClose();
     } catch (error) {
@@ -689,7 +717,8 @@ function StrokeEditor({ prodshade, companyId, planMonth, canEdit, onClose }) {
           <p className="font-semibold text-slate-800">Part 1 — Which stroke (recipe) to plan with, and for which days</p>
           <p className="mt-1">
             Each row is one period of this month. <b>Stroke</b> = the approved recipe whose RM quantities will be used for planning in
-            that period. <b>From / To</b> = the days that stroke applies. <b>Qty Override</b> = how much of this month&apos;s plan should
+            that period. <b>From / To</b> = the days that stroke applies. This applies to <b>this month only</b>; other months
+            use the current stroke unless they are set separately. <b>Qty Override</b> = how much of this month&apos;s plan should
             be made with that stroke; leave it blank and the month&apos;s plan is split by number of days.
           </p>
           <p className="mt-1">
@@ -706,6 +735,10 @@ function StrokeEditor({ prodshade, companyId, planMonth, canEdit, onClose }) {
             Primary RM (the stroke line&apos;s own material) and the other group members. <b>No</b>: leave the Primary RM out — only the
             other members are planned. The group&apos;s requirement is one common pool, never counted again per item. This is a
             planning assumption only; Stroke Master and production are not changed.
+          </p>
+          <p className="mt-1">
+            Use Primary is <b>carried forward</b>: a change saved here applies from this month to every later month, until a later
+            month changes it again. <b>Decided In</b> shows the month the current value comes from (Default = never changed = Yes).
           </p>
         </div>
         <ErpDenseGrid {...GRID_PROPS} columns={groupColumns} rows={groupRows} rowKey={(g) => g.key} emptyMessage="The selected stroke(s) have no RM material groups." maxHeight="35vh" />

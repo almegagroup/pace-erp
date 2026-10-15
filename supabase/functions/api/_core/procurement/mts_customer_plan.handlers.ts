@@ -483,7 +483,7 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
     const prodshadeIds = [...new Set(skus.map((s) => s.prodshade_material_id))];
     if (prodshadeIds.length === 0) return okResponse({ plan_month: planMonth, prodshades: [] }, ctx.request_id, req);
 
-    const [strokeRows, currentRows, settingRows] = await Promise.all([
+    const [strokeRows, currentRows, settingRows, decisionRows] = await Promise.all([
       fetchInChunks<JsonRecord>(prodshadeIds, (chunk) => serviceRoleClient.schema("erp_production").from("stroke_master")
         .select("id, prodshade_material_id, stroke_number, revision_no, description")
         .eq("company_id", companyId).eq("po_type", "MTS").eq("status", "APPROVED")
@@ -495,11 +495,17 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
         .select("id, prodshade_material_id, version_no, remarks, created_by, created_at")
         .eq("company_id", companyId).eq("plan_month", planMonth).eq("is_current", true)
         .in("prodshade_material_id", chunk)),
+      // Use Primary carries forward (owner 2026-10-15): every current decision
+      // effective on or before this month; the latest one per key wins below.
+      fetchInChunks<JsonRecord>(prodshadeIds, (chunk) => serviceRoleClient.schema("erp_planning").from("stroke_group_primary_decision")
+        .select("stroke_master_id, material_group_id, effective_month, use_primary")
+        .eq("company_id", companyId).eq("is_current", true).lte("effective_month", planMonth)
+        .in("prodshade_material_id", chunk)),
     ]);
 
     const strokeIds = strokeRows.map((s) => textValue(s.id));
     const settingIds = settingRows.map((s) => textValue(s.id));
-    const [strokeLines, periodRows, primaryRows] = await Promise.all([
+    const [strokeLines, periodRows] = await Promise.all([
       strokeIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(strokeIds, (chunk) => serviceRoleClient
         .schema("erp_production").from("stroke_line")
         .select("stroke_master_id, material_id, material_group_id, display_order")
@@ -508,11 +514,14 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
         .schema("erp_planning").from("stroke_plan_period")
         .select("setting_id, stroke_master_id, period_from, period_to, planned_base_qty, display_order")
         .in("setting_id", chunk)),
-      settingIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(settingIds, (chunk) => serviceRoleClient
-        .schema("erp_planning").from("stroke_plan_group_primary")
-        .select("setting_id, stroke_master_id, material_group_id, use_primary")
-        .in("setting_id", chunk)),
     ]);
+    const decisionByKey = new Map<string, { use_primary: boolean; effective_month: string }>();
+    for (const d of decisionRows) {
+      const key = `${textValue(d.stroke_master_id)}|${textValue(d.material_group_id)}`;
+      const month = textValue(d.effective_month);
+      const seen = decisionByKey.get(key);
+      if (!seen || month > seen.effective_month) decisionByKey.set(key, { use_primary: d.use_primary === true, effective_month: month });
+    }
 
     const groupIds = [...new Set(strokeLines.map((l) => textValue(l.material_group_id)))];
     const [groups, members] = await Promise.all([
@@ -555,8 +564,6 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
             planned_base_qty: numberOrNull(p.planned_base_qty),
           }))
         : null;
-      const primaryMap = new Map(primaryRows.filter((p) => textValue(p.setting_id) === settingId)
-        .map((p) => [`${textValue(p.stroke_master_id)}|${textValue(p.material_group_id)}`, p.use_primary === true]));
 
       return {
         prodshade_material_id: pid,
@@ -578,8 +585,9 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
                 member_labels: (membersByGroup.get(gid) ?? [])
                   .filter((id) => id !== textValue(l.material_id))
                   .map((id) => materialLabel(materials.get(id))),
-                use_primary: primaryMap.has(key) ? primaryMap.get(key) : true,
-                is_saved: primaryMap.has(key),
+                // No decision on or before this month = default Yes.
+                use_primary: decisionByKey.get(key)?.use_primary ?? true,
+                primary_set_month: decisionByKey.get(key)?.effective_month ?? null,
               };
             });
           return {
