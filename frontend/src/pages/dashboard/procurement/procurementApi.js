@@ -915,6 +915,16 @@ export function getMtsPlanningActuals(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/actuals", undefined, params);
 }
 
+// Historical Operations Import (POTMP). The caller supplies source codes and
+// rows only; the server resolves master records and enforces company scope.
+export function dryRunHistoricalOperationsImport(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-plan/historical-import/dry-run", data);
+}
+
+export function commitHistoricalOperationsImport(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-plan/historical-import/commit", data);
+}
+
 export function getMtsPlanProductGroups(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/product-groups", undefined, params);
 }

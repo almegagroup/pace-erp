@@ -429,6 +429,15 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // Historical Operations Import. Separate authority from PO21; tx code POTMP.
+  PROC_HISTORICAL_OPERATIONS_IMPORT: {
+    screen_code: "PROC_HISTORICAL_OPERATIONS_IMPORT",
+    route: "/dashboard/procurement/historical-operations-import",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_PLANT_TRANSFER_LIST: {
     screen_code: "PROC_PLANT_TRANSFER_LIST",
     route: "/dashboard/procurement/transfer",

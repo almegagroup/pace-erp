@@ -161,6 +161,7 @@ import IVDetailPage from "../pages/dashboard/procurement/accounts/IVDetailPage.j
 import BlockedIVListPage from "../pages/dashboard/procurement/accounts/BlockedIVListPage.jsx";
 import ProcurementPlanningPage from "../pages/dashboard/procurement/planning/ProcurementPlanningPage.jsx";
 import MtsCustomerPlanPage from "../pages/dashboard/procurement/planning/MtsCustomerPlanPage.jsx";
+import HistoricalOperationsImportPage from "../pages/dashboard/procurement/planning/HistoricalOperationsImportPage.jsx";
 import PlantTransferPage from "../pages/dashboard/procurement/transfer/PlantTransferPage.jsx";
 import PlantTransferDetailPage from "../pages/dashboard/procurement/transfer/PlantTransferDetailPage.jsx";
 import SettlementInvoicePage from "../pages/dashboard/procurement/transfer/SettlementInvoicePage.jsx";
@@ -761,6 +762,10 @@ export default function AppRouter() {
                   <Route
                     path="procurement/mts-customer-plan"
                     element={<MtsCustomerPlanPage />}
+                  />
+                  <Route
+                    path="procurement/historical-operations-import"
+                    element={<HistoricalOperationsImportPage />}
                   />
                   <Route
                     path="procurement/transfer"

@@ -4639,6 +4639,28 @@
     "deps": []
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/planning/HistoricalOperationsImportPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "dryRunHistoricalOperationsImport",
+        "method": "POST",
+        "path": "/api/procurement/mts-plan/historical-import/dry-run",
+        "resourceCode": "PROC_HISTORICAL_OPERATIONS_IMPORT",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "commitHistoricalOperationsImport",
+        "method": "POST",
+        "path": "/api/procurement/mts-plan/historical-import/commit",
+        "resourceCode": "PROC_HISTORICAL_OPERATIONS_IMPORT",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/po/POCreateOpeningPage.jsx",
     "dependencyCount": 6,
     "deps": [
