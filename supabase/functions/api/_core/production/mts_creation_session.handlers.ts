@@ -6,6 +6,7 @@
  * database RPC that owns all durable writes in one transaction.
  */
 
+import { isProdshadeExcludedFromProcessPo } from "../../_shared/processPoExclusion.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { okResponse, errorResponse } from "../response.ts";
@@ -144,6 +145,8 @@ async function resolveSessionHeader(body: JsonRecord, ctx: ProdHandlerContext, a
   if (!machine || machineRow.active !== true || String(machineRow.company_id ?? "") !== companyId) throw new Error("PROD_PO_MACHINE_INVALID");
   if (!shift || shiftRow.active !== true || String(shiftRow.company_id ?? "") !== companyId) throw new Error("PROD_MTS_SHIFT_INVALID");
   if (!prodshade) throw new Error("PROD_MTS_PRODSHADE_INVALID");
+  // SA OM13: excluded from Process PO creation for this company (covers Page 4-6 previews and commit).
+  if (await isProdshadeExcludedFromProcessPo(companyId, materialId)) throw new Error("PROD_MTS_PRODSHADE_EXCLUDED");
 
   const range = await resolveMtsBatchRangeNumbers(companyId, materialId, batchStartSerial, numberOfBatches);
   if ("errorCode" in range) throw new Error(range.errorCode);

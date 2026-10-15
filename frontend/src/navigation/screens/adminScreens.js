@@ -355,6 +355,15 @@ export const ADMIN_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // OM13 "Process PO Exclusion" (owner, 2026-10-15).
+  SA_PROD_PROCESS_PO_EXCLUSION: {
+    screen_code: "SA_PROD_PROCESS_PO_EXCLUSION",
+    route: "/sa/production/process-po-exclusion",
+    universe: "ADMIN",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   SA_PROD_SEGMENT_LOCATIONS: {
     screen_code: "SA_PROD_SEGMENT_LOCATIONS",
     route: "/sa/production/segment-locations",

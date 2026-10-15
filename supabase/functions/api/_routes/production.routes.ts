@@ -235,6 +235,11 @@ import {
   getPartialBatchReversalHandler,
 } from "../_core/production/partial_reversal.handlers.ts";
 
+import {
+  getProcessPoExclusionHandler,
+  saveProcessPoExclusionHandler,
+} from "../_core/production/process_po_exclusion.handlers.ts";
+
 export async function dispatchProductionRoutes(
   routeKey: string,
   req: Request,
@@ -259,6 +264,12 @@ export async function dispatchProductionRoutes(
       return await createPackCodeHandler(req, ctx);
     case "POST:/api/production/pack-codes/toggle":
       return await togglePackCodeHandler(req, ctx);
+
+    // SA OM13: Process PO Exclusion
+    case "GET:/api/production/process-po-exclusion":
+      return await getProcessPoExclusionHandler(req, ctx);
+    case "POST:/api/production/process-po-exclusion":
+      return await saveProcessPoExclusionHandler(req, ctx);
 
     // Approved Prodshades
     case "GET:/api/production/prodshades":
