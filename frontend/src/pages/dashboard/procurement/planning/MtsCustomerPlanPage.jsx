@@ -17,7 +17,7 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
@@ -26,6 +26,14 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
+import {
+  buildGroupedRows,
+  compareByGroup,
+  GROUP_COLUMNS,
+  totalRowProps,
+  withTotalCells,
+} from "./mtsPlanGrouping.js";
+import ProductGroupDrawer from "./MtsProductGroupDrawer.jsx";
 import {
   getMtsPlanAccess,
   getMtsPlanEntryGrid,
@@ -49,7 +57,8 @@ const URGENT_MODE_OPTIONS = [
 ];
 const BASE_TYPES = ["ROLLING", "FINAL"];
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const GRID_PROPS = { cellNavigate: true, columnFilter: true, stickyFirstColumn: true, fitColumnWidths: true };
+// Every grid on this page: Excel cell navigation, per-column filter and an all-column search box (owner).
+const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true };
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 
 function currentMonthValue() {
@@ -78,6 +87,7 @@ export default function MtsCustomerPlanPage() {
   const companyId = companyIdInput || resolveDefaultTransactionCompanyId(runtimeContext);
   const [activeTab, setActiveTab] = useState("entry");
   const [planMonth, setPlanMonth] = useState(currentMonthValue());
+  const [groupDrawerOpen, setGroupDrawerOpen] = useState(false);
 
   const accessQ = useQuery({
     queryKey: ["procurement", "mts-plan", "access", companyId],
@@ -121,6 +131,15 @@ export default function MtsCustomerPlanPage() {
               </button>
             ))}
           </div>
+          {companyId ? (
+            <button
+              type="button"
+              onClick={() => setGroupDrawerOpen(true)}
+              className="h-8 border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-900 hover:bg-amber-100"
+            >
+              Product Group
+            </button>
+          ) : null}
           {access ? (
             <span className="text-xs text-slate-500">
               Access: {access.can_maintain ? "Full (all plan types + stroke setup)" : access.can_enter_addon ? "View + Additional / Urgent entry" : "View only"}
@@ -138,6 +157,9 @@ export default function MtsCustomerPlanPage() {
           <ReportTab companyId={companyId} />
         )}
       </div>
+      {groupDrawerOpen && companyId ? (
+        <ProductGroupDrawer key={companyId} companyId={companyId} onClose={() => setGroupDrawerOpen(false)} />
+      ) : null}
     </ErpScreenScaffold>
   );
 }
@@ -186,44 +208,44 @@ function PlanEntryTab({ companyId, planMonth, access }) {
   }
 
   // Excel-style paste: a multi-line clipboard fills this row and the rows below it.
-  function handlePaste(event, startIndex) {
+  function handlePaste(event, skuId) {
     const text = event.clipboardData?.getData("text") ?? "";
     if (!text.includes("\n")) return;
     event.preventDefault();
     const values = text.replace(/\r/g, "").split("\n").filter((line, index, all) => index < all.length - 1 || line !== "");
     setDrafts((current) => {
       const next = { ...current };
+      // Fills the SKU rows in the order they are shown (total rows are skipped).
+      const order = displayOrderRef.current;
+      const start = order.indexOf(skuId);
       values.forEach((value, offset) => {
-        const row = rows[startIndex + offset];
-        if (row) next[row.sku_material_id] = value.split("\t")[0].trim().replace(/,/g, "");
+        const target = start < 0 ? null : order[start + offset];
+        if (target) next[target] = value.split("\t")[0].trim().replace(/,/g, "");
       });
       return next;
     });
   }
 
   // Excel feel: Enter / ArrowDown moves to the next row's input, ArrowUp to the previous one.
-  function handleQtyKeyDown(event, index) {
+  // Total rows have no input, so moving follows the inputs on screen.
+  function handleQtyKeyDown(event) {
     let step = 0;
     if (event.key === "Enter" || event.key === "ArrowDown") step = 1;
     else if (event.key === "ArrowUp") step = -1;
     if (!step) return;
     event.preventDefault();
-    const grid = event.currentTarget.closest("table");
-    for (let target = index + step; target >= 0 && target < rows.length; target += step) {
-      const next = grid?.querySelector(`input[data-plan-qty-index="${target}"]`);
-      if (!next) {
-        event.currentTarget.scrollIntoView({ block: "center" });
-        return;
-      }
-      if (!next.disabled) {
-        next.focus();
-        next.select();
+    const inputs = [...(event.currentTarget.closest("table")?.querySelectorAll("input[data-plan-qty]") ?? [])];
+    for (let target = inputs.indexOf(event.currentTarget) + step; target >= 0 && target < inputs.length; target += step) {
+      if (!inputs[target].disabled) {
+        inputs[target].scrollIntoView({ block: "nearest" });
+        inputs[target].focus();
+        inputs[target].select();
         return;
       }
     }
   }
 
-  function qtyInput(row, index) {
+  function qtyInput(row) {
     const disabled = !canWriteType || !rowAllowsUom(row);
     return (
       <input
@@ -233,29 +255,36 @@ function PlanEntryTab({ companyId, planMonth, access }) {
         title={!rowAllowsUom(row) ? `No verified ${entryUom} conversion for this SKU` : undefined}
         className={`h-7 w-28 border px-1.5 text-right font-mono text-xs outline-none ${disabled ? "border-slate-200 bg-slate-100 text-slate-400" : "border-sky-300 bg-sky-50 text-sky-900 focus:border-sky-600"}`}
         value={drafts[row.sku_material_id] ?? ""}
-        data-plan-qty-index={index}
-        onKeyDown={(event) => handleQtyKeyDown(event, index)}
-        onPaste={(event) => handlePaste(event, index)}
+        data-plan-qty
+        onKeyDown={handleQtyKeyDown}
+        onPaste={(event) => handlePaste(event, row.sku_material_id)}
         onChange={(event) => setDrafts((current) => ({ ...current, [row.sku_material_id]: event.target.value }))}
       />
     );
   }
 
-  const indexBySku = useMemo(() => new Map(rows.map((row, index) => [row.sku_material_id, index])), [rows]);
+  const displayOrderRef = useRef([]);
   const entrySum = (row) => (row.entries ?? []).reduce((sum, entry) => sum + Number(entry.base_qty ?? 0), 0);
   const currentBaseEntry = (row) => (row.entries ?? [])[0] ?? null;
 
-  const columns = [
+  const baseQty = (qty, row) => ({ qty, unit: row.base_uom_code });
+  const draftQty = (row) => {
+    const raw = String(drafts[row.sku_material_id] ?? "").trim().replace(/,/g, "");
+    return raw === "" || !Number.isFinite(Number(raw)) ? null : { qty: Number(raw), unit: entryUom };
+  };
+  const columns = withTotalCells([
+    ...GROUP_COLUMNS,
     { key: "sku_label", label: "SKU", width: "300px" },
     { key: "sku_document_name", label: "Document Name", width: "260px", render: (r) => blankOr(r.sku_document_name) },
     { key: "prodshade_label", label: "Prodshade", width: "240px" },
     { key: "pack_code", label: "Pack", width: "70px", render: (r) => blankOr(r.pack_code) },
-    { key: "base_uom_code", label: "Base UoM", width: "80px" },
+    { key: "base_uom_code", label: "Base UoM", width: "80px", totalUnit: true },
     {
       key: "new_qty", label: isBaseType ? `New ${planType === "FINAL" ? "Final" : "Rolling"} (${entryUom})` : `New Entry (${entryUom})`,
       width: "150px", align: "right", filterable: false,
-      render: (r) => qtyInput(r, indexBySku.get(r.sku_material_id) ?? 0),
+      render: (r) => qtyInput(r),
       copyValue: (r) => drafts[r.sku_material_id] ?? "",
+      total: draftQty,
     },
     isBaseType
       ? {
@@ -266,22 +295,28 @@ function PlanEntryTab({ companyId, planMonth, access }) {
           },
           copyValue: (r) => currentBaseEntry(r)?.entered_qty ?? "",
           filterValue: (r) => fmtQty(currentBaseEntry(r)?.entered_qty),
+          total: (r) => {
+            const entry = currentBaseEntry(r);
+            return entry ? { qty: entry.entered_qty, unit: entry.entered_uom_code } : null;
+          },
         }
       : {
           key: "current_type", label: `${planType === "URGENT" ? "Urgent" : "Additional"} Entries`, width: "150px", align: "right",
           render: (r) => ((r.entries ?? []).length ? `${(r.entries ?? []).length} · ${fmtQty(entrySum(r))} ${r.base_uom_code}` : ""),
           copyValue: (r) => entrySum(r),
           filterValue: (r) => String((r.entries ?? []).length),
+          total: (r) => ((r.entries ?? []).length ? baseQty(entrySum(r), r) : null),
         },
-    { key: "rolling", label: "Rolling", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.rolling_qty), copyValue: (r) => r.effective?.rolling_qty ?? "", filterValue: (r) => fmtQty(r.effective?.rolling_qty) },
-    { key: "final", label: "Final", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.final_qty), copyValue: (r) => r.effective?.final_qty ?? "", filterValue: (r) => fmtQty(r.effective?.final_qty) },
-    { key: "additional", label: "Additional", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.additional_qty), copyValue: (r) => r.effective?.additional_qty ?? "", filterValue: (r) => fmtQty(r.effective?.additional_qty) },
-    { key: "urgent_extra", label: "Urgent Extra", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.urgent_extra_qty), copyValue: (r) => r.effective?.urgent_extra_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_extra_qty) },
-    { key: "urgent_from_plan", label: "Urgent From Plan", width: "120px", align: "right", render: (r) => fmtQty(r.effective?.urgent_from_plan_qty), copyValue: (r) => r.effective?.urgent_from_plan_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_from_plan_qty) },
+    { key: "rolling", label: "Rolling", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.rolling_qty), copyValue: (r) => r.effective?.rolling_qty ?? "", filterValue: (r) => fmtQty(r.effective?.rolling_qty), total: (r) => baseQty(r.effective?.rolling_qty, r) },
+    { key: "final", label: "Final", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.final_qty), copyValue: (r) => r.effective?.final_qty ?? "", filterValue: (r) => fmtQty(r.effective?.final_qty), total: (r) => baseQty(r.effective?.final_qty, r) },
+    { key: "additional", label: "Additional", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.additional_qty), copyValue: (r) => r.effective?.additional_qty ?? "", filterValue: (r) => fmtQty(r.effective?.additional_qty), total: (r) => baseQty(r.effective?.additional_qty, r) },
+    { key: "urgent_extra", label: "Urgent Extra", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.urgent_extra_qty), copyValue: (r) => r.effective?.urgent_extra_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_extra_qty), total: (r) => baseQty(r.effective?.urgent_extra_qty, r) },
+    { key: "urgent_from_plan", label: "Urgent From Plan", width: "120px", align: "right", render: (r) => fmtQty(r.effective?.urgent_from_plan_qty), copyValue: (r) => r.effective?.urgent_from_plan_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_from_plan_qty), total: (r) => baseQty(r.effective?.urgent_from_plan_qty, r) },
     {
       key: "effective", label: "Effective Plan", width: "120px", align: "right",
       render: (r) => <span className="font-semibold text-slate-900">{fmtQty(r.effective?.effective_qty)}</span>,
       copyValue: (r) => r.effective?.effective_qty ?? "", filterValue: (r) => fmtQty(r.effective?.effective_qty),
+      total: (r) => baseQty(r.effective?.effective_qty, r),
     },
     {
       key: "history", label: "History", width: "90px", filterable: false,
@@ -291,7 +326,16 @@ function PlanEntryTab({ companyId, planMonth, access }) {
         </button>
       ),
     },
-  ];
+  ]);
+
+  const totalFields = columns.filter((column) => column.total);
+  const decorateEntryRows = useCallback((visibleRows) => {
+    const grouped = buildGroupedRows(visibleRows, totalFields, (row) => row.base_uom_code);
+    displayOrderRef.current = grouped.filter((row) => !row.__total).map((row) => row.sku_material_id);
+    return grouped;
+    // totalFields is rebuilt every render; its inputs are drafts / unit / plan type.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts, entryUom, planType, rows]);
 
   async function handleSave() {
     const lines = [];
@@ -404,7 +448,9 @@ function PlanEntryTab({ companyId, planMonth, access }) {
         virtualize
         columns={columns}
         rows={rows}
-        rowKey={(row) => row.sku_material_id}
+        decorateRows={decorateEntryRows}
+        getRowProps={totalRowProps}
+        rowKey={(row) => row.row_key ?? row.sku_material_id}
         emptyMessage={gridQ.isLoading ? "Loading..." : gridQ.error ? errorText(gridQ.error) : "No MTS SKUs found for this company."}
         maxHeight="calc(100vh - 360px)"
       />
@@ -521,8 +567,11 @@ function StrokeTab({ companyId, planMonth, access }) {
     return groups.length === 0 ? "No RM groups" : `${groups.length} group(s), ${off} with Use Primary = No`;
   }
 
+  const sortByGroup = useCallback((visibleRows) => [...visibleRows].sort(compareByGroup), []);
   const columns = [
-    { key: "prodshade_label", label: "Prodshade", width: "300px" },
+    ...GROUP_COLUMNS,
+    { key: "prodshade_label", label: "Prodshade", width: "260px" },
+    { key: "prodshade_document_name", label: "Document Name", width: "220px", render: (r) => blankOr(r.prodshade_document_name) },
     { key: "current_stroke_number", label: "Current Stroke", width: "120px", render: (r) => blankOr(r.current_stroke_number) },
     { key: "strokes", label: "Approved Strokes", width: "160px", render: (r) => r.strokes.map((s) => s.stroke_number).join(", "), filterValue: (r) => r.strokes.map((s) => s.stroke_number).join(", ") },
     { key: "periods", label: "Planning Stroke Periods", width: "360px", render: periodSummary, copyValue: periodSummary, filterValue: periodSummary },
@@ -551,6 +600,7 @@ function StrokeTab({ companyId, planMonth, access }) {
         {...GRID_PROPS}
         columns={columns}
         rows={prodshades}
+        decorateRows={sortByGroup}
         rowKey={(r) => r.prodshade_material_id}
         onRowActivate={setEditing}
         emptyMessage={strokeQ.isLoading ? "Loading..." : strokeQ.error ? errorText(strokeQ.error) : "No MTS Prodshades for this company."}
@@ -808,11 +858,12 @@ function ReportTab({ companyId }) {
   }, [report]);
 
   const fixedColumns = [
+    ...GROUP_COLUMNS,
     { key: "sku_label", label: "SKU", width: "300px" },
     { key: "sku_document_name", label: "Document Name", width: "260px", render: (r) => blankOr(r.sku_document_name) },
     { key: "prodshade_label", label: "Prodshade", width: "240px" },
     { key: "pack_code", label: "Pack", width: "70px", render: (r) => blankOr(r.pack_code) },
-    { key: "base_uom_code", label: "UoM", width: "70px" },
+    { key: "base_uom_code", label: "UoM", width: "70px", totalUnit: true },
     { key: "row_type", label: "Type", width: "80px" },
   ];
   const monthColumns = months.map((month) => ({
@@ -831,8 +882,16 @@ function ReportTab({ companyId }) {
     },
     copyValue: (r) => r.plan?.[month]?.qty ?? "",
     filterValue: (r) => fmtQty(r.plan?.[month]?.qty),
+    total: (r) => ({ qty: r.plan?.[month]?.qty ?? null, unit: r.base_uom_code }),
   }));
-  const columns = [...fixedColumns, ...monthColumns];
+  const columns = withTotalCells([...fixedColumns, ...monthColumns]);
+  const totalFields = columns.filter((column) => column.total);
+  const decorateReportRows = useCallback(
+    (visibleRows) => buildGroupedRows(visibleRows, totalFields, (row) => row.base_uom_code),
+    // totalFields depends only on the months of this report.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [months.join(",")],
+  );
 
   async function exportExcel() {
     try {
@@ -841,13 +900,18 @@ function ReportTab({ companyId }) {
         fileName: `mts_customer_plan_${months[0] ?? ""}_${months[months.length - 1] ?? ""}.xlsx`,
         sheetName: "Plan Report",
         columns: columns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align, numFmt: c.key.startsWith("m_") ? "#,##0.###" : undefined })),
-        rows: gridRows,
+        // Same order and total rows as the screen (whole report, no column filter).
+        rows: decorateReportRows(gridRows),
         getCellValue: (row, column) => {
-          if (column.key.startsWith("m_")) {
+          const gridColumn = columns.find((c) => c.key === column.key);
+          if (!row.__total && column.key.startsWith("m_")) {
             const qty = row.plan?.[column.key.slice(2)]?.qty;
             return qty === null || qty === undefined ? "" : Number(qty);
           }
-          return row[column.key] ?? "";
+          if (!row.__total && (column.key === "mother_group_name" || column.key === "child_group_name")) {
+            return gridColumn.filterValue(row);
+          }
+          return gridColumn?.copyValue?.(row) ?? "";
         },
       });
     } catch (error) {
@@ -915,6 +979,8 @@ function ReportTab({ companyId }) {
         virtualize
         columns={columns}
         rows={gridRows}
+        decorateRows={decorateReportRows}
+        getRowProps={totalRowProps}
         rowKey={(r) => r.row_key}
         emptyMessage={!executed ? "Select months and press Show Report." : reportQ.isLoading ? "Loading..." : reportQ.error ? errorText(reportQ.error) : "No SKUs."}
         maxHeight="calc(100vh - 420px)"

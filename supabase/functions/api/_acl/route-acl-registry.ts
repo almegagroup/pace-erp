@@ -350,6 +350,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/mts-plan/addon-lines":      { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/base-lines":       { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/stroke-settings":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
+  "GET:/api/procurement/mts-plan/product-groups":    { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  "POST:/api/procurement/mts-plan/product-groups":   { skipAcl: false, resourceCode: "PROC_MTS_PLAN_GROUP_MAINTAIN", action: "WRITE" },
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
   "POST:/api/procurement/planning/lines/bulk-upsert": { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "EDIT" },
   "GET:/api/procurement/planning/sloc-groups":        { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },

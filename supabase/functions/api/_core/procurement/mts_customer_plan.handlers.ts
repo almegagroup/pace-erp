@@ -14,6 +14,8 @@
  *   PROC_MTS_CUSTOMER_PLAN           VIEW  = every read on this page
  *                                    WRITE = Additional / Urgent entries
  *   PROC_MTS_CUSTOMER_PLAN_MAINTAIN  WRITE = Rolling / Final entries + Tab 2
+ *   PROC_MTS_PLAN_GROUP_MAINTAIN     WRITE = Product Group (Mother / Child
+ *                                    group of Prodshades) layout
  *   Two resources because they are two different actions (pattern #6): the
  *   owner gives Stores / Logistics / Plant Head add-on entry only, while SCM,
  *   Director and ACL-MASTER also maintain the base plan.
@@ -61,6 +63,7 @@ type MtsPlanHandlerContext = {
 
 const RESOURCE_PAGE = "PROC_MTS_CUSTOMER_PLAN";
 const RESOURCE_MAINTAIN = "PROC_MTS_CUSTOMER_PLAN_MAINTAIN";
+const RESOURCE_GROUP = "PROC_MTS_PLAN_GROUP_MAINTAIN";
 const MAX_LINES_PER_SAVE = 1000;
 
 function textValue(value: unknown): string {
@@ -96,6 +99,11 @@ async function requirePlanAddonAccess(req: Request, ctx: MtsPlanHandlerContext, 
 async function requirePlanMaintainAccess(req: Request, ctx: MtsPlanHandlerContext, companyId: string): Promise<Response | null> {
   const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_MAINTAIN, "WRITE");
   return allowed ? null : planError(req, ctx, "MTS_PLAN_FORBIDDEN", 403, "You cannot maintain the Rolling / Final plan or stroke setup for this company.");
+}
+
+async function requirePlanGroupAccess(req: Request, ctx: MtsPlanHandlerContext, companyId: string): Promise<Response | null> {
+  const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_GROUP, "WRITE");
+  return allowed ? null : planError(req, ctx, "MTS_PLAN_FORBIDDEN", 403, "You cannot maintain Product Groups for this company.");
 }
 
 /** company_id from query/body, membership-checked; returns "" if missing. */
@@ -145,6 +153,48 @@ async function loadMaterials(ids: string[]): Promise<Map<string, JsonRecord>> {
   return new Map(rows.map((row) => [textValue(row.id), row]));
 }
 
+type ProdshadeGroup = {
+  mother_group_id: string | null;
+  mother_group_name: string | null;
+  child_group_id: string | null;
+  child_group_name: string | null;
+};
+type GroupLayout = {
+  mothers: JsonRecord[];
+  children: JsonRecord[];
+  byProdshade: Map<string, ProdshadeGroup>;
+};
+const NO_GROUP: ProdshadeGroup = { mother_group_id: null, mother_group_name: null, child_group_id: null, child_group_name: null };
+
+async function loadGroupLayout(companyId: string): Promise<GroupLayout> {
+  const [mothersRes, childrenRes, membersRes] = await Promise.all([
+    serviceRoleClient.schema("erp_planning").from("prodshade_mother_group")
+      .select("id, group_name").eq("company_id", companyId),
+    serviceRoleClient.schema("erp_planning").from("prodshade_child_group")
+      .select("id, group_name, mother_group_id").eq("company_id", companyId),
+    serviceRoleClient.schema("erp_planning").from("prodshade_group_member")
+      .select("prodshade_material_id, child_group_id").eq("company_id", companyId),
+  ]);
+  if (mothersRes.error || childrenRes.error || membersRes.error) throw new Error("MTS_PLAN_GROUP_LOOKUP_FAILED");
+  const mothers = (mothersRes.data ?? []) as JsonRecord[];
+  const children = (childrenRes.data ?? []) as JsonRecord[];
+  const motherById = new Map(mothers.map((m) => [textValue(m.id), m]));
+  const childById = new Map(children.map((c) => [textValue(c.id), c]));
+  const byProdshade = new Map<string, ProdshadeGroup>();
+  for (const member of (membersRes.data ?? []) as JsonRecord[]) {
+    const child = childById.get(textValue(member.child_group_id));
+    if (!child) continue;
+    const mother = motherById.get(textValue(child.mother_group_id));
+    byProdshade.set(textValue(member.prodshade_material_id), {
+      mother_group_id: mother ? textValue(mother.id) : null,
+      mother_group_name: mother ? textValue(mother.group_name) : null,
+      child_group_id: textValue(child.id),
+      child_group_name: textValue(child.group_name),
+    });
+  }
+  return { mothers, children, byProdshade };
+}
+
 async function loadEntryUomOptions(materials: Map<string, JsonRecord>): Promise<Map<string, EntryUomOption[]>> {
   const ids = [...materials.keys()];
   const conversions = ids.length === 0 ? [] : await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient
@@ -191,9 +241,10 @@ export async function getMtsPlanAccessHandler(req: Request, ctx: MtsPlanHandlerC
     if (!companyId) return planError(req, ctx, "MTS_PLAN_COMPANY_REQUIRED", 400, "company_id is required.");
     const viewDenied = await requirePlanViewAccess(req, ctx, companyId);
     if (viewDenied) return viewDenied;
-    const [canAddon, canMaintain] = await Promise.all([
+    const [canAddon, canMaintain, canManageGroups] = await Promise.all([
       canMaintainCompanyResource(ctx, companyId, RESOURCE_PAGE, "WRITE"),
       canMaintainCompanyResource(ctx, companyId, RESOURCE_MAINTAIN, "WRITE"),
+      canMaintainCompanyResource(ctx, companyId, RESOURCE_GROUP, "WRITE"),
     ]);
     const allowedPlanTypes: PlanType[] = [
       ...(canMaintain ? BASE_PLAN_TYPES : []),
@@ -204,6 +255,7 @@ export async function getMtsPlanAccessHandler(req: Request, ctx: MtsPlanHandlerC
       can_view: true,
       can_enter_addon: canAddon || canMaintain,
       can_maintain: canMaintain,
+      can_manage_groups: canManageGroups,
       allowed_plan_types: allowedPlanTypes,
     }, ctx.request_id, req);
   } catch (error) {
@@ -227,13 +279,14 @@ export async function getMtsPlanEntryGridHandler(req: Request, ctx: MtsPlanHandl
     if (!isPlanType(planType)) return planError(req, ctx, "MTS_PLAN_INVALID_TYPE", 400, "plan_type is invalid.");
 
     const { skus, ambiguous } = await loadCompanySkus(companyId);
-    const [linesResult, effectiveRows] = await Promise.all([
+    const [linesResult, effectiveRows, groups] = await Promise.all([
       serviceRoleClient.schema("erp_planning").from("customer_plan_line")
         .select("id, entry_id, version_no, sku_material_id, entered_qty, entered_uom_code, base_qty, base_uom_code, urgent_mode, urgent_from_date, urgent_to_date, remarks, source_system, created_by, created_at")
         .eq("company_id", companyId).eq("plan_month", planMonth).eq("plan_type", planType)
         .eq("is_current", true).eq("is_cancelled", false)
         .order("created_at", { ascending: true }),
       loadEffective(companyId, [planMonth]),
+      loadGroupLayout(companyId),
     ]);
     if (linesResult.error) throw new Error("MTS_PLAN_LINES_FAILED");
     const lines = (linesResult.data ?? []) as JsonRecord[];
@@ -281,7 +334,9 @@ export async function getMtsPlanEntryGridHandler(req: Request, ctx: MtsPlanHandl
         sku_external_code: textValue(material?.external_code) || null,
         sku_document_name: textValue(material?.document_name) || null,
         base_uom_code: textValue(material?.base_uom_code) || null,
+        prodshade_material_id: meta?.prodshade_material_id ?? null,
         prodshade_label: meta ? materialLabel(materials.get(meta.prodshade_material_id)) : "—",
+        ...(meta ? groups.byProdshade.get(meta.prodshade_material_id) ?? NO_GROUP : NO_GROUP),
         pack_code: meta?.pack_code ?? null,
         is_current_mts_sku: Boolean(meta),
         entry_uom_options: uomOptions.get(skuId) ?? [],
@@ -483,7 +538,7 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
     const prodshadeIds = [...new Set(skus.map((s) => s.prodshade_material_id))];
     if (prodshadeIds.length === 0) return okResponse({ plan_month: planMonth, prodshades: [] }, ctx.request_id, req);
 
-    const [strokeRows, currentRows, settingRows, decisionRows] = await Promise.all([
+    const [strokeRows, currentRows, settingRows, decisionRows, productGroups] = await Promise.all([
       fetchInChunks<JsonRecord>(prodshadeIds, (chunk) => serviceRoleClient.schema("erp_production").from("stroke_master")
         .select("id, prodshade_material_id, stroke_number, revision_no, description")
         .eq("company_id", companyId).eq("po_type", "MTS").eq("status", "APPROVED")
@@ -501,6 +556,7 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
         .select("stroke_master_id, material_group_id, effective_month, use_primary")
         .eq("company_id", companyId).eq("is_current", true).lte("effective_month", planMonth)
         .in("prodshade_material_id", chunk)),
+      loadGroupLayout(companyId),
     ]);
 
     const strokeIds = strokeRows.map((s) => textValue(s.id));
@@ -568,6 +624,8 @@ export async function getMtsPlanStrokeSettingsHandler(req: Request, ctx: MtsPlan
       return {
         prodshade_material_id: pid,
         prodshade_label: materialLabel(materials.get(pid)),
+        prodshade_document_name: textValue(materials.get(pid)?.document_name) || null,
+        ...(productGroups.byProdshade.get(pid) ?? NO_GROUP),
         current_stroke_master_id: currentStroke ? currentStroke.id : null,
         current_stroke_number: currentNumber || null,
         strokes: strokes.map((s) => {
@@ -662,6 +720,79 @@ export async function saveMtsPlanStrokeSettingHandler(req: Request, ctx: MtsPlan
   }
 }
 
+// ── GET /api/procurement/mts-plan/product-groups ────────────────────────────
+// Every MTS Prodshade of the company with its Document Name and current group.
+export async function getMtsPlanProductGroupsHandler(req: Request, ctx: MtsPlanHandlerContext): Promise<Response> {
+  try {
+    const companyId = await resolveCompany(ctx, new URL(req.url).searchParams.get("company_id"));
+    if (!companyId) return planError(req, ctx, "MTS_PLAN_COMPANY_REQUIRED", 400, "company_id is required.");
+    const accessError = await requirePlanViewAccess(req, ctx, companyId);
+    if (accessError) return accessError;
+    const [{ skus, ambiguous }, groups, canManage] = await Promise.all([
+      loadCompanySkus(companyId),
+      loadGroupLayout(companyId),
+      canMaintainCompanyResource(ctx, companyId, RESOURCE_GROUP, "WRITE"),
+    ]);
+    const prodshadeIds = [...new Set([...skus, ...ambiguous].map((s) => s.prodshade_material_id).concat([...groups.byProdshade.keys()]))];
+    const materials = await loadMaterials(prodshadeIds);
+    const prodshades = prodshadeIds.map((pid) => ({
+      prodshade_material_id: pid,
+      prodshade_label: materialLabel(materials.get(pid)),
+      prodshade_document_name: textValue(materials.get(pid)?.document_name) || null,
+      ...(groups.byProdshade.get(pid) ?? NO_GROUP),
+    })).sort((a, b) => a.prodshade_label.localeCompare(b.prodshade_label, undefined, { numeric: true }));
+    return okResponse({
+      company_id: companyId,
+      can_manage: canManage,
+      mother_groups: groups.mothers.map((m) => ({ id: m.id, name: m.group_name })),
+      child_groups: groups.children.map((c) => ({ id: c.id, name: c.group_name, mother_group_id: c.mother_group_id })),
+      prodshades,
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "MTS_PLAN_GROUP_FAILED";
+    if (code === "COMPANY_SCOPE_VIOLATION") return planError(req, ctx, code, 403, "Company is outside your scope.");
+    return planError(req, ctx, "MTS_PLAN_GROUP_FAILED", 500, "Could not load Product Groups.");
+  }
+}
+
+// ── POST /api/procurement/mts-plan/product-groups ───────────────────────────
+// Saves the whole Mother / Child / member layout of one company atomically.
+export async function saveMtsPlanProductGroupsHandler(req: Request, ctx: MtsPlanHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const companyId = await resolveCompany(ctx, body.company_id);
+    if (!companyId) return planError(req, ctx, "MTS_PLAN_COMPANY_REQUIRED", 400, "company_id is required.");
+    const accessError = await requirePlanGroupAccess(req, ctx, companyId);
+    if (accessError) return accessError;
+    const list = (value: unknown) => (Array.isArray(value) ? value as JsonRecord[] : []);
+    const layout = {
+      mothers: list(body.mother_groups).map((m) => ({ key: textValue(m.key), id: textValue(m.id) || null, name: textValue(m.name) })),
+      children: list(body.child_groups).map((c) => ({
+        key: textValue(c.key), id: textValue(c.id) || null, name: textValue(c.name), mother_key: textValue(c.mother_key),
+      })),
+      members: list(body.members).map((m) => ({ prodshade_material_id: textValue(m.prodshade_material_id), child_key: textValue(m.child_key) })),
+    };
+    if (layout.members.length > 5000 || layout.children.length > 1000 || layout.mothers.length > 500) {
+      return planError(req, ctx, "MTS_PLAN_GROUP_TOO_LARGE", 400, "Too many groups or members in one save.");
+    }
+    const { data, error } = await serviceRoleClient.schema("erp_planning").rpc("save_prodshade_groups", {
+      p_company_id: companyId,
+      p_actor: ctx.auth_user_id,
+      p_layout: layout,
+    });
+    if (error) {
+      const code = rpcErrorCode(error.message);
+      if (code) return planError(req, ctx, code, 400, String(error.message).replace(/^.*?(MTS_PLAN_[A-Z_]+):\s*/, ""));
+      throw new Error("MTS_PLAN_GROUP_SAVE_FAILED");
+    }
+    return okResponse({ result: data }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "MTS_PLAN_GROUP_SAVE_FAILED";
+    if (code === "COMPANY_SCOPE_VIOLATION") return planError(req, ctx, code, 403, "Company is outside your scope.");
+    return planError(req, ctx, "MTS_PLAN_GROUP_SAVE_FAILED", 500, "Could not save Product Groups.");
+  }
+}
+
 // ── GET /api/procurement/mts-plan/report ────────────────────────────────────
 export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerContext): Promise<Response> {
   try {
@@ -675,7 +806,9 @@ export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerC
     if (months.length === 0) return planError(req, ctx, "MTS_PLAN_MONTHS_REQUIRED", 400, "Select at least one month.");
     if (months.length > MAX_REPORT_MONTHS) return planError(req, ctx, "MTS_PLAN_TOO_MANY_MONTHS", 400, `Select at most ${MAX_REPORT_MONTHS} months.`);
 
-    const [{ skus }, effectiveRows] = await Promise.all([loadCompanySkus(companyId), loadEffective(companyId, months)]);
+    const [{ skus }, effectiveRows, groups] = await Promise.all([
+      loadCompanySkus(companyId), loadEffective(companyId, months), loadGroupLayout(companyId),
+    ]);
     const skuIds = [...new Set([...skus.map((s) => s.sku_material_id), ...effectiveRows.map((r) => r.sku_material_id)])];
     const skuMeta = new Map(skus.map((s) => [s.sku_material_id, s]));
     const materials = await loadMaterials([...skuIds, ...skus.map((s) => s.prodshade_material_id)]);
@@ -690,7 +823,9 @@ export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerC
         sku_external_code: textValue(material?.external_code) || null,
         sku_document_name: textValue(material?.document_name) || null,
         base_uom_code: textValue(material?.base_uom_code) || null,
+        prodshade_material_id: meta?.prodshade_material_id ?? null,
         prodshade_label: meta ? materialLabel(materials.get(meta.prodshade_material_id)) : "—",
+        ...(meta ? groups.byProdshade.get(meta.prodshade_material_id) ?? NO_GROUP : NO_GROUP),
         pack_code: meta?.pack_code ?? null,
         is_current_mts_sku: Boolean(meta),
         plan: pivot.get(skuId) ?? {},
