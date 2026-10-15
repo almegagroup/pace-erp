@@ -307,7 +307,7 @@ export default function DOListPage() {
                   { key: "tally_invoice_number", label: "Tally Invoice Number", width: "150px", render: (row) => row.tally_invoice_number || "—" },
                   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px", render: (row) => row.tally_invoice_date || "—" },
                   { key: "inbound_number", label: "Inbound Number", width: "120px", render: (row) => row.inbound_number || "—" },
-                  { key: "apl_invoice", label: "APL Invoice", width: "130px", render: (row) => row.apl_invoice || "Not recorded" },
+                  { key: "apl_invoice", label: "APL Invoice", width: "130px", render: (row) => row.apl_invoice || "" },
                   {
                     key: "status",
                     label: "Status",

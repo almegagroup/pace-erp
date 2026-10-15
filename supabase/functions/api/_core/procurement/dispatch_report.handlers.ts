@@ -176,9 +176,15 @@ export async function getDispatchReportHandler(
     const soIds = uniqueValues([...invoices.map((row) => row.so_id), ...soLines.map((row) => row.so_id)]);
     const salesOrders = await fetchInChunks<JsonRecord>(soIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("sales_order")
-      .select("id, customer_po_number, dispatch_type, dispatch_category, bill_to_parent_company_id")
+      .select("id, customer_po_number, dispatch_type, dispatch_category, bill_to_parent_company_id, vendor_code_id")
       .in("id", chunk));
     const soById = new Map(salesOrders.map((row) => [textValue(row.id), row]));
+
+    const vendorCodeIds = uniqueValues(salesOrders.map((row) => row.vendor_code_id));
+    const vendorCodes = await fetchInChunks<JsonRecord>(vendorCodeIds, (chunk) => serviceRoleClient
+      .schema("erp_production").from("vendor_code_master")
+      .select("id, vendor_code").in("id", chunk));
+    const vendorCodeById = new Map(vendorCodes.map((row) => [textValue(row.id), textValue(row.vendor_code)]));
 
     const materialIds = uniqueValues(invoiceLines.map((row) => row.material_id));
     const materials = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
@@ -359,6 +365,7 @@ export async function getDispatchReportHandler(
       return {
         row_key: rowKey,
         company_code: companyCode,
+        vendor_code: joined(lineDetails.map((entry) => vendorCodeById.get(textValue(entry.so.vendor_code_id)))),
         month_year: monthYear(tallyDate),
         type: joined(lineDetails.map((entry) => entry.soLine.line_material_type || material.material_type)),
         fg_type: joined(lineDetails.map((entry) => entry.soLine.fg_type)),

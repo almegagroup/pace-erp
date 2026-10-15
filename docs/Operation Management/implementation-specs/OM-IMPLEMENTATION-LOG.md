@@ -6224,3 +6224,21 @@ lookup was added.
 **Verification:** Production read-only inspection of displayed MTS invoice `9200000958` found no
 invoice/allocation FO but found SO Map Group external FO `5159971994`; the repaired path now
 returns that value. `deno check` of the dispatch-report handler and `git diff --check` pass.
+
+## 2026-10-15 — SO03/SO04 APL blank state, SO04 APL filter and Vendor Code — DONE
+
+**Scope:** An unrecorded APL case was incorrectly rendered as `Not recorded` in SO03, despite the
+explicit requirement that an APL value remains blank until a case is saved. SO04 also needed a
+review checkbox for only recorded APL cases and the selected SO Company Vendor Code beside its
+Company Code.
+
+**Implemented:** The SO03 list endpoint returns `null` for an absent APL case and the grid/export
+render it blank. SO04 now has an `APL Invoice Cases only` checkbox, composable with text search
+and Stroke Mismatch; its count and Excel export use the same filtered rows. SO04 resolves
+`sales_order.vendor_code_id` through `vendor_code_master` in one chunked lookup and returns the
+human-readable Vendor Code column; no internal UUID is exposed.
+
+**Verification:** Production read-only inspection of SO04 invoice `9200000958` resolves Vendor
+Code `YAL09V`. Both touched backend handlers pass `deno check`; both touched frontend files pass
+ESLint; Vite build passes. The build retains only the pre-existing GRN duplicate `emptyMessage`
+warning.

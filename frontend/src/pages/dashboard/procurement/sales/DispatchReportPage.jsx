@@ -106,8 +106,13 @@ function rowHasStrokeMismatch(row) {
   return Array.isArray(row.so_stroke_entries) && row.so_stroke_entries.some((entry) => entry.mismatch);
 }
 
+function rowHasAplInvoiceCase(row) {
+  return Boolean(String(row?.apl_invoice_status ?? "").trim());
+}
+
 const GRID_COLUMNS = [
   { key: "company_code", label: "Company Code", width: "100px", render: (r) => r.company_code || "—" },
+  { key: "vendor_code", label: "Vendor Code", width: "110px", render: (r) => r.vendor_code || "—" },
   { key: "month_year", label: "Month-Year", width: "90px" },
   { key: "invoice_number", label: "PACE Invoice #", width: "130px", render: (r) => r.invoice_number || "—" },
   { key: "apl_invoice_status", label: "APL Invoice", width: "270px", render: (r) => r.apl_invoice_status || "" },
@@ -231,15 +236,18 @@ export default function DispatchReportPage() {
   // (genuinely-nonexistent-stroke) subset -- on top of the existing
   // free-text search rather than replacing it.
   const [mismatchOnly, setMismatchOnly] = useState(false);
+  const [aplCasesOnly, setAplCasesOnly] = useState(false);
   const mismatchRowCount = useMemo(() => rows.filter(rowHasStrokeMismatch).length, [rows]);
+  const aplCaseRowCount = useMemo(() => rows.filter(rowHasAplInvoiceCase).length, [rows]);
   const filteredRows = useMemo(() => {
     const needle = globalSearch.trim().toLowerCase();
     return rows.filter((row) => {
       if (mismatchOnly && !rowHasStrokeMismatch(row)) return false;
+      if (aplCasesOnly && !rowHasAplInvoiceCase(row)) return false;
       if (!needle) return true;
       return GRID_COLUMNS.some((column) => getColumnFilterText(column, row).toLowerCase().includes(needle));
     });
-  }, [rows, globalSearch, mismatchOnly]);
+  }, [rows, globalSearch, mismatchOnly, aplCasesOnly]);
 
   function updateFilter(key, value) {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -257,6 +265,7 @@ export default function DispatchReportPage() {
     setError("");
     setGlobalSearch("");
     setMismatchOnly(false);
+    setAplCasesOnly(false);
     setPage(1);
   }
 
@@ -264,6 +273,7 @@ export default function DispatchReportPage() {
     setError("");
     setGlobalSearch("");
     setMismatchOnly(false);
+    setAplCasesOnly(false);
     if (!effectiveCompanyId) {
       setError("Select a company first.");
       return;
@@ -451,7 +461,7 @@ export default function DispatchReportPage() {
               <span className="text-xs text-slate-500">
                 {reportQ.isLoading
                   ? "Loading..."
-                  : hasActiveSearch || mismatchOnly
+                  : hasActiveSearch || mismatchOnly || aplCasesOnly
                     ? `${filteredRows.length} of ${rows.length} row${rows.length === 1 ? "" : "s"} (filtered)`
                     : `${rows.length} row${rows.length === 1 ? "" : "s"}`}
               </span>
@@ -475,6 +485,10 @@ export default function DispatchReportPage() {
               <label className="ml-2 flex h-8 items-center gap-1.5 whitespace-nowrap rounded border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-700">
                 <input type="checkbox" checked={mismatchOnly} onChange={(e) => setMismatchOnly(e.target.checked)} />
                 Stroke Mismatch only ({mismatchRowCount})
+              </label>
+              <label className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded border border-sky-200 bg-sky-50 px-3 text-xs font-semibold text-sky-800">
+                <input type="checkbox" checked={aplCasesOnly} onChange={(e) => setAplCasesOnly(e.target.checked)} />
+                APL Invoice Cases only ({aplCaseRowCount})
               </label>
             </div>
             <ErpDenseGrid

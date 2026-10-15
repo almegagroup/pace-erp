@@ -1198,7 +1198,7 @@ export async function listDeliveryOrdersHandler(req: Request, ctx: ProcurementHa
         tally_invoice_number: invoice?.tally_invoice_number ?? row.pre_invoice_tally_invoice_number ?? null,
         tally_invoice_date: invoice?.tally_invoice_date ?? row.pre_invoice_tally_invoice_date ?? null,
         inbound_number: invoice?.inbound_number ?? row.pre_invoice_inbound_number ?? null,
-        apl_invoice: !aplCase ? "Not recorded"
+        apl_invoice: !aplCase ? null
           : toUpperTrimmedString(aplCase.status) === "YES" ? `Yes ${toTrimmedString(aplCase.received_date)}`
           : toUpperTrimmedString(aplCase.status) === "CANCELLED" ? "Cancelled"
           : "No",
