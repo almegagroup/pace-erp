@@ -79,7 +79,8 @@ function planError(req: Request, ctx: MtsPlanHandlerContext, code: string, statu
 }
 function materialLabel(row: JsonRecord | undefined): string {
   if (!row) return "—";
-  return [textValue(row.pace_code), textValue(row.material_name)].filter(Boolean).join(" — ") || "—";
+  // Owner 2026-10-15: no Pace Code on this page — material name only.
+  return textValue(row.material_name) || "—";
 }
 
 // Named require*Access so company-scope-write-acl-guard.mjs recognises the
@@ -679,6 +680,7 @@ export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerC
         sku_material_id: skuId,
         sku_label: materialLabel(material),
         sku_external_code: textValue(material?.external_code) || null,
+        sku_document_name: textValue(material?.document_name) || null,
         base_uom_code: textValue(material?.base_uom_code) || null,
         prodshade_label: meta ? materialLabel(materials.get(meta.prodshade_material_id)) : "—",
         pack_code: meta?.pack_code ?? null,

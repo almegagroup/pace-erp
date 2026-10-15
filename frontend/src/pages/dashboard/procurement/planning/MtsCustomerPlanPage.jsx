@@ -201,6 +201,28 @@ function PlanEntryTab({ companyId, planMonth, access }) {
     });
   }
 
+  // Excel feel: Enter / ArrowDown moves to the next row's input, ArrowUp to the previous one.
+  function handleQtyKeyDown(event, index) {
+    let step = 0;
+    if (event.key === "Enter" || event.key === "ArrowDown") step = 1;
+    else if (event.key === "ArrowUp") step = -1;
+    if (!step) return;
+    event.preventDefault();
+    const grid = event.currentTarget.closest("table");
+    for (let target = index + step; target >= 0 && target < rows.length; target += step) {
+      const next = grid?.querySelector(`input[data-plan-qty-index="${target}"]`);
+      if (!next) {
+        event.currentTarget.scrollIntoView({ block: "center" });
+        return;
+      }
+      if (!next.disabled) {
+        next.focus();
+        next.select();
+        return;
+      }
+    }
+  }
+
   function qtyInput(row, index) {
     const disabled = !canWriteType || !rowAllowsUom(row);
     return (
@@ -211,6 +233,8 @@ function PlanEntryTab({ companyId, planMonth, access }) {
         title={!rowAllowsUom(row) ? `No verified ${entryUom} conversion for this SKU` : undefined}
         className={`h-7 w-28 border px-1.5 text-right font-mono text-xs outline-none ${disabled ? "border-slate-200 bg-slate-100 text-slate-400" : "border-sky-300 bg-sky-50 text-sky-900 focus:border-sky-600"}`}
         value={drafts[row.sku_material_id] ?? ""}
+        data-plan-qty-index={index}
+        onKeyDown={(event) => handleQtyKeyDown(event, index)}
         onPaste={(event) => handlePaste(event, index)}
         onChange={(event) => setDrafts((current) => ({ ...current, [row.sku_material_id]: event.target.value }))}
       />
@@ -223,19 +247,15 @@ function PlanEntryTab({ companyId, planMonth, access }) {
 
   const columns = [
     { key: "sku_label", label: "SKU", width: "300px" },
-    { key: "sku_external_code", label: "External Code", width: "130px", render: (r) => blankOr(r.sku_external_code) },
+    { key: "sku_document_name", label: "Document Name", width: "260px", render: (r) => blankOr(r.sku_document_name) },
     { key: "prodshade_label", label: "Prodshade", width: "240px" },
     { key: "pack_code", label: "Pack", width: "70px", render: (r) => blankOr(r.pack_code) },
     { key: "base_uom_code", label: "Base UoM", width: "80px" },
-    { key: "rolling", label: "Rolling", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.rolling_qty), copyValue: (r) => r.effective?.rolling_qty ?? "", filterValue: (r) => fmtQty(r.effective?.rolling_qty) },
-    { key: "final", label: "Final", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.final_qty), copyValue: (r) => r.effective?.final_qty ?? "", filterValue: (r) => fmtQty(r.effective?.final_qty) },
-    { key: "additional", label: "Additional", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.additional_qty), copyValue: (r) => r.effective?.additional_qty ?? "", filterValue: (r) => fmtQty(r.effective?.additional_qty) },
-    { key: "urgent_extra", label: "Urgent Extra", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.urgent_extra_qty), copyValue: (r) => r.effective?.urgent_extra_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_extra_qty) },
-    { key: "urgent_from_plan", label: "Urgent From Plan", width: "120px", align: "right", render: (r) => fmtQty(r.effective?.urgent_from_plan_qty), copyValue: (r) => r.effective?.urgent_from_plan_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_from_plan_qty) },
     {
-      key: "effective", label: "Effective Plan", width: "120px", align: "right",
-      render: (r) => <span className="font-semibold text-slate-900">{fmtQty(r.effective?.effective_qty)}</span>,
-      copyValue: (r) => r.effective?.effective_qty ?? "", filterValue: (r) => fmtQty(r.effective?.effective_qty),
+      key: "new_qty", label: isBaseType ? `New ${planType === "FINAL" ? "Final" : "Rolling"} (${entryUom})` : `New Entry (${entryUom})`,
+      width: "150px", align: "right", filterable: false,
+      render: (r) => qtyInput(r, indexBySku.get(r.sku_material_id) ?? 0),
+      copyValue: (r) => drafts[r.sku_material_id] ?? "",
     },
     isBaseType
       ? {
@@ -253,11 +273,15 @@ function PlanEntryTab({ companyId, planMonth, access }) {
           copyValue: (r) => entrySum(r),
           filterValue: (r) => String((r.entries ?? []).length),
         },
+    { key: "rolling", label: "Rolling", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.rolling_qty), copyValue: (r) => r.effective?.rolling_qty ?? "", filterValue: (r) => fmtQty(r.effective?.rolling_qty) },
+    { key: "final", label: "Final", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.final_qty), copyValue: (r) => r.effective?.final_qty ?? "", filterValue: (r) => fmtQty(r.effective?.final_qty) },
+    { key: "additional", label: "Additional", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.additional_qty), copyValue: (r) => r.effective?.additional_qty ?? "", filterValue: (r) => fmtQty(r.effective?.additional_qty) },
+    { key: "urgent_extra", label: "Urgent Extra", width: "100px", align: "right", render: (r) => fmtQty(r.effective?.urgent_extra_qty), copyValue: (r) => r.effective?.urgent_extra_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_extra_qty) },
+    { key: "urgent_from_plan", label: "Urgent From Plan", width: "120px", align: "right", render: (r) => fmtQty(r.effective?.urgent_from_plan_qty), copyValue: (r) => r.effective?.urgent_from_plan_qty ?? "", filterValue: (r) => fmtQty(r.effective?.urgent_from_plan_qty) },
     {
-      key: "new_qty", label: isBaseType ? `New ${planType === "FINAL" ? "Final" : "Rolling"} (${entryUom})` : `New Entry (${entryUom})`,
-      width: "150px", align: "right", filterable: false,
-      render: (r) => qtyInput(r, indexBySku.get(r.sku_material_id) ?? 0),
-      copyValue: (r) => drafts[r.sku_material_id] ?? "",
+      key: "effective", label: "Effective Plan", width: "120px", align: "right",
+      render: (r) => <span className="font-semibold text-slate-900">{fmtQty(r.effective?.effective_qty)}</span>,
+      copyValue: (r) => r.effective?.effective_qty ?? "", filterValue: (r) => fmtQty(r.effective?.effective_qty),
     },
     {
       key: "history", label: "History", width: "90px", filterable: false,
@@ -364,9 +388,10 @@ function PlanEntryTab({ companyId, planMonth, access }) {
         </button>
       </div>
       <p className="mb-2 text-xs text-slate-500">
-        Effective Plan = Final if entered, else Rolling, plus Additional and Urgent Extra. Urgent From Plan only re-phases existing plan
-        quantity and never adds to it. Every save is versioned; nothing is overwritten. Paste a column from Excel into the first
-        input to fill the rows below it.
+        How to enter: 1) choose Plan Type and Input UoM; 2) type the quantity in the blue “New …” column (Enter / ↓ goes to the next
+        row, or paste a whole column from Excel into the first box); 3) click Save. Effective Plan = Final if entered, else Rolling,
+        plus Additional and Urgent Extra; Urgent From Plan only re-phases existing quantity. Every save is versioned. A grey box
+        means that SKU has no verified conversion for the chosen Input UoM.
         {!canWriteType ? " You can view this plan type but not enter it." : ""}
       </p>
       {(gridQ.data?.ambiguous_skus ?? []).length > 0 ? (
@@ -660,8 +685,29 @@ function StrokeEditor({ prodshade, companyId, planMonth, canEdit, onClose }) {
       ) : null}
     >
       <div className="grid gap-3">
-        <p className="text-xs text-slate-500">Periods may not overlap and must stay inside the month. Days not covered by a period have no planning stroke.</p>
+        <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <p className="font-semibold text-slate-800">Part 1 — Which stroke (recipe) to plan with, and for which days</p>
+          <p className="mt-1">
+            Each row is one period of this month. <b>Stroke</b> = the approved recipe whose RM quantities will be used for planning in
+            that period. <b>From / To</b> = the days that stroke applies. <b>Qty Override</b> = how much of this month&apos;s plan should
+            be made with that stroke; leave it blank and the month&apos;s plan is split by number of days.
+          </p>
+          <p className="mt-1">
+            Example: stroke 0064 from 1st to 15th and stroke 0095 from 16th to 31st — click <b>Add Period</b> for the second row. If
+            the whole month uses the current stroke, keep the single default row as it is. Periods may not overlap and must stay inside
+            the month; days with no period have no planning stroke.
+          </p>
+        </div>
         <ErpDenseGrid {...GRID_PROPS} columns={periodColumns} rows={periods} rowKey={(p) => String(p.id)} emptyMessage="Add a period." maxHeight="30vh" />
+        <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <p className="font-semibold text-slate-800">Part 2 — RM group: plan on the Primary RM or not</p>
+          <p className="mt-1">
+            One row per RM group on the chosen stroke(s). <b>Use Primary = Yes</b>: the group&apos;s requirement may be met by the
+            Primary RM (the stroke line&apos;s own material) and the other group members. <b>No</b>: leave the Primary RM out — only the
+            other members are planned. The group&apos;s requirement is one common pool, never counted again per item. This is a
+            planning assumption only; Stroke Master and production are not changed.
+          </p>
+        </div>
         <ErpDenseGrid {...GRID_PROPS} columns={groupColumns} rows={groupRows} rowKey={(g) => g.key} emptyMessage="The selected stroke(s) have no RM material groups." maxHeight="35vh" />
         {canEdit ? (
           <label className="grid gap-1 text-sm text-slate-700">
@@ -730,7 +776,7 @@ function ReportTab({ companyId }) {
 
   const fixedColumns = [
     { key: "sku_label", label: "SKU", width: "300px" },
-    { key: "sku_external_code", label: "External Code", width: "130px", render: (r) => blankOr(r.sku_external_code) },
+    { key: "sku_document_name", label: "Document Name", width: "260px", render: (r) => blankOr(r.sku_document_name) },
     { key: "prodshade_label", label: "Prodshade", width: "240px" },
     { key: "pack_code", label: "Pack", width: "70px", render: (r) => blankOr(r.pack_code) },
     { key: "base_uom_code", label: "UoM", width: "70px" },
