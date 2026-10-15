@@ -357,15 +357,17 @@ function selectedMonths(months: string[]): Set<string> {
 }
 
 async function loadHistoricalActuals(companyId: string, fromDate: string, toExclusive: string, monthSet: Set<string>): Promise<{ rows: ActualAggregationInput[]; warnings: JsonRecord[] }> {
-  const [productionResult, dispatchResult] = await Promise.all([
+  const [productionResult, dispatchResult, batchesResult] = await Promise.all([
     serviceRoleClient.schema("erp_history").from("production_actual")
       .select("production_date, external_sku, material_id, prodshade, normalized_kg")
       .eq("company_id", companyId).eq("validation_status", "VALIDATED").gte("production_date", fromDate).lt("production_date", toExclusive),
     serviceRoleClient.schema("erp_history").from("fg_dispatch_actual")
       .select("dispatch_date, external_sku, material_id, normalized_dispatched_kg")
       .eq("company_id", companyId).eq("validation_status", "VALIDATED").eq("cancellation_flag", false).gte("dispatch_date", fromDate).lt("dispatch_date", toExclusive),
+    serviceRoleClient.schema("erp_history").from("import_batch")
+      .select("record_kind").eq("company_id", companyId).in("record_kind", ["PRODUCTION", "FG_DISPATCH"]).in("status", ["COMMITTED", "COMMITTED_WITH_EXCEPTIONS"]),
   ]);
-  if (productionResult.error || dispatchResult.error) throw new Error("HISTORY_ACTUALS_READ_FAILED");
+  if (productionResult.error || dispatchResult.error || batchesResult.error) throw new Error("HISTORY_ACTUALS_READ_FAILED");
   const production = (productionResult.data ?? []) as JsonRecord[];
   const dispatch = (dispatchResult.data ?? []) as JsonRecord[];
   const materialById = await loadMaterials([...production, ...dispatch].map((row) => text(row.material_id)).filter(Boolean));
@@ -382,7 +384,11 @@ async function loadHistoricalActuals(companyId: string, fromDate: string, toExcl
   }
   const { count: incompleteCount } = await serviceRoleClient.schema("erp_history").from("import_exception")
     .select("id", { count: "exact", head: true }).eq("company_id", companyId).eq("resolved_at", null);
-  const warnings = incompleteCount ? [{ code: "HISTORY_DATA_QUALITY", count: incompleteCount, message: `${incompleteCount} unresolved historical import exception(s) are excluded from actual totals.` }] : [];
+  const importedKinds = new Set((batchesResult.data ?? []).map((row: unknown) => text((row as JsonRecord).record_kind)));
+  const warnings: JsonRecord[] = [];
+  if (!importedKinds.has("PRODUCTION")) warnings.push({ code: "HISTORY_PRODUCTION_COVERAGE_MISSING", count: 1, message: "No committed historical Production import covers this historical period; blank is not zero." });
+  if (!importedKinds.has("FG_DISPATCH")) warnings.push({ code: "HISTORY_DISPATCH_COVERAGE_MISSING", count: 1, message: "No committed historical FG Dispatch import covers this historical period; blank is not zero." });
+  if (incompleteCount) warnings.push({ code: "HISTORY_DATA_QUALITY", count: incompleteCount, message: `${incompleteCount} unresolved historical import exception(s) are excluded from actual totals.` });
   return { rows, warnings };
 }
 

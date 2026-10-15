@@ -816,6 +816,8 @@ function ReportTab({ companyId }) {
   }, [thisYear]);
   const [monthsByYear, setMonthsByYear] = useState(() => ({ [thisYear]: [new Date().getMonth() + 1] }));
   const [executed, setExecuted] = useState("");
+  const [showProduction, setShowProduction] = useState(false);
+  const [showDispatch, setShowDispatch] = useState(false);
 
   const selectedMonths = useMemo(() => Object.entries(monthsByYear)
     .flatMap(([year, months]) => months.map((m) => `${year}-${String(m).padStart(2, "0")}`))
@@ -848,33 +850,68 @@ function ReportTab({ companyId }) {
   });
   const report = reportQ.data;
   const actuals = actualsQ.data;
-  const months = report?.months ?? [];
+  const months = useMemo(() => report?.months ?? [], [report]);
 
-  // One PLAN row per SKU.  Actuals are a separate source-classified grid below
-  // because a ProdShade quantity must never be guessed into a packed SKU.
+  // A Plan Report remains one SKU-wise grid: PLAN is always present and actual
+  // rows are inserted only when their independent toggle is enabled. A
+  // ProdShade actual is mapped only where one selected SKU owns that ProdShade;
+  // a shared ProdShade is warned and never duplicated into several SKUs.
   const gridRows = useMemo(() => {
+    const reportRows = report?.rows ?? [];
+    const skuIds = new Set(reportRows.map((row) => row.sku_material_id));
+    const skuByProdshade = new Map();
+    for (const row of reportRows) {
+      if (!row.prodshade_material_id) continue;
+      skuByProdshade.set(row.prodshade_material_id, [...(skuByProdshade.get(row.prodshade_material_id) ?? []), row.sku_material_id]);
+    }
+    const actualBySkuMonth = new Map();
+    const unmappedIdentityKeys = new Set();
+    for (const actual of actuals?.rows ?? []) {
+      let targetSkuId = skuIds.has(actual.material_id) ? actual.material_id : null;
+      if (!targetSkuId && actual.has_production && actual.identity_level === "PRODSHADE") {
+        const targets = skuByProdshade.get(actual.material_id) ?? [];
+        if (targets.length === 1) targetSkuId = targets[0];
+      }
+      if (!targetSkuId) {
+        unmappedIdentityKeys.add(actual.identity_key);
+        continue;
+      }
+      const key = `${targetSkuId}|${actual.month}`;
+      const prior = actualBySkuMonth.get(key) ?? {};
+      actualBySkuMonth.set(key, {
+        production_kg: actual.has_production ? Number(prior.production_kg ?? 0) + Number(actual.production_kg ?? 0) : prior.production_kg,
+        dispatch_kg: actual.has_dispatch ? Number(prior.dispatch_kg ?? 0) + Number(actual.dispatch_kg ?? 0) : prior.dispatch_kg,
+        production_source: actual.has_production ? actual.source_classification : prior.production_source,
+        dispatch_source: actual.has_dispatch ? actual.source_classification : prior.dispatch_source,
+      });
+    }
     const result = [];
-    for (const row of report?.rows ?? []) {
-      result.push({ ...row, row_type: "PLAN", row_key: `${row.sku_material_id}|PLAN` });
+    for (const row of reportRows) {
+      const actual = Object.fromEntries(months.map((month) => [month, actualBySkuMonth.get(`${row.sku_material_id}|${month}`) ?? null]));
+      result.push({ ...row, actual, row_type: "PLAN", row_key: `${row.sku_material_id}|PLAN` });
+      if (showProduction) result.push({ ...row, actual, row_type: "PRODUCTION", row_key: `${row.sku_material_id}|PRODUCTION` });
+      if (showDispatch) result.push({ ...row, actual, row_type: "DISPATCH", row_key: `${row.sku_material_id}|DISPATCH` });
     }
-    return result;
-  }, [report]);
-  const actualRows = useMemo(() => {
-    const planByMaterialMonth = new Map();
-    for (const row of report?.rows ?? []) {
-      for (const month of months) planByMaterialMonth.set(`${row.sku_material_id}|${month}`, row.plan?.[month]?.qty ?? null);
-    }
-    return (actuals?.rows ?? []).map((row) => {
-      const planKg = row.material_id ? planByMaterialMonth.get(`${row.material_id}|${row.month}`) ?? null : null;
-      const productionKg = row.has_production ? Number(row.production_kg ?? 0) : null;
-      return {
-        ...row,
-        row_key: `${row.month}|${row.identity_key}|${row.source_classification}`,
-        plan_kg: planKg,
-        plan_vs_production_kg: planKg === null || productionKg === null ? null : Number(planKg) - productionKg,
-      };
-    });
-  }, [actuals, months, report]);
+    return { rows: result, unmappedIdentityCount: unmappedIdentityKeys.size };
+  }, [actuals, months, report, showDispatch, showProduction]);
+
+  function actualInReportUom(row, kg) {
+    if (kg === null || kg === undefined) return null;
+    const uom = String(row.base_uom_code ?? "").toUpperCase();
+    if (uom === "KG") return Number(kg);
+    if (uom === "MT") return Number(kg) / 1000;
+    return null;
+  }
+  function reportCell(row, month) {
+    if (row.row_type === "PLAN") return row.plan?.[month]?.qty ?? null;
+    const actual = row.actual?.[month];
+    return actualInReportUom(row, row.row_type === "PRODUCTION" ? actual?.production_kg : actual?.dispatch_kg);
+  }
+  function reportCellSource(row, month) {
+    if (row.row_type === "PLAN") return row.plan?.[month]?.base_source ?? "No Rolling/Final";
+    const actual = row.actual?.[month];
+    return row.row_type === "PRODUCTION" ? actual?.production_source : actual?.dispatch_source;
+  }
 
   const fixedColumns = [
     ...GROUP_COLUMNS,
@@ -891,17 +928,20 @@ function ReportTab({ companyId }) {
     width: "110px",
     align: "right",
     render: (r) => {
-      const cell = r.plan?.[month];
-      if (!cell || cell.qty === null) return "";
+      const qty = reportCell(r, month);
+      if (qty === null) return "";
+      const source = reportCellSource(r, month);
       return (
-        <span title={`${cell.base_source ?? "No Rolling/Final"}${cell.legacy ? " · historical Google Sheet source" : ""}`} className={cell.legacy ? "text-indigo-700" : ""}>
-          {fmtQty(cell.qty)}
+        <span title={source ?? "Actual quantity unavailable"} className={r.row_type === "PLAN" && r.plan?.[month]?.legacy ? "text-indigo-700" : r.row_type === "PRODUCTION" ? "text-emerald-700" : r.row_type === "DISPATCH" ? "text-sky-700" : ""}>
+          {fmtQty(qty)}
         </span>
       );
     },
-    copyValue: (r) => r.plan?.[month]?.qty ?? "",
-    filterValue: (r) => fmtQty(r.plan?.[month]?.qty),
-    total: (r) => ({ qty: r.plan?.[month]?.qty ?? null, unit: r.base_uom_code }),
+    copyValue: (r) => reportCell(r, month) ?? "",
+    filterValue: (r) => fmtQty(reportCell(r, month)),
+    // Existing group subtotal rows remain PLAN totals; adding actual rows must
+    // never silently combine plan with production or dispatch.
+    total: (r) => r.row_type === "PLAN" ? ({ qty: reportCell(r, month), unit: r.base_uom_code }) : null,
   }));
   const columns = withTotalCells([...fixedColumns, ...monthColumns]);
   const totalFields = columns.filter((column) => column.total);
@@ -920,11 +960,11 @@ function ReportTab({ companyId }) {
         sheetName: "Plan Report",
         columns: columns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align, numFmt: c.key.startsWith("m_") ? "#,##0.###" : undefined })),
         // Same order and total rows as the screen (whole report, no column filter).
-        rows: decorateReportRows(gridRows),
+        rows: decorateReportRows(gridRows.rows),
         getCellValue: (row, column) => {
           const gridColumn = columns.find((c) => c.key === column.key);
           if (!row.__total && column.key.startsWith("m_")) {
-            const qty = row.plan?.[column.key.slice(2)]?.qty;
+            const qty = reportCell(row, column.key.slice(2));
             return qty === null || qty === undefined ? "" : Number(qty);
           }
           if (!row.__total && (column.key === "mother_group_name" || column.key === "child_group_name")) {
@@ -972,60 +1012,43 @@ function ReportTab({ companyId }) {
           </button>
           <button
             type="button"
-            disabled={gridRows.length === 0}
+            disabled={gridRows.rows.length === 0}
             onClick={() => void exportExcel()}
             className="h-8 border border-slate-300 bg-white px-3 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
             Export Excel
           </button>
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={showProduction} onChange={(event) => setShowProduction(event.target.checked)} />
+            Show Production
+          </label>
+          <label className="flex items-center gap-1">
+            <input type="checkbox" checked={showDispatch} onChange={(event) => setShowDispatch(event.target.checked)} />
+            Show Dispatch
+          </label>
         </div>
         <p className="text-xs text-slate-500">
-          PLAN = effective plan (Final, else Rolling, plus Additional and Urgent Extra). Blank = no plan entered. Actuals below use imported history through Sep-2026 and posted ERP transactions from Oct-2026; incomplete source data is warned, never treated as zero.
+          PLAN = effective plan (Final, else Rolling, plus Additional and Urgent Extra). Production and Dispatch are hidden by default. They use imported history through Sep-2026 and posted ERP transactions from Oct-2026; blank means no verified quantity, not zero.
         </p>
+        {(actuals?.warnings ?? []).length > 0 || gridRows.unmappedIdentityCount > 0 ? (
+          <div className="grid gap-1 text-xs text-amber-800">
+            {(actuals?.warnings ?? []).map((warning) => <p key={`${warning.code}-${warning.count}`}>Data quality — {warning.message}</p>)}
+            {gridRows.unmappedIdentityCount > 0 ? <p>Data quality — {gridRows.unmappedIdentityCount} actual material/ProdShade identity value(s) could not be safely assigned to one visible SKU and were excluded from SKU rows.</p> : null}
+          </div>
+        ) : null}
       </div>
       <ErpDenseGrid
         {...GRID_PROPS}
         rangeSelect
         virtualize
         columns={columns}
-        rows={gridRows}
+        rows={gridRows.rows}
         decorateRows={decorateReportRows}
         getRowProps={totalRowProps}
         rowKey={(r) => r.row_key}
         emptyMessage={!executed ? "Select months and press Show Report." : reportQ.isLoading ? "Loading..." : reportQ.error ? errorText(reportQ.error) : "No SKUs."}
         maxHeight="calc(100vh - 420px)"
       />
-      <div className="mt-5 border-t border-slate-200 pt-4">
-        <h3 className="text-sm font-semibold text-slate-900">Unified Production & Dispatch Actuals</h3>
-        <p className="mt-1 text-xs text-slate-500">Source is explicit. A ProdShade production quantity is not allocated to a packed SKU, so Plan vs Production remains blank unless the identity is the same SKU.</p>
-        {(actuals?.warnings ?? []).length > 0 ? (
-          <div className="mt-2 grid gap-1 text-xs text-amber-800">
-            {actuals.warnings.map((warning) => <p key={`${warning.code}-${warning.count}`}>Data quality — {warning.message}</p>)}
-          </div>
-        ) : null}
-        <ErpDenseGrid
-          {...GRID_PROPS}
-          className="mt-3"
-          rangeSelect
-          virtualize
-          columns={[
-            { key: "month", label: "Month", width: "100px" },
-            { key: "source_classification", label: "Source", width: "120px" },
-            { key: "identity_level", label: "Identity", width: "105px" },
-            { key: "material_label", label: "Material / ProdShade", width: "270px" },
-            { key: "external_sku", label: "External SKU", width: "140px", render: (row) => blankOr(row.external_sku) },
-            { key: "prodshade", label: "ProdShade", width: "220px", render: (row) => blankOr(row.prodshade) },
-            { key: "plan_kg", label: "Plan KG", width: "110px", align: "right", render: (row) => fmtQty(row.plan_kg) },
-            { key: "production_kg", label: "Production KG", width: "125px", align: "right", render: (row) => row.has_production ? fmtQty(row.production_kg) : "" },
-            { key: "dispatch_kg", label: "Dispatch KG", width: "115px", align: "right", render: (row) => row.has_dispatch ? fmtQty(row.dispatch_kg) : "" },
-            { key: "plan_vs_production_kg", label: "Plan − Production KG", width: "165px", align: "right", render: (row) => fmtQty(row.plan_vs_production_kg) },
-          ]}
-          rows={actualRows}
-          rowKey={(row) => row.row_key}
-          emptyMessage={!executed ? "Select months and press Show Report." : actualsQ.isLoading ? "Loading actuals..." : actualsQ.error ? errorText(actualsQ.error) : "No actuals for the selected period."}
-          maxHeight="360px"
-        />
-      </div>
     </ErpSectionCard>
   );
 }
