@@ -4,6 +4,16 @@ import { useNavigate } from "react-router-dom";
 import ErpCompanySelector from "../../../../components/inputs/ErpCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
+import PoHssFields from "./PoHssFields.jsx";
+import {
+  EMPTY_HSS_FORM,
+  HSS_TRADE_TYPE,
+  buildHssMotherOptions,
+  buildHssPatch,
+  buildHssPayload,
+  resolveHssState,
+  validateHss,
+} from "./poHss.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
@@ -249,6 +259,7 @@ export default function POCreatePage() {
     shipment_mode: "",
     import_trade_type: "",
     customs_movement_type: "",
+    ...EMPTY_HSS_FORM,
     cost_center_id: "",
     extra_fields: [],
   });
@@ -301,6 +312,7 @@ export default function POCreatePage() {
       companies: Array.isArray(filterOptionsQuery.data?.companies) ? filterOptionsQuery.data.companies : [],
       vendors: Array.isArray(filterOptionsQuery.data?.vendors) ? filterOptionsQuery.data.vendors : [],
       materials: Array.isArray(filterOptionsQuery.data?.materials) ? filterOptionsQuery.data.materials : [],
+      hssMotherVendors: Array.isArray(filterOptionsQuery.data?.hss_mother_vendors) ? filterOptionsQuery.data.hss_mother_vendors : [],
     }),
     [filterOptionsQuery.data]
   );
@@ -355,9 +367,11 @@ export default function POCreatePage() {
   const defaultPaymentTermId = paymentTerms[0]?.id || "";
 
   const selectedVendor = useMemo(() => vendorDetailCacheRef.current.get(form.vendor_id) ?? null, [form.vendor_id]);
-  const showIncoterm = useMemo(
-    () => String(selectedVendor?.vendor_type || "").toUpperCase() === "IMPORT",
-    [selectedVendor]
+  // High Sea Sale: a DOMESTIC vendor's PO can be an import PO too (see PoHssFields.jsx).
+  const { vendorIsImport, isImportPo: showIncoterm, isHss } = resolveHssState(selectedVendor, form);
+  const hssMotherOptions = useMemo(
+    () => buildHssMotherOptions(filterOptions.hssMotherVendors, form.vendor_id),
+    [filterOptions.hssMotherVendors, form.vendor_id]
   );
   const deliveryDateLabel = showIncoterm ? "ETA to Port" : "Delivery Date";
   const portQuery = usePortOptionsQuery(
@@ -543,6 +557,11 @@ export default function POCreatePage() {
       setError("Shipment mode, import trade type, and customs movement type are required for import purchase orders.");
       return;
     }
+    const hssError = validateHss(form, isHss);
+    if (hssError) {
+      setError(hssError);
+      return;
+    }
     // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" (LOCKED 2026-09-30)
     // — mandatory for BULK, the document-date-based window a Bulk GE's
     // Challan/Invoice date is validated against.
@@ -575,7 +594,8 @@ export default function POCreatePage() {
       const payload = {
         company_id: form.company_id,
         vendor_id: form.vendor_id,
-        vendor_type: String(selectedVendor?.vendor_type || "DOMESTIC").toUpperCase(),
+        // An HSS PO is IMPORT even when the vendor is DOMESTIC in Vendor Master.
+        vendor_type: showIncoterm ? "IMPORT" : "DOMESTIC",
         delivery_type: form.delivery_type,
         effective_start_date: form.delivery_type === "BULK" ? form.effective_start_date : null,
         order_in_lot: form.delivery_type === "BULK" && form.order_in_lot,
@@ -584,6 +604,7 @@ export default function POCreatePage() {
         shipment_mode: showIncoterm ? form.shipment_mode : null,
         import_trade_type: showIncoterm ? form.import_trade_type : null,
         customs_movement_type: showIncoterm ? form.customs_movement_type : null,
+        ...buildHssPayload(form, isHss),
         cost_center_id: form.cost_center_id,
         extra_fields: form.extra_fields.map((entry) => entry.trim()).filter(Boolean),
         // Per feasibility doc 87.12A: each material becomes its own PO, all
@@ -882,7 +903,7 @@ export default function POCreatePage() {
                   Vendor <span className="text-rose-500">*</span>
                   <ErpComboboxField
                     value={form.vendor_id}
-                    onChange={(value) => updateHeaderField("vendor_id", value)}
+                    onChange={(value) => setForm((current) => ({ ...current, vendor_id: value, ...EMPTY_HSS_FORM, import_trade_type: "" }))}
                     options={vendorOptions}
                     blankLabel="Select vendor"
                   />
@@ -984,7 +1005,15 @@ export default function POCreatePage() {
                     Import Trade Type <span className="text-rose-500">*</span>
                     <select
                       value={form.import_trade_type}
-                      onChange={(event) => updateHeaderField("import_trade_type", event.target.value)}
+                      disabled={!vendorIsImport}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (value === HSS_TRADE_TYPE) {
+                          setForm((current) => ({ ...current, ...buildHssPatch(true, selectedVendor, vendorIsImport) }));
+                        } else {
+                          setForm((current) => ({ ...current, ...EMPTY_HSS_FORM, import_trade_type: value }));
+                        }
+                      }}
                       className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
                     >
                       <option value="">Select trade type</option>
@@ -1009,6 +1038,15 @@ export default function POCreatePage() {
                     </select>
                   </label>
                 ) : null}
+                <PoHssFields
+                  form={form}
+                  vendorSelected={Boolean(form.vendor_id)}
+                  vendorIsImport={vendorIsImport}
+                  isHss={isHss}
+                  motherOptions={hssMotherOptions}
+                  onToggleHss={(enabled) => setForm((current) => ({ ...current, ...buildHssPatch(enabled, selectedVendor, vendorIsImport) }))}
+                  onChange={(patch) => setForm((current) => ({ ...current, ...patch }))}
+                />
               </div>
             </ErpSectionCard>
 

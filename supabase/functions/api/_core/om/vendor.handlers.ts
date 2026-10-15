@@ -95,6 +95,25 @@ async function findVendorsByGstNumber(gstNumber: string): Promise<JsonRecord[]> 
 
 /* ── Create ─────────────────────────────────────────────────────────────── */
 
+// Default High Sea Sale Mother Company (2026-10-15): pre-fills the Mother Company on a PO, but
+// only when that PO is marked High Sea Sale. It must be an active IMPORT vendor -- its Import
+// Lead Time Master row is what the HSS PO's CSN uses.
+async function validateHssMotherVendor(motherId: string, selfId: string | null): Promise<string | null> {
+  if (selfId && motherId === selfId) return "OM_VENDOR_HSS_MOTHER_SELF";
+  const mother = await getVendorById(motherId);
+  if (!mother) return "OM_VENDOR_HSS_MOTHER_NOT_FOUND";
+  if (toTrimmedString(mother.vendor_type).toUpperCase() !== "IMPORT" || toTrimmedString(mother.status).toUpperCase() !== "ACTIVE") {
+    return "OM_VENDOR_HSS_MOTHER_NOT_IMPORT";
+  }
+  return null;
+}
+
+const HSS_MOTHER_ERROR_MESSAGES: Record<string, string> = {
+  OM_VENDOR_HSS_MOTHER_SELF: "A vendor cannot be its own Mother Company.",
+  OM_VENDOR_HSS_MOTHER_NOT_FOUND: "Mother Company not found.",
+  OM_VENDOR_HSS_MOTHER_NOT_IMPORT: "The Mother Company must be an active Import vendor.",
+};
+
 export async function createVendorHandler(
   req: Request,
   ctx: OmHandlerContext,
@@ -142,6 +161,12 @@ export async function createVendorHandler(
       }
     }
 
+    const hssMotherVendorId = toTrimmedString(body.default_hss_mother_vendor_id) || null;
+    if (hssMotherVendorId) {
+      const hssError = await validateHssMotherVendor(hssMotherVendorId, null);
+      if (hssError) return vendorErrorResponse(req, ctx, hssError, 400, HSS_MOTHER_ERROR_MESSAGES[hssError]);
+    }
+
     const { data: vendorCode, error: codeError } = await serviceRoleClient.rpc("generate_vendor_code");
     if (codeError || !vendorCode) {
       console.error("[vendor.create] generate_vendor_code RPC failed:", JSON.stringify(codeError));
@@ -174,6 +199,7 @@ export async function createVendorHandler(
         corr_address_pin:   toTrimmedString(body.corr_address_pin)   || null,
         msme_registered: typeof body.msme_registered === "boolean" ? body.msme_registered : null,
         msme_certificate_number: toTrimmedString(body.msme_certificate_number) || null,
+        default_hss_mother_vendor_id: hssMotherVendorId,
         status: "ACTIVE",
         approved_by: ctx.auth_user_id,
         approved_at: new Date().toISOString(),
@@ -382,6 +408,15 @@ export async function updateVendorHandler(
     // Optional, non-mandatory — can be filled in any time after creation.
     if (typeof body.msme_registered === "boolean") {
       updates.msme_registered = body.msme_registered;
+    }
+
+    if (body.default_hss_mother_vendor_id !== undefined) {
+      const hssMotherVendorId = toTrimmedString(body.default_hss_mother_vendor_id) || null;
+      if (hssMotherVendorId) {
+        const hssError = await validateHssMotherVendor(hssMotherVendorId, id);
+        if (hssError) return vendorErrorResponse(req, ctx, hssError, 400, HSS_MOTHER_ERROR_MESSAGES[hssError]);
+      }
+      updates.default_hss_mother_vendor_id = hssMotherVendorId;
     }
 
     if (Object.keys(updates).length === 2) {

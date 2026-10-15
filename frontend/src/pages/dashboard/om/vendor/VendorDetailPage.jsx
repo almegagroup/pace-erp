@@ -26,6 +26,7 @@ import {
   getVendorPaymentTerms,
   listVendorMaterialInfos,
   listVendorCompanyMaps,
+  listVendors,
   mapVendorToCompany,
   updateVendor,
   upsertVendorContacts,
@@ -140,6 +141,7 @@ export default function VendorDetailPage() {
       currency_code: vendor.currency_code ?? "BDT",
       msme_registered: vendor.msme_registered ?? null,
       msme_certificate_number: vendor.msme_certificate_number ?? "",
+      default_hss_mother_vendor_id: vendor.default_hss_mother_vendor_id ?? "",
     });
     setTermsCompanyId((current) => current || vendor.latest_payment_terms?.company_id || "");
   }, [vendor]);
@@ -160,6 +162,21 @@ export default function VendorDetailPage() {
   }
 
   function setField(key, value) { setForm((p) => ({ ...p, [key]: value })); }
+
+  // High Sea Sale Mother Company choices (active Import vendors) -- Domestic vendors only.
+  const importVendorsQuery = useQuery({
+    queryKey: ["om", "vendors", { vendor_type: "IMPORT", status: "ACTIVE", limit: 500 }],
+    queryFn: () => listVendors({ vendor_type: "IMPORT", status: "ACTIVE", limit: 500 }),
+    enabled: vendor?.vendor_type === "DOMESTIC",
+  });
+  const hssMotherVendors = useMemo(
+    () => (Array.isArray(importVendorsQuery.data?.data) ? importVendorsQuery.data.data : []).filter((entry) => entry.id !== vendor?.id),
+    [importVendorsQuery.data, vendor?.id]
+  );
+  const hssMotherName = useMemo(() => {
+    const mother = hssMotherVendors.find((entry) => entry.id === vendor?.default_hss_mother_vendor_id);
+    return mother ? [mother.vendor_code, mother.vendor_name].filter(Boolean).join(" — ") : "";
+  }, [hssMotherVendors, vendor?.default_hss_mother_vendor_id]);
 
   async function handleSave() {
     if (!vendor?.id || !form) return;
@@ -187,6 +204,7 @@ export default function VendorDetailPage() {
         currency_code: form.currency_code,
         msme_registered: form.msme_registered,
         msme_certificate_number: form.msme_certificate_number,
+        ...(vendor.vendor_type === "DOMESTIC" ? { default_hss_mother_vendor_id: form.default_hss_mother_vendor_id || null } : {}),
       });
       if (result?.data) {
         await detailQuery.refetch();
@@ -365,6 +383,20 @@ export default function VendorDetailPage() {
                         className={INPUT_CLS}
                       />
                     </ErpDenseFormRow>
+                    <ErpDenseFormRow label="HSS Default Mother Company">
+                      <select
+                        value={form.default_hss_mother_vendor_id}
+                        onChange={(e) => setField("default_hss_mother_vendor_id", e.target.value)}
+                        className={INPUT_CLS}
+                      >
+                        <option value="">— None —</option>
+                        {hssMotherVendors.map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {[entry.vendor_code, entry.vendor_name].filter(Boolean).join(" — ")}
+                          </option>
+                        ))}
+                      </select>
+                    </ErpDenseFormRow>
                   </>
                 )}
               </div>
@@ -401,6 +433,10 @@ export default function VendorDetailPage() {
                     {vendor.msme_registered === true && (
                       <ErpFieldPreview label="MSME Certificate Number" value={vendor.msme_certificate_number} />
                     )}
+                    <ErpFieldPreview
+                      label="HSS Default Mother Company"
+                      value={vendor.default_hss_mother_vendor_id ? hssMotherName || "—" : "None"}
+                    />
                   </>
                 )}
               </div>
