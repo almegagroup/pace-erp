@@ -13,7 +13,7 @@ Scope: one Procurement page, exactly three tabs. **No historical import, no Prod
 | Backend API | `supabase/functions/api/_core/procurement/mts_customer_plan.handlers.ts` | 8 routes under `/api/procurement/mts-plan/*`; routes + registry wired. |
 | Frontend | `frontend/src/pages/dashboard/procurement/planning/MtsCustomerPlanPage.jsx` | 3 tabs; every table = `ErpDenseGrid` with Excel cell navigation + column filter; Excel-paste into qty column; history drawer; Excel export of the report (only visible columns/rows). |
 | Registration | `operationScreens.js` (`PROC_MTS_CUSTOMER_PLAN`, `/dashboard/procurement/mts-customer-plan`), `AppRouter.jsx`, `procurementApi.js`, `PAGE-DEPENDENCY-MANIFEST.json` | |
-| ACL data | `docs/mts-planning/acl/MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` | **Prepared, not applied.** Uses TX code PO21; refuses to run if PO21 is already taken by another menu. |
+| ACL data | `docs/mts-planning/acl/MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` | **Applied to PROD 2026-10-14** (owner approval). Uses TX code PO21; refuses to run if PO21 is already taken by another menu. |
 
 ## Business rules implemented (owner)
 
@@ -56,7 +56,7 @@ Resources: `PROC_MTS_CUSTOMER_PLAN` (VIEW, WRITE) and companion `PROC_MTS_CUSTOM
 
 ## Blockers before anyone can click through the page
 
-1. ~~TX code approval~~ — **PO21 approved** (2026-10-14). The menu row and ACL grants are still not provisioned until the provisioning SQL runs on DEV.
+1. ~~TX code approval~~ — **PO21 approved** (2026-10-14); provisioned on PROD (see PROD rollout).
 2. **`erp_planning` must be added to Exposed schemas** in the Supabase Dashboard (DEV now, PROD later) — platform config, cannot be done by migration or MCP. Until then every `/mts-plan` API call returns a PostgREST schema error.
 3. Then run the provisioning SQL on DEV + ACL version bump/capture/snapshot (steps in the SQL header), and test with SCM, Stores and Plant Head users.
 4. PROD: migration + Exposed schemas + provisioning only with separate explicit owner approval.
@@ -67,6 +67,17 @@ PROD `PO` codes in use: PO01–PO14, PO16–PO19. **Recommend `PO21`.**
 - `PO15` is free but was "previously retired/skipped" (feasibility doc, PO19 tx-code note: "PO15 previously retired/skipped") — reusing it risks confusion with old references.
 - `PO20` is already earmarked in planning docs for "Credit Notes (Vendor)" (Returns & Claims slice).
 - `PO21` is the first code with no history and no reservation, and keeps the page inside the Procurement `PO` family where PO11 Procurement Planning already sits.
+
+## PROD rollout (2026-10-14/15, owner approved)
+
+- Migration `20261014150000` applied to PROD (history shows the same version).
+- ACL provisioning SQL applied; menu PO21 under `GRP_ACL_PROCUREMENT`.
+- New active ACL versions: CMP003 v131, CMP005 v27, CMP011 v27 — captured, snapshot generated, menu snapshots rebuilt.
+- Verified in `precomputed_acl_view`:
+  - Full (VIEW + WRITE + MAINTAIN:WRITE): SCM P0004, P0005, P0006, P0077; Director / ACL-MASTER P0074, P0076.
+  - VIEW + WRITE only (Additional / Urgent): Stores — CMP003 P0009, P0013, P0014, P0024, P0055–P0059; CMP005 P0097; CMP011 P0084, P0088, P0090, P0092, P0094. Plant Head — P0003, P0065, P0100.
+  - No LOGISTICS users exist in these three companies today.
+- Exposed schemas: DEV's `authenticator` role override already lists `erp_planning`. PROD has **no** role override, so the PROD Dashboard → API → Exposed schemas list governs; `erp_planning` must be added there by hand (not verifiable from the agent container — outbound to the PROD API is blocked).
 
 ## Not done (by instruction)
 
