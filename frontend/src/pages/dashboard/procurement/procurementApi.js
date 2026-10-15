@@ -911,6 +911,10 @@ export function getMtsPlanReport(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/report", undefined, params);
 }
 
+export function getMtsPlanningActuals(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-plan/actuals", undefined, params);
+}
+
 export function getMtsPlanProductGroups(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/product-groups", undefined, params);
 }

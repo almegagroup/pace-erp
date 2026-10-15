@@ -84,6 +84,11 @@ import {
   upsertProcurementPlanningLinesHandler,
 } from "../_core/procurement/planning.handlers.ts";
 import {
+  commitHistoricalImportHandler,
+  dryRunHistoricalImportHandler,
+  getMtsPlanningActualsHandler,
+} from "../_core/procurement/historical_operations.handlers.ts";
+import {
   getMtsPlanAccessHandler,
   getMtsPlanEntryGridHandler,
   getMtsPlanHistoryHandler,
@@ -764,6 +769,12 @@ export async function dispatchProcurementRoutes(
       return await saveMtsPlanStrokeSettingHandler(req, ctx);
     case "GET:/api/procurement/mts-plan/report":
       return await getMtsPlanReportHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/actuals":
+      return await getMtsPlanningActualsHandler(req, ctx);
+    case "POST:/api/procurement/mts-plan/historical-import/dry-run":
+      return await dryRunHistoricalImportHandler(req, ctx);
+    case "POST:/api/procurement/mts-plan/historical-import/commit":
+      return await commitHistoricalImportHandler(req, ctx);
     case "GET:/api/procurement/mts-plan/product-groups":
       return await getMtsPlanProductGroupsHandler(req, ctx);
     case "POST:/api/procurement/mts-plan/product-groups":

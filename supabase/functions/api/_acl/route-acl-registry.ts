@@ -352,7 +352,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/opening-stock/recalculate-valuation": { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" },
 
   // ── Procurement: Reports ──────────────────────────────────────────────────
-  // MTS Customer Plan (3-tab page). Two resources = two different actions
+  // MTS Customer Plan and its unified actuals. Two resources = two different actions
   // (bug pattern #6): page VIEW + Additional/Urgent WRITE on the page resource;
   // Rolling/Final + Tab 2 stroke setup on the MAINTAIN companion resource.
   // Handlers re-check the page-selected company (company-scope-write-acl-guard).
@@ -361,9 +361,12 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/mts-plan/history":           { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "GET:/api/procurement/mts-plan/stroke-settings":   { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "GET:/api/procurement/mts-plan/report":            { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  "GET:/api/procurement/mts-plan/actuals":           { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "POST:/api/procurement/mts-plan/addon-lines":      { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/base-lines":       { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/stroke-settings":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
+  "POST:/api/procurement/mts-plan/historical-import/dry-run": { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
+  "POST:/api/procurement/mts-plan/historical-import/commit":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
   "GET:/api/procurement/mts-plan/product-groups":    { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "POST:/api/procurement/mts-plan/product-groups":   { skipAcl: false, resourceCode: "PROC_MTS_PLAN_GROUP_MAINTAIN", action: "WRITE" },
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },

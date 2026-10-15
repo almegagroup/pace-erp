@@ -38,6 +38,7 @@ import {
   getMtsPlanAccess,
   getMtsPlanEntryGrid,
   getMtsPlanHistory,
+  getMtsPlanningActuals,
   getMtsPlanReport,
   getMtsPlanStrokeSettings,
   saveMtsPlanAddonLines,
@@ -815,8 +816,6 @@ function ReportTab({ companyId }) {
   }, [thisYear]);
   const [monthsByYear, setMonthsByYear] = useState(() => ({ [thisYear]: [new Date().getMonth() + 1] }));
   const [executed, setExecuted] = useState("");
-  const [showProduction, setShowProduction] = useState(false);
-  const [showDispatch, setShowDispatch] = useState(false);
 
   const selectedMonths = useMemo(() => Object.entries(monthsByYear)
     .flatMap(([year, months]) => months.map((m) => `${year}-${String(m).padStart(2, "0")}`))
@@ -842,13 +841,17 @@ function ReportTab({ companyId }) {
     queryFn: () => getMtsPlanReport({ company_id: companyId, months: executed }),
     enabled: Boolean(companyId && executed),
   });
+  const actualsQ = useQuery({
+    queryKey: ["procurement", "mts-plan", "actuals", companyId, executed],
+    queryFn: () => getMtsPlanningActuals({ company_id: companyId, months: executed }),
+    enabled: Boolean(companyId && executed),
+  });
   const report = reportQ.data;
+  const actuals = actualsQ.data;
   const months = report?.months ?? [];
-  const productionAvailable = report?.production?.available === true;
-  const dispatchAvailable = report?.dispatch?.available === true;
 
-  // One PLAN row per SKU. Production / Dispatch rows would be inserted under
-  // each PLAN row once their sources exist; today both are unavailable.
+  // One PLAN row per SKU.  Actuals are a separate source-classified grid below
+  // because a ProdShade quantity must never be guessed into a packed SKU.
   const gridRows = useMemo(() => {
     const result = [];
     for (const row of report?.rows ?? []) {
@@ -856,6 +859,22 @@ function ReportTab({ companyId }) {
     }
     return result;
   }, [report]);
+  const actualRows = useMemo(() => {
+    const planByMaterialMonth = new Map();
+    for (const row of report?.rows ?? []) {
+      for (const month of months) planByMaterialMonth.set(`${row.sku_material_id}|${month}`, row.plan?.[month]?.qty ?? null);
+    }
+    return (actuals?.rows ?? []).map((row) => {
+      const planKg = row.material_id ? planByMaterialMonth.get(`${row.material_id}|${row.month}`) ?? null : null;
+      const productionKg = row.has_production ? Number(row.production_kg ?? 0) : null;
+      return {
+        ...row,
+        row_key: `${row.month}|${row.identity_key}|${row.source_classification}`,
+        plan_kg: planKg,
+        plan_vs_production_kg: planKg === null || productionKg === null ? null : Number(planKg) - productionKg,
+      };
+    });
+  }, [actuals, months, report]);
 
   const fixedColumns = [
     ...GROUP_COLUMNS,
@@ -951,14 +970,6 @@ function ReportTab({ companyId }) {
           >
             Show Report ({selectedMonths.length} month{selectedMonths.length === 1 ? "" : "s"})
           </button>
-          <label className="flex items-center gap-1" title={report?.production?.reason ?? "Production source not yet designed"}>
-            <input type="checkbox" disabled={!productionAvailable} checked={showProduction && productionAvailable} onChange={(e) => setShowProduction(e.target.checked)} />
-            Show Production {productionAvailable ? "" : "(not available yet)"}
-          </label>
-          <label className="flex items-center gap-1" title={report?.dispatch?.reason ?? "Dispatch source not yet designed"}>
-            <input type="checkbox" disabled={!dispatchAvailable} checked={showDispatch && dispatchAvailable} onChange={(e) => setShowDispatch(e.target.checked)} />
-            Show Dispatch {dispatchAvailable ? "" : "(not available yet)"}
-          </label>
           <button
             type="button"
             disabled={gridRows.length === 0}
@@ -969,8 +980,7 @@ function ReportTab({ companyId }) {
           </button>
         </div>
         <p className="text-xs text-slate-500">
-          PLAN = effective plan (Final, else Rolling, plus Additional and Urgent Extra). Blank = no plan entered. Blue figures come from the
-          historical Google Sheet import (not loaded yet). Production and Dispatch rows will appear once their sources are designed.
+          PLAN = effective plan (Final, else Rolling, plus Additional and Urgent Extra). Blank = no plan entered. Actuals below use imported history through Sep-2026 and posted ERP transactions from Oct-2026; incomplete source data is warned, never treated as zero.
         </p>
       </div>
       <ErpDenseGrid
@@ -985,6 +995,37 @@ function ReportTab({ companyId }) {
         emptyMessage={!executed ? "Select months and press Show Report." : reportQ.isLoading ? "Loading..." : reportQ.error ? errorText(reportQ.error) : "No SKUs."}
         maxHeight="calc(100vh - 420px)"
       />
+      <div className="mt-5 border-t border-slate-200 pt-4">
+        <h3 className="text-sm font-semibold text-slate-900">Unified Production & Dispatch Actuals</h3>
+        <p className="mt-1 text-xs text-slate-500">Source is explicit. A ProdShade production quantity is not allocated to a packed SKU, so Plan vs Production remains blank unless the identity is the same SKU.</p>
+        {(actuals?.warnings ?? []).length > 0 ? (
+          <div className="mt-2 grid gap-1 text-xs text-amber-800">
+            {actuals.warnings.map((warning) => <p key={`${warning.code}-${warning.count}`}>Data quality — {warning.message}</p>)}
+          </div>
+        ) : null}
+        <ErpDenseGrid
+          {...GRID_PROPS}
+          className="mt-3"
+          rangeSelect
+          virtualize
+          columns={[
+            { key: "month", label: "Month", width: "100px" },
+            { key: "source_classification", label: "Source", width: "120px" },
+            { key: "identity_level", label: "Identity", width: "105px" },
+            { key: "material_label", label: "Material / ProdShade", width: "270px" },
+            { key: "external_sku", label: "External SKU", width: "140px", render: (row) => blankOr(row.external_sku) },
+            { key: "prodshade", label: "ProdShade", width: "220px", render: (row) => blankOr(row.prodshade) },
+            { key: "plan_kg", label: "Plan KG", width: "110px", align: "right", render: (row) => fmtQty(row.plan_kg) },
+            { key: "production_kg", label: "Production KG", width: "125px", align: "right", render: (row) => row.has_production ? fmtQty(row.production_kg) : "" },
+            { key: "dispatch_kg", label: "Dispatch KG", width: "115px", align: "right", render: (row) => row.has_dispatch ? fmtQty(row.dispatch_kg) : "" },
+            { key: "plan_vs_production_kg", label: "Plan − Production KG", width: "165px", align: "right", render: (row) => fmtQty(row.plan_vs_production_kg) },
+          ]}
+          rows={actualRows}
+          rowKey={(row) => row.row_key}
+          emptyMessage={!executed ? "Select months and press Show Report." : actualsQ.isLoading ? "Loading actuals..." : actualsQ.error ? errorText(actualsQ.error) : "No actuals for the selected period."}
+          maxHeight="360px"
+        />
+      </div>
     </ErpSectionCard>
   );
 }

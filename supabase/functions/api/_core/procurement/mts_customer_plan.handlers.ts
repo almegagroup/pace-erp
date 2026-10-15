@@ -22,8 +22,8 @@
  *   Every handler re-checks the TARGET company's grant (canMaintainCompanyResource),
  *   since the route gate only checks the session company (company-scope-write-acl-guard).
  *
- * Production / Dispatch actuals are NOT integrated (owner has not designed the
- * sources yet); the report says so explicitly instead of showing zeros.
+ * Historical/ERP-live actuals are supplied by historical_operations.handlers.ts;
+ * this plan endpoint remains responsible only for effective plan quantities.
  * Planning never writes to PO / CSN / GRN / stock / production / dispatch.
  * Authority: Backend
  */
@@ -836,10 +836,7 @@ export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerC
       company_id: companyId,
       months,
       rows,
-      // Owner has not designed Production / Dispatch sources yet — say so
-      // instead of showing invented zeros.
-      production: { available: false, reason: "Production source not yet designed by owner." },
-      dispatch: { available: false, reason: "Dispatch source not yet designed by owner." },
+      actuals_endpoint: "/api/procurement/mts-plan/actuals",
     }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "MTS_PLAN_REPORT_FAILED";
