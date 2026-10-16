@@ -18,6 +18,7 @@
  */
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
+import { log } from "../../_lib/logger.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
@@ -25,7 +26,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { aggregateActuals, HISTORY_CUTOVER, text, type ActualAggregationInput } from "./historical_operations.logic.ts";
 import { parseMonthList } from "./mts_customer_plan.logic.ts";
-import { mapHistoryRpcError, requestChecksum } from "./historical_import.rpc.ts";
+import { mapHistoryRpcError, requestChecksum, type HistoryRpcError } from "./historical_import.rpc.ts";
 
 type JsonRecord = Record<string, unknown>;
 type HistoricalContext = {
@@ -46,10 +47,14 @@ function historyError(req: Request, ctx: HistoricalContext, code: string, status
 }
 
 async function runImport(req: Request, ctx: HistoricalContext, commit: boolean): Promise<Response> {
+  let companyId = "";
+  let recordKind = "";
+  let rowCount = 0;
+  let checksum = "";
   try {
     const body = await req.json().catch(() => null) as JsonRecord | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) return historyError(req, ctx, "HISTORY_IMPORT_INVALID", 400, "A JSON object request body is required.");
-    const companyId = text(body.company_id);
+    companyId = text(body.company_id);
     if (!companyId) return historyError(req, ctx, "HISTORY_IMPORT_INVALID", 400, "company_id is required.");
     await assertCompanyScope(ctx, companyId);
     if (!await canMaintainCompanyResource(ctx, companyId, RESOURCE_IMPORT, "WRITE")) {
@@ -60,12 +65,35 @@ async function runImport(req: Request, ctx: HistoricalContext, commit: boolean):
       source_file_key: body.source_file_key, source_file_name: body.source_file_name,
       source_sheet_name: body.source_sheet_name, rows: body.rows ?? [],
     };
-    const checksum = await requestChecksum(request);
+    recordKind = text(body.record_kind).toUpperCase();
+    rowCount = Array.isArray(request.rows) ? request.rows.length : 0;
+    checksum = await requestChecksum(request);
     const { data, error } = await serviceRoleClient.rpc("import_historical_operations", {
       p_request: { ...request, checksum }, p_actor: ctx.auth_user_id, p_dry_run: !commit,
     });
     if (error) {
-      const mapped = mapHistoryRpcError(error.message);
+      const rpcError = error as HistoryRpcError;
+      log({
+        level: "ERROR",
+        request_id: ctx.request_id,
+        route_key: "PROC_HISTORICAL_OPERATIONS_IMPORT",
+        event: "HISTORY_IMPORT_RPC_FAILED",
+        actor: ctx.auth_user_id,
+        meta: {
+          company_id: companyId,
+          record_kind: recordKind,
+          mode: commit ? "commit" : "dry_run",
+          row_count: rowCount,
+          checksum,
+          rpc_error: {
+            code: rpcError.code ?? null,
+            message: rpcError.message ?? null,
+            details: rpcError.details ?? null,
+            hint: rpcError.hint ?? null,
+          },
+        },
+      });
+      const mapped = mapHistoryRpcError(rpcError);
       return historyError(req, ctx, mapped.code, mapped.status, mapped.message);
     }
     const result = (data ?? {}) as JsonRecord;
@@ -75,6 +103,21 @@ async function runImport(req: Request, ctx: HistoricalContext, commit: boolean):
     return okResponse({ ...result, checksum }, ctx.request_id, req);
   } catch (error) {
     if (error instanceof Error && error.message === "COMPANY_SCOPE_VIOLATION") return historyError(req, ctx, error.message, 403, "Company is outside your scope.");
+    log({
+      level: "ERROR",
+      request_id: ctx.request_id,
+      route_key: "PROC_HISTORICAL_OPERATIONS_IMPORT",
+      event: "HISTORY_IMPORT_HANDLER_FAILED",
+      actor: ctx.auth_user_id,
+      meta: {
+        company_id: companyId || null,
+        record_kind: recordKind || null,
+        mode: commit ? "commit" : "dry_run",
+        row_count: rowCount,
+        checksum: checksum || null,
+        error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? null } : String(error),
+      },
+    });
     return historyError(req, ctx, "HISTORY_IMPORT_FAILED", 500, "Could not process the historical import.");
   }
 }
