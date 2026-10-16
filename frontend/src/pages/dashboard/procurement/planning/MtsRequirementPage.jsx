@@ -86,6 +86,21 @@ function fmtDays(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "";
 }
+/**
+ * A material row can contain PM demand from several Pack BOMs, so this is a
+ * provenance summary rather than a false single conversion of the material
+ * total. Each value is the source SKU's physical outer-pack count over CM+NM.
+ */
+function packSourceLabel(pool) {
+  if (pool?.kind !== "PM" || pool.outer_qty === null || pool.outer_qty === undefined || !pool.outer_uom_code) return "";
+  const fill = pool.fill_qty_per_outer === null || pool.fill_qty_per_outer === undefined
+    ? ""
+    : ` × ${fmtQty(pool.fill_qty_per_outer)} KG`;
+  return `${fmtQty(pool.outer_qty)} ${pool.outer_uom_code}${fill}`;
+}
+function packSourceSummary(pools) {
+  return [...new Set((pools ?? []).map(packSourceLabel).filter(Boolean))].join("; ");
+}
 function yesNo(value) {
   if (value === null || value === undefined) return "";
   return value ? "Yes" : "No";
@@ -265,6 +280,11 @@ function buildReportColumns(expanded, toggleExpanded) {
     textColumn("material_code", "Material Code", "identity", { width: "110px" }),
     textColumn("material_type", "TYPE", "identity", { width: "60px" }),
     textColumn("base_uom_code", "UoM", "identity", { width: "60px" }),
+    textColumn("user_pack_qty", "Pack Qty (CM + NM)", "identity", {
+      width: "240px",
+      read: (r) => packSourceSummary(r.pools),
+      render: (r) => dash(packSourceSummary(r.pools)),
+    }),
     textColumn("identifier", "Identifier", "identity", { width: "120px", render: (r) => badge(r.identifier) }),
     textColumn("id2", "ID2 (with incoming)", "identity", { width: "140px", render: (r) => badge(r.id2) }),
     {
@@ -354,6 +374,8 @@ function SourceDetail({ row }) {
     { key: "required_location", label: "Req SLoc", width: "80px" },
     { key: "pool_total", label: "Pool Demand", width: "110px", align: "right", render: (p) => fmtQty(p.pool_total) },
     { key: "this_material_qty", label: "This Material", width: "110px", align: "right", render: (p) => fmtQty(p.this_material_qty) },
+    { key: "outer_qty", label: "User Pack Qty (CM + NM)", width: "150px", align: "right", render: (p) => (p.outer_qty === null ? "—" : `${fmtQty(p.outer_qty)} ${p.outer_uom_code ?? ""}`), copyValue: (p) => p.outer_qty ?? "" },
+    { key: "fill_qty_per_outer", label: "Fill / Pack", width: "110px", align: "right", render: (p) => (p.fill_qty_per_outer === null ? "—" : `${fmtQty(p.fill_qty_per_outer)} KG`), copyValue: (p) => p.fill_qty_per_outer ?? "" },
     { key: "strokes", label: "Effective Stroke(s)", width: "260px", render: (p) => (p.strokes.length ? p.strokes.join("; ") : "—"), copyValue: (p) => p.strokes.join("; ") },
     { key: "skus", label: "SKU (Pack BOM)", width: "260px", render: (p) => (p.skus.length ? p.skus.join("; ") : "—"), copyValue: (p) => p.skus.join("; ") },
     { key: "prodshades", label: "Prodshade(s) (PO21 plan)", width: "260px", render: (p) => p.prodshades.join("; "), copyValue: (p) => p.prodshades.join("; ") },

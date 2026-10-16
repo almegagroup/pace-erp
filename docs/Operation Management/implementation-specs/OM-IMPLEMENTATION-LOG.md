@@ -6540,3 +6540,19 @@ Open / blocked: Google Sheets not reachable (legacy formulas UNRESOLVED for Pror
   expose/reload `erp_planning` as required, run rolled-back DB scenario test, execute the proposed
   ACL provisioning and version/snapshot rebuild, complete company-role UAT, then separately approve
   PROD. No migration, ACL data, deployment, merge to `dev`/`main`, or PROD write was performed.
+
+---
+
+### 2026-10-16 — PO22 multi-pack user-unit provenance (Codex) — CODE CHECKS PASS, NOT DEPLOYED
+
+- Added presentation-only Pack BOM provenance for PM demand: the Requirement grid and its Excel
+  export now show a `Pack Qty (CM + NM)` summary such as `65,125 BAG × 40 KG`; the source drill
+  shows the physical outer-pack quantity and fill per pack for each individual Pack BOM pool.
+- A material can be consumed by multiple pack sizes, so values are retained separately per Pack BOM
+  rather than incorrectly converting the material-level requirement to one invented unit. The output
+  unit comes only from the active Pack BOM OUTPUT line and the fill from its SFG/output ratio.
+- No requirement, allocation, stock, inbound, coverage, MOQ, lead-time, or approved NM formula
+  changed. RM pools and Pack BOMs without an OUTPUT UoM remain blank rather than guessed.
+- Verification: PO22 Deno tests 20/20 (including Pack BOM outer-pack trace); `deno check` logic and
+  handler clean; focused PO22 frontend ESLint clean; Vite production build passes. No DB action,
+  deployment, ACL action, or merge was performed.

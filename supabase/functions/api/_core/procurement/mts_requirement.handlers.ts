@@ -273,6 +273,7 @@ async function loadFormulationMasters(companyId: string, extraStrokeIds: string[
       pack_bom_id: id,
       sfg_qty: num(sfg?.qty),
       output_qty: num(output?.qty),
+      output_uom_code: text(output?.uom_code) || null,
       inputs: lines.filter((l) => text(l.line_type) === "INPUT").map((l) => ({
         material_id: text(l.material_id),
         qty: Number(l.qty ?? 0),
@@ -818,6 +819,9 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
           skus: p.sku_ids.map(nameOf),
           strokes: p.stroke_ids.map(strokeLabel),
           pack_bom_count: p.pack_bom_ids.length,
+          outer_qty: p.outer_qty,
+          outer_uom_code: p.outer_uom_code,
+          fill_qty_per_outer: p.fill_qty_per_outer,
         })),
       };
     }).sort((a, b) => a.material_type.localeCompare(b.material_type) || a.material_name.localeCompare(b.material_name));

@@ -97,7 +97,7 @@ function baseInput(overrides: Partial<ExplosionInput> = {}): ExplosionInput {
     strokeSettings: new Map(),
     primaryDecisions: [],
     groupMembers: new Map([["G1", [{ material_id: "RM-B", active: true }, { material_id: "RM-C", active: true }]]]),
-    packBoms: new Map([["SKU1", { pack_bom_id: "B1", sfg_qty: 20, output_qty: 1, inputs: [
+    packBoms: new Map([["SKU1", { pack_bom_id: "B1", sfg_qty: 20, output_qty: 1, output_uom_code: "BAG", inputs: [
       { material_id: "PM-BAG", qty: 1, uom_code: "NOS", storage_location_id: "P1LOC", material_group_id: null },
     ] }]]),
     materials: new Map([
@@ -225,8 +225,8 @@ Deno.test("One material in several Prodshades and lines: stock counted once [T4]
     ]),
     currentStrokeByProdshade: new Map([["P1", "S1"], ["P2", "S2"]]),
     packBoms: new Map([
-      ["SKU1", { pack_bom_id: "B1", sfg_qty: 20, output_qty: 1, inputs: [] }],
-      ["SKU2", { pack_bom_id: "B2", sfg_qty: 20, output_qty: 1, inputs: [] }],
+      ["SKU1", { pack_bom_id: "B1", sfg_qty: 20, output_qty: 1, output_uom_code: "BAG", inputs: [] }],
+      ["SKU2", { pack_bom_id: "B2", sfg_qty: 20, output_qty: 1, output_uom_code: "BAG", inputs: [] }],
     ]),
   });
   const exploded = explodeDemand(input);
@@ -240,6 +240,9 @@ Deno.test("One material in several Prodshades and lines: stock counted once [T4]
 Deno.test("Pack BOM: PM per outer unit; non-producing SKU w/o BOM is silent; producing SKU w/o BOM raises [T7][T8]", () => {
   const withBom = explodeDemand(baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 400 })]) }));
   near(withBom.records.filter((r) => r.kind === "PM").reduce((s, r) => s + r.qty, 0), 20, "400 KG / 20 KG per bag = 20 bags");
+  const pmRecords = withBom.records.filter((r) => r.kind === "PM");
+  near(pmRecords.reduce((s, r) => s + Number(r.outer_qty ?? 0), 0), 20, "user-facing BAG quantity follows Pack BOM output");
+  assertEqual([pmRecords[0].outer_uom_code, pmRecords[0].fill_qty_per_outer], ["BAG", 20], "pack display carries verified output unit and fill quantity");
   const noDemand = explodeDemand(baseInput({ effective: [], packBoms: new Map() }));
   assertEqual(noDemand.exceptions.length, 0, "no plan, no BOM → no false exception");
   const missing = explodeDemand(baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 400 })]), packBoms: new Map() }));

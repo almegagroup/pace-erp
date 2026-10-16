@@ -297,6 +297,8 @@ export type PackBomInfo = {
   pack_bom_id: string;
   sfg_qty: number | null;    // KG of Prodshade per OUTPUT qty
   output_qty: number | null; // outer units the BOM is written for (1 for MTS)
+  /** User-facing outer-pack unit from the Pack BOM OUTPUT line (for example BAG or DRUM). */
+  output_uom_code: string | null;
   inputs: PackBomLine[];
 };
 
@@ -322,6 +324,12 @@ export type DemandRecord = {
   stroke_master_id: string | null;
   stroke_line_id: string | null;
   pack_bom_id: string | null;
+  /** PM source only: physical outer packs represented by this daily demand record. */
+  outer_qty: number | null;
+  /** PM source only: the Pack BOM OUTPUT unit. Never inferred from a material UoM. */
+  outer_uom_code: string | null;
+  /** PM source only: KG of product in one outer unit, derived from the active Pack BOM. */
+  fill_qty_per_outer: number | null;
   group_id: string | null;
   use_primary: boolean | null;
   sort_key: string;
@@ -556,6 +564,9 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           stroke_master_id: stroke.stroke_master_id,
           stroke_line_id: line.stroke_line_id,
           pack_bom_id: null,
+          outer_qty: null,
+          outer_uom_code: null,
+          fill_qty_per_outer: null,
           group_id: line.material_group_id,
           use_primary: usePrimary,
           sort_key: `1|${label}|${String(line.display_order).padStart(6, "0")}|${line.stroke_line_id}`,
@@ -619,6 +630,12 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           stroke_master_id: null,
           stroke_line_id: null,
           pack_bom_id: bom.pack_bom_id,
+          // Presentation-only provenance.  Requirement math remains in the PM
+          // material's base unit; this makes the individual Pack BOM's physical
+          // outer-pack count visible without flattening mixed pack sizes.
+          outer_qty: kg / kgPerOuter,
+          outer_uom_code: bom.output_uom_code,
+          fill_qty_per_outer: kgPerOuter,
           group_id: line.material_group_id,
           use_primary: null,
           sort_key: `2|${skuId}|${line.material_id}`,
@@ -655,7 +672,7 @@ export type AllocationResult = {
   /** material → day → part of that demand covered from usable stock at the required location. */
   fromStockByMaterial: Map<string, Map<string, number>>;
   /** pool traceability: pool → { candidates, demand, per material }. */
-  pools: Map<string, { kind: "RM" | "PM"; candidates: string[]; group_id: string | null; use_primary: boolean | null; storage_location_id: string | null; total: number; byMaterial: Map<string, number>; prodshades: Set<string>; skus: Set<string>; strokes: Set<string>; pack_boms: Set<string> }>;
+  pools: Map<string, { kind: "RM" | "PM"; candidates: string[]; group_id: string | null; use_primary: boolean | null; storage_location_id: string | null; total: number; byMaterial: Map<string, number>; prodshades: Set<string>; skus: Set<string>; strokes: Set<string>; pack_boms: Set<string>; outer_qty: number; outer_uom_code: string | null; fill_qty_per_outer: number | null }>;
   stock: Map<string, MaterialStockPosition>;
 };
 
@@ -763,8 +780,10 @@ export function allocateDemand(
       kind: record.kind, candidates: record.candidates, group_id: record.group_id, use_primary: record.use_primary,
       storage_location_id: record.storage_location_id, total: 0, byMaterial: new Map<string, number>(),
       prodshades: new Set<string>(), skus: new Set<string>(), strokes: new Set<string>(), pack_boms: new Set<string>(),
+      outer_qty: 0, outer_uom_code: record.outer_uom_code, fill_qty_per_outer: record.fill_qty_per_outer,
     };
     pool.total += record.qty;
+    pool.outer_qty += record.outer_qty ?? 0;
     pool.prodshades.add(record.prodshade_material_id);
     if (record.sku_material_id) pool.skus.add(record.sku_material_id);
     if (record.stroke_master_id) pool.strokes.add(record.stroke_master_id);
@@ -1274,6 +1293,10 @@ export type PoolTrace = {
   sku_ids: string[];
   stroke_ids: string[];
   pack_bom_ids: string[];
+  /** Physical pack provenance for PM pools; absent for RM pools. */
+  outer_qty: number | null;
+  outer_uom_code: string | null;
+  fill_qty_per_outer: number | null;
 };
 
 export type RequirementRow = {
@@ -1343,6 +1366,11 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
         sku_ids: [...pool.skus].sort(),
         stroke_ids: [...pool.strokes].sort(),
         pack_bom_ids: [...pool.pack_boms].sort(),
+        outer_qty: pool.outer_uom_code ? roundQty(pool.outer_qty) : null,
+        outer_uom_code: pool.outer_uom_code,
+        fill_qty_per_outer: pool.outer_uom_code && pool.fill_qty_per_outer !== null
+          ? roundQty(pool.fill_qty_per_outer)
+          : null,
       };
       poolsByMaterial.set(candidate, [...(poolsByMaterial.get(candidate) ?? []), trace]);
     }
