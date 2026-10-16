@@ -6312,6 +6312,28 @@ matches, while the pre-existing repository/Dev ledger drift remains: local count
 
 ---
 
+### 2026-10-16 — PO22 Requirement recovery audit (BLOCKED; no implementation found)
+
+- Audit scope: take over and verify the reported PO22 Requirement implementation without
+  rebuilding it; no application, migration, ACL, DEV, or PROD mutation was authorised or made.
+- Evidence: `agent/codex`, `origin/main`, `origin/dev`, `origin/agent/claude`,
+  `origin/agent/chatgpt`, every registered Claude worktree, and dangling Git commits were searched
+  read-only. None contains a PO22 page/route/handler/test/menu registration, a
+  `20261016100000*` migration, or the requested Requirement ACL provisioning SQL.
+- The three PO22 calculation/source/reconciliation documents named in the handoff are absent from
+  the repository. Existing PO21 Customer Plan code and documentation are not PO22 and were not
+  repurposed.
+- Direct legacy-sheet inspection verifies the key formula split: CMP003's next-month requirement
+  days switch to the complete next month after the 15th; CMP005/CMP011 use
+  `MAX(Target Coverage - Current Month Days Left, 0)`. Legacy lead time is `MAXIFS + 4`, not an
+  average. Full field matrix and safe ERP correction requirements:
+  `docs/mts-planning/PO22-DEPLOYMENT-READINESS-AUDIT-2026-10-16.md`.
+- Status: **BLOCKED — source recovery or explicit build authorisation required.** No code test,
+  migration integrity test, ACL test, export parity test, commit, PR, merge, deployment, or
+  production action can truthfully be reported for PO22.
+
+---
+
 ### 2026-10-15 — Historical Operations + PO21 audit and fixes (Claude) — CODE COMPLETE, NOT VERIFIED
 
 Audit of `agent/chatgpt` 365205b/f94c434/137a24c (originally 84f4f4c1/a257d998/426f7428) and Codex's
