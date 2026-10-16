@@ -363,8 +363,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/mts-plan/report":            { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "GET:/api/procurement/mts-plan/actuals":           { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "GET:/api/procurement/historical/lead-times":      { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
-  "POST:/api/procurement/historical-procurement-import/dry-run": { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
-  "POST:/api/procurement/historical-procurement-import/commit":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
+  "GET:/api/procurement/historical/procurement-evidence": { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  // POTMP is the sole authority for every historical import category; PO21
+  // planning-maintenance access does not grant import capability.
+  "POST:/api/procurement/historical-procurement-import/dry-run": { skipAcl: false, resourceCode: "PROC_HISTORICAL_OPERATIONS_IMPORT", action: "WRITE" },
+  "POST:/api/procurement/historical-procurement-import/commit":  { skipAcl: false, resourceCode: "PROC_HISTORICAL_OPERATIONS_IMPORT", action: "WRITE" },
   "POST:/api/procurement/mts-plan/addon-lines":      { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/base-lines":       { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/stroke-settings":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },

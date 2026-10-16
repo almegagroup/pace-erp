@@ -6458,3 +6458,16 @@ errors; `planning.readonly.test.ts` fails without `SUPABASE_URL` env (`--allow-e
 
 **Status:** code-level PASS on the reconciled tree; PROD deploy still waits for the owner's branch
 decision. No deploy, no PROD write, no historical import, no push to `dev`/`main`.
+
+---
+
+## 2026-10-16 — Historical procurement / Product Data snapshot extension (POTMP) — PENDING REVIEW, NOT DEPLOYED
+
+- Audited the verified Google workbook `ALMEGA - Supply Chain File`
+  (`1tUoPMEOglPkY7nHvMTtvR-27YCCxM0THYXnc7dbgkEA`): only `PO_SHEET`,
+  `MVT_TRACKER` and `Product_Data_Base` are eligible. Hidden derived
+  `MOVEMENT_TRACKER` is expressly excluded.
+- Added one additive migration, `20261016022853_historical_procurement_window_and_reference_snapshot.sql`, which wraps the existing procurement history importer rather than creating a parallel pathway. It adds the procurement-only analytics window 2024-09-01…2026-08-31, dependent-parent flags, a private lineaged Product Database snapshot table, reviewed exceptions/counts, and a history-only lead-time reader. It does not touch live procurement, inventory, GRN, invoice, GL or Production/FG Dispatch import behavior.
+- Added POTMP choices for PO headers, PO lines, movements and Product Database snapshots, with a 500 combined-record limit. Existing Production/FG Dispatch remains 2,000 rows with its 30-Sep-2026 boundary. The UI now renders returned summary/reconciliation/counts rather than dashes/toast-only and clears approval when payload/source/company changes.
+- Added a scoped read-only procurement-evidence reader: exact live PO overlap is labelled `ERP_LIVE` and preferred; historical observations and reference defaults are labelled separately. It explicitly reports `live_supply_affected: false`.
+- **Not performed:** migration apply, DEV/PROD deployment, historical import, or any live operational/data mutation. Database contract testing requires a reviewed environment where the prerequisite v1 importer is deployed.

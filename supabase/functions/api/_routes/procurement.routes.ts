@@ -88,7 +88,7 @@ import {
   dryRunHistoricalImportHandler,
   getMtsPlanningActualsHandler,
 } from "../_core/procurement/historical_operations.handlers.ts";
-import { getHistoricalLeadTimesHandler, historicalProcurementImportHandler } from "../_core/procurement/historical_procurement.handlers.ts";
+import { getHistoricalLeadTimesHandler, getHistoricalProcurementEvidenceHandler, historicalProcurementImportHandler } from "../_core/procurement/historical_procurement.handlers.ts";
 import {
   getMtsPlanAccessHandler,
   getMtsPlanEntryGridHandler,
@@ -774,6 +774,8 @@ export async function dispatchProcurementRoutes(
       return await getMtsPlanningActualsHandler(req, ctx);
     case "GET:/api/procurement/historical/lead-times":
       return await getHistoricalLeadTimesHandler(req, ctx);
+    case "GET:/api/procurement/historical/procurement-evidence":
+      return await getHistoricalProcurementEvidenceHandler(req, ctx);
     case "POST:/api/procurement/historical-procurement-import/dry-run":
       return await historicalProcurementImportHandler(req, ctx, false);
     case "POST:/api/procurement/historical-procurement-import/commit":

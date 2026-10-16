@@ -925,6 +925,21 @@ export function commitHistoricalOperationsImport(data) {
   return fetchProcurement("POST", "/api/procurement/mts-plan/historical-import/commit", data);
 }
 
+// Historical procurement uses the same POTMP page and ACL, but its dedicated
+// endpoint/contract keeps procurement records out of the Production/Dispatch
+// actuals importer.
+export function dryRunHistoricalProcurementImport(data) {
+  return fetchProcurement("POST", "/api/procurement/historical-procurement-import/dry-run", data);
+}
+
+export function commitHistoricalProcurementImport(data) {
+  return fetchProcurement("POST", "/api/procurement/historical-procurement-import/commit", data);
+}
+
+export function getHistoricalProcurementEvidence(params) {
+  return fetchProcurement("GET", "/api/procurement/historical/procurement-evidence", undefined, params);
+}
+
 export function getMtsPlanProductGroups(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/product-groups", undefined, params);
 }

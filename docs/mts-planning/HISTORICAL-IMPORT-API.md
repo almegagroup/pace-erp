@@ -1,8 +1,10 @@
 # Historical Import API (for the importing agent)
 
-Status: code complete, **NOT VERIFIED** — the two import RPCs are not yet applied
-on DEV (see OM-IMPLEMENTATION-LOG, 2026-10-15). Do not call commit endpoints
-until that entry says VERIFIED.
+Status: procurement-history v2 is prepared for review, **NOT APPLIED by this
+change**. It depends on the existing v1 procurement-history importer and is
+not an authorisation to call a commit endpoint. Apply only through the normal
+reviewed database release, then verify its RPC contract in that environment
+before importing any source batch.
 
 All data lands only in the private `erp_history` schema. Nothing here reads into
 or writes live PO / CSN / GRN / stock / GL records.
@@ -104,14 +106,53 @@ Commit response: `{ committed:true, batch_id, status, summary, issues[], checksu
 - `vendor_code` must be an active vendor of the company (else ERROR). No vendor_code but a supplier name → header kept as UNMAPPED (WARNING).
 - `material_code` matches the company-active material's `external_code` or `pace_code`; ambiguous → ERROR; not found → UNMAPPED (WARNING).
 - `normalized_kg` is computed by the server; any client value is ignored.
+- Procurement's historical analytical window is **2024-09-01 through 2026-08-31 inclusive**. `order_date` and an actual movement event date are assessed separately. Older headers/lines required by an in-window movement are stored as labelled dependencies, not discarded. Scheduled ETA/ETD is never used as an actual event.
+- `invoice_number` or `bl_number` alone is never a movement identity. Preserve all date milestones separately; cancellation stays auditable but is excluded from valid lead-time aggregates.
 
 ERROR codes: `HISTORY_SOURCE_ROW_REQUIRED`, `HISTORY_PO_NUMBER_REQUIRED`, `HISTORY_PO_DUPLICATE_IN_BATCH`, `HISTORY_DATE_INVALID`, `HISTORY_NUMBER_INVALID`, `HISTORY_SUPPLY_TYPE_INVALID`, `HISTORY_BOOLEAN_INVALID`, `HISTORY_RAW_ID_NOT_ACCEPTED`, `HISTORY_VENDOR_NOT_FOUND`, `HISTORY_LINE_IDENTITY_REQUIRED`, `HISTORY_LINE_DUPLICATE_IN_BATCH`, `HISTORY_PO_HEADER_UNRESOLVED`, `HISTORY_MATERIAL_AMBIGUOUS`, `HISTORY_SOURCE_RECORD_KEY_REQUIRED`, `HISTORY_MOVEMENT_DUPLICATE_IN_BATCH`, `HISTORY_PO_LINE_UNRESOLVED`.
 WARNING codes: `HISTORY_VENDOR_UNMAPPED`, `HISTORY_MATERIAL_UNMAPPED`, `HISTORY_UOM_CONVERSION_MISSING`.
+
+### Product Database Reference Snapshot
+
+Use the same procurement endpoint with the three transaction arrays empty and
+`product_reference_snapshots` populated. This is the only valid way to import
+`Product_Data_Base`; it never creates a live vendor/material and is explicitly
+stored as an undated/current reference snapshot.
+
+```json
+{
+  "company_id": "uuid",
+  "source_system": "GOOGLE_SHEETS",
+  "source_file_key": "1tUoPMEOglPkY7nHvMTtvR-27YCCxM0THYXnc7dbgkEA",
+  "source_file_name": "ALMEGA - Supply Chain File",
+  "source_sheet_name": "Product_Data_Base",
+  "source_extracted_at": "2026-10-16T10:30:00+05:30",
+  "purchase_orders": [], "purchase_order_lines": [], "consignment_movements": [],
+  "product_reference_snapshots": [
+    { "source_row_number": 2, "source_record_key": "Product_Data_Base:2",
+      "supplier_name": "Source supplier", "vendor_code": "V0001",
+      "item_name": "Source item", "item_category": "RM", "item_type": "...",
+      "material_code": "RM-0001", "source_uom": "KG", "supply_type": "IMPORT",
+      "source_prefix": "...", "source_lead_time_defaults": { "sail_time_days": "12" } }
+  ]
+}
+```
+
+Missing exact mappings become visible `UNMAPPED` warnings; ambiguous material
+matches or a supplied but ineligible vendor code are blocking errors. There is
+no fuzzy name resolution and no master auto-creation.
+
+The response summary always renders `submitted_count`, `stored_count`,
+`validated_count`, `unmapped_count`, `quarantined_count`, warning/error counts,
+source-UOM quantities, checksum, batch/status and reconciliation. Stored is
+not synonymous with analytically valid.
 
 ## 3. Reads / reconciliation
 
 - `GET /api/procurement/mts-plan/actuals?company_id=&months=2026-08-01,2026-09-01,2026-10-01`
   → `rows[]` (month, material, identity_level SKU|PRODSHADE, production_kg / dispatch_kg, source HISTORICAL|ERP_LIVE), `coverage { PRODUCTION[], DISPATCH[] }` (covered month without a value = 0, uncovered = blank), `warnings[]`.
 - `GET /api/procurement/historical/lead-times?company_id=&group_by=COMPANY|VENDOR|MATERIAL`
-  → labelled groups, split LOCAL/DOMESTIC vs IMPORT, with sample count, average, median, p80, p90, variability.
+  → labelled historical groups, split LOCAL/DOMESTIC vs IMPORT, with sample count, measured actual date pairs, average, median, p80, p90, variability and quality exclusions. This reader never changes master lead time.
+- `GET /api/procurement/historical/procurement-evidence?company_id=&vendor_id=&material_id=`
+  → read-only rows visibly labelled `ERP_LIVE`, `HISTORICAL` or `REFERENCE_DEFAULT`; exact live PO identity wins overlap reconciliation. It also returns current ERP payment-term/vendor-term and domestic/import lead-time master evidence without changing it. Historical quantities are never current stock/open-PO/in-transit/commitment supply.
 - Reconciliation per batch: `erp_history.import_batch` (`submitted_row_count`, `imported_row_count`, `exception_row_count`, `normalized_kg_total`, `reconciliation` summary) and `erp_history.import_exception` (open while `resolved_at IS NULL`).
