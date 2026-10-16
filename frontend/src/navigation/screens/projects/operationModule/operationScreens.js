@@ -429,6 +429,16 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // PO22 Requirement (2 tabs: Requirement Report / Material Settings).
+  // Procurement menu group; tx code PO22 (owner brief 2026-10-16).
+  PROC_MTS_REQUIREMENT: {
+    screen_code: "PROC_MTS_REQUIREMENT",
+    route: "/dashboard/procurement/mts-requirement",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // Historical Operations Import. Separate authority from PO21; tx code POTMP.
   PROC_HISTORICAL_OPERATIONS_IMPORT: {
     screen_code: "PROC_HISTORICAL_OPERATIONS_IMPORT",

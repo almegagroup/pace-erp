@@ -120,7 +120,7 @@ type CompanySku = {
   pack_code: string;
 };
 
-async function loadCompanySkus(companyId: string): Promise<{ skus: CompanySku[]; ambiguous: CompanySku[] }> {
+export async function loadCompanySkus(companyId: string): Promise<{ skus: CompanySku[]; ambiguous: CompanySku[] }> {
   const { data, error } = await serviceRoleClient.schema("erp_planning")
     .rpc("mts_company_skus", { p_company_id: companyId });
   if (error) throw new Error("MTS_PLAN_SKU_LOOKUP_FAILED");
