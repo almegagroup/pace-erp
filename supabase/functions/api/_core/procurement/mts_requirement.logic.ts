@@ -1039,10 +1039,10 @@ export function effectivePolicy(rows: PolicyRow[], materialId: string, asOf: str
  * NM REQ DAYS (ERP, date-aware): how many days of next month must already be
  * covered now so that cover from the as-of date reaches Target days:
  *   clamp(Target − CM days left, 0, days in NM).
- * Legacy differs per company (CMP003: a 15th-of-month condition; CMP005 /
- * CMP011: target vs days left). The legacy formulas were not readable from
- * this environment and are recorded as UNVERIFIED in the reconciliation
- * report — they are deliberately not re-implemented here.
+ * Legacy differs per company (verified directly on 2026-10-16): CMP003 has
+ * a 15th-of-month step, while CMP005/CMP011 use target minus days left. This
+ * single policy-driven rule is an intentional ERP smoothing correction; the
+ * reconciliation report records the exact variance rather than hiding it.
  */
 export function nmRequiredDays(targetDays: number | null, calendar: PlanningCalendar): number | null {
   if (targetDays === null || targetDays === undefined) return null;

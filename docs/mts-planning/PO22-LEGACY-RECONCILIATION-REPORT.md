@@ -1,12 +1,12 @@
 # PO22 Requirement — Legacy vs ERP Reconciliation Report
 
-Date: 2026-10-16 · Branch: `agent/claude` · Read-only PROD inspection only (no DEV use, no PROD write).
+Date: 2026-10-16 · Branch: `agent/codex` · Legacy sheets and PROD inspected read-only (no DEV use, no PROD write).
 
 ## 1. What could and could not be reconciled
 
 | Item | Result |
 |---|---|
-| Legacy sheet values (REQUIREMENT etc.) | **Not reconciled** — the Google Sheets are blocked from this environment (HTTP 403). No legacy number was compared. |
+| Legacy sheet formulas (REQUIREMENT etc.) | **Formula-level reconciled** — direct reads of CMP003/CMP005/CMP011 confirm the fields listed in §3. A frozen row-value parity run remains pending source-identity mapping. |
 | ERP engine vs independent calculation on real PROD data | **Reconciled** for CMP011, as-of 2026-10-16 (below). |
 | Policy table / save rules | Verified on a throwaway local PostgreSQL 16 with stub masters: 8 / 8 scenario checks pass (`supabase/tests/erp_planning_material_requirement_policy.test.sql`). |
 | Engine rules | 20 / 20 Deno unit tests pass (`mts_requirement.logic.test.ts`). |
@@ -35,7 +35,9 @@ Engine status for these rows was NO_POLICY (no Tab 2 policy saved yet in PROD �
 |---|---|---|---|
 | Today | `TODAY()` / `EOMONTH` live | user-selected as-of date | reproducible, auditable runs |
 | Lead time | `MAXIFS(...) + 4` called "AVG" | same value kept as "legacy equivalent", labelled a maximum; configured and observed avg/max/P90 shown beside it | the sheet name was misleading |
-| NM REQ DAYS | CMP003 15th-day condition; CMP005/011 target vs days-left | one date-aware rule clamp(Target − CM days left, 0, NM days) for all three companies | brief asks for an agreed date-aware rule; legacy formulas not readable here, so **variance cannot be quantified yet** — unit test T17 documents the ERP behaviour around the 15th (no step change) |
+| NM REQ DAYS | CMP003: `IF(DAY(TODAY())>=15, days in NM, 0)`; CMP005/CMP011: `MAX(Target − CM days left, 0)` | one date-aware rule clamp(Target − CM days left, 0, NM days) for all three companies | deliberate ERP smoothing: coverage policy grows continuously instead of a CMP003 mid-month step; test T17 documents the correction |
+| Current Month Prorata | Legacy changes denominator based on MOQ Active | remaining date-wise demand from selected as-of date | correction: MOQ policy must not alter demand-rate arithmetic |
+| Safety / lead-time stock | `TOTAL PRORATA × Target` and `MAXIFS+4 × TOTAL PRORATA` | Critical / effective-lead-time × average daily demand | correction: legacy formulas multiply a horizon quantity by days; ERP preserves units and labels max+4 as a legacy equivalent, not an average |
 | Stock / consumption | RM_DATA sheet | posted ledger | ERP truth |
 | Stock elsewhere | blended (legacy unknown) | only required-SLoc stock is usable; other SLoc shown as transfer candidate | owner T01 / B09 rule |
 | Group materials | historic group percentages (B09 says not to reuse) | one demand pool per stroke / BOM line, stock drawn once, shortfall to procurement target | owner B09 |
@@ -44,8 +46,8 @@ Engine status for these rows was NO_POLICY (no Tab 2 policy saved yet in PROD �
 
 ## 4. Open items for the owner
 
-1. **Legacy formula export** for Prorata NM, Identifier, ID2, NM REQ DAYS (both variants), Safety Day Stock, Lead time Stock, Total Stock — needed to quantify variances (see mapping doc).
-2. **Initial policy import** — use Tab 2 "Import from REQUIREMENT sheet" (paste per company). The sheet does not say whether an MOQ is a vendor or company MOQ, so the importer requires the user to choose; nothing is assumed.
-3. **Cross-company production allocation** has no storage in PO21 yet — PO22 explodes all demand with the plan company's own masters and says so.
-4. **ACL decision** — the provisioning SQL proposes: page VIEW for everyone who has PO21; Material Settings edit for PO21 full-access users (SCM / Director / ACL-MASTER). Owner to confirm before it is run.
-5. **Litre-base SKU in CMP003** needs a fixed L→KG master conversion, otherwise its RM/PM demand is reported as an exception.
+1. **Initial policy import** — use Tab 2 "Import from REQUIREMENT sheet" (paste per company). The sheet does not say whether an MOQ is a vendor or company MOQ, so the importer requires the user to choose; nothing is assumed.
+2. **Cross-company production allocation** has no storage in PO21 yet — PO22 explodes all demand with the plan company's own masters and says so.
+3. **ACL decision** — the provisioning SQL proposes: page VIEW for everyone who has PO21; Material Settings edit for PO21 full-access users (SCM / Director / ACL-MASTER). Owner to confirm before it is run.
+4. **Litre-base SKU in CMP003** needs a fixed L→KG master conversion, otherwise its RM/PM demand is reported as an exception.
+5. **Numeric parity** requires frozen date/source snapshots and material identities; do not compare moving `TODAY()` workbook cells to a selected-as-of ERP run.

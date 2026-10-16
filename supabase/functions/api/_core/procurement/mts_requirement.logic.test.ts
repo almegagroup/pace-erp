@@ -363,8 +363,8 @@ Deno.test("Coverage: zero demand, zero stock, date-wise with inbound [T15]", () 
 
 Deno.test("NM REQ DAYS: ERP date-aware rule around the 15th [T17]", () => {
   // ERP: clamp(Target − CM days left, 0, NM days). Same rule for every company;
-  // the CMP003 legacy 15th-day condition is UNVERIFIED (sheet not readable) and
-  // recorded in the reconciliation report instead of being re-implemented.
+  // direct sheet inspection verified CMP003's 15th-day step differs, and the
+  // reconciliation report records this deliberate smoothing correction.
   const target = 45;
   const d14 = buildCalendar("2026-11-01", "2026-11-14")!; // 17 days left
   const d15 = buildCalendar("2026-11-01", "2026-11-15")!; // 16 days left

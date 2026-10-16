@@ -1,14 +1,16 @@
 # PO22 Requirement — Deployment Readiness Audit
 
 **Date:** 2026-10-16
-**Status:** BLOCKED — no PO22 implementation is available to audit, test, or deploy.
-**Scope:** evidence preservation and legacy-formula reconciliation only. No production data,
-schema, ACL, or application change was made.
+**Status:** SUPERSEDED AS A RECOVERY FINDING — the initial repository search used a stale
+`origin/agent/claude` ref. After an explicit fetch, Claude's PO22 commit
+`ec8758bfefe6adbab0bb1c8eacd6c3d2de2373c0` was recovered and integrated on `agent/codex`.
+**Scope:** preserve the initial search evidence and direct legacy-formula reconciliation. No
+production data, schema, ACL, or application change was made by this audit itself.
 
 ## Repository evidence
 
-The following required PO22 assets are absent from `agent/codex`, `origin/main`,
-`origin/dev`, `origin/agent/claude`, and `origin/agent/chatgpt` at audit time:
+The following finding was accurate only for the stale local remote-tracking refs available before
+the explicit fetch; it is not a current implementation-status claim:
 
 - a `20261016100000*` migration;
 - `docs/mts-planning/acl/MTS-REQUIREMENT-ACL-PROVISIONING.sql`;
@@ -20,8 +22,8 @@ The following required PO22 assets are absent from `agent/codex`, `origin/main`,
 All registered Claude worktrees were inspected read-only. Their uncommitted work is unrelated
 (migration guard scripts, HR documentation, and an operation-management source document), and
 was left untouched. Reachable refs and dangling commit objects were also searched without finding
-a PO22 implementation. Therefore the reported tabs, settings model, export, source expansion, and
-ACL cannot be claimed as built or verified.
+a PO22 implementation. The subsequent explicit fetch recovered the published implementation; this
+document must be read together with the current PO22 calculation contract and reconciliation report.
 
 ## Legacy workbook reconciliation matrix
 
@@ -69,8 +71,5 @@ without the missing PO22 source and test suite.
 
 ## Deployment decision
 
-**Not deployment-ready.** There is no code or migration to run, no ACL resource to provision,
-and no deterministic calculation implementation to test. Recovery must begin by locating the
-unpublished PO22 branch/worktree or receiving an explicit authorisation to build the feature from
-the reconciled contract. Until then, no PR is appropriate and no migration, ACL provisioning,
-deployment, merge, or production write may occur.
+The recovery conclusion above is superseded. PO22 has been recovered into `agent/codex`; its
+separate migration and ACL provisioning remain deliberately unapplied and require owner approval.

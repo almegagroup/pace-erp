@@ -617,23 +617,43 @@ function parseSheetImport(rawText, rows) {
   const matched = [];
   const unmatched = [];
   const lines = String(rawText ?? "").replace(/\r/g, "").split("\n").filter((line) => line.trim() !== "");
-  lines.forEach((line, index) => {
-    const cells = line.split("\t").map((cell) => cell.trim());
-    const key = normalizeKey(cells[0]);
-    if (index === 0 && /ITEM/.test(key) && !byCode.has(key) && !byName.has(key)) return; // header row
+  const parsed = lines.map((line) => line.split("\t").map((cell) => cell.trim()));
+  // A normal copy from legacy REQUIREMENT includes TYPE in column B and MOQ
+  // later in the row. Detect its named header so we never misread TYPE as the
+  // Target Coverage value. The compact six-column import remains supported.
+  const headerIndex = parsed.findIndex((cells) => {
+    const labels = cells.map(normalizeKey);
+    return labels.includes("ITEMS") && labels.includes("TARGET COV") && labels.includes("CRITICAL COV");
+  });
+  const header = headerIndex >= 0 ? parsed[headerIndex].map(normalizeKey) : null;
+  const indexOf = (...labels) => header ? header.findIndex((value) => labels.includes(value)) : -1;
+  const fields = header ? {
+    item: indexOf("ITEMS"),
+    target: indexOf("TARGET COV"),
+    critical: indexOf("CRITICAL COV"),
+    moq: indexOf("MOQ"),
+    moqUom: indexOf("MOQ UOM", "MOQ UOM CODE"),
+    moqActive: indexOf("MOQ ACTIVE"),
+  } : { item: 0, target: 1, critical: 2, moq: 3, moqUom: 4, moqActive: 5 };
+  parsed.forEach((cells, index) => {
+    if (headerIndex >= 0 && index <= headerIndex) return;
+    const cell = (field) => field >= 0 ? cells[field] ?? "" : "";
+    const item = cell(fields.item);
+    const key = normalizeKey(item);
+    if (!key) return;
     const row = byCode.get(key) ?? byName.get(key);
     if (!row) {
-      unmatched.push({ line: index + 1, item: cells[0], reason: byName.get(key) === null ? "name matches more than one material" : "no company material with this code / name" });
+      unmatched.push({ line: index + 1, item, reason: byName.get(key) === null ? "name matches more than one material" : "no company material with this code / name" });
       return;
     }
     matched.push({
       material_id: row.material_id,
-      item: cells[0],
-      target: parseNumberOrBlank(cells[1]),
-      critical: parseNumberOrBlank(cells[2]),
-      moq: parseNumberOrBlank(cells[3]),
-      moq_uom: String(cells[4] ?? "").trim().toUpperCase(),
-      moq_active: /^(Y|YES|TRUE|1|ACTIVE)$/i.test(String(cells[5] ?? "").trim()),
+      item,
+      target: parseNumberOrBlank(cell(fields.target)),
+      critical: parseNumberOrBlank(cell(fields.critical)),
+      moq: parseNumberOrBlank(cell(fields.moq)),
+      moq_uom: String(cell(fields.moqUom)).trim().toUpperCase(),
+      moq_active: /^(Y|YES|TRUE|1|ACTIVE)$/i.test(String(cell(fields.moqActive)).trim()),
       raw: cells,
     });
   });
@@ -935,7 +955,7 @@ function SettingsTab({ companyId, asOf, access, today }) {
       {showImport ? (
         <div className="grid gap-2 border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
           <span>
-            Paste rows copied from this company's REQUIREMENT sheet in this column order: ITEMS (material code or exact name) · Target Cov · Critical Cov · MOQ · MOQ UoM · MOQ Active (Yes/No).
+            Paste either full rows with the legacy REQUIREMENT header (the named ITEMS, Target Cov, Critical Cov, MOQ and optional MOQ Active columns are detected), or a compact selection in this order: ITEMS (material code or exact name) · Target Cov · Critical Cov · MOQ · MOQ UoM · MOQ Active (Yes/No).
             Rows are only matched to this company's existing materials — nothing is created. Matched rows are staged below as unsaved edits for review.
           </span>
           <textarea value={importText} onChange={(event) => setImportText(event.target.value)} rows={5} className="border border-amber-300 bg-white p-1 font-mono text-xs" />

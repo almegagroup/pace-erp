@@ -1,17 +1,13 @@
 # PO22 Requirement — Source / Field / Formula Mapping
 
-Date: 2026-10-16 · Author: Claude Code · Status: **Partially verified** — see the source-validation gap below.
+Date: 2026-10-16 · Author: Claude Code · Updated by Codex after direct legacy-sheet inspection · Status: **legacy formulas inspected; ERP variances explicit**.
 
-## Source-validation gap (read first)
+## Legacy-source inspection (read first)
 
-The three company REPORTS_ALL spreadsheets named in the brief (CMP003 `1lm-FpAW…`, CMP005 `18SQHKF0…`, CMP011 `1z0Ikk0z…`) **could not be opened from this environment** (Google Docs blocked by the network proxy, HTTP 403). No copy of any of the tabs (REQUIREMENT, RM_PM_REQ, ITEM_REQ, BOM, DV, PLAN, PLAN/PRD, RM_DATA, CONSOILI_MVT) exists in the repository.
-
-So this mapping uses only:
-- formulas quoted in the owner brief (2026-10-16): `AVG. LEAD TIME = MAXIFS(CONSOILI_MVT!R, material) + 4`, `Critical Cov default = ROUNDUP(Target Cov / 2)`, EOMONTH / TODAY date arithmetic, NM REQ DAYS differs (CMP003 15th-day condition; CMP005 / CMP011 target vs days-left);
-- the field list in the brief and `BUSINESS-REQUIREMENTS.md` B11 / B12;
-- the verified ERP schema and code.
-
-Nothing below claims a legacy formula that was not supplied. Each row says **VERIFIED (brief)**, **ERP DEFINITION** (ERP semantics defined here, legacy formula not seen) or **UNRESOLVED**. No field was dropped.
+On 2026-10-16 the live `REQUIREMENT` formulas were read directly for CMP003 SURFACE,
+CMP005 ACPL and CMP011 JAYASHREE. The ERP source remains the verified schema/code; the
+legacy tab is a functional reference, not a formula-copy target. Each intentional ERP variance is
+identified below so no legacy substitution is silent.
 
 ## Legacy field → ERP field
 
@@ -27,7 +23,7 @@ Nothing below claims a legacy formula that was not supplied. Each row says **VER
 | 8 | Current Req | Current Req (CURRENT MONTH REQ) | ERP DEFINITION | whole-CM demand from PO21 × Stroke / Pack BOM |
 | 9 | Current Prorata | Current Prorata (CM PRORATA) | VERIFIED intent (EOMONTH/TODAY) → as-of based | demand `D`..CM end |
 | 10 | Req NM | Req NM | ERP DEFINITION | whole-NM demand |
-| 11 | Prorata NM | Prorata NM | **UNRESOLVED** legacy meaning | ERP: equals Req NM (NM has no elapsed days). If the sheet scaled NM by a day count, that is captured by NEXT MONTH REQ (#24) |
+| 11 | Prorata NM | Prorata NM | VERIFIED: `ROUNDUP(Req NM / days in NM,2)` | ERP deliberately exposes full NM demand in `Req NM`; daily rate is `Avg Daily Req` / date-wise demand |
 | 12 | CURRENT CONS. | CURRENT CONS. | ERP DEFINITION (replaces RM_DATA) | net posted P261 − P262, CM start .. day before as-of |
 | 13 | CURRENT_STOCK | CURRENT_STOCK (usable) | ERP DEFINITION (replaces RM_DATA) | ledger stock at start of as-of day, UNRESTRICTED at required SLoc − open reservations |
 | 14 | Current Balance | Current Balance | ERP DEFINITION | stock − CM prorata |
@@ -41,19 +37,19 @@ Nothing below claims a legacy formula that was not supplied. Each row says **VER
 | 22 | Below Critical w. In | Below Critical w. In | ERP DEFINITION | Cov till NM < Critical |
 | 23 | MOQ | MOQ + MOQ UoM + MOQ Source | VERIFIED intent (B09) | Tab 2 policy, source VENDOR / COMPANY / NONE |
 | 24 | MOQ Active | MOQ Active | ERP DEFINITION | Tab 2 policy flag; applied to Net Req (MOQ) |
-| 25 | Identifier | Identifier | **UNRESOLVED** legacy values | ERP: NO_DEMAND / NO_POLICY / CRITICAL / BELOW_TARGET / OK from stock cover |
-| 26 | ID2 | ID2 (with incoming) | **UNRESOLVED** legacy values | ERP: same classes from cover with incoming |
+| 25 | Identifier | Identifier | VERIFIED: compact 0–3 sum of below-target, below-critical and ID2 flags | ERP: named NO_DEMAND / NO_POLICY / CRITICAL / BELOW_TARGET / OK states; safer than an opaque code |
+| 26 | ID2 | ID2 (with incoming) | VERIFIED: set where calculated Total Stock is at least Current Stock | ERP: named cover-with-inbound state, using the same required-SLoc stock definition |
 | 27 | CURRENT MONTH REQ | = Current Req (#8) | ERP DEFINITION — the sheet lists it twice | same value |
 | 28 | PRORATA (current month) | = Current Prorata (#9) | same | same value |
 | 29 | CM DAYS LEFT | CM DAYS LEFT | VERIFIED intent (EOMONTH − TODAY) | inclusive as-of .. CM end |
-| 30 | NM REQ DAYS | NM REQ DAYS | **legacy formula UNRESOLVED** (differs CMP003 vs CMP005/011) | ERP: clamp(Target − CM DAYS LEFT, 0, NM days), same for all companies |
+| 30 | NM REQ DAYS | NM REQ DAYS | VERIFIED: CMP003 = full NM days only from the 15th; CMP005/CMP011 = `MAX(Target − CM Days Left,0)` | ERP: clamp(Target − CM DAYS LEFT, 0, NM days), same for all companies; intentional smoothing correction, not a legacy copy |
 | 31 | NEXT MONTH REQ | NEXT MONTH REQ | ERP DEFINITION | NM demand for the first NM REQ DAYS days |
 | 32 | TOTAL REQ | TOTAL REQ | ERP DEFINITION | Current Req + NEXT MONTH REQ |
 | 33 | TOTAL PRORATA | TOTAL PRORATA | ERP DEFINITION | Current Prorata + NEXT MONTH REQ |
 | 34 | AVG. LEAD TIME | AVG. LEAD TIME (effective) + Source + configured / observed columns | VERIFIED (brief): legacy = MAXIFS(...)+4, a **max** | see contract §6 |
-| 35 | Safety Day Stock | Safety Day Stock | ERP DEFINITION (legacy formula not seen) | Critical × avg daily |
-| 36 | Lead time Stock | Lead time Stock | ERP DEFINITION | effective lead time × avg daily |
-| 37 | Total Stock | Total Stock | ERP DEFINITION | Safety + Lead time Stock |
+| 35 | Safety Day Stock | Safety Day Stock | VERIFIED: `TOTAL PRORATA × Target Cov` | ERP correction: Critical × avg daily; legacy quantity×days mixes a horizon quantity with a coverage-day target |
+| 36 | Lead time Stock | Lead time Stock | VERIFIED: `AVG. LEAD TIME × TOTAL PRORATA` | ERP correction: effective lead time × avg daily |
+| 37 | Total Stock | Total Stock | VERIFIED: Safety + Lead time Stock | Same composition, with dimensionally consistent ERP inputs |
 
 ERP-only additions (no legacy column): CM Req − Cons, Unrestricted / Reserved @ Req SLoc, Other SLoc (transfer), QA, Blocked, Required SLoc / Other SLocs, In-transit ETA passed / unknown / later, Inbound Risk, NM Opening / Closing, stock-out dates, Net Req, Net Req (MOQ), Avg Daily Req, lead-time configured / observed / P90 / samples, policy effective date / version / source / updated by.
 
@@ -67,6 +63,8 @@ ERP-only additions (no legacy column): CM Req − Cons, Unrestricted / Reserved 
 | RM_DATA | `erp_inventory.get_stock_history` (stock + CONS bucket), `reservation_document` |
 | CONSOILI_MVT | received CSNs (PO date → GRN date) + `erp_history` lead-time samples |
 
-## What is needed to close the UNRESOLVED rows
+## Remaining formula-review boundary
 
-A copy (xlsx / csv export) of each company's REQUIREMENT tab with formulas visible (or a screenshot of the formula bar for columns Prorata NM, Identifier, ID2, NM REQ DAYS, Safety Day Stock, Lead time Stock, Total Stock). The engine keeps each of those fields isolated in one function, so a confirmed legacy rule can be adopted without touching the rest.
+The verified formulas establish the legacy behavior. A row-level numeric parity run still needs a
+frozen selected date, matching historical source snapshot and mapped ERP material identities; it
+must compare intentional ERP corrections separately from regressions.

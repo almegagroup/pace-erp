@@ -6513,3 +6513,30 @@ Owner brief 2026-10-16: PO22 "Requirement", two tabs (Requirement Report, Materi
 Checks run: Deno tests 39 / 39 (PO22 + PO21 + historical logic suites); `deno check` new handlers clean; `procurement.routes.ts` 96 errors before = 96 after (all pre-existing); eslint touched frontend files clean; `vite build` OK; all CI guards pass incl. `dependency-provisioning-check --strict-manifest`. Real-data smoke run (CMP011, as-of 2026-10-16, PROD read-only export) matches independent hand calculations (see reconciliation report §2).
 
 Open / blocked: Google Sheets not reachable (legacy formulas UNRESOLVED for Prorata NM, Identifier, ID2, NM REQ DAYS variants, Safety / Lead-time / Total Stock); "MTS Planning" sub-group not created (menu tree has no nested groups — PO22 sits under Procurement like PO21); cross-company production allocation has no PO21 storage; deployment needs migration + ACL provisioning + `NOTIFY pgrst` + migration-integrity-check, each with owner approval.
+
+---
+
+### 2026-10-16 — PO22 recovery, legacy formula audit and import correction (Codex) — CODE CHECKS PASS, NOT DEPLOYED
+
+- Recovered Claude commit `ec8758bfefe6adbab0bb1c8eacd6c3d2de2373c0` only after an explicit
+  `git fetch origin agent/claude`; it was cherry-picked with `-x` onto `agent/codex` without
+  rebuilding PO22. The concurrent POTMP and both agents' log entries were retained.
+- Direct formula reads of all three legacy `REQUIREMENT` tabs correct the prior source-gap note:
+  CMP003 switches NM requirement days to a full next month at day 15; CMP005/CMP011 use
+  `MAX(Target Coverage − CM Days Left, 0)`. The engine's common clamp rule remains an explicit,
+  documented smoothing correction. Legacy safety/lead-time stock use `TOTAL PRORATA` and are
+  dimensionally corrected in ERP to daily demand × policy days. `MAXIFS + 4` is documented as a
+  maximum-plus-buffer, not an average.
+- Fixed a verified Tab 2 bulk-import defect: a full legacy row contains `TYPE` in column B and
+  `MOQ` later in the row, but the importer had treated adjacent cells as Target/Critical/MOQ.
+  It now detects named legacy headers, maps their actual columns, preserves compact six-column
+  paste, stages unmatched/ambiguous items for review, and still requires a human Vendor/Company
+  MOQ-source choice.
+- Verification: PO22 Deno engine tests 20/20; `deno check` logic + handler clean; focused ESLint
+  clean; Vite production build passes; all mandatory `.mjs` ACL/company/payload/route/JSX/stock,
+  dependency-manifest and migration scans pass. Full-repository ESLint remains red on 70
+  unrelated pre-existing violations; no PO22 violation was reported.
+- Rollout remains blocked pending owner approval only: apply migration `20261016100000` to DEV,
+  expose/reload `erp_planning` as required, run rolled-back DB scenario test, execute the proposed
+  ACL provisioning and version/snapshot rebuild, complete company-role UAT, then separately approve
+  PROD. No migration, ACL data, deployment, merge to `dev`/`main`, or PROD write was performed.
