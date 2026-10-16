@@ -1810,3 +1810,25 @@ export function listPrintGroups(params) {
 export function createPrintLog(payload) {
   return fetchProcurement("POST", "/api/procurement/print-groups/log", payload);
 }
+
+// PO22 MTS Requirement (Requirement Report + Material Settings). Responses are
+// plain objects without a `data`/`pagination` key, so read `.rows` directly.
+export function getMtsRequirementAccess(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/access", undefined, params);
+}
+
+export function getMtsRequirementReport(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/report", undefined, params);
+}
+
+export function getMtsRequirementPolicies(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/policies", undefined, params);
+}
+
+export function getMtsRequirementPolicyHistory(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/policy-history", undefined, params);
+}
+
+export function saveMtsRequirementPolicies(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/policies", data);
+}

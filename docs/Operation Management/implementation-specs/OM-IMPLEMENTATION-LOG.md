@@ -6493,3 +6493,23 @@ decision. No deploy, no PROD write, no historical import, no push to `dev`/`main
 - Added POTMP choices for PO headers, PO lines, movements and Product Database snapshots, with a 500 combined-record limit. Existing Production/FG Dispatch remains 2,000 rows with its 30-Sep-2026 boundary. The UI now renders returned summary/reconciliation/counts rather than dashes/toast-only and clears approval when payload/source/company changes.
 - Added a scoped read-only procurement-evidence reader: exact live PO overlap is labelled `ERP_LIVE` and preferred; historical observations and reference defaults are labelled separately. It explicitly reports `live_supply_affected: false`.
 - **Not performed:** migration apply, DEV/PROD deployment, historical import, or any live operational/data mutation. Database contract testing requires a reviewed environment where the prerequisite v1 importer is deployed.
+
+---
+
+### 2026-10-16 — PO22 Requirement (Procurement · MTS Planning) — DONE on branch, NOT applied / deployed (Claude)
+
+Owner brief 2026-10-16: PO22 "Requirement", two tabs (Requirement Report, Material Settings), CMP003 / CMP005 / CMP011, deterministic engine from PO21 plan + Stroke / Pack BOM + ledger stock + posted consumption + PO / CSN + masters. No AI, no PO23, no procurement actions.
+
+| Layer | File | Notes |
+|---|---|---|
+| Migration | `supabase/migrations/20261016100000_erp_planning_material_requirement_policy.sql` | `erp_planning.material_requirement_policy` (append-only, effective-dated, per company × individual material) + atomic `save_material_requirement_policies()`. Not applied to DEV (brief: do not use DEV) or PROD. |
+| DB test | `supabase/tests/erp_planning_material_requirement_policy.test.sql` | 8 checks; passed on a throwaway local PostgreSQL 16 with stub masters. |
+| Engine | `_core/procurement/mts_requirement.logic.ts` (+ `.logic.test.ts`, 20 tests) | pure; demand → day-wise → Stroke / Pack BOM explosion → count-once group allocation (production's rule) → Q-T06 inbound partition → lead time → all REQUIREMENT fields. |
+| API | `_core/procurement/mts_requirement.handlers.ts` | `GET /mts-requirement/access|report|policies|policy-history`, `POST /mts-requirement/policies`. Routes + `route-acl-registry.ts`. `loadCompanySkus` now exported from `mts_customer_plan.handlers.ts` (reuse, no behaviour change). |
+| Frontend | `pages/dashboard/procurement/planning/MtsRequirementPage.jsx` | ErpDenseGrid only, inline source drill / history (no side panels), column-group toggles, RM/PM + risk filters, Excel export of the grid's own visible columns and filtered rows, Tab 2 inline edit + Excel paste + REQUIREMENT-sheet paste import. Registered in `operationScreens.js` (`PROC_MTS_REQUIREMENT`), `AppRouter.jsx`, `procurementApi.js`, `PAGE-DEPENDENCY-MANIFEST.json`. |
+| ACL SQL | `docs/mts-planning/acl/MTS-REQUIREMENT-ACL-PROVISIONING.sql` | NOT run. TX PO22 verified free on PROD. Access rule PROPOSED (owner to confirm). |
+| Docs | `docs/mts-planning/PO22-REQUIREMENT-CALCULATION-CONTRACT.md`, `PO22-REQUIREMENT-SOURCE-FIELD-MAPPING.md`, `PO22-LEGACY-RECONCILIATION-REPORT.md` | |
+
+Checks run: Deno tests 39 / 39 (PO22 + PO21 + historical logic suites); `deno check` new handlers clean; `procurement.routes.ts` 96 errors before = 96 after (all pre-existing); eslint touched frontend files clean; `vite build` OK; all CI guards pass incl. `dependency-provisioning-check --strict-manifest`. Real-data smoke run (CMP011, as-of 2026-10-16, PROD read-only export) matches independent hand calculations (see reconciliation report §2).
+
+Open / blocked: Google Sheets not reachable (legacy formulas UNRESOLVED for Prorata NM, Identifier, ID2, NM REQ DAYS variants, Safety / Lead-time / Total Stock); "MTS Planning" sub-group not created (menu tree has no nested groups — PO22 sits under Procurement like PO21); cross-company production allocation has no PO21 storage; deployment needs migration + ACL provisioning + `NOTIFY pgrst` + migration-integrity-check, each with owner approval.

@@ -4639,6 +4639,20 @@
     "deps": []
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/planning/MtsRequirementPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "saveMtsRequirementPolicies",
+        "method": "POST",
+        "path": "/api/procurement/mts-requirement/policies",
+        "resourceCode": "PROC_MTS_REQUIREMENT_POLICY",
+        "action": "WRITE",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/planning/HistoricalOperationsImportPage.jsx",
     "dependencyCount": 5,
     "deps": [
