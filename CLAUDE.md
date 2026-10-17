@@ -554,6 +554,38 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
+> ### 🔴 2026-10-15 — DEFERRED BACKFILL: Inward QA valuation 1000× (business owner: "backfill pore korbo")
+>
+> **Bug (code fixed, commit `c0e1a47`):** `inward_qa.handlers.ts`-এর usage decision (P321/P344 ইত্যাদি)
+> base-UoM qty (KG) post করত `grn.grn_rate` দিয়ে — যেটা PO/GRN UoM-এর rate (per MT)। GRN নিজে P101
+> ঠিক করত `grn_rate ÷ per_pack_qty`, QA করত না। ফলে MT-এ GR, KG-তে QA হলে rate ১০০০ গুণ। এখন QA-ও
+> GRN posting-এর একই formula ব্যবহার করে — **নতুন posting ঠিক, কিন্তু পুরনো posting-এর valuation
+> এখনো ভুল, backfill ইচ্ছাকৃতভাবে পরে করা হবে।**
+>
+> **Prod-এ ক্ষতির পরিধি (2026-10-15 মাপা):** ২৪০টা QA decision line — CMP003 ১৪০ (Dalmia Infrapro
+> PPC Cement, Dolomite 240#, White Cement JK), CMP005 ৭৪ (Dolomite 240#, Ribbon 50×300, Ultratech
+> PPC), CMP011 ২৬ (Dolomite 240#)। Posted value ≈ ₹২,০৯০ কোটি, সঠিক ≈ ₹২ কোটি। যেমন Ultratech PPC
+> CMP005 WAR ≈ ₹২,৬২৫/kg (GRN ₹৬.১৯/kg)। খোঁজার query: `inward_qa_decision_line` ⨝
+> `inward_qa_document` ⨝ `goods_receipt` where `per_pack_qty > 1` AND `goods_receipt.uom_code <>
+> inward_qa_document.uom_code` AND `grn_rate > 0`.
+>
+> **⚠️ backfill না হওয়া পর্যন্ত:** এই material-গুলোর `stock_snapshot.valuation_rate` (WAR) ফোলানো
+> থাকবে, তাই এদের প্রতিটা নতুন issue (Process PO Verify, Packing PO ইত্যাদি) ফোলানো value নিয়েই post
+> হবে — SFG/FG cost (যেমন CMP005 MTS FG ₹১,০৮৫–১,১৮২/kg) ভুল থাকবে। Qty সম্পূর্ণ ঠিক, শুধু value ভুল।
+>
+> **Backfill পদ্ধতি (যখন করা হবে):** প্রতিটা ভুল QA IN leg-এ §109 Recalculate
+> (`recalculate_valuation_at_row` + TS cascade, RM→SFG→FG) সঠিক rate (`grn_rate ÷ per_pack_qty`)
+> দিয়ে। ⚠️ প্রতিটা ledger row একবারই recalculate করা যায় (one-time lock) আর এত বড় scale-এ cascade
+> আগে চলেনি — তাই প্রথমে **একটা material** (CMP005 Ultratech PPC) চালিয়ে business owner-কে ফল
+> দেখাও, OK পেলে বাকিগুলো। Business owner-এর confirmation ছাড়া শুরু করবে না।
+>
+> **একই session-এ ঠিক করা আনুষঙ্গিক (commit `c0e1a47`):** GRN invoice split-এ original GRN এখন
+> status **SPLIT** (আগে REVERSED হতো → QA "Reversed with GRN" বলে lock করত, AC01-এ challan→GE→
+> GRN→invoice chain হারাত)। Migration `20261015170000` deploy-এ ৫টা পুরনো split (2000000240/490/
+> 498/501/526) SPLIT-এ backfill করে, 2000000167 (পুরনো P102 mechanism, সত্যিকারের reversal)
+> REVERSED থাকে। RTV-এর legacy `goods_receipt_line` path-এও একই `grn_rate` প্যাটার্ন আছে, কিন্তু
+> prod-এ ওই table খালি (0 row) — ব্যবহার শুরু হলে আগে ঠিক করো।
+>
 > ### 📍 2026-09-22 session note — sequencing decision (business owner), পরের session এটা সবার আগে পড়ো
 >
 > **প্রেক্ষাপট:** এই session-টা ছিল MTS (Make-to-Stock, IWC/Powder) batch-wise stock posting
