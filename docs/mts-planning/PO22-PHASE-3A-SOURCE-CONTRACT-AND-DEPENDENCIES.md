@@ -43,7 +43,7 @@ The snapshot is an in-memory Phase 3A contract only. It has no database persiste
 5. Verify lifecycle-unique source keys for PO, Gate Entry, CSN/sub-CSN, lots, partial GRN and knock-off events.
 6. Verify material UOM conversions, especially the CMP003 litre-to-KG exception and all Pack BOM unit paths.
 7. Confirm vendor MOQ/order-multiple, delivery-lot and total lead-time source contracts before any procurement scenario exists.
-8. Obtain an approved DEV baseline of current PO22 CM/NM output before changing any integration surface; no owner PROD UAT is assumed by Phase 3A.
+8. Establish an automated, reproducible baseline of current PO22 CM/NM output before changing any integration surface. Phase 3A requests no owner DEV UAT; business UAT remains owner-controlled in PROD only after a separately approved controlled release.
 
 ## Phase 3B entry criteria
 
