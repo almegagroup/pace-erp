@@ -7,9 +7,12 @@
 export type OptimizerMissingDataCode =
   | "MISSING_UOM_CONVERSION"
   | "INVALID_QUANTITY"
-  | "UNKNOWN_ETA"
-  | "DUPLICATE_STOCK_EVENT"
-  | "DUPLICATE_INBOUND_EVENT";
+  | "ETA_MISSING"
+  | "ETA_INVALID"
+  | "ETA_OVERDUE"
+  | "CONFLICTING_STOCK_EVIDENCE"
+  | "CONFLICTING_RESERVATION_EVIDENCE"
+  | "CONFLICTING_INBOUND_EVIDENCE";
 
 export type OptimizerMissingData = {
   code: OptimizerMissingDataCode;
@@ -26,6 +29,13 @@ export type OptimizerMaterialUom = {
   to_base_factors: Record<string, number>;
 };
 
+/** Verified conversion evidence for a GROUP_POOL, where material_id is intentionally null. */
+export type OptimizerDemandUomEvidence = {
+  base_uom_code: string;
+  to_base_factors: Record<string, number>;
+  source: string;
+};
+
 export type OptimizerDemandSource = {
   source_key: string;
   company_id: string;
@@ -35,6 +45,8 @@ export type OptimizerDemandSource = {
   demand_kind: "FIXED_EXCLUSIVE" | "GROUP_POOL";
   group_id: string | null;
   material_id: string | null;
+  /** Required for GROUP_POOL when no material is selected; never infer a member. */
+  uom_evidence: OptimizerDemandUomEvidence | null;
   qty: number;
   uom_code: string;
 };
@@ -77,6 +89,12 @@ export type OptimizerRawSources = {
   as_of: string;
   captured_at: string;
   materials: OptimizerMaterialUom[];
+  /** Source-adapter supplied policy; no R/S prefix assumptions are permitted. */
+  stock_eligibility: {
+    eligible_stock_type_codes: string[];
+    excluded_storage_location_ids: string[];
+    policy_source: string;
+  };
   demand: OptimizerDemandSource[];
   stock: OptimizerStockSource[];
   reservations: OptimizerReservationSource[];
@@ -90,6 +108,8 @@ export type OptimizerDemandInput = Omit<OptimizerDemandSource, "qty" | "uom_code
 export type OptimizerStockInput = Omit<OptimizerStockSource, "qty" | "uom_code"> & {
   qty_base: number | null;
   base_uom_code: string | null;
+  planning_eligible: boolean;
+  exclusion_reason: "STOCK_TYPE" | "LOCATION" | null;
 };
 export type OptimizerReservationInput = Omit<OptimizerReservationSource, "qty" | "uom_code"> & {
   qty_base: number | null;
@@ -98,6 +118,7 @@ export type OptimizerReservationInput = Omit<OptimizerReservationSource, "qty" |
 export type OptimizerInboundInput = Omit<OptimizerInboundSource, "qty" | "uom_code"> & {
   qty_base: number | null;
   base_uom_code: string | null;
+  eta_state: "KNOWN" | "MISSING" | "INVALID" | "OVERDUE";
 };
 
 /** Immutable normalized evidence. Future solver runs must consume this, not live rows. */
@@ -118,5 +139,12 @@ export class OptimizerSourceScopeError extends Error {
   constructor(public readonly source: string, public readonly sourceKey: string, expectedCompany: string, actualCompany: string) {
     super(`${source} ${sourceKey} belongs to ${actualCompany}, not requested company ${expectedCompany}.`);
     this.name = "OptimizerSourceScopeError";
+  }
+}
+
+export class OptimizerMaterialMasterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OptimizerMaterialMasterError";
   }
 }
