@@ -4654,7 +4654,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/planning/HistoricalOperationsImportPage.jsx",
-    "dependencyCount": 2,
+    "dependencyCount": 5,
     "deps": [
       {
         "fn": "dryRunHistoricalOperationsImport",
@@ -4670,6 +4670,30 @@
         "path": "/api/procurement/mts-plan/historical-import/commit",
         "resourceCode": "PROC_HISTORICAL_OPERATIONS_IMPORT",
         "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "dryRunHistoricalProcurementImport",
+        "method": "POST",
+        "path": "/api/procurement/historical-procurement-import/dry-run",
+        "resourceCode": "PROC_HISTORICAL_OPERATIONS_IMPORT",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "commitHistoricalProcurementImport",
+        "method": "POST",
+        "path": "/api/procurement/historical-procurement-import/commit",
+        "resourceCode": "PROC_HISTORICAL_OPERATIONS_IMPORT",
+        "action": "WRITE",
+        "skipAcl": false
+      },
+      {
+        "fn": "getHistoricalProcurementEvidence",
+        "method": "GET",
+        "path": "/api/procurement/historical/procurement-evidence",
+        "resourceCode": "PROC_MTS_CUSTOMER_PLAN",
+        "action": "VIEW",
         "skipAcl": false
       }
     ]

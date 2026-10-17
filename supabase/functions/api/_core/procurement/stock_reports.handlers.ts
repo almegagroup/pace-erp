@@ -2244,6 +2244,8 @@ export async function getCurrentStockMachineWiseHandler(
       const machine = row.machineId ? machineMap.get(row.machineId) : null;
       return {
         material_id: row.materialId,
+        storage_location_id: row.storageLocationId,
+        machine_id: row.machineId,
         material_name: material?.material_name ?? null,
         document_name: material?.document_name ?? null,
         pace_code: material?.pace_code ?? null,
