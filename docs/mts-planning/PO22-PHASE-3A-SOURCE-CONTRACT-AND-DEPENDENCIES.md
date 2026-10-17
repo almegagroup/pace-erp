@@ -49,3 +49,11 @@ The snapshot is deeply frozen in memory and is a Phase 3A contract only. It has 
 ## Phase 3B entry criteria
 
 Phase 3B may add source adapters, persistent snapshot/run tables and company policy/selection data only after the listed dependencies are evidenced and owner-approved. It must continue to preserve PO22 CM/NM and the approved NM Requirement Days calculation.
+
+## Phase 3A final safety guardrails
+
+- Conflicted reservation or stock evidence blocks the affected material's executable physical-stock eligibility, not just the conflicted row. Conflicted inbound evidence blocks projected supply credit for the affected material. A downstream planner MUST examine `planning_blockers` and refuse affected calculations until reconciliation; omitting conflicts is never equivalent to zero reservations.
+- Stock policy is source-driven: eligible stock **types** plus company-specific explicitly excluded locations. CMP003 must exclude OT01 and OT02. Other locations may be inspected as material evidence; transfer eligibility, source/destination suitability and company ownership require a separate verified Phase 3B+ adapter. Location-code R/S prefixes are not interpreted here.
+- An OT exclusion is not sufficient alone: blocked/QA types are excluded. No inbound row is executable stock; `projected_supply_eligible` can only be true for known valid non-overdue ETA and valid base quantity with no affected inbound conflict.
+- Fingerprints canonicalize unordered eligibility/exclusion policy lists, excluding `captured_at`. Persistent snapshots still require cryptographic SHA-256 and source adapter truth checks.
+- Verified GROUP_POOL UOM source identity must be checked by the source adapter, not inferred from a material candidate.
