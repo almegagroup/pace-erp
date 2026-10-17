@@ -45,6 +45,7 @@ async function byIds(
 export type VerifiedLifecycleIdentityRead = Readonly<{
   gate_lines: readonly ReconciledGateEvidence[];
   po_lot_identities: readonly VerifiedLotIdentity[];
+  po_lot_balance_identities: readonly Readonly<{ lot_id: string; po_line_id: string; lot_number: string; balance_qty: number }>[];
   reservations: readonly (VerifiedReservationIdentity & { source_key: string })[];
   stock_ledger_source_keys: readonly string[];
   /** An event ID is provenance only. Stock availability comes from verified balances. */
@@ -105,7 +106,26 @@ export async function readOptimizerLifecycleIdentities(
   const lotRecords = lots.map((row) => ({
     id: value(row.id), po_line_id: value(row.po_line_id), lot_number: value(row.lot_number),
   }));
-  indexAuthoritativeLotIds(lotRecords);
+  const lotIndex = indexAuthoritativeLotIds(lotRecords);
+  // The actual PROD RPC is STABLE and returns the authoritative lot_id,
+  // not merely a lot number. Verify it against the immutable source row ID.
+  const lotBalances: { lot_id: string; po_line_id: string; lot_number: string; balance_qty: number }[] = [];
+  for (const part of chunked(lineIds)) {
+    const { data, error } = await serviceRoleClient.schema("erp_procurement")
+      .rpc("po_lot_balances", { p_po_line_ids: part, p_exclude_ge_line_id: null });
+    if (error) throw new Error("PHASE3B_LOT_BALANCE_RPC_FAILED");
+    for (const row of (data ?? []) as DbRow[]) {
+      const poLine = value(row.po_line_id);
+      const lotNumber = value(row.lot_number);
+      const lotId = value(row.lot_id);
+      const expected = lotIndex.get(JSON.stringify([poLine, lotNumber]));
+      const balance = Number(row.balance_qty);
+      if (!expected || expected !== lotId || !Number.isFinite(balance) || balance < 0) {
+        throw new Error(`PHASE3B_LOT_BALANCE_LINEAGE_UNVERIFIED:${poLine}:${lotNumber}`);
+      }
+      lotBalances.push({ lot_id: lotId, po_line_id: poLine, lot_number: lotNumber, balance_qty: balance });
+    }
+  }
 
   const reservations: (VerifiedReservationIdentity & { source_key: string })[] = [];
   for (const part of chunked([...new Set(selectedMaterialIds.filter(Boolean))])) {
@@ -132,6 +152,7 @@ export async function readOptimizerLifecycleIdentities(
   return Object.freeze({
     gate_lines: gateEvidence,
     po_lot_identities: Object.freeze(lotRecords.sort((a, b) => a.id.localeCompare(b.id)).map(Object.freeze)),
+    po_lot_balance_identities: Object.freeze(lotBalances.sort((a, b) => a.lot_id.localeCompare(b.lot_id)).map(Object.freeze)),
     reservations: Object.freeze(reservations.sort((a, b) => a.source_key.localeCompare(b.source_key)).map(Object.freeze)),
     stock_ledger_source_keys: Object.freeze(ledgerSourceKeys),
     stock_ledger_events_are_not_balances: true as const,
