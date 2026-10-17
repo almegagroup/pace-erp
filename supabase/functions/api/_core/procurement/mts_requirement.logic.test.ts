@@ -1,0 +1,447 @@
+/*
+ * PO22 Requirement engine — unit tests (no database).
+ * Brief test numbers are noted as [Tn]. Tests that belong to other layers:
+ *   [T1]  company isolation          → handler (assertCompanyScope + per-company ACL) and
+ *                                      supabase/tests/erp_planning_material_requirement_policy.test.sql P4
+ *   [T18] policy edit + revision      → DB test P1–P3 (+ effectivePolicy below)
+ *   [T20] per-company policies        → DB test P4
+ *   [T22] Excel export parity         → frontend exports the grid's own filtered rows/columns
+ */
+import {
+  addDays,
+  allocateDemand,
+  bucketInbound,
+  buildCalendar,
+  buildRequirementRows,
+  buildToBaseFactors,
+  canonicalJson,
+  computeLeadTime,
+  computeMaterialMetrics,
+  consumptionFromConsBucket,
+  coverageDays,
+  effectivePlanAt,
+  effectivePolicy,
+  explodeDemand,
+  type ExplosionInput,
+  type MaterialInfo,
+  moqInBase,
+  nmRequiredDays,
+  partitionPoLineInbound,
+  type PlanLineVersion,
+  type PolicyRow,
+  type RequirementInput,
+  resolveUsePrimary,
+  skuDailyDemand,
+  toMaterialBase,
+  type Warning,
+} from "./mts_requirement.logic.ts";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+function assertEqual(actual: unknown, expected: unknown, message: string) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a !== e) throw new Error(`${message}\n  expected: ${e}\n  actual:   ${a}`);
+}
+function near(actual: number | null | undefined, expected: number, message: string, tolerance = 0.001) {
+  if (actual === null || actual === undefined || Math.abs(actual - expected) > tolerance) {
+    throw new Error(`${message}: expected ${expected}, got ${actual}`);
+  }
+}
+function sum(map: Map<string, number> | undefined, from = "0000", to = "9999"): number {
+  let total = 0;
+  for (const [day, qty] of map ?? []) if (day >= from && day <= to) total += qty;
+  return total;
+}
+
+// ── fixture ───────────────────────────────────────────────────────────────
+let seq = 0;
+function line(partial: Partial<PlanLineVersion>): PlanLineVersion {
+  seq += 1;
+  return {
+    entry_id: partial.entry_id ?? `e${seq}`,
+    version_no: partial.version_no ?? 1,
+    plan_month: partial.plan_month ?? "2026-11-01",
+    plan_type: partial.plan_type ?? "ROLLING",
+    urgent_mode: partial.urgent_mode ?? null,
+    urgent_from_date: partial.urgent_from_date ?? null,
+    urgent_to_date: partial.urgent_to_date ?? null,
+    sku_material_id: partial.sku_material_id ?? "SKU1",
+    base_qty: partial.base_qty ?? 0,
+    is_cancelled: partial.is_cancelled ?? false,
+    created_at: partial.created_at ?? "2026-10-01T00:00:00Z",
+  };
+}
+function material(id: string, type: string, base = "KG", conversions: Record<string, number> = {}): MaterialInfo {
+  return { material_id: id, material_type: type, base_uom_code: base, status: "ACTIVE", to_base_factors: conversions };
+}
+
+/** Prodshade P1 (SKU1 20 KG bag), stroke S1 = RM-A 60% (fixed, R1) + RM group G1 40% (primary RM-B, member RM-C, R1). */
+function baseInput(overrides: Partial<ExplosionInput> = {}): ExplosionInput {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  return {
+    calendar,
+    effective: [],
+    skus: new Map([["SKU1", { sku_material_id: "SKU1", prodshade_material_id: "P1", base_uom_code: "KG", kg_per_base_unit: 1 }]]),
+    currentStrokeByProdshade: new Map([["P1", "S1"]]),
+    strokes: new Map([
+      ["S1", { stroke_master_id: "S1", stroke_number: "0001", prodshade_material_id: "P1", lines: [
+        { stroke_line_id: "L1", material_id: "RM-A", dosage_pct: 60, material_group_id: null, storage_location_id: "R1", display_order: 1 },
+        { stroke_line_id: "L2", material_id: "RM-B", dosage_pct: 40, material_group_id: "G1", storage_location_id: "R1", display_order: 2 },
+      ] }],
+      ["S2", { stroke_master_id: "S2", stroke_number: "0002", prodshade_material_id: "P1", lines: [
+        { stroke_line_id: "L3", material_id: "RM-A", dosage_pct: 100, material_group_id: null, storage_location_id: "R1", display_order: 1 },
+      ] }],
+    ]),
+    strokeSettings: new Map(),
+    primaryDecisions: [],
+    groupMembers: new Map([["G1", [{ material_id: "RM-B", active: true }, { material_id: "RM-C", active: true }]]]),
+    packBoms: new Map([["SKU1", { pack_bom_id: "B1", sfg_qty: 20, output_qty: 1, output_uom_code: "BAG", inputs: [
+      { material_id: "PM-BAG", qty: 1, uom_code: "NOS", storage_location_id: "P1LOC", material_group_id: null },
+    ] }]]),
+    materials: new Map([
+      ["RM-A", material("RM-A", "RM")], ["RM-B", material("RM-B", "RM")], ["RM-C", material("RM-C", "RM")],
+      ["PM-BAG", material("PM-BAG", "PM", "NOS")],
+    ]),
+    prodshadeLabels: new Map([["P1", "Prodshade One"]]),
+    ...overrides,
+  };
+}
+function effectiveFor(lines: PlanLineVersion[]) {
+  return effectivePlanAt(lines, null);
+}
+
+// ── tests ─────────────────────────────────────────────────────────────────
+Deno.test("calendar: CM days left inclusive, month end, year rollover [T16]", () => {
+  const nov = buildCalendar("2026-11-01", "2026-11-17")!;
+  assertEqual([nov.cmDaysInMonth, nov.cmDaysLeft, nov.cmDaysElapsed, nov.nmStart, nov.nmDaysInMonth], [30, 14, 16, "2026-12-01", 31], "mid-month");
+  const dec = buildCalendar("2026-12-01", "2026-12-31")!;
+  assertEqual([dec.cmDaysLeft, dec.nmStart, dec.nmEnd, dec.nmDaysInMonth], [1, "2027-01-01", "2027-01-31", 31], "last day + year rollover");
+  const feb = buildCalendar("2028-01-01", "2028-01-31")!;
+  assertEqual(feb.nmDaysInMonth, 29, "leap February as NM");
+  assertEqual(buildCalendar("2026-11-01", "2026-12-01"), null, "as-of outside the plan month is rejected");
+  assertEqual(addDays("2026-12-31", 1), "2027-01-01", "addDays rollover");
+});
+
+Deno.test("effective plan: Final replaces Rolling, Additional + Extra add, From Plan never adds; as-of version", () => {
+  const lines = [
+    line({ entry_id: "r", plan_type: "ROLLING", base_qty: 100, created_at: "2026-10-01T00:00:00Z" }),
+    line({ entry_id: "f", plan_type: "FINAL", base_qty: 300, created_at: "2026-10-05T00:00:00Z" }),
+    line({ entry_id: "f", version_no: 2, plan_type: "FINAL", base_qty: 310, created_at: "2026-10-06T00:00:00Z" }),
+    line({ entry_id: "a", plan_type: "ADDITIONAL", base_qty: 20, created_at: "2026-10-07T00:00:00Z" }),
+    line({ entry_id: "x", plan_type: "URGENT", urgent_mode: "EXTRA", urgent_from_date: "2026-11-03", urgent_to_date: "2026-11-04", base_qty: 10, created_at: "2026-10-08T00:00:00Z" }),
+    line({ entry_id: "p", plan_type: "URGENT", urgent_mode: "FROM_PLAN", urgent_from_date: "2026-11-01", urgent_to_date: "2026-11-02", base_qty: 50, created_at: "2026-10-08T00:00:00Z" }),
+    line({ entry_id: "c", plan_type: "ADDITIONAL", base_qty: 999, is_cancelled: true, created_at: "2026-10-09T00:00:00Z" }),
+  ];
+  const [now] = effectivePlanAt(lines, null);
+  assertEqual([now.base_source, now.base_qty, now.additional_qty, now.effective_qty], ["FINAL", 310, 20, 340], "current plan");
+  const [then] = effectivePlanAt(lines, "2026-10-02T00:00:00Z");
+  assertEqual([then.base_source, then.effective_qty], ["ROLLING", 100], "plan as it stood on 2 Oct (version reproducibility)");
+});
+
+Deno.test("SKU day demand: pro-rata + Urgent windows, month total kept", () => {
+  const [entry] = effectiveFor([
+    line({ plan_type: "FINAL", base_qty: 300 }),
+    line({ plan_type: "URGENT", urgent_mode: "FROM_PLAN", urgent_from_date: "2026-11-01", urgent_to_date: "2026-11-05", base_qty: 50 }),
+    line({ plan_type: "URGENT", urgent_mode: "EXTRA", urgent_from_date: "2026-11-10", urgent_to_date: "2026-11-11", base_qty: 20 }),
+  ]);
+  const warnings: Warning[] = [];
+  const daily = skuDailyDemand(entry, warnings);
+  near(sum(daily), 320, "month total = Final + Extra (From Plan only re-phases)");
+  near(daily.get("2026-11-01")!, 250 / 30 + 10, "From Plan window day");
+  near(daily.get("2026-11-10")!, 250 / 30 + 10, "Extra window day");
+  near(daily.get("2026-11-20")!, 250 / 30, "ordinary day");
+  assertEqual(warnings.length, 0, "no warnings");
+});
+
+Deno.test("RM explosion: multiple stroke periods in one month [T2]", () => {
+  const input = baseInput({
+    effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 3000 })]),
+    strokeSettings: new Map([["2026-11-01|P1", [
+      { stroke_master_id: "S1", period_from: "2026-11-01", period_to: "2026-11-10", planned_base_qty: null },
+      { stroke_master_id: "S2", period_from: "2026-11-11", period_to: "2026-11-30", planned_base_qty: null },
+    ]]]),
+  });
+  const result = explodeDemand(input);
+  const rmA = result.records.filter((r) => r.candidates[0] === "RM-A");
+  // 100 KG/day. Days 1–10 on S1 → 60 KG/day RM-A; days 11–30 on S2 → 100 KG/day RM-A.
+  near(rmA.filter((r) => r.day <= "2026-11-10").reduce((s, r) => s + r.qty, 0), 600, "S1 period RM-A");
+  near(rmA.filter((r) => r.day > "2026-11-10").reduce((s, r) => s + r.qty, 0), 2000, "S2 period RM-A");
+  near(result.records.filter((r) => r.pool_key === "RM|L2").reduce((s, r) => s + r.qty, 0), 400, "group line only on S1 days");
+});
+
+Deno.test("Stroke period planned quantity overrides pro-rata, month total preserved", () => {
+  const input = baseInput({
+    effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 3000 })]),
+    strokeSettings: new Map([["2026-11-01|P1", [
+      { stroke_master_id: "S1", period_from: "2026-11-01", period_to: "2026-11-10", planned_base_qty: 2000 },
+      { stroke_master_id: "S2", period_from: "2026-11-11", period_to: "2026-11-30", planned_base_qty: null },
+    ]]]),
+  });
+  const result = explodeDemand(input);
+  near(sum(result.prodshadeDaily.get("P1")), 3000, "Prodshade month total unchanged");
+  near(sum(result.prodshadeDaily.get("P1"), "2026-11-01", "2026-11-10"), 2000, "override period");
+});
+
+Deno.test("Use Primary Yes / No per Stroke × group, carried forward [T3]", () => {
+  const decisions = [
+    { stroke_master_id: "S1", material_group_id: "G1", effective_month: "2026-10-01", use_primary: false },
+    { stroke_master_id: "S1", material_group_id: "G1", effective_month: "2026-12-01", use_primary: true },
+    { stroke_master_id: "S9", material_group_id: "G1", effective_month: "2026-01-01", use_primary: false },
+  ];
+  assertEqual(resolveUsePrimary(decisions, "S1", "G1", "2026-11-01"), false, "Oct No carries into Nov");
+  assertEqual(resolveUsePrimary(decisions, "S1", "G1", "2026-12-01"), true, "Dec Yes");
+  assertEqual(resolveUsePrimary(decisions, "S2", "G1", "2026-11-01"), true, "other stroke defaults Yes");
+  const noPrimary = explodeDemand(baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 300 })]), primaryDecisions: decisions }));
+  const pool = noPrimary.records.find((r) => r.pool_key === "RM|L2")!;
+  assertEqual([pool.use_primary, pool.candidates], [false, ["RM-C"]], "No excludes the primary");
+  const yesPrimary = explodeDemand(baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 300 })]) }));
+  assertEqual(yesPrimary.records.find((r) => r.pool_key === "RM|L2")!.candidates, ["RM-B", "RM-C"], "Yes = primary first, then members");
+});
+
+Deno.test("Group pool: demand allocated once, never copied to every member [T5]", () => {
+  const input = baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 3000 })]) });
+  const exploded = explodeDemand(input);
+  const alloc = allocateDemand(exploded.records, input.calendar, [
+    { material_id: "RM-C", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 500 },
+  ], [], true);
+  const b = sum(alloc.dailyByMaterial.get("RM-B"));
+  const c = sum(alloc.dailyByMaterial.get("RM-C"));
+  near(b + c, 1200, "B + C = the group's 40% of 3000, not 2 × 1200");
+  near(c, 500, "member stock used first when the primary has none (production order)");
+  near(b, 700, "shortfall attributed once to the procurement target (primary)");
+});
+
+Deno.test("One material in several Prodshades and lines: stock counted once [T4][T5]", () => {
+  const input = baseInput({
+    effective: effectiveFor([
+      line({ plan_type: "FINAL", base_qty: 300, sku_material_id: "SKU1" }),
+      line({ plan_type: "FINAL", base_qty: 300, sku_material_id: "SKU2" }),
+    ]),
+    skus: new Map([
+      ["SKU1", { sku_material_id: "SKU1", prodshade_material_id: "P1", base_uom_code: "KG", kg_per_base_unit: 1 }],
+      ["SKU2", { sku_material_id: "SKU2", prodshade_material_id: "P2", base_uom_code: "KG", kg_per_base_unit: 1 }],
+    ]),
+    currentStrokeByProdshade: new Map([["P1", "S1"], ["P2", "S2"]]),
+    packBoms: new Map([
+      ["SKU1", { pack_bom_id: "B1", sfg_qty: 20, output_qty: 1, output_uom_code: "BAG", inputs: [] }],
+      ["SKU2", { pack_bom_id: "B2", sfg_qty: 20, output_qty: 1, output_uom_code: "BAG", inputs: [] }],
+    ]),
+  });
+  const exploded = explodeDemand(input);
+  const alloc = allocateDemand(exploded.records, input.calendar, [
+    { material_id: "RM-A", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 100 },
+  ], [], true);
+  near(sum(alloc.dailyByMaterial.get("RM-A")), 180 + 300, "RM-A demand from both Prodshades (60% of 300 + 100% of 300)");
+  near(sum(alloc.fromStockByMaterial.get("RM-A")), 100, "the 100 KG of stock is used once, not per Prodshade");
+});
+
+Deno.test("Pack BOM: PM per outer unit; non-producing SKU w/o BOM is silent; producing SKU w/o BOM raises [T7][T8]", () => {
+  const withBom = explodeDemand(baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 400 })]) }));
+  near(withBom.records.filter((r) => r.kind === "PM").reduce((s, r) => s + r.qty, 0), 20, "400 KG / 20 KG per bag = 20 bags");
+  const pmRecords = withBom.records.filter((r) => r.kind === "PM");
+  near(pmRecords.reduce((s, r) => s + Number(r.outer_qty ?? 0), 0), 20, "user-facing BAG quantity follows Pack BOM output");
+  assertEqual([pmRecords[0].outer_uom_code, pmRecords[0].fill_qty_per_outer], ["BAG", 20], "pack display carries verified output unit and fill quantity");
+  const noDemand = explodeDemand(baseInput({ effective: [], packBoms: new Map() }));
+  assertEqual(noDemand.exceptions.length, 0, "no plan, no BOM → no false exception");
+  const missing = explodeDemand(baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 400 })]), packBoms: new Map() }));
+  assertEqual(missing.exceptions.map((e) => e.code), ["MISSING_PACK_BOM"], "planned manufacture without BOM is a real exception");
+});
+
+Deno.test("Cross-company allocation has no source: unknown SKUs raise, never silently exploded [T6]", () => {
+  const result = explodeDemand(baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 100, sku_material_id: "OTHER_CO_SKU" })]) }));
+  assertEqual(result.exceptions.map((e) => e.code), ["SKU_NOT_CURRENT_MTS_SKU"], "exception");
+  assertEqual(result.records.length, 0, "no demand invented");
+});
+
+Deno.test("Unit conversions: KG/MT, litre SKU, PM pack units, PO ratio [T9]", () => {
+  const factors = buildToBaseFactors("KG", [
+    { from_uom_code: "BAG", to_uom_code: "KG", conversion_factor: 25, variable_conversion: false, active: true },
+    { from_uom_code: "KG", to_uom_code: "DRUM", conversion_factor: 0.005, variable_conversion: false, active: true },
+    { from_uom_code: "BBL", to_uom_code: "KG", conversion_factor: null, variable_conversion: true, active: true },
+  ]);
+  assertEqual(factors, { MT: 1000, BAG: 25, DRUM: 200 }, "fixed both-direction factors, variable ignored, MT standard");
+  assertEqual(toMaterialBase(material("X", "RM", "KG", factors), 2, "MT"), 2000, "MT → KG");
+  assertEqual(toMaterialBase(material("X", "PM", "NOS"), 3, "BOX"), null, "unknown unit is not guessed");
+  const litre = explodeDemand(baseInput({
+    effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 100 })]),
+    skus: new Map([["SKU1", { sku_material_id: "SKU1", prodshade_material_id: "P1", base_uom_code: "L", kg_per_base_unit: null }]]),
+  }));
+  assertEqual(litre.exceptions.map((e) => e.code), ["SKU_KG_CONVERSION_MISSING"], "litre SKU without KG conversion is flagged");
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "RM-A", po_number: "930001", line_number: 1, open_qty: 2, base_per_po_unit: 1000,
+    expected_delivery_date: "2026-11-20", at_gate: [], csns: [], lots: [],
+  }, "2026-11-01", warnings);
+  assertEqual(events.map((e) => e.qty), [2000], "2 MT open on the PO = 2000 KG");
+});
+
+Deno.test("Consumption nets reversals [T10]", () => {
+  // CONS bucket = IN − OUT of P261/P262: issued 500 (OUT), reversed 120 (IN) → −380.
+  assertEqual(consumptionFromConsBucket(-380), 380, "net consumption");
+  assertEqual(consumptionFromConsBucket(null), 0, "no movements");
+  const calendar = buildCalendar("2026-11-01", "2026-11-16")!;
+  const metrics = computeMaterialMetrics({
+    calendar, demandByDay: new Map([["2026-11-05", 300], ["2026-11-20", 600]]), consumption: 380, stock: 0,
+    inbound: bucketInbound([], calendar), policy: null, moqBaseQty: null, leadTimeDays: null,
+  });
+  assertEqual([metrics.cm_req, metrics.cm_prorata, metrics.cm_cons, metrics.cm_balance_req], [900, 600, 380, 520], "CM figures");
+});
+
+Deno.test("Stock: required vs remote SLoc, QA / blocked excluded, reservations applied [T11][T12]", () => {
+  const input = baseInput({ effective: effectiveFor([line({ plan_type: "FINAL", base_qty: 300 })]) });
+  const exploded = explodeDemand(input);
+  const alloc = allocateDemand(exploded.records, input.calendar, [
+    { material_id: "RM-A", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 50 },
+    { material_id: "RM-A", storage_location_id: "S9", stock_type_code: "UNRESTRICTED", qty: 400 },
+    { material_id: "RM-A", storage_location_id: "R1", stock_type_code: "QUALITY_INSPECTION", qty: 70 },
+    { material_id: "RM-A", storage_location_id: "R1", stock_type_code: "BLOCKED", qty: 30 },
+  ], [{ material_id: "RM-A", storage_location_id: "R1", qty: 20 }], true);
+  const pos = alloc.stock.get("RM-A")!;
+  assertEqual([pos.usable_at_required, pos.reserved_at_required, pos.other_sloc_unrestricted, pos.quality_inspection, pos.blocked], [30, 20, 400, 70, 30], "stock split");
+  assertEqual(pos.other_locations, ["S9"], "remote location is a transfer candidate only");
+  near(sum(alloc.fromStockByMaterial.get("RM-A")), 30, "only usable stock at R1 covers demand");
+  const noRes = allocateDemand(exploded.records, input.calendar, [
+    { material_id: "RM-A", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 50 },
+  ], [{ material_id: "RM-A", storage_location_id: "R1", qty: 20 }], false);
+  assertEqual(noRes.stock.get("RM-A")!.usable_at_required, 50, "past as-of date: current reservations not applied");
+});
+
+Deno.test("Inbound: GE / CSN / lot / remainder never exceed the PO line; mother CSN skipped [T13]", () => {
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "RM-A", po_number: "930010", line_number: 1, open_qty: 100, base_per_po_unit: 1,
+    expected_delivery_date: "2026-12-15",
+    at_gate: [{ qty_base: 10, reference: "GE 1000000001", date: "2026-10-31" }],
+    csns: [
+      { csn_number: "C1", status: "TRN", dispatch_qty: 40, received_qty: 15, eta: "2026-11-05", is_mother_with_children: false },
+      { csn_number: "C2", status: "ORD", dispatch_qty: 50, received_qty: 0, eta: "2026-11-20", is_mother_with_children: false },
+      { csn_number: "M", status: "TRN", dispatch_qty: 999, received_qty: 0, eta: "2026-11-02", is_mother_with_children: true },
+      { csn_number: "C3", status: "GRD", dispatch_qty: 30, received_qty: 30, eta: "2026-10-01", is_mother_with_children: false },
+    ],
+    lots: [{ lot_number: "L1", balance_qty: 80, delivery_date: "2026-12-01" }],
+  }, "2026-11-01", warnings);
+  assertEqual(events.map((e) => [e.kind, e.qty, e.date]), [
+    ["AT_GATE", 10, "2026-11-01"],
+    ["IN_TRANSIT", 25, "2026-11-05"],
+    ["IN_TRANSIT", 50, "2026-11-20"],
+    ["SCHEDULED_LOT", 15, "2026-12-01"],
+  ], "partition is capped at the 100 open; lot only gets what is left");
+  near(events.reduce((s, e) => s + e.qty, 0), 100, "never more than the PO open quantity");
+});
+
+Deno.test("Inbound dates: overdue and missing ETA are not counted as on-time supply [T14]", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-10")!;
+  const buckets = bucketInbound([
+    { material_id: "X", qty: 5, date: "2026-11-02", kind: "IN_TRANSIT", date_source: "CSN_ETA_TO_PLANT", reference: "a" },
+    { material_id: "X", qty: 7, date: "2026-11-12", kind: "IN_TRANSIT", date_source: "CSN_ETA_TO_PLANT", reference: "b" },
+    { material_id: "X", qty: 11, date: "2026-12-03", kind: "SCHEDULED_LOT", date_source: "LOT_DELIVERY_DATE", reference: "c" },
+    { material_id: "X", qty: 13, date: "2027-01-03", kind: "PO_REMAINDER", date_source: "PO_EXPECTED_DELIVERY", reference: "d" },
+    { material_id: "X", qty: 17, date: null, kind: "PO_REMAINDER", date_source: "NONE", reference: "e" },
+  ], calendar);
+  assertEqual([buckets.overdue, buckets.cm, buckets.nm, buckets.later, buckets.unknown, buckets.total], [5, 7, 11, 13, 17, 53], "buckets");
+  const remainder = partitionPoLineInbound({
+    material_id: "X", po_number: "1", line_number: 1, open_qty: 9, base_per_po_unit: 1, expected_delivery_date: null,
+    at_gate: [], csns: [], lots: [],
+  }, "2026-11-10", []);
+  assertEqual([remainder[0].date, remainder[0].date_source], [null, "NONE"], "missing ETA stays UNKNOWN, never immediate");
+});
+
+Deno.test("Coverage: zero demand, zero stock, date-wise with inbound [T15]", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const none = coverageDays(100, calendar, new Map(), null, 0);
+  assertEqual(none.days, null, "no demand = no finite cover (shown as NO_DEMAND)");
+  const demand = new Map<string, number>();
+  for (const day of calendar.horizon) demand.set(day, 10);
+  const zero = coverageDays(0, calendar, demand, null, 10);
+  assertEqual([zero.days, zero.stockout_date], [0, "2026-11-01"], "zero stock = zero cover");
+  const half = coverageDays(25, calendar, demand, null, 10);
+  assertEqual(half.days, 2.5, "fractional day");
+  const withIn = coverageDays(25, calendar, demand, new Map([["2026-11-03", 100]]), 10);
+  assertEqual(withIn.days, 12.5, "inbound on day 3 extends cover");
+  const beyond = coverageDays(10000, calendar, demand, null, 10);
+  assert(beyond.extrapolated && (beyond.days ?? 0) > 61, "extrapolated past NM end at NM rate");
+});
+
+Deno.test("NM REQ DAYS: ERP date-aware rule around the 15th [T17]", () => {
+  // ERP: clamp(Target − CM days left, 0, NM days). Same rule for every company;
+  // direct sheet inspection verified CMP003's 15th-day step differs, and the
+  // reconciliation report records this deliberate smoothing correction.
+  const target = 45;
+  const d14 = buildCalendar("2026-11-01", "2026-11-14")!; // 17 days left
+  const d15 = buildCalendar("2026-11-01", "2026-11-15")!; // 16 days left
+  const d16 = buildCalendar("2026-11-01", "2026-11-16")!; // 15 days left
+  assertEqual([nmRequiredDays(target, d14), nmRequiredDays(target, d15), nmRequiredDays(target, d16)], [28, 29, 30], "grows one day per calendar day, no step at the 15th");
+  assertEqual(nmRequiredDays(10, d14), 0, "target inside CM → 0");
+  assertEqual(nmRequiredDays(90, d16), 31, "capped at NM length");
+  assertEqual(nmRequiredDays(null, d16), null, "no policy → unknown");
+});
+
+Deno.test("Policy by effective date + MOQ without fixed vendor minimum [T18][T19]", () => {
+  const policies: PolicyRow[] = [
+    { material_id: "RM-A", effective_from: "2026-10-01", target_cov_days: 40, critical_cov_days: 20, moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 1 },
+    { material_id: "RM-A", effective_from: "2026-11-15", target_cov_days: 60, critical_cov_days: 25, moq_qty: 2, moq_uom_code: "MT", moq_source: "COMPANY", moq_active: true, version_no: 3 },
+  ];
+  assertEqual(effectivePolicy(policies, "RM-A", "2026-11-14")!.target_cov_days, 40, "before the new effective date");
+  assertEqual(effectivePolicy(policies, "RM-A", "2026-11-15")!.target_cov_days, 60, "from the new effective date");
+  assertEqual(effectivePolicy(policies, "RM-B", "2026-11-15"), null, "other material unaffected");
+  const kgMaterial = material("RM-A", "RM", "KG", { MT: 1000 });
+  assertEqual(moqInBase(policies[1], kgMaterial), 2000, "2 MT company MOQ = 2000 KG");
+  const calendar = buildCalendar("2026-11-01", "2026-11-20")!;
+  const demand = new Map<string, number>();
+  for (const day of calendar.horizon) demand.set(day, 10);
+  const metrics = computeMaterialMetrics({
+    calendar, demandByDay: demand, consumption: 0, stock: 0, inbound: bucketInbound([], calendar),
+    policy: policies[1], moqBaseQty: 2000, leadTimeDays: 10,
+  });
+  // 11 days left → NM REQ DAYS 49 capped to 31 → NEXT MONTH REQ 310; TOTAL PRORATA 110 + 310 = 420.
+  assertEqual([metrics.nm_req_days, metrics.next_month_req, metrics.total_prorata, metrics.net_req, metrics.net_req_moq], [31, 310, 420, 420, 2000], "net requirement raised to active MOQ");
+  const noMoq = computeMaterialMetrics({
+    calendar, demandByDay: demand, consumption: 0, stock: 0, inbound: bucketInbound([], calendar),
+    policy: policies[0], moqBaseQty: null, leadTimeDays: null,
+  });
+  assertEqual(noMoq.net_req, noMoq.net_req_moq, "no fixed MOQ → net requirement unchanged");
+  assertEqual([metrics.identifier, metrics.safety_day_stock, metrics.lead_time_stock, metrics.total_stock_level], ["CRITICAL", 250, 100, 350], "classification and stock levels");
+});
+
+Deno.test("Lead time: legacy max+4 vs configured vs unknown", () => {
+  const configured = [
+    { vendor_label: "V1", route: "DOMESTIC" as const, days: 7, detail: "transit 7" },
+    { vendor_label: "V2", route: "IMPORT" as const, days: 45, detail: "sail 30 + clearance 10 + inland 5" },
+  ];
+  const observed = computeLeadTime(configured, [10, 20, 30]);
+  assertEqual([observed.observed_avg, observed.observed_max, observed.legacy_equivalent, observed.effective, observed.effective_source], [20, 30, 34, 34, "LEGACY_MAX_PLUS_4"], "history wins, labelled as max+4 not average");
+  const configuredOnly = computeLeadTime(configured, []);
+  assertEqual([configuredOnly.effective, configuredOnly.effective_source], [45, "CONFIGURED_MAX_TRANSIT"], "falls back to largest configured route");
+  const unknown = computeLeadTime([], []);
+  assertEqual([unknown.effective, unknown.effective_source], [null, "UNKNOWN"], "never zero");
+});
+
+Deno.test("Whole pipeline: deterministic, and a source change changes the result [T21]", () => {
+  const explosion = baseInput();
+  const input: RequirementInput = {
+    ...explosion,
+    planLines: [line({ entry_id: "fixed1", plan_type: "FINAL", base_qty: 3000 }), line({ entry_id: "fixed2", plan_type: "FINAL", plan_month: "2026-12-01", base_qty: 3100 })],
+    demandAt: null,
+    stockRows: [{ material_id: "RM-A", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 500 }],
+    reservations: [],
+    applyReservations: true,
+    consumptionByMaterial: new Map(),
+    inboundEvents: [{ material_id: "RM-A", qty: 1000, date: "2026-11-10", kind: "IN_TRANSIT", date_source: "CSN_ETA_TO_PLANT", reference: "x" }],
+    policies: [{ material_id: "RM-A", effective_from: "2026-01-01", target_cov_days: 30, critical_cov_days: 15, moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 1 }],
+    leadTimes: new Map(),
+    materialUniverse: ["RM-A", "RM-B", "RM-C", "PM-BAG"],
+  };
+  const first = buildRequirementRows(input);
+  const second = buildRequirementRows(input);
+  assertEqual(canonicalJson(first), canonicalJson(second), "same sources → identical output");
+  const rmA = first.rows.find((row) => row.material_id === "RM-A")!;
+  near(rmA.metrics.cm_req, 1800, "RM-A Nov = 60% of 3000");
+  near(rmA.metrics.nm_req, 1860, "RM-A Dec = 60% of 3100");
+  near(rmA.metrics.current_stk_days, 8.33, "stock-only cover (days rounded to 2 dp)");
+  near(rmA.metrics.intransit_cm, 1000, "CSN in CM");
+  assertEqual(first.rows.map((row) => row.material_id), ["PM-BAG", "RM-A", "RM-B", "RM-C"], "universe rows, including zero-demand RM-C");
+  const changed = buildRequirementRows({ ...input, stockRows: [{ material_id: "RM-A", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 600 }] });
+  assert(canonicalJson(changed) !== canonicalJson(first), "stock change → different result");
+});

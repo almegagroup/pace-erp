@@ -101,6 +101,13 @@ import {
   saveMtsPlanProductGroupsHandler,
   saveMtsPlanStrokeSettingHandler,
 } from "../_core/procurement/mts_customer_plan.handlers.ts";
+import {
+  getMtsRequirementAccessHandler,
+  getMtsRequirementPoliciesHandler,
+  getMtsRequirementPolicyHistoryHandler,
+  getMtsRequirementReportHandler,
+  saveMtsRequirementPoliciesHandler,
+} from "../_core/procurement/mts_requirement.handlers.ts";
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
 import {
   createReportLayoutHandler,
@@ -794,6 +801,16 @@ export async function dispatchProcurementRoutes(
       return await getMtsPlanProductGroupsHandler(req, ctx);
     case "POST:/api/procurement/mts-plan/product-groups":
       return await saveMtsPlanProductGroupsHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/access":
+      return await getMtsRequirementAccessHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/report":
+      return await getMtsRequirementReportHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/policies":
+      return await getMtsRequirementPoliciesHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/policy-history":
+      return await getMtsRequirementPolicyHistoryHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/policies":
+      return await saveMtsRequirementPoliciesHandler(req, ctx);
     case "GET:/api/procurement/document-flow":
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":

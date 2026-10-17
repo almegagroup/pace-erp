@@ -178,11 +178,24 @@ async function fetchSoWithLines(soId: string): Promise<{ so: JsonRecord; lines: 
 }
 
 async function fetchActiveAllocationsForSo(soId: string): Promise<JsonRecord[]> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_procurement").from("sales_order_map_allocation")
-    .select("*").eq("so_id", soId).eq("status", "ACTIVE");
-  if (error) throw new Error("SO_MAP_ALLOCATION_FETCH_FAILED");
-  return (data ?? []) as JsonRecord[];
+  // A single DD SO can be split across hundreds of FOs.  PostgREST silently
+  // caps an unpaged result at db-max-rows, so page this SO-scoped read too;
+  // otherwise later map groups vanish before downstream lookups even start.
+  const rows: JsonRecord[] = [];
+  const pageSize = 1000;
+  for (let from = 0;; from += pageSize) {
+    // The local DbQueryBuilder type does not expose range(), although the
+    // Supabase query builder supports it at runtime (same convention as
+    // _shared/chunkedIn.ts).
+    // deno-lint-ignore no-explicit-any
+    const query = serviceRoleClient.schema("erp_procurement").from("sales_order_map_allocation")
+      .select("*").eq("so_id", soId).eq("status", "ACTIVE").order("id") as any;
+    const { data, error } = await query.range(from, from + pageSize - 1);
+    if (error) throw new Error("SO_MAP_ALLOCATION_FETCH_FAILED");
+    const page = (data ?? []) as JsonRecord[];
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
 }
 
 // §133.9 — SOs needing SO Map action: DEPENDENT_* types only (Independent
@@ -331,30 +344,47 @@ export async function getSoMapStatusHandler(req: Request, ctx: ProcurementHandle
     }
     const allocations = await fetchActiveAllocationsForSo(soId);
     const mapGroupIds = [...new Set(allocations.map((row) => toTrimmedString(row.map_group_id)).filter(Boolean))];
-    const { data: mapGroupRows, error: mapGroupError } = mapGroupIds.length
-      ? await serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
-          .select("id, external_fo_number, revised_external_fo_number").in("id", mapGroupIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (mapGroupError) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_LOOKUP_FAILED", 500, "Unable to load mapped FO numbers.");
-    const mapGroupById = new Map(((mapGroupRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    let mapGroupRows: JsonRecord[];
+    try {
+      // mapGroupIds grows with the FO count.  Sending all UUIDs in one .in()
+      // makes a URL large enough to be rejected before PostgREST is reached.
+      mapGroupRows = mapGroupIds.length
+        ? await fetchInChunks<JsonRecord>(mapGroupIds, (idChunk) => serviceRoleClient.schema("erp_procurement").from("sales_order_map_group")
+          .select("id, external_fo_number, revised_external_fo_number").in("id", idChunk).order("id"))
+        : [];
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_LOOKUP_FAILED", 500, "Unable to load mapped FO numbers.");
+    }
+    const mapGroupById = new Map(mapGroupRows.map((row) => [toTrimmedString(row.id), row]));
     const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
-    const { data: materialRows, error: materialError } = materialIds.length
-      ? await serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", materialIds)
-      : { data: [] as JsonRecord[], error: null };
-    if (materialError) return soMapErrorResponse(req, ctx, "SO_MAP_MATERIAL_LOOKUP_FAILED", 500, "Unable to load SO item details.");
-    const materialById = new Map(((materialRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    let materialRows: JsonRecord[];
+    try {
+      materialRows = materialIds.length
+        ? await fetchInChunks<JsonRecord>(materialIds, (idChunk) => serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id, pace_code, material_name").in("id", idChunk).order("id"))
+        : [];
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_MATERIAL_LOOKUP_FAILED", 500, "Unable to load SO item details.");
+    }
+    const materialById = new Map(materialRows.map((row) => [toTrimmedString(row.id), row]));
     const foIds = [...new Set(allocations.map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
     const addressIds = [...new Set(allocations.map((row) => toTrimmedString(row.customer_address_id)).filter(Boolean))];
     const depotIds = [...new Set(allocations.map((row) => toTrimmedString(row.depot_code_id)).filter(Boolean))];
-    const [{ data: mappedFoRows, error: mappedFoError }, { data: mappedAddressRows, error: mappedAddressError }, { data: mappedDepotRows, error: mappedDepotError }] = await Promise.all([
-      foIds.length ? serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, party_name, customer_address_id").in("id", foIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      addressIds.length ? serviceRoleClient.schema("erp_master").from("customer_address").select("id, site_name, address_line, town, state").in("id", addressIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-      depotIds.length ? serviceRoleClient.schema("erp_master").from("fg_depot_code").select("id, code, description").in("id", depotIds) : Promise.resolve({ data: [] as JsonRecord[], error: null }),
-    ]);
-    if (mappedFoError || mappedAddressError || mappedDepotError) return soMapErrorResponse(req, ctx, "SO_MAP_DESTINATION_LOOKUP_FAILED", 500, "Unable to load mapping destinations.");
-    const mappedFoById = new Map(((mappedFoRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-    const mappedAddressById = new Map(((mappedAddressRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
-    const mappedDepotById = new Map(((mappedDepotRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), row]));
+    let mappedFoRows: JsonRecord[];
+    let mappedAddressRows: JsonRecord[];
+    let mappedDepotRows: JsonRecord[];
+    try {
+      [mappedFoRows, mappedAddressRows, mappedDepotRows] = await Promise.all([
+        foIds.length ? fetchInChunks<JsonRecord>(foIds, (idChunk) => serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, party_name, customer_address_id").in("id", idChunk).order("id")) : Promise.resolve([] as JsonRecord[]),
+        addressIds.length ? fetchInChunks<JsonRecord>(addressIds, (idChunk) => serviceRoleClient.schema("erp_master").from("customer_address").select("id, site_name, address_line, town, state").in("id", idChunk).order("id")) : Promise.resolve([] as JsonRecord[]),
+        depotIds.length ? fetchInChunks<JsonRecord>(depotIds, (idChunk) => serviceRoleClient.schema("erp_master").from("fg_depot_code").select("id, code, description").in("id", idChunk).order("id")) : Promise.resolve([] as JsonRecord[]),
+      ]);
+    } catch {
+      return soMapErrorResponse(req, ctx, "SO_MAP_DESTINATION_LOOKUP_FAILED", 500, "Unable to load mapping destinations.");
+    }
+    const mappedFoById = new Map(mappedFoRows.map((row) => [toTrimmedString(row.id), row]));
+    const mappedAddressById = new Map(mappedAddressRows.map((row) => [toTrimmedString(row.id), row]));
+    const mappedDepotById = new Map(mappedDepotRows.map((row) => [toTrimmedString(row.id), row]));
     const enrichedAllocations = allocations.map((allocation) => {
       const mapGroup = mapGroupById.get(toTrimmedString(allocation.map_group_id));
       const externalFoNumber = effectiveExternalFoNumber(mapGroup);
