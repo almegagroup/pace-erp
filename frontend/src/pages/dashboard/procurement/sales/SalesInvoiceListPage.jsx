@@ -158,7 +158,7 @@ export default function SalesInvoiceListPage() {
               onChange={(nextValue) => { setCompanyId(nextValue); setPage(1); }}
               label="Company"
             />
-            <QuickFilterInput label="Search (all columns)" value={search} onChange={(value) => { setSearch(value); setPage(1); }} primaryFocus placeholder="DO, SO/STO, customer, truck, invoice, batch..." />
+            <QuickFilterInput label="Search every column" value={search} onChange={(value) => { setSearch(value); setPage(1); }} primaryFocus placeholder="DO, SO/STO, FO, customer, SKU, batch, truck, LR, Tally invoice, IBN..." />
             <label className="flex flex-col gap-1 text-xs text-slate-500">
               Date column
               <select
