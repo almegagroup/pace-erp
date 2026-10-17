@@ -48,6 +48,8 @@ Deno.test("conflicting stock, reservation and inbound duplicates fail closed", (
   equal(result.stock.length, 0, "conflicted stock omitted");
   equal(result.reservations.length, 0, "conflicted reservation omitted");
   equal(result.inbound.length, 0, "conflicted inbound omitted");
+  assert(result.planning_blockers.some((x) => x.material_id === "MAT-1" && x.domain === "EXECUTABLE_STOCK"), "reservation/stock conflict blocks material availability");
+  assert(result.planning_blockers.some((x) => x.material_id === "MAT-1" && x.domain === "PROJECTED_INBOUND"), "inbound conflict blocks forecast");
   assert(result.missing_data.some((x) => x.code === "CONFLICTING_STOCK_EVIDENCE"), "stock conflict visible");
   assert(result.missing_data.some((x) => x.code === "CONFLICTING_RESERVATION_EVIDENCE"), "reservation conflict visible");
   assert(result.missing_data.some((x) => x.code === "CONFLICTING_INBOUND_EVIDENCE"), "inbound conflict visible");
@@ -93,4 +95,41 @@ Deno.test("malformed and duplicate material masters are rejected", () => {
   const malformed = fixture(); malformed.materials[0].to_base_factors.MT = 0;
   let malformedError: unknown; try { normalizeOptimizerSources(malformed); } catch (caught) { malformedError = caught; }
   assert(malformedError instanceof OptimizerMaterialMasterError, "invalid factor rejected");
+});
+
+Deno.test("one conflicted reservation blocks otherwise valid physical stock", () => {
+  const raw = fixture();
+  raw.reservations.push({ ...raw.reservations[0], qty: 700 });
+  const result = normalizeOptimizerSources(raw);
+  equal(result.stock[0].planning_eligible, false, "available stock blocked");
+  equal(result.stock[0].exclusion_reason, "SOURCE_CONFLICT", "reason explicit");
+});
+
+Deno.test("one conflicted inbound source blocks forecast credit for the material", () => {
+  const raw = fixture();
+  raw.inbound.push({ ...raw.inbound[0], qty: 900 });
+  raw.inbound.push({ ...raw.inbound[0], source_key: "other-lot" });
+  const result = normalizeOptimizerSources(raw);
+  equal(result.inbound.length, 1, "unconflicted inbound retained as evidence");
+  equal(result.inbound[0].projected_supply_eligible, false, "material forecast credit blocked");
+});
+
+Deno.test("missing CMP003 OT exclusions fail closed; other company location policy remains source-driven", () => {
+  const raw = fixture();
+  raw.stock_eligibility.excluded_storage_location_ids = ["OT01"];
+  let error: unknown; try { normalizeOptimizerSources(raw); } catch (caught) { error = caught; }
+  assert(error instanceof Error, "incomplete CMP003 excluded locations rejected");
+  const other = fixture(); other.company_id = "CMP005";
+  other.demand[0].company_id = "CMP005"; other.stock[0].company_id = "CMP005";
+  other.reservations[0].company_id = "CMP005"; other.inbound[0].company_id = "CMP005";
+  other.stock_eligibility.excluded_storage_location_ids = [];
+  equal(normalizeOptimizerSources(other).stock[0].planning_eligible, true, "company policy is supplied externally");
+});
+
+Deno.test("stock policy list ordering does not affect business fingerprint", () => {
+  const a = fixture(); const b = fixture();
+  a.stock_eligibility.eligible_stock_type_codes.push("QA", "BLOCKED");
+  b.stock_eligibility.eligible_stock_type_codes.unshift("BLOCKED", "QA");
+  b.stock_eligibility.excluded_storage_location_ids.reverse();
+  equal(normalizeOptimizerSources(a).source_fingerprint, normalizeOptimizerSources(b).source_fingerprint, "policy ordering irrelevant");
 });
