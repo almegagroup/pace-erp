@@ -321,6 +321,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // -- it's the same page, same workbench, just a different attribution action.
   "GET:/api/procurement/machine-distribution/unassigned": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
   "POST:/api/procurement/machine-distribution/assign":    { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
+  // §138.13.2 -- release is the inverse of machine attribution, still an
+  // IN11/stock-workbench write and deliberately not a PROC_CURRENT_STOCK
+  // report permission.
+  "GET:/api/procurement/machine-distribution/release-availability": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
+  "POST:/api/procurement/machine-distribution/release":              { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/balance":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
   "POST:/api/procurement/stock-status-change/postings": { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/postings":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },

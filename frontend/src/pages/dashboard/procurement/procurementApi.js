@@ -1703,6 +1703,14 @@ export function postMachineDistribution(data) {
   return fetchProcurement("POST", "/api/procurement/machine-distribution/assign", data);
 }
 
+export function getMachineReleaseAvailability(params) {
+  return fetchProcurement("GET", "/api/procurement/machine-distribution/release-availability", undefined, params);
+}
+
+export function postMachineRelease(data) {
+  return fetchProcurement("POST", "/api/procurement/machine-distribution/release", data);
+}
+
 export function getStockLedgerReport(params) {
   return fetchProcurement("GET", "/api/procurement/stock-ledger", undefined, params);
 }

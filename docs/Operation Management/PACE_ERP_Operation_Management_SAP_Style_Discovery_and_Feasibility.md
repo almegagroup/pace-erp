@@ -24443,6 +24443,25 @@ qty, একটা common reference দিয়ে জোড়া লাগা�
 শুধু host page IN03 থেকে IN11-এ সরে গেছে, আর grid-এ Storage Location column + all-column search
 নতুন যোগ হয়েছে।
 
+#### 138.13.2 — Machine bucket Release / Reallocate (LOCKED + IMPLEMENTED, ২০২৬-১০-১৭)
+
+IN03-এর **Machine Wise RM Stock** drawer-এ কোনো real machine bucket row থেকে **Release** করা যায়।
+এটি physical transfer নয়: selected Machine bucket থেকে `OUT` এবং সেই একই S-location-এর
+`Unassigned` bucket-এ `IN`—দুটি `machine_stock_log` row-ই একই reference-এ `MANUAL_RELEASE`
+source type দিয়ে লেখা হয়। তাই stock ledger, stock snapshot, valuation, GRN কিংবা reservation
+document-এর কোনো posting/update হয় না।
+
+Release-এর আগে backend current machine balance এবং open reservation আবার পড়ে। PROCESS_PO
+reservation শুধু তার নিজের selected machine-এর bucket lock করে; অন্য reservation source একই
+location-এ প্রযোজ্য থাকে। `release_qty <= max(0, machine_balance - applicable_open_reservation)`
+না হলে server `LTR_MACHINE_RELEASE_QTY_EXCEEDS_FREE` দিয়ে block করে। Browser-এর displayed
+balance কখনও authority নয়; final re-check + paired write database function
+`erp_production.release_machine_stock_allocation()`-এ হয়।
+
+Release হওয়ার পরে quantity Unassigned-এ থাকে—even a single-MTS-machine S-location-এও automatic
+single-machine trigger সেটি আবার map করবে না। User পরে IN11-এর existing **Distribute to Machine**
+flow দিয়ে সেটি এক বা একাধিক machine-এ reallocate করতে পারে।
+
 ### 138.14 — MTS Process PO Create (Page 1-3): Current/Non-Current Stroke Policy + Batch Range (✅ DESIGN LOCKED — 2026-09-17/18, IMPLEMENTATION CODE-COMPLETE, UNCOMMITTED — live browser click-through still pending)
 
 **পটভূমি:** §138-এর machine-respect mechanism ঠিক করার পাশাপাশি একই সেশনে business owner MTS
