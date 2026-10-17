@@ -1,168 +1,148 @@
 # PO22 Phase 2 — Optimizer Architecture and Data Contract
 
-**Status:** DESIGN ONLY — not a migration, API, frontend, AI integration, or deployment plan approval.  
-**Date:** 2026-10-17  
-**Baseline:** `docs/mts-planning/PO22-PHASE-1-FULL-AUDIT-2026-10-17.md`, `BUSINESS-REQUIREMENTS.md`, and `DECISION-REGISTER.md`.  
-**Scope:** CMP003, CMP005, CMP011 and future MTS companies through one company-scoped engine.
+**Status:** DESIGN ONLY — no migration, API, frontend, AI integration, deployment, or PO-creation approval.
+**Revision:** Phase 2B owner-confirmed rules, 2026-10-17.
+**Baseline:** `PO22-PHASE-1-FULL-AUDIT-2026-10-17.md`, `BUSINESS-REQUIREMENTS.md`, `DECISION-REGISTER.md`.
 
-## 1. Non-negotiable boundary
+## 1. Scope and preserved boundary
 
-The optimizer is a new deterministic planning layer *after* existing PO22 Requirement calculation. It consumes immutable PO22/PO21 evidence and returns advisory allocation, transfer, and buy recommendations. It must not change:
+One shared optimizer serves CMP003, CMP005, CMP011 and future MTS companies. It uses company-scoped policies, data and ACL—never company-specific calculation branches.
 
-- PO21 effective demand rules, PO22 CM/NM calculations, Target/Critical policy, or the approved coverage-based NM Requirement Days formula;
-- stock, reservation, Stroke, Pack BOM, PO, CSN, GRN, vendor, or policy master facts;
-- existing confirmed PO/CSN obligations; or
-- transactional procurement authority. A recommendation never creates a purchase order.
-
-The PO22 run remains the source of CM/NM requirements and coverage facts. An optimizer run has its own immutable input fingerprint and rule version; it never silently rewrites an earlier run.
-
-## 2. Target architecture
+It sits after existing PO22 Requirement calculation and consumes immutable PO22/PO21 evidence. It must not modify PO21 effective demand, PO22 CM/NM columns, Target/Critical policy, the approved coverage-based NM Requirement Days formula, `buildRequirementRows()`, or existing PO22 tests. It creates advisory allocation, transfer-context and new-buy recommendations only; it never writes stock, reservation, formulation, PO, CSN, GRN, vendor or operational policy data. Accepted recommendations never create POs.
 
 ```text
-Existing PO22 deterministic report
-  PO21 demand + effective Stroke/Pack BOM + stock + reservations + PO/CSN/lot
-                                  │
-                                  ▼
-Optimizer input snapshot (immutable, company-scoped, dated)
-  eligibility · location policy · transfer feasibility · policy · commercial evidence
-                                  │
-                                  ▼
-Deterministic feasibility/allocation solver
-  consumption allocation → protected demand → transfer proposals → new-buy candidates
-                                  │
-                                  ▼
-Deterministic validator + explanation codes
-                                  │
-                   ┌──────────────┴───────────────┐
-                   ▼                              ▼
-      planner-reviewed recommendation       optional AI explanation/ranking
-                   │                              │
-                   └──────────────┬───────────────┘
-                                  ▼
-                 accept / ignore / supersede audit record
-                         (still no PO creation)
+Existing PO22 report (unchanged)
+  demand · formulation · stock · reservations · PO/CSN/lot lifecycle
+                         ↓
+Immutable optimizer run input, company scoped and dated
+  monthly new-buy selection · R/S pool policy · OT exclusions · commercial evidence
+                         ↓
+Deterministic solver: protect fixed demand → allocate groups → project supply → buy/delivery lots
+                         ↓
+Deterministic validation and explanation codes
+                  ↙                         ↘
+        planner decision              optional AI analysis only
+                  ↓
+        advisory audit record — no transaction
 ```
 
-The solver is pure and testable. Persistence captures input, output, decision and provenance; React only renders them. AI is outside the numerical authority path.
+Completed runs retain source fingerprint, rule/policy versions, timestamps, unknown data and every constraint relaxation. React renders results only.
 
-## 3. Proposed `erp_planning` data model
+## 2. Proposed `erp_planning` data contract
 
-All tables below are proposals. They are not deployed. UUID primary keys, `company_id`, audit columns (`created_at`, `created_by`), and RLS/company ACL checks are mandatory. No proposed table updates an operational source table.
+All objects are proposals, not deployed. Every table has UUID key, `company_id`, creation audit, RLS/company ACL and append-only revision where it holds policy.
 
-### 3.1 Effective-dated policy and eligibility
+### 2.1 Company controls
 
-| Proposed table | Key / fields | Constraints and purpose |
+| Table | Key fields | Constraint / purpose |
 |---|---|---|
-| `optimizer_material_eligibility_policy` | `company_id`, `material_id`, `effective_from`, `version_no`, `is_current`; `eligibility_mode` (`INCLUDE`, `EXCLUDE_NEW_BUY`, `EXCLUDE_CONSUMPTION`, `REVIEW`); `six_month_start`, `six_month_end`, `reason_code`, `remarks` | Append-only revision, one current row per company/material/effective date. Manual policy controls eligibility for the stated horizon. `EXCLUDE_*` never erases existing stock or confirmed inbound evidence. |
-| `optimizer_group_usage_rule` | `company_id`, source kind (`STROKE_LINE`/`PACK_BOM_LINE`), source ID, `material_group_id`, `effective_from`, version; `rm_primary_mode` (`PRIMARY_ALLOWED`, `PRIMARY_EXCLUDED`, `POOL_ONLY`); `shortage_ownership_mode` (`GROUP_POOL` only initially) | RM inherits PO21 Stroke × group Use Primary. PM has no primary toggle. A group with no valid optimizer allocation remains a pool, never a default material. |
-| `optimizer_exclusive_demand_rule` | `company_id`, `material_id`, source ProdShade/Stroke/Pack BOM reference, `effective_from/to`, `protection_mode`, `minimum_coverage_days`, `reason_code` | Prevents common stock from being consumed by a flexible pool before mandatory dated demand is protected. Exact business meaning of exclusivity remains owner-approved input. |
-| `optimizer_location_policy` | `company_id`, `storage_location_id`, `effective_from`, version; `planning_role` (`RM_REQUIRED`, `PM_REQUIRED`, `TRANSFER_SOURCE`, `EXCLUDED`), `supply_eligible`, `new_buy_receipt_eligible`, `hard_exclusion_reason` | Required consumption location normally comes from effective Stroke/Pack BOM. This table supplies company-specific guardrails/exceptions, not a replacement for those master links. CMP003 OT01 requires an effective `EXCLUDED`/`supply_eligible=false` row. |
-| `optimizer_transfer_policy` | `company_id`, `from_location_id`, `to_location_id`, effective date/version; `allowed`, `requires_approval`, `execution_lead_days`, `capacity_qty`, `reason_code` | A suggestion is feasible only if this rule allows it. Intra-company transfer execution may have zero elapsed days once posted, but unposted stock is never credited to destination supply. |
+| `optimizer_material_procurement_selection` | company, material, `planning_month`, version/current, `new_buy_selected`, reason/remarks | User-controlled monthly eligibility for **new tentative procurement**. One current record per company/material/month. AI cannot alter it. Deselection never removes existing stock or confirmed inbound from allocation evidence. |
+| `optimizer_group_usage_rule` | company, source kind/ID, material group, effective date/version, RM primary state, `shortage_ownership_mode` | Each formulation line becomes exactly one `FIXED_EXCLUSIVE` or `GROUP_POOL`, never both. RM respects Stroke × group Use Primary; PM has no primary toggle. Group shortage is group-owned. |
+| `optimizer_exclusive_demand_rule` | company, material, ProdShade/Stroke/Pack-BOM source, effective dates, protection metadata | Represents non-substitutable date-wise demand before flexible allocation. |
+| `optimizer_location_policy` | company, location, effective date/version, role (`R_S_ELIGIBLE`, `P_ELIGIBLE`, `EXCLUDED`, `OTHER`), supply/new-buy-receipt flags, reason | Supplements formulation location provenance. CMP003 OT01 and OT02 use effective `EXCLUDED` records; no company code is hardcoded in solver logic. |
+| `optimizer_transfer_policy` | company, from/to location, effective version, allowed/approval/operational metadata | Only for transfers in optimizer scope. R→S machine distribution is manual plant work outside procurement scheduling—no artificial R→S lead time or suggested R→S transfer. |
+| `optimizer_vendor_order_constraint` | company, vendor, material, route, effective range/version, MOQ, order multiple, purchase UOM, source evidence | Vendor MOQ and order multiple are separate constraints. Missing multiple is `UNKNOWN`, never one. |
 
-Both material and location policies should use the same append-only retirement pattern as the proposed PO22 `material_requirement_policy` migration. Policy changes require a distinct optimizer-policy WRITE resource; a run records the exact policy version set it used.
+### 2.2 Immutable run, supply and output records
 
-### 3.2 Run, snapshot and recommendation records
-
-| Proposed table | Grain / core fields | Constraints |
+| Table | Grain / fields | Constraint |
 |---|---|---|
-| `optimizer_run` | one run: `company_id`, `as_of_date`, CM/NM/horizon end, optional `demand_at`, `source_fingerprint`, `rule_version`, `status`, `calibration_reference`, `requested_by`, `calculated_at` | Run is immutable after `COMPLETED`/`FAILED`; company scope required. It references no mutable “latest” result. |
-| `optimizer_run_input` | run + typed source fact (`DEMAND`, `STOCK`, `RESERVATION`, `INBOUND`, `POLICY`, `ELIGIBILITY`, `COMMERCIAL`) + source identity + canonical JSON | Store actual inputs and source timestamps/checksums sufficient for replay. PII/commercial fields follow access policy. |
-| `optimizer_demand_pool` | run, pool key, day, source kind/reference, `material_group_id`, demand quantity/base UOM, `pool_state` (`FIXED_MATERIAL`, `GROUP_UNALLOCATED`, `GROUP_ALLOCATED`, `EXCLUSIVE`) | Unique `(run, pool_key, day)`. `GROUP_UNALLOCATED` has no `material_id`; it cannot be promoted to a buy line until deterministic allocation is valid. |
-| `optimizer_virtual_allocation` | run, day, material, SLoc, pool, quantity, allocation kind (`STOCK`, `INBOUND`, `TRANSFER`, `NEW_BUY`, `PROTECTED`) | Unique enough to prevent duplicate source use. It is a planning reservation only, never `reservation_document` or stock posting. |
-| `optimizer_recommendation` | run, recommendation type (`BUY`, `TRANSFER`, `UNALLOCATED_GROUP_RISK`), material nullable for unallocated group, vendor/SLoc nullable, quantity/base UOM, status, priority, deterministic explanation codes | A BUY needs a material, vendor and validated order quantity. A group-risk line deliberately has no material/vendor. |
-| `optimizer_recommendation_schedule` | recommendation, `po_by_date`, `requested_dispatch_date`, `estimated_plant_eta`, confidence, source/event references | Dates remain separately auditable; none means UNKNOWN, never today/zero. |
-| `optimizer_recommendation_decision` | recommendation, `decision` (`ACCEPTED`, `IGNORED`, `SUPERSEDED`), reason, actor/time | Accepting is a planning decision only. It must not call PO/CSN/stock APIs. |
-| `optimizer_commercial_evidence` | run, material/vendor/route, currency, landed-cost components, payment-term evidence, reliability measures, freshness/quality status | Raw input snapshot only; missing values are marked UNKNOWN/STALE, not defaulted to zero. |
-| `optimizer_ai_usage_ledger` | provider/model, month bucket, reservation/settlement amounts, token usage, run/recommendation references, actor, status | Implements B13's server-side concurrency-safe budget reservation/settlement. No AI call may bypass it. |
+| `optimizer_run` | company, as-of, CM/NM/horizon, demand version, fingerprint, rule version, calibration reference, status | Immutable after completion/failure. |
+| `optimizer_run_input` | run + source category (`DEMAND`, `STOCK`, `RESERVATION`, `INBOUND`, `POLICY`, `SELECTION`, `COMMERCIAL`) + canonical snapshot | Sufficient provenance for deterministic replay. |
+| `optimizer_demand_pool` | run, pool/day, source ref, group, base-UOM demand, state (`FIXED_EXCLUSIVE`, `GROUP_UNALLOCATED`, `GROUP_ALLOCATED`) | Exactly one state per source line/day. `GROUP_UNALLOCATED` has no material ID and cannot yield a false material buy. |
+| `optimizer_supply_event` | run, material, source location, date/null, qty/UOM, kind (`OPENING_STOCK`, `GE`, `CSN`, `LOT`, `PO_REMAINDER`, `PROPOSED_DELIVERY`), lifecycle identifiers/confidence | Stores current remaining lifecycle supply separately from original PO quantity. |
+| `optimizer_virtual_allocation` | run, day, material, company R/S supply-pool/location provenance, demand pool, qty, kind (`STOCK`, `INBOUND`, `NEW_BUY`, `PROTECTED`) | Planning-only conservation record; never a stock/reservation posting. |
+| `optimizer_recommendation` | run, `BUY` or `UNALLOCATED_GROUP_RISK`, material/vendor nullable as appropriate, qty/UOM, priority/status, codes | BUY needs eligible material/vendor and solver validation. Group risk has no invented material or vendor. |
+| `optimizer_delivery_lot` | recommendation/supply event, sequence, qty, requested/confirmed dispatch, proposed/current ETA, status/confidence | Supports staggered lots; proposed lots must sum to their recommended PO quantity. |
+| `optimizer_recommendation_schedule` | recommendation, PO-by, requested dispatch, estimated plant ETA, source/confidence | PO placement, requested dispatch, actual dispatch and ETA remain distinct. |
+| `optimizer_recommendation_decision` | recommendation, accepted/ignored/superseded, reason, actor/time | Planning audit only; cannot create PO, CSN, transfer, reservation or ledger entry. |
+| `optimizer_commercial_evidence` | run, material/vendor/route, AC01/PO/vendor evidence, currency, cost, payment, reliability/consumption/freshness | Missing data is `UNKNOWN`/`STALE`, never zero. |
+| `optimizer_ai_usage_ledger` | provider/model/month, atomic reservation/settlement, usage, run/actor/status | B13 hard-cap audit; no AI call bypasses it. |
 
-## 4. Company, material and location policy model
+## 3. Stock availability: company R/S pool
 
-1. **Company is the ACL and planning boundary.** Each source fact, policy and run belongs to one company. Cross-company production/transfer stays explicitly modelled as a future separately-approved event; it is never inferred from stock.
-2. **Required location is formulation-derived.** For a demand pool, `stroke_line.default_storage_location_id` or `pack_bom_line.storage_location_id` defines the direct consumption destination. This preserves the PO22 source contract.
-3. **CMP003 OT01 is a hard planning exclusion.** No OT01 balance, reservation, inbound, transfer source/destination or coverage credit may enter optimizer supply. The exclusion is effective-dated/configured, visible in evidence and tested—not a code literal.
-4. **R/S/P are not blanket availability shortcuts.** The solver evaluates the source-derived required location plus `optimizer_location_policy`. Eligible remote R/S stock is a possible transfer source only after its own reservations, mandatory demand, policy and source-surplus test; it is never added directly to destination cover.
-5. **Transfer feasibility is a state transition.** A suggested transfer consumes virtual source availability and has a destination available date. If operational execution is instantaneous, that date can equal the approved execution date, but unposted physical stock remains at the source until the transaction occurs.
-6. **QA/Blocked/other restricted stock remains non-supply.** It may be shown as a risk/evidence line but cannot satisfy a demand constraint without a separately approved release event.
+1. Pool eligible **unrestricted** R-series and S-series stock at company level by material, retaining original SLoc provenance and deducting valid reservations before allocation.
+2. CMP003 OT01 and OT02 contribute nothing: not opening supply, inbound, allocation, coverage, transfer source/destination or recommendation.
+3. QA, Blocked and other restricted stock are evidence/risk only until a valid operational release exists.
+4. Eligible existing S-stock is immediately relevant to procurement planning. Do not impose an R→S transfer lead time. R→S machine distribution is manual plant activity, outside PO22 scheduling.
+5. R001→R002 redistribution may occur operationally but cannot create a procurement shortage: company R/S conservation prevents buying the same quantity twice.
+6. Effective Stroke/Pack BOM locations stay PO22 provenance/direct-consumption facts. This revised R/S pooling applies only in optimizer scenarios and does not change PO22 stock/report formulas.
+7. A balance outside eligible policy remains visible as non-supply evidence; nothing is implicitly moved between companies.
 
-## 5. Demand-pool and exclusive-demand model
+## 4. Joint group and exclusive allocation
 
-For every day `t`, PO22 produces source quantity `D[p,t]` for a fixed material line or a material group pool `p`.
+Each formulation line/day creates one record only:
 
-- A fixed line is represented as one allowed material.
-- RM Use Primary = Yes permits the Stroke line primary plus active group members, but preserves primary identity and source trace.
-- RM Use Primary = No permits active members only. If no allocation is chosen, `pool_state = GROUP_UNALLOCATED` and its shortage remains on the pool.
-- PM alternatives derive from active Pack BOM group relationships; no RM Use Primary setting is borrowed for PM.
-- An exclusive/mandatory rule creates protected date-wise material demand before flexible pool allocation. Protection changes dynamically with valid forecast, policy and inbound changes; it is not a static “75 days” hold.
-- A material that appears in multiple groups is one physical material/location balance. All allocations draw from the same material/location/day inventory state.
+- `FIXED_EXCLUSIVE`: non-substitutable material demand, protected date-wise; or
+- `GROUP_POOL`: one shared demand with active group members eligible to consume it.
 
-### Allocation variables and constraints
+RM eligibility follows effective Stroke and Use Primary; PM alternatives derive only from active Pack BOM group relationships. Historical consumption may inform scenario/risk/economics but is never a fixed allocation percentage.
 
-Let `x[p,m,l,t]` be material `m` allocated from location `l` to pool `p` on day `t`; `s[m,l,t]` be virtual available balance; `i[m,l,t]` confirmed dated inbound; `f[a,t]` approved transfer proposal; and `q[m,v,t]` new-buy quantity.
+Let `x[p,m,t]` be material consumption for pool `p`, `S[m,t]` eligible company R/S opening balance after reservations, `I[m,t]` dated existing lifecycle supply, `q[m,v]` a new vendor order, `d[q,k,t]` a delivery lot, and `h[p,t]` shortage.
 
-1. **Pool fulfilment:** `Σ(m,l) x[p,m,l,t] + h[p,t] = D[p,t]`. For unallocated flexible groups, `h` stays a group shortage, not a member shortage.
-2. **Eligibility:** `x = 0` unless material is valid for the source Stroke/BOM/group/date and manual six-month policy permits consumption.
-3. **Physical conservation:** a material/location unit can appear in at most one allocation at a time; balances roll forward as prior balance + arrived confirmed inbound + posted/approved feasible transfer arrival − allocations.
-4. **Exclusive protection:** allocations to flexible pools cannot reduce a material below that date's protected exclusive demand plus required critical floor, unless the run explicitly reports an unavoidable prioritized shortage.
-5. **Existing obligations:** current stock and confirmed PO/CSN/GE/lot events are always represented as supply evidence regardless of `EXCLUDE_NEW_BUY`; ETA/pending status controls when, not whether, they are visible.
-6. **Location:** direct required SLoc is supply; remote SLoc needs a permitted transfer edge and source-surplus proof. OT01 has no solver edge.
-7. **New buy:** `q` is zero unless material/vendor/route are active, lead time is known enough to meet the requested ETA or the line is labelled infeasible, and MOQ/multiple constraints hold.
-8. **No hidden time travel:** stock starts from posted ledger at as-of; dispatch/arrival reflects actual CSN event state and current calculated plant ETA. An estimated arrival never becomes an actual arrival.
+1. `Σm x[p,m,t] + h[p,t] = D[p,t]`. When allocation is not deterministically valid, `h` stays `GROUP_UNALLOCATED`.
+2. `x=0` unless the member is active and eligible for the exact source group/date. Monthly new-buy deselection never blocks stock/PO/CSN consumption.
+3. `S[m,t+1] = S[m,t] + I[m,t] + Σk d[q,k,t] - Σp x[p,m,t]`. A physical unit is allocated once only across every group and exclusive use.
+4. Flexible-group allocation cannot reduce material below fixed/exclusive date-wise demand plus protection floor except a separately reported, prioritized unavoidable shortage.
+5. Existing stock and confirmed PO/GE/CSN/lot lifecycle supply are considered before tentative buy. Original PO quantity is never current outstanding supply.
+6. Unused valid supply—including MOQ/multiple excess—carries into future months before new procurement.
+7. New `q` is zero unless the material is selected for that month, vendor/route and MOQ/multiple are valid, and deterministic date/lead-time validation succeeds. Unknown ETA is risk, not on-time cover.
 
-Use lexicographic objectives: (1) minimize mandatory production interruption and critical breaches; (2) minimize unallocated group risk and infeasible date gaps; (3) minimize excess inventory/avoidable transfers; (4) minimize deterministic commercial score only where evidence is complete; (5) prefer better supplier reliability as a transparent tie-breaker. The solver must report every relaxation, never conceal it in a single score.
+Objectives are lexicographic: production continuity/critical breaches; unallocated group risk/date gaps; avoid excess/duplicate procurement; then only complete commercial evidence and supplier reliability. Every relaxation gets an explanation code.
 
-## 6. Six-month material selection precedence
+## 5. Monthly six-month new-procurement selection
 
-The six-month window is a manual planning control, not a deletion mechanism. It applies separately to **new buy**, **new consumption allocation**, and **existing supply evidence**.
+The user chooses whether each material is eligible for **new tentative procurement** in each month of the six-month horizon. That manual choice is authoritative.
 
-1. Current date-effective approved Stroke/Pack BOM line establishes a baseline candidate.
-2. Active group membership establishes technically possible alternatives only for that source line; membership alone does not prove an exclusive use is safe.
-3. An effective manual optimizer eligibility policy has precedence for new-buy/new-allocation use within its stated six-month interval.
-4. Explicit `EXCLUDE_NEW_BUY` blocks new tentative orders but retains existing stock, confirmed PO/CSN/lot and their risk in the timeline.
-5. Explicit `EXCLUDE_CONSUMPTION` blocks new flexible allocation but does not make physically existing stock disappear; it is shown as blocked-by-policy evidence.
-6. If source master and manual policy conflict or an end date is missing, state is `REVIEW`; no automatic allocation/buy recommendation is emitted.
-7. Every run snapshots selected, excluded and review materials with the source rule and effective dates.
+1. Active formulation/group membership establishes technical consumption possibility.
+2. Selection gates only a new-buy recommendation. Existing stock, confirmed PO/CSN/lots and their consumption remain relevant after deselection.
+3. A deselected material can leave a shortage/risk result; the solver cannot silently substitute or change the selection.
+4. AI may describe a pattern or request a scenario. It cannot edit selection/settings; a user-approved change creates a new validated solver run.
+5. Each run snapshots monthly selection and source/effective dates.
 
-## 7. MOQ versus order multiple
+## 6. Vendor MOQ, order multiples and delivery lots
 
-MOQ is a lower bound on one vendor-material order. An order multiple is an indivisible increment; they are independent constraints.
+MOQ is the lower bound of one vendor-material PO; order multiple is its indivisible increment. Both are vendor-specific and enforceable only with source evidence:
 
-| Case | Deterministic rule | Recommendation |
+`q[m,v] >= MOQ[m,v]` and `q[m,v] mod Multiple[m,v] = 0`.
+
+Delivery lots satisfy `Σk d[q,k] = q[m,v]`, each with separate requested/confirmed dispatch and ETA.
+
+| Requirement | MOQ / multiple | Recommendation |
 |---|---|---|
-| Net new requirement 700 KG; supplier MOQ 1,000 KG; multiple 250 KG | `q >= 1000`, `q mod 250 = 0` | 1,000 KG. |
-| Net new requirement 1,250 KG; MOQ 1,000 KG; multiple 600 KG | smallest multiple ≥ `max(1250,1000)` | 1,800 KG, with excess 550 KG explained. |
-| Company minimum 1,000 KG but supplier permits 400 KG dispatch lot | Apply contractual/order MOQ to `q`; do not turn dispatch lot into MOQ | 1,000 KG order; schedule may model 400 KG dispatch only if PO/CSN evidence permits it. |
+| 700 KG | MOQ 1,000 KG; multiple 250 KG | 1,000 KG PO. |
+| 1,250 KG | MOQ 1,000 KG; multiple 600 KG | 1,800 KG PO; 550 KG excess carries forward. |
+| **28 MT** | enforceable multiple **25 MT** | **50 MT PO**, with 25 MT + 25 MT staggered lots when each ETA is represented. |
 
-The existing PO22 policy table remains the manual Target/Critical/MOQ authority. Order multiples require a separate vendor-material commercial source; absent evidence means `multiple = UNKNOWN`, not 1.
+For existing commitments, PO line open balance, Gate Entry, dispatched/received CSN, lot balance, cancellation/knock-off and GRN determine remaining quantity. Original PO qty is not re-counted.
 
-## 8. Vendor, dispatch and ETA event model
+## 7. Lead time, dispatch and ETA
 
-`configured_total_lead_days` is an effective-dated order-release-to-plant-ETA duration and **already includes vendor processing**. The optimizer must not append another processing duration to it.
+Configured lead time is the effective **PO release to expected plant delivery** duration and already includes vendor processing. Never add processing again.
 
-| Event / date | Meaning | Source and use |
-|---|---|---|
-| PO-by date | Latest release date to target estimated plant ETA under configured total lead time | Proposal only; `eta - configured_total_lead_days`. |
-| Requested dispatch date | Requested supplier dispatch milestone on a proposed/confirmed PO | Stored separately; only derived when a verified component split exists. It is never treated as actual dispatch. |
-| Actual dispatch date | Physical vendor dispatch | CSN/event evidence only. |
-| CSN status | ORD/TRN/other lifecycle state, dispatched qty, partial receipt, mother/sub relation | Determines remaining confirmed supply and its confidence. |
-| Updated plant ETA | Latest calculated ETA to plant for the applicable CSN | Current projected arrival; it can change between runs and must carry source/time. |
-| GRN/posted receipt | Inventory fact | Removes future inbound and is reflected in ledger stock; never added twice. |
+| Field | Meaning |
+|---|---|
+| PO-by | Advisory release deadline: target ETA less configured total lead time. |
+| Requested dispatch | Supplier commitment for a proposed/confirmed PO; not PO date or actual dispatch. |
+| Actual dispatch | Physical CSN/event evidence; can precede/follow requested dispatch. |
+| CSN lifecycle | Status, partial dispatch/receipt, mother/sub relation and consignee determine remaining confirmed supply. |
+| Plant ETA | Latest calculated CSN ETA to plant; current preferred in-transit evidence with source/time. |
+| Unknown date | Explicit `UNKNOWN`, no on-time coverage credit. |
+| GRN | Stock fact, not future inbound; count once through ledger. |
 
-If total lead time is unknown, a buy candidate may be listed only as `ETA_UNKNOWN / not schedule-feasible`; it cannot receive an on-time coverage credit. Existing CSNs are always considered before proposed buying.
+Existing CSN/lifecycle evidence wins over stale PO promise. Proposed lot ETA stays a proposal until confirmed CSN evidence replaces it.
 
-## 9. Commercial evidence and missing-data policy
+## 8. Commercial evidence
 
-Potential evidence sources are AC01 approved landed-cost/costing facts, PO/PO-line price and currency, approved freight/tax components, vendor payment terms, vendor-material mapping, lead-time masters, received-CSN observations, historical procurement samples, and—only when verified—dispatch/collection cash timing. These sources must be captured with effective date, currency, source identity and freshness.
+AC01 is the candidate source for actual landed-cost evidence, subject to field/source verification. Vendor Master is the candidate source for new-order payment terms; existing PO terms are evidence for existing commitments. Where authoritative, the run includes historical consumption, supplier performance, projected cash impact and working capital.
 
-- Missing landed cost/payment term/reliability/capacity is `UNKNOWN`, never zero or “best”.
-- Production continuity constraints still run with unknown commercial values; economics cannot silently choose a supplier on incomplete evidence.
-- Currency/FX, recoverable tax, credit limit, cash budget, vendor capacity and customer collection logic are unavailable until authoritative sources are verified.
-- Commercial score must expose component values, missing reasons and weight/rule version. It cannot be an opaque AI score.
+- Missing landed cost, payment terms, performance, FX/tax, capacity, cash or working-capital data is `UNKNOWN`, not zero/best.
+- Continuity solver still runs; commercial vendor ranking is unavailable/partial with explicit reasons.
+- Commercial score is deterministic, component-visible and versioned—not an AI score.
 
-## 10. Planning-run API contract
+## 9. Proposed APIs
 
-All APIs are proposed and require new company-scoped resource/action entries. None shares PO creation access.
-
-### Create deterministic run
+All APIs are proposed and require distinct company-scoped ACL resources. They never reuse PO-create access.
 
 `POST /api/procurement/mts-optimizer/runs`
 
@@ -174,78 +154,70 @@ All APIs are proposed and require new company-scoped resource/action entries. No
   "horizon_end": "YYYY-MM-DD",
   "demand_at": "ISO timestamp or null",
   "calibration_reference": { "ledger_date": "YYYY-MM-DD" },
-  "scenario_label": "optional planner label"
+  "scenario_label": "optional"
 }
 ```
 
-Response contains immutable `run_id`, source fingerprint, policy versions, calculated pool rows, allocation/recommendation rows, exceptions, unknown data list, objective/relaxation results and no transactional document ID.
-
-### Read and decide
+Response carries run/fingerprint/rule and policy versions, pools, allocations, delivery lots, projected coverage, buy/risk recommendations, evidence confidence, unknowns and relaxations—never a transactional document ID.
 
 - `GET /api/procurement/mts-optimizer/runs?company_id=...`
 - `GET /api/procurement/mts-optimizer/runs/:run_id`
 - `GET /api/procurement/mts-optimizer/runs/:run_id/recommendations`
 - `POST /api/procurement/mts-optimizer/recommendations/:id/decision`
 
-Decision body is `{ "decision": "ACCEPTED|IGNORED|SUPERSEDED", "reason": "..." }`. An ACCEPTED decision records planner intent only. It does not create a PO, CSN, transfer, reservation or stock movement.
+Accept/ignore/supersede only records planning intent; it cannot post any document or stock activity.
 
-A material buy response requires: material/vendor/route identity, base and purchase UOM quantity, MOQ and multiple evidence, PO-by, requested dispatch, ETA confidence, coverage before/after, risk/explanation codes, commercial evidence state and deterministic validation result. An unallocated group-risk response carries the pool identity and eligible candidates but intentionally no false material buy quantity.
+## 10. AI Gateway and numerical authority
 
-## 11. AI Gateway contract and validation boundary
+AI analyzes patterns, risks, alternative strategies and suggested policy improvements. The deterministic solver alone calculates and validates quantities, PO-by dates, delivery schedules, stock projection and feasible allocations.
 
-The existing AI foundation is not sufficient for planning budget/audit requirements. A planning-specific gateway must create a concurrency-safe budget reservation under the B13 USD 5/month hard cap before any provider call and settle actual usage afterward. Budget exhaustion disables AI only, not deterministic planning.
+AI receives only ACL-filtered compact run evidence: recommendation IDs, candidate sets, policy/selection state, risk/unknown flags, calculated results and fingerprint. It cannot query or mutate ERP.
 
-**Input:** a compact, ACL-filtered deterministic run/recommendation snapshot: IDs/labels, allowed candidate set, quantities, dates, policy/unknown flags, explanation codes and source fingerprint. It excludes unrestricted raw database access and gives the model no authority to query or mutate ERP.
+AI may return explanations, evidence references, strategy ranking, questions and **scenario requests**. A scenario request cannot change manual settings or final numbers; after user authorization it starts a new deterministic run. AI cannot allocate an unallocated group pool or create a material buy.
 
-**Output:** structured JSON limited to `explanation`, `risk_summary`, `evidence_references`, `ranked_existing_recommendation_ids`, `questions_for_planner`, and optional `proposed_quantity`/date fields.
+The planning gateway atomically reserves/settles B13 hard-cap usage. AI failure, validation rejection or budget exhaustion is recorded and never blocks deterministic planning. Recommendations never create POs.
 
-**Validator:** rejects an output unless run ID/fingerprint match; referenced IDs belong to the company/run; quantities satisfy deterministic MOQ/multiple/eligibility/location/lead-time constraints; dates are feasible; no absent supplier/material is invented; and no field asks for a transaction. AI cannot turn a `GROUP_UNALLOCATED` pool into a material buy. Any failed numeric output is discarded and logged with a validation reason.
+## 11. Acceptance tests
 
-## 12. Acceptance tests
-
-| Company / case | Acceptance condition |
+| Case | Condition |
 |---|---|
-| CMP003 OT01 | OT01 never contributes stock, inbound, transfer or coverage; report shows exclusion evidence. |
-| CMP003 RDP Use Primary = No | Shortfall remains `GROUP_UNALLOCATED`; it is not attributed to lexical/UUID-first RDP member. |
-| CMP003 exclusive RDP/DA1100-type case | Date-wise mandatory demand/protected floor is served before flexible alternatives consume shared material; all stock allocations sum to physical balance once. |
-| CMP003 R/S remote stock | Source required SLoc cover excludes remote stock; transfer recommendation appears only with policy, surplus proof and an arrival date; it is not double-counted. |
-| CMP003 litre SKU | Missing fixed L→KG conversion prevents consumption/buy numbers and produces a visible exception. |
-| CMP005 PM in nonstandard location | Effective Pack BOM location plus company policy determines direct versus transfer treatment; no R/P prefix assumption. |
-| CMP005 RDP/multi-group material | Existing PO/CSN and stock are consumed at most once across all pools; existing supply remains visible if material is excluded for new buy. |
-| CMP011 40 KG multi-pack | Base-unit requirement and displayed pack provenance reconcile; a multiple/MOQ recommendation remains in procurement UOM. |
-| All three companies | Company scope prevents reading/allocating another company's material, stock, policy, vendor or recommendation. |
-| Future company onboarding | Add company ACL, source-verified MTS formulation, location policy and initial manual policies; no code fork or company code conditional. |
-| Inbound lifecycle | Partial receipt, knock-off, Gate Entry, mother/sub-CSN, foreign consignee, updated ETA and unknown ETA follow current PO22 partitioning before optimizer supply. |
-| Commercial unknown | Solver may flag production risk but cannot rank a vendor as cheapest/best from missing landed cost or payment data. |
-| AI failure/budget exhaustion | Deterministic run persists; no provider call/transaction occurs; explanation is unavailable with an auditable reason. |
+| CMP003 OT01/OT02 | Neither contributes stock, inbound, transfer, allocation or coverage; evidence shows exclusion. |
+| CMP003 R/S company pool | Eligible unrestricted R/S balance pools once after reservations; no artificial R→S delay blocks existing S stock. |
+| CMP003 R001→R002 | Redistribution cannot create a new purchase need or duplicate procurement. |
+| CMP003 RDP Use Primary = No | Shortfall is `GROUP_UNALLOCATED`, never UUID/lexical first material. |
+| CMP003 exclusive plus RDP | Fixed/exclusive date-wise demand is protected before flexible allocation; shared physical pool cannot over-allocate. |
+| CMP003 litre SKU | Missing L→KG conversion produces exception, never quantities. |
+| CMP005 PM/nonstandard location | Company/source policy decides availability without R/P prefix assumption; existing commitments remain visible when deselected for new buy. |
+| CMP005 shared material | One material across groups/exclusive use is consumed once over all days. |
+| CMP011 multi-pack | Base math, pack provenance and vendor UOM/multiple reconcile. |
+| 28 MT / 25 MT | 50 MT PO plus two 25 MT lots; individual lot ETA drives coverage; excess carries forward. |
+| Inbound lifecycle | Partial GRN, knock-off, GE, mother/sub-CSN, foreign consignee, latest/unknown ETA use current PO22 partitioning first. |
+| Monthly deselection | New buy blocked; existing stock/PO/CSN remains allocation evidence. |
+| Future company | ACL + source-verified formulation + R/S/OT policy + monthly selection onboards it with no code fork. |
+| Commercial unknown / AI outage | Continuity solver completes; commercial/AI states are unknown/unavailable with reason and no automatic action. |
 
-## 13. Chronological implementation sequence
+## 12. Implementation sequence (not authorization)
 
-1. Complete controlled DEV rollout of existing PO22 (`mts_requirement.logic.ts`, `mts_requirement.handlers.ts`, migration `20261016100000...`, ACL provisioning) and verify snapshot rebuilding. Do not start the optimizer before its foundation runs in DEV.
-2. Freeze representative CMP003/CMP005/CMP011 PO22 source snapshots and obtain numeric UAT sign-off for current behaviour.
-3. Implement and test append-only optimizer policy/run tables in `erp_planning`; verify exposed schema, RLS, route registry and ACL before any UI.
-4. Implement a pure solver beside—not inside—`buildRequirementRows` in `supabase/functions/api/_core/procurement/mts_requirement.logic.ts`; retain PO22 contract tests unchanged and add optimizer-specific pure tests.
-5. Implement source loaders by reusing `loadFormulationMasters`, `loadStockAndConsumption`, `loadReservations`, `loadInbound`, `loadLeadTimes`, `effectivePolicy`, and `canonicalJson` from the existing PO22 files, without copying or altering their semantics.
-6. Add location/exclusive/eligibility policy maintenance only after owner decisions and dedicated WRITE ACL design.
-7. Build read-only run/recommendation UI using `ErpDenseGrid` and the current PO22 detailed provenance pattern. Add accept/ignore audit only; no PO button.
-8. Add commercial evidence and deterministic scoring only after sources/freshness rules are verified.
-9. Add planning AI gateway, budget ledger, validator and ACL after deterministic recommendations pass UAT.
+1. Controlled DEV rollout of existing PO22 foundation: current migration, ACL provisioning, route/API checks and snapshots. Do not start optimizer implementation before it succeeds.
+2. Freeze CMP003/CMP005/CMP011 UAT source snapshots and sign off existing PO22 numerical behavior; do not edit `buildRequirementRows()`.
+3. Verify source fields/seed data for R/S/OT policy, reservations, lifecycle supply, AC01, Vendor Master and existing PO terms.
+4. Add append-only optimizer controls/runs/supply-event/delivery-lot tables under `erp_planning`, with RLS/ACL and no operational writes.
+5. Implement a pure solver beside—not inside—`buildRequirementRows`, reusing existing PO22 source semantics (`loadFormulationMasters`, `loadStockAndConsumption`, `loadReservations`, `loadInbound`, `loadLeadTimes`, `effectivePolicy`, `canonicalJson`).
+6. Add deterministic optimizer tests before any read-only `ErpDenseGrid` result UI.
+7. Add commercial score only after source verification; add AI gateway/budget/validator only after deterministic UAT.
 
-## 14. Decisions still requiring owner approval
+## 13. Genuine operational data-source / technical questions
 
-1. Who may make the deterministic allocation choice for an uncovered RM Use-Primary-No/PM group pool, and what allocation modes are permitted?
-2. Define exclusive/mandatory material protection at the exact Stroke/ProdShade/date grain and whether coverage floor is Critical, Target or another approved value.
-3. Confirm CMP003 OT01 hard exclusion effective date and whether any exceptional OT01 flow can ever be introduced through an explicitly approved future policy.
-4. Approve initial company/location policy records and which transfer routes require planner versus operational approval.
-5. Confirm whether MOQ and order multiple are maintained per vendor-material-route, company-material, contract, or combination—and their precedence.
-6. Confirm the accepted source and meaning of landed cost, payment-term cash date, FX, tax recoverability, cash budget, capacity and supplier reliability.
-7. Confirm six-month eligibility ownership, review cadence and whether `EXCLUDE_CONSUMPTION` can override an active approved formulation source.
-8. Decide what should happen when configured total lead time is unknown or conflicts with observed supplier performance.
-9. Approve AI monthly reset timezone, model/provider price source, setting-change ACL and whether AI may return numeric suggestions at all after deterministic validation.
-10. Define the future hand-off from an accepted recommendation to a PO draft, if any; this is explicitly out of scope for PO22 optimizer implementation.
+1. Which exact approved AC01 fields supply landed cost, freight/tax, currency/effective date and fallback behavior?
+2. Which Vendor Master fields/version provide applicable new-order terms, and which PO fields are authoritative for commitments?
+3. Which records/quality thresholds define supplier performance without inventing a score?
+4. What is the authoritative cash/working-capital input for budget, credit, FX, recoverable tax and collection timing?
+5. Which reservation statuses and exact location identities seed/validate R/S/OT policy for each company?
+6. Which lifecycle fields win when requested dispatch, CSN hierarchy, partial receipt and recalculated plant ETA conflict?
+7. What provider price/config source and month-reset timezone implement the already-approved AI budget technically?
 
-## 15. Owner-review summary
+## 14. Design-change summary and readiness
 
-Ready for review: a shared, company-configured optimizer shape; immutable run/audit model; group-pool-first shortage handling; explicit CMP003 OT01/location/transfer guardrails; MOQ/multiple semantics; separate PO-by/dispatch/ETA events; and a hard deterministic/AI boundary.
+Phase 2B replaces the earlier per-location transfer assumption with company-level eligible R/S pooling, hard OT01/OT02 exclusion and no artificial R→S scheduling delay. It confirms one demand-record state per formulation line, joint fixed/group allocation, monthly new-buy-only selection, vendor MOQ/multiple with split delivery lots, lifecycle-based outstanding supply, AC01/Vendor/PO commercial-source direction, and AI as analysis-only behind deterministic reruns.
 
-Outstanding: exclusive-demand business rules, group-pool allocation authority, location policy seed data, commercial evidence sources, six-month eligibility governance, and AI operational governance. No design item above is represented as deployed or authorized for implementation.
+The design is ready for owner review and source verification. It is **not implementation-ready** until existing PO22 is rolled out to DEV and the seven operational source/seed questions above are verified. Phase 3 must not start without separate approval.
