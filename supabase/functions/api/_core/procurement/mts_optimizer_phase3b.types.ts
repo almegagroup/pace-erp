@@ -140,7 +140,7 @@ export type OptimizerNewBuyEligibility = {
   readonly company_id: string;
   readonly selection_month: string;
   readonly decisions: readonly OptimizerNewBuyDecision[];
-  readonly selected_material_ids: ReadonlySet<string>;
+  readonly selected_material_ids: readonly string[];
 };
 
 export type OptimizerAdaptedPhase3BSources = {
