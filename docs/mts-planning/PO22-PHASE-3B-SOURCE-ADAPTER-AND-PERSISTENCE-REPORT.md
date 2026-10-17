@@ -67,3 +67,26 @@ Phase 3C cannot safely begin until the open source identities above are checked 
 - Six independent consecutive monthly selection states are now required for every planning snapshot; empty or partial windows are rejected, while UNKNOWN material decisions are explicitly retained. The selection decision list and selected-material IDs are cross-validated.
 - Selected material IDs are deeply frozen, canonical JSON-compatible arrays instead of mutable JavaScript Sets.
 - **Verified live mapping still outstanding:** existing PO22 loader does not supply `gate_entry_line.id` or authoritative lot row IDs. Phase 3B currently has no live extractor. Do not invent IDs or alter existing CM/NM loaders; a dedicated read-only source adapter must be designed after confirming the actual keys/joins and tested against company-isolated records before operational use.
+
+
+## 2026-10-17 — read-only PROD source-identity audit and isolated code (ChatGPT branch)
+
+PROD schema and three-company aggregate checks (no writes/migrations/deployments):
+
+| Source | CMP003 | CMP005 | CMP011 |
+| --- | ---: | ---: | ---: |
+| Gate Entry lines | 313 | 99 | 43 |
+| Authoritative `purchase_order_lot` rows | 2 | 1 | 2 |
+| OPEN/PARTIAL reservation documents | 28 | 7 | 0 |
+| `stock_ledger` entries | 34,992 | 12,841 | 7,016 |
+
+Authoritative keys have been verified in schema: `gate_entry_line.id` + `po_line_id` + `gate_entry_id`, `purchase_order_lot.id` + `po_line_id` + `lot_number`, `reservation_document.id` with status/balance/UOM, and `stock_ledger.id` + `stock_document_id` with company/location/stock type. Five lot rows have no ambiguous (PO-line, lot-number) keys.
+
+**Critical cross-company evidence:** 59 GE lines received by CMP005 against CMP003 POs, 7 CMP005 against CMP011 POs, and 40 CMP011 against CMP003 POs. All 106 are already `grn_posted=true` in the inspected PROD data; no unposted cross-company GE line was found. A posted GE must be sourced from receiving-company stock, not re-credited as projected inbound to the PO owner. This is an observed PROD fact at audit time, not a universal guarantee for future records.
+
+Added isolated evidence contracts on `agent/chatgpt` (not wired into an authorized HTTP route or the current requirement calculation):
+- `mts_optimizer_phase3b_receiving.logic.ts` classifies physical receipt by **receiving-company identity independently of PO owner**, blocks unidentified/conflicting lines, and validates authoritative lot/reservation/ledger identities.
+- `mts_optimizer_phase3b_receiving.logic.test.ts` adds pure classification/identity tests; execution still needs verification.
+- `mts_optimizer_phase3b_source.reader.ts` is an internal, read-only Supabase evidence loader for explicit, preauthorized PO-line and ledger IDs, with company-scoped active reservation reads. The caller is required to establish company/ACL scope before passing IDs. It is not a complete material stock-balance or demand extractor and is not exposed as an API.
+
+**Still required before live Phase 3B sign-off:** independent Deno/type-check/regression execution at the new commits; verified current `po_lot_balances` RPC output-to-`purchase_order_lot.id` match for each applicable active line; authoritative as-of inventory balance sourcing and source-identity manifest (ledger events themselves are not balances); stroke/Pack BOM and month-to-daily demand read path; explicit cross-company PO remainder/CSN destination ownership policy; authorized API capture/read boundary, migration and ACL approvals. No current Phase 3B source adapter is promoted to live usage.
