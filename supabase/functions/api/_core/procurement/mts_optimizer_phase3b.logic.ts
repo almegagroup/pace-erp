@@ -200,7 +200,7 @@ export function resolveNewBuyEligibility(companyId: string, selectionMonth: stri
       ? { material_id, state: row.is_selected_for_new_purchase ? "SELECTED" as const : "DESELECTED" as const, selection_version_no: row.version_no, selection_source_key: row.source_key }
       : { material_id, state: "UNKNOWN" as const, selection_version_no: null, selection_source_key: null };
   });
-  return deepFreeze({ company_id: companyId, selection_month: selectionMonth, decisions, selected_material_ids: new Set(decisions.filter((decision) => decision.state === "SELECTED").map((decision) => decision.material_id)) });
+  return deepFreeze({ company_id: companyId, selection_month: selectionMonth, decisions, selected_material_ids: decisions.filter((decision) => decision.state === "SELECTED").map((decision) => decision.material_id) });
 }
 
 /** Six independent monthly decisions; there is deliberately no carry-forward. */
@@ -222,7 +222,7 @@ async function sha256(value: unknown): Promise<string> {
  * SHA-256 covers business evidence only; captured_at/provenance remain audit
  * metadata so an equivalent re-capture has the same evidence fingerprint.
  */
-export async function createPersistentOptimizerInputSnapshot(raw: OptimizerRawSources, provenance: Omit<OptimizerRunProvenance, "source_contract_version" | "source_tables"> & { source_tables?: readonly string[] }, selectionWindow: readonly OptimizerNewBuyEligibility[] = []): Promise<OptimizerPersistentInputSnapshot> {
+export async function createPersistentOptimizerInputSnapshot(raw: OptimizerRawSources, provenance: Omit<OptimizerRunProvenance, "source_contract_version" | "source_tables"> & { source_tables?: readonly string[] }, selectionWindow: readonly OptimizerNewBuyEligibility[]): Promise<OptimizerPersistentInputSnapshot> {
   const normalized = normalizeOptimizerSources(raw);
   if (!provenance.captured_at) throw new Error("Snapshot provenance requires captured_at.");
   const supplyEvidence = {
@@ -236,7 +236,23 @@ export async function createPersistentOptimizerInputSnapshot(raw: OptimizerRawSo
     missing_data: normalized.missing_data,
     planning_blockers: normalized.planning_blockers,
   };
+  // Each planning snapshot requires six independent, consecutive month decisions.
+  // UNKNOWN is permitted and remains blocking for tentative new buys.
+  if (selectionWindow.length !== 6) throw new Error("Planning snapshot requires exactly six monthly selection decisions.");
   const orderedSelections = [...selectionWindow].sort((a, b) => a.selection_month.localeCompare(b.selection_month));
+  const start = orderedSelections[0].selection_month;
+  if (!isMonthFirst(start)) throw new Error("Planning snapshot has invalid selection month.");
+  for (let i = 0; i < 6; i++) {
+    let expected = start;
+    for (let j = 0; j < i; j++) expected = nextMonth(expected);
+    if (orderedSelections[i].selection_month !== expected) throw new Error("Planning snapshot selection months must be six consecutive months.");
+    const s = orderedSelections[i];
+    const ids = s.decisions.map((d) => d.material_id);
+    if (ids.length !== new Set(ids).size) throw new Error("Planning snapshot has duplicate selection material identities.");
+    if (canonicalJson([...ids].sort()) !== canonicalJson([...orderedSelections[0].decisions.map((d) => d.material_id)].sort())) throw new Error("Planning snapshot must resolve the same materials for all six months.");
+    const selected = s.decisions.filter((d) => d.state === "SELECTED").map((d) => d.material_id).sort();
+    if (canonicalJson(selected) !== canonicalJson([...s.selected_material_ids].sort())) throw new Error("Planning snapshot has inconsistent selection decisions.");
+  }
   if (orderedSelections.some((selection) => selection.company_id !== normalized.company_id)) throw new Error("Selection evidence belongs to a different company than the snapshot.");
   const businessEvidence = { sha256_supply_fingerprint: await sha256(supplyEvidence), selection_window: orderedSelections };
   const completeProvenance: OptimizerRunProvenance = {
