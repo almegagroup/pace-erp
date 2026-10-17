@@ -45,11 +45,30 @@ CREATE INDEX ix_mts_optimizer_selection_effective
 COMMENT ON TABLE erp_planning.mts_optimizer_material_selection IS
   'PO22 optimizer: owner-controlled, effective monthly eligibility for tentative NEW purchases only. It never removes posted physical stock or confirmed PO/CSN/GE supply from an input snapshot.';
 
--- Existing planning guard permits only current-row retirement and prevents
--- deletion, preserving the decision history used by a run snapshot.
+-- `guard_append_only()` does not itself verify the direction of an
+-- is_current update. This table needs a stricter guard: only retirement of a
+-- current version (true -> false) is allowed; a new version is activated only
+-- by INSERT. That keeps append-only history and the partial unique index sound.
+CREATE OR REPLACE FUNCTION erp_planning.guard_mts_optimizer_selection_append_only()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'MTS_OPTIMIZER_SELECTION_APPEND_ONLY: selection rows cannot be deleted';
+  END IF;
+  IF (to_jsonb(NEW) - 'is_current') IS DISTINCT FROM (to_jsonb(OLD) - 'is_current')
+     OR OLD.is_current IS NOT TRUE OR NEW.is_current IS NOT FALSE THEN
+    RAISE EXCEPTION 'MTS_OPTIMIZER_SELECTION_APPEND_ONLY: only is_current true->false retirement is allowed';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
 CREATE TRIGGER trg_mts_optimizer_material_selection_append_only
   BEFORE UPDATE OR DELETE ON erp_planning.mts_optimizer_material_selection
-  FOR EACH ROW EXECUTE FUNCTION erp_planning.guard_append_only();
+  FOR EACH ROW EXECUTE FUNCTION erp_planning.guard_mts_optimizer_selection_append_only();
 
 CREATE TABLE erp_planning.mts_optimizer_input_snapshot (
   id                           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -58,8 +77,10 @@ CREATE TABLE erp_planning.mts_optimizer_input_snapshot (
   captured_at                  timestamptz NOT NULL,
   source_contract_version      text NOT NULL,
   source_fingerprint           text NOT NULL,
+  sha256_supply_fingerprint    text NOT NULL CHECK (sha256_supply_fingerprint ~ '^sha256:[0-9a-f]{64}$'),
   sha256_business_fingerprint  text NOT NULL CHECK (sha256_business_fingerprint ~ '^sha256:[0-9a-f]{64}$'),
   input_json                   jsonb NOT NULL,
+  selection_window_json        jsonb NOT NULL,
   provenance_json              jsonb NOT NULL,
   blocker_count                integer NOT NULL DEFAULT 0 CHECK (blocker_count >= 0),
   created_by                   uuid,
@@ -67,7 +88,11 @@ CREATE TABLE erp_planning.mts_optimizer_input_snapshot (
   CONSTRAINT uq_mts_optimizer_input_snapshot_evidence
     UNIQUE (company_id, as_of_date, sha256_business_fingerprint),
   CONSTRAINT ck_mts_optimizer_input_snapshot_shape CHECK (
-    jsonb_typeof(input_json) = 'object' AND jsonb_typeof(provenance_json) = 'object'
+    jsonb_typeof(input_json) = 'object'
+    AND jsonb_typeof(selection_window_json) = 'array'
+    AND jsonb_typeof(provenance_json) = 'object'
+    AND provenance_json ? 'source_identity_manifest'
+    AND provenance_json ? 'source_versions'
   )
 );
 
@@ -94,6 +119,8 @@ CREATE TRIGGER trg_mts_optimizer_input_snapshot_immutable
 
 ALTER TABLE erp_planning.mts_optimizer_material_selection ENABLE ROW LEVEL SECURITY;
 ALTER TABLE erp_planning.mts_optimizer_input_snapshot ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE erp_planning.mts_optimizer_material_selection FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE erp_planning.mts_optimizer_input_snapshot FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON erp_planning.mts_optimizer_material_selection TO service_role;
 GRANT SELECT, INSERT ON erp_planning.mts_optimizer_input_snapshot TO service_role;
 

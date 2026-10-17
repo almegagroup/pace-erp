@@ -30,6 +30,20 @@
 
 BEGIN;
 
+-- Fail rather than silently omitting a grant if the existing PO21 capability
+-- catalog is incomplete in the target database. ACL-MASTER/P0076 inclusion is
+-- verified after new-version snapshot generation, not assumed from a role name.
+DO $$
+DECLARE v_capability text;
+BEGIN
+  FOREACH v_capability IN ARRAY ARRAY['CAP_MTS_PLAN_FULL', 'CAP_MTS_PLAN_ADDON', 'CAP_MTS_PLAN_ADDON_PLANTHEAD'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM acl.capabilities c WHERE c.capability_code = v_capability) THEN
+      RAISE EXCEPTION 'MTS_OPTIMIZER_ACL_CAPABILITY_MISSING: %', v_capability;
+    END IF;
+  END LOOP;
+END;
+$$;
+
 INSERT INTO acl.menu_master (menu_code, display_name, description, is_system)
 SELECT v.code, v.name, v.description, true
 FROM (VALUES
@@ -47,8 +61,7 @@ FROM (VALUES
   ('CAP_MTS_PLAN_ADDON_PLANTHEAD', 'PROC_MTS_OPTIMIZER_INPUT',     'VIEW')
 ) AS v(capability_code, menu_code, action)
 JOIN acl.menu_master m ON m.menu_code = v.menu_code
-WHERE EXISTS (SELECT 1 FROM acl.capabilities c WHERE c.capability_code = v.capability_code)
-  AND NOT EXISTS (
+WHERE NOT EXISTS (
     SELECT 1 FROM acl.capability_menu_actions existing
     WHERE existing.capability_code = v.capability_code
       AND existing.menu_id = m.id
