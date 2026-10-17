@@ -1340,6 +1340,38 @@ const DISTRIBUTE_ERROR_CODES = new Set([
   "LTR_DISTRIBUTE_LOCATION_NOT_MTS",
 ]);
 
+// §138.13.2 -- release is the inverse attribution move of MANUAL_ALLOT. It
+// returns stock from a real machine bucket to the same location's Unassigned
+// bucket. It is deliberately a separate action from distribution: a user can
+// only reallocate quantity after the release has passed the reservation guard.
+const MACHINE_RELEASE_ERROR_CODES = new Set([
+  "LTR_MACHINE_RELEASE_INVALID",
+  "LTR_MACHINE_RELEASE_LOCATION_NOT_MTS",
+  "LTR_MACHINE_RELEASE_MACHINE_LOCATION_MISMATCH",
+  "LTR_MACHINE_RELEASE_QTY_EXCEEDS_FREE",
+  "LTR_MACHINE_RELEASE_MACHINE_NOT_FOUND",
+]);
+
+type MachineReleaseInput = {
+  company_id: string;
+  storage_location_id: string;
+  material_id: string;
+  machine_id: string;
+  batch_number: string | null;
+  quantity: number;
+};
+
+function normalizeMachineRelease(raw: JsonRecord): MachineReleaseInput {
+  return {
+    company_id: toTrimmedString(raw.company_id),
+    storage_location_id: toTrimmedString(raw.storage_location_id),
+    material_id: toTrimmedString(raw.material_id),
+    machine_id: toTrimmedString(raw.machine_id),
+    batch_number: toTrimmedString(raw.batch_number) || null,
+    quantity: Number(parsePositiveNumber(raw.quantity) ?? 0),
+  };
+}
+
 async function getStorageLocationInfo(ids: string[]): Promise<Map<string, JsonRecord>> {
   const uniqueIds = [...new Set(ids.map((entry) => toTrimmedString(entry)).filter(Boolean))];
   const map = new Map<string, JsonRecord>();
@@ -1572,6 +1604,172 @@ export async function postMachineDistributionHandler(
           : code === "LTR_DISTRIBUTE_FAILED"
             ? 500
             : 400;
+    return ltrErrorResponse(req, ctx, code, status, message);
+  }
+}
+
+// The reservation rule intentionally mirrors MTS Page 4's bucket policy:
+// PROCESS_PO reservations belong only to that Process PO's selected machine;
+// every other open reservation remains location-wide.  Thus a release can
+// never move quantity out of a bucket that is already committed to a Process
+// PO on that same machine.
+async function getMachineReleaseAvailability(params: Omit<MachineReleaseInput, "quantity">): Promise<{
+  machine_qty: number;
+  open_reservation_qty: number;
+  releasable_qty: number;
+}> {
+  const mtsLocationIds = await getMtsMachineStorageLocationIds(params.company_id);
+  if (!mtsLocationIds.has(params.storage_location_id)) {
+    throw new Error("LTR_MACHINE_RELEASE_LOCATION_NOT_MTS");
+  }
+
+  const { data: machine, error: machineError } = await serviceRoleClient
+    .schema("erp_master")
+    .from("machine_master")
+    .select("id, company_id, storage_location_id")
+    .eq("id", params.machine_id)
+    .maybeSingle();
+  if (machineError || !machine) throw new Error("LTR_MACHINE_RELEASE_MACHINE_NOT_FOUND");
+  if (
+    toTrimmedString((machine as JsonRecord).company_id) !== params.company_id
+    || toTrimmedString((machine as JsonRecord).storage_location_id) !== params.storage_location_id
+  ) {
+    throw new Error("LTR_MACHINE_RELEASE_MACHINE_LOCATION_MISMATCH");
+  }
+
+  let bucketRows: JsonRecord[];
+  try {
+    bucketRows = await fetchAllRows<JsonRecord>((from, to) => {
+      let query = serviceRoleClient
+        .schema("erp_production")
+        .from("machine_stock_log")
+        .select("qty, direction")
+        .eq("company_id", params.company_id)
+        .eq("storage_location_id", params.storage_location_id)
+        .eq("material_id", params.material_id)
+        .eq("machine_id", params.machine_id)
+        .range(from, to);
+      query = params.batch_number ? query.eq("batch_number", params.batch_number) : query.is("batch_number", null);
+      return query;
+    });
+  } catch {
+    throw new Error("LTR_MACHINE_RELEASE_LOOKUP_FAILED");
+  }
+  const machineQty = Number(bucketRows.reduce((sum, row) => (
+    sum + (toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1) * Number(parseNullableNumber(row.qty) ?? 0)
+  ), 0).toFixed(6));
+
+  const { data: reservationRows, error: reservationError } = await serviceRoleClient
+    .schema("erp_production")
+    .from("reservation_document")
+    .select("balance_qty, source_type, source_id")
+    .eq("company_id", params.company_id)
+    .eq("storage_location_id", params.storage_location_id)
+    .eq("material_id", params.material_id)
+    .in("status", ["OPEN", "PARTIAL"]);
+  if (reservationError) throw new Error("LTR_MACHINE_RELEASE_RESERVATION_LOOKUP_FAILED");
+  const reservations = (reservationRows ?? []) as JsonRecord[];
+  const processOrderIds = [...new Set(reservations
+    .filter((row) => toUpperTrimmedString(row.source_type) === "PROCESS_PO")
+    .map((row) => toTrimmedString(row.source_id))
+    .filter(Boolean))];
+  const machineByProcessOrderId = new Map<string, string | null>();
+  if (processOrderIds.length > 0) {
+    const { data: processOrders, error: processOrderError } = await serviceRoleClient
+      .schema("erp_production")
+      .from("process_order")
+      .select("id, machine_id")
+      .in("id", processOrderIds);
+    if (processOrderError) throw new Error("LTR_MACHINE_RELEASE_RESERVATION_LOOKUP_FAILED");
+    for (const processOrder of (processOrders ?? []) as JsonRecord[]) {
+      machineByProcessOrderId.set(toTrimmedString(processOrder.id), toTrimmedString(processOrder.machine_id) || null);
+    }
+  }
+  const openReservationQty = Number(reservations.reduce((sum, row) => {
+    if (toUpperTrimmedString(row.source_type) === "PROCESS_PO") {
+      const reservationMachineId = machineByProcessOrderId.get(toTrimmedString(row.source_id));
+      if (reservationMachineId === undefined || reservationMachineId !== params.machine_id) return sum;
+    }
+    return sum + Number(parseNullableNumber(row.balance_qty) ?? 0);
+  }, 0).toFixed(6));
+  return {
+    machine_qty: machineQty,
+    open_reservation_qty: openReservationQty,
+    releasable_qty: Number(Math.max(0, machineQty - openReservationQty).toFixed(6)),
+  };
+}
+
+export async function getMachineReleaseAvailabilityHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const params = normalizeMachineRelease({
+      company_id: url.searchParams.get("company_id"),
+      storage_location_id: url.searchParams.get("storage_location_id"),
+      material_id: url.searchParams.get("material_id"),
+      machine_id: url.searchParams.get("machine_id"),
+      batch_number: url.searchParams.get("batch_number"),
+      quantity: 1,
+    });
+    if (!params.company_id || !params.storage_location_id || !params.material_id || !params.machine_id) {
+      throw new Error("LTR_MACHINE_RELEASE_INVALID");
+    }
+    await assertScopedCompanyAccess(ctx, params.company_id, POST_RESOURCE, "VIEW");
+    const availability = await getMachineReleaseAvailability(params);
+    return okResponse({ data: availability }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "LTR_MACHINE_RELEASE_LOOKUP_FAILED";
+    const code = message === "LTR_SCOPE_VIOLATION"
+      ? message
+      : MACHINE_RELEASE_ERROR_CODES.has(message)
+        ? message
+        : "LTR_MACHINE_RELEASE_LOOKUP_FAILED";
+    return ltrErrorResponse(req, ctx, code, code === "LTR_SCOPE_VIOLATION" ? 403 : 400, message);
+  }
+}
+
+export async function postMachineReleaseHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    const release = normalizeMachineRelease(await parseBody(req));
+    if (!release.company_id || !release.storage_location_id || !release.material_id || !release.machine_id || release.quantity <= 0) {
+      throw new Error("LTR_MACHINE_RELEASE_INVALID");
+    }
+    await assertScopedCompanyAccess(ctx, release.company_id, POST_RESOURCE, "WRITE");
+
+    // The RPC repeats the availability calculation immediately before the
+    // paired write. The UI's GET result is informative only and is never
+    // trusted as an authority to release stock.
+    const { data, error } = await serviceRoleClient
+      .schema("erp_production")
+      .rpc("release_machine_stock_allocation", {
+        p_company_id: release.company_id,
+        p_storage_location_id: release.storage_location_id,
+        p_material_id: release.material_id,
+        p_machine_id: release.machine_id,
+        p_batch_number: release.batch_number,
+        p_quantity: Number(release.quantity.toFixed(6)),
+        p_created_by: ctx.auth_user_id,
+      });
+    if (error) {
+      const message = toTrimmedString(error.message);
+      if (MACHINE_RELEASE_ERROR_CODES.has(message)) throw new Error(message);
+      console.error("[location_transfer.postMachineRelease] rpc failed:", JSON.stringify(error));
+      throw new Error("LTR_MACHINE_RELEASE_FAILED");
+    }
+    return okResponse({ ok: true, ...(data as JsonRecord) }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "LTR_MACHINE_RELEASE_FAILED";
+    const code = message === "LTR_SCOPE_VIOLATION"
+      ? message
+      : MACHINE_RELEASE_ERROR_CODES.has(message)
+        ? message
+        : "LTR_MACHINE_RELEASE_FAILED";
+    const status = code === "LTR_SCOPE_VIOLATION" ? 403 : code === "LTR_MACHINE_RELEASE_QTY_EXCEEDS_FREE" ? 409 : code === "LTR_MACHINE_RELEASE_FAILED" ? 500 : 400;
     return ltrErrorResponse(req, ctx, code, status, message);
   }
 }
