@@ -17,7 +17,7 @@ function fixture(): OptimizerPhase3BAdapterInput {
   };
 }
 
-function snapshot(adapted: ReturnType<typeof adaptOptimizerPhase3BSources>, selections = [] as ReturnType<typeof resolveSixMonthNewBuyEligibility>) {
+function snapshot(adapted: ReturnType<typeof adaptOptimizerPhase3BSources>, selections = resolveSixMonthNewBuyEligibility(adapted.raw.company_id, "2026-10-01", adapted.raw.materials.map((m) => m.material_id), [])) {
   return createPersistentOptimizerInputSnapshot(adapted.raw, { captured_at: adapted.raw.captured_at, captured_by: "P0076", adapter_versions: { phase3b: "1" }, source_identity_manifest: adapted.source_identity_manifest, source_versions: { erp_schema: "UNKNOWN" } }, selections);
 }
 
@@ -117,4 +117,31 @@ Deno.test("SHA supply vs planning-decision fingerprints are content-stable and d
   const changed = await snapshot(adaptOptimizerPhase3BSources(first), selected);
   assert(changed.sha256_supply_fingerprint === a.sha256_supply_fingerprint && changed.sha256_business_fingerprint !== a.sha256_business_fingerprint, "selection affects only decision digest");
   assert(Object.isFrozen(a) && Object.isFrozen(a.provenance) && Object.isFrozen(a.selection_window), "snapshot immutable");
+});
+
+Deno.test("planning snapshot rejects absent, incomplete, repeated or inconsistent six-month decisions", async () => {
+  const adapted = adaptOptimizerPhase3BSources(fixture());
+  const valid = resolveSixMonthNewBuyEligibility("CMP003", "2026-10-01", ["MAT-1"], []);
+  const provenance = { captured_at: adapted.raw.captured_at, captured_by: null, adapter_versions: { phase3b: "1" }, source_identity_manifest: adapted.source_identity_manifest, source_versions: { erp_schema: "UNKNOWN" } };
+  for (const invalid of [[], valid.slice(0, 5), [...valid.slice(0, 5), valid[4]]]) {
+    let error: unknown;
+    try { await createPersistentOptimizerInputSnapshot(adapted.raw, provenance, invalid); } catch (caught) { error = caught; }
+    assert(error instanceof Error, "missing, partial or duplicate month window must fail");
+  }
+  const stale = valid.map((row, index) => index === 0 ? { ...row, selected_material_ids: ["MAT-1"] } : row);
+  let staleError: unknown;
+  try { await createPersistentOptimizerInputSnapshot(adapted.raw, provenance, stale); } catch (caught) { staleError = caught; }
+  assert(staleError instanceof Error, "selected IDs cannot contradict month decisions");
+});
+
+Deno.test("selected material identities in snapshots are frozen arrays, not mutable Sets", async () => {
+  const adapted = adaptOptimizerPhase3BSources(fixture());
+  const window = resolveSixMonthNewBuyEligibility("CMP003", "2026-10-01", ["MAT-1"], [
+    { company_id: "CMP003", material_id: "MAT-1", selection_month: "2026-10-01", is_selected_for_new_purchase: true, version_no: 1, is_current: true, source_key: "selection-one" },
+  ]);
+  const record = await snapshot(adapted, window);
+  equal(record.selection_window[0].selected_material_ids, ["MAT-1"], "selected list persists in fingerprintable form");
+  assert(Object.isFrozen(record.selection_window[0].selected_material_ids), "selected IDs cannot be mutated");
+  const before = record.sha256_business_fingerprint;
+  assert(before.startsWith("sha256:"), "immutable evidence has valid digest");
 });
