@@ -925,6 +925,21 @@ export function commitHistoricalOperationsImport(data) {
   return fetchProcurement("POST", "/api/procurement/mts-plan/historical-import/commit", data);
 }
 
+// Historical procurement uses the same POTMP page and ACL, but its dedicated
+// endpoint/contract keeps procurement records out of the Production/Dispatch
+// actuals importer.
+export function dryRunHistoricalProcurementImport(data) {
+  return fetchProcurement("POST", "/api/procurement/historical-procurement-import/dry-run", data);
+}
+
+export function commitHistoricalProcurementImport(data) {
+  return fetchProcurement("POST", "/api/procurement/historical-procurement-import/commit", data);
+}
+
+export function getHistoricalProcurementEvidence(params) {
+  return fetchProcurement("GET", "/api/procurement/historical/procurement-evidence", undefined, params);
+}
+
 export function getMtsPlanProductGroups(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/product-groups", undefined, params);
 }
@@ -1688,6 +1703,14 @@ export function postMachineDistribution(data) {
   return fetchProcurement("POST", "/api/procurement/machine-distribution/assign", data);
 }
 
+export function getMachineReleaseAvailability(params) {
+  return fetchProcurement("GET", "/api/procurement/machine-distribution/release-availability", undefined, params);
+}
+
+export function postMachineRelease(data) {
+  return fetchProcurement("POST", "/api/procurement/machine-distribution/release", data);
+}
+
 export function getStockLedgerReport(params) {
   return fetchProcurement("GET", "/api/procurement/stock-ledger", undefined, params);
 }
@@ -1794,4 +1817,26 @@ export function listPrintGroups(params) {
 
 export function createPrintLog(payload) {
   return fetchProcurement("POST", "/api/procurement/print-groups/log", payload);
+}
+
+// PO22 MTS Requirement (Requirement Report + Material Settings). Responses are
+// plain objects without a `data`/`pagination` key, so read `.rows` directly.
+export function getMtsRequirementAccess(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/access", undefined, params);
+}
+
+export function getMtsRequirementReport(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/report", undefined, params);
+}
+
+export function getMtsRequirementPolicies(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/policies", undefined, params);
+}
+
+export function getMtsRequirementPolicyHistory(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/policy-history", undefined, params);
+}
+
+export function saveMtsRequirementPolicies(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/policies", data);
 }

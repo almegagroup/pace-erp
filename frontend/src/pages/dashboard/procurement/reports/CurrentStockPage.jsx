@@ -30,6 +30,8 @@ import { listMachines } from "../../om/omApi.js";
 import {
   getCurrentStock,
   getCurrentStockMachineWise,
+  getMachineReleaseAvailability,
+  postMachineRelease,
   searchCurrentStockBatchNumbers,
   searchCurrentStockPackingPoNumbers,
 } from "../procurementApi.js";
@@ -170,6 +172,116 @@ const MACHINE_WISE_COLUMNS = [
 ];
 const EMPTY_MACHINE_WISE_ROWS = [];
 
+// §138.13.2 -- the report is where users can see a machine's actual bucket,
+// but the release is still a separate guarded inventory action.  The server
+// recomputes these values immediately before it writes; the drawer values are
+// an explanation, never the authority for a release.
+function MachineReleaseDrawer({ visible, onClose, companyId, row, onReleased }) {
+  const [quantity, setQuantity] = useState("");
+  const [error, setError] = useState("");
+  const [posting, setPosting] = useState(false);
+  const releaseParams = useMemo(() => (row && companyId ? {
+    company_id: companyId,
+    storage_location_id: row.storage_location_id,
+    material_id: row.material_id,
+    machine_id: row.machine_id,
+    batch_number: row.batch_number || undefined,
+  } : null), [companyId, row]);
+  const availabilityQuery = useQuery({
+    queryKey: ["machine-release-availability", releaseParams],
+    queryFn: () => getMachineReleaseAvailability(releaseParams),
+    enabled: visible && Boolean(releaseParams?.storage_location_id && releaseParams?.material_id && releaseParams?.machine_id),
+  });
+  const availability = availabilityQuery.data?.data ?? availabilityQuery.data ?? null;
+  const releasableQty = Number(availability?.releasable_qty ?? 0);
+
+  useEffect(() => {
+    if (visible) {
+      setQuantity("");
+      setError("");
+    }
+  }, [visible, row?.machine_id, row?.material_id, row?.batch_number]);
+
+  async function handleRelease() {
+    const parsedQuantity = Number(quantity);
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+      setError("Enter a release quantity greater than zero.");
+      return;
+    }
+    setPosting(true);
+    setError("");
+    try {
+      await postMachineRelease({ ...releaseParams, quantity: parsedQuantity });
+      await onReleased(parsedQuantity);
+      onClose();
+    } catch (releaseError) {
+      setError(releaseError instanceof Error ? releaseError.message : "Machine release failed.");
+      await availabilityQuery.refetch();
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  return (
+    <DrawerBase
+      visible={visible}
+      onClose={onClose}
+      onEscape={onClose}
+      side="center"
+      width="min(620px, calc(100vw - 24px))"
+      title="Release Machine Stock"
+      actions={(
+        <>
+          <button type="button" onClick={onClose} className="h-8 border border-slate-300 bg-white px-4 text-xs font-semibold uppercase tracking-[0.12em] text-slate-700">Cancel</button>
+          <button
+            type="button"
+            onClick={() => void handleRelease()}
+            disabled={posting || availabilityQuery.isLoading || releasableQty <= 0}
+            className="h-8 border border-amber-700 bg-amber-100 px-4 text-xs font-semibold uppercase tracking-[0.12em] text-amber-950 disabled:opacity-50"
+          >
+            {posting ? "Releasing..." : "Release to Unassigned"}
+          </button>
+        </>
+      )}
+    >
+      <p className="mb-4 text-xs text-slate-600">
+        This changes only the machine allocation. It returns quantity to the same SLoc&apos;s Unassigned bucket; no physical stock movement or stock-ledger posting is created.
+      </p>
+      {availabilityQuery.isLoading ? <p className="py-6 text-center text-sm text-slate-500">Checking current machine balance and reservations...</p> : null}
+      {availabilityQuery.error ? <p className="mb-3 text-sm text-rose-700">{availabilityQuery.error instanceof Error ? availabilityQuery.error.message : "Unable to check release availability."}</p> : null}
+      {!availabilityQuery.isLoading && !availabilityQuery.error && availability ? (
+        <>
+          <div className="grid gap-3 border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+            <div><div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Material</div><div className="mt-1 text-sm font-semibold text-slate-900">{row?.material_name || "—"}</div></div>
+            <div><div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Machine</div><div className="mt-1 text-sm font-semibold text-slate-900">{row?.machine_label || "—"}</div></div>
+            <div><div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">SLoc / Batch</div><div className="mt-1 text-sm text-slate-900">{row?.storage_location_code || "—"} / {row?.batch_number || "—"}</div></div>
+            <div><div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">UOM</div><div className="mt-1 text-sm text-slate-900">{row?.base_uom_code || "—"}</div></div>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <div className="border border-slate-200 p-3"><div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">Machine balance</div><div className="mt-1 text-lg font-semibold">{formatQuantity(availability.machine_qty)}</div></div>
+            <div className="border border-rose-200 bg-rose-50 p-3"><div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-rose-700">Open reservation</div><div className="mt-1 text-lg font-semibold text-rose-800">{formatQuantity(availability.open_reservation_qty)}</div></div>
+            <div className="border border-emerald-200 bg-emerald-50 p-3"><div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-700">Releasable</div><div className="mt-1 text-lg font-semibold text-emerald-800">{formatQuantity(availability.releasable_qty)}</div></div>
+          </div>
+          <label className="mt-4 grid gap-1 text-xs font-semibold uppercase tracking-[0.1em] text-slate-700">
+            Release quantity ({row?.base_uom_code || "UOM"})
+            <input
+              type="number"
+              min="0.000001"
+              step="0.000001"
+              max={releasableQty}
+              value={quantity}
+              onChange={(event) => setQuantity(event.target.value)}
+              className="h-10 border border-slate-300 bg-white px-3 text-sm font-normal normal-case tracking-normal text-slate-900 outline-none focus:border-sky-600"
+            />
+          </label>
+          {releasableQty <= 0 ? <p className="mt-3 text-xs font-semibold text-amber-800">Nothing can be released: this machine balance is fully covered by open reservations.</p> : null}
+        </>
+      ) : null}
+      {error ? <p className="mt-3 text-sm font-semibold text-rose-700">{error}</p> : null}
+    </DrawerBase>
+  );
+}
+
 // §138.8 — "Machine wise stock" drawer (business owner, 2026-09-22). Re-runs
 // the exact same filter criteria the main Current Stock report was last
 // executed with, aggregating machine_stock_log into a current per-machine
@@ -197,6 +309,9 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
   const rows = query.data ?? EMPTY_MACHINE_WISE_ROWS;
   const [allColumnSearch, setAllColumnSearch] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [releaseRow, setReleaseRow] = useState(null);
+  const [releaseNotice, setReleaseNotice] = useState("");
+  const companyId = String(params?.company_id || params?.company_ids || "").split(",")[0].trim();
   const filteredRows = useMemo(() => {
     const searchTerm = allColumnSearch.trim().toLocaleLowerCase();
     if (!searchTerm) return rows;
@@ -220,6 +335,29 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
     } finally {
       setExporting(false);
     }
+  }
+
+  const machineGridColumns = useMemo(() => [
+    ...MACHINE_WISE_COLUMNS,
+    {
+      key: "release",
+      label: "Release",
+      width: "110px",
+      render: (row) => row.machine_id && Number(row.unrestricted_qty) > 0 ? (
+        <button
+          type="button"
+          onClick={() => { setReleaseNotice(""); setReleaseRow(row); }}
+          className="border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-800"
+        >
+          Release
+        </button>
+      ) : <span className="text-slate-400">—</span>,
+    },
+  ], []);
+
+  async function handleReleased(quantity) {
+    await query.refetch();
+    setReleaseNotice(`${formatQuantity(quantity)} released to the same SLoc's Unassigned bucket. You can now redistribute it from IN11.`);
   }
 
   return (
@@ -251,8 +389,9 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
       )}
     >
       <p className="mb-3 text-xs text-slate-500">
-        RM materials only. Uses the same executed company, material, storage location, batch, and zero-stock filters.
+        RM materials only. Uses the same executed company, material, storage location, batch, and zero-stock filters. Release excludes every open reservation on this machine.
       </p>
+      {releaseNotice ? <p className="mb-3 border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">{releaseNotice}</p> : null}
       {query.isLoading ? (
         <p className="py-6 text-center text-sm text-slate-500">Loading...</p>
       ) : query.error ? (
@@ -275,7 +414,7 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
             <span className="text-xs text-slate-500">{filteredRows.length} of {rows.length} RM rows</span>
           </div>
           <ErpDenseGrid
-            columns={MACHINE_WISE_COLUMNS}
+            columns={machineGridColumns}
             rows={filteredRows}
             rowKey={(row, index) => `${row.material_id}-${row.storage_location_code}-${row.machine_label}-${index}`}
             emptyMessage="No RM machine-wise stock matches this search."
@@ -283,6 +422,13 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
           />
         </>
       )}
+      <MachineReleaseDrawer
+        visible={Boolean(releaseRow)}
+        onClose={() => setReleaseRow(null)}
+        companyId={companyId}
+        row={releaseRow}
+        onReleased={handleReleased}
+      />
     </DrawerBase>
   );
 }

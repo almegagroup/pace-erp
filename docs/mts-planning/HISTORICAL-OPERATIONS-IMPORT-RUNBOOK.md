@@ -83,3 +83,38 @@ do **not** delete historical rows casually: preserve batch/exception audit
 evidence and use a corrective re-import with the same stable source identity.
 No rollback procedure ever calls inventory, GL, invoice, DO or process-order
 tables.
+
+## Historical procurement batches (POTMP)
+
+Use the **Historical Operations Import** page route
+`/dashboard/procurement/historical-operations-import` with the same
+normal ERP session and the company selected explicitly. Choose one procurement
+import type at a time, paste a reviewed JSON array from a TXT file, dry-run,
+review every returned issue/count, tick approval, then commit only the exact
+unchanged payload.
+
+1. Import `PO_SHEET` headers first (`Historical Purchase Orders / headers`), in
+   batches of at most **500 combined rows**.
+2. Import its PO lines next (`Historical PO Lines`), also at most 500 rows.
+   Lines can resolve a parent committed in an earlier batch only when company
+   and `source_system` agree.
+3. Import `MVT_TRACKER` as `Historical Consignment Movements`, at most 500
+   rows. Each movement needs its own stable `source_record_key`; invoice/BL
+   alone is invalid as a uniqueness strategy.
+4. Import `Product_Data_Base` only as `Product Database Reference Snapshot`.
+   Enter the source extraction timestamp; this is an undated/current default
+   snapshot, never a historical transaction or payment/lead-time proof.
+
+For procurement, retain all source fields and evaluate PO order dates and
+actual movement events independently for **2024-09-01 … 2026-08-31**. Keep
+older parents needed by an in-window movement; label them as dependencies.
+Do not use hidden `MOVEMENT_TRACKER`, scheduled ETD/ETA as actual events,
+fuzzy vendor/material matching, or automatic live-master creation. The
+existing Production/FG Dispatch workflow and its 2,000-row / 30-Sep-2026
+boundary are unchanged.
+
+After each dry-run, record the batch checksum and inspect submitted, stored,
+validated, unmapped, quarantined, warning/error and UOM totals. A commit is
+permitted only when there are no blocking errors; stored `UNMAPPED` rows are
+not valid planning evidence. No runbook step authorises a production import
+or deployment without the business owner's separate approval.

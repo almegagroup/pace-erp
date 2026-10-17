@@ -321,6 +321,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // -- it's the same page, same workbench, just a different attribution action.
   "GET:/api/procurement/machine-distribution/unassigned": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
   "POST:/api/procurement/machine-distribution/assign":    { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
+  // §138.13.2 -- release is the inverse of machine attribution, still an
+  // IN11/stock-workbench write and deliberately not a PROC_CURRENT_STOCK
+  // report permission.
+  "GET:/api/procurement/machine-distribution/release-availability": { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "VIEW"  },
+  "POST:/api/procurement/machine-distribution/release":              { skipAcl: false, resourceCode: "PROC_LOC_TRANSFER_POST", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/balance":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
   "POST:/api/procurement/stock-status-change/postings": { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "WRITE" },
   "GET:/api/procurement/stock-status-change/postings":  { skipAcl: false, resourceCode: "PROD_STOCK_STATUS_CHANGE", action: "VIEW"  },
@@ -363,13 +368,21 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/mts-plan/report":            { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "GET:/api/procurement/mts-plan/actuals":           { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "GET:/api/procurement/historical/lead-times":      { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
-  "POST:/api/procurement/historical-procurement-import/dry-run": { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
-  "POST:/api/procurement/historical-procurement-import/commit":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
+  "GET:/api/procurement/historical/procurement-evidence": { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
+  // POTMP is the sole authority for every historical import category; PO21
+  // planning-maintenance access does not grant import capability.
+  "POST:/api/procurement/historical-procurement-import/dry-run": { skipAcl: false, resourceCode: "PROC_HISTORICAL_OPERATIONS_IMPORT", action: "WRITE" },
+  "POST:/api/procurement/historical-procurement-import/commit":  { skipAcl: false, resourceCode: "PROC_HISTORICAL_OPERATIONS_IMPORT", action: "WRITE" },
   "POST:/api/procurement/mts-plan/addon-lines":      { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/base-lines":       { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/stroke-settings":  { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN_MAINTAIN", action: "WRITE" },
   "POST:/api/procurement/mts-plan/historical-import/dry-run": { skipAcl: false, resourceCode: "PROC_HISTORICAL_OPERATIONS_IMPORT", action: "WRITE" },
   "POST:/api/procurement/mts-plan/historical-import/commit":  { skipAcl: false, resourceCode: "PROC_HISTORICAL_OPERATIONS_IMPORT", action: "WRITE" },
+  "GET:/api/procurement/mts-requirement/access":         { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+  "GET:/api/procurement/mts-requirement/report":         { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+  "GET:/api/procurement/mts-requirement/policies":       { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+  "GET:/api/procurement/mts-requirement/policy-history": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+  "POST:/api/procurement/mts-requirement/policies":      { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT_POLICY", action: "WRITE" },
   "GET:/api/procurement/mts-plan/product-groups":    { skipAcl: false, resourceCode: "PROC_MTS_CUSTOMER_PLAN", action: "VIEW" },
   "POST:/api/procurement/mts-plan/product-groups":   { skipAcl: false, resourceCode: "PROC_MTS_PLAN_GROUP_MAINTAIN", action: "WRITE" },
   "GET:/api/procurement/planning":                    { skipAcl: false, resourceCode: "PROC_PLANNING_VIEW",  action: "VIEW" },
