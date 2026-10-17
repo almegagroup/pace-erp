@@ -80,8 +80,8 @@ Deno.test("CMP003 OT exclusion and deselection never remove stock or confirmed i
   const base = fixture();
   const input: OptimizerPhase3BAdapterInput = { ...base, stock: [...base.stock, { ...base.stock[0], source_identity: "ot01", source_key: "ot01", storage_location_id: "OT01" }] };
   const adapted = adaptOptimizerPhase3BSources(input);
-  const selection = resolveNewBuyEligibility("CMP003", "2026-11-01", ["MAT-1"], [{ company_id: "CMP003", material_id: "MAT-1", selection_month: "2026-11-01", is_selected_for_new_purchase: false, version_no: 1, is_current: true, source_key: "selection-1" }]);
-  const result = await snapshot(adapted, [selection]);
+  const selectionWindow = resolveSixMonthNewBuyEligibility("CMP003", "2026-10-01", ["MAT-1"], [{ company_id: "CMP003", material_id: "MAT-1", selection_month: "2026-11-01", is_selected_for_new_purchase: false, version_no: 1, is_current: true, source_key: "selection-1" }]);
+  const result = await snapshot(adapted, selectionWindow);
   equal(result.normalized.stock.map((row) => [row.storage_location_id, row.planning_eligible]), [["R003", true], ["OT01", false]], "OT01 excluded");
   equal([result.normalized.stock.length, result.normalized.inbound.length], [2, 4], "new-buy decision cannot filter evidence");
 });
