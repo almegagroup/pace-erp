@@ -14,6 +14,14 @@ export type OptimizerMissingDataCode =
   | "CONFLICTING_RESERVATION_EVIDENCE"
   | "CONFLICTING_INBOUND_EVIDENCE";
 
+/** A conflict blocks the affected material/domain until source evidence is reconciled. */
+export type OptimizerPlanningBlocker = {
+  material_id: string;
+  domain: "EXECUTABLE_STOCK" | "PROJECTED_INBOUND";
+  source_key: string;
+  reason: OptimizerMissingDataCode;
+};
+
 export type OptimizerMissingData = {
   code: OptimizerMissingDataCode;
   source: "DEMAND" | "STOCK" | "RESERVATION" | "INBOUND";
@@ -109,7 +117,7 @@ export type OptimizerStockInput = Omit<OptimizerStockSource, "qty" | "uom_code">
   qty_base: number | null;
   base_uom_code: string | null;
   planning_eligible: boolean;
-  exclusion_reason: "STOCK_TYPE" | "LOCATION" | null;
+  exclusion_reason: "STOCK_TYPE" | "LOCATION" | "SOURCE_CONFLICT" | null;
 };
 export type OptimizerReservationInput = Omit<OptimizerReservationSource, "qty" | "uom_code"> & {
   qty_base: number | null;
@@ -119,6 +127,8 @@ export type OptimizerInboundInput = Omit<OptimizerInboundSource, "qty" | "uom_co
   qty_base: number | null;
   base_uom_code: string | null;
   eta_state: "KNOWN" | "MISSING" | "INVALID" | "OVERDUE";
+  /** Forecast only, never authorization for executable Store usage. */
+  projected_supply_eligible: boolean;
 };
 
 /** Immutable normalized evidence. Future solver runs must consume this, not live rows. */
@@ -133,6 +143,8 @@ export type OptimizerInputSnapshot = {
   reservations: readonly OptimizerReservationInput[];
   inbound: readonly OptimizerInboundInput[];
   missing_data: readonly OptimizerMissingData[];
+  /** Consumers MUST check blockers before considering material quantities. */
+  planning_blockers: readonly OptimizerPlanningBlocker[];
 };
 
 export class OptimizerSourceScopeError extends Error {
