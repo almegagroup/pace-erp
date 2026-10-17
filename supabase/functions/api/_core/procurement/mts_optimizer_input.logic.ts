@@ -8,6 +8,7 @@ import {
   OptimizerMaterialMasterError,
   type OptimizerMaterialUom,
   type OptimizerMissingData,
+  type OptimizerPlanningBlocker,
   type OptimizerRawSources,
   OptimizerSourceScopeError,
   type OptimizerStockInput,
@@ -88,7 +89,8 @@ function validateMaterialMaster(rows: OptimizerMaterialUom[]): OptimizerMaterial
 
 export function normalizeOptimizerSources(raw: OptimizerRawSources): OptimizerInputSnapshot {
   if (!isIsoDate(raw.as_of)) throw new Error("Optimizer input as_of must be an ISO date.");
-  if (!raw.stock_eligibility.policy_source) throw new Error("Optimizer stock eligibility policy requires a source.");
+  if (!raw.stock_eligibility.policy_source?.trim() || !raw.stock_eligibility.eligible_stock_type_codes?.length || !Array.isArray(raw.stock_eligibility.excluded_storage_location_ids)) throw new Error("Optimizer stock eligibility requires a sourced stock-type and location-exclusion policy.");
+  if (raw.company_id === "CMP003" && !["OT01", "OT02"].every((loc) => raw.stock_eligibility.excluded_storage_location_ids.includes(loc))) throw new Error("CMP003 policy must exclude OT01 and OT02.");
   const materials = validateMaterialMaster(raw.materials);
   const materialMap = new Map(materials.map((row) => [row.material_id, row]));
   const missing: OptimizerMissingData[] = [];
@@ -102,25 +104,43 @@ export function normalizeOptimizerSources(raw: OptimizerRawSources): OptimizerIn
     const value = normalizedQty(row, "DEMAND", materialMap, explicit); if (value.missing) missing.push(value.missing);
     return { ...row, qty_base: value.qty_base, base_uom_code: value.base_uom_code };
   }).sort((a, b) => a.source_key.localeCompare(b.source_key));
+  // A missing/excess reservation cannot be interpreted as zero: block executable
+  // stock use for the affected material. Stock conflicts have the same treatment.
+  const blockerCodes = new Set(["CONFLICTING_STOCK_EVIDENCE", "CONFLICTING_RESERVATION_EVIDENCE"]);
+  // Deduplicate BEFORE computing blockers so all conflicting keys are known.
+  const uniqueStock = dedupeFailClosed(raw.stock, "STOCK", "CONFLICTING_STOCK_EVIDENCE", missing);
+  const uniqueReservations = dedupeFailClosed(raw.reservations, "RESERVATION", "CONFLICTING_RESERVATION_EVIDENCE", missing);
+  const uniqueInbound = dedupeFailClosed(raw.inbound, "INBOUND", "CONFLICTING_INBOUND_EVIDENCE", missing);
+  const blockedStockMaterials = new Set(missing.filter((x) => blockerCodes.has(x.code)).map((x) => x.material_id).filter((x): x is string => !!x));
+  const blockedInboundMaterials = new Set(missing.filter((x) => x.code === "CONFLICTING_INBOUND_EVIDENCE").map((x) => x.material_id).filter((x): x is string => !!x));
   const eligibleTypes = new Set(raw.stock_eligibility.eligible_stock_type_codes);
   const excludedLocations = new Set(raw.stock_eligibility.excluded_storage_location_ids);
-  const stock: OptimizerStockInput[] = dedupeFailClosed(raw.stock, "STOCK", "CONFLICTING_STOCK_EVIDENCE", missing).map((row) => {
+  const stock: OptimizerStockInput[] = uniqueStock.map((row) => {
     const value = normalizedQty(row, "STOCK", materialMap); if (value.missing) missing.push(value.missing);
-    const exclusion_reason = excludedLocations.has(row.storage_location_id) ? "LOCATION" : !eligibleTypes.has(row.stock_type_code) ? "STOCK_TYPE" : null;
+    const exclusion_reason = blockedStockMaterials.has(row.material_id) ? "SOURCE_CONFLICT" : excludedLocations.has(row.storage_location_id) ? "LOCATION" : !eligibleTypes.has(row.stock_type_code) ? "STOCK_TYPE" : null;
     return { ...row, qty_base: value.qty_base, base_uom_code: value.base_uom_code, planning_eligible: exclusion_reason === null && value.qty_base !== null, exclusion_reason };
   });
-  const reservations: OptimizerReservationInput[] = dedupeFailClosed(raw.reservations, "RESERVATION", "CONFLICTING_RESERVATION_EVIDENCE", missing).map((row) => {
+  const reservations: OptimizerReservationInput[] = uniqueReservations.map((row) => {
     const value = normalizedQty(row, "RESERVATION", materialMap); if (value.missing) missing.push(value.missing);
     return { ...row, qty_base: value.qty_base, base_uom_code: value.base_uom_code };
   });
-  const inbound: OptimizerInboundInput[] = dedupeFailClosed(raw.inbound, "INBOUND", "CONFLICTING_INBOUND_EVIDENCE", missing).map((row) => {
+  const inbound: OptimizerInboundInput[] = uniqueInbound.map((row) => {
     const value = normalizedQty(row, "INBOUND", materialMap); if (value.missing) missing.push(value.missing);
     const eta_state = row.eta_to_plant === null ? "MISSING" : !isIsoDate(row.eta_to_plant) ? "INVALID" : row.eta_to_plant < raw.as_of ? "OVERDUE" : "KNOWN";
     if (eta_state !== "KNOWN") missing.push({ code: `ETA_${eta_state}` as OptimizerMissingData["code"], source: "INBOUND", source_key: row.source_key, material_id: row.material_id, message: `Plant ETA is ${eta_state.toLowerCase()} and receives no on-time coverage credit.` });
-    return { ...row, qty_base: value.qty_base, base_uom_code: value.base_uom_code, eta_state };
+    return { ...row, qty_base: value.qty_base, base_uom_code: value.base_uom_code, eta_state, projected_supply_eligible: eta_state === "KNOWN" && value.qty_base !== null && !blockedInboundMaterials.has(row.material_id) };
   });
+  const planningBlockers: OptimizerPlanningBlocker[] = missing.filter((item) =>
+    (item.code === "CONFLICTING_STOCK_EVIDENCE" || item.code === "CONFLICTING_RESERVATION_EVIDENCE" || item.code === "CONFLICTING_INBOUND_EVIDENCE") && !!item.material_id
+  ).map((item) => ({ material_id: item.material_id!, domain: item.code === "CONFLICTING_INBOUND_EVIDENCE" ? "PROJECTED_INBOUND" : "EXECUTABLE_STOCK", source_key: item.source_key, reason: item.code }));
+  planningBlockers.sort((a, b) => `${a.material_id}|${a.domain}|${a.source_key}|${a.reason}`.localeCompare(`${b.material_id}|${b.domain}|${b.source_key}|${b.reason}`));
   const missingData = missing.sort((a, b) => `${a.source}|${a.source_key}|${a.code}`.localeCompare(`${b.source}|${b.source_key}|${b.code}`));
   // captured_at is audit metadata, intentionally excluded from source_fingerprint.
-  const businessEvidence = { company_id: raw.company_id, as_of: raw.as_of, materials, stock_eligibility: raw.stock_eligibility, demand, stock, reservations, inbound, missing_data: missingData };
+  const stockEligibility = {
+    policy_source: raw.stock_eligibility.policy_source,
+    eligible_stock_type_codes: [...eligibleTypes].sort(),
+    excluded_storage_location_ids: [...excludedLocations].sort(),
+  };
+  const businessEvidence = { company_id: raw.company_id, as_of: raw.as_of, materials, stock_eligibility: stockEligibility, demand, stock, reservations, inbound, missing_data: missingData, planning_blockers: planningBlockers };
   return deepFreeze({ schema_version: 1, ...businessEvidence, captured_at: raw.captured_at, source_fingerprint: fingerprint(businessEvidence) });
 }
