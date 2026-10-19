@@ -19,7 +19,10 @@ One readable place for the business owner, Codex, Claude, and ChatGPT to find:
 - Real PROD data is read-only for verification; no operational writes, migrations, ACL application, deployment, PO creation or stock postings without separate owner approval.
 
 ## Documents
-- [Business design and decisions](REQUIREMENTS-AND-DECISIONS.md)
+- [Business design & decisions master index](REQUIREMENTS-AND-DECISIONS.md)
+- [Complete approved contract traceability](APPROVED-CONTRACT-TRACEABILITY.md)
+- [Historic Google Sheet formula reference](GOOGLE-SHEET-FORMULA-REFERENCE.md)
+- [28-requirement acceptance matrix](REQUIREMENT-ACCEPTANCE-MATRIX.md)
 - [Implementation snapshot and gap register](PROGRESS-SNAPSHOT.md)
 - Existing detailed contracts: `docs/mts-planning/PO22-PHASE-2D-FINAL-OPTIMIZER-AND-STORE-CONTRACT.md`, PO22 Phase 3A/B contracts and reports.
 - Existing project register: `docs/INTEGRATION-REGISTER.md` on `agent/codex`. Refresh exact branch SHAs before editing any status.
