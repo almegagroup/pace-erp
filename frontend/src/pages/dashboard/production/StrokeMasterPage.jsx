@@ -38,6 +38,7 @@ import {
   MATERIAL_TYPE_OPTIONS, PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, EMPTY_LINE,
   friendlyStrokeErr, dosageSumOf, renderDrawerActions, Field,
   StrokeLinesTable, GroupCreateModal, MemberAddModal,
+  DuplicateLinesConfirmModal, describeDuplicateLines,
 } from "./strokeShared.jsx";
 import { formatPreciseNumber, formatSum } from "./productionPrecision.js";
 import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
@@ -109,6 +110,7 @@ export default function StrokeMasterPage() {
   const [groupModal, setGroupModal] = useState(null); // { onCreated } | null
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
   const [memberModal, setMemberModal] = useState(null); // groupId | null
+  const [dupConfirm, setDupConfirm] = useState(null); // { items, proceed } | null
   const [memberMaterialId, setMemberMaterialId] = useState("");
 
   const firstInputRef = useRef(null);
@@ -435,8 +437,17 @@ export default function StrokeMasterPage() {
     return true;
   }
 
-  async function handleCreate(e) {
-    e.preventDefault();
+  // Duplicate material lines are allowed but must be confirmed once per save.
+  // Returns true when the modal was opened (caller stops; Confirm re-runs it).
+  function askDuplicateConfirm(lineList, proceed) {
+    const items = describeDuplicateLines(lineList, lineMaterialsByType);
+    if (items.length === 0) return false;
+    setDupConfirm({ items, proceed });
+    return true;
+  }
+
+  async function handleCreate(e, duplicatesConfirmed = false) {
+    e?.preventDefault?.();
     setAttemptedSave(true);
     if (isDuplicateBlocked) {
       toast("Duplicate blocked: this Prodshade + Stroke Number combination already exists.", "error");
@@ -447,6 +458,7 @@ export default function StrokeMasterPage() {
     if (lines.some((l) => l.material_id) && Math.abs(sum - 100) > 0.01) {
       toast(`Dosage must sum to 100. Current: ${formatSum(sum, "0")}%`, "error"); return;
     }
+    if (!duplicatesConfirmed && askDuplicateConfirm(lines, () => handleCreate(null, true))) return;
     setSaving(true);
     try {
       const isNewProdshade = form.prodshade_mode === "new";
@@ -478,7 +490,7 @@ export default function StrokeMasterPage() {
     finally { setSaving(false); }
   }
 
-  async function handleSaveDraft() {
+  async function handleSaveDraft(duplicatesConfirmed = false) {
     setAttemptedSave(true);
     if (!hasCommunicationDetails(detail) || !isManualDocumentDateWithinWindow(detail.communication_date)) {
       toast(!hasCommunicationDetails(detail) ? "Communication Date, Type, Communicator Name, and Communication Reference are required." : MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
@@ -490,6 +502,7 @@ export default function StrokeMasterPage() {
     }
     const sum = dosageSumOf(detailEditLines);
     if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${formatSum(sum, "0")}%`, "error"); return; }
+    if (duplicatesConfirmed !== true && askDuplicateConfirm(detailEditLines, () => handleSaveDraft(true))) return;
     setSaving(true);
     try {
       await updateStrokeMaster(detail.id, {
@@ -519,7 +532,7 @@ export default function StrokeMasterPage() {
     finally { setSaving(false); }
   }
 
-  async function handleSaveApproveDraft() {
+  async function handleSaveApproveDraft(duplicatesConfirmed = false) {
     setAttemptedSave(true);
     if (!hasCommunicationDetails(detail) || !isManualDocumentDateWithinWindow(detail.communication_date)) {
       toast(!hasCommunicationDetails(detail) ? "Communication Date, Type, Communicator Name, and Communication Reference are required." : MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
@@ -534,6 +547,7 @@ export default function StrokeMasterPage() {
       toast(`Dosage must sum to 100. Current: ${formatSum(sum, "0")}%`, "error");
       return;
     }
+    if (duplicatesConfirmed !== true && askDuplicateConfirm(detailEditLines, () => handleSaveApproveDraft(true))) return;
     setSaving(true);
     try {
       await updateStrokeMaster(detail.id, {
@@ -1237,6 +1251,12 @@ export default function StrokeMasterPage() {
         </div>
       </DrawerBase>
 
+      <DuplicateLinesConfirmModal
+        open={Boolean(dupConfirm)}
+        items={dupConfirm?.items}
+        onCancel={() => setDupConfirm(null)}
+        onConfirm={() => { const proceed = dupConfirm?.proceed; setDupConfirm(null); proceed?.(); }}
+      />
       <GroupCreateModal
         open={Boolean(groupModal)}
         groupForm={groupForm}
