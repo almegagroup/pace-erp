@@ -9,10 +9,21 @@
 5. Latest live `agent/codex:docs/INTEGRATION-REGISTER.md` and actual Git SHAs **verified afresh**. `common:CODEX-INTEGRATION-REGISTER-SNAPSHOT.md` is a frozen dated fallback, NEVER a live reference.
 6. Exact source code, named tests, bounded read-only PROD evidence and owner-controlled UAT; no completeness/deployment assertion based on an agent's narrative.
 
+## Owner controls execution assignment — latest explicit decision (2026-10-19)
+**The business owner may appoint Codex, Claude or ChatGPT to any PO22 task at any time. No permanent AI implementation or verification owner exists.** Assignment is per bounded task, never a forever-exclusive ownership claim. The owner may hand a task from one agent to another. Do not refuse a new assignment merely because an older register says Codex is permanent owner.
+
+**Continuity contract for every assigned agent:**
+1. Read this common workspace, approved contracts, exact live branch SHAs, existing implementation/tests, current task status, and latest handoff before acting.
+2. Confirm the owner-assigned task, file territory, current base commit, permitted branch and operating restrictions. Existing `agent/*` branch ownership and locked branch safety rules still apply; **changing task owner does not silently authorize an agent to edit another agent's branch**. If the intended code branch cannot be safely worked on, report the branch handoff problem and obtain owner authorization for the permitted integration path.
+3. Work only in the agreed file territory; avoid concurrent overlapping changes.
+4. At the end, report exact file changes/commit SHA, tests run and result, source proof, known limitations, unfinished steps and the safe next entry point. Include whether code is agent-only, merged to main, deployed, or UAT accepted.
+5. Update common progress and handoff **through a serialized, conflict-checked documentation write** coordinated by the currently assigned documentation updater. If the agent cannot safely update `common`, supply a ready-to-apply handoff and leave status OPEN—never claim it was recorded.
+6. Next assigned agent repeats verification against live Git and resumes rather than rebuilding from narrative memory.
+
+**Do not turn the task-handoff mechanism into a requirement for user approval of routine safe work.** Separate owner approval remains mandatory for deployment, migration/ACL application, operational data writes, and branch promotion.
+
 ## Mission: preserve continuity; no more unbounded audit loop
-- **ChatGPT:** requirement-source reconciliation, business decision consistency, master traceability and documentation coordination. Do not edit PO22 code on other branches.
-- **Claude:** independent implementation/security/numeric correctness review, reproducible defects and acceptance evidence; do not secretly become a competing code integration owner.
-- **Codex:** sole PO22 implementation owner on `agent/codex`, continuing from actual commits. No phase-by-phase design reset, no duplicate existing modules, no unauthorized production operations.
+- **ChatGPT, Claude and Codex:** roles are **assigned by the user per task**; any may be asked to design, audit, implement or verify as permitted by the tools and branch workflow. Never infer a permanent role from a prior register. Continue from actual commits; do not repeat completed work or make unauthorized operational changes.
 - Any agent that discovers a conflict reports source lines, last owner decision, affected feature and exact proposed resolution. Owner decides when business semantics are genuinely ambiguous.
 - When one agent is working, the others may inspect but must not independently push documentation to `common`. The designated documentation integrator handles reviewed updates sequentially; until a formal policy is signed off, **treat `common` as read-only for other agents**.
 
