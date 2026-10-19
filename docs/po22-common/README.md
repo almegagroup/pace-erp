@@ -13,7 +13,7 @@ One readable place for the business owner, Codex, Claude, and ChatGPT to find:
 - `common` is a **coordination/documentation branch, not a release baseline**. Do not merge it into `dev`/`main` or treat it as deployed code.
 - The owner requested `common`, which changes the earlier five-branch-only policy in `docs/BRANCH-WORKFLOW.md`. That locked file and the formal promotion rules remain unchanged; reconcile/document the new exception explicitly **before** any cross-agent write workflow.
 - Until a single-writer, reviewed update protocol is approved, all three agents **read** `common`; do not concurrently push or rewrite this branch. Designate a documentation integrator to commit updates with fetch/compare and no overwrites.
-- Codex remains PO22 code implementation owner on `agent/codex` unless the business owner explicitly changes this. Claude and ChatGPT can independently review and propose amendments without conflicting code edits.
+- **Latest owner decision:** Codex, Claude, or ChatGPT may be assigned implementation, verification, research or documentation **per task**, with mandatory reproducible handoff. There is no permanent AI role. Assignment does not bypass agent-branch permissions or owner-controlled integration gates.
 - Never reset, rebase, cherry-pick, force-push or silently overwrite remote state. Main and dev promotions still need explicit owner permission.
 - Source of truth for an implemented feature is exact source SHA + tests + acceptance evidence, not a design document or agent statement.
 - Real PROD data is read-only for verification; no operational writes, migrations, ACL application, deployment, PO creation or stock postings without separate owner approval.
