@@ -1,5 +1,6 @@
-# PO22 Business Requirements and Decisions — Consolidation Draft
+# PO22 Business Requirements and Decisions — Master Index (Consolidation In Progress)
 
+> **IMPORTANT — THIS FILE IS AN INDEX, NOT THE WHOLE SPECIFICATION.** For complete governing decisions, read the entire [approved Phase 2D contract](../mts-planning/PO22-PHASE-2D-FINAL-OPTIMIZER-AND-STORE-CONTRACT.md), [13-section contract traceability](APPROVED-CONTRACT-TRACEABILITY.md), [28-item requirement/acceptance matrix](REQUIREMENT-ACCEPTANCE-MATRIX.md), [formula-level historic spreadsheet reference](GOOGLE-SHEET-FORMULA-REFERENCE.md), and [implementation snapshot](PROGRESS-SNAPSHOT.md). Read these together; do not implement from the summary alone. The original Phase 2D contract's 22 acceptance tests remain normative. Later explicit owner decisions on independent company planning and user-created Sub-CSN supersede inconsistent illustrative cross-company examples.\n\n
 **Status: PARTIAL RECORD; source-contract and business-owner reconciliation pending.**
 This is a snapshot of established conversation decisions and repo-contract pointers, not a completed or newly approved design. Preserve `buildRequirementRows()`, existing CM/NM and NM Requirement Days calculations, and PO21 effective plan precedence.
 
@@ -57,3 +58,18 @@ Turn company-specific effective PO21 production plans into auditable, material-l
 
 ## Open, not silently final
 Exact field-level joins and schema validity, as-of inventory reconciliation, source-line demand lineage to effective PO21 line/version, Use Primary date semantics, economic source coverage/route costs, UI approval model and fully verified spreadsheet numerical parity require audit and owner sign-off. Record each with evidence in progress register rather than implying completion.
+
+## Verified detail inventory — not optional
+The following business rules were present in the approved Phase 2D contract but abbreviated or absent in the initial consolidation, and are now explicitly linked to their binding source:
+- **§2:** CM remainder + complete NM, user-triggered typically fortnightly Store sharing, no mandatory approval/acknowledgement/deviation enforcement/revision chain; changes reflected on a new run only.
+- **§3:** Six-month per-company/per-material monthly manual selection affects *tentative new purchases only*. Deselected material may still consume eligible on-hand and precommitted inbound; RM Use Primary Yes vs No, PM alternative group eligibility distinct; source-line demand never duplicated.
+- **§4:** unrestricted posted R+S stock pooled across permitted company SLocs; include eligible R003 and distinguish it from CMP003 OT01/OT02 hard exclusions; prevent subtracting already-consumed reservation twice.
+- **§5:** optional physically-backed **R→R advice only**, with destination evidence and possible UNKNOWN; no R→S, S→R or S→S recommendations and no movement posting.
+- **§6:** product-first, dense, printable/exportable Store instructions plus group/material summaries, exact source-line identity, physical executable vs future vs uncovered; all summaries reconcile.
+- **§7:** group/lot/GRN partial-receipt dedupe, distinct supplier MOQ and order multiple, dated split lots, residual actual stock available next run, requested vs actual dispatch vs ETA vs PO-by, no invented total lead time.
+- **§8:** AC01 DRAFT provisional/POSTED final evidence, existing PO payment term authority, vendor default for future, cost component/tax/FX uncertainty, AI budget cap and numeric authority isolation.
+- **§10:** all 22 owner-approved tests; **§11:** all 11 source-verification obligations; **§12:** phase/release approval gates.
+- **Owner clarification:** planning company isolation is strict. The optimizer never initiates or proposes autonomous cross-company allocation; only explicit user-created item-specific Sub-CSN can change destination evidence.
+
+## Status: no unsupported 100% claim
+This document now points to substantially fuller traceable material, but the whole prior conversation/repo/document corpus has not been exhaustively enumerated and verified. Source-level gaps and conflicting evidence are OPEN in the matrix. Never equate 'documented' with 'implemented', 'tested', 'UAT accepted' or 'deployed'.
