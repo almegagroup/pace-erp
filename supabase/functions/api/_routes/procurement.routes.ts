@@ -108,6 +108,12 @@ import {
   getMtsRequirementReportHandler,
   saveMtsRequirementPoliciesHandler,
 } from "../_core/procurement/mts_requirement.handlers.ts";
+import {
+  getMtsOptimizerLifecycleEvidenceHandler,
+  getMtsOptimizerSelectionsHandler,
+  listMtsOptimizerSnapshotsHandler,
+  saveMtsOptimizerSelectionsHandler,
+} from "../_core/procurement/mts_optimizer_phase3b.handlers.ts";
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
 import {
   createReportLayoutHandler,
@@ -811,6 +817,14 @@ export async function dispatchProcurementRoutes(
       return await getMtsRequirementPolicyHistoryHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/policies":
       return await saveMtsRequirementPoliciesHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
+      return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/selections":
+      return await getMtsOptimizerSelectionsHandler(req, ctx);
+    case "POST:/api/procurement/mts-optimizer/selections":
+      return await saveMtsOptimizerSelectionsHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/snapshots":
+      return await listMtsOptimizerSnapshotsHandler(req, ctx);
     case "GET:/api/procurement/document-flow":
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":
