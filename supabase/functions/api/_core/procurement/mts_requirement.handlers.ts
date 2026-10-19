@@ -64,6 +64,7 @@ import {
   type LocationRole,
   type MaterialInfo,
   type PackBomInfo,
+  type PlanningCalendar,
   partitionPoLineInbound,
   type PlanLineVersion,
   type PoLineInboundInput,
@@ -590,14 +591,14 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
       const booking = bookingDays.get(`${vendorId}|${materialId}`) ?? 0;
       const bookingText = booking > 0 ? `booking ${booking} + ` : "";
       for (const row of domesticRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
-        configured.push({ vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
       }
       for (const row of importRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
         const sail = Number(row.sail_time_days ?? 0);
         const clearance = Number(row.clearance_days ?? 0);
         const inlandDays = inland.get(text(row.port_of_discharge_id));
         const days = booking + sail + clearance + (inlandDays ?? 0);
-        configured.push({ vendor_label: label, route: "IMPORT", days, detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
       }
     }
     result.set(materialId, computeLeadTime(configured, observed.get(materialId) ?? []));
@@ -688,6 +689,76 @@ export async function getMtsRequirementAccessHandler(req: Request, ctx: ReqHandl
   }
 }
 
+/**
+ * Loads every source and runs the approved Requirement pipeline once. Shared by the
+ * Requirement report and the Planning (Phase 3D) view so both use identical numbers.
+ */
+export async function computeRequirement(companyId: string, calendar: PlanningCalendar, asOf: string, today: string, demandAt: string | null) {
+  const months = [calendar.cmStart, calendar.nmStart];
+
+  const [planLines, settings, policyLoad] = await Promise.all([
+    loadPlanLines(companyId, months),
+    loadStrokeSettings(companyId, months),
+    loadPolicies(companyId),
+  ]);
+  const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
+  const masters = await loadFormulationMasters(companyId, periodStrokeIds);
+  const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+  const skuIds = [...masters.skus.keys()];
+  const [materialRows, conversions] = await Promise.all([
+    loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]),
+    loadConversions([...universe, ...skuIds]),
+  ]);
+  const materials = materialInfoMap(materialRows, conversions);
+  for (const [skuId, sku] of masters.skus) {
+    const info = materials.get(skuId);
+    sku.base_uom_code = info?.base_uom_code ?? "";
+    // KG per one SKU base unit: 1 for KG, else a fixed master conversion to KG (never guessed).
+    const baseUnit = (info?.base_uom_code ?? "").toUpperCase();
+    sku.kg_per_base_unit = !info ? null : baseUnit === "KG" ? 1 : buildToBaseFactors("KG", conversions.get(skuId) ?? [])[baseUnit] ?? null;
+  }
+  const universeSet = new Set(universe);
+  const applyReservations = asOf >= today;
+  const [stockLoad, reservations, inbound, leadTimes, locationRoles] = await Promise.all([
+    loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
+    applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
+    loadInbound(companyId, asOf, materials, universeSet),
+    loadLeadTimes(companyId, asOf, universe),
+    loadLocationRoles(companyId),
+  ]);
+
+  const prodshadeLabels = new Map(masters.prodshadeIds.map((pid) => [pid, text(materialRows.get(pid)?.material_name) || pid]));
+  const input = {
+    calendar,
+    skus: masters.skus,
+    currentStrokeByProdshade: masters.currentStrokeByProdshade,
+    strokes: masters.strokes,
+    strokeSettings: settings.strokeSettings,
+    primaryDecisions: settings.primaryDecisions,
+    groupMembers: masters.groupMembers,
+    packBoms: masters.packBoms,
+    materials,
+    prodshadeLabels,
+    planLines,
+    demandAt,
+    stockRows: stockLoad.stock,
+    reservations,
+    applyReservations,
+    consumptionByMaterial: stockLoad.consumption,
+    inboundEvents: inbound.events,
+    policies: policyLoad.policies,
+    leadTimes,
+    materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
+    locationRoles: locationRoles ?? undefined,
+  };
+  const output = buildRequirementRows(input);
+  const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
+  return {
+    calendar, planLines, settings, policyLoad, masters, materialRows, materials, applyReservations,
+    inbound, leadTimes, locationRoles, input, output, fingerprint,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/procurement/mts-requirement/report?company_id&plan_month=YYYY-MM&as_of=YYYY-MM-DD[&demand_at=ISO]
 // ─────────────────────────────────────────────────────────────────────────────
@@ -709,65 +780,9 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     const demandAtRaw = text(url.searchParams.get("demand_at"));
     const demandAt = demandAtRaw && Number.isFinite(Date.parse(demandAtRaw)) ? new Date(demandAtRaw).toISOString() : null;
     if (demandAtRaw && !demandAt) return fail(req, ctx, "MTS_REQ_INVALID_DEMAND_AT", 400, "demand_at must be an ISO date-time.");
-    const months = [calendar.cmStart, calendar.nmStart];
-
-    const [planLines, settings, policyLoad] = await Promise.all([
-      loadPlanLines(companyId, months),
-      loadStrokeSettings(companyId, months),
-      loadPolicies(companyId),
-    ]);
-    const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
-    const masters = await loadFormulationMasters(companyId, periodStrokeIds);
-    const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
-    const skuIds = [...masters.skus.keys()];
-    const [materialRows, conversions] = await Promise.all([
-      loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]),
-      loadConversions([...universe, ...skuIds]),
-    ]);
-    const materials = materialInfoMap(materialRows, conversions);
-    for (const [skuId, sku] of masters.skus) {
-      const info = materials.get(skuId);
-      sku.base_uom_code = info?.base_uom_code ?? "";
-      // KG per one SKU base unit: 1 for KG, else a fixed master conversion to KG (never guessed).
-      const baseUnit = (info?.base_uom_code ?? "").toUpperCase();
-      sku.kg_per_base_unit = !info ? null : baseUnit === "KG" ? 1 : buildToBaseFactors("KG", conversions.get(skuId) ?? [])[baseUnit] ?? null;
-    }
-    const universeSet = new Set(universe);
-    const applyReservations = asOf >= today;
-    const [stockLoad, reservations, inbound, leadTimes, locationRoles] = await Promise.all([
-      loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
-      applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
-      loadInbound(companyId, asOf, materials, universeSet),
-      loadLeadTimes(companyId, asOf, universe),
-      loadLocationRoles(companyId),
-    ]);
-
-    const prodshadeLabels = new Map(masters.prodshadeIds.map((pid) => [pid, text(materialRows.get(pid)?.material_name) || pid]));
-    const input = {
-      calendar,
-      skus: masters.skus,
-      currentStrokeByProdshade: masters.currentStrokeByProdshade,
-      strokes: masters.strokes,
-      strokeSettings: settings.strokeSettings,
-      primaryDecisions: settings.primaryDecisions,
-      groupMembers: masters.groupMembers,
-      packBoms: masters.packBoms,
-      materials,
-      prodshadeLabels,
-      planLines,
-      demandAt,
-      stockRows: stockLoad.stock,
-      reservations,
-      applyReservations,
-      consumptionByMaterial: stockLoad.consumption,
-      inboundEvents: inbound.events,
-      policies: policyLoad.policies,
-      leadTimes,
-      materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
-      locationRoles: locationRoles ?? undefined,
-    };
-    const output = buildRequirementRows(input);
-    const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
+    const {
+      planLines, settings, policyLoad, masters, materialRows, applyReservations, inbound, locationRoles, output, fingerprint,
+    } = await computeRequirement(companyId, calendar, asOf, today, demandAt);
 
     // Labels (R-01: never show raw ids).
     const locationIds = unique(output.rows.flatMap((row) => [
@@ -826,7 +841,7 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         lead_time_observed_max: row.lead_time?.observed_max ?? null,
         lead_time_observed_p90: row.lead_time?.observed_p90 ?? null,
         lead_time_observed_count: row.lead_time?.observed_count ?? 0,
-        lead_time_routes: row.lead_time?.configured_routes ?? [],
+        lead_time_routes: (row.lead_time?.configured_routes ?? []).map(({ vendor_id: _vendor, ...route }) => route),
         moq_qty: row.policy?.moq_qty ?? null,
         moq_uom_code: row.policy?.moq_uom_code ?? null,
         moq_source: row.policy?.moq_source ?? null,
@@ -857,7 +872,7 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
       };
     }).sort((a, b) => a.material_type.localeCompare(b.material_type) || a.material_name.localeCompare(b.material_name));
 
-    const groups = output.groups.map((group) => ({
+    const groups = output.groups.map(({ uncovered_by_day: _uncovered, ...group }) => ({
       ...group,
       group_label: groupLabel.get(group.group_id) ?? "—",
       members: group.members.map((member) => ({ ...member, material_name: nameOf(member.material_id), material_code: text(materialRows.get(member.material_id)?.pace_code) || null })),

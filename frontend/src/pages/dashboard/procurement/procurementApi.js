@@ -1858,6 +1858,31 @@ export function saveMtsFinanceSetting(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/finance-settings", data);
 }
 
+export function getMtsPlanning(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/planning", undefined, params);
+}
+
+export function saveMtsPlanningRun(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/planning/runs", data);
+}
+
+export function listMtsPlanningRuns(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/planning/runs", undefined, params);
+}
+
+export function getMtsPlanningRun(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/planning/run", undefined, params);
+}
+
+// PO22 optimizer six-month new-buy selection (Phase 3B endpoints).
+export function getMtsOptimizerSelections(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-optimizer/selections", undefined, params);
+}
+
+export function saveMtsOptimizerSelections(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-optimizer/selections", data);
+}
+
 export function getMtsLocationPolicy(params) {
   return fetchProcurement("GET", "/api/procurement/mts-requirement/location-policy", undefined, params);
 }

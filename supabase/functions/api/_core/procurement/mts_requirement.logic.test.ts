@@ -637,3 +637,31 @@ Deno.test("D3: reservations at counted locations are deducted once from the pool
   ], [{ material_id: "PM-1", storage_location_id: "P001", qty: 20 }], true, { locationRoles: roles });
   assertEqual([alloc.stock.get("PM-1")!.usable_at_required, alloc.stock.get("PM-1")!.reserved_at_required, sum(alloc.fromStockByMaterial.get("PM-1"))], [5, 20, 5], "25 − 20 reserved = 5 usable");
 });
+
+Deno.test("Store report rows reconcile: executable + not backed = line demand; executable never exceeds stock", () => {
+  const explosion = baseInput();
+  const output = buildRequirementRows({
+    ...explosion,
+    planLines: [line({ entry_id: "s1", plan_type: "FINAL", base_qty: 3000 }), line({ entry_id: "s2", plan_type: "FINAL", plan_month: "2026-12-01", base_qty: 3100 })],
+    demandAt: null,
+    stockRows: [
+      { material_id: "RM-A", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 500 },
+      { material_id: "RM-C", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 300 },
+    ],
+    reservations: [], applyReservations: true, consumptionByMaterial: new Map(),
+    inboundEvents: [{ material_id: "RM-A", qty: 1000, date: "2026-11-10", kind: "IN_TRANSIT", date_source: "CSN_ETA_TO_PLANT", reference: "x" }],
+    policies: [], leadTimes: new Map(), materialUniverse: ["RM-A", "RM-B", "RM-C", "PM-BAG"],
+    locationRoles: new Map([["R1", "COUNTED"], ["P1LOC", "COUNTED"]]),
+  });
+  const byLine = new Map<string, { demand: number; covered: number }>();
+  for (const row of output.store_rows) {
+    const key = `${row.pool_key}|${row.period}`;
+    const seen = byLine.get(key) ?? { demand: row.demand_qty, covered: 0 };
+    seen.covered += row.executable_qty + row.not_backed_qty;
+    byLine.set(key, seen);
+  }
+  for (const [key, value] of byLine) near(value.covered, value.demand, `line ${key} reconciles`, 1e-6);
+  const executableA = output.store_rows.filter((r) => r.material_id === "RM-A").reduce((s, r) => s + r.executable_qty, 0);
+  near(executableA, 500, "RM-A executable = its 500 counted stock, never the 1000 in transit");
+  assert(output.store_rows.every((r) => r.executable_qty === 0 || r.not_backed_qty === 0), "a row is either executable or not backed");
+});

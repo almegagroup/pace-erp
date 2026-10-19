@@ -18,7 +18,7 @@ export type OptimizerConfirmedArrival = Readonly<{
   /** CSN Tracker plant ETA. A past or missing ETA is assumed to arrive on as_of and flagged (D5). */
   eta_to_plant: string | null;
   qty_base: number;
-  lifecycle_kind: "AT_GATE" | "IN_TRANSIT" | "SCHEDULED_LOT" | "PO_REMAINDER";
+  lifecycle_kind: "AT_GATE" | "IN_TRANSIT" | "SCHEDULED_LOT" | "PO_REMAINDER" | "STO_IN_TRANSIT";
 }>;
 
 /** Target / Critical days effective from a date (D3: per member material, can change over time). */

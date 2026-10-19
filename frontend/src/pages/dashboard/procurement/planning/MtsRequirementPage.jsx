@@ -32,7 +32,13 @@ import {
   getMtsFinanceSettings,
   getMtsFxRates,
   getMtsLocationPolicy,
+  getMtsOptimizerSelections,
+  getMtsPlanning,
+  getMtsPlanningRun,
+  listMtsPlanningRuns,
   saveMtsLocationPolicy,
+  saveMtsOptimizerSelections,
+  saveMtsPlanningRun,
   saveMtsFinanceSetting,
   saveMtsFxRate,
   saveMtsRequirementPolicies,
@@ -230,7 +236,7 @@ export default function MtsRequirementPage() {
             </label>
           ) : null}
           <div className="flex flex-wrap gap-1">
-            {[{ id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }].map((tab) => (
+            {[{ id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }, { id: "planning", label: "4. Planning" }, { id: "store", label: "5. Store Report" }].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -257,8 +263,12 @@ export default function MtsRequirementPage() {
           />
         ) : activeTab === "settings" ? (
           <SettingsTab companyId={companyId} asOf={asOf} access={access} today={today} />
-        ) : (
+        ) : activeTab === "cost" ? (
           <CostSettingsTab companyId={companyId} access={access} today={today} />
+        ) : activeTab === "planning" ? (
+          <PlanningTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} access={access} />
+        ) : (
+          <StoreReportTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
         )}
       </div>
     </ErpScreenScaffold>
@@ -1297,6 +1307,321 @@ function CostSettingsTab({ companyId, access, today }) {
         ) : null}
         <ErpDenseGrid {...GRID_PROPS} columns={financeColumns} rows={financeRows} rowKey={(r) => r.effective_from} />
       </section>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab 4 — Planning (sheet PLANNING equivalent): advisory buys, ETA flags, group shortage, daily grid
+// ─────────────────────────────────────────────────────────────────────────────
+const BUY_STATUS_TONE = { ADVISORY: "BELOW_TARGET", ADVISORY_LATE: "CRITICAL", UNKNOWN_POLICY: "NO_POLICY", UNKNOWN_LEAD_TIME: "NO_POLICY", NO_BUY: "OK" };
+const BUY_STATUS_LABEL = { ADVISORY: "Buy", ADVISORY_LATE: "Buy — late", UNKNOWN_POLICY: "No Target set", UNKNOWN_LEAD_TIME: "No lead time", NO_BUY: "No buy" };
+function buyBadge(status) {
+  const tone = BADGE_TONE[BUY_STATUS_TONE[status]] ?? "bg-slate-100 text-slate-700";
+  return <span className={`px-1.5 py-0.5 text-[11px] font-semibold ${tone}`}>{BUY_STATUS_LABEL[status] ?? status}</span>;
+}
+
+function usePlanningQuery(companyId, planMonth, asOf, demandAt) {
+  return useQuery({
+    queryKey: ["procurement", "mts-requirement", "planning", companyId, planMonth, asOf, demandAt],
+    queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
+    enabled: Boolean(companyId && planMonth && asOf),
+  });
+}
+
+function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
+  const queryClient = useQueryClient();
+  const canEdit = Boolean(access?.can_edit_policy);
+  const planningQ = usePlanningQuery(companyId, planMonth, asOf, demandAt);
+  const plan = planningQ.data ?? null;
+  const [showNoBuy, setShowNoBuy] = useState(false);
+  const [dailyMaterial, setDailyMaterial] = useState("");
+  const [saving, setSaving] = useState(false);
+  const buys = useMemo(() => (plan?.buys ?? []).filter((b) => showNoBuy || b.status !== "NO_BUY"), [plan, showNoBuy]);
+  const materialsWithDaily = useMemo(() => {
+    const seen = new Map();
+    for (const row of plan?.daily ?? []) if (!seen.has(row.material_id)) seen.set(row.material_id, `${row.material_code ?? ""} ${row.material_name}`.trim());
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [plan]);
+  const dailyRows = useMemo(() => (plan?.daily ?? []).filter((r) => r.material_id === dailyMaterial), [plan, dailyMaterial]);
+
+  async function saveRun() {
+    setSaving(true);
+    try {
+      const result = await saveMtsPlanningRun({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined });
+      pushToast({ message: `Planning run saved (${String(result?.source_fingerprint ?? "").slice(0, 12)}).`, tone: "success" });
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "planning-runs", companyId] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const buyColumns = [
+    { key: "material_name", label: "Material", width: "240px" },
+    { key: "material_code", label: "Code", width: "100px", render: (b) => dash(b.material_code) },
+    { key: "status", label: "Status", width: "130px", render: (b) => buyBadge(b.status), copyValue: (b) => BUY_STATUS_LABEL[b.status] ?? b.status },
+    { key: "sequence", label: "#", width: "40px", align: "right", render: (b) => (b.sequence || "") },
+    { key: "required_qty_base", label: "Required", width: "110px", align: "right", render: (b) => fmtQty(b.required_qty_base), copyValue: (b) => b.required_qty_base },
+    { key: "recommended_po_qty_base", label: "PO Qty (MOQ / multiple)", width: "150px", align: "right", render: (b) => (b.recommended_po_qty_base === null ? "—" : `${fmtQty(b.recommended_po_qty_base)} ${b.uom ?? ""}`), copyValue: (b) => b.recommended_po_qty_base ?? "" },
+    { key: "recommended_po_by", label: "PO By", width: "100px", render: (b) => dash(b.recommended_po_by) },
+    { key: "estimated_plant_eta", label: "Plant ETA", width: "100px", render: (b) => dash(b.estimated_plant_eta) },
+    { key: "lots", label: "Delivery Lots", width: "220px", render: (b) => ((b.lots ?? []).length ? b.lots.map((l) => `${l.plant_eta}: ${fmtQty(l.qty_base)}`).join(" · ") : "—"), copyValue: (b) => (b.lots ?? []).map((l) => `${l.plant_eta}:${l.qty_base}`).join(" ") },
+    { key: "vendor_label", label: "Vendor (fastest feasible)", width: "220px", render: (b) => dash(b.vendor_label) },
+    { key: "total_lead_time_days", label: "Lead (booking + route)", width: "140px", render: (b) => (b.total_lead_time_days === null ? "—" : `${b.total_lead_time_days} d${b.booking_time_days ? ` (incl. ${b.booking_time_days} booking)` : ""}`), copyValue: (b) => b.total_lead_time_days ?? "" },
+    { key: "reason", label: "Why", width: "360px" },
+  ];
+  const flagColumns = [
+    { key: "material_name", label: "Material", width: "240px" },
+    { key: "document", label: "Document", width: "280px" },
+    { key: "eta_to_plant", label: "CSN ETA", width: "100px", render: (f) => dash(f.eta_to_plant) },
+    { key: "reason", label: "Issue", width: "110px", render: (f) => (f.reason === "ETA_PASSED" ? badge("OVERDUE") : badge("ETA_UNKNOWN")), copyValue: (f) => f.reason },
+    { key: "message", label: "Action", width: "420px" },
+  ];
+  const groupColumns = [
+    { key: "group_label", label: "Group", width: "240px" },
+    { key: "month", label: "Month", width: "90px", render: (a) => String(a.month).slice(0, 7) },
+    { key: "uncovered_qty", label: "Group shortage", width: "120px", align: "right", render: (a) => fmtQty(a.uncovered_qty), copyValue: (a) => a.uncovered_qty },
+    { key: "assigned_material_name", label: "Planned through member", width: "240px", render: (a) => (a.assigned_material_name ?? <span className="font-semibold text-rose-700">Select a member for new buy</span>), copyValue: (a) => a.assigned_material_name ?? "" },
+    { key: "reason", label: "Basis", width: "160px", render: (a) => ({ SINGLE_SELECTED: "Your selection", CHEAPEST_SELECTED: "Cheapest of selected", NONE_SELECTED: "Nothing selected" }[a.reason] ?? a.reason) },
+  ];
+  const dailyColumns = [
+    { key: "day", label: "Date", width: "100px" },
+    { key: "opening_qty_base", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening_qty_base), copyValue: (r) => r.opening_qty_base },
+    { key: "confirmed_arrival_qty_base", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.confirmed_arrival_qty_base ? fmtQty(r.confirmed_arrival_qty_base) : ""), copyValue: (r) => r.confirmed_arrival_qty_base },
+    { key: "planned_lot_qty_base", label: "Proposed Lot", width: "110px", align: "right", render: (r) => (r.planned_lot_qty_base ? <span className="font-semibold text-sky-800">{fmtQty(r.planned_lot_qty_base)}</span> : ""), copyValue: (r) => r.planned_lot_qty_base },
+    { key: "demand_qty_base", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.demand_qty_base), copyValue: (r) => r.demand_qty_base },
+    { key: "closing_qty_base", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing_qty_base < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing_qty_base)}</span>, copyValue: (r) => r.closing_qty_base },
+    { key: "max_cover_days", label: "Max Days", width: "80px", align: "right", render: (r) => (r.max_cover_days ?? "—") },
+    { key: "min_stock_qty_base", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock_qty_base), copyValue: (r) => r.min_stock_qty_base },
+    { key: "min_cover_days", label: "Min Days", width: "80px", align: "right", render: (r) => (r.min_cover_days ?? "—") },
+    { key: "target_days", label: "Target / Critical", width: "110px", render: (r) => `${fmtDays(r.target_days) || "—"} / ${fmtDays(r.critical_days) || "—"}` },
+  ];
+
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "planning", companyId] })} className="h-8 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          {planningQ.isFetching ? "Calculating…" : "Recalculate"}
+        </button>
+        <button type="button" onClick={() => void saveRun()} disabled={!canEdit || saving || !plan} className="h-8 border border-sky-600 bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+          {saving ? "Saving…" : "Save this run"}
+        </button>
+        <label className="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" checked={showNoBuy} onChange={(event) => setShowNoBuy(event.target.checked)} /> Show materials with no buy</label>
+        {plan ? <span className="text-xs text-slate-500">Advisory only — never creates a PO. CM + NM horizon {plan.calendar.as_of} → {plan.calendar.nm_end} · Source {String(plan.source_fingerprint).slice(0, 12)}</span> : null}
+      </div>
+      {planningQ.error ? <p className="text-sm text-rose-700">{errorText(planningQ.error)}</p> : null}
+
+      <section className="grid gap-1">
+        <h3 className="text-sm font-semibold text-slate-800">Buy recommendations</h3>
+        <ErpDenseGrid {...GRID_PROPS} columns={buyColumns} rows={buys} rowKey={(b) => `${b.material_id}|${b.sequence}|${b.status}`} emptyMessage={planningQ.isLoading ? "Calculating…" : "No buy needed in CM + NM."} maxHeight="40vh" />
+      </section>
+
+      {(plan?.arrival_flags ?? []).length > 0 ? (
+        <section className="grid gap-1">
+          <h3 className="text-sm font-semibold text-rose-800">CSN ETA needs update (assumed arriving today until changed in CSN Tracker)</h3>
+          <ErpDenseGrid {...GRID_PROPS} columns={flagColumns} rows={plan.arrival_flags} rowKey={(f) => f.source_key} maxHeight="30vh" />
+        </section>
+      ) : null}
+
+      <section className="grid gap-1">
+        <h3 className="text-sm font-semibold text-slate-800">Group shortages</h3>
+        <ErpDenseGrid {...GRID_PROPS} columns={groupColumns} rows={plan?.group_assignments ?? []} rowKey={(a) => `${a.group_id}|${a.month}`} emptyMessage="No group shortage in CM + NM." maxHeight="30vh" />
+        <MemberSelection companyId={companyId} planMonth={planMonth} plan={plan} canEdit={canEdit} />
+      </section>
+
+      <section className="grid gap-1">
+        <h3 className="text-sm font-semibold text-slate-800">Daily planning (sheet PLANNING)</h3>
+        <select value={dailyMaterial} onChange={(event) => setDailyMaterial(event.target.value)} className={`${INPUT_CLASS} w-96`}>
+          <option value="">Select a material…</option>
+          {materialsWithDaily.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+        {dailyMaterial ? <ErpDenseGrid {...GRID_PROPS} columns={dailyColumns} rows={dailyRows} rowKey={(r) => r.day} maxHeight="50vh" /> : null}
+      </section>
+    </div>
+  );
+}
+
+/** D3: monthly "use for new buy" choice for group members (Phase 3B selection). */
+function MemberSelection({ companyId, planMonth, plan, canEdit }) {
+  const queryClient = useQueryClient();
+  const months = useMemo(() => {
+    const cm = `${planMonth}-01`;
+    const d = new Date(`${cm}T00:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+    return [cm, d.toISOString().slice(0, 10)];
+  }, [planMonth]);
+  const selQ = useQuery({
+    queryKey: ["procurement", "mts-optimizer", "selections", companyId],
+    queryFn: () => getMtsOptimizerSelections({ company_id: companyId }),
+    enabled: Boolean(companyId),
+    retry: false,
+  });
+  const [drafts, setDrafts] = useState({});
+  const current = useMemo(() => {
+    const map = new Map();
+    for (const row of selQ.data?.rows ?? []) if (row.is_current) map.set(`${row.material_id}|${String(row.selection_month).slice(0, 10)}`, row.is_selected_for_new_purchase);
+    return map;
+  }, [selQ.data]);
+  const members = useMemo(() => {
+    const seen = new Map();
+    for (const a of plan?.group_assignments ?? []) seen.set(a.group_id, a.group_label);
+    return seen;
+  }, [plan]);
+  if (selQ.error) return <p className="text-xs text-slate-500">Member selection is not available for your access yet.</p>;
+  if (members.size === 0) return null;
+  const groupMembers = (groupId) => new Map(((plan?.groups ?? []).find((g) => g.group_id === groupId)?.members ?? []).map((m) => [m.material_id, `${m.material_code ?? ""} ${m.material_name}`.trim()]));
+  const value = (materialId, month) => drafts[`${materialId}|${month}`] ?? current.get(`${materialId}|${month}`) ?? false;
+  async function save() {
+    try {
+      const rows = Object.entries(drafts).map(([key, selected]) => {
+        const [material_id, selection_month] = key.split("|");
+        return { material_id, selection_month, is_selected_for_new_purchase: Boolean(selected) };
+      });
+      await saveMtsOptimizerSelections({ company_id: companyId, rows });
+      pushToast({ message: `Saved ${rows.length} selection(s). Recalculate to apply.`, tone: "success" });
+      setDrafts({});
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-optimizer", "selections", companyId] });
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "planning", companyId] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    }
+  }
+  return (
+    <details className="border border-slate-200 bg-slate-50 p-2 text-xs">
+      <summary className="cursor-pointer font-semibold text-slate-700">Choose members for new buy (per month)</summary>
+      <div className="mt-2 grid gap-2">
+        {[...members.entries()].map(([groupId, label]) => (
+          <div key={groupId} className="grid gap-1">
+            <span className="font-semibold">{label}</span>
+            {[...groupMembers(groupId).entries()].map(([materialId, name]) => (
+              <div key={materialId} className="flex items-center gap-3">
+                <span className="w-72 truncate">{name}</span>
+                {months.map((month) => (
+                  <label key={month} className="flex items-center gap-1">
+                    <input type="checkbox" disabled={!canEdit} checked={Boolean(value(materialId, month))} onChange={(event) => setDrafts((c) => ({ ...c, [`${materialId}|${month}`]: event.target.checked }))} />
+                    {month.slice(0, 7)}
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+        ))}
+        {canEdit ? <button type="button" onClick={() => void save()} disabled={Object.keys(drafts).length === 0} className="h-7 w-40 border border-sky-600 bg-sky-600 px-2 font-semibold text-white disabled:opacity-50">Save selection</button> : null}
+      </div>
+    </details>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab 5 — Store Material Usage Instruction (Phase 2D §6), live or a saved run
+// ─────────────────────────────────────────────────────────────────────────────
+function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
+  const [runId, setRunId] = useState("");
+  const [view, setView] = useState("PRODUCT");
+  const liveQ = usePlanningQuery(companyId, planMonth, asOf, demandAt);
+  const runsQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-runs", companyId], queryFn: () => listMtsPlanningRuns({ company_id: companyId }), enabled: Boolean(companyId), retry: false });
+  const runQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-run", companyId, runId], queryFn: () => getMtsPlanningRun({ company_id: companyId, id: runId }), enabled: Boolean(companyId && runId) });
+  const source = runId ? runQ.data?.run?.result ?? null : liveQ.data ?? null;
+  const rows = useMemo(() => source?.store_rows ?? [], [source]);
+  const materialSummary = useMemo(() => {
+    const map = new Map();
+    for (const r of rows) {
+      const key = r.material_id ?? `group:${r.group_id}`;
+      const seen = map.get(key) ?? { key, material_name: r.material_name, group_label: r.material_id ? "" : r.group_label, uom: r.uom, executable_qty: 0, not_backed_qty: 0 };
+      seen.executable_qty += r.executable_qty;
+      seen.not_backed_qty += r.not_backed_qty;
+      map.set(key, seen);
+    }
+    return [...map.values()].sort((a, b) => a.material_name.localeCompare(b.material_name));
+  }, [rows]);
+  const groupSummary = useMemo(() => {
+    const map = new Map();
+    for (const r of rows.filter((x) => x.line_type === "GROUP")) {
+      const seen = map.get(r.group_id) ?? { group_id: r.group_id, group_label: r.group_label, executable_qty: 0, not_backed_qty: 0, members: new Set() };
+      seen.executable_qty += r.executable_qty;
+      seen.not_backed_qty += r.not_backed_qty;
+      if (r.material_id) seen.members.add(r.material_name);
+      map.set(r.group_id, seen);
+    }
+    return [...map.values()].map((g) => ({ ...g, members: [...g.members].sort().join(", ") })).sort((a, b) => String(a.group_label).localeCompare(String(b.group_label)));
+  }, [rows]);
+
+  const productColumns = [
+    { key: "product", label: "Product", width: "240px" },
+    { key: "source", label: "Stroke / Pack BOM", width: "240px" },
+    { key: "period", label: "Period", width: "90px", render: (r) => (r.period === "CM" ? "CM (rest)" : "NM") },
+    { key: "line_type", label: "Line", width: "70px" },
+    { key: "group_label", label: "Group", width: "180px", render: (r) => dash(r.group_label) },
+    { key: "material_name", label: "Material to use", width: "240px", render: (r) => (r.material_id ? r.material_name : <span className="text-rose-700">{r.material_name}</span>) },
+    { key: "demand_qty", label: "Line demand", width: "110px", align: "right", render: (r) => fmtQty(r.demand_qty), copyValue: (r) => r.demand_qty },
+    { key: "executable_qty", label: "From physical stock", width: "130px", align: "right", render: (r) => (r.executable_qty ? <span className="font-semibold text-emerald-800">{fmtQty(r.executable_qty)}</span> : ""), copyValue: (r) => r.executable_qty },
+    { key: "not_backed_qty", label: "Not yet backed (future / short)", width: "180px", align: "right", render: (r) => (r.not_backed_qty ? <span className="text-rose-700">{fmtQty(r.not_backed_qty)}</span> : ""), copyValue: (r) => r.not_backed_qty },
+    { key: "uom", label: "UoM", width: "60px", render: (r) => dash(r.uom) },
+  ];
+  const materialColumns = [
+    { key: "material_name", label: "Material", width: "260px", render: (m) => (m.group_label ? `${m.group_label} (not assigned)` : m.material_name) },
+    { key: "executable_qty", label: "From physical stock", width: "140px", align: "right", render: (m) => fmtQty(m.executable_qty), copyValue: (m) => m.executable_qty },
+    { key: "not_backed_qty", label: "Not yet backed", width: "140px", align: "right", render: (m) => fmtQty(m.not_backed_qty), copyValue: (m) => m.not_backed_qty },
+    { key: "uom", label: "UoM", width: "60px", render: (m) => dash(m.uom) },
+  ];
+  const groupColumnsSummary = [
+    { key: "group_label", label: "Group", width: "240px" },
+    { key: "members", label: "Members used", width: "320px" },
+    { key: "executable_qty", label: "From physical stock", width: "140px", align: "right", render: (g) => fmtQty(g.executable_qty), copyValue: (g) => g.executable_qty },
+    { key: "not_backed_qty", label: "Not yet backed", width: "140px", align: "right", render: (g) => fmtQty(g.not_backed_qty), copyValue: (g) => g.not_backed_qty },
+  ];
+  const columns = view === "PRODUCT" ? productColumns : view === "MATERIAL" ? materialColumns : groupColumnsSummary;
+  const gridRows = view === "PRODUCT" ? rows : view === "MATERIAL" ? materialSummary : groupSummary;
+
+  async function exportExcel() {
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `po22_store_report_${source?.calendar?.as_of ?? asOf}.xlsx`,
+        sheetName: "Store Report",
+        columns: columns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align })),
+        rows: gridRows,
+        getCellValue: (row, column) => {
+          const col = columns.find((c) => c.key === column.key);
+          return col?.copyValue ? col.copyValue(row) : row[column.key] ?? "";
+        },
+        preambleRows: [
+          ["Store Material Usage Instruction — advisory, from current physical stock only"],
+          ["As-of", source?.calendar?.as_of ?? ""],
+          ["CM + NM", `${source?.calendar?.as_of ?? ""} → ${source?.calendar?.nm_end ?? ""}`],
+          ["Run", runId ? `Saved run ${runId}` : "Live calculation"],
+          ["Source fingerprint", source?.source_fingerprint ?? ""],
+        ],
+      });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    }
+  }
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="grid gap-1 text-sm text-slate-700">
+          <span className="font-medium">Run</span>
+          <select value={runId} onChange={(event) => setRunId(event.target.value)} className={`${INPUT_CLASS} w-96`}>
+            <option value="">Live calculation (not saved)</option>
+            {(runsQ.data?.rows ?? []).map((r) => <option key={r.id} value={r.id}>{new Date(r.created_at).toLocaleString()} · as-of {r.as_of} · {r.created_by_name}</option>)}
+          </select>
+        </label>
+        {["PRODUCT", "MATERIAL", "GROUP"].map((option) => (
+          <button key={option} type="button" onClick={() => setView(option)} className={`h-8 border px-3 text-xs font-semibold ${view === option ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"}`}>
+            {option === "PRODUCT" ? "Product-wise" : option === "MATERIAL" ? "Material summary" : "Group summary"}
+          </button>
+        ))}
+        <button type="button" onClick={() => void exportExcel()} disabled={!source} className="h-8 border border-emerald-600 bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Excel</button>
+      </div>
+      <p className="text-xs text-slate-500">
+        &quot;From physical stock&quot; is backed by posted counted stock at the run time — Store may use it. &quot;Not yet backed&quot; depends on future arrivals or is short:
+        never issue against it. If the production mix changes, follow the row of the product actually produced; shared stock cannot serve every product in full.
+      </p>
+      <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={gridRows} rowKey={(r) => (view === "PRODUCT" ? `${r.pool_key}|${r.period}|${r.material_id ?? "rest"}` : view === "MATERIAL" ? r.key : r.group_id)} emptyMessage={(runId ? runQ.isLoading : liveQ.isLoading) ? "Loading…" : "No demand in CM + NM."} maxHeight="calc(100vh - 340px)" />
     </div>
   );
 }

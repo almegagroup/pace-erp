@@ -117,6 +117,12 @@ import {
   saveMtsFxRateHandler,
 } from "../_core/procurement/mts_planning_cost.handlers.ts";
 import {
+  getMtsPlanningHandler,
+  getMtsPlanningRunHandler,
+  listMtsPlanningRunsHandler,
+  saveMtsPlanningRunHandler,
+} from "../_core/procurement/mts_planning.handlers.ts";
+import {
   getMtsOptimizerLifecycleEvidenceHandler,
   getMtsOptimizerRequirementDemandEvidenceHandler,
   getMtsOptimizerSelectionsHandler,
@@ -838,6 +844,14 @@ export async function dispatchProcurementRoutes(
       return await getMtsLocationPolicyHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/location-policy":
       return await saveMtsLocationPolicyHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/planning":
+      return await getMtsPlanningHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/planning/runs":
+      return await saveMtsPlanningRunHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/planning/runs":
+      return await listMtsPlanningRunsHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/planning/run":
+      return await getMtsPlanningRunHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
       return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/requirement-demand-evidence":

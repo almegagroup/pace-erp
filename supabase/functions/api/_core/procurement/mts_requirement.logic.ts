@@ -874,8 +874,18 @@ export type AllocationResult = {
   /** Material-null group pools (RM Use Primary = No, PM groups): uncovered demand stays with the group. */
   groups: Map<string, GroupPoolDemand>;
   /** pool traceability: pool → { candidates, demand, per material }. */
-  pools: Map<string, { kind: "RM" | "PM"; candidates: string[]; group_id: string | null; use_primary: boolean | null; storage_location_id: string | null; total: number; byMaterial: Map<string, number>; prodshades: Set<string>; skus: Set<string>; strokes: Set<string>; pack_boms: Set<string>; outer_qty: number; outer_uom_code: string | null; fill_qty_per_outer: number | null }>;
+  pools: Map<string, PoolAllocation>;
   stock: Map<string, MaterialStockPosition>;
+};
+
+export type StorePeriod = "CM" | "NM";
+export type PoolAllocation = {
+  kind: "RM" | "PM"; candidates: string[]; group_id: string | null; use_primary: boolean | null; storage_location_id: string | null;
+  total: number; byMaterial: Map<string, number>; prodshades: Set<string>; skus: Set<string>; strokes: Set<string>; pack_boms: Set<string>;
+  outer_qty: number; outer_uom_code: string | null; fill_qty_per_outer: number | null;
+  /** Store report (Phase 2D §6): demand from as-of per period, and what current stock backs, per material. */
+  periodDemand: Record<StorePeriod, number>;
+  periodFromStock: Map<string, Record<StorePeriod, number>>;
 };
 
 function bump(map: Map<string, Map<string, number>>, material: string, day: string, qty: number) {
@@ -1025,12 +1035,15 @@ export function allocateDemand(
   const addTo = (map: Map<string, number>, key: string, qty: number) => map.set(key, (map.get(key) ?? 0) + qty);
 
   const processRecord = (record: DemandRecord) => {
-    const pool = pools.get(record.pool_key) ?? {
+    const pool: PoolAllocation = pools.get(record.pool_key) ?? {
       kind: record.kind, candidates: record.candidates, group_id: record.group_id, use_primary: record.use_primary,
       storage_location_id: record.storage_location_id, total: 0, byMaterial: new Map<string, number>(),
       prodshades: new Set<string>(), skus: new Set<string>(), strokes: new Set<string>(), pack_boms: new Set<string>(),
       outer_qty: 0, outer_uom_code: record.outer_uom_code, fill_qty_per_outer: record.fill_qty_per_outer,
+      periodDemand: { CM: 0, NM: 0 }, periodFromStock: new Map(),
     };
+    const period: StorePeriod | null = record.day < calendar.asOf ? null : record.day <= calendar.cmEnd ? "CM" : "NM";
+    if (period) pool.periodDemand[period] += record.qty;
     pool.total += record.qty;
     pool.outer_qty += record.outer_qty ?? 0;
     pool.prodshades.add(record.prodshade_material_id);
@@ -1058,6 +1071,11 @@ export function allocateDemand(
       pool.byMaterial.set(material, (pool.byMaterial.get(material) ?? 0) + qty);
       if (isFixed) addTo(fixedByMaterial, material, qty);
       else if (fromStock) addTo(groupShareByMaterial, material, qty);
+      if (fromStock && period) {
+        const byPeriod = pool.periodFromStock.get(material) ?? { CM: 0, NM: 0 };
+        byPeriod[period] += qty;
+        pool.periodFromStock.set(material, byPeriod);
+      }
       if (group && fromStock) addTo(group.drawnByMaterial, material, qty);
     };
     const uncovered = (qty: number) => {
@@ -1233,7 +1251,7 @@ export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. Lead time
 // ─────────────────────────────────────────────────────────────────────────────
-export type ConfiguredLeadTime = { vendor_label: string; route: "DOMESTIC" | "IMPORT"; days: number; detail: string };
+export type ConfiguredLeadTime = { vendor_label: string; route: "DOMESTIC" | "IMPORT"; days: number; detail: string; vendor_id?: string };
 export type LeadTimeResult = {
   configured_min: number | null;
   configured_max: number | null;
@@ -1663,6 +1681,8 @@ export type RequirementRow = {
   /** D3: this material's own fixed (exclusive) demand vs group demand drawn from its stock (horizon). */
   fixed_demand_qty: number;
   group_share_qty: number;
+  /** Internal: day → demand attributed to this material (not serialised by the API). */
+  daily_demand: Map<string, number>;
 };
 
 /** D3: one row per material-null group pool (RM Use Primary = No, PM groups). */
@@ -1690,6 +1710,8 @@ export type GroupRequirementRow = {
   }>;
   any_member_below_target: boolean;
   any_member_below_critical: boolean;
+  /** Internal: day → group shortage (not serialised by the API). */
+  uncovered_by_day: Map<string, number>;
 };
 
 export type RequirementInput = Omit<ExplosionInput, "effective"> & {
@@ -1708,9 +1730,32 @@ export type RequirementInput = Omit<ExplosionInput, "effective"> & {
   locationRoles?: Map<string, LocationRole>;
 };
 
+/**
+ * Store Material Usage Instruction row (Phase 2D §6): one product source line × period × material.
+ * Executable = backed by current posted counted stock only; the rest is not yet backed (future /
+ * uncovered) and is never an issue instruction. Σ executable + not_backed = demand per line/period.
+ */
+export type StoreInstructionRow = {
+  pool_key: string;
+  kind: "RM" | "PM";
+  period: StorePeriod;
+  prodshade_ids: string[];
+  sku_ids: string[];
+  stroke_ids: string[];
+  pack_bom_ids: string[];
+  line_type: "FIXED" | "GROUP";
+  group_id: string | null;
+  /** null = group pool remainder not assigned to a member. */
+  material_id: string | null;
+  demand_qty: number;          // line demand in the period (repeated on each row of the line)
+  executable_qty: number;      // this material's share backed by current stock
+  not_backed_qty: number;      // only on the remainder row
+};
+
 export type RequirementOutput = {
   rows: RequirementRow[];
   groups: GroupRequirementRow[];
+  store_rows: StoreInstructionRow[];
   warnings: Warning[];
   exceptions: Warning[];
   effective: EffectiveSkuMonth[];
@@ -1822,6 +1867,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       from_stock_qty: roundQty(fromStock),
       fixed_demand_qty: roundQty(allocation.fixedByMaterial.get(materialId) ?? 0),
       group_share_qty: roundQty(allocation.groupShareByMaterial.get(materialId) ?? 0),
+      daily_demand: demand,
     };
   });
 
@@ -1861,9 +1907,34 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       members,
       any_member_below_target: members.some((m) => m.below_target === true),
       any_member_below_critical: members.some((m) => m.below_critical === true),
+      uncovered_by_day: group.uncoveredByDay,
     };
   }).sort((a, b) => a.group_id.localeCompare(b.group_id));
-  return { rows, groups, warnings, exceptions: explosion.exceptions, effective };
+  const storeRows: StoreInstructionRow[] = [];
+  for (const [poolKey, pool] of [...allocation.pools].sort(([a], [b]) => a.localeCompare(b))) {
+    for (const period of ["CM", "NM"] as const) {
+      const demand = pool.periodDemand[period];
+      if (demand <= EPSILON) continue;
+      const base = {
+        pool_key: poolKey, kind: pool.kind, period,
+        prodshade_ids: [...pool.prodshades].sort(), sku_ids: [...pool.skus].sort(), stroke_ids: [...pool.strokes].sort(), pack_bom_ids: [...pool.pack_boms].sort(),
+        line_type: (pool.group_id && pool.candidates.length > 1 ? "GROUP" : "FIXED") as StoreInstructionRow["line_type"],
+        group_id: pool.group_id, demand_qty: roundQty(demand),
+      };
+      let backed = 0;
+      for (const [material, byPeriod] of [...pool.periodFromStock].sort(([a], [b]) => a.localeCompare(b))) {
+        if (byPeriod[period] <= EPSILON) continue;
+        backed += byPeriod[period];
+        storeRows.push({ ...base, material_id: material, executable_qty: roundQty(byPeriod[period]), not_backed_qty: 0 });
+      }
+      const rest = demand - backed;
+      if (rest > EPSILON) {
+        const owner = isGroupOwnedPool({ group_id: pool.group_id, kind: pool.kind, use_primary: pool.use_primary }) ? null : pool.candidates[0];
+        storeRows.push({ ...base, material_id: owner, executable_qty: 0, not_backed_qty: roundQty(rest) });
+      }
+    }
+  }
+  return { rows, groups, store_rows: storeRows, warnings, exceptions: explosion.exceptions, effective };
 }
 
 export type UomConversion = { from_uom_code: string; to_uom_code: string; conversion_factor: number | null; variable_conversion: boolean | null; active: boolean | null };
