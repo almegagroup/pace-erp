@@ -117,6 +117,7 @@ import {
   saveMtsFxRateHandler,
 } from "../_core/procurement/mts_planning_cost.handlers.ts";
 import {
+  explainMtsPlanningHandler,
   getMtsPlanningHandler,
   getMtsPlanningRunHandler,
   listMtsPlanningRunsHandler,
@@ -852,6 +853,8 @@ export async function dispatchProcurementRoutes(
       return await listMtsPlanningRunsHandler(req, ctx);
     case "GET:/api/procurement/mts-requirement/planning/run":
       return await getMtsPlanningRunHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/planning/ai-explain":
+      return await explainMtsPlanningHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
       return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/requirement-demand-evidence":

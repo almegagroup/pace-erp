@@ -12,6 +12,8 @@ export type AiTextRequest = {
   prompt: string;
   maxTokens: number;
   signal?: AbortSignal;
+  /** Prompt length cap (default 4000, hard ceiling 16000 characters). */
+  maxPromptChars?: number;
 };
 
 export class AiProviderError extends Error {
@@ -31,7 +33,8 @@ function tokenCount(input: unknown): number {
 export async function generateAiText(args: AiTextRequest): Promise<AiTextResult> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new AiProviderError("NOT_CONFIGURED");
-  if (typeof args.prompt !== "string" || args.prompt.length === 0 || args.prompt.length > 4000) {
+  const promptCap = Math.min(16000, Math.max(1, Math.trunc(args.maxPromptChars ?? 4000)));
+  if (typeof args.prompt !== "string" || args.prompt.length === 0 || args.prompt.length > promptCap) {
     throw new AiProviderError("INVALID_RESPONSE");
   }
   const maxTokens = Math.min(1024, Math.max(1, Math.trunc(args.maxTokens) || 64));

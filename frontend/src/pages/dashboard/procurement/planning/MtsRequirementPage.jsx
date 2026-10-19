@@ -33,6 +33,7 @@ import {
   getMtsFxRates,
   getMtsLocationPolicy,
   getMtsOptimizerSelections,
+  explainMtsPlanning,
   getMtsPlanning,
   getMtsPlanningRun,
   listMtsPlanningRuns,
@@ -1449,6 +1450,8 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
         <MemberSelection companyId={companyId} planMonth={planMonth} plan={plan} canEdit={canEdit} />
       </section>
 
+      <AiExplain companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandAt} buys={plan?.buys ?? []} />
+
       <section className="grid gap-1">
         <h3 className="text-sm font-semibold text-slate-800">Daily planning (sheet PLANNING)</h3>
         <select value={dailyMaterial} onChange={(event) => setDailyMaterial(event.target.value)} className={`${INPUT_CLASS} w-96`}>
@@ -1458,6 +1461,46 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
         {dailyMaterial ? <ErpDenseGrid {...GRID_PROPS} columns={dailyColumns} rows={dailyRows} rowKey={(r) => r.day} maxHeight="50vh" /> : null}
       </section>
     </div>
+  );
+}
+
+/** Phase 2D §8: AI explains the deterministic plan; it never changes a number. */
+function AiExplain({ companyId, planMonth, asOf, demandAt, buys }) {
+  const [material, setMaterial] = useState("");
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const names = useMemo(() => [...new Set(buys.filter((b) => b.status !== "NO_BUY").map((b) => b.material_name))].sort(), [buys]);
+  async function ask() {
+    setBusy(true);
+    try {
+      const result = await explainMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined, material_name: material || undefined, question: question || undefined });
+      setAnswer(result);
+    } catch (error) {
+      setAnswer({ error: errorText(error) });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="grid gap-1 border border-violet-200 bg-violet-50 p-2">
+      <h3 className="text-sm font-semibold text-violet-900">Explain with AI (advisory)</h3>
+      <div className="flex flex-wrap items-end gap-2 text-xs">
+        <select value={material} onChange={(event) => setMaterial(event.target.value)} className={`${INPUT_CLASS} w-72`}>
+          <option value="">Whole plan</option>
+          {names.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+        <input value={question} maxLength={500} onChange={(event) => setQuestion(event.target.value)} placeholder="Optional question (e.g. which import is most urgent?)" className={`${INPUT_CLASS} w-96`} />
+        <button type="button" onClick={() => void ask()} disabled={busy} className="h-8 border border-violet-600 bg-violet-600 px-3 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{busy ? "Thinking…" : "Explain"}</button>
+      </div>
+      {answer?.error ? <p className="text-xs text-rose-700">{answer.error}</p> : null}
+      {answer?.explanation ? (
+        <div className="grid gap-1">
+          <pre className="whitespace-pre-wrap text-sm text-slate-800">{answer.explanation}</pre>
+          <span className="text-[11px] text-slate-500">{answer.note} · {answer.usage ? `${answer.usage.input_tokens + answer.usage.output_tokens} tokens` : ""}</span>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

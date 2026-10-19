@@ -28,6 +28,8 @@ import type { OptimizerAdvisoryBuy } from "./mts_optimizer_phase3d.types.ts";
 import { type CostOption, costOption, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
+import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
+import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 
 type JsonRecord = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "").trim();
@@ -370,5 +372,54 @@ export async function getMtsPlanningRunHandler(req: Request, ctx: ReqHandlerCont
     return okResponse({ run: data }, ctx.request_id, req);
   } catch (error) {
     return handleError(req, ctx, error, "MTS_PLANNING_RUN_LOAD_FAILED", "Could not load the planning run.");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/procurement/mts-requirement/planning/ai-explain  (Phase 2D §8, owner D8)
+// AI explains and advises on the deterministic plan; it never changes a number.
+// ─────────────────────────────────────────────────────────────────────────────
+const AI_MAX_OUTPUT_TOKENS = 1024;
+
+export async function explainMtsPlanningHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const body = await req.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+    const companyId = text(body.company_id);
+    if (!companyId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id is required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementViewAccess(req, ctx, companyId);
+    if (denied) return denied;
+    if (process.env.AI_CORE_ENABLED !== "true") return fail(req, ctx, "AI_NOT_ENABLED", 403, "AI explanations are switched off for this environment.");
+    const parsed = readParams(body, todayInIndia());
+    if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
+    const plan = await computePlanning({ companyId, ...parsed.params! });
+    const prompt = buildPlanningAiPrompt(plan, text(body.material_name) || null, text(body.question) || null);
+    const cap = Math.max(1, Number(process.env.PO22_AI_MONTHLY_TOKEN_CAP ?? 1_000_000) || 1_000_000);
+    const reserve = Math.ceil(prompt.length / 3) + AI_MAX_OUTPUT_TOKENS;
+    const month = `${todayInIndia().slice(0, 7)}-01`;
+    const { data: reserved, error: reserveError } = await serviceRoleClient.schema("erp_planning").rpc("reserve_mts_ai_budget", {
+      p_company_id: companyId, p_month: month, p_tokens: reserve, p_cap: cap,
+    });
+    if (reserveError) return fail(req, ctx, "AI_BUDGET_UNAVAILABLE", 503, "AI budget tracking is not available yet.");
+    if (reserved !== true) return fail(req, ctx, "AI_BUDGET_EXCEEDED", 429, "This company's monthly AI budget is used up. Planning itself still works.");
+    let used = 0;
+    try {
+      const result = await generateAiText({ prompt, maxTokens: AI_MAX_OUTPUT_TOKENS, maxPromptChars: PO22_AI_MAX_PROMPT_CHARS });
+      used = result.usage.input_tokens + result.usage.output_tokens;
+      return okResponse({
+        explanation: result.text,
+        model: result.model,
+        usage: result.usage,
+        source_fingerprint: plan.source_fingerprint,
+        note: "Advisory text only. Numbers come from the deterministic plan; change settings and recalculate for a new scenario.",
+      }, ctx.request_id, req);
+    } catch (error) {
+      const code = error instanceof AiProviderError ? error.code : "UNAVAILABLE";
+      return fail(req, ctx, code === "NOT_CONFIGURED" ? "AI_NOT_CONFIGURED" : "AI_PROVIDER_UNAVAILABLE", code === "NOT_CONFIGURED" ? 503 : 502, "The AI explanation is not available right now. Planning itself still works.");
+    } finally {
+      await serviceRoleClient.schema("erp_planning").rpc("settle_mts_ai_budget", { p_company_id: companyId, p_month: month, p_reserved: reserve, p_used: used });
+    }
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_PLANNING_AI_FAILED", "Could not prepare the AI explanation.");
   }
 }

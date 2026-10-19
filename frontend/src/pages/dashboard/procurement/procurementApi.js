@@ -1874,6 +1874,10 @@ export function getMtsPlanningRun(params) {
   return fetchProcurement("GET", "/api/procurement/mts-requirement/planning/run", undefined, params);
 }
 
+export function explainMtsPlanning(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/planning/ai-explain", data);
+}
+
 // PO22 optimizer six-month new-buy selection (Phase 3B endpoints).
 export function getMtsOptimizerSelections(params) {
   return fetchProcurement("GET", "/api/procurement/mts-optimizer/selections", undefined, params);
