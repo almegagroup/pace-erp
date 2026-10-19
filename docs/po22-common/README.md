@@ -2,7 +2,7 @@
 Status: INITIAL CONSOLIDATION, NOT FINAL BUSINESS SIGN-OFF.
 Branch: `common` (created from `main` on 2026-10-19 at the business owner's explicit request).
 
-## Purpose
+**MANDATORY for all three agents: [START-HERE-ALL-AGENTS.md](START-HERE-ALL-AGENTS.md), then [COMMIT-TO-FILE-MAP.md](COMMIT-TO-FILE-MAP.md).** Do not start PO22 work from this README alone.\n\n## Purpose
 One readable place for the business owner, Codex, Claude, and ChatGPT to find:
 1. Approved business rules and decisions, with sources and verification state.
 2. Exact implemented/integrated state, commits, tests and blockers.
@@ -23,7 +23,7 @@ One readable place for the business owner, Codex, Claude, and ChatGPT to find:
 - [Complete approved contract traceability](APPROVED-CONTRACT-TRACEABILITY.md)
 - [Historic Google Sheet formula reference](GOOGLE-SHEET-FORMULA-REFERENCE.md)
 - [28-requirement acceptance matrix](REQUIREMENT-ACCEPTANCE-MATRIX.md)
-- [Implementation snapshot and gap register](PROGRESS-SNAPSHOT.md)
+- [Implementation snapshot and gap register](PROGRESS-SNAPSHOT.md)\n- [Complete historical Codex register copy](CODEX-INTEGRATION-REGISTER-SNAPSHOT.md)\n- [Commit-to-file inventory for all agent/codex changed paths](COMMIT-TO-FILE-MAP.md)
 - Existing detailed contracts: `docs/mts-planning/PO22-PHASE-2D-FINAL-OPTIMIZER-AND-STORE-CONTRACT.md`, PO22 Phase 3A/B contracts and reports.
 - Existing project register: `docs/INTEGRATION-REGISTER.md` on `agent/codex`. Refresh exact branch SHAs before editing any status.
 
