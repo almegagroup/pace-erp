@@ -141,7 +141,7 @@ function handleError(req: Request, ctx: ReqHandlerContext, error: unknown, fallb
 // ─────────────────────────────────────────────────────────────────────────────
 // Loaders (read-only)
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadMaterialRows(ids: string[]): Promise<Map<string, JsonRecord>> {
+export async function loadMaterialRows(ids: string[]): Promise<Map<string, JsonRecord>> {
   const list = unique(ids);
   if (list.length === 0) return new Map();
   const rows = await fetchInChunks<JsonRecord>(list, (chunk) => serviceRoleClient
@@ -151,7 +151,7 @@ async function loadMaterialRows(ids: string[]): Promise<Map<string, JsonRecord>>
   return new Map(rows.map((row) => [text(row.id), row]));
 }
 
-async function loadConversions(ids: string[]): Promise<Map<string, UomConversion[]>> {
+export async function loadConversions(ids: string[]): Promise<Map<string, UomConversion[]>> {
   const list = unique(ids);
   const rows = list.length === 0 ? [] : await fetchInChunks<JsonRecord>(list, (chunk) => serviceRoleClient
     .schema("erp_master").from("material_uom_conversion")
@@ -165,7 +165,7 @@ async function loadConversions(ids: string[]): Promise<Map<string, UomConversion
   return byMaterial;
 }
 
-type FormulationMasters = {
+export type FormulationMasters = {
   skus: Map<string, SkuInfo>;
   ambiguousCount: number;
   strokes: Map<string, StrokeInfo>;
@@ -183,7 +183,7 @@ type FormulationMasters = {
  * RM/PM material universe = every material on those strokes / BOMs and their
  * group members (owner: one policy per individual material).
  */
-async function loadFormulationMasters(companyId: string, extraStrokeIds: string[]): Promise<FormulationMasters> {
+export async function loadFormulationMasters(companyId: string, extraStrokeIds: string[]): Promise<FormulationMasters> {
   const warnings: Warning[] = [];
   const { skus: companySkus, ambiguous } = await loadCompanySkus(companyId);
   const prodshadeIds = unique(companySkus.map((s) => s.prodshade_material_id));
@@ -220,18 +220,20 @@ async function loadFormulationMasters(companyId: string, extraStrokeIds: string[
       .in("stroke_master_id", chunk)),
     bomIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(bomIds, (chunk) => serviceRoleClient
       .schema("erp_production").from("pack_bom_line")
-      .select("pack_bom_id, line_type, material_id, qty, uom_code, storage_location_id, material_group_id")
+      .select("id, pack_bom_id, line_type, material_id, qty, uom_code, storage_location_id, material_group_id")
       .in("pack_bom_id", chunk)),
   ]);
 
   const groupIds = unique([...strokeLines, ...bomLines].map((l) => text(l.material_group_id)));
   const memberRows = groupIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
     .schema("erp_master").from("material_category_group_member")
-    .select("group_id, material_id, active").in("group_id", chunk));
+    .select("id, group_id, material_id, active").in("group_id", chunk));
   const groupMembers = new Map<string, GroupMember[]>();
   for (const member of memberRows) {
     const key = text(member.group_id);
-    groupMembers.set(key, [...(groupMembers.get(key) ?? []), { material_id: text(member.material_id), active: member.active !== false }]);
+    groupMembers.set(key, [...(groupMembers.get(key) ?? []), {
+      material_id: text(member.material_id), active: member.active !== false, group_id: key, source_id: text(member.id) || undefined,
+    }]);
   }
 
   const strokes = new Map<string, StrokeInfo>();
@@ -275,6 +277,7 @@ async function loadFormulationMasters(companyId: string, extraStrokeIds: string[
       output_qty: num(output?.qty),
       output_uom_code: text(output?.uom_code) || null,
       inputs: lines.filter((l) => text(l.line_type) === "INPUT").map((l) => ({
+        pack_bom_line_id: text(l.id) || undefined,
         material_id: text(l.material_id),
         qty: Number(l.qty ?? 0),
         uom_code: text(l.uom_code),
@@ -297,12 +300,13 @@ async function loadFormulationMasters(companyId: string, extraStrokeIds: string[
   return { skus, ambiguousCount: ambiguous.length, strokes, currentStrokeByProdshade, groupMembers, packBoms, materialUniverse: universe, prodshadeIds, warnings };
 }
 
-async function loadPlanLines(companyId: string, months: string[]): Promise<PlanLineVersion[]> {
+export async function loadPlanLines(companyId: string, months: string[]): Promise<PlanLineVersion[]> {
   const data = await fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("customer_plan_line")
-    .select("entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at")
+    .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at")
     .eq("company_id", companyId).in("plan_month", months)
     .order("created_at", { ascending: true }).order("id", { ascending: true }), "MTS_REQ_PLAN_LOAD_FAILED");
   return data.map((row) => ({
+    source_id: text(row.id) || undefined,
     entry_id: text(row.entry_id),
     version_no: Number(row.version_no),
     plan_month: text(row.plan_month).slice(0, 10),
@@ -317,7 +321,7 @@ async function loadPlanLines(companyId: string, months: string[]): Promise<PlanL
   }));
 }
 
-async function loadStrokeSettings(companyId: string, months: string[]) {
+export async function loadStrokeSettings(companyId: string, months: string[]) {
   const [settings, decisionData] = await Promise.all([
     fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("stroke_plan_setting")
       .select("id, plan_month, prodshade_material_id, version_no, created_at")
@@ -603,7 +607,7 @@ async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[];
   };
 }
 
-function materialInfoMap(rows: Map<string, JsonRecord>, conversions: Map<string, UomConversion[]>): Map<string, MaterialInfo> {
+export function materialInfoMap(rows: Map<string, JsonRecord>, conversions: Map<string, UomConversion[]>): Map<string, MaterialInfo> {
   const result = new Map<string, MaterialInfo>();
   for (const [id, row] of rows) {
     const base = text(row.base_uom_code);

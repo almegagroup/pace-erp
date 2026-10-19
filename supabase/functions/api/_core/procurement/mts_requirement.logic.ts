@@ -121,6 +121,8 @@ export function buildCalendar(planMonth: string, asOf: string): PlanningCalendar
 // 1. Effective PO21 plan (same rule as erp_planning.customer_plan_effective)
 // ─────────────────────────────────────────────────────────────────────────────
 export type PlanLineVersion = {
+  /** Immutable customer_plan_line row id when read from ERP. */
+  source_id?: string;
   entry_id: string;
   version_no: number;
   plan_month: string;
@@ -284,9 +286,18 @@ export type StrokePeriod = { stroke_master_id: string; period_from: string; peri
 /** Key `${month}|${prodshade}` → periods saved on PO21 Tab 2 (absent = default current stroke). */
 export type StrokeSettingMap = Map<string, StrokePeriod[]>;
 export type PrimaryDecision = { stroke_master_id: string; material_group_id: string; effective_month: string; use_primary: boolean };
-export type GroupMember = { material_id: string; active: boolean };
+export type GroupMember = {
+  material_id: string;
+  active: boolean;
+  /** The actual material-group row identity supplied by the loader. */
+  group_id?: string;
+  /** Immutable membership-row identity when supplied by the read-only loader. */
+  source_id?: string;
+};
 
 export type PackBomLine = {
+  /** Immutable Pack BOM INPUT-line identity when supplied by the read-only loader. */
+  pack_bom_line_id?: string;
   material_id: string;
   qty: number;
   uom_code: string;
@@ -324,6 +335,8 @@ export type DemandRecord = {
   stroke_master_id: string | null;
   stroke_line_id: string | null;
   pack_bom_id: string | null;
+  /** PM source only: the immutable Pack BOM INPUT line. */
+  pack_bom_line_id: string | null;
   /** PM source only: physical outer packs represented by this daily demand record. */
   outer_qty: number | null;
   /** PM source only: the Pack BOM OUTPUT unit. Never inferred from a material UoM. */
@@ -564,6 +577,7 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           stroke_master_id: stroke.stroke_master_id,
           stroke_line_id: line.stroke_line_id,
           pack_bom_id: null,
+          pack_bom_line_id: null,
           outer_qty: null,
           outer_uom_code: null,
           fill_qty_per_outer: null,
@@ -630,6 +644,7 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           stroke_master_id: null,
           stroke_line_id: null,
           pack_bom_id: bom.pack_bom_id,
+          pack_bom_line_id: line.pack_bom_line_id ?? null,
           // Presentation-only provenance.  Requirement math remains in the PM
           // material's base unit; this makes the individual Pack BOM's physical
           // outer-pack count visible without flattening mixed pack sizes.
