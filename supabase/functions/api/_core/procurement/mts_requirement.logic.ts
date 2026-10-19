@@ -1095,15 +1095,26 @@ export type InboundBuckets = {
   later: number;      // after NM
   unknown: number;    // no ETA
   total: number;
-  byDay: Map<string, number>; // dated events inside the horizon (as-of .. NM end)
+  /** Physically dispatched / at gate (CSN, gate entry, STO in transit) vs open PO (lot / remainder). */
+  dispatched: number;
+  open_po: number;
+  /**
+   * Dated events inside the horizon (as-of .. NM end). Owner D5: overdue and no-ETA
+   * events are assumed to arrive on the as-of date (never dropped) and stay flagged
+   * in `overdue` / `unknown`.
+   */
+  byDay: Map<string, number>;
 };
 
 export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar): InboundBuckets {
-  const buckets: InboundBuckets = { overdue: 0, cm: 0, nm: 0, later: 0, unknown: 0, total: 0, byDay: new Map() };
+  const buckets: InboundBuckets = { overdue: 0, cm: 0, nm: 0, later: 0, unknown: 0, total: 0, dispatched: 0, open_po: 0, byDay: new Map() };
+  const assumeToday = (qty: number) => buckets.byDay.set(calendar.asOf, (buckets.byDay.get(calendar.asOf) ?? 0) + qty);
   for (const event of events) {
     buckets.total += event.qty;
-    if (!event.date) { buckets.unknown += event.qty; continue; }
-    if (event.date < calendar.asOf) { buckets.overdue += event.qty; continue; }
+    if (event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER") buckets.open_po += event.qty;
+    else buckets.dispatched += event.qty;
+    if (!event.date) { buckets.unknown += event.qty; assumeToday(event.qty); continue; }
+    if (event.date < calendar.asOf) { buckets.overdue += event.qty; assumeToday(event.qty); continue; }
     if (event.date <= calendar.cmEnd) buckets.cm += event.qty;
     else if (event.date <= calendar.nmEnd) buckets.nm += event.qty;
     else { buckets.later += event.qty; continue; }
@@ -1126,7 +1137,7 @@ export type LeadTimeResult = {
   observed_p90: number | null;
   legacy_equivalent: number | null; // observed max + 4 (sheet: MAXIFS(CONSOILI_MVT!R, material) + 4)
   effective: number | null;
-  effective_source: "LEGACY_MAX_PLUS_4" | "CONFIGURED_MAX_TRANSIT" | "UNKNOWN";
+  effective_source: "CONFIGURED_MAX" | "LEGACY_MAX_PLUS_4" | "UNKNOWN";
 };
 
 export const LEGACY_LEAD_TIME_BUFFER_DAYS = 4;
@@ -1140,11 +1151,11 @@ function percentile(sorted: number[], fraction: number): number | null {
 }
 
 /**
- * Effective lead time used for coverage, in this precedence (documented):
- *   1. observed history: max observed + 4 days (keeps the legacy sheet rule,
- *      now explicitly labelled as a maximum, not an average);
- *   2. configured vendor transit master (largest route, transit only — the
- *      masters hold no vendor processing time);
+ * Effective lead time used for coverage, in this precedence (owner decision D2/D6,
+ * 2026-10-19):
+ *   1. configured vendor lead time = Booking Time (blank = 0) + route master
+ *      (largest across this material's vendors/routes);
+ *   2. fallback: observed history max + 4 days (the legacy sheet rule);
  *   3. UNKNOWN (never zero).
  */
 export function computeLeadTime(configured: ConfiguredLeadTime[], observedDays: number[]): LeadTimeResult {
@@ -1153,7 +1164,7 @@ export function computeLeadTime(configured: ConfiguredLeadTime[], observedDays: 
   const observedMax = valid.length ? valid[valid.length - 1] : null;
   const legacy = observedMax === null ? null : observedMax + LEGACY_LEAD_TIME_BUFFER_DAYS;
   const configuredMax = configuredDays.length ? Math.max(...configuredDays) : null;
-  const effective = legacy ?? configuredMax;
+  const effective = configuredMax ?? legacy;
   return {
     configured_min: configuredDays.length ? Math.min(...configuredDays) : null,
     configured_max: configuredMax,
@@ -1164,7 +1175,7 @@ export function computeLeadTime(configured: ConfiguredLeadTime[], observedDays: 
     observed_p90: percentile(valid, 0.9),
     legacy_equivalent: legacy,
     effective,
-    effective_source: legacy !== null ? "LEGACY_MAX_PLUS_4" : configuredMax !== null ? "CONFIGURED_MAX_TRANSIT" : "UNKNOWN",
+    effective_source: configuredMax !== null ? "CONFIGURED_MAX" : legacy !== null ? "LEGACY_MAX_PLUS_4" : "UNKNOWN",
   };
 }
 
@@ -1301,6 +1312,29 @@ export type MaterialMetrics = {
   identifier: "NO_DEMAND" | "NO_POLICY" | "CRITICAL" | "BELOW_TARGET" | "OK";
   id2: "NO_DEMAND" | "NO_POLICY" | "CRITICAL" | "BELOW_TARGET" | "OK";
   inbound_risk: "NONE" | "ON_TIME" | "ETA_UNKNOWN" | "OVERDUE";
+  // ── Sheet REQUIREMENT meanings (owner decision D2, 2026-10-19) ──────────────
+  /** H: remaining CM = CM req − consumption so far; when ≤ 0 the sheet shows Req NM instead. */
+  sheet_current_req: number;
+  sheet_current_req_basis: "CM_REMAINING" | "NM";
+  /** I: daily rate of H (over CM days left, or NM days when H is the NM basis). */
+  current_prorata_daily: number;
+  /** K: NM daily rate. */
+  nm_prorata_daily: number;
+  /** AB = NM REQ DAYS × K. */
+  sheet_next_month_req: number | null;
+  /** AC = H + AB. */
+  sheet_total_req: number | null;
+  /** AD: daily rate over the cover window (CM days left + NM REQ DAYS). */
+  total_prorata_daily: number;
+  /** N: H − current stock (+ = shortage). */
+  current_balance_shortage: number;
+  /** Dispatched / at gate vs open PO (lot / remainder) inbound. */
+  intransit_dispatched: number;
+  intransit_open_po: number;
+  /** AJ: reorder level (Safety + Lead-time stock) ≥ current stock. */
+  reorder_flag: boolean | null;
+  /** X: 0 = no total requirement; else 1 + below Target + below Critical (only when reorder flag). */
+  priority_score: number | null;
 };
 
 export type MetricsInput = {
@@ -1324,8 +1358,8 @@ function classify(coverDays: number | null, hasDemand: boolean, policy: PolicyRo
   if (!hasDemand) return "NO_DEMAND";
   if (!policy || policy.target_cov_days === null) return "NO_POLICY";
   const cover = coverDays ?? Number.POSITIVE_INFINITY;
-  if (policy.critical_cov_days !== null && cover < policy.critical_cov_days) return "CRITICAL";
-  if (cover < policy.target_cov_days) return "BELOW_TARGET";
+  if (policy.critical_cov_days !== null && cover <= policy.critical_cov_days) return "CRITICAL";
+  if (cover <= policy.target_cov_days) return "BELOW_TARGET";
   return "OK";
 }
 
@@ -1353,8 +1387,9 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
 
   const target = policy?.target_cov_days ?? null;
   const critical = policy?.critical_cov_days ?? null;
+  // D2: Below Target / Critical are inclusive (<=), like the sheet.
   const below = (cover: number | null, threshold: number | null) =>
-    threshold === null || !hasDemand ? null : (cover ?? Number.POSITIVE_INFINITY) < threshold;
+    threshold === null || !hasDemand ? null : (cover ?? Number.POSITIVE_INFINITY) <= threshold;
 
   const nmReqDays = nmRequiredDays(target, calendar);
   const nextMonthReq = nmReqDays === null ? null : demandForFirstNmDays(demandByDay, calendar, nmReqDays);
@@ -1371,6 +1406,27 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   if (netReq !== null && policy?.moq_active && input.moqBaseQty !== null && netReq > EPSILON) {
     netReqMoq = Math.max(netReq, input.moqBaseQty);
   }
+
+  // Sheet REQUIREMENT meanings (D2): H, I, K, AB, AC, AD, N, AG–AJ, X.
+  const remainingCm = cmReq - input.consumption;
+  const cmBasis = remainingCm > EPSILON;
+  const sheetCurrentReq = cmBasis ? remainingCm : nmReq;
+  const nmProrataDaily = nmDaily;
+  const currentProrataDaily = cmBasis ? (calendar.cmDaysLeft > 0 ? remainingCm / calendar.cmDaysLeft : 0) : nmProrataDaily;
+  const sheetNextMonthReq = nmReqDays === null ? null : nmReqDays * nmProrataDaily;
+  const sheetTotalReq = sheetNextMonthReq === null ? null : sheetCurrentReq + sheetNextMonthReq;
+  const coverWindow = calendar.cmDaysLeft + (nmReqDays ?? 0);
+  const totalProrataDaily = cmBasis
+    ? (coverWindow > 0 ? (sheetTotalReq ?? sheetCurrentReq) / coverWindow : 0)
+    : currentProrataDaily;
+  const safetyStock = target === null ? null : target * totalProrataDaily;
+  const leadStock = input.leadTimeDays === null ? null : input.leadTimeDays * totalProrataDaily;
+  const totalStockLevel = safetyStock === null || leadStock === null ? null : safetyStock + leadStock;
+  const reorderFlag = !hasDemand || totalStockLevel === null ? null : totalStockLevel >= input.stock - EPSILON;
+  const belowTarget = below(stockOnly.days, target);
+  const belowCritical = below(stockOnly.days, critical);
+  const priorityScore = reorderFlag !== true ? null
+    : (sheetTotalReq ?? 0) <= EPSILON ? 0 : 1 + (belowTarget ? 1 : 0) + (belowCritical ? 1 : 0);
 
   const inboundRisk: MaterialMetrics["inbound_risk"] = inbound.total <= EPSILON
     ? "NONE"
@@ -1406,8 +1462,8 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
     cover_extrapolated: stockOnly.extrapolated || withAll.extrapolated,
     target_cov_days: target,
     critical_cov_days: critical,
-    below_target: below(stockOnly.days, target),
-    below_critical: below(stockOnly.days, critical),
+    below_target: belowTarget,
+    below_critical: belowCritical,
     below_target_with_in: below(withAll.days, target),
     below_critical_with_in: below(withAll.days, critical),
     nm_req_days: nmReqDays,
@@ -1415,15 +1471,28 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
     total_req: totalReq === null ? null : r(totalReq),
     total_prorata: totalProrata === null ? null : r(totalProrata),
     avg_daily_req: r(avgDaily),
-    safety_day_stock: critical === null ? null : r(critical * avgDaily),
-    lead_time_stock: input.leadTimeDays === null ? null : r(input.leadTimeDays * avgDaily),
-    total_stock_level: critical === null || input.leadTimeDays === null ? null : r((critical + input.leadTimeDays) * avgDaily),
+    // D2: Safety Day Stock = Target days × AD (sheet AG); Lead-time stock = lead time × AD (AH).
+    safety_day_stock: safetyStock === null ? null : r(safetyStock),
+    lead_time_stock: leadStock === null ? null : r(leadStock),
+    total_stock_level: totalStockLevel === null ? null : r(totalStockLevel),
     net_req: netReq === null ? null : r(netReq),
     moq_base_qty: input.moqBaseQty === null ? null : r(input.moqBaseQty),
     net_req_moq: netReqMoq === null ? null : r(netReqMoq),
     identifier: classify(stockOnly.days, hasDemand, policy),
     id2: classify(withAll.days, hasDemand, policy),
     inbound_risk: inboundRisk,
+    sheet_current_req: r(sheetCurrentReq),
+    sheet_current_req_basis: cmBasis ? "CM_REMAINING" : "NM",
+    current_prorata_daily: r(currentProrataDaily),
+    nm_prorata_daily: r(nmProrataDaily),
+    sheet_next_month_req: sheetNextMonthReq === null ? null : r(sheetNextMonthReq),
+    sheet_total_req: sheetTotalReq === null ? null : r(sheetTotalReq),
+    total_prorata_daily: r(totalProrataDaily),
+    current_balance_shortage: r(sheetCurrentReq - input.stock),
+    intransit_dispatched: r(inbound.dispatched),
+    intransit_open_po: r(inbound.open_po),
+    reorder_flag: reorderFlag,
+    priority_score: priorityScore,
   };
 }
 
@@ -1603,6 +1672,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       inbound: {
         overdue: roundQty(bucketTotals.overdue), cm: roundQty(bucketTotals.cm), nm: roundQty(bucketTotals.nm),
         later: roundQty(bucketTotals.later), unknown: roundQty(bucketTotals.unknown), total: roundQty(bucketTotals.total),
+        dispatched: roundQty(bucketTotals.dispatched), open_po: roundQty(bucketTotals.open_po),
       },
       inbound_events: events.map((event) => ({ ...event, qty: roundQty(event.qty) })),
       pools: (poolsByMaterial.get(materialId) ?? []).sort((a, b) => a.pool_key.localeCompare(b.pool_key)),

@@ -507,7 +507,7 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
   if (universe.length === 0) return new Map();
   const [vmiRows, vendorMapRows, receivedCsns, historyRes] = await Promise.all([
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
-      .select("vendor_id, material_id").eq("status", "ACTIVE").in("material_id", chunk)),
+      .select("vendor_id, material_id, booking_time_days").eq("status", "ACTIVE").in("material_id", chunk)),
     fetchAllPages(() => serviceRoleClient.schema("erp_master").from("vendor_company_map").select("id, vendor_id").eq("company_id", companyId).eq("active", true).order("id"), "MTS_REQ_VENDOR_MAP_LOAD_FAILED"),
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_procurement").from("consignment_note")
       .select("material_id, po_id, grn_date").eq("company_id", companyId).eq("status", "GRD").not("grn_date", "is", null).in("material_id", chunk)),
@@ -515,10 +515,14 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
   ]);
   const companyVendors = new Set(vendorMapRows.map((v) => text(v.vendor_id)));
   const vendorsByMaterial = new Map<string, string[]>();
+  // D6: optional vendor × material Booking Time (PO → vendor dispatch); blank = 0.
+  const bookingDays = new Map<string, number>();
   for (const row of vmiRows) {
     const vendorId = text(row.vendor_id);
     if (!companyVendors.has(vendorId)) continue;
     const key = text(row.material_id);
+    const booking = num(row.booking_time_days);
+    if (booking !== null && booking > 0) bookingDays.set(`${vendorId}|${key}`, booking);
     vendorsByMaterial.set(key, unique([...(vendorsByMaterial.get(key) ?? []), vendorId]));
   }
   const vendorIds = unique([...vendorsByMaterial.values()].flat());
@@ -571,15 +575,17 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
     const configured: ConfiguredLeadTime[] = [];
     for (const vendorId of vendorsByMaterial.get(materialId) ?? []) {
       const label = vendorLabel.get(vendorId) ?? "—";
+      const booking = bookingDays.get(`${vendorId}|${materialId}`) ?? 0;
+      const bookingText = booking > 0 ? `booking ${booking} + ` : "";
       for (const row of domesticRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
-        configured.push({ vendor_label: label, route: "DOMESTIC", days: Number(row.transit_days ?? 0), detail: `transit ${Number(row.transit_days ?? 0)}` });
+        configured.push({ vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
       }
       for (const row of importRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
         const sail = Number(row.sail_time_days ?? 0);
         const clearance = Number(row.clearance_days ?? 0);
         const inlandDays = inland.get(text(row.port_of_discharge_id));
-        const days = sail + clearance + (inlandDays ?? 0);
-        configured.push({ vendor_label: label, route: "IMPORT", days, detail: `sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
+        const days = booking + sail + clearance + (inlandDays ?? 0);
+        configured.push({ vendor_label: label, route: "IMPORT", days, detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
       }
     }
     result.set(materialId, computeLeadTime(configured, observed.get(materialId) ?? []));

@@ -291,8 +291,9 @@ function buildReportColumns(expanded, toggleExpanded) {
       read: (r) => packSourceSummary(r.pools),
       render: (r) => dash(packSourceSummary(r.pools)),
     }),
-    textColumn("identifier", "Identifier", "identity", { width: "120px", render: (r) => badge(r.identifier) }),
-    textColumn("id2", "ID2 (with incoming)", "identity", { width: "140px", render: (r) => badge(r.id2) }),
+    qtyColumn("priority_score", "Identifier (0–3)", "identity", { width: "100px" }),
+    textColumn("reorder_flag", "ID2 (at reorder level)", "identity", { width: "130px", read: (r) => (r.reorder_flag === null ? "" : yesNo(r.reorder_flag)), render: (r) => flag(r.reorder_flag) }),
+    textColumn("identifier", "Status", "identity", { width: "120px", render: (r) => badge(r.identifier) }),
     {
       key: "sources", label: "Sources", group: "identity", width: "90px", filterable: false,
       render: (r) => (
@@ -311,12 +312,13 @@ function buildReportColumns(expanded, toggleExpanded) {
     textColumn("moq_active", "MOQ Active", "policy", { width: "90px", read: (r) => yesNo(r.moq_active) }),
     textColumn("policy_effective_from", "Policy From", "policy", { width: "100px" }),
 
-    qtyColumn("cm_req", "Current Req (CURRENT MONTH REQ)", "demand", { width: "150px" }),
-    qtyColumn("cm_prorata", "Current Prorata (CM PRORATA)", "demand", { width: "150px" }),
+    qtyColumn("sheet_current_req", "Current Req (remaining CM)", "demand", { width: "150px" }),
+    textColumn("sheet_current_req_basis", "Current Req Basis", "demand", { width: "120px", read: (r) => (r.sheet_current_req_basis === "NM" ? "CM consumed → Req NM" : "CM remaining") }),
+    qtyColumn("current_prorata_daily", "Current Prorata / day", "demand", { width: "130px" }),
+    qtyColumn("cm_req", "CM Req (whole month)", "demand", { width: "130px" }),
     qtyColumn("cm_cons", "CURRENT CONS.", "demand"),
-    qtyColumn("cm_balance_req", "CM Req − Cons", "demand"),
     qtyColumn("nm_req", "Req NM", "demand"),
-    qtyColumn("nm_prorata", "Prorata NM", "demand"),
+    qtyColumn("nm_prorata_daily", "Prorata NM / day", "demand", { width: "120px" }),
 
     qtyColumn("current_stock", "CURRENT_STOCK (usable)", "stock", { width: "130px" }),
     qtyColumn("stock_unrestricted_at_required", "Unrestricted @ Req SLoc", "stock", { width: "130px" }),
@@ -328,6 +330,8 @@ function buildReportColumns(expanded, toggleExpanded) {
     textColumn("other_locations", "Other SLocs", "stock", { width: "110px", read: (r) => (r.other_locations ?? []).join(", ") }),
 
     qtyColumn("intransit_cm", "INTRANSIT CM", "inbound"),
+    qtyColumn("intransit_dispatched", "Dispatched / At Gate", "inbound", { width: "130px" }),
+    qtyColumn("intransit_open_po", "Open PO (not dispatched)", "inbound", { width: "140px" }),
     qtyColumn("intransit_nm", "INTRANSIT NM", "inbound"),
     qtyColumn("intransit_overdue", "In-transit ETA Passed", "inbound", { width: "120px" }),
     qtyColumn("intransit_unknown", "In-transit ETA Unknown", "inbound", { width: "130px" }),
@@ -338,7 +342,7 @@ function buildReportColumns(expanded, toggleExpanded) {
     qtyColumn("current_cov", "Current Cov", "coverage", { days: true }),
     qtyColumn("next_month_cov", "Next Month Cov", "coverage", { days: true }),
     qtyColumn("cov_till_nm", "Cov till NM", "coverage", { days: true }),
-    qtyColumn("current_balance", "Current Balance", "coverage"),
+    qtyColumn("current_balance_shortage", "Current Balance (+ = short)", "coverage", { width: "140px" }),
     qtyColumn("nm_opening", "NM Opening (proj.)", "coverage"),
     qtyColumn("nm_closing", "NM Closing (proj.)", "coverage"),
     textColumn("status_nm", "Status of NM", "coverage", { width: "130px", render: (r) => badge(r.status_nm) }),
@@ -351,9 +355,9 @@ function buildReportColumns(expanded, toggleExpanded) {
 
     qtyColumn("cm_days_left", "CM DAYS LEFT", "requirement", { days: true, width: "90px" }),
     qtyColumn("nm_req_days", "NM REQ DAYS", "requirement", { days: true, width: "90px" }),
-    qtyColumn("next_month_req", "NEXT MONTH REQ", "requirement"),
-    qtyColumn("total_req", "TOTAL REQ", "requirement"),
-    qtyColumn("total_prorata", "TOTAL PRORATA", "requirement"),
+    qtyColumn("sheet_next_month_req", "NEXT MONTH REQ", "requirement"),
+    qtyColumn("sheet_total_req", "TOTAL REQ", "requirement"),
+    qtyColumn("total_prorata_daily", "TOTAL PRORATA / day", "requirement", { width: "130px" }),
     qtyColumn("net_req", "Net Req (after stock + in-transit)", "requirement", { width: "150px" }),
     qtyColumn("net_req_moq", "Net Req (MOQ applied)", "requirement", { width: "130px" }),
 
@@ -365,7 +369,7 @@ function buildReportColumns(expanded, toggleExpanded) {
     qtyColumn("lead_time_observed_p90", "Observed P90", "leadtime", { days: true, width: "100px" }),
     qtyColumn("lead_time_observed_count", "Samples", "leadtime", { width: "70px" }),
     qtyColumn("avg_daily_req", "Avg Daily Req", "leadtime"),
-    qtyColumn("safety_day_stock", "Safety Day Stock", "leadtime"),
+    qtyColumn("safety_day_stock", "Safety Day Stock (Target × prorata)", "leadtime", { width: "160px" }),
     qtyColumn("lead_time_stock", "Lead time Stock", "leadtime"),
     qtyColumn("total_stock_level", "Total Stock", "leadtime"),
   ];
@@ -397,7 +401,7 @@ function SourceDetail({ row }) {
     { key: "vendor_label", label: "Vendor", width: "260px" },
     { key: "route", label: "Route", width: "90px" },
     { key: "days", label: "Days", width: "60px", align: "right" },
-    { key: "detail", label: "Master detail (transit only — no vendor processing time stored)", width: "360px" },
+    { key: "detail", label: "Lead time detail (Booking Time + route)", width: "360px" },
   ];
   return (
     <div className="grid gap-2 bg-slate-50 p-2">

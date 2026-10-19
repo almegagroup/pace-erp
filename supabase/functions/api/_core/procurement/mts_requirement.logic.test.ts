@@ -405,7 +405,10 @@ Deno.test("Policy by effective date + MOQ without fixed vendor minimum [T18][T19
     policy: policies[0], moqBaseQty: null, leadTimeDays: null,
   });
   assertEqual(noMoq.net_req, noMoq.net_req_moq, "no fixed MOQ → net requirement unchanged");
-  assertEqual([metrics.identifier, metrics.safety_day_stock, metrics.lead_time_stock, metrics.total_stock_level], ["CRITICAL", 250, 100, 350], "classification and stock levels");
+  // D2 sheet meanings: H = 300 remaining (nothing consumed), AB = 31 × 10, AC = 610, AD = 610 / (11 + 31).
+  assertEqual([metrics.sheet_current_req, metrics.sheet_next_month_req, metrics.sheet_total_req, metrics.total_prorata_daily], [300, 310, 610, 14.52381], "sheet H / AB / AC / AD");
+  assertEqual([metrics.identifier, metrics.safety_day_stock, metrics.lead_time_stock, metrics.total_stock_level], ["CRITICAL", 871.428571, 145.238095, 1016.666667], "Safety = Target × AD, lead stock = lead × AD");
+  assertEqual([metrics.reorder_flag, metrics.priority_score, metrics.current_balance_shortage], [true, 3, 300], "reorder flag, priority 0–3, + = shortage");
 });
 
 Deno.test("Lead time: legacy max+4 vs configured vs unknown", () => {
@@ -414,9 +417,11 @@ Deno.test("Lead time: legacy max+4 vs configured vs unknown", () => {
     { vendor_label: "V2", route: "IMPORT" as const, days: 45, detail: "sail 30 + clearance 10 + inland 5" },
   ];
   const observed = computeLeadTime(configured, [10, 20, 30]);
-  assertEqual([observed.observed_avg, observed.observed_max, observed.legacy_equivalent, observed.effective, observed.effective_source], [20, 30, 34, 34, "LEGACY_MAX_PLUS_4"], "history wins, labelled as max+4 not average");
+  assertEqual([observed.observed_avg, observed.observed_max, observed.legacy_equivalent, observed.effective, observed.effective_source], [20, 30, 34, 45, "CONFIGURED_MAX"], "D2: configured (booking + route) wins; history max+4 is the fallback");
+  const historyOnly = computeLeadTime([], [10, 20, 30]);
+  assertEqual([historyOnly.effective, historyOnly.effective_source], [34, "LEGACY_MAX_PLUS_4"], "fallback to sheet rule");
   const configuredOnly = computeLeadTime(configured, []);
-  assertEqual([configuredOnly.effective, configuredOnly.effective_source], [45, "CONFIGURED_MAX_TRANSIT"], "falls back to largest configured route");
+  assertEqual([configuredOnly.effective, configuredOnly.effective_source], [45, "CONFIGURED_MAX"], "largest configured route");
   const unknown = computeLeadTime([], []);
   assertEqual([unknown.effective, unknown.effective_source], [null, "UNKNOWN"], "never zero");
 });
@@ -567,4 +572,26 @@ Deno.test("lineage: explosion quantities unchanged by attribution", () => {
   const withoutRefs = explodeDemand(baseInput({ effective: effectiveFor(lines).map(({ contributors: _c, ...entry }) => entry) }));
   assertEqual(withRefs.records.map((record) => [record.day, record.pool_key, record.qty]), withoutRefs.records.map((record) => [record.day, record.pool_key, record.qty]), "same day/pool/qty");
   assertEqual(withoutRefs.records.every((record) => record.plan_line_contributions.length === 0), true, "no contributors → no lineage (adapter fails closed)");
+});
+
+Deno.test("D5/D2: overdue and no-ETA inbound are assumed today; dispatched vs open PO split", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-10")!;
+  const buckets = bucketInbound([
+    { material_id: "X", qty: 5, date: "2026-11-02", kind: "IN_TRANSIT", date_source: "CSN_ETA_TO_PLANT", reference: "a" },
+    { material_id: "X", qty: 17, date: null, kind: "PO_REMAINDER", date_source: "NONE", reference: "e" },
+    { material_id: "X", qty: 3, date: "2026-11-15", kind: "SCHEDULED_LOT", date_source: "LOT_DELIVERY_DATE", reference: "f" },
+  ], calendar);
+  assertEqual([buckets.overdue, buckets.unknown, buckets.byDay.get("2026-11-10"), buckets.dispatched, buckets.open_po], [5, 17, 22, 5, 20], "assumed on as-of, still flagged");
+});
+
+Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata is a daily rate", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-21")!; // 10 CM days left
+  const demand = new Map<string, number>();
+  for (const day of calendar.horizon) demand.set(day, 10);
+  const policy: PolicyRow = { material_id: "M", effective_from: "2026-01-01", target_cov_days: 20, critical_cov_days: 10, moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 1 };
+  const consumed = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 300, stock: 1000, inbound: bucketInbound([], calendar), policy, moqBaseQty: null, leadTimeDays: 5 });
+  assertEqual([consumed.sheet_current_req_basis, consumed.sheet_current_req, consumed.current_prorata_daily, consumed.nm_prorata_daily], ["NM", 310, 10, 10], "CM consumed → NM basis");
+  const partial = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 150, stock: 1000, inbound: bucketInbound([], calendar), policy, moqBaseQty: null, leadTimeDays: 5 });
+  assertEqual([partial.sheet_current_req_basis, partial.sheet_current_req, partial.current_prorata_daily], ["CM_REMAINING", 150, 15], "remaining 150 over 10 days");
+  assertEqual([partial.reorder_flag, partial.priority_score], [false, null], "stock above reorder level → no priority");
 });
