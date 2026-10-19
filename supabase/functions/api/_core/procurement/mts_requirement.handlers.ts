@@ -621,6 +621,7 @@ async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[];
       moq_uom_code: text(row.moq_uom_code) || null,
       moq_source: (text(row.moq_source) || "NONE") as PolicyRow["moq_source"],
       moq_active: row.moq_active === true,
+      carrying_rate_per_uom: num(row.carrying_rate_per_uom),
       version_no: Number(row.version_no ?? 1),
     })),
   };

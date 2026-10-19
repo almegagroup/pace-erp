@@ -23,7 +23,11 @@ import {
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
 import { assemblePlanningInput, type VendorTerm } from "./mts_planning.logic.ts";
-import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
+import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import type { OptimizerAdvisoryBuy } from "./mts_optimizer_phase3d.types.ts";
+import { type CostOption, costOption, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
+import { interestPctAt } from "./mts_planning_cost.logic.ts";
+import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "").trim();
@@ -52,7 +56,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   if (universe.length === 0) return result;
   const [vmiRows, mapRes] = await Promise.all([
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
-      .select("vendor_id, material_id, moq_qty, order_multiple_qty, delivery_lot_qty, supply_uom_code, booking_time_days, last_purchase_price, last_purchase_currency")
+      .select("id, vendor_id, material_id, moq_qty, order_multiple_qty, delivery_lot_qty, supply_uom_code, booking_time_days, last_purchase_price, last_purchase_currency")
       .eq("status", "ACTIVE").in("material_id", chunk)),
     serviceRoleClient.schema("erp_master").from("vendor_company_map").select("vendor_id").eq("company_id", companyId).eq("active", true).limit(5000),
   ]);
@@ -62,6 +66,19 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   const vendors = vendorIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(vendorIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("vendor_master").select("id, vendor_code, vendor_name").in("id", chunk));
   const label = new Map(vendors.map((v) => [text(v.id), [text(v.vendor_code), text(v.vendor_name)].filter(Boolean).join(" — ")]));
+  // Default payment term per vendor-material (D10: cash-out timing).
+  const vmiIds = unique(rows.map((row) => text(row.id)));
+  const termRows = vmiIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
+    .from("vendor_material_payment_term").select("vmi_id, payment_term_id, is_default").in("vmi_id", chunk));
+  const termIds = unique(termRows.map((t) => text(t.payment_term_id)));
+  const terms = termIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(termIds, (chunk) => serviceRoleClient.schema("erp_master")
+    .from("payment_terms_master").select("id, credit_days, advance_pct, payment_method, payment_type").in("id", chunk));
+  const termById = new Map(terms.map((t) => [text(t.id), t]));
+  const termByVmi = new Map<string, JsonRecord>();
+  for (const t of termRows) {
+    const term = termById.get(text(t.payment_term_id));
+    if (term && (t.is_default === true || !termByVmi.has(text(t.vmi_id)))) termByVmi.set(text(t.vmi_id), term);
+  }
   for (const row of rows) {
     const materialId = text(row.material_id);
     const vendorId = text(row.vendor_id);
@@ -75,6 +92,12 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
       last_price: num(row.last_purchase_price), currency: text(row.last_purchase_currency) || null,
+      ...(() => {
+        const term = termByVmi.get(text(row.id));
+        if (!term) return { credit_days: null, advance: false };
+        const advance = (num(term.advance_pct) ?? 0) >= 100 || text(term.payment_method).toUpperCase() === "ADVANCE" || text(term.payment_type).toUpperCase() === "ADVANCE";
+        return { credit_days: num(term.credit_days), advance };
+      })(),
     }]);
   }
   return result;
@@ -93,6 +116,89 @@ async function loadSelections(companyId: string, months: string[]): Promise<{ ma
   return { map, available: true };
 }
 
+type CostInputs = {
+  interestPct: number | null;
+  customerCreditDays: number | null;
+  fxByCurrency: Map<string, { inr: number | null; source: string | null; stale: boolean }>;
+  landedByVendorMaterial: Map<string, { adder: number | null; basis: "FINAL" | "PROVISIONAL" | "NONE" }>;
+};
+
+async function loadCostInputs(companyId: string, asOf: string, today: string, universe: string[], vendorTerms: Map<string, VendorTerm[]>, materials: Awaited<ReturnType<typeof computeRequirement>>["materials"]): Promise<CostInputs> {
+  const since = new Date(Date.parse(`${today}T00:00:00Z`) - 365 * 86_400_000).toISOString().slice(0, 10);
+  const currencies = unique([...vendorTerms.values()].flat().map((t) => (t.currency ?? "INR").toUpperCase()).filter((c) => c !== "INR"));
+  const [financeRes, soRes, grns, fxPicks] = await Promise.all([
+    serviceRoleClient.schema("erp_planning").from("company_planning_finance").select("effective_from, interest_pct_per_year").eq("company_id", companyId).limit(500),
+    serviceRoleClient.schema("erp_procurement").from("sales_order").select("payment_term_id").eq("company_id", companyId).gte("so_date", since).not("payment_term_id", "is", null).limit(5000),
+    universe.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+      .select("id, vendor_id, material_id, received_qty, uom_code, status, grn_date").eq("company_id", companyId).gte("grn_date", since).in("material_id", chunk)),
+    Promise.all(currencies.map(async (code) => [code, await resolveFxRate(code, today).catch(() => null)] as const)),
+  ]);
+  const interestPct = financeRes.error ? null : interestPctAt(((financeRes.data ?? []) as JsonRecord[]).map((r) => ({ effective_from: text(r.effective_from), interest_pct_per_year: Number(r.interest_pct_per_year) })), asOf);
+  // Customer credit days = the company's most used sales payment term (D11: invoice date + term).
+  const termCounts = new Map<string, number>();
+  for (const row of (soRes.data ?? []) as JsonRecord[]) termCounts.set(text(row.payment_term_id), (termCounts.get(text(row.payment_term_id)) ?? 0) + 1);
+  const topTerm = [...termCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  let customerCreditDays: number | null = null;
+  if (topTerm) {
+    const { data } = await serviceRoleClient.schema("erp_master").from("payment_terms_master").select("credit_days").eq("id", topTerm).maybeSingle();
+    customerCreditDays = num((data as JsonRecord | null)?.credit_days);
+  }
+  const fxByCurrency = new Map<string, { inr: number | null; source: string | null; stale: boolean }>([["INR", { inr: 1, source: "BASE", stale: false }]]);
+  for (const [code, pick] of fxPicks) fxByCurrency.set(code, { inr: pick?.inr_per_unit ?? null, source: pick?.source ?? null, stale: pick?.stale ?? false });
+  // Landed cost history per vendor + material (AC01 landed_cost by GRN).
+  const postedGrns = grns.filter((g) => !["CANCELLED", "REVERSED", "DRAFT"].includes(text(g.status).toUpperCase()));
+  const grnIds = unique(postedGrns.map((g) => text(g.id)));
+  const landed = grnIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(grnIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("landed_cost").select("grn_id, total_cost, status").in("grn_id", chunk));
+  const landedByGrn = new Map<string, { total: number; status: string }>();
+  for (const row of landed) {
+    if (text(row.status).toUpperCase() === "CANCELLED") continue;
+    const seen = landedByGrn.get(text(row.grn_id)) ?? { total: 0, status: "POSTED" };
+    seen.total += Number(row.total_cost ?? 0);
+    if (text(row.status).toUpperCase() !== "POSTED") seen.status = "DRAFT";
+    landedByGrn.set(text(row.grn_id), seen);
+  }
+  const history = new Map<string, Array<{ total_cost: number; received_base_qty: number; status: string }>>();
+  for (const grn of postedGrns) {
+    const lc = landedByGrn.get(text(grn.id));
+    if (!lc) continue;
+    const base = toMaterialBase(materials.get(text(grn.material_id)), Number(grn.received_qty ?? 0), text(grn.uom_code));
+    if (base === null) continue;
+    const key = `${text(grn.vendor_id)}|${text(grn.material_id)}`;
+    history.set(key, [...(history.get(key) ?? []), { total_cost: lc.total, received_base_qty: base, status: lc.status }]);
+  }
+  const landedByVendorMaterial = new Map([...history].map(([key, rows]) => [key, landedAdder(rows)]));
+  return { interestPct, customerCreditDays, fxByCurrency, landedByVendorMaterial };
+}
+
+function costOptionsFor(
+  buy: OptimizerAdvisoryBuy,
+  terms: readonly VendorTerm[],
+  inputs: CostInputs,
+  asOf: string,
+  dailyUse: number,
+  carryingRate: number | null,
+): CostOption[] {
+  const options = terms.map((term) => {
+    const lead = totalLeadTimeDays({ material_id: term.material_id, target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, booking_time_days: term.booking_days, route_lead_time_days: term.route_days });
+    const need = buy.need_date ?? buy.estimated_plant_eta;
+    const feasible = lead !== null && need !== null && new Date(Date.parse(`${need}T00:00:00Z`) - lead * 86_400_000).toISOString().slice(0, 10) >= asOf;
+    let orderQty: number | null = null;
+    try {
+      orderQty = applyOrderConstraints(buy.required_qty_base, { material_id: term.material_id, target_days: null, critical_days: null, vendor_moq_qty_base: term.moq_base, order_multiple_qty_base: term.multiple_base, configured_lead_time_days: null });
+    } catch { orderQty = null; }
+    const currency = (term.currency ?? "INR").toUpperCase();
+    const fx = inputs.fxByCurrency.get(currency) ?? { inr: null, source: null, stale: false };
+    const landed = inputs.landedByVendorMaterial.get(`${term.vendor_id}|${term.material_id}`) ?? { adder: null, basis: "NONE" as const };
+    return costOption({
+      vendor_label: term.vendor_label, price: term.last_price, currency, fx_inr: fx.inr, fx_source: fx.source ? `${fx.source}${fx.stale ? " (last available)" : ""}` : null,
+      landed_adder: landed.adder, landed_basis: landed.basis, vendor_credit_days: term.credit_days ?? null, advance: term.advance ?? false,
+      order_qty: orderQty, lead_time_days: lead, feasible,
+    }, { required_qty: buy.required_qty_base, daily_use: dailyUse, carrying_rate: carryingRate, interest_pct: inputs.interestPct, customer_credit_days: inputs.customerCreditDays });
+  });
+  return rankCostOptions(options);
+}
+
 /** Full planning payload (labels resolved, R-01: no raw ids shown). */
 export async function computePlanning(p: PlanningParams) {
   const calendar = buildCalendar(p.planMonth, p.asOf);
@@ -105,11 +211,26 @@ export async function computePlanning(p: PlanningParams) {
     loadSelections(p.companyId, [calendar.cmStart, calendar.nmStart]),
   ]);
   const policyMoqBase = new Map(req.output.rows.map((r) => [r.material_id, moqInBase(r.policy, req.materials.get(r.material_id))]));
-  const assembly = assemblePlanningInput({
-    calendar, rows: req.output.rows, groups: req.output.groups, policies: req.policyLoad.policies,
-    vendorTerms, selections: selections.map, policyMoqBase,
-  });
-  const projection = projectDailyCoverage(assembly.input);
+  const baseArgs = { calendar, rows: req.output.rows, groups: req.output.groups, policies: req.policyLoad.policies, vendorTerms, selections: selections.map, policyMoqBase };
+  const horizonDays = Math.max(1, Math.round((Date.parse(`${calendar.nmEnd}T00:00:00Z`) - Date.parse(`${calendar.asOf}T00:00:00Z`)) / 86_400_000) + 1);
+  const dailyUseOf = (id: string, demand: ReadonlyArray<{ material_id: string | null; qty_base: number }>) =>
+    demand.filter((d) => d.material_id === id).reduce((s, d) => s + d.qty_base, 0) / horizonDays;
+  const carryingOf = (id: string) => req.output.rows.find((r) => r.material_id === id)?.policy?.carrying_rate_per_uom ?? null;
+  // Pass 1: fastest feasible vendor → when and how much is needed.
+  const pass1 = assemblePlanningInput(baseArgs);
+  const projection1 = projectDailyCoverage(pass1.input);
+  const costInputs = await loadCostInputs(p.companyId, calendar.asOf, p.today, universe, vendorTerms, req.materials);
+  const vendorOverride = new Map<string, string>();
+  for (const buy of projection1.advisory_buys) {
+    if ((buy.status !== "ADVISORY" && buy.status !== "ADVISORY_LATE") || buy.sequence !== 1) continue;
+    const terms = vendorTerms.get(buy.material_id) ?? [];
+    const best = costOptionsFor(buy, terms, costInputs, calendar.asOf, dailyUseOf(buy.material_id, pass1.input.daily_demand), carryingOf(buy.material_id))[0];
+    const term = best?.rank === 1 && best.feasible ? terms.find((t) => t.vendor_label === best.vendor_label) : undefined;
+    if (term) vendorOverride.set(buy.material_id, term.vendor_id);
+  }
+  // Pass 2: cheapest feasible vendor's MOQ / multiple / lead time.
+  const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, vendorOverride }) : pass1;
+  const projection = vendorOverride.size ? projectDailyCoverage(assembly.input) : projection1;
 
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
@@ -133,6 +254,11 @@ export async function computePlanning(p: PlanningParams) {
     source_fingerprint: req.fingerprint,
     calculated_at: new Date().toISOString(),
     selections_available: selections.available,
+    cost_basis: {
+      interest_pct: costInputs.interestPct,
+      customer_credit_days: costInputs.customerCreditDays,
+      fx: Object.fromEntries([...costInputs.fxByCurrency].map(([code, fx]) => [code, fx])),
+    },
     location_policy: req.locationRoles ? "COMPANY_POLICY" : "LEGACY_REQUIRED_LOCATION",
     // Only materials with any use, arrival or proposed lot in CM + NM (keeps the payload small).
     daily: projection.rows.filter((row) => activeMaterials.has(row.material_id)).map((row) => ({ ...row, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id) })),
@@ -143,7 +269,10 @@ export async function computePlanning(p: PlanningParams) {
         ...buy, material_name: nameOf(buy.material_id), material_code: codeOf(buy.material_id), uom: uom(buy.material_id),
         vendor_label: vendor?.vendor_label ?? null, vendor_moq_base: vendor?.moq_base ?? null, vendor_multiple_base: vendor?.multiple_base ?? null,
         vendor_lot_base: vendor?.lot_base ?? null, booking_time_days: vendor?.booking_days ?? null, route_lead_time_days: vendor?.route_days ?? null,
-        vendor_options: (vendorTerms.get(buy.material_id) ?? []).map((t) => ({ vendor_label: t.vendor_label, booking_days: t.booking_days, route_days: t.route_days, moq_base: t.moq_base, multiple_base: t.multiple_base, last_price: t.last_price, currency: t.currency })),
+        vendor_basis: vendorOverride.has(buy.material_id) ? "LOWEST_TOTAL_COST" : vendor ? "FASTEST_FEASIBLE" : null,
+        cost_options: buy.status === "ADVISORY" || buy.status === "ADVISORY_LATE"
+          ? costOptionsFor(buy, vendorTerms.get(buy.material_id) ?? [], costInputs, calendar.asOf, dailyUseOf(buy.material_id, assembly.input.daily_demand), carryingOf(buy.material_id))
+          : [],
       };
     }),
     groups: req.output.groups.map((g) => ({

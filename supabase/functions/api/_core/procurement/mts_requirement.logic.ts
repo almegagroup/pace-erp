@@ -1352,6 +1352,8 @@ export type PolicyRow = {
   moq_source: "VENDOR" | "COMPANY" | "NONE";
   moq_active: boolean;
   version_no: number;
+  /** D10 item carrying Rate (INR per base unit); optional. */
+  carrying_rate_per_uom?: number | null;
 };
 
 /** Policy used on `asOf`: the row with the latest effective_from <= asOf. */

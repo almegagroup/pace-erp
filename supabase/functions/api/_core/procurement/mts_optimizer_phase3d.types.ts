@@ -113,6 +113,8 @@ export type OptimizerAdvisoryBuy = Readonly<{
   recommended_po_qty_base: number | null;
   recommended_po_by: string | null;
   estimated_plant_eta: string | null;
+  /** Day the cover falls to Target — when the material is needed (null for non-buy statuses). */
+  need_date: string | null;
   lots: readonly OptimizerPlannedLot[];
   total_lead_time_days: number | null;
   status: "NO_BUY" | "UNKNOWN_POLICY" | "UNKNOWN_LEAD_TIME" | "ADVISORY" | "ADVISORY_LATE";

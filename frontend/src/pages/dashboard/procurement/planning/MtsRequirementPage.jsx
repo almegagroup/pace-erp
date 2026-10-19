@@ -1336,6 +1336,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
   const plan = planningQ.data ?? null;
   const [showNoBuy, setShowNoBuy] = useState(false);
   const [dailyMaterial, setDailyMaterial] = useState("");
+  const [costOpen, setCostOpen] = useState("");
   const [saving, setSaving] = useState(false);
   const buys = useMemo(() => (plan?.buys ?? []).filter((b) => showNoBuy || b.status !== "NO_BUY"), [plan, showNoBuy]);
   const materialsWithDaily = useMemo(() => {
@@ -1368,7 +1369,16 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "recommended_po_by", label: "PO By", width: "100px", render: (b) => dash(b.recommended_po_by) },
     { key: "estimated_plant_eta", label: "Plant ETA", width: "100px", render: (b) => dash(b.estimated_plant_eta) },
     { key: "lots", label: "Delivery Lots", width: "220px", render: (b) => ((b.lots ?? []).length ? b.lots.map((l) => `${l.plant_eta}: ${fmtQty(l.qty_base)}`).join(" · ") : "—"), copyValue: (b) => (b.lots ?? []).map((l) => `${l.plant_eta}:${l.qty_base}`).join(" ") },
-    { key: "vendor_label", label: "Vendor (fastest feasible)", width: "220px", render: (b) => dash(b.vendor_label) },
+    { key: "vendor_label", label: "Vendor", width: "220px", render: (b) => dash(b.vendor_label) },
+    { key: "vendor_basis", label: "Vendor basis", width: "140px", render: (b) => ({ LOWEST_TOTAL_COST: "Lowest total cost", FASTEST_FEASIBLE: "Fastest (cost unknown)" }[b.vendor_basis] ?? "—") },
+    {
+      key: "cost_btn", label: "Cost compare", width: "110px", filterable: false,
+      render: (b) => ((b.cost_options ?? []).length ? (
+        <button type="button" onClick={() => setCostOpen((c) => (c === `${b.material_id}|${b.sequence}` ? "" : `${b.material_id}|${b.sequence}`))} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">
+          {costOpen === `${b.material_id}|${b.sequence}` ? "Hide" : `${b.cost_options.length} vendor(s)`}
+        </button>
+      ) : "—"),
+    },
     { key: "total_lead_time_days", label: "Lead (booking + route)", width: "140px", render: (b) => (b.total_lead_time_days === null ? "—" : `${b.total_lead_time_days} d${b.booking_time_days ? ` (incl. ${b.booking_time_days} booking)` : ""}`), copyValue: (b) => b.total_lead_time_days ?? "" },
     { key: "reason", label: "Why", width: "360px" },
   ];
@@ -1415,7 +1425,15 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
 
       <section className="grid gap-1">
         <h3 className="text-sm font-semibold text-slate-800">Buy recommendations</h3>
-        <ErpDenseGrid {...GRID_PROPS} columns={buyColumns} rows={buys} rowKey={(b) => `${b.material_id}|${b.sequence}|${b.status}`} emptyMessage={planningQ.isLoading ? "Calculating…" : "No buy needed in CM + NM."} maxHeight="40vh" />
+        <ErpDenseGrid
+          {...GRID_PROPS}
+          columns={buyColumns}
+          rows={buys}
+          rowKey={(b) => `${b.material_id}|${b.sequence}|${b.status}`}
+          renderExpandedRow={(b) => (costOpen === `${b.material_id}|${b.sequence}` ? <CostCompare options={b.cost_options} basis={plan?.cost_basis} uom={b.uom} /> : null)}
+          emptyMessage={planningQ.isLoading ? "Calculating…" : "No buy needed in CM + NM."}
+          maxHeight="40vh"
+        />
       </section>
 
       {(plan?.arrival_flags ?? []).length > 0 ? (
@@ -1439,6 +1457,33 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
         </select>
         {dailyMaterial ? <ErpDenseGrid {...GRID_PROPS} columns={dailyColumns} rows={dailyRows} rowKey={(r) => r.day} maxHeight="50vh" /> : null}
       </section>
+    </div>
+  );
+}
+
+/** D8/D10/D11: per-vendor total cost for one buy (advisory). */
+function CostCompare({ options, basis, uom }) {
+  const columns = [
+    { key: "rank", label: "Rank", width: "50px", render: (o) => (o.rank ?? "—") },
+    { key: "vendor_label", label: "Vendor", width: "220px" },
+    { key: "feasible", label: "On time", width: "70px", render: (o) => (o.feasible ? "Yes" : <span className="text-rose-700">No</span>) },
+    { key: "lead_time_days", label: "Lead (d)", width: "70px", align: "right", render: (o) => (o.lead_time_days ?? "—") },
+    { key: "unit_price_inr", label: `Price ₹/${uom ?? "unit"}`, width: "110px", align: "right", render: (o) => (o.unit_price_inr === null ? "—" : `${fmtQty(o.unit_price_inr)}${o.currency && o.currency !== "INR" ? ` (${o.currency} @ ${o.fx_inr ?? "?"})` : ""}`) },
+    { key: "landed_adder", label: "Landed ₹/unit", width: "120px", align: "right", render: (o) => (o.landed_adder === null ? "—" : `${fmtQty(o.landed_adder)}${o.landed_basis === "PROVISIONAL" ? " (draft)" : ""}`) },
+    { key: "days_money_tied", label: "Days money tied", width: "120px", align: "right", render: (o) => (o.days_money_tied ?? "—") },
+    { key: "financing_per_unit", label: "Interest ₹/unit", width: "110px", align: "right", render: (o) => (o.financing_per_unit === null ? "—" : fmtQty(o.financing_per_unit)) },
+    { key: "total_per_unit", label: "Total ₹/unit", width: "110px", align: "right", render: (o) => (o.total_per_unit === null ? "—" : <strong>{fmtQty(o.total_per_unit)}</strong>) },
+    { key: "order_qty", label: "Order qty", width: "110px", align: "right", render: (o) => (o.order_qty === null ? "—" : fmtQty(o.order_qty)) },
+    { key: "excess_cost", label: "MOQ excess cost ₹", width: "130px", align: "right", render: (o) => (o.excess_cost === null ? "—" : fmtQty(o.excess_cost)) },
+    { key: "total_cost", label: "Total cost ₹", width: "130px", align: "right", render: (o) => (o.total_cost === null ? "—" : <strong>{fmtQty(o.total_cost)}</strong>) },
+    { key: "missing", label: "Not known", width: "220px", render: (o) => ((o.missing ?? []).length ? <span className="text-amber-700">{o.missing.join(", ")}</span> : "") },
+  ];
+  return (
+    <div className="grid gap-1 bg-slate-50 p-2">
+      <span className="text-xs text-slate-600">
+        Interest {basis?.interest_pct ?? "not set"}% · customer pays in {basis?.customer_credit_days ?? "?"} days · advisory: you decide the vendor.
+      </span>
+      <ErpDenseGrid columns={columns} rows={options ?? []} rowKey={(o) => o.vendor_label} fitColumnWidths />
     </div>
   );
 }

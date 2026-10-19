@@ -210,7 +210,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
               if (leadTime === null) {
                 materialBuys.push(freeze({
                   material_id: materialId, sequence, required_qty_base: required, recommended_po_qty_base: orderQty, recommended_po_by: null,
-                  estimated_plant_eta: day, lots: [], total_lead_time_days: null, status: "UNKNOWN_LEAD_TIME",
+                  estimated_plant_eta: day, need_date: day, lots: [], total_lead_time_days: null, status: "UNKNOWN_LEAD_TIME",
                   reason: "Lead time is missing (vendor route lead time / Booking Time); PO-by date is unknown and no lot is projected.", advisory_only: true as const,
                 }));
                 pendingUntil = allDays.length; // one unknown-lead-time recommendation is enough
@@ -238,7 +238,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
                 }
                 materialBuys.push(freeze({
                   material_id: materialId, sequence, required_qty_base: required, recommended_po_qty_base: orderQty,
-                  recommended_po_by: late ? input.as_of : poBy, estimated_plant_eta: eta, lots: plannedLots, total_lead_time_days: leadTime,
+                  recommended_po_by: late ? input.as_of : poBy, estimated_plant_eta: eta, need_date: day, lots: plannedLots, total_lead_time_days: leadTime,
                   status: late ? "ADVISORY_LATE" : "ADVISORY",
                   reason: late
                     ? `PO-by date ${poBy} has already passed; ordering today arrives ${eta}. The cover gap until then stays visible.`
@@ -270,13 +270,13 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
     if (!policy || !anyCoverage) {
       buys.push(freeze({
         material_id: materialId, sequence: 0, required_qty_base: Math.max(0, roundQty(-balance)), recommended_po_qty_base: null, recommended_po_by: null,
-        estimated_plant_eta: null, lots: [], total_lead_time_days: leadTime, status: "UNKNOWN_POLICY",
+        estimated_plant_eta: null, need_date: null, lots: [], total_lead_time_days: leadTime, status: "UNKNOWN_POLICY",
         reason: "Target/Critical policy is missing; no new-buy quantity is authorized.", advisory_only: true as const,
       }));
     } else if (materialBuys.length === 0) {
       buys.push(freeze({
         material_id: materialId, sequence: 0, required_qty_base: 0, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null,
-        lots: [], total_lead_time_days: leadTime, status: "NO_BUY", reason: "Projected cover stays above Target through the horizon.", advisory_only: true as const,
+        need_date: null, lots: [], total_lead_time_days: leadTime, status: "NO_BUY", reason: "Projected cover stays above Target through the horizon.", advisory_only: true as const,
       }));
     } else buys.push(...materialBuys);
   }

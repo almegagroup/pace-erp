@@ -24,6 +24,9 @@ export type VendorTerm = {
   route_days: number | null;
   last_price: number | null;
   currency: string | null;
+  /** Default payment term of this vendor-material: credit days; advance = paid before receipt. */
+  credit_days?: number | null;
+  advance?: boolean;
 };
 
 export type GroupAssignment = {
@@ -71,6 +74,8 @@ export function assemblePlanningInput(args: {
   selections: ReadonlyMap<string, ReadonlySet<string>>;
   /** policy MOQ in base unit (fallback when no vendor MOQ). */
   policyMoqBase: ReadonlyMap<string, number | null>;
+  /** Cost-ranked vendor per material (pass 2); absent = fastest feasible vendor. */
+  vendorOverride?: ReadonlyMap<string, string>;
 }): PlanningAssembly {
   const { calendar } = args;
   const inHorizon = (day: string) => day >= calendar.asOf && day <= calendar.nmEnd;
@@ -91,7 +96,9 @@ export function assemblePlanningInput(args: {
     for (const [index, event] of row.inbound_events.entries()) {
       arrivals.push({ source_key: `A|${id}|${index}|${event.reference}`, material_id: id, eta_to_plant: event.date, qty_base: event.qty, lifecycle_kind: event.kind });
     }
-    const vendor = chooseVendor(args.vendorTerms.get(id) ?? []);
+    const terms = args.vendorTerms.get(id) ?? [];
+    const override = args.vendorOverride?.get(id);
+    const vendor = (override ? terms.find((t) => t.vendor_id === override) : undefined) ?? chooseVendor(terms);
     chosen.set(id, vendor);
     const versions = args.policies.filter((p) => p.material_id === id)
       .map((p) => ({ effective_from: p.effective_from, target_days: p.target_cov_days, critical_days: p.critical_cov_days }));
