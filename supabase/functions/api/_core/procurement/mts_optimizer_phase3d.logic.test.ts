@@ -30,3 +30,8 @@ Deno.test("lead time determines advisory PO-by date without adding processing tw
   const buy = result.advisory_buys[0];
   equal([buy.status, buy.estimated_plant_eta, buy.recommended_po_by, buy.recommended_po_qty_base], ["ADVISORY", "2026-10-20", "2026-10-17", 25], "configured lead time is used once");
 });
+
+Deno.test("missing Target/Critical policy stays UNKNOWN even when current stock is positive", () => {
+  const result = projectDailyCoverage(input({ policies: [] }));
+  equal(result.advisory_buys[0].status, "UNKNOWN_POLICY", "policy absence cannot silently become a no-buy decision");
+});

@@ -84,9 +84,12 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
     const criticalDay = criticalFloor === null ? null : first(criticalFloor);
     const targetDay = targetFloor === null ? null : first(targetFloor);
     risks.push(freeze({ material_id: materialId, first_shortage_day: shortageDay, first_below_critical_day: criticalDay, first_below_target_day: targetDay, projected_closing_qty_base: balance, unresolved_group_pool_qty_base: roundQty(unresolvedGroupQty) }));
+    if (!policy || policy.target_days === null || policy.critical_days === null) {
+      buys.push(freeze({ material_id: materialId, required_qty_base: Math.max(0, roundQty(-balance)), recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null, status: "UNKNOWN_POLICY", reason: "Target/Critical policy is missing; no new-buy quantity is authorized.", advisory_only: true as const }));
+      continue;
+    }
     const required = Math.max(0, roundQty((targetFloor ?? 0) - balance));
     if (required <= EPSILON) { buys.push(freeze({ material_id: materialId, required_qty_base: 0, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null, status: "NO_BUY", reason: "Projected closing balance meets the available target policy.", advisory_only: true as const })); continue; }
-    if (!policy || policy.target_days === null || policy.critical_days === null) { buys.push(freeze({ material_id: materialId, required_qty_base: required, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null, status: "UNKNOWN_POLICY", reason: "Target/Critical policy is missing; no new-buy quantity is authorized.", advisory_only: true as const })); continue; }
     if (policy.configured_lead_time_days === null || !Number.isInteger(policy.configured_lead_time_days) || policy.configured_lead_time_days < 0) { buys.push(freeze({ material_id: materialId, required_qty_base: required, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null, status: "UNKNOWN_LEAD_TIME", reason: "Configured plant lead time is missing or invalid; PO-by date is unknown.", advisory_only: true as const })); continue; }
     const eta = shortageDay ?? input.horizon_end;
     buys.push(freeze({ material_id: materialId, required_qty_base: required, recommended_po_qty_base: applyOrderConstraints(required, policy), recommended_po_by: addDays(eta, -policy.configured_lead_time_days), estimated_plant_eta: eta, status: "ADVISORY", reason: "Deterministic target-floor replenishment; lead time already includes processing and plant delivery.", advisory_only: true as const }));
