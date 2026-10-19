@@ -72,6 +72,19 @@ accepted `main` commit `12762593`; it is not an integration candidate. Its
 remaining documentation conflict-resolution commit must not be used to bypass
 the branch workflow.
 
+### Recorded PO22 validation evidence
+
+| Commit range | Exact command / check | Result |
+|---|---|---|
+| `74c406d8` + `40cc0b63`, rerun after register creation | `deno test --no-check supabase/functions/api/_core/procurement/mts_optimizer_phase3b_receiving.logic.test.ts supabase/functions/api/_core/procurement/mts_optimizer_phase3b.persistence.test.ts supabase/functions/api/_core/procurement/mts_optimizer_input.logic.test.ts supabase/functions/api/_core/procurement/mts_optimizer_phase3b.logic.test.ts supabase/functions/api/_core/procurement/mts_requirement.logic.test.ts` | **57 passed, 0 failed** |
+| `74c406d8` + `40cc0b63` | `deno check` over the new receiving, source-reader, persistence and handler modules | Pass |
+| `74c406d8` | `node scripts/route-acl-registry-guard.mjs`, `node scripts/company-scope-guard.mjs`, `node scripts/company-scope-write-acl-guard.mjs` | Pass; existing unrelated registry warnings retained |
+| `74c406d8` | `npm.cmd run build` in `frontend/` | Pass; existing duplicate JSX attribute and bundle-size warnings retained |
+| `74c406d8` | `deno check supabase/functions/api/_routes/procurement.routes.ts` | Not a Phase 3B failure: 96 pre-existing errors in unrelated procurement handlers. New direct modules type-check cleanly. |
+
+No live database query, write, migration application, ACL provisioning,
+deployment, or promotion was part of this evidence.
+
 ## Cross-module coordination procedure
 
 1. **Register first.** Before a task changes code, create/update one row in
