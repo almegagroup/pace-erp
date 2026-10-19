@@ -1,55 +1,96 @@
-import { applyOrderConstraints, projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
-import type { OptimizerProjectionInput } from "./mts_optimizer_phase3d.types.ts";
+import { applyOrderConstraints, projectDailyCoverage, splitIntoLots, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import type { OptimizerMaterialPlanningPolicy, OptimizerProjectionInput } from "./mts_optimizer_phase3d.types.ts";
 
 function equal(actual: unknown, expected: unknown, message: string) { if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${message}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`); }
-const policy = (id = "M1") => ({ material_id: id, target_days: 4, critical_days: 2, vendor_moq_qty_base: 20, order_multiple_qty_base: 25, configured_lead_time_days: 3 });
-function input(overrides: Partial<OptimizerProjectionInput> = {}): OptimizerProjectionInput { return { as_of: "2026-10-19", horizon_end: "2026-10-24", opening_qty_by_material: { M1: 10 }, daily_demand: [{ source_key: "d1", material_id: "M1", required_by: "2026-10-19", qty_base: 5 }, { source_key: "d2", material_id: "M1", required_by: "2026-10-20", qty_base: 6 }], confirmed_arrivals: [], policies: [policy()], ...overrides }; }
+function policy(overrides: Partial<OptimizerMaterialPlanningPolicy> = {}): OptimizerMaterialPlanningPolicy {
+  return { material_id: "M1", target_days: 5, critical_days: 2, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, route_lead_time_days: 3, booking_time_days: null, ...overrides };
+}
+function daily(qty: number, from = "2026-10-01", to = "2026-10-31", materialId: string | null = "M1") {
+  const out = [];
+  for (let d = new Date(`${from}T00:00:00Z`); d.toISOString().slice(0, 10) <= to; d = new Date(d.getTime() + 86_400_000)) {
+    const day = d.toISOString().slice(0, 10);
+    out.push({ source_key: `${materialId}:${day}`, material_id: materialId, required_by: day, qty_base: qty });
+  }
+  return out;
+}
+function input(overrides: Partial<OptimizerProjectionInput> = {}): OptimizerProjectionInput {
+  return { as_of: "2026-10-01", horizon_end: "2026-10-31", opening_qty_by_material: { M1: 10 }, daily_demand: daily(1), confirmed_arrivals: [], policies: [policy()], ...overrides };
+}
+const row = (result: ReturnType<typeof projectDailyCoverage>, day: string, id = "M1") => result.rows.find((r) => r.material_id === id && r.day === day)!;
 
 Deno.test("MOQ and order multiple are distinct: 28 at a 25 multiple recommends 50", () => {
-  equal(applyOrderConstraints(28, policy()), 50, "round to enforceable multiple after MOQ");
-  equal(applyOrderConstraints(1, policy()), 25, "MOQ 20 is then rounded to 25 multiple");
+  equal(applyOrderConstraints(28, policy({ vendor_moq_qty_base: 20, order_multiple_qty_base: 25 })), 50, "round to enforceable multiple after MOQ");
+  equal(applyOrderConstraints(1, policy({ vendor_moq_qty_base: 20, order_multiple_qty_base: 25 })), 25, "MOQ 20 is then rounded to 25 multiple");
+  equal(splitIntoLots(50, 25), [25, 25], "50 = 25 + 25 lots");
+  equal(splitIntoLots(60, 25), [25, 25, 10], "remainder lot");
+});
+
+Deno.test("D6: total lead time = Booking Time (blank = 0) + route; else configured total", () => {
+  equal(totalLeadTimeDays(policy({ booking_time_days: 20, route_lead_time_days: 35 })), 55, "booking + route");
+  equal(totalLeadTimeDays(policy({ booking_time_days: null, route_lead_time_days: 35 })), 35, "blank booking = 0");
+  equal(totalLeadTimeDays(policy({ route_lead_time_days: null, configured_lead_time_days: 40 })), 40, "configured total");
+  equal(totalLeadTimeDays(policy({ route_lead_time_days: null, configured_lead_time_days: null })), null, "unknown");
 });
 
 Deno.test("confirmed ETA is projected on its plant date but is never executable Store stock", () => {
-  const result = projectDailyCoverage(input({ confirmed_arrivals: [{ source_key: "csn", material_id: "M1", eta_to_plant: "2026-10-20", qty_base: 12, lifecycle_kind: "IN_TRANSIT" }] }));
-  const day = result.rows.find((row) => row.material_id === "M1" && row.day === "2026-10-20")!;
-  equal([day.opening_qty_base, day.confirmed_arrival_qty_base, day.closing_qty_base, day.executable_arrival], [5, 12, 11, false], "arrival affects projection only on ETA");
+  const result = projectDailyCoverage(input({ policies: [policy({ target_days: 1, critical_days: 0 })], confirmed_arrivals: [{ source_key: "csn", material_id: "M1", eta_to_plant: "2026-10-03", qty_base: 12, lifecycle_kind: "IN_TRANSIT" }] }));
+  const day = row(result, "2026-10-03");
+  equal([day.opening_qty_base, day.confirmed_arrival_qty_base, day.closing_qty_base, day.min_stock_qty_base, day.executable_arrival], [8, 12, 19, 7, false], "arrival affects projection only on ETA; min stock excludes it");
 });
 
-Deno.test("unknown ETA and material-null group demand cannot manufacture material supply", () => {
+Deno.test("D5: passed or missing CSN ETA is assumed today, flagged, never dropped", () => {
+  const result = projectDailyCoverage(input({ confirmed_arrivals: [
+    { source_key: "late", material_id: "M1", eta_to_plant: "2026-09-25", qty_base: 7, lifecycle_kind: "IN_TRANSIT" },
+    { source_key: "none", material_id: "M1", eta_to_plant: null, qty_base: 3, lifecycle_kind: "IN_TRANSIT" },
+  ] }));
+  equal(row(result, "2026-10-01").confirmed_arrival_qty_base, 10, "both counted on as_of");
+  equal(result.arrival_flags.map((f) => [f.source_key, f.reason, f.assumed_eta]), [["late", "ETA_PASSED", "2026-10-01"], ["none", "ETA_MISSING", "2026-10-01"]], "user is told to update CSN Tracker");
+});
+
+Deno.test("group-pool demand is reported per group and not copied onto any material", () => {
   const result = projectDailyCoverage(input({
-    daily_demand: [{ source_key: "pool", material_id: null, required_by: "2026-10-19", qty_base: 9 }],
-    confirmed_arrivals: [{ source_key: "unknown", material_id: "M1", eta_to_plant: null, qty_base: 100, lifecycle_kind: "IN_TRANSIT" }],
+    opening_qty_by_material: { M1: 10, M2: 10 },
+    daily_demand: [{ source_key: "pool", material_id: null, group_id: "G1", required_by: "2026-10-02", qty_base: 9 }, { source_key: "pool2", material_id: null, group_id: "G2", required_by: "2026-10-03", qty_base: 4 }],
+    policies: [policy(), policy({ material_id: "M2" })],
   }));
-  equal(result.rows.find((row) => row.day === "2026-10-19")!.closing_qty_base, 10, "unassigned group demand and unknown ETA are not assigned to M1");
-  equal(result.risks[0].unresolved_group_pool_qty_base, 9, "pool shortage remains explicit");
+  equal(result.group_pool_risks.map((g) => [g.group_id, g.unresolved_qty_base, g.first_day]), [["G1", 9, "2026-10-02"], ["G2", 4, "2026-10-03"]], "per group");
+  equal([row(result, "2026-10-31", "M1").closing_qty_base, row(result, "2026-10-31", "M2").closing_qty_base], [10, 10], "pool not assigned to members");
+  equal(Object.keys(result.risks[0]).includes("unresolved_group_pool_qty_base"), false, "no company-wide pool copy on material risk");
 });
 
-Deno.test("lead time determines advisory PO-by date without adding processing twice", () => {
-  const result = projectDailyCoverage(input());
-  const buy = result.advisory_buys[0];
-  equal([buy.status, buy.estimated_plant_eta, buy.recommended_po_by, buy.recommended_po_qty_base], ["ADVISORY", "2026-10-20", "2026-10-17", 25], "configured lead time is used once");
+Deno.test("D2: lot triggers when cover falls to Target (inclusive); MOQ excess carries forward", () => {
+  const result = projectDailyCoverage(input({ policies: [policy({ vendor_moq_qty_base: 10 })] }));
+  const buys = result.advisory_buys.filter((b) => b.status === "ADVISORY");
+  equal(buys.map((b) => [b.sequence, b.estimated_plant_eta, b.recommended_po_by, b.recommended_po_qty_base]), [[1, "2026-10-05", "2026-10-02", 10], [2, "2026-10-15", "2026-10-12", 10], [3, "2026-10-25", "2026-10-22", 10]], "cover 5 = Target triggers; next order only after the 10 is used");
+  equal([row(result, "2026-10-05").planned_lot_qty_base, row(result, "2026-10-05").closing_qty_base, row(result, "2026-10-05").max_cover_days], [10, 15, 15], "lot lands on its ETA");
+  equal(result.risks[0].first_shortage_day, null, "no stock-out");
 });
 
-Deno.test("arrival target is the first Critical/Target coverage breach, not first negative stock", () => {
-  const result = projectDailyCoverage(input({
-    opening_qty_by_material: { M1: 10 },
-    horizon_end: "2026-10-23",
-    daily_demand: [
-      { source_key: "d1", material_id: "M1", required_by: "2026-10-19", qty_base: 3 },
-      { source_key: "d2", material_id: "M1", required_by: "2026-10-20", qty_base: 3 },
-      { source_key: "d3", material_id: "M1", required_by: "2026-10-21", qty_base: 3 },
-      { source_key: "d4", material_id: "M1", required_by: "2026-10-22", qty_base: 3 },
-    ],
-    policies: [{ ...policy(), target_days: 2, critical_days: 1, configured_lead_time_days: 2 }],
-  }));
-  const risk = result.risks[0];
-  const buy = result.advisory_buys[0];
-  equal([risk.first_below_target_day, risk.first_below_critical_day, risk.first_shortage_day], ["2026-10-20", "2026-10-21", "2026-10-22"], "policy risks are distinct");
-  equal([buy.estimated_plant_eta, buy.recommended_po_by], ["2026-10-21", "2026-10-19"], "critical coverage breach drives the arrival target");
+Deno.test("PO-by already passed is ADVISORY_LATE: earliest arrival = today + lead time, gap stays visible", () => {
+  const result = projectDailyCoverage(input({ opening_qty_by_material: { M1: 3 }, policies: [policy({ vendor_moq_qty_base: 10, route_lead_time_days: 10 })] }));
+  const first = result.advisory_buys[0];
+  equal([first.status, first.recommended_po_by, first.estimated_plant_eta, first.lots[0].plant_eta], ["ADVISORY_LATE", "2026-10-01", "2026-10-11", "2026-10-11"], "late order flagged");
+  equal(result.risks[0].first_shortage_day, "2026-10-04", "shortage before the late lot is visible");
+  equal(row(result, "2026-10-11").planned_lot_qty_base, 10, "lot on earliest feasible day");
+});
+
+Deno.test("one 50 order arrives as dated 25 + 25 lots; the second lot is not a new PO", () => {
+  const result = projectDailyCoverage(input({ opening_qty_by_material: { M1: 40 }, daily_demand: daily(4), policies: [policy({ order_multiple_qty_base: 50, delivery_lot_qty_base: 25 })] }));
+  const first = result.advisory_buys[0];
+  equal([first.sequence, first.recommended_po_qty_base, first.lots.map((l) => [l.plant_eta, l.qty_base])], [1, 50, [["2026-10-05", 25], ["2026-10-11", 25]]], "lots dated by need");
+  equal(row(result, "2026-10-11").planned_lot_qty_base, 25, "second lot on its own date");
+});
+
+Deno.test("D3: Target/Critical are effective-dated per material", () => {
+  const result = projectDailyCoverage(input({ opening_qty_by_material: { M1: 100 }, policies: [policy({ coverage_versions: [{ effective_from: "2026-10-15", target_days: 10, critical_days: 4 }] })] }));
+  equal([row(result, "2026-10-14").target_days, row(result, "2026-10-15").target_days, row(result, "2026-10-15").critical_days], [5, 10, 4], "version applies from its date");
 });
 
 Deno.test("missing Target/Critical policy stays UNKNOWN even when current stock is positive", () => {
-  const result = projectDailyCoverage(input({ policies: [] }));
-  equal(result.advisory_buys[0].status, "UNKNOWN_POLICY", "policy absence cannot silently become a no-buy decision");
+  equal(projectDailyCoverage(input({ policies: [] })).advisory_buys[0].status, "UNKNOWN_POLICY", "policy absence cannot become no-buy");
+});
+
+Deno.test("missing lead time gives one UNKNOWN_LEAD_TIME recommendation, no fabricated PO-by", () => {
+  const result = projectDailyCoverage(input({ policies: [policy({ route_lead_time_days: null, configured_lead_time_days: null })] }));
+  equal(result.advisory_buys.map((b) => [b.status, b.recommended_po_by]), [["UNKNOWN_LEAD_TIME", null]], "single unknown");
 });
