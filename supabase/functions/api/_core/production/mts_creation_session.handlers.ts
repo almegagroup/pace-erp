@@ -35,8 +35,17 @@ function isMtsProductionDateWithinWindow(value: string): boolean {
   return value >= addDaysIso(today, -MTS_PRODUCTION_DATE_WINDOW_DAYS) && value <= today;
 }
 
+// Stroke-structure rejections are fixed by editing the Stroke, not by retrying
+// the page -- surface the real reason instead of the generic page message.
+const STROKE_ERROR_MESSAGES: Record<string, string> = {
+  PROD_PO_STROKE_DUPLICATE_LINE:
+    "Stroke master contains the same material twice (same dosage and storage location). Merge the duplicate lines in the Stroke, re-approve, then create the Process PO.",
+  PROD_PO_STROKE_DOSAGE_INVALID: "Stroke master dosage must total exactly 100% before a Process PO can be created.",
+  PROD_PO_MTS_PLAN_NO_STROKE_LINES: "Stroke master has no material lines.",
+};
+
 function sessionError(req: Request, ctx: ProdHandlerContext, code: string, status: number, message: string): Response {
-  return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
+  return errorResponse(code, STROKE_ERROR_MESSAGES[code] ?? message, ctx.request_id, "NONE", status, {}, req);
 }
 
 function createdResponse(data: unknown, requestId: string, req: Request): Response {
