@@ -1,6 +1,8 @@
 # Google Sheet Reference — formula-level PO22 verification
 **Source:** Native Google Sheets workbook `[SURFACE] REPORTS_ALL`, ID `1lm-FpAWzgECOb4PM7AIX8-1q9gUI10flqQmB17qAKgg`, inspected in FORMULA mode on 2026-10-19. Literal formulas are evidence of historic behavior, not necessarily the approved final implementation if brittle. This is a bounded sampling (header and example rows), **not exhaustive all tabs/all rows**.
 
+> **2026-10-19 update:** complete row-level formulas for CMP011 and CMP005 (all tabs) are in [CLAUDE-FINDINGS-2026-10-19-SHEETS-AND-STATE.md](CLAUDE-FINDINGS-2026-10-19-SHEETS-AND-STATE.md); that file supersedes this sampled note where they differ. CMP003 is still unread.
+
 ## Requirement tab
 - `C` Target Coverage Days. `D = ROUNDUP(C/2)` Critical Days in the reference.
 - `E` Current Stock Days from current stock `M` / prorata `AD`.

@@ -22,6 +22,7 @@ One readable place for the business owner, Codex, Claude, and ChatGPT to find:
 - [Business design & decisions master index](REQUIREMENTS-AND-DECISIONS.md)
 - [Complete approved contract traceability](APPROVED-CONTRACT-TRACEABILITY.md)
 - [Historic Google Sheet formula reference](GOOGLE-SHEET-FORMULA-REFERENCE.md)
+- [Claude findings 2026-10-19: full CMP011/CMP005 sheet formulas, sheet-vs-ERP comparison, live implementation state](CLAUDE-FINDINGS-2026-10-19-SHEETS-AND-STATE.md)
 - [28-requirement acceptance matrix](REQUIREMENT-ACCEPTANCE-MATRIX.md)
 - [Implementation snapshot and gap register](PROGRESS-SNAPSHOT.md)\n- [Complete historical Codex register copy](CODEX-INTEGRATION-REGISTER-SNAPSHOT.md)\n- [Commit-to-file inventory for all agent/codex changed paths](COMMIT-TO-FILE-MAP.md)
 - Existing detailed contracts: `docs/mts-planning/PO22-PHASE-2D-FINAL-OPTIMIZER-AND-STORE-CONTRACT.md`, PO22 Phase 3A/B contracts and reports.
