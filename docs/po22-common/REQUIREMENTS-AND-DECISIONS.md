@@ -1,6 +1,8 @@
 # PO22 Business Requirements and Decisions — Master Index (Consolidation In Progress)
 
 > **IMPORTANT — THIS FILE IS AN INDEX, NOT THE WHOLE SPECIFICATION.** For complete governing decisions, read the entire [approved Phase 2D contract](../mts-planning/PO22-PHASE-2D-FINAL-OPTIMIZER-AND-STORE-CONTRACT.md), [13-section contract traceability](APPROVED-CONTRACT-TRACEABILITY.md), [28-item requirement/acceptance matrix](REQUIREMENT-ACCEPTANCE-MATRIX.md), [formula-level historic spreadsheet reference](GOOGLE-SHEET-FORMULA-REFERENCE.md), and [implementation snapshot](PROGRESS-SNAPSHOT.md). Read these together; do not implement from the summary alone. The original Phase 2D contract's 22 acceptance tests remain normative. Later explicit owner decisions on independent company planning and user-created Sub-CSN supersede inconsistent illustrative cross-company examples.\n\n
+> **2026-10-19 owner decisions (R003 shown-not-counted, Requirement-tab column rules, group items with per-member dated Target/Critical, MOQ per material+vendor):** see [OWNER-DECISIONS-2026-10-19-REQUIREMENT-AND-GROUPS.md](OWNER-DECISIONS-2026-10-19-REQUIREMENT-AND-GROUPS.md). They override conflicting text below and in the Phase 2D contract.
+
 **Status: PARTIAL RECORD; source-contract and business-owner reconciliation pending.**
 This is a snapshot of established conversation decisions and repo-contract pointers, not a completed or newly approved design. Preserve `buildRequirementRows()`, existing CM/NM and NM Requirement Days calculations, and PO21 effective plan precedence.
 
