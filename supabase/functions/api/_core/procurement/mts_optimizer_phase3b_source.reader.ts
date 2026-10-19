@@ -14,6 +14,7 @@ import {
   verifyGrnReceivingCompany,
   verifyReservationIdentity,
   verifyStockLedgerIdentity,
+  verifyStoCsnReceiving,
   type ReconciledGateEvidence,
   type VerifiedLotIdentity,
   type VerifiedReservationIdentity,
@@ -40,6 +41,11 @@ export type VerifiedLifecycleIdentityRead = Readonly<{
     id: string; po_line_id: string; mother_csn_id: string | null; material_id: string;
     owning_company_id: string; receiving_company_id: string; status: string;
     disposition: "RECEIVING_COMPANY" | "OTHER_COMPANY_RECEIPT"; has_children: boolean;
+  }>[];
+  /** STO CSNs have no PO line by design and are therefore a separate source family. */
+  sto_csn_documents: readonly Readonly<{
+    id: string; source_company_id: string; receiving_company_id: string;
+    sto_line_id: string; material_id: string; status: string;
   }>[];
   /** A GRN proves receipt only for its own verified GE line; it is never new inbound. */
   grn_documents: readonly Readonly<{
@@ -232,6 +238,15 @@ export async function readOptimizerLifecycleIdentities(
     });
   }).sort((a, b) => a.id.localeCompare(b.id));
 
+  const selectedMaterialSet = [...new Set(selectedMaterialIds.filter(Boolean))];
+  const stoCsnRows = selectedMaterialSet.length === 0 ? [] : await fetchInChunks<DbRow>(selectedMaterialSet, (part) => serviceRoleClient.schema("erp_procurement").from("consignment_note")
+    .select("id,company_id,consignee_company_id,sto_line_id,material_id,status")
+    .eq("consignee_company_id", requestedCompanyId).not("sto_line_id", "is", null).in("material_id", part), 100);
+  const stoCsnDocuments = stoCsnRows.map((row) => verifyStoCsnReceiving({
+    id: value(row.id), source_company_id: value(row.company_id), receiving_company_id: value(row.consignee_company_id),
+    sto_line_id: value(row.sto_line_id), material_id: value(row.material_id), status: value(row.status),
+  }, requestedCompanyId)).sort((a, b) => a.id.localeCompare(b.id));
+
   const gateLineIds = gateInput.map((row) => row.gate_entry_line_id);
   const grnResults = await Promise.all([
     ...Array.from({ length: Math.ceil(gateLineIds.length / 100) }, (_, index) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
@@ -319,6 +334,7 @@ export async function readOptimizerLifecycleIdentities(
   return Object.freeze({
     gate_lines: gateEvidence,
     csn_documents: Object.freeze(csnDocuments),
+    sto_csn_documents: Object.freeze(stoCsnDocuments),
     grn_documents: Object.freeze(grnDocuments),
     po_lot_identities: Object.freeze(lotRecords.sort((a, b) => a.id.localeCompare(b.id)).map((row): VerifiedLotIdentity => Object.freeze(row))),
     po_lot_balance_identities: Object.freeze(lotBalances.sort((a, b) => a.lot_id.localeCompare(b.lot_id)).map((row): Readonly<{ lot_id: string; po_line_id: string; lot_number: string; balance_qty: number }> => Object.freeze(row))),

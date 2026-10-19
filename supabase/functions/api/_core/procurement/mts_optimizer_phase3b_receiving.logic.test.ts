@@ -5,6 +5,7 @@ import {
   verifyGrnReceivingCompany,
   verifyReservationIdentity,
   verifyStockLedgerIdentity,
+  verifyStoCsnReceiving,
   type VerifiedGateLine,
 } from "./mts_optimizer_phase3b_receiving.logic.ts";
 
@@ -84,4 +85,12 @@ Deno.test("GRN identity must match the verified receiving company", () => {
   let failed = false;
   try { verifyGrnReceivingCompany(grn, "CMP003"); } catch { failed = true; }
   assert(failed, "wrong GRN company fails closed");
+});
+
+Deno.test("STO CSN is separate from PO-line evidence and belongs only to its consignee", () => {
+  const csn = { id: "sto-csn-1", source_company_id: "CMP003", receiving_company_id: "CMP005", sto_line_id: "sto-line-1", material_id: "mat-1", status: "TRN" };
+  equal(verifyStoCsnReceiving(csn, "CMP005").status, "TRN", "actual STO consignee");
+  let failed = false;
+  try { verifyStoCsnReceiving(csn, "CMP003"); } catch { failed = true; }
+  assert(failed, "STO sender must not claim receiver supply");
 });

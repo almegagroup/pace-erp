@@ -50,7 +50,7 @@ for the fast-forward process.
 | Phase 2D optimizer/store contract | `main`: `843b47f` | Approved design | **Yes**, as a design contract | Document review contract, not deployment evidence | No solver implementation | Codex uses it as Phase 3+ contract |
 | Phase 3A normalization, immutable snapshots, fail-closed UOM/stock/inbound policy | `main`: `c7dfe79e`, `dc4a24e6` | Complete source-contract foundation | **Yes** | 13 normalization tests included in current 57-test run | Real source extraction remains a dependency | Codex preserves and regresses before every later phase |
 | Phase 3B pure adapter / table migration foundation | `main`: `ba8aca7e`, `02e4d6cd` | Partial accepted foundation | **Yes** for pure contracts/table migration only | 13 Phase 3B logic tests included in current run | API/reader/selection save were not in accepted baseline | Codex adds controlled implementation below |
-| Phase 3B physical identity readers (PO, GE, CSN/sub-CSN, GRN, lot, reservation, ledger), company scope, selection API, snapshot persistence | `agent/codex`: `74c406d8`, `40cc0b63`; overlapping review evidence `agent/chatgpt`: `e3247a24`…`02e2243a` | Implemented on Codex branch; reimplemented linearly, not history-integrated | **No** — pending explicit fast-forward promotion | 57/57 Deno tests; direct new-module type checks; route ACL/company-scope guards; frontend build | Needs source-line demand extractor, approved migration/ACL application, and live UAT. Whole procurement route type-check has 96 pre-existing unrelated errors. | Owner approves promotion when ready; Codex remains implementation owner |
+| Phase 3B physical identity readers (PO, GE, CSN/sub-CSN, GRN, lot, reservation, ledger), company scope, selection API, snapshot persistence | `agent/codex`: `74c406d8`, `40cc0b63`, pending STO-consignee hardening; overlapping review evidence `agent/chatgpt`: `e3247a24`…`02e2243a` | Implemented on Codex branch; reimplemented linearly, not history-integrated | **No** — pending explicit fast-forward promotion | 57/57 prior Deno tests; STO hardening regression pending commit | Bounded read-only production reconciliation confirmed PO/GE/GRN identity joins and identified STO CSNs as a separate, valid consignee-owned lifecycle family. Demand-line extraction and approved migration/ACL application remain pending. | Commit isolated STO correction; Codex remains implementation owner |
 | Phase 3C fixed/group joint dated allocation | None | Pending | No | Not started | Requires verified PO21 → product/ProdShade → Stroke/Pack-BOM line-grain source and Phase 3B acceptance | Owner decision after Phase 3B promotion/UAT gate; Codex |
 | Phase 3D coverage, consignments, MOQ/order multiple, PO-by / ETA recommendations | None | Pending | No | Not started | Depends on 3C plus datewise demand and vendor/event data | Sequentially after 3C; Codex |
 | Phase 3E PO22 planning UI, Store instructions, export/exceptions | None | Pending | No | Not started | Depends on 3D deterministic outputs and ACL rollout | Sequentially after 3D; Codex |
@@ -71,6 +71,23 @@ evidence.
 accepted `main` commit `12762593`; it is not an integration candidate. Its
 remaining documentation conflict-resolution commit must not be used to bypass
 the branch workflow.
+
+### Read-only production reconciliation evidence
+
+On 2026-10-19, bounded `SELECT` queries against the owner-authorized
+production project inspected only schema presence, company-scoped aggregate
+counts and lifecycle referential integrity for CMP003, CMP005 and CMP011. No
+credentials, identifiers, quantities or commercial values are retained here.
+
+| Purpose | Source tables | Outcome |
+|---|---|---|
+| Verify Phase 3B source availability | Planning, procurement, production and inventory tables named in the Phase 3B contract | Required source families exist; selection and snapshot tables are present but contain no run evidence yet. |
+| Verify PO/GE/GRN receiving lineage | `purchase_order_line`, `gate_entry_line`, `goods_receipt` | Bounded consistency checks found no missing matched receiver-GRN lineage for posted gate evidence. |
+| Verify CSN ownership rule | `consignment_note`, PO and STO lineage fields | Direct PO CSNs had expected PO-line lineage. Valid STO CSN patterns had no PO line by design and proved consignee ownership; reader now represents them separately and never mixes them with PO-line CSN evidence. |
+
+These checks are source-contract evidence only. They neither produce an input
+snapshot nor authorize a quantity, recommendation, migration, ACL change or
+operational action.
 
 ### Recorded PO22 validation evidence
 

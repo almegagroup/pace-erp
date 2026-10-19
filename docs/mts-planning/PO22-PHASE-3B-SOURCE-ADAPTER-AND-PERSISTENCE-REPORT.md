@@ -95,3 +95,13 @@ These routes require the proposed `PROC_MTS_OPTIMIZER_INPUT:VIEW` and `PROC_MTS_
 ### Remaining source-contract boundary
 
 Full persistent input capture deliberately remains server-side and unexposed until a dedicated, verified PO21 → product/ProdShade → stroke/Pack-BOM line-grain demand extractor can produce every `FIXED_EXCLUSIVE` / material-null `GROUP_POOL` record with source identities. The existing PO22 requirement loader is not repurposed or changed. This is a Phase 3B source dependency, not permission to fabricate dates, conversion factors, group-member allocations or lifecycle IDs.
+
+### 2026-10-19 STO consignee correction
+
+Bounded, read-only production lineage checks for CMP003, CMP005 and CMP011
+showed that a valid stock-transfer-order CSN may have no `po_line_id` by
+design. `mts_optimizer_phase3b_source.reader.ts` now reads that lifecycle
+family separately by its real CSN and STO-line identity, validates its actual
+consignee company, and does not route it through direct PO-line partitioning.
+It remains future evidence only; this correction creates neither stock,
+transfer instruction nor incoming-quantity credit.

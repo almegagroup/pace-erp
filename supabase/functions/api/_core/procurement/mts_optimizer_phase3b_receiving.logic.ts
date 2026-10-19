@@ -70,6 +70,28 @@ export function verifyGrnReceivingCompany(row: VerifiedGrnDocument, receivingCom
   return Object.freeze({ ...row, status: row.status.toUpperCase() });
 }
 
+export type VerifiedStoCsnDocument = Readonly<{
+  id: string;
+  source_company_id: string;
+  receiving_company_id: string;
+  sto_line_id: string;
+  material_id: string;
+  status: string;
+}>;
+
+/** STO consignment is future evidence for its actual consignee, never PO-line evidence. */
+export function verifyStoCsnReceiving(row: VerifiedStoCsnDocument, requestedCompanyId: string): VerifiedStoCsnDocument {
+  requiredId(row.id, "consignment_note.id");
+  requiredId(row.source_company_id, "consignment_note.company_id");
+  if (requiredId(row.receiving_company_id, "consignment_note.consignee_company_id") !== requiredId(requestedCompanyId, "requested_company_id")) {
+    throw new Error(`PHASE3B_STO_CSN_RECEIVING_COMPANY_MISMATCH:${row.id}`);
+  }
+  requiredId(row.sto_line_id, "consignment_note.sto_line_id");
+  requiredId(row.material_id, "consignment_note.material_id");
+  requiredId(row.status, "consignment_note.status");
+  return Object.freeze({ ...row, status: row.status.toUpperCase() });
+}
+
 const BLOCKED_GATE_STATUSES = new Set(["CANCELLED", "PRUNED"]);
 const POSTED_GATE_STATUSES = new Set(["GRN_POSTED"]);
 
