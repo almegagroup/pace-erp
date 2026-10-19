@@ -86,3 +86,19 @@ Owner states all data exists; Claude to verify location/fill-rate in PROD (read-
 
 ## D9 — All companies together
 CMP003, CMP005 and CMP011 go live together under the same rules. Company-specific differences are handled through manual/configurable data fields, not code differences. (This makes the CMP003 sheet `AA3` NM-Req-Days formula non-blocking: the ERP rule `min(NM days, max(0, Target − CM days left))` applies to all companies.)
+
+## D8 data check — PROD read-only, 2026-10-19 (Claude)
+| Need | PROD evidence | State |
+|---|---|---|
+| Vendor payment term (cash out) | Every PO in CMP003/005/011 has `payment_term_id`; 130/132 vendor-material rows have a default term; terms are CREDIT 10–90 days (+3 ADVANCE in CMP003) | ✅ present |
+| LC | No PO uses an LC term (`lc_type = N_A` everywhere, `lc_required` false), including the 10 import POs | ✅ no LC today (support kept for future terms) |
+| Customer payment term (cash in) | CMP003: 1,001 sales invoices since 2026-09-02, 1 customer, 15 days from invoice / from bill received. CMP005: 10 SOs, CMP011: 7 SOs, all 15 days, **0 sales invoices in ERP** | ⚠️ term present; CMP005/011 invoices not in ERP |
+| Actual customer collection date | No receipt/collection table; `sales_invoice` has no paid/received/due date column | ❌ missing — use term-based expected date unless a source (e.g. Tally) is provided |
+| "Bill received" date (PT-017 reference) | No column on `sales_invoice` | ❌ missing |
+| Actual vendor payment date | No AP payment table | ❌ missing — use term-based expected date |
+| Landed cost | CMP003 26 POSTED; CMP005 42 DRAFT; CMP011 4 POSTED + 39 DRAFT | ✅ present (DRAFT = provisional) |
+| Purchase price / currency | 90/132 vendor-material rows have last price; PO lines 249 INR + 13 USD; vendor-material currency defaults 127 INR / 5 USD | ⚠️ partial |
+| FX rate | No exchange-rate table | ❌ missing — manual input needed for USD |
+| Financing / interest rate | No table or field | ❌ missing — manual company setting needed |
+| Holding cost of safety stock | Target days exist (policy table); no holding-cost rate | ❌ rate missing — derive from interest rate (+ optional storage %) |
+| FG ↔ material linkage | Stroke Master (RM) + Pack BOM (PM) per SKU; PO21 plan has SKU but no customer | ✅ (customer per company, single customer in CMP003) |
