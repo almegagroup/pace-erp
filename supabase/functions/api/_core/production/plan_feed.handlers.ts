@@ -1651,14 +1651,19 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         resolveProdshadeMapForMaterials(materialIdsWithStroke),
         resolveProdshadeIdsFromSkuText(skusWithStrokeNoMaterial),
       ]),
-      serviceRoleClient
-        .schema("erp_production").from("plan_feed_packing_order_allocation")
-        .select("plan_feed_id, packing_order_id, allocated_qty_kg")
-        .in("plan_feed_id", foIds),
-      serviceRoleClient
-        .schema("erp_procurement").from("sales_order_map_allocation")
-        .select("id, fo_id")
-        .in("fo_id", foIds),
+      // A large company's Total Table can contain more than ~400 FOs. Passing
+      // every UUID in one PostgREST `.in()` places them in the GET URL and
+      // exceeds the proxy URL limit before the query reaches Postgres.
+      fetchInChunks<JsonRecord>(foIds, (chunk) =>
+        serviceRoleClient
+          .schema("erp_production").from("plan_feed_packing_order_allocation")
+          .select("plan_feed_id, packing_order_id, allocated_qty_kg")
+          .in("plan_feed_id", chunk)),
+      fetchInChunks<JsonRecord>(foIds, (chunk) =>
+        serviceRoleClient
+          .schema("erp_procurement").from("sales_order_map_allocation")
+          .select("id, fo_id")
+          .in("fo_id", chunk)),
     ]);
 
     const townByPartyId = new Map<string, string | null>();
@@ -1687,13 +1692,13 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     const strokesByKey = new Map<string, JsonRecord[]>();
     const activePoTypesByStrokeId = new Map<string, Set<string>>();
     if (prodshadeIds.length > 0) {
-      const { data: strokeRows, error: strokeErr } = await serviceRoleClient
-        .schema("erp_production").from("stroke_master")
-        .select("id, company_id, prodshade_material_id, stroke_number, po_type")
-        .in("prodshade_material_id", prodshadeIds);
-      if (strokeErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+      const strokeRows = await fetchInChunks<JsonRecord>(prodshadeIds, (chunk) =>
+        serviceRoleClient
+          .schema("erp_production").from("stroke_master")
+          .select("id, company_id, prodshade_material_id, stroke_number, po_type")
+          .in("prodshade_material_id", chunk));
       const strokeIds: string[] = [];
-      for (const s of (strokeRows ?? []) as JsonRecord[]) {
+      for (const s of strokeRows) {
         const key = `${s.company_id}|${s.prodshade_material_id}|${s.stroke_number}`;
         if (!strokesByKey.has(key)) strokesByKey.set(key, []);
         strokesByKey.get(key)!.push(s);
@@ -1711,11 +1716,10 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       }
     }
 
-    const { data: allocs, error: allocErr } = allocsResult;
-    if (allocErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+    const allocs = allocsResult;
 
     const allocByFo: Record<string, JsonRecord[]> = {};
-    for (const a of (allocs ?? []) as JsonRecord[]) {
+    for (const a of allocs) {
       const foId = String(a.plan_feed_id);
       if (!allocByFo[foId]) allocByFo[foId] = [];
       allocByFo[foId].push(a);
@@ -1725,9 +1729,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     // (was a hardcoded 0 placeholder before -- §83.18-REVISED's own note).
     // Traced SO Map allocation -> DO line -> POSTED Invoice line, never via
     // Packing PO FINAL status (that would misreport "produced" as "shipped").
-    const { data: foAllocationRows, error: foAllocationRowsErr } = foAllocationResult;
-    if (foAllocationRowsErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
-    const foByAllocationId = new Map(((foAllocationRows ?? []) as JsonRecord[]).map((row) => [String(row.id), String(row.fo_id)]));
+    const foByAllocationId = new Map(foAllocationResult.map((row) => [String(row.id), String(row.fo_id)]));
     const allocationIdsForDispatch = [...foByAllocationId.keys()];
 
     const dispatchedByFo = new Map<string, number>();
@@ -1783,25 +1785,25 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       }
     }
 
-    const poIds = [...new Set(((allocs ?? []) as JsonRecord[]).map((row) => String(row.packing_order_id ?? "")).filter(Boolean))];
+    const poIds = [...new Set(allocs.map((row) => String(row.packing_order_id ?? "")).filter(Boolean))];
     type BatchInfo = { batch_number: string; prodshade_name: string | null; stroke_number: string | null };
     const batchByPoId = new Map<string, BatchInfo>();
     if (poIds.length > 0) {
-      const { data: packingOrders, error: poErr } = await serviceRoleClient
-        .schema("erp_production").from("packing_order")
-        .select("id, process_order_id")
-        .in("id", poIds);
-      if (poErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
+      const packingOrders = await fetchInChunks<JsonRecord>(poIds, (chunk) =>
+        serviceRoleClient
+          .schema("erp_production").from("packing_order")
+          .select("id, process_order_id")
+          .in("id", chunk));
 
-      const processOrderIds = [...new Set(((packingOrders ?? []) as JsonRecord[]).map((row) => String(row.process_order_id ?? "")).filter(Boolean))];
+      const processOrderIds = [...new Set(packingOrders.map((row) => String(row.process_order_id ?? "")).filter(Boolean))];
       const batchByProcessOrderId = new Map<string, { batch_number: string; stroke_master_id: string | null }>();
       if (processOrderIds.length > 0) {
-        const { data: processOrders, error: procErr } = await serviceRoleClient
-          .schema("erp_production").from("process_order")
-          .select("id, batch_number, stroke_master_id")
-          .in("id", processOrderIds);
-        if (procErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
-        for (const row of (processOrders ?? []) as JsonRecord[]) {
+        const processOrders = await fetchInChunks<JsonRecord>(processOrderIds, (chunk) =>
+          serviceRoleClient
+            .schema("erp_production").from("process_order")
+            .select("id, batch_number, stroke_master_id")
+            .in("id", chunk));
+        for (const row of processOrders) {
           const batchNumber = toTrimmedString(row.batch_number);
           if (batchNumber) {
             batchByProcessOrderId.set(String(row.id), {
@@ -1821,14 +1823,14 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
       )];
       const strokeInfoByStrokeId = new Map<string, { prodshade_name: string | null; stroke_number: string | null }>();
       if (strokeMasterIds.length > 0) {
-        const { data: strokeRows, error: strokeErr } = await serviceRoleClient
-          .schema("erp_production").from("stroke_master")
-          .select("id, stroke_number, prodshade_material_id")
-          .in("id", strokeMasterIds);
-        if (strokeErr) throw new Error("PROD_PLAN_FEED_SUMMARY_FAILED");
-        const prodshadeMaterialIds = [...new Set(((strokeRows ?? []) as JsonRecord[]).map((r) => toTrimmedString(r.prodshade_material_id)).filter(Boolean))];
+        const strokeRows = await fetchInChunks<JsonRecord>(strokeMasterIds, (chunk) =>
+          serviceRoleClient
+            .schema("erp_production").from("stroke_master")
+            .select("id, stroke_number, prodshade_material_id")
+            .in("id", chunk));
+        const prodshadeMaterialIds = [...new Set(strokeRows.map((r) => toTrimmedString(r.prodshade_material_id)).filter(Boolean))];
         const prodshadeMaterialMap = await getMaterialMapByIds(prodshadeMaterialIds);
-        for (const row of (strokeRows ?? []) as JsonRecord[]) {
+        for (const row of strokeRows) {
           const prod = prodshadeMaterialMap.get(toTrimmedString(row.prodshade_material_id));
           strokeInfoByStrokeId.set(String(row.id), {
             prodshade_name: prod ? (toTrimmedString(prod.material_name) || toTrimmedString(prod.document_name) || null) : null,
@@ -1837,7 +1839,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         }
       }
 
-      for (const row of (packingOrders ?? []) as JsonRecord[]) {
+      for (const row of packingOrders) {
         const info = batchByProcessOrderId.get(String(row.process_order_id ?? ""));
         if (info) {
           const strokeInfo = info.stroke_master_id ? strokeInfoByStrokeId.get(info.stroke_master_id) : undefined;
