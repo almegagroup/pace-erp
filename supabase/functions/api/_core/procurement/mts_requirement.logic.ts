@@ -138,6 +138,44 @@ export type PlanLineVersion = {
 
 export type UrgentWindow = { qty: number; from: string; to: string };
 
+/**
+ * One effective PO21 plan line (exact customer_plan_line version) that makes
+ * up an SKU-month.  Superseded versions, cancelled entries and a ROLLING base
+ * replaced by a FINAL are never contributors.
+ *   BASE / ADDITIONAL — share the month pool in proportion to their qty.
+ *   URGENT_EXTRA      — adds its own qty inside its own window.
+ *   URGENT_FROM_PLAN  — re-phases pool qty into its window; adds nothing.
+ */
+export type PlanLineRef = {
+  source_id: string | null;
+  entry_id: string;
+  version_no: number;
+  plan_type: PlanLineVersion["plan_type"];
+  urgent_mode: PlanLineVersion["urgent_mode"];
+  role: "BASE" | "ADDITIONAL" | "URGENT_EXTRA" | "URGENT_FROM_PLAN";
+  qty: number;
+  from: string | null;
+  to: string | null;
+};
+
+/**
+ * The part of one demand quantity that comes from one effective plan line.
+ * `adds_qty=false` marks an Urgent FROM_PLAN line that only moved quantity
+ * into this day; its qty is already counted under the BASE/ADDITIONAL lines.
+ * Σ qty of the adds_qty=true contributions = the demand quantity.
+ */
+export type PlanLineContribution = {
+  source_id: string | null;
+  entry_id: string;
+  version_no: number;
+  plan_type: PlanLineVersion["plan_type"];
+  urgent_mode: PlanLineVersion["urgent_mode"];
+  role: PlanLineRef["role"];
+  sku_material_id: string;
+  adds_qty: boolean;
+  qty: number;
+};
+
 export type EffectiveSkuMonth = {
   plan_month: string;
   sku_material_id: string;
@@ -147,6 +185,8 @@ export type EffectiveSkuMonth = {
   urgent_extra: UrgentWindow[];
   urgent_from_plan: UrgentWindow[];
   effective_qty: number | null; // null = nothing entered (distinct from 0)
+  /** Exact effective plan-line versions behind this SKU-month (set by effectivePlanAt). */
+  contributors?: PlanLineRef[];
 };
 
 /**
@@ -190,6 +230,24 @@ export function effectivePlanAt(lines: PlanLineVersion[], demandAt: string | nul
     const additional = sum(additionals);
     const extra = urgentExtra.reduce((total, row) => total + row.qty, 0);
     const anyDemand = baseQty !== null || additionals.length > 0 || urgentExtra.length > 0;
+    const ref = (row: PlanLineVersion, role: PlanLineRef["role"]): PlanLineRef => ({
+      source_id: row.source_id ?? null,
+      entry_id: row.entry_id,
+      version_no: row.version_no,
+      plan_type: row.plan_type,
+      urgent_mode: row.urgent_mode,
+      role,
+      qty: Number(row.base_qty),
+      from: role === "URGENT_EXTRA" || role === "URGENT_FROM_PLAN" ? String(row.urgent_from_date) : null,
+      to: role === "URGENT_EXTRA" || role === "URGENT_FROM_PLAN" ? String(row.urgent_to_date) : null,
+    });
+    const byEntry = (a: PlanLineVersion, b: PlanLineVersion) => a.entry_id.localeCompare(b.entry_id);
+    const contributors: PlanLineRef[] = [
+      ...(finals.length > 0 ? finals : rollings).sort(byEntry).map((row) => ref(row, "BASE")),
+      ...additionals.sort(byEntry).map((row) => ref(row, "ADDITIONAL")),
+      ...group.filter((row) => row.plan_type === "URGENT" && row.urgent_mode === "EXTRA").sort(byEntry).map((row) => ref(row, "URGENT_EXTRA")),
+      ...group.filter((row) => row.plan_type === "URGENT" && row.urgent_mode === "FROM_PLAN").sort(byEntry).map((row) => ref(row, "URGENT_FROM_PLAN")),
+    ];
     result.push({
       plan_month,
       sku_material_id,
@@ -199,6 +257,7 @@ export function effectivePlanAt(lines: PlanLineVersion[], demandAt: string | nul
       urgent_extra: urgentExtra,
       urgent_from_plan: urgentFromPlan,
       effective_qty: anyDemand ? roundQty((baseQty ?? 0) + additional + extra) : null,
+      contributors,
     });
   }
   return result;
@@ -260,6 +319,63 @@ export function skuDailyDemand(entry: EffectiveSkuMonth, warnings: Warning[]): M
     }
   }
   return daily;
+}
+
+/**
+ * Splits skuDailyDemand() by effective plan line, day by day, using exactly the
+ * same phasing.  Σ adds_qty contributions per day = skuDailyDemand() for that
+ * day.  Never changes a quantity; attribution only.
+ */
+export function skuDailyContributions(entry: EffectiveSkuMonth): Map<string, PlanLineContribution[]> {
+  const monthFirst = entry.plan_month;
+  const monthLast = monthEnd(monthFirst);
+  const result = new Map<string, PlanLineContribution[]>();
+  if (entry.effective_qty === null) return result;
+  const refs = entry.contributors ?? [];
+  const spreadWindow = (daily: Map<string, number>, qty: number, from: string | null, to: string | null) => {
+    if (!from || !to || !spreadOver(daily, qty, from, to, monthFirst, monthLast)) spreadOver(daily, qty, monthFirst, monthLast, monthFirst, monthLast);
+  };
+  const push = (day: string, ref: PlanLineRef, adds: boolean, qty: number) => {
+    if (qty <= EPSILON) return;
+    const list = result.get(day) ?? [];
+    list.push({
+      source_id: ref.source_id, entry_id: ref.entry_id, version_no: ref.version_no, plan_type: ref.plan_type,
+      urgent_mode: ref.urgent_mode, role: ref.role, sku_material_id: entry.sku_material_id, adds_qty: adds, qty,
+    });
+    result.set(day, list);
+  };
+  const pool = (entry.base_qty ?? 0) + entry.additional_qty;
+  const fromPlanTotal = entry.urgent_from_plan.reduce((total, row) => total + row.qty, 0);
+  const movable = Math.min(fromPlanTotal, pool);
+  let scale = fromPlanTotal > EPSILON ? movable / fromPlanTotal : 0;
+  if (!Number.isFinite(scale)) scale = 0;
+
+  const poolDaily = new Map<string, number>();
+  spreadOver(poolDaily, pool - movable, monthFirst, monthLast, monthFirst, monthLast);
+  const rephased: Array<[PlanLineRef, Map<string, number>]> = [];
+  for (const ref of refs.filter((row) => row.role === "URGENT_FROM_PLAN")) {
+    const daily = new Map<string, number>();
+    spreadWindow(daily, ref.qty * scale, ref.from, ref.to);
+    for (const [day, qty] of daily) poolDaily.set(day, (poolDaily.get(day) ?? 0) + qty);
+    rephased.push([ref, daily]);
+  }
+  const poolRefs = refs.filter((row) => row.role === "BASE" || row.role === "ADDITIONAL");
+  const poolRefTotal = poolRefs.reduce((total, row) => total + row.qty, 0);
+  for (const day of [...poolDaily.keys()].sort()) {
+    const qty = poolDaily.get(day) ?? 0;
+    if (poolRefTotal > EPSILON) for (const ref of poolRefs) push(day, ref, true, qty * (ref.qty / poolRefTotal));
+    for (const [ref, daily] of rephased) push(day, ref, false, daily.get(day) ?? 0);
+  }
+  for (const ref of refs.filter((row) => row.role === "URGENT_EXTRA")) {
+    const daily = new Map<string, number>();
+    spreadWindow(daily, ref.qty, ref.from, ref.to);
+    for (const [day, qty] of daily) push(day, ref, true, qty);
+  }
+  return result;
+}
+
+function scaleContributions(list: readonly PlanLineContribution[], factor: number): PlanLineContribution[] {
+  return list.map((row) => ({ ...row, qty: row.qty * factor }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -346,6 +462,12 @@ export type DemandRecord = {
   group_id: string | null;
   use_primary: boolean | null;
   sort_key: string;
+  /**
+   * Effective PO21 plan-line versions behind this record, in this record's
+   * unit (RM/PM base).  Σ adds_qty qty = qty.  In a month with a Tab 2 period
+   * quantity override, RM shares follow each line's share of the month.
+   */
+  plan_line_contributions: PlanLineContribution[];
 };
 
 export type ExplosionInput = {
@@ -368,6 +490,8 @@ export type ExplosionResult = {
   exceptions: Warning[];
   prodshadeDaily: Map<string, Map<string, number>>; // prodshade → day → KG
   skuDailyKg: Map<string, Map<string, number>>;     // sku → day → KG
+  /** prodshade → day → plan-line contributions in KG (Σ adds_qty = prodshadeDaily). */
+  prodshadeDailyContributions: Map<string, Map<string, PlanLineContribution[]>>;
 };
 
 /** Use Primary for a Stroke × RM group in a month: latest decision on or before the month; none = Yes. */
@@ -453,6 +577,8 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
   const records: DemandRecord[] = [];
   const skuDailyKg = new Map<string, Map<string, number>>();
   const prodshadeDaily = new Map<string, Map<string, number>>();
+  const skuContribKg = new Map<string, Map<string, PlanLineContribution[]>>();
+  const prodshadeContrib = new Map<string, Map<string, PlanLineContribution[]>>();
   const months = [input.calendar.cmStart, input.calendar.nmStart];
   const exceptionKeys = new Set<string>();
   const addException = (key: string, warning: Warning) => {
@@ -489,6 +615,11 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
     const kgDaily = skuDailyKg.get(sku.sku_material_id) ?? new Map<string, number>();
     for (const [day, qty] of daily) kgDaily.set(day, (kgDaily.get(day) ?? 0) + qty * sku.kg_per_base_unit);
     skuDailyKg.set(sku.sku_material_id, kgDaily);
+    const contribDaily = skuContribKg.get(sku.sku_material_id) ?? new Map<string, PlanLineContribution[]>();
+    for (const [day, list] of skuDailyContributions(entry)) {
+      contribDaily.set(day, [...(contribDaily.get(day) ?? []), ...scaleContributions(list, sku.kg_per_base_unit)]);
+    }
+    skuContribKg.set(sku.sku_material_id, contribDaily);
   }
 
   // Prodshade day demand = Σ its SKUs, then Tab 2 period overrides per month.
@@ -497,8 +628,12 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
     const target = prodshadeDaily.get(prodshadeId) ?? new Map<string, number>();
     for (const [day, qty] of daily) target.set(day, (target.get(day) ?? 0) + qty);
     prodshadeDaily.set(prodshadeId, target);
+    const contribTarget = prodshadeContrib.get(prodshadeId) ?? new Map<string, PlanLineContribution[]>();
+    for (const [day, list] of skuContribKg.get(skuId) ?? []) contribTarget.set(day, [...(contribTarget.get(day) ?? []), ...list]);
+    prodshadeContrib.set(prodshadeId, contribTarget);
   }
   for (const [prodshadeId, daily] of prodshadeDaily) {
+    const contribDaily = prodshadeContrib.get(prodshadeId) ?? new Map<string, PlanLineContribution[]>();
     for (const month of months) {
       const periods = input.strokeSettings.get(`${month}|${prodshadeId}`) ?? [];
       const monthLast = monthEnd(month);
@@ -506,7 +641,28 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
       applyPeriodOverrides(monthDaily, month, periods, prodshadeId, warnings);
       for (const day of [...daily.keys()]) if (day >= month && day <= monthLast) daily.delete(day);
       for (const [day, qty] of monthDaily) daily.set(day, qty);
+      const overridden = periods.some((period) => period.planned_base_qty !== null && period.planned_base_qty !== undefined);
+      if (!overridden) continue;
+      // A Tab 2 period quantity re-phases the whole month: each plan line keeps
+      // its share of the month's planned quantity on every day.
+      const monthShares = new Map<string, PlanLineContribution>();
+      let monthTotal = 0;
+      for (const [day, list] of contribDaily) {
+        if (day < month || day > monthLast) continue;
+        for (const row of list) {
+          if (!row.adds_qty) continue;
+          const key = `${row.sku_material_id}|${row.entry_id}|${row.version_no}`;
+          const seen = monthShares.get(key);
+          monthShares.set(key, seen ? { ...seen, qty: seen.qty + row.qty } : { ...row });
+          monthTotal += row.qty;
+        }
+        contribDaily.delete(day);
+      }
+      if (monthTotal <= EPSILON) continue;
+      const shares = [...monthShares.values()];
+      for (const [day, qty] of monthDaily) contribDaily.set(day, scaleContributions(shares, qty / monthTotal));
     }
+    prodshadeContrib.set(prodshadeId, contribDaily);
   }
 
   // RM: each day uses the stroke of the Tab 2 period covering it, else the current stroke.
@@ -565,6 +721,7 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
         }
         const rmQty = (Number(line.dosage_pct) / 100) * qty;
         if (rmQty <= EPSILON) continue;
+        const dayContrib = prodshadeContrib.get(prodshadeId)?.get(day) ?? [];
         records.push({
           day,
           kind: "RM",
@@ -584,6 +741,7 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           group_id: line.material_group_id,
           use_primary: usePrimary,
           sort_key: `1|${label}|${String(line.display_order).padStart(6, "0")}|${line.stroke_line_id}`,
+          plan_line_contributions: scaleContributions(dayContrib, Number(line.dosage_pct) / 100),
         });
       }
     }
@@ -654,13 +812,14 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           group_id: line.material_group_id,
           use_primary: null,
           sort_key: `2|${skuId}|${line.material_id}`,
+          plan_line_contributions: scaleContributions(skuContribKg.get(skuId)?.get(day) ?? [], perOuterBase / kgPerOuter),
         });
       }
     }
   }
 
   records.sort((a, b) => a.day.localeCompare(b.day) || a.sort_key.localeCompare(b.sort_key));
-  return { records, warnings, exceptions, prodshadeDaily, skuDailyKg };
+  return { records, warnings, exceptions, prodshadeDaily, skuDailyKg, prodshadeDailyContributions: prodshadeContrib };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

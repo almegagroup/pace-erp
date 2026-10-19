@@ -24,8 +24,13 @@ export type OptimizerRequirementDemandEvidence = Readonly<{
   company_id: string;
   plan_month: string;
   as_of: string;
-  /** customer_plan_line ids read before effective-version precedence is applied. */
+  /**
+   * customer_plan_line ids of the EFFECTIVE versions only (FINAL over ROLLING,
+   * latest version, not cancelled) for CM+NM — the lines demand is built from.
+   */
   plan_line_source_ids: readonly string[];
+  /** Count of plan-line rows read before effective-version precedence. */
+  loaded_plan_line_count: number;
   demand: readonly OptimizerDemandSource[];
   group_members: readonly OptimizerGroupMember[];
   issues: readonly OptimizerDemandAdapterIssue[];
@@ -66,9 +71,10 @@ export async function readOptimizerRequirementDemandEvidence(
     const baseUnit = (info?.base_uom_code ?? "").toUpperCase();
     sku.kg_per_base_unit = !info ? null : baseUnit === "KG" ? 1 : buildToBaseFactors("KG", conversions.get(skuId) ?? [])[baseUnit] ?? null;
   }
+  const effective = effectivePlanAt(planLines, demandAt).filter((entry) => months.includes(entry.plan_month));
   const explosion = explodeDemand({
     calendar,
-    effective: effectivePlanAt(planLines, demandAt),
+    effective,
     skus: masters.skus,
     currentStrokeByProdshade: masters.currentStrokeByProdshade,
     strokes: masters.strokes,
@@ -84,7 +90,8 @@ export async function readOptimizerRequirementDemandEvidence(
     company_id: companyId,
     plan_month: planMonth,
     as_of: asOf,
-    plan_line_source_ids: Object.freeze(unique(planLines.map((line) => line.source_id ?? "")).sort()),
+    plan_line_source_ids: Object.freeze(unique(effective.flatMap((entry) => (entry.contributors ?? []).map((ref) => ref.source_id ?? ""))).sort()),
+    loaded_plan_line_count: planLines.length,
     demand: adapted.demand,
     group_members: adapted.group_members,
     issues: adapted.issues,

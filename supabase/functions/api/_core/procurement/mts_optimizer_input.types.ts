@@ -57,6 +57,23 @@ export type OptimizerDemandSource = {
   uom_evidence: OptimizerDemandUomEvidence | null;
   qty: number;
   uom_code: string;
+  /**
+   * Requirement-sourced demand only: the exact effective PO21 plan-line
+   * versions behind this quantity (same unit as qty; Σ adds_qty = qty).
+   */
+  plan_line_contributions?: readonly OptimizerPlanLineContribution[];
+};
+
+export type OptimizerPlanLineContribution = {
+  source_id: string;
+  entry_id: string;
+  version_no: number;
+  plan_type: "ROLLING" | "FINAL" | "ADDITIONAL" | "URGENT";
+  urgent_mode: "FROM_PLAN" | "EXTRA" | null;
+  role: "BASE" | "ADDITIONAL" | "URGENT_EXTRA" | "URGENT_FROM_PLAN";
+  sku_material_id: string;
+  adds_qty: boolean;
+  qty: number;
 };
 
 export type OptimizerStockSource = {

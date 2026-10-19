@@ -31,6 +31,8 @@ import {
   type PolicyRow,
   type RequirementInput,
   resolveUsePrimary,
+  type DemandRecord,
+  skuDailyContributions,
   skuDailyDemand,
   toMaterialBase,
   type Warning,
@@ -60,6 +62,7 @@ let seq = 0;
 function line(partial: Partial<PlanLineVersion>): PlanLineVersion {
   seq += 1;
   return {
+    source_id: partial.source_id,
     entry_id: partial.entry_id ?? `e${seq}`,
     version_no: partial.version_no ?? 1,
     plan_month: partial.plan_month ?? "2026-11-01",
@@ -444,4 +447,124 @@ Deno.test("Whole pipeline: deterministic, and a source change changes the result
   assertEqual(first.rows.map((row) => row.material_id), ["PM-BAG", "RM-A", "RM-B", "RM-C"], "universe rows, including zero-demand RM-C");
   const changed = buildRequirementRows({ ...input, stockRows: [{ material_id: "RM-A", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 600 }] });
   assert(canonicalJson(changed) !== canonicalJson(first), "stock change → different result");
+});
+
+// ── PO21 plan-line lineage (attribution only — numbers unchanged) ─────────
+function addsTotal(record: DemandRecord): number {
+  return record.plan_line_contributions.filter((row) => row.adds_qty).reduce((total, row) => total + row.qty, 0);
+}
+function bySource(records: DemandRecord[], adds = true): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const record of records) for (const row of record.plan_line_contributions) {
+    if (row.adds_qty !== adds) continue;
+    out[String(row.source_id)] = (out[String(row.source_id)] ?? 0) + row.qty;
+  }
+  for (const key of Object.keys(out)) out[key] = Math.round(out[key] * 1000) / 1000;
+  return out;
+}
+function conserving(records: DemandRecord[], message: string) {
+  assert(records.length > 0, `${message}: no records`);
+  for (const record of records) near(addsTotal(record), record.qty, `${message}: ${record.day} ${record.pool_key} contributions = qty`, 1e-6);
+}
+
+Deno.test("lineage: only effective versions contribute — Final over Rolling, latest version, cancelled dropped", () => {
+  const lines = [
+    line({ source_id: "R1", entry_id: "r", plan_type: "ROLLING", base_qty: 100, created_at: "2026-10-01T00:00:00Z" }),
+    line({ source_id: "F1v1", entry_id: "f", plan_type: "FINAL", base_qty: 300, created_at: "2026-10-05T00:00:00Z" }),
+    line({ source_id: "F1v2", entry_id: "f", version_no: 2, plan_type: "FINAL", base_qty: 310, created_at: "2026-10-06T00:00:00Z" }),
+    line({ source_id: "C1", entry_id: "c", plan_type: "ADDITIONAL", base_qty: 999, is_cancelled: true, created_at: "2026-10-09T00:00:00Z" }),
+  ];
+  const [now] = effectivePlanAt(lines, null);
+  assertEqual(now.contributors?.map((ref) => [ref.source_id, ref.version_no, ref.role]), [["F1v2", 2, "BASE"]], "latest FINAL version only");
+  const [then] = effectivePlanAt(lines, "2026-10-05T12:00:00Z");
+  assertEqual(then.contributors?.map((ref) => ref.source_id), ["F1v1"], "as-of demand time gives the version effective then");
+  const [early] = effectivePlanAt(lines, "2026-10-02T00:00:00Z");
+  assertEqual(early.contributors?.map((ref) => [ref.source_id, ref.role]), [["R1", "BASE"]], "Rolling before any Final");
+  const explosion = explodeDemand(baseInput({ effective: [now] }));
+  conserving(explosion.records, "Final v2");
+  const ids = new Set(explosion.records.flatMap((record) => record.plan_line_contributions.map((row) => row.source_id)));
+  assertEqual([...ids], ["F1v2"], "no superseded, rolling or cancelled line reaches demand");
+});
+
+Deno.test("lineage: Additional + Urgent Extra + Urgent From-Plan per day, conserved against skuDailyDemand", () => {
+  const [entry] = effectiveFor([
+    line({ source_id: "F", plan_type: "FINAL", base_qty: 300 }),
+    line({ source_id: "A", plan_type: "ADDITIONAL", base_qty: 60 }),
+    line({ source_id: "P", plan_type: "URGENT", urgent_mode: "FROM_PLAN", urgent_from_date: "2026-11-01", urgent_to_date: "2026-11-05", base_qty: 50 }),
+    line({ source_id: "X", plan_type: "URGENT", urgent_mode: "EXTRA", urgent_from_date: "2026-11-10", urgent_to_date: "2026-11-11", base_qty: 20 }),
+  ]);
+  const daily = skuDailyDemand(entry, []);
+  const contributions = skuDailyContributions(entry);
+  for (const [day, qty] of daily) {
+    const list = contributions.get(day) ?? [];
+    near(list.filter((row) => row.adds_qty).reduce((total, row) => total + row.qty, 0), qty, `${day} conserved`, 1e-9);
+  }
+  const totals: Record<string, number> = {};
+  const timing: Record<string, number> = {};
+  for (const list of contributions.values()) for (const row of list) {
+    const target = row.adds_qty ? totals : timing;
+    target[String(row.source_id)] = (target[String(row.source_id)] ?? 0) + row.qty;
+  }
+  near(totals.F, 300, "Final share of the month");
+  near(totals.A, 60, "Additional share of the month");
+  near(totals.X, 20, "Urgent Extra adds its own qty");
+  assertEqual(totals.P, undefined, "Urgent From-Plan adds nothing");
+  near(timing.P, 50, "Urgent From-Plan recorded as re-phasing of 50");
+  const day1 = contributions.get("2026-11-01")!;
+  near(day1.find((row) => row.source_id === "F")!.qty, (310 / 30 + 10) * (300 / 360), "From-Plan window day split Final:Additional 300:60");
+  assertEqual(contributions.get("2026-11-20")!.some((row) => row.source_id === "P" || row.source_id === "X"), false, "ordinary day has no urgent line");
+  assertEqual(contributions.get("2026-11-10")!.find((row) => row.source_id === "X")!.role, "URGENT_EXTRA", "Extra in its window");
+});
+
+Deno.test("lineage: multiple SKUs under one Prodshade → RM keeps each SKU's plan line; PM per SKU", () => {
+  const input = baseInput({
+    effective: effectiveFor([
+      line({ source_id: "S1-F", plan_type: "FINAL", base_qty: 300, sku_material_id: "SKU1" }),
+      line({ source_id: "S2-F", plan_type: "FINAL", base_qty: 600, sku_material_id: "SKU2" }),
+    ]),
+    skus: new Map([
+      ["SKU1", { sku_material_id: "SKU1", prodshade_material_id: "P1", base_uom_code: "KG", kg_per_base_unit: 1 }],
+      ["SKU2", { sku_material_id: "SKU2", prodshade_material_id: "P1", base_uom_code: "BAG", kg_per_base_unit: 20 }],
+    ]),
+  });
+  const result = explodeDemand(input);
+  const rm = result.records.filter((record) => record.kind === "RM");
+  conserving(rm, "RM");
+  const rmA = bySource(rm.filter((record) => record.pool_key === "RM|L1"));
+  near(rmA["S1-F"], 0.6 * 300, "RM-A from SKU1 line (KG)");
+  near(rmA["S2-F"], 0.6 * 600 * 20, "RM-A from SKU2 line (bags × 20 KG)");
+  assertEqual(new Set(rm[0].plan_line_contributions.map((row) => row.sku_material_id)).size, 2, "RM record keeps both SKUs");
+  const pm = result.records.filter((record) => record.kind === "PM");
+  conserving(pm, "PM");
+  assertEqual(Object.keys(bySource(pm)), ["S1-F"], "PM of SKU1 Pack BOM only from SKU1's line");
+  near(bySource(pm)["S1-F"], 300 / 20, "15 bags");
+});
+
+Deno.test("lineage: Tab 2 period qty override keeps month shares and conserves per record", () => {
+  const input = baseInput({
+    effective: effectiveFor([
+      line({ source_id: "F", plan_type: "FINAL", base_qty: 2400 }),
+      line({ source_id: "A", plan_type: "ADDITIONAL", base_qty: 600 }),
+    ]),
+    strokeSettings: new Map([["2026-11-01|P1", [
+      { stroke_master_id: "S1", period_from: "2026-11-01", period_to: "2026-11-10", planned_base_qty: 2000 },
+      { stroke_master_id: "S2", period_from: "2026-11-11", period_to: "2026-11-30", planned_base_qty: null },
+    ]]]),
+  });
+  const result = explodeDemand(input);
+  const rm = result.records.filter((record) => record.kind === "RM");
+  conserving(rm, "override month");
+  const day3 = rm.find((record) => record.day === "2026-11-03" && record.pool_key === "RM|L1")!;
+  near(day3.plan_line_contributions.find((row) => row.source_id === "F")!.qty / day3.qty, 0.8, "Final keeps its 80% month share");
+});
+
+Deno.test("lineage: explosion quantities unchanged by attribution", () => {
+  const lines = [
+    line({ source_id: "F", plan_type: "FINAL", base_qty: 3000 }),
+    line({ source_id: "P", plan_type: "URGENT", urgent_mode: "FROM_PLAN", urgent_from_date: "2026-11-02", urgent_to_date: "2026-11-03", base_qty: 400 }),
+  ];
+  const withRefs = explodeDemand(baseInput({ effective: effectiveFor(lines) }));
+  const withoutRefs = explodeDemand(baseInput({ effective: effectiveFor(lines).map(({ contributors: _c, ...entry }) => entry) }));
+  assertEqual(withRefs.records.map((record) => [record.day, record.pool_key, record.qty]), withoutRefs.records.map((record) => [record.day, record.pool_key, record.qty]), "same day/pool/qty");
+  assertEqual(withoutRefs.records.every((record) => record.plan_line_contributions.length === 0), true, "no contributors → no lineage (adapter fails closed)");
 });

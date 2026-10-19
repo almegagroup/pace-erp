@@ -5,12 +5,13 @@
  * here.  Missing immutable identities or UOM proof fail closed.
  */
 import type { DemandRecord, GroupMember, MaterialInfo } from "./mts_requirement.logic.ts";
-import type { OptimizerDemandSource } from "./mts_optimizer_input.types.ts";
+import type { OptimizerDemandSource, OptimizerPlanLineContribution } from "./mts_optimizer_input.types.ts";
 import type { OptimizerGroupMember } from "./mts_optimizer_phase3c.types.ts";
 
 export type OptimizerDemandAdapterIssue = Readonly<{
   code:
     | "DEMAND_SOURCE_ID_MISSING"
+    | "PLAN_LINE_ATTRIBUTION_MISSING"
     | "FIXED_MATERIAL_UOM_MISSING"
     | "GROUP_MEMBER_ID_MISSING"
     | "GROUP_MEMBER_GROUP_MISMATCH"
@@ -48,6 +49,19 @@ function groupPool(record: DemandRecord): boolean {
   // not have a Use Primary decision and are represented as their true group.
   return !!record.group_id && (record.kind === "PM" || record.use_primary === false);
 }
+/**
+ * Effective PO21 plan-line lineage of a record, or null when it cannot be
+ * proven (no contributor, a contributor without its immutable row id, or
+ * contributions that do not add up to the record quantity).
+ */
+function planLineLineage(record: DemandRecord): OptimizerPlanLineContribution[] | null {
+  const rows = record.plan_line_contributions ?? [];
+  if (rows.length === 0 || rows.some((row) => !row.source_id)) return null;
+  const total = rows.filter((row) => row.adds_qty).reduce((sum, row) => sum + row.qty, 0);
+  if (Math.abs(total - record.qty) > Math.max(1e-6, Math.abs(record.qty) * 1e-9)) return null;
+  return rows.map((row) => ({ ...row, source_id: row.source_id! }))
+    .sort((a, b) => a.source_id.localeCompare(b.source_id) || Number(b.adds_qty) - Number(a.adds_qty));
+}
 function materialEvidence(material: MaterialInfo | undefined) {
   if (!material?.base_uom_code) return null;
   return freeze({ base_uom_code: material.base_uom_code, to_base_factors: { ...material.to_base_factors }, source: "erp_master.material_master/material_uom_conversion" });
@@ -77,6 +91,11 @@ export function adaptRequirementDemandToOptimizer(
       continue;
     }
     const sourceKey = keyFor(companyId, record, sourceLineId);
+    const lineage = planLineLineage(record);
+    if (!lineage) {
+      addIssue("PLAN_LINE_ATTRIBUTION_MISSING", sourceKey, sourceLineId, "Demand cannot be traced to exact effective PO21 plan-line versions that add up to its quantity.");
+      continue;
+    }
     if (!groupPool(record)) {
       const materialId = record.candidates[0] ?? null;
       const evidence = materialId ? materialEvidence(materials.get(materialId)) : null;
@@ -88,6 +107,7 @@ export function adaptRequirementDemandToOptimizer(
         source_key: sourceKey, company_id: companyId, product_id: record.prodshade_material_id,
         source_line_id: sourceLineId, required_by: record.day, demand_kind: "FIXED_EXCLUSIVE",
         group_id: null, material_id: materialId, uom_evidence: null, qty: record.qty, uom_code: evidence.base_uom_code,
+        plan_line_contributions: lineage,
       }));
       continue;
     }
@@ -121,6 +141,7 @@ export function adaptRequirementDemandToOptimizer(
       source_key: sourceKey, company_id: companyId, product_id: record.prodshade_material_id,
       source_line_id: sourceLineId, required_by: record.day, demand_kind: "GROUP_POOL",
       group_id: groupId, material_id: null, uom_evidence: primaryEvidence, qty: record.qty, uom_code: primaryEvidence.base_uom_code,
+      plan_line_contributions: lineage,
     }));
     for (const member of active) members.push(freeze({
       demand_source_key: sourceKey, group_id: groupId, material_id: member.material_id,

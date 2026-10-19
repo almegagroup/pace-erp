@@ -12,7 +12,9 @@ function record(overrides: Partial<DemandRecord> = {}): DemandRecord {
     day: "2026-11-01", kind: "RM", pool_key: "RM|SL-1", candidates: ["M1"], storage_location_id: "R001", qty: 10,
     prodshade_material_id: "PS-1", sku_material_id: null, stroke_master_id: "SM-1", stroke_line_id: "SL-1",
     pack_bom_id: null, pack_bom_line_id: null, outer_qty: null, outer_uom_code: null, fill_qty_per_outer: null,
-    group_id: null, use_primary: null, sort_key: "1|SL-1", ...overrides,
+    group_id: null, use_primary: null, sort_key: "1|SL-1",
+    plan_line_contributions: [{ source_id: "PL-1", entry_id: "E-1", version_no: 1, plan_type: "FINAL", urgent_mode: null, role: "BASE", sku_material_id: "SKU-1", adds_qty: true, qty: overrides.qty ?? 10 }],
+    ...overrides,
   };
 }
 function group(...rows: GroupMember[]): ReadonlyMap<string, readonly GroupMember[]> { return new Map([["G1", rows]]); }
@@ -50,4 +52,17 @@ Deno.test("wrong actual group identity is rejected rather than matched by a map 
     group({ material_id: "M1", active: true, group_id: "G2", source_id: "GM-1" }), new Map([["M1", material("M1")]]));
   equal(result.demand.length, 0, "mismatched group has no optimizer demand");
   equal(result.issues.map((row) => row.code), ["GROUP_MEMBER_GROUP_MISMATCH"], "actual group is validated");
+});
+
+Deno.test("Demand without provable PO21 plan-line lineage fails closed", () => {
+  const materials = new Map([["M1", material("M1")]]);
+  const none = adaptRequirementDemandToOptimizer("CMP003", [record({ plan_line_contributions: [] })], group(), materials);
+  equal(none.demand.length, 0, "no contributor = no demand");
+  equal(none.issues.map((row) => row.code), ["PLAN_LINE_ATTRIBUTION_MISSING"], "missing lineage issue");
+  const noId = adaptRequirementDemandToOptimizer("CMP003", [record({ plan_line_contributions: [{ source_id: null, entry_id: "E-1", version_no: 1, plan_type: "FINAL", urgent_mode: null, role: "BASE", sku_material_id: "SKU-1", adds_qty: true, qty: 10 }] })], group(), materials);
+  equal(noId.issues.map((row) => row.code), ["PLAN_LINE_ATTRIBUTION_MISSING"], "contributor without row id rejected");
+  const short = adaptRequirementDemandToOptimizer("CMP003", [record({ plan_line_contributions: [{ source_id: "PL-1", entry_id: "E-1", version_no: 1, plan_type: "FINAL", urgent_mode: null, role: "BASE", sku_material_id: "SKU-1", adds_qty: true, qty: 9 }] })], group(), materials);
+  equal(short.issues.map((row) => row.code), ["PLAN_LINE_ATTRIBUTION_MISSING"], "non-conserving lineage rejected");
+  const ok = adaptRequirementDemandToOptimizer("CMP003", [record()], group(), materials);
+  equal(ok.demand[0].plan_line_contributions?.map((row) => [row.source_id, row.version_no, row.qty]), [["PL-1", 1, 10]], "lineage carried to optimizer demand");
 });
