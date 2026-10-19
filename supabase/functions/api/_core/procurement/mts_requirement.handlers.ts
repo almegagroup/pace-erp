@@ -79,7 +79,7 @@ import {
 } from "./mts_requirement.logic.ts";
 
 type JsonRecord = Record<string, unknown>;
-type ReqHandlerContext = {
+export type ReqHandlerContext = {
   context: Extract<ContextResolution, { status: "RESOLVED" }>;
   request_id: string;
   auth_user_id: string;
@@ -104,7 +104,7 @@ const num = (value: unknown): number | null => {
 };
 const unique = (values: Array<string | null | undefined>) => [...new Set(values.filter((v): v is string => Boolean(v)))];
 
-function fail(req: Request, ctx: ReqHandlerContext, code: string, status: number, message: string): Response {
+export function fail(req: Request, ctx: ReqHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
@@ -115,23 +115,23 @@ export function todayInIndia(nowMs = Date.now()): string {
 
 // Named require*Access so company-scope-write-acl-guard.mjs recognises the
 // target-company check inside each handler body.
-async function requireRequirementViewAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
+export async function requireRequirementViewAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
   const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_PAGE, "VIEW");
   return allowed ? null : fail(req, ctx, "MTS_REQ_FORBIDDEN", 403, "You do not have access to the MTS Requirement for this company.");
 }
-async function requireRequirementPolicyAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
+export async function requireRequirementPolicyAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
   const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_POLICY, "WRITE");
   return allowed ? null : fail(req, ctx, "MTS_REQ_FORBIDDEN", 403, "You cannot change Material Settings for this company.");
 }
 
-async function resolveCompany(ctx: ReqHandlerContext, raw: unknown): Promise<string> {
+export async function resolveCompany(ctx: ReqHandlerContext, raw: unknown): Promise<string> {
   const companyId = text(raw);
   if (!companyId) return "";
   await assertCompanyScope(ctx, companyId);
   return companyId;
 }
 
-function handleError(req: Request, ctx: ReqHandlerContext, error: unknown, fallbackCode: string, message: string): Response {
+export function handleError(req: Request, ctx: ReqHandlerContext, error: unknown, fallbackCode: string, message: string): Response {
   const code = error instanceof Error ? error.message : fallbackCode;
   if (code === "COMPANY_SCOPE_VIOLATION") return fail(req, ctx, code, 403, "Company is outside your scope.");
   console.error(`[mts_requirement] ${fallbackCode}`, code);
@@ -589,7 +589,7 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
 
 async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[]; raw: JsonRecord[] }> {
   const raw = await fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, source_system, created_by, created_at")
+    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, source_system, created_by, created_at")
     .eq("company_id", companyId).eq("is_current", true).order("id"), "MTS_REQ_POLICY_LOAD_FAILED");
   return {
     raw,
@@ -926,6 +926,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
             moq_source: text(current.moq_source) || "NONE",
             moq_active: current.moq_active === true,
             remarks: text(current.remarks) || null,
+            carrying_rate_per_uom: num(current.carrying_rate_per_uom),
             source_system: text(current.source_system),
             updated_by: users.get(text(current.created_by)) ?? "—",
             updated_at: current.created_at,
@@ -958,7 +959,7 @@ export async function getMtsRequirementPolicyHistoryHandler(req: Request, ctx: R
     const materialId = text(url.searchParams.get("material_id"));
     if (!materialId) return fail(req, ctx, "MTS_REQ_INVALID_INPUT", 400, "material_id is required.");
     const { data, error } = await serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, source_system, created_by, created_at")
+      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, source_system, created_by, created_at")
       .eq("company_id", companyId).eq("material_id", materialId)
       .order("created_at", { ascending: false }).range(0, 999);
     if (error) throw new Error("MTS_REQ_POLICY_HISTORY_FAILED");
@@ -976,6 +977,7 @@ export async function getMtsRequirementPolicyHistoryHandler(req: Request, ctx: R
         moq_source: text(r.moq_source),
         moq_active: r.moq_active === true,
         remarks: text(r.remarks) || null,
+        carrying_rate_per_uom: num(r.carrying_rate_per_uom),
         source_system: text(r.source_system),
         updated_by: users.get(text(r.created_by)) ?? "—",
         updated_at: r.created_at,
@@ -1015,7 +1017,7 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
         return fail(req, ctx, "MTS_REQ_POLICY_MATERIAL_NOT_IN_COMPANY", 400, "A material on this save is not used by this company's MTS Strokes / Pack BOMs.");
       }
       if (!isIsoDate(effectiveFrom)) return fail(req, ctx, "MTS_REQ_POLICY_INVALID_INPUT", 400, "Every row needs a valid Effective From date (YYYY-MM-DD).");
-      const numericFields = ["target_cov_days", "critical_cov_days", "moq_qty"] as const;
+      const numericFields = ["target_cov_days", "critical_cov_days", "moq_qty", "carrying_rate_per_uom"] as const;
       for (const field of numericFields) {
         if (row[field] !== null && row[field] !== undefined && row[field] !== "" && num(row[field]) === null) {
           return fail(req, ctx, "MTS_REQ_POLICY_INVALID_INPUT", 400, `${field} must be a number.`);
@@ -1031,6 +1033,7 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
         moq_source: text(row.moq_source).toUpperCase() || "NONE",
         moq_active: row.moq_active === true,
         remarks: text(row.remarks) || null,
+        carrying_rate_per_uom: num(row.carrying_rate_per_uom),
         source_ref: row.source_ref && typeof row.source_ref === "object" ? row.source_ref : null,
       });
     }

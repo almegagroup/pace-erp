@@ -109,6 +109,12 @@ import {
   saveMtsRequirementPoliciesHandler,
 } from "../_core/procurement/mts_requirement.handlers.ts";
 import {
+  getMtsFinanceSettingsHandler,
+  getMtsFxRatesHandler,
+  saveMtsFinanceSettingHandler,
+  saveMtsFxRateHandler,
+} from "../_core/procurement/mts_planning_cost.handlers.ts";
+import {
   getMtsOptimizerLifecycleEvidenceHandler,
   getMtsOptimizerRequirementDemandEvidenceHandler,
   getMtsOptimizerSelectionsHandler,
@@ -818,6 +824,14 @@ export async function dispatchProcurementRoutes(
       return await getMtsRequirementPolicyHistoryHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/policies":
       return await saveMtsRequirementPoliciesHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/fx-rates":
+      return await getMtsFxRatesHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/fx-rates":
+      return await saveMtsFxRateHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/finance-settings":
+      return await getMtsFinanceSettingsHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/finance-settings":
+      return await saveMtsFinanceSettingHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
       return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/requirement-demand-evidence":

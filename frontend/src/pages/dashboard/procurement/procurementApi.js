@@ -1840,3 +1840,20 @@ export function getMtsRequirementPolicyHistory(params) {
 export function saveMtsRequirementPolicies(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/policies", data);
 }
+
+// PO22 cost settings (owner decisions D10/D11). Plain objects: read `.rows`.
+export function getMtsFxRates(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/fx-rates", undefined, params);
+}
+
+export function saveMtsFxRate(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/fx-rates", data);
+}
+
+export function getMtsFinanceSettings(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/finance-settings", undefined, params);
+}
+
+export function saveMtsFinanceSetting(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/finance-settings", data);
+}

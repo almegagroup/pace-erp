@@ -29,6 +29,10 @@ import {
   getMtsRequirementPolicies,
   getMtsRequirementPolicyHistory,
   getMtsRequirementReport,
+  getMtsFinanceSettings,
+  getMtsFxRates,
+  saveMtsFinanceSetting,
+  saveMtsFxRate,
   saveMtsRequirementPolicies,
 } from "../procurementApi.js";
 
@@ -224,7 +228,7 @@ export default function MtsRequirementPage() {
             </label>
           ) : null}
           <div className="flex flex-wrap gap-1">
-            {[{ id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }].map((tab) => (
+            {[{ id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Cost Settings" }].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -249,8 +253,10 @@ export default function MtsRequirementPage() {
             asOf={asOf}
             demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""}
           />
-        ) : (
+        ) : activeTab === "settings" ? (
           <SettingsTab companyId={companyId} asOf={asOf} access={access} today={today} />
+        ) : (
+          <CostSettingsTab companyId={companyId} access={access} today={today} />
         )}
       </div>
     </ErpScreenScaffold>
@@ -568,6 +574,7 @@ function policyDraftBase(row, today) {
     moq_active: policy?.moq_active ?? false,
     effective_from: today,
     remarks: policy?.remarks ?? "",
+    carrying_rate_per_uom: policy?.carrying_rate_per_uom ?? "",
   };
 }
 function normalizeKey(value) {
@@ -585,7 +592,9 @@ function validateDraft(draft, row) {
   const target = parseNumberOrBlank(draft.target_cov_days);
   const critical = parseNumberOrBlank(draft.critical_cov_days);
   const moq = parseNumberOrBlank(draft.moq_qty);
-  if (Number.isNaN(target) || Number.isNaN(critical) || Number.isNaN(moq)) return "numbers only";
+  const rate = parseNumberOrBlank(draft.carrying_rate_per_uom);
+  if (Number.isNaN(target) || Number.isNaN(critical) || Number.isNaN(moq) || Number.isNaN(rate)) return "numbers only";
+  if (rate !== "" && rate < 0) return "Rate may not be negative";
   if ((target !== "" && target < 0) || (critical !== "" && critical < 0) || (moq !== "" && moq < 0)) return "values may not be negative";
   if (target === "" && critical !== "") return "Critical needs Target";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(draft.effective_from ?? ""))) return "Effective From is required";
@@ -763,6 +772,22 @@ function SettingsTab({ companyId, asOf, access, today }) {
     />
   );
 
+  // D10: change the carrying Rate for every row shown (filters apply) from one month onward.
+  const [bulkRate, setBulkRate] = useState("");
+  const [bulkRateFrom, setBulkRateFrom] = useState(today);
+  function applyBulkRate() {
+    const order = orderRef.current.length ? orderRef.current : rows.map((r) => r.material_id);
+    setDrafts((current) => {
+      const next = { ...current };
+      for (const id of order) {
+        const row = rowById.get(id);
+        if (!row) continue;
+        next[id] = { ...(next[id] ?? policyDraftBase(row, today)), carrying_rate_per_uom: bulkRate, effective_from: bulkRateFrom };
+      }
+      return next;
+    });
+  }
+
   const dirtyIds = Object.keys(drafts);
   const errors = useMemo(() => {
     const result = {};
@@ -797,6 +822,11 @@ function SettingsTab({ companyId, asOf, access, today }) {
         return numberInput(r, "critical_cov_days", "w-20", typeof target === "number" && Number.isFinite(target) ? `⌈${target}/2⌉=${Math.ceil(target / 2)}` : "");
       },
       copyValue: (r) => valueOf(r, "critical_cov_days"),
+    },
+    {
+      key: "carrying_rate_per_uom", label: "Rate (₹ / base UoM)", width: "120px", filterable: false,
+      render: (r) => numberInput(r, "carrying_rate_per_uom", "w-24", "landed only"),
+      copyValue: (r) => valueOf(r, "carrying_rate_per_uom"),
     },
     { key: "moq_qty", label: "MOQ Qty", width: "110px", filterable: false, render: (r) => numberInput(r, "moq_qty", "w-24"), copyValue: (r) => valueOf(r, "moq_qty") },
     {
@@ -916,6 +946,7 @@ function SettingsTab({ companyId, asOf, access, today }) {
         moq_source: draft.moq_source,
         moq_active: Boolean(draft.moq_active),
         remarks: draft.remarks || null,
+        carrying_rate_per_uom: draft.carrying_rate_per_uom === "" ? null : Number(draft.carrying_rate_per_uom),
         source_ref: draft.__source_ref ?? null,
       };
     };
@@ -969,6 +1000,13 @@ function SettingsTab({ companyId, asOf, access, today }) {
         >
           {showImport ? "Close import" : "Import from REQUIREMENT sheet"}
         </button>
+        <span className="flex items-center gap-1 text-xs text-slate-600">
+          Rate for all shown rows
+          <input type="text" inputMode="decimal" disabled={!canEdit} value={bulkRate} onChange={(event) => setBulkRate(event.target.value)} placeholder="blank = landed only" className={`${INPUT_CLASS} w-28`} />
+          from
+          <input type="date" disabled={!canEdit} value={bulkRateFrom} onChange={(event) => setBulkRateFrom(event.target.value)} className={INPUT_CLASS} />
+          <button type="button" onClick={applyBulkRate} disabled={!canEdit} className="h-8 border border-slate-300 bg-white px-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Apply</button>
+        </span>
         <span className="text-xs text-slate-500">
           One policy per individual material. Blank Critical = ROUNDUP(Target / 2) on save. Each save is versioned; nothing is overwritten.
           {!canEdit ? " You can view these settings but not change them." : ""}
@@ -1015,3 +1053,121 @@ function SettingsTab({ companyId, asOf, access, today }) {
   );
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab 3 — Cost Settings (owner decisions D10/D11): exchange rates and company interest %
+// ─────────────────────────────────────────────────────────────────────────────
+function CostSettingsTab({ companyId, access, today }) {
+  const queryClient = useQueryClient();
+  const canEdit = Boolean(access?.can_edit_policy);
+  const [currency, setCurrency] = useState("USD");
+  const [fxDraft, setFxDraft] = useState({ rate_date: today, inr_per_unit: "", remarks: "" });
+  const [interestDraft, setInterestDraft] = useState({ effective_from: today, interest_pct_per_year: "", remarks: "" });
+  const [saving, setSaving] = useState("");
+
+  const fxQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "fx-rates", companyId, currency],
+    queryFn: () => getMtsFxRates({ company_id: companyId, currency }),
+    enabled: Boolean(companyId) && /^[A-Z]{3}$/.test(currency),
+  });
+  const financeQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "finance-settings", companyId],
+    queryFn: () => getMtsFinanceSettings({ company_id: companyId }),
+    enabled: Boolean(companyId),
+  });
+  const fxRows = fxQ.data?.rows ?? [];
+  const effective = fxQ.data?.effective_today ?? null;
+  const financeRows = financeQ.data?.rows ?? [];
+
+  async function saveFx() {
+    setSaving("fx");
+    try {
+      await saveMtsFxRate({ company_id: companyId, currency_code: currency, ...fxDraft, inr_per_unit: Number(fxDraft.inr_per_unit) });
+      pushToast({ message: `Manual ${currency} rate saved for ${fxDraft.rate_date}.`, tone: "success" });
+      setFxDraft((current) => ({ ...current, inr_per_unit: "", remarks: "" }));
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "fx-rates", companyId] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving("");
+    }
+  }
+  async function saveInterest() {
+    setSaving("interest");
+    try {
+      await saveMtsFinanceSetting({ company_id: companyId, ...interestDraft, interest_pct_per_year: Number(interestDraft.interest_pct_per_year) });
+      pushToast({ message: `Interest % saved from ${interestDraft.effective_from}.`, tone: "success" });
+      setInterestDraft((current) => ({ ...current, interest_pct_per_year: "", remarks: "" }));
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "finance-settings", companyId] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving("");
+    }
+  }
+
+  const fxColumns = [
+    { key: "rate_date", label: "Date", width: "110px" },
+    { key: "source", label: "Source", width: "90px", render: (r) => (r.source === "MANUAL" ? "Manual" : "Auto") },
+    { key: "inr_per_unit", label: `₹ per 1 ${currency}`, width: "120px", align: "right", render: (r) => Number(r.inr_per_unit).toFixed(4), copyValue: (r) => r.inr_per_unit },
+    { key: "provider_rate_date", label: "Provider Date", width: "110px", render: (r) => dash(r.provider_rate_date) },
+    { key: "provider", label: "Provider", width: "150px", render: (r) => dash(r.provider) },
+    { key: "remarks", label: "Remarks", width: "220px", render: (r) => dash(r.remarks) },
+  ];
+  const financeColumns = [
+    { key: "effective_from", label: "Effective From", width: "120px" },
+    { key: "interest_pct_per_year", label: "Interest % / year", width: "130px", align: "right", render: (r) => Number(r.interest_pct_per_year).toFixed(2) },
+    { key: "remarks", label: "Remarks", width: "260px", render: (r) => dash(r.remarks) },
+  ];
+
+  return (
+    <div className="grid gap-4">
+      <section className="grid gap-2">
+        <h3 className="text-sm font-semibold text-slate-800">Exchange rates</h3>
+        <p className="text-xs text-slate-500">
+          Fetched automatically every day (first view of the day) from a public reference rate; a manual rate on the same date wins.
+          Planning uses: BOE rate on the CSN → rate on the BOE date → today&apos;s rate. Holidays use the last available rate.
+        </p>
+        <div className="flex flex-wrap items-end gap-2 text-xs text-slate-600">
+          <label className="grid gap-1">Currency
+            <input value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value.toUpperCase())} className={`${INPUT_CLASS} w-20`} />
+          </label>
+          <span className="pb-2 text-sm">
+            Today: {effective ? <strong>₹ {Number(effective.inr_per_unit).toFixed(4)}</strong> : <span className="text-rose-700">no rate</span>}
+            {effective ? ` · ${effective.source === "MANUAL" ? "manual" : "auto"} · ${effective.rate_date}${effective.stale ? " (last available)" : ""}` : ""}
+            {fxQ.data && !fxQ.data.fetched_today ? <span className="ml-2 text-amber-700">Today&apos;s automatic fetch did not succeed.</span> : null}
+          </span>
+        </div>
+        {canEdit ? (
+          <div className="flex flex-wrap items-end gap-2 text-xs text-slate-600">
+            <label className="grid gap-1">Date<input type="date" value={fxDraft.rate_date} onChange={(event) => setFxDraft((c) => ({ ...c, rate_date: event.target.value }))} className={INPUT_CLASS} /></label>
+            <label className="grid gap-1">₹ per 1 {currency}<input type="text" inputMode="decimal" value={fxDraft.inr_per_unit} onChange={(event) => setFxDraft((c) => ({ ...c, inr_per_unit: event.target.value }))} className={`${INPUT_CLASS} w-28`} /></label>
+            <label className="grid gap-1">Remarks<input value={fxDraft.remarks} maxLength={300} onChange={(event) => setFxDraft((c) => ({ ...c, remarks: event.target.value }))} className={`${INPUT_CLASS} w-56`} /></label>
+            <button type="button" onClick={() => void saveFx()} disabled={saving === "fx" || !(Number(fxDraft.inr_per_unit) > 0)} className="h-8 border border-sky-600 bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+              {saving === "fx" ? "Saving…" : "Save manual rate"}
+            </button>
+          </div>
+        ) : null}
+        <ErpDenseGrid {...GRID_PROPS} columns={fxColumns} rows={fxRows} rowKey={(r) => `${r.rate_date}|${r.source}`} />
+      </section>
+
+      <section className="grid gap-2">
+        <h3 className="text-sm font-semibold text-slate-800">Company interest %</h3>
+        <p className="text-xs text-slate-500">
+          Cost of money tied up: value × % × days from paying the vendor to receiving the customer payment. Applies from its date until a later one.
+        </p>
+        {canEdit ? (
+          <div className="flex flex-wrap items-end gap-2 text-xs text-slate-600">
+            <label className="grid gap-1">Effective From<input type="date" value={interestDraft.effective_from} onChange={(event) => setInterestDraft((c) => ({ ...c, effective_from: event.target.value }))} className={INPUT_CLASS} /></label>
+            <label className="grid gap-1">Interest % / year<input type="text" inputMode="decimal" value={interestDraft.interest_pct_per_year} onChange={(event) => setInterestDraft((c) => ({ ...c, interest_pct_per_year: event.target.value }))} className={`${INPUT_CLASS} w-24`} /></label>
+            <label className="grid gap-1">Remarks<input value={interestDraft.remarks} maxLength={300} onChange={(event) => setInterestDraft((c) => ({ ...c, remarks: event.target.value }))} className={`${INPUT_CLASS} w-56`} /></label>
+            <button type="button" onClick={() => void saveInterest()} disabled={saving === "interest" || interestDraft.interest_pct_per_year === ""} className="h-8 border border-sky-600 bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+              {saving === "interest" ? "Saving…" : "Save interest %"}
+            </button>
+          </div>
+        ) : null}
+        <ErpDenseGrid {...GRID_PROPS} columns={financeColumns} rows={financeRows} rowKey={(r) => r.effective_from} />
+      </section>
+    </div>
+  );
+}

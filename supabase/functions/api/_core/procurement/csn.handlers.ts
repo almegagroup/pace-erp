@@ -108,6 +108,7 @@ const NUMERIC_FIELDS = new Set([
   "rebate_rate",
   "received_qty",
   "transit_days_snapshot",
+  "boe_exchange_rate",
 ]);
 const MANUAL_EDITABLE_FIELDS = [
   "dispatch_qty",
@@ -125,6 +126,8 @@ const MANUAL_EDITABLE_FIELDS = [
   "invoice_date",
   "boe_number",
   "boe_date",
+  // PO22 D11: customs exchange rate printed on the BOE (INR per unit of PO currency).
+  "boe_exchange_rate",
   "eta_at_port",
   "eta_at_port_is_manual_override",
   "ata_at_port",
@@ -738,6 +741,7 @@ async function cloneBalanceCsnFromSource(
     bl_date: null,
     boe_number: null,
     boe_date: null,
+    boe_exchange_rate: null,
     scheduled_eta_to_port: null,
     etd: null,
     etd_is_manual_override: false,
