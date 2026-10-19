@@ -116,3 +116,10 @@ CMP003, CMP005 and CMP011 go live together under the same rules. Company-specifi
 - **Cost = landed cost + item Rate (if filled) + financing**, two separate inputs:
   - (a) **Item Rate** in PO22 Material Settings: per item, an amount per UOM, for physical carrying cost (storage, handling, deterioration). Effective-dated monthly carry-forward (D10.4).
   - (b) **Company interest %** per year (effective-dated company setting), for money tied up. Financing = value × % × days from vendor cash-out to customer cash-in. Safety stock held longer increases the days, so no separate safety-stock cost is needed.
+
+## D12 — Counted stock locations (owner, 2026-10-19)
+- Counted: R-series RM stores (R001, R002), shop floor S001/S002, and packing P001/P002. PM requirement is met from P001/P002 stock.
+- Shown, not counted, referred for transfer: R003 (D1).
+- Not counted: OT01/OT02, finished-goods F-series, admix S003/P003/T003/L003.
+- The stock rules inside the engine stay as decided (unrestricted posted only, valid reservations deducted, no QA/blocked, stock counted once).
+- Held as a per-company location setting so a company can differ (D9).
