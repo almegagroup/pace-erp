@@ -384,6 +384,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/mts-requirement/policy-history": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "POST:/api/procurement/mts-requirement/policies":      { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT_POLICY", action: "WRITE" },
   "GET:/api/procurement/mts-optimizer/lifecycle-evidence": { skipAcl: false, resourceCode: "PROC_MTS_OPTIMIZER_INPUT", action: "VIEW" },
+  "GET:/api/procurement/mts-optimizer/requirement-demand-evidence": { skipAcl: false, resourceCode: "PROC_MTS_OPTIMIZER_INPUT", action: "VIEW" },
   "GET:/api/procurement/mts-optimizer/selections":        { skipAcl: false, resourceCode: "PROC_MTS_OPTIMIZER_INPUT", action: "VIEW" },
   "POST:/api/procurement/mts-optimizer/selections":       { skipAcl: false, resourceCode: "PROC_MTS_OPTIMIZER_SELECTION", action: "WRITE" },
   "GET:/api/procurement/mts-optimizer/snapshots":         { skipAcl: false, resourceCode: "PROC_MTS_OPTIMIZER_INPUT", action: "VIEW" },

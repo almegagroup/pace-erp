@@ -110,6 +110,7 @@ import {
 } from "../_core/procurement/mts_requirement.handlers.ts";
 import {
   getMtsOptimizerLifecycleEvidenceHandler,
+  getMtsOptimizerRequirementDemandEvidenceHandler,
   getMtsOptimizerSelectionsHandler,
   listMtsOptimizerSnapshotsHandler,
   saveMtsOptimizerSelectionsHandler,
@@ -819,6 +820,8 @@ export async function dispatchProcurementRoutes(
       return await saveMtsRequirementPoliciesHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
       return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/requirement-demand-evidence":
+      return await getMtsOptimizerRequirementDemandEvidenceHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/selections":
       return await getMtsOptimizerSelectionsHandler(req, ctx);
     case "POST:/api/procurement/mts-optimizer/selections":

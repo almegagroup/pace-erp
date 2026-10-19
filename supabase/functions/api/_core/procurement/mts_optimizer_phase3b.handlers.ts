@@ -7,6 +7,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { errorResponse, okResponse } from "../response.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { readOptimizerAsOfStockBalances, readOptimizerLifecycleIdentities, readOptimizerMaterialUoms } from "./mts_optimizer_phase3b_source.reader.ts";
+import { readOptimizerRequirementDemandEvidence } from "./mts_optimizer_phase3c_source.reader.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ReqHandlerContext = {
@@ -20,6 +21,7 @@ const RESOURCE_INPUT = "PROC_MTS_OPTIMIZER_INPUT";
 const RESOURCE_SELECTION = "PROC_MTS_OPTIMIZER_SELECTION";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const PLAN_MONTH = /^\d{4}-\d{2}$/;
 const MAX_IDS_PER_SOURCE_READ = 500;
 const MAX_SELECTION_ROWS_PER_SAVE = 1200;
 const text = (value: unknown) => String(value ?? "").trim();
@@ -86,6 +88,39 @@ export async function getMtsOptimizerLifecycleEvidenceHandler(req: Request, ctx:
     }, ctx.request_id, req);
   } catch (error) {
     return handleError(req, ctx, error, "MTS_OPTIMIZER_SOURCE_READ_FAILED", "Could not read optimizer source evidence.");
+  }
+}
+
+/**
+ * Read-only PO21 → formulation demand evidence.  This remains separate from
+ * the approved PO22 report and returns no allocation, purchase, transfer or
+ * Store instruction.
+ */
+export async function getMtsOptimizerRequirementDemandEvidenceHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = await resolveCompany(ctx, url.searchParams.get("company_id"));
+    if (!companyId) return fail(req, ctx, "MTS_OPTIMIZER_COMPANY_REQUIRED", 400, "company_id is required.");
+    const denied = await requireInputView(req, ctx, companyId);
+    if (denied) return denied;
+    const planMonthParam = text(url.searchParams.get("plan_month"));
+    const asOf = text(url.searchParams.get("as_of"));
+    if (!PLAN_MONTH.test(planMonthParam) || !ISO_DATE.test(asOf)) {
+      return fail(req, ctx, "MTS_OPTIMIZER_INVALID_DEMAND_PERIOD", 400, "plan_month must be YYYY-MM and as_of must be YYYY-MM-DD.");
+    }
+    const demandAtRaw = text(url.searchParams.get("demand_at"));
+    const demandAt = demandAtRaw && Number.isFinite(Date.parse(demandAtRaw)) ? new Date(demandAtRaw).toISOString() : null;
+    if (demandAtRaw && !demandAt) return fail(req, ctx, "MTS_OPTIMIZER_INVALID_DEMAND_AT", 400, "demand_at must be an ISO date-time.");
+    const evidence = await readOptimizerRequirementDemandEvidence(companyId, `${planMonthParam}-01`, asOf, demandAt);
+    return okResponse({
+      ...evidence,
+      warnings: [
+        "This endpoint exposes immutable PO21/formulation demand evidence only.",
+        "It does not allocate a group member, post Store stock, calculate a purchase quantity, or create a PO.",
+      ],
+    }, ctx.request_id, req);
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_OPTIMIZER_DEMAND_SOURCE_READ_FAILED", "Could not read optimizer demand source evidence.");
   }
 }
 
