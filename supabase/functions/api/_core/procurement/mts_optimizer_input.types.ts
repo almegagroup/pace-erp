@@ -138,6 +138,12 @@ export type OptimizerInputSnapshot = {
   as_of: string;
   captured_at: string;
   source_fingerprint: string;
+  /**
+   * The verified material/UOM master evidence consumed while normalizing this
+   * immutable run.  Allocation must use this evidence rather than infer a
+   * material UOM from a stock or demand row.
+   */
+  materials: readonly OptimizerMaterialUom[];
   demand: readonly OptimizerDemandInput[];
   stock: readonly OptimizerStockInput[];
   reservations: readonly OptimizerReservationInput[];
