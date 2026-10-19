@@ -108,3 +108,11 @@ CMP003, CMP005 and CMP011 go live together under the same rules. Company-specifi
 2. **"Bill received" / invoice-based terms:** the invoice date is entered in CSN Tracker; follow the payment term's scheduled date and the revised date when present, and the actual payment date when it exists.
 3. **FX rate:** for a proposed buy, the rate of the planning day. For an existing import CSN, the rate on its BOE date. If the BOE date is blank, use the current rate. (A dated rate source is needed; none exists in PROD today.)
 4. **Carrying rate:** new column **Rate** next to the safety/Target days in PO22 Material Settings, per item, an amount **per UOM**. Blank = cost is landed cost only. Filled = rate × qty is added to landed cost. It carries forward month to month. The user can change it for all items or selected items in any month; the change applies from that month onward (effective-dated, same mechanism as Target/Critical).
+
+## D11 — Final cost model and FX source (owner approved, 2026-10-19)
+- **Customer cash-in (FG):** sales invoice date + payment term for now; provision for an actual received date later.
+- **FX rate:** auto-fetched daily into an ERP rate table (date, currency, rate, source); the user can override; holidays and failed fetches use the last available rate, flagged "stale". Import CSN gets an optional **BOE exchange rate** field (the customs rate printed on the BOE).
+  - Precedence: BOE rate on the CSN > table rate on the BOE date > today's table rate (when the BOE date is blank). A proposed buy uses the planning-day rate.
+- **Cost = landed cost + item Rate (if filled) + financing**, two separate inputs:
+  - (a) **Item Rate** in PO22 Material Settings: per item, an amount per UOM, for physical carrying cost (storage, handling, deterioration). Effective-dated monthly carry-forward (D10.4).
+  - (b) **Company interest %** per year (effective-dated company setting), for money tied up. Financing = value × % × days from vendor cash-out to customer cash-in. Safety stock held longer increases the days, so no separate safety-stock cost is needed.
