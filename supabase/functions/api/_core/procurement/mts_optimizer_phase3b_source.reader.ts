@@ -9,7 +9,9 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import {
   indexAuthoritativeLotIds,
+  reconcileCsnReceiving,
   reconcileGateReceiving,
+  verifyGrnReceivingCompany,
   verifyReservationIdentity,
   verifyStockLedgerIdentity,
   type ReconciledGateEvidence,
@@ -21,7 +23,7 @@ import {
 type DbRow = Record<string, unknown>;
 const value = (v: unknown) => String(v ?? "").trim();
 async function byIds(
-  table: "purchase_order_line" | "purchase_order" | "gate_entry_line" | "gate_entry" | "purchase_order_lot" | "stock_ledger",
+  table: "purchase_order_line" | "purchase_order" | "gate_entry_line" | "gate_entry" | "purchase_order_lot" | "consignment_note" | "stock_ledger",
   schema: "erp_procurement" | "erp_inventory",
   columns: string,
   filterField: string,
@@ -33,6 +35,16 @@ async function byIds(
 }
 export type VerifiedLifecycleIdentityRead = Readonly<{
   gate_lines: readonly ReconciledGateEvidence[];
+  /** CSN/sub-CSN documents remain lifecycle evidence; no quantity is credited here. */
+  csn_documents: readonly Readonly<{
+    id: string; po_line_id: string; mother_csn_id: string | null; material_id: string;
+    owning_company_id: string; receiving_company_id: string; status: string;
+    disposition: "RECEIVING_COMPANY" | "OTHER_COMPANY_RECEIPT"; has_children: boolean;
+  }>[];
+  /** A GRN proves receipt only for its own verified GE line; it is never new inbound. */
+  grn_documents: readonly Readonly<{
+    id: string; gate_entry_line_id: string; company_id: string; status: string;
+  }>[];
   po_lot_identities: readonly VerifiedLotIdentity[];
   po_lot_balance_identities: readonly Readonly<{ lot_id: string; po_line_id: string; lot_number: string; balance_qty: number }>[];
   reservations: readonly (VerifiedReservationIdentity & { source_key: string })[];
@@ -195,6 +207,65 @@ export async function readOptimizerLifecycleIdentities(
     if (!isPoOwner && !isReceivingCompany) throw new Error(`PHASE3B_PO_LINE_OUTSIDE_COMPANY:${value(line.id)}`);
   }
 
+  const csnRows = await byIds("consignment_note", "erp_procurement", "id,po_line_id,mother_csn_id,material_id,company_id,consignee_company_id,status", "po_line_id", lineIds);
+  const csnById = new Map(csnRows.map((row) => [value(row.id), row]));
+  if (csnById.size !== csnRows.length) throw new Error("PHASE3B_CSN_DUPLICATE_IDENTITY");
+  const csnIds = [...csnById.keys()];
+  const childRows = csnIds.length === 0 ? [] : await fetchInChunks<DbRow>(csnIds, (part) => serviceRoleClient.schema("erp_procurement").from("consignment_note")
+    .select("id,mother_csn_id").in("mother_csn_id", part), 100);
+  const mothersWithChildren = new Set(childRows.map((row) => value(row.mother_csn_id)).filter(Boolean));
+  const csnDocuments = csnRows.map((row) => {
+    const id = value(row.id);
+    const poLineId = value(row.po_line_id);
+    const poLine = lineById.get(poLineId);
+    const materialId = value(row.material_id);
+    const owner = value(row.company_id);
+    const consignee = value(row.consignee_company_id) || owner;
+    const status = value(row.status).toUpperCase();
+    if (!id || !poLine || !materialId || materialId !== value(poLine.material_id) || !owner || !consignee || !status) {
+      throw new Error(`PHASE3B_CSN_LINEAGE_UNVERIFIED:${id || poLineId}`);
+    }
+    return reconcileCsnReceiving(requestedCompanyId, {
+      id, po_line_id: poLineId, mother_csn_id: value(row.mother_csn_id) || null,
+      material_id: materialId, owning_company_id: owner, receiving_company_id: consignee, status,
+      has_children: mothersWithChildren.has(id),
+    });
+  }).sort((a, b) => a.id.localeCompare(b.id));
+
+  const gateLineIds = gateInput.map((row) => row.gate_entry_line_id);
+  const grnResults = await Promise.all([
+    ...Array.from({ length: Math.ceil(gateLineIds.length / 100) }, (_, index) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+      .select("id,company_id,status,gate_entry_line_id,source_gate_entry_line_id")
+      .in("gate_entry_line_id", gateLineIds.slice(index * 100, (index + 1) * 100))),
+    ...Array.from({ length: Math.ceil(gateLineIds.length / 100) }, (_, index) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+      .select("id,company_id,status,gate_entry_line_id,source_gate_entry_line_id")
+      .in("source_gate_entry_line_id", gateLineIds.slice(index * 100, (index + 1) * 100))),
+  ]);
+  const grnById = new Map<string, DbRow>();
+  for (const result of grnResults) {
+    if (result.error) throw new Error("PHASE3B_GRN_READ_FAILED");
+    for (const row of (result.data ?? []) as DbRow[]) {
+      const id = value(row.id);
+      const existing = grnById.get(id);
+      if (!id || (existing && JSON.stringify(existing) !== JSON.stringify(row))) throw new Error(`PHASE3B_GRN_DUPLICATE_IDENTITY:${id}`);
+      grnById.set(id, row);
+    }
+  }
+  const grnDocuments = [...grnById.values()].map((row) => {
+    const id = value(row.id);
+    const companyId = value(row.company_id);
+    const status = value(row.status).toUpperCase();
+    const gateLineId = value(row.gate_entry_line_id) || value(row.source_gate_entry_line_id);
+    if (!id || !companyId || !status || !gateLineId || !gateLineIds.includes(gateLineId)) throw new Error(`PHASE3B_GRN_LINEAGE_UNVERIFIED:${id}`);
+    const gate = gateInput.find((candidate) => candidate.gate_entry_line_id === gateLineId)!;
+    return verifyGrnReceivingCompany({ id, gate_entry_line_id: gateLineId, company_id: companyId, status }, gate.receiving_company_id);
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  for (const gate of gateInput.filter((row) => row.grn_posted)) {
+    if (!grnDocuments.some((grn) => grn.gate_entry_line_id === gate.gate_entry_line_id && grn.status === "POSTED")) {
+      throw new Error(`PHASE3B_GRN_POSTED_IDENTITY_MISSING:${gate.gate_entry_line_id}`);
+    }
+  }
+
   const lots = await byIds("purchase_order_lot", "erp_procurement", "id,po_line_id,lot_number", "po_line_id", lineIds);
   const lotRecords = lots.map((row) => ({
     id: value(row.id), po_line_id: value(row.po_line_id), lot_number: value(row.lot_number),
@@ -247,6 +318,8 @@ export async function readOptimizerLifecycleIdentities(
 
   return Object.freeze({
     gate_lines: gateEvidence,
+    csn_documents: Object.freeze(csnDocuments),
+    grn_documents: Object.freeze(grnDocuments),
     po_lot_identities: Object.freeze(lotRecords.sort((a, b) => a.id.localeCompare(b.id)).map((row): VerifiedLotIdentity => Object.freeze(row))),
     po_lot_balance_identities: Object.freeze(lotBalances.sort((a, b) => a.lot_id.localeCompare(b.lot_id)).map((row): Readonly<{ lot_id: string; po_line_id: string; lot_number: string; balance_qty: number }> => Object.freeze(row))),
     reservations: Object.freeze(reservations.sort((a, b) => a.source_key.localeCompare(b.source_key)).map((row): VerifiedReservationIdentity & { source_key: string } => Object.freeze(row))),

@@ -1,6 +1,8 @@
 import {
   reconcileGateReceiving,
+  reconcileCsnReceiving,
   indexAuthoritativeLotIds,
+  verifyGrnReceivingCompany,
   verifyReservationIdentity,
   verifyStockLedgerIdentity,
   type VerifiedGateLine,
@@ -65,4 +67,21 @@ Deno.test("stock ledger source identity is never fabricated from company+locatio
   let failed = false;
   try { verifyStockLedgerIdentity("CMP011", s); } catch { failed = true; }
   assert(failed, "cross-company ledger");
+});
+
+Deno.test("CSN receiver and mother/sub-CSN identity stay explicit", () => {
+  const base = { id: "csn-1", po_line_id: "po-line-1", mother_csn_id: null, material_id: "mat-1", owning_company_id: "CMP003", receiving_company_id: "CMP005", status: "IN_TRANSIT", has_children: true };
+  equal(reconcileCsnReceiving("CMP005", base).disposition, "RECEIVING_COMPANY", "CSN belongs to consignee");
+  equal(reconcileCsnReceiving("CMP003", base).disposition, "OTHER_COMPANY_RECEIPT", "PO owner is not physical receiver");
+  let failed = false;
+  try { reconcileCsnReceiving("CMP005", { ...base, id: "" }); } catch { failed = true; }
+  assert(failed, "missing CSN id fails closed");
+});
+
+Deno.test("GRN identity must match the verified receiving company", () => {
+  const grn = { id: "grn-1", company_id: "CMP005", status: "POSTED", gate_entry_line_id: "ge-line-1" };
+  equal(verifyGrnReceivingCompany(grn, "CMP005").status, "POSTED", "correct GRN company");
+  let failed = false;
+  try { verifyGrnReceivingCompany(grn, "CMP003"); } catch { failed = true; }
+  assert(failed, "wrong GRN company fails closed");
 });

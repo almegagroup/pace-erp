@@ -29,6 +29,47 @@ export type ReconciledGateEvidence = Readonly<{
   reason: string;
 }>;
 
+export type VerifiedCsnDocument = Readonly<{
+  id: string;
+  po_line_id: string;
+  mother_csn_id: string | null;
+  material_id: string;
+  owning_company_id: string;
+  receiving_company_id: string;
+  status: string;
+  has_children: boolean;
+}>;
+
+/** A mother CSN remains provenance only once its sub-CSNs are present. */
+export function reconcileCsnReceiving(requestedCompanyId: string, row: VerifiedCsnDocument): VerifiedCsnDocument & { disposition: "RECEIVING_COMPANY" | "OTHER_COMPANY_RECEIPT" } {
+  requiredId(requestedCompanyId, "requested_company_id");
+  requiredId(row.id, "consignment_note.id");
+  requiredId(row.po_line_id, "consignment_note.po_line_id");
+  requiredId(row.material_id, "consignment_note.material_id");
+  requiredId(row.owning_company_id, "consignment_note.company_id");
+  requiredId(row.receiving_company_id, "consignment_note.consignee_company_id");
+  requiredId(row.status, "consignment_note.status");
+  if (row.mother_csn_id !== null) requiredId(row.mother_csn_id, "consignment_note.mother_csn_id");
+  return Object.freeze({ ...row, disposition: row.receiving_company_id === requestedCompanyId ? "RECEIVING_COMPANY" : "OTHER_COMPANY_RECEIPT" });
+}
+
+export type VerifiedGrnDocument = Readonly<{
+  id: string;
+  company_id: string;
+  status: string;
+  gate_entry_line_id: string;
+}>;
+
+/** A GRN's company must be the physical GE receiver, never just the PO owner. */
+export function verifyGrnReceivingCompany(row: VerifiedGrnDocument, receivingCompanyId: string): VerifiedGrnDocument {
+  requiredId(row.id, "goods_receipt.id");
+  const companyId = requiredId(row.company_id, "goods_receipt.company_id");
+  requiredId(row.status, "goods_receipt.status");
+  requiredId(row.gate_entry_line_id, "goods_receipt.gate_entry_line_id");
+  if (companyId !== requiredId(receivingCompanyId, "gate_entry.receiving_company_id")) throw new Error(`PHASE3B_GRN_COMPANY_MISMATCH:${row.id}`);
+  return Object.freeze({ ...row, status: row.status.toUpperCase() });
+}
+
 const BLOCKED_GATE_STATUSES = new Set(["CANCELLED", "PRUNED"]);
 const POSTED_GATE_STATUSES = new Set(["GRN_POSTED"]);
 
