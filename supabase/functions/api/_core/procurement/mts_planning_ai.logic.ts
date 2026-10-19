@@ -21,7 +21,7 @@ const n = (value: unknown) => (value === null || value === undefined || value ==
 
 export function buildPlanningAiPrompt(plan: Plan, focusMaterialName: string | null, question: string | null): string {
   const lines: string[] = [];
-  lines.push("You are a procurement planning assistant for an ERP. Explain the deterministic plan below to the planner in simple Bengali (keep material names, numbers and units as given).");
+  lines.push("You are a procurement planning assistant for an ERP. Explain the deterministic plan below to the planner in simple, plain English (keep material names, numbers and units exactly as given).");
   lines.push("Rules: use ONLY the numbers given here; never invent, round away or change a quantity, date or cost; never say a PO was created. If something is unknown, say it is unknown and what data would fix it. You may suggest what to review or which scenario to re-run (the planner re-runs the system for new numbers).");
   lines.push(`Horizon: ${clean(plan.calendar?.as_of)} to ${clean(plan.calendar?.nm_end)}. Interest ${n(plan.cost_basis?.interest_pct)}%/year, customer pays in ${n(plan.cost_basis?.customer_credit_days)} days.`);
   const buys = (plan.buys ?? []).filter((b) => b.status !== "NO_BUY");
