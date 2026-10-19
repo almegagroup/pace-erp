@@ -595,3 +595,45 @@ Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata i
   assertEqual([partial.sheet_current_req_basis, partial.sheet_current_req, partial.current_prorata_daily], ["CM_REMAINING", 150, 15], "remaining 150 over 10 days");
   assertEqual([partial.reorder_flag, partial.priority_score], [false, null], "stock above reorder level → no priority");
 });
+
+// ── Owner D1/D3/D12: pooled counted stock, fixed first, group-owned shortage ───────
+function rec(partial: Partial<DemandRecord>): DemandRecord {
+  return {
+    day: "2026-11-05", kind: "RM", pool_key: "P", candidates: ["M"], storage_location_id: "R001", qty: 0,
+    prodshade_material_id: "PS", sku_material_id: null, stroke_master_id: "S", stroke_line_id: "L", pack_bom_id: null,
+    pack_bom_line_id: null, outer_qty: null, outer_uom_code: null, fill_qty_per_outer: null, group_id: null,
+    use_primary: null, sort_key: "x", plan_line_contributions: [], ...partial,
+  };
+}
+
+Deno.test("D3/D12: fixed demand is met first; group shortage stays on the group; R003 shown not counted", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"], ["S001", "COUNTED"], ["R003", "TRANSFER_SOURCE"], ["OT01", "EXCLUDED"]]);
+  const records = [
+    // group demand dated BEFORE the fixed demand — fixed still wins (pass 1)
+    rec({ day: "2026-11-03", pool_key: "G", group_id: "G1", use_primary: false, candidates: ["RM-B", "RM-C"], qty: 100 }),
+    rec({ day: "2026-11-05", pool_key: "F", candidates: ["RM-B"], qty: 50, storage_location_id: "R001" }),
+  ];
+  const alloc = allocateDemand(records, calendar, [
+    { material_id: "RM-B", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 40 },
+    { material_id: "RM-B", storage_location_id: "S001", stock_type_code: "UNRESTRICTED", qty: 20 },
+    { material_id: "RM-C", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 30 },
+    { material_id: "RM-C", storage_location_id: "R003", stock_type_code: "UNRESTRICTED", qty: 40 },
+    { material_id: "RM-C", storage_location_id: "OT01", stock_type_code: "UNRESTRICTED", qty: 5 },
+  ], [], true, { locationRoles: roles });
+  assertEqual(alloc.stock.get("RM-B")!.usable_at_required, 60, "R001 + S001 pooled");
+  assertEqual([alloc.stock.get("RM-C")!.usable_at_required, alloc.stock.get("RM-C")!.other_sloc_unrestricted, alloc.stock.get("RM-C")!.excluded_unrestricted], [30, 40, 5], "R003 transfer source, OT01 excluded");
+  assertEqual(alloc.fixedByMaterial.get("RM-B"), 50, "fixed met first");
+  const group = alloc.groups.get("G1")!;
+  assertEqual([group.drawnByMaterial.get("RM-B"), group.drawnByMaterial.get("RM-C"), group.uncoveredByDay.get("2026-11-03")], [10, 30, 60], "group uses leftovers; shortage stays on the group");
+  assertEqual(sum(alloc.dailyByMaterial.get("RM-C")), 30, "no shortage pushed onto a member");
+});
+
+Deno.test("D3: reservations at counted locations are deducted once from the pooled stock", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"], ["P001", "COUNTED"]]);
+  const alloc = allocateDemand([rec({ candidates: ["PM-1"], kind: "PM", qty: 10 })], calendar, [
+    { material_id: "PM-1", storage_location_id: "P001", stock_type_code: "UNRESTRICTED", qty: 25 },
+  ], [{ material_id: "PM-1", storage_location_id: "P001", qty: 20 }], true, { locationRoles: roles });
+  assertEqual([alloc.stock.get("PM-1")!.usable_at_required, alloc.stock.get("PM-1")!.reserved_at_required, sum(alloc.fromStockByMaterial.get("PM-1"))], [5, 20, 5], "25 − 20 reserved = 5 usable");
+});

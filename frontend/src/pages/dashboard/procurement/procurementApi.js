@@ -1857,3 +1857,11 @@ export function getMtsFinanceSettings(params) {
 export function saveMtsFinanceSetting(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/finance-settings", data);
 }
+
+export function getMtsLocationPolicy(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/location-policy", undefined, params);
+}
+
+export function saveMtsLocationPolicy(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/location-policy", data);
+}

@@ -111,6 +111,8 @@ import {
 import {
   getMtsFinanceSettingsHandler,
   getMtsFxRatesHandler,
+  getMtsLocationPolicyHandler,
+  saveMtsLocationPolicyHandler,
   saveMtsFinanceSettingHandler,
   saveMtsFxRateHandler,
 } from "../_core/procurement/mts_planning_cost.handlers.ts";
@@ -832,6 +834,10 @@ export async function dispatchProcurementRoutes(
       return await getMtsFinanceSettingsHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/finance-settings":
       return await saveMtsFinanceSettingHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/location-policy":
+      return await getMtsLocationPolicyHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/location-policy":
+      return await saveMtsLocationPolicyHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
       return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/requirement-demand-evidence":

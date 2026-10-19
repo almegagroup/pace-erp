@@ -31,6 +31,8 @@ import {
   getMtsRequirementReport,
   getMtsFinanceSettings,
   getMtsFxRates,
+  getMtsLocationPolicy,
+  saveMtsLocationPolicy,
   saveMtsFinanceSetting,
   saveMtsFxRate,
   saveMtsRequirementPolicies,
@@ -228,7 +230,7 @@ export default function MtsRequirementPage() {
             </label>
           ) : null}
           <div className="flex flex-wrap gap-1">
-            {[{ id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Cost Settings" }].map((tab) => (
+            {[{ id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -320,14 +322,18 @@ function buildReportColumns(expanded, toggleExpanded) {
     qtyColumn("nm_req", "Req NM", "demand"),
     qtyColumn("nm_prorata_daily", "Prorata NM / day", "demand", { width: "120px" }),
 
-    qtyColumn("current_stock", "CURRENT_STOCK (usable)", "stock", { width: "130px" }),
-    qtyColumn("stock_unrestricted_at_required", "Unrestricted @ Req SLoc", "stock", { width: "130px" }),
-    qtyColumn("stock_reserved_at_required", "Reserved @ Req SLoc", "stock", { width: "120px" }),
-    qtyColumn("stock_other_sloc", "Other SLoc (transfer)", "stock", { width: "120px" }),
+    qtyColumn("current_stock", "CURRENT_STOCK (counted)", "stock", { width: "130px" }),
+    qtyColumn("stock_unrestricted_at_required", "Unrestricted (counted locations)", "stock", { width: "150px" }),
+    qtyColumn("stock_reserved_at_required", "Reserved", "stock", { width: "100px" }),
+    qtyColumn("stock_other_sloc", "Not counted — transfer (R003 / F…)", "stock", { width: "170px" }),
+    textColumn("transfer_suggestion", "Transfer Suggestion", "stock", { width: "200px", render: (r) => (r.transfer_suggestion ? <span className="font-semibold text-amber-800">{r.transfer_suggestion}</span> : dash(null)) }),
+    qtyColumn("stock_excluded", "Excluded (OT…)", "stock", { width: "110px" }),
+    qtyColumn("fixed_demand_qty", "Own fixed demand (CM+NM)", "stock", { width: "150px" }),
+    qtyColumn("group_share_qty", "Used by groups (CM+NM)", "stock", { width: "140px" }),
     qtyColumn("stock_qa", "QA Stock", "stock", { width: "90px" }),
     qtyColumn("stock_blocked", "Blocked", "stock", { width: "90px" }),
-    textColumn("required_locations", "Required SLoc", "stock", { width: "110px", read: (r) => (r.required_locations ?? []).join(", ") }),
-    textColumn("other_locations", "Other SLocs", "stock", { width: "110px", read: (r) => (r.other_locations ?? []).join(", ") }),
+    textColumn("required_locations", "Counted SLocs", "stock", { width: "110px", read: (r) => (r.required_locations ?? []).join(", ") }),
+    textColumn("other_locations", "Transfer SLocs", "stock", { width: "110px", read: (r) => (r.other_locations ?? []).join(", ") }),
 
     qtyColumn("intransit_cm", "INTRANSIT CM", "inbound"),
     qtyColumn("intransit_dispatched", "Dispatched / At Gate", "inbound", { width: "130px" }),
@@ -373,6 +379,59 @@ function buildReportColumns(expanded, toggleExpanded) {
     qtyColumn("lead_time_stock", "Lead time Stock", "leadtime"),
     qtyColumn("total_stock_level", "Total Stock", "leadtime"),
   ];
+}
+
+/** D3: material-null group pools — the group's shortage is never assigned to a member. */
+function GroupsView({ groups, expanded, setExpanded, loading }) {
+  const columns = [
+    { key: "group_label", label: "Group", width: "240px" },
+    { key: "kind", label: "RM / PM", width: "70px" },
+    { key: "cm_demand", label: "Group demand CM (rest)", width: "150px", align: "right", render: (g) => fmtQty(g.cm_demand), copyValue: (g) => g.cm_demand },
+    { key: "nm_demand", label: "Group demand NM", width: "130px", align: "right", render: (g) => fmtQty(g.nm_demand), copyValue: (g) => g.nm_demand },
+    { key: "covered_from_stock", label: "Met from members' stock", width: "160px", align: "right", render: (g) => fmtQty(g.covered_from_stock), copyValue: (g) => g.covered_from_stock },
+    { key: "uncovered_cm", label: "Group shortage CM", width: "130px", align: "right", render: (g) => <span className={g.uncovered_cm > 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(g.uncovered_cm)}</span>, copyValue: (g) => g.uncovered_cm },
+    { key: "uncovered_nm", label: "Group shortage NM", width: "130px", align: "right", render: (g) => <span className={g.uncovered_nm > 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(g.uncovered_nm)}</span>, copyValue: (g) => g.uncovered_nm },
+    { key: "first_uncovered_day", label: "First short day", width: "110px", render: (g) => dash(g.first_uncovered_day) },
+    { key: "cover_days", label: "Cover days", width: "90px", align: "right", render: (g) => (g.cover_days === null ? "Through NM" : g.cover_days) },
+    { key: "members_inbound_total", label: "Members' incoming", width: "130px", align: "right", render: (g) => fmtQty(g.members_inbound_total), copyValue: (g) => g.members_inbound_total },
+    { key: "member_flag", label: "Member below Target / Critical", width: "190px", render: (g) => (g.any_member_below_critical ? badge("CRITICAL") : g.any_member_below_target ? badge("BELOW_TARGET") : "") },
+    {
+      key: "members_btn", label: "Members", width: "90px", filterable: false,
+      render: (g) => (
+        <button type="button" onClick={() => setExpanded((current) => (current === g.group_id ? "" : g.group_id))} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">
+          {expanded === g.group_id ? "Hide" : `Show ${g.members.length}`}
+        </button>
+      ),
+    },
+  ];
+  const memberColumns = [
+    { key: "material_name", label: "Member", width: "260px" },
+    { key: "material_code", label: "Code", width: "110px", render: (m) => dash(m.material_code) },
+    { key: "fixed_demand_qty", label: "Own fixed demand (met first)", width: "180px", align: "right", render: (m) => fmtQty(m.fixed_demand_qty) },
+    { key: "drawn_qty", label: "Given to this group", width: "140px", align: "right", render: (m) => fmtQty(m.drawn_qty) },
+    { key: "usable_stock", label: "Counted stock", width: "120px", align: "right", render: (m) => fmtQty(m.usable_stock) },
+    { key: "target_cov_days", label: "Target / Critical", width: "120px", render: (m) => `${fmtDays(m.target_cov_days) || "—"} / ${fmtDays(m.critical_cov_days) || "—"}` },
+    { key: "flag", label: "Member cover", width: "130px", render: (m) => (m.below_critical ? badge("CRITICAL") : m.below_target ? badge("BELOW_TARGET") : m.below_target === false ? "OK" : "—") },
+  ];
+  return (
+    <div className="grid gap-1">
+      <p className="text-xs text-slate-500">
+        Each member&apos;s own fixed (exclusive) demand is met first from its stock. What is left serves the group. A group shortage is the group&apos;s,
+        bought through the member you select for new buy — it is never charged to one member automatically.
+      </p>
+      <ErpDenseGrid
+        {...GRID_PROPS}
+        columns={columns}
+        rows={groups}
+        rowKey={(g) => g.group_id}
+        renderExpandedRow={(g) => (expanded === g.group_id ? (
+          <div className="bg-slate-50 p-2"><ErpDenseGrid columns={memberColumns} rows={g.members} rowKey={(m) => m.material_id} fitColumnWidths /></div>
+        ) : null)}
+        emptyMessage={loading ? "Calculating…" : "No group pools (Use Primary = No / PM groups) in this plan."}
+        maxHeight="calc(100vh - 380px)"
+      />
+    </div>
+  );
 }
 
 function SourceDetail({ row }) {
@@ -426,6 +485,8 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
   const [riskFilter, setRiskFilter] = useState("ALL");
   const [hiddenGroups, setHiddenGroups] = useState(() => new Set());
   const [expanded, setExpanded] = useState("");
+  const [view, setView] = useState("MATERIALS");
+  const [expandedGroup, setExpandedGroup] = useState("");
   // Rows the grid currently shows after its own column filters (null until it reports).
   const filteredRef = useRef(null);
   const reportKey = ["procurement", "mts-requirement", "report", companyId, planMonth, asOf, demandAt];
@@ -530,6 +591,13 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
           Calculated {new Date(report.provenance.calculated_at).toLocaleString()} · Source {String(report.provenance.source_fingerprint).slice(0, 12)}
         </p>
       ) : null}
+      <div className="flex gap-2">
+        {[{ id: "MATERIALS", label: "Materials" }, { id: "GROUPS", label: `Groups (${report?.groups?.length ?? 0})` }].map((option) => (
+          <button key={option.id} type="button" onClick={() => setView(option.id)} className={`h-7 border px-3 text-xs font-semibold ${view === option.id ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"}`}>
+            {option.label}
+          </button>
+        ))}
+      </div>
       {exceptions.length > 0 ? (
         <details className="border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-800" open>
           <summary className="cursor-pointer font-semibold">{exceptions.length} exception(s) — demand that could not be exploded</summary>
@@ -550,16 +618,20 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
           </ul>
         </details>
       ) : null}
-      <ErpDenseGrid
-        {...GRID_PROPS}
-        columns={columns}
-        rows={rows}
-        rowKey={(row) => row.material_id}
-        onFilteredRowsChange={onFilteredRowsChange}
-        renderExpandedRow={renderExpandedRow}
-        emptyMessage={reportQ.isLoading ? "Calculating…" : reportQ.error ? errorText(reportQ.error) : "No RM / PM materials for this company."}
-        maxHeight="calc(100vh - 380px)"
-      />
+      {view === "GROUPS" ? (
+        <GroupsView groups={(report?.groups ?? []).filter((g) => typeFilter === "ALL" || g.kind === typeFilter)} expanded={expandedGroup} setExpanded={setExpandedGroup} loading={reportQ.isLoading} />
+      ) : (
+        <ErpDenseGrid
+          {...GRID_PROPS}
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => row.material_id}
+          onFilteredRowsChange={onFilteredRowsChange}
+          renderExpandedRow={renderExpandedRow}
+          emptyMessage={reportQ.isLoading ? "Calculating…" : reportQ.error ? errorText(reportQ.error) : "No RM / PM materials for this company."}
+          maxHeight="calc(100vh - 380px)"
+        />
+      )}
     </div>
   );
 }
@@ -1079,6 +1151,27 @@ function CostSettingsTab({ companyId, access, today }) {
     queryFn: () => getMtsFinanceSettings({ company_id: companyId }),
     enabled: Boolean(companyId),
   });
+  const locationQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "location-policy", companyId],
+    queryFn: () => getMtsLocationPolicy({ company_id: companyId }),
+    enabled: Boolean(companyId),
+  });
+  const [roleDrafts, setRoleDrafts] = useState({});
+  const locationRows = locationQ.data?.rows ?? [];
+  async function saveRoles() {
+    setSaving("roles");
+    try {
+      const rowsToSave = Object.entries(roleDrafts).map(([storage_location_id, role]) => ({ storage_location_id, role }));
+      await saveMtsLocationPolicy({ company_id: companyId, rows: rowsToSave });
+      pushToast({ message: `Saved ${rowsToSave.length} location role(s). Recalculate the Requirement to apply.`, tone: "success" });
+      setRoleDrafts({});
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement"] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving("");
+    }
+  }
   const fxRows = fxQ.data?.rows ?? [];
   const effective = fxQ.data?.effective_today ?? null;
   const financeRows = financeQ.data?.rows ?? [];
@@ -1124,8 +1217,40 @@ function CostSettingsTab({ companyId, access, today }) {
     { key: "remarks", label: "Remarks", width: "260px", render: (r) => dash(r.remarks) },
   ];
 
+  const roleLabel = { COUNTED: "Counted", TRANSFER_SOURCE: "Shown + transfer referral", EXCLUDED: "Excluded" };
+  const locationColumns = [
+    { key: "location_code", label: "Location", width: "90px" },
+    { key: "location_name", label: "Name", width: "260px" },
+    {
+      key: "role", label: "Planning role", width: "220px", filterable: false,
+      render: (r) => (
+        <select disabled={!canEdit} value={roleDrafts[r.storage_location_id] ?? r.role} onChange={(event) => setRoleDrafts((c) => ({ ...c, [r.storage_location_id]: event.target.value }))} className={`${INPUT_CLASS} w-52`}>
+          {Object.entries(roleLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      ),
+      copyValue: (r) => roleLabel[r.role] ?? r.role,
+    },
+    { key: "configured", label: "Set", width: "70px", render: (r) => (r.configured ? "Yes" : <span className="text-amber-700">Default</span>) },
+  ];
+
   return (
     <div className="grid gap-4">
+      <section className="grid gap-2">
+        <h3 className="text-sm font-semibold text-slate-800">Stock locations</h3>
+        <p className="text-xs text-slate-500">
+          Counted = usable stock (pooled across all counted locations). Shown + transfer referral = visible, never counted, the Requirement suggests moving it (e.g. R003, F-series).
+          Excluded = ignored (OT01 / OT02). A location not set yet behaves as &quot;Shown + transfer referral&quot;.
+        </p>
+        {canEdit ? (
+          <div>
+            <button type="button" onClick={() => void saveRoles()} disabled={saving === "roles" || Object.keys(roleDrafts).length === 0} className="h-8 border border-sky-600 bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+              {saving === "roles" ? "Saving…" : `Save roles ${Object.keys(roleDrafts).length || ""}`.trim()}
+            </button>
+          </div>
+        ) : null}
+        <ErpDenseGrid {...GRID_PROPS} columns={locationColumns} rows={locationRows} rowKey={(r) => r.storage_location_id} />
+      </section>
+
       <section className="grid gap-2">
         <h3 className="text-sm font-semibold text-slate-800">Exchange rates</h3>
         <p className="text-xs text-slate-500">

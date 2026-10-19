@@ -829,22 +829,50 @@ export type StockRow = { material_id: string; storage_location_id: string; stock
 export type ReservationRow = { material_id: string; storage_location_id: string; qty: number };
 
 export type MaterialStockPosition = {
-  usable_at_required: number;      // UNRESTRICTED − open reservations, at required locations
+  /**
+   * Usable stock = UNRESTRICTED − open reservations. With a company location policy
+   * (owner D1/D12) this is pooled over every COUNTED location; without one it is the
+   * stock at the stroke / Pack BOM line's required location (legacy behaviour).
+   */
+  usable_at_required: number;
   unrestricted_at_required: number;
   reserved_at_required: number;
-  other_sloc_unrestricted: number; // transfer candidates; never usable at the required location
+  /** Shown, never counted: TRANSFER_SOURCE locations (e.g. R003, F-series) → transfer referral. */
+  other_sloc_unrestricted: number;
+  /** Not counted and not referred (e.g. OT01 / OT02 / admix shop floor). */
+  excluded_unrestricted: number;
   quality_inspection: number;
   blocked: number;
   other_stock_types: number;       // IN_TRANSIT / FOR_REPROCESS / RESERVED stock types
-  required_locations: string[];
-  other_locations: string[];
+  required_locations: string[];    // counted (pooled mode) or required locations
+  other_locations: string[];       // transfer-source locations holding stock
+};
+
+/** Company planning role of a storage location (owner D1/D12). */
+export type LocationRole = "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED";
+
+export type GroupPoolDemand = {
+  group_id: string;
+  kind: "RM" | "PM";
+  /** day → group demand (whole pool) and the part stock could not cover (never assigned to a member). */
+  demandByDay: Map<string, number>;
+  uncoveredByDay: Map<string, number>;
+  /** member → qty drawn from that member's stock for this group. */
+  drawnByMaterial: Map<string, number>;
+  candidates: Set<string>;
+  pool_keys: Set<string>;
 };
 
 export type AllocationResult = {
   /** material → day → demand attributed to that material (full horizon). */
   dailyByMaterial: Map<string, Map<string, number>>;
-  /** material → day → part of that demand covered from usable stock at the required location. */
+  /** material → day → part of that demand covered from usable stock. */
   fromStockByMaterial: Map<string, Map<string, number>>;
+  /** material → horizon qty of its own fixed demand / of group demand drawn from its stock. */
+  fixedByMaterial: Map<string, number>;
+  groupShareByMaterial: Map<string, number>;
+  /** Material-null group pools (RM Use Primary = No, PM groups): uncovered demand stays with the group. */
+  groups: Map<string, GroupPoolDemand>;
   /** pool traceability: pool → { candidates, demand, per material }. */
   pools: Map<string, { kind: "RM" | "PM"; candidates: string[]; group_id: string | null; use_primary: boolean | null; storage_location_id: string | null; total: number; byMaterial: Map<string, number>; prodshades: Set<string>; skus: Set<string>; strokes: Set<string>; pack_boms: Set<string>; outer_qty: number; outer_uom_code: string | null; fill_qty_per_outer: number | null }>;
   stock: Map<string, MaterialStockPosition>;
@@ -856,14 +884,25 @@ function bump(map: Map<string, Map<string, number>>, material: string, day: stri
   map.set(material, inner);
 }
 
+/** A group pool whose shortage belongs to the group, not to a member (Phase 2D §3, owner D3). */
+export function isGroupOwnedPool(record: Pick<DemandRecord, "group_id" | "kind" | "use_primary">): boolean {
+  return !!record.group_id && (record.kind === "PM" || record.use_primary === false);
+}
+
+export type AllocationOptions = {
+  /** Company location policy; when present stock is pooled over COUNTED locations (owner D12). */
+  locationRoles?: Map<string, LocationRole>;
+};
+
 /**
  * Same "count once" rule production uses (computeMtsAutoDeriveRowsForGroup,
- * process_order.handlers.ts): per pool, draw from the procurement target's own
- * usable stock first, then the other candidates smallest-available-first, and
- * subtract what was drawn from the shared pool before the next pool. Days are
- * processed chronologically from the as-of date. Whatever stock cannot cover
- * is attributed once to the pool's procurement target (candidates[0]). Days
- * before the as-of date are already consumed and attributed to the target.
+ * process_order.handlers.ts), with the owner's D3 order:
+ *   pass 1 — FIXED lines (one material only) draw from their own material's stock, by date;
+ *   pass 2 — GROUP lines draw from what is left, by date: the procurement target first
+ *            (primary when Use Primary = Yes), then other members smallest-available-first.
+ * Uncovered fixed / Use-Primary-Yes demand is attributed to candidates[0]; uncovered
+ * material-null group demand (Use Primary = No, PM groups) stays with the group.
+ * Days before the as-of date are already consumed and attributed to the target.
  */
 export function allocateDemand(
   records: DemandRecord[],
@@ -871,8 +910,12 @@ export function allocateDemand(
   stockRows: StockRow[],
   reservations: ReservationRow[],
   applyReservations: boolean,
+  options: AllocationOptions = {},
 ): AllocationResult {
-  const usable = new Map<string, number>(); // `${material}|${sloc}` → remaining usable
+  const roles = options.locationRoles;
+  const pooled = !!roles;
+  const roleOf = (location: string): LocationRole => roles?.get(location) ?? "TRANSFER_SOURCE";
+  const usable = new Map<string, number>(); // pooled: material → usable; legacy: material|sloc → usable
   const requiredLocations = new Map<string, Set<string>>();
   for (const record of records) {
     if (!record.storage_location_id) continue;
@@ -895,22 +938,35 @@ export function allocateDemand(
     if (!pos) {
       pos = {
         usable_at_required: 0, unrestricted_at_required: 0, reserved_at_required: 0, other_sloc_unrestricted: 0,
-        quality_inspection: 0, blocked: 0, other_stock_types: 0,
-        required_locations: [...(requiredLocations.get(material) ?? [])].sort(), other_locations: [],
+        excluded_unrestricted: 0, quality_inspection: 0, blocked: 0, other_stock_types: 0,
+        required_locations: pooled ? [] : [...(requiredLocations.get(material) ?? [])].sort(), other_locations: [],
       };
       stock.set(material, pos);
     }
     return pos;
   };
   const otherLocations = new Map<string, Set<string>>();
+  const countedLocations = new Map<string, Set<string>>();
+  const unrestrictedByKey = new Map<string, number>();
   for (const row of stockRows) {
     const qty = Number(row.qty);
     if (Math.abs(qty) <= EPSILON) continue;
     const pos = position(row.material_id);
-    const isRequired = (requiredLocations.get(row.material_id) ?? new Set()).has(row.storage_location_id);
     if (row.stock_type_code === "UNRESTRICTED") {
-      if (isRequired) {
+      const counted = pooled
+        ? roleOf(row.storage_location_id) === "COUNTED"
+        : (requiredLocations.get(row.material_id) ?? new Set()).has(row.storage_location_id);
+      if (counted) {
         pos.unrestricted_at_required += qty;
+        const key = `${row.material_id}|${row.storage_location_id}`;
+        unrestrictedByKey.set(key, (unrestrictedByKey.get(key) ?? 0) + qty);
+        if (pooled) {
+          const set = countedLocations.get(row.material_id) ?? new Set<string>();
+          set.add(row.storage_location_id);
+          countedLocations.set(row.material_id, set);
+        }
+      } else if (pooled && roleOf(row.storage_location_id) === "EXCLUDED") {
+        pos.excluded_unrestricted += qty;
       } else {
         pos.other_sloc_unrestricted += qty;
         const set = otherLocations.get(row.material_id) ?? new Set<string>();
@@ -926,30 +982,49 @@ export function allocateDemand(
     }
   }
   for (const [material, set] of otherLocations) position(material).other_locations = [...set].sort();
-  // Usable pool per required location.
-  const unrestrictedByKey = new Map<string, number>();
-  for (const row of stockRows) {
-    if (row.stock_type_code !== "UNRESTRICTED") continue;
-    const key = `${row.material_id}|${row.storage_location_id}`;
-    unrestrictedByKey.set(key, (unrestrictedByKey.get(key) ?? 0) + Number(row.qty));
-  }
-  for (const [material, locations] of requiredLocations) {
-    const pos = position(material);
-    for (const location of locations) {
-      const key = `${material}|${location}`;
-      const reserved = reservedByKey.get(key) ?? 0;
-      pos.reserved_at_required += reserved;
-      const net = Math.max(0, (unrestrictedByKey.get(key) ?? 0) - reserved);
-      usable.set(key, net);
-      pos.usable_at_required += net;
+  if (pooled) {
+    // Usable per material = Σ over counted locations of max(0, unrestricted − reserved there).
+    const materials = new Set([...countedLocations.keys(), ...[...reservedByKey.keys()].map((key) => key.split("|")[0])]);
+    for (const material of materials) {
+      const pos = position(material);
+      const locations = new Set([
+        ...(countedLocations.get(material) ?? []),
+        ...[...reservedByKey.keys()].filter((key) => key.startsWith(`${material}|`)).map((key) => key.split("|")[1]).filter((loc) => roleOf(loc) === "COUNTED"),
+      ]);
+      pos.required_locations = [...(countedLocations.get(material) ?? [])].sort();
+      let total = 0;
+      for (const location of locations) {
+        const key = `${material}|${location}`;
+        const reserved = reservedByKey.get(key) ?? 0;
+        pos.reserved_at_required += reserved;
+        total += Math.max(0, (unrestrictedByKey.get(key) ?? 0) - reserved);
+      }
+      usable.set(material, total);
+      pos.usable_at_required = total;
+    }
+  } else {
+    for (const [material, locations] of requiredLocations) {
+      const pos = position(material);
+      for (const location of locations) {
+        const key = `${material}|${location}`;
+        const reserved = reservedByKey.get(key) ?? 0;
+        pos.reserved_at_required += reserved;
+        const net = Math.max(0, (unrestrictedByKey.get(key) ?? 0) - reserved);
+        usable.set(key, net);
+        pos.usable_at_required += net;
+      }
     }
   }
 
   const dailyByMaterial = new Map<string, Map<string, number>>();
   const fromStockByMaterial = new Map<string, Map<string, number>>();
+  const fixedByMaterial = new Map<string, number>();
+  const groupShareByMaterial = new Map<string, number>();
+  const groups = new Map<string, GroupPoolDemand>();
   const pools: AllocationResult["pools"] = new Map();
-  // DEPENDENT ordering: each pool draws from the stock left by the pools before it.
-  for (const record of records) {
+  const addTo = (map: Map<string, number>, key: string, qty: number) => map.set(key, (map.get(key) ?? 0) + qty);
+
+  const processRecord = (record: DemandRecord) => {
     const pool = pools.get(record.pool_key) ?? {
       kind: record.kind, candidates: record.candidates, group_id: record.group_id, use_primary: record.use_primary,
       storage_location_id: record.storage_location_id, total: 0, byMaterial: new Map<string, number>(),
@@ -963,17 +1038,42 @@ export function allocateDemand(
     if (record.stroke_master_id) pool.strokes.add(record.stroke_master_id);
     if (record.pack_bom_id) pool.pack_boms.add(record.pack_bom_id);
     pools.set(record.pool_key, pool);
+    const groupOwned = isGroupOwnedPool(record);
+    const isFixed = !record.group_id || record.candidates.length <= 1;
+    let group: GroupPoolDemand | null = null;
+    if (groupOwned) {
+      group = groups.get(record.group_id!) ?? {
+        group_id: record.group_id!, kind: record.kind, demandByDay: new Map(), uncoveredByDay: new Map(),
+        drawnByMaterial: new Map(), candidates: new Set(), pool_keys: new Set(),
+      };
+      record.candidates.forEach((c) => group!.candidates.add(c));
+      group.pool_keys.add(record.pool_key);
+      addTo(group.demandByDay, record.day, record.qty);
+      groups.set(record.group_id!, group);
+    }
     const target = record.candidates[0];
     const attribute = (material: string, qty: number, fromStock: boolean) => {
       bump(dailyByMaterial, material, record.day, qty);
       if (fromStock) bump(fromStockByMaterial, material, record.day, qty);
       pool.byMaterial.set(material, (pool.byMaterial.get(material) ?? 0) + qty);
+      if (isFixed) addTo(fixedByMaterial, material, qty);
+      else if (fromStock) addTo(groupShareByMaterial, material, qty);
+      if (group && fromStock) addTo(group.drawnByMaterial, material, qty);
     };
-    if (record.day < calendar.asOf || !record.storage_location_id) {
-      attribute(target, record.qty, false);
-      continue;
+    const uncovered = (qty: number) => {
+      if (group) addTo(group.uncoveredByDay, record.day, qty);
+      else attribute(target, qty, false);
+    };
+    if (record.day < calendar.asOf) {
+      // Already consumed: not a stock decision. Group-owned demand stays group demand only.
+      if (!group) attribute(target, record.qty, false);
+      return;
     }
-    const keyOf = (material: string) => `${material}|${record.storage_location_id}`;
+    if (!pooled && !record.storage_location_id) {
+      uncovered(record.qty);
+      return;
+    }
+    const keyOf = (material: string) => (pooled ? material : `${material}|${record.storage_location_id}`);
     const ordered = [
       target,
       ...record.candidates.slice(1).sort((a, b) =>
@@ -989,9 +1089,16 @@ export function allocateDemand(
       attribute(material, draw, true);
       remaining -= draw;
     }
-    if (remaining > EPSILON) attribute(target, remaining, false);
-  }
-  return { dailyByMaterial, fromStockByMaterial, pools, stock };
+    if (remaining > EPSILON) uncovered(remaining);
+  };
+
+  // DEPENDENT ordering: pass 1 (fixed) then pass 2 (group); inside each, chronological — each
+  // record draws from the stock left by the records before it.
+  const fixedRecords = records.filter((r) => !r.group_id || r.candidates.length <= 1);
+  const groupRecords = records.filter((r) => r.group_id && r.candidates.length > 1);
+  for (const record of fixedRecords) processRecord(record);
+  for (const record of groupRecords) processRecord(record);
+  return { dailyByMaterial, fromStockByMaterial, fixedByMaterial, groupShareByMaterial, groups, pools, stock };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1553,6 +1660,36 @@ export type RequirementRow = {
   lead_time: LeadTimeResult | null;
   policy: PolicyRow | null;
   from_stock_qty: number;      // horizon demand covered by usable stock in allocation
+  /** D3: this material's own fixed (exclusive) demand vs group demand drawn from its stock (horizon). */
+  fixed_demand_qty: number;
+  group_share_qty: number;
+};
+
+/** D3: one row per material-null group pool (RM Use Primary = No, PM groups). */
+export type GroupRequirementRow = {
+  group_id: string;
+  kind: "RM" | "PM";
+  member_ids: string[];
+  cm_demand: number;            // group demand as-of .. CM end
+  nm_demand: number;
+  covered_from_stock: number;   // drawn from members' counted stock after fixed demand
+  uncovered_cm: number;         // group shortage, never assigned to a member
+  uncovered_nm: number;
+  first_uncovered_day: string | null;
+  cover_days: number | null;    // days from as-of until the first uncovered day (null = covered through NM)
+  members_inbound_total: number;
+  members: Array<{
+    material_id: string;
+    drawn_qty: number;          // this group's demand met from this member
+    fixed_demand_qty: number;   // the member's own exclusive demand (met first)
+    usable_stock: number;
+    target_cov_days: number | null;
+    critical_cov_days: number | null;
+    below_target: boolean | null;
+    below_critical: boolean | null;
+  }>;
+  any_member_below_target: boolean;
+  any_member_below_critical: boolean;
 };
 
 export type RequirementInput = Omit<ExplosionInput, "effective"> & {
@@ -1567,10 +1704,13 @@ export type RequirementInput = Omit<ExplosionInput, "effective"> & {
   leadTimes: Map<string, LeadTimeResult>;
   /** Every RM/PM material of the company's MTS strokes / Pack BOMs (shown even with zero demand). */
   materialUniverse: string[];
+  /** Company planning location roles (owner D1/D12); absent = legacy required-location stock. */
+  locationRoles?: Map<string, LocationRole>;
 };
 
 export type RequirementOutput = {
   rows: RequirementRow[];
+  groups: GroupRequirementRow[];
   warnings: Warning[];
   exceptions: Warning[];
   effective: EffectiveSkuMonth[];
@@ -1588,7 +1728,7 @@ export function moqInBase(policy: PolicyRow | null, material: MaterialInfo | und
 export function buildRequirementRows(input: RequirementInput): RequirementOutput {
   const effective = effectivePlanAt(input.planLines, input.demandAt);
   const explosion = explodeDemand({ ...input, effective });
-  const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations);
+  const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations, { locationRoles: input.locationRoles });
   const warnings = [...explosion.warnings];
   const eventsByMaterial = new Map<string, InboundEvent[]>();
   for (const event of input.inboundEvents) eventsByMaterial.set(event.material_id, [...(eventsByMaterial.get(event.material_id) ?? []), event]);
@@ -1626,7 +1766,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
   ])].sort();
   const emptyStock = (): MaterialStockPosition => ({
     usable_at_required: 0, unrestricted_at_required: 0, reserved_at_required: 0, other_sloc_unrestricted: 0,
-    quality_inspection: 0, blocked: 0, other_stock_types: 0, required_locations: [], other_locations: [],
+    excluded_unrestricted: 0, quality_inspection: 0, blocked: 0, other_stock_types: 0, required_locations: [], other_locations: [],
   });
 
   const rows: RequirementRow[] = materialIds.map((materialId) => {
@@ -1665,6 +1805,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
         unrestricted_at_required: roundQty(stock.unrestricted_at_required),
         reserved_at_required: roundQty(stock.reserved_at_required),
         other_sloc_unrestricted: roundQty(stock.other_sloc_unrestricted),
+        excluded_unrestricted: roundQty(stock.excluded_unrestricted),
         quality_inspection: roundQty(stock.quality_inspection),
         blocked: roundQty(stock.blocked),
         other_stock_types: roundQty(stock.other_stock_types),
@@ -1679,9 +1820,50 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       lead_time: leadTime,
       policy,
       from_stock_qty: roundQty(fromStock),
+      fixed_demand_qty: roundQty(allocation.fixedByMaterial.get(materialId) ?? 0),
+      group_share_qty: roundQty(allocation.groupShareByMaterial.get(materialId) ?? 0),
     };
   });
-  return { rows, warnings, exceptions: explosion.exceptions, effective };
+
+  const rowById = new Map(rows.map((row) => [row.material_id, row]));
+  const { calendar } = input;
+  const groups: GroupRequirementRow[] = [...allocation.groups.values()].map((group) => {
+    const inRange = (map: Map<string, number>, from: string, to: string) =>
+      [...map].filter(([day]) => day >= from && day <= to).reduce((sum, [, qty]) => sum + qty, 0);
+    const uncoveredDays = [...group.uncoveredByDay].filter(([day, qty]) => day >= calendar.asOf && qty > EPSILON).map(([day]) => day).sort();
+    const firstUncovered = uncoveredDays[0] ?? null;
+    const memberIds = [...group.candidates].sort();
+    const members = memberIds.map((id) => {
+      const row = rowById.get(id);
+      return {
+        material_id: id,
+        drawn_qty: roundQty(group.drawnByMaterial.get(id) ?? 0),
+        fixed_demand_qty: row?.fixed_demand_qty ?? 0,
+        usable_stock: row?.stock.usable_at_required ?? 0,
+        target_cov_days: row?.metrics.target_cov_days ?? null,
+        critical_cov_days: row?.metrics.critical_cov_days ?? null,
+        below_target: row?.metrics.below_target ?? null,
+        below_critical: row?.metrics.below_critical ?? null,
+      };
+    });
+    return {
+      group_id: group.group_id,
+      kind: group.kind,
+      member_ids: memberIds,
+      cm_demand: roundQty(inRange(group.demandByDay, calendar.asOf, calendar.cmEnd)),
+      nm_demand: roundQty(inRange(group.demandByDay, calendar.nmStart, calendar.nmEnd)),
+      covered_from_stock: roundQty([...group.drawnByMaterial.values()].reduce((sum, qty) => sum + qty, 0)),
+      uncovered_cm: roundQty(inRange(group.uncoveredByDay, calendar.asOf, calendar.cmEnd)),
+      uncovered_nm: roundQty(inRange(group.uncoveredByDay, calendar.nmStart, calendar.nmEnd)),
+      first_uncovered_day: firstUncovered,
+      cover_days: firstUncovered === null ? null : daysInclusive(calendar.asOf, firstUncovered) - 1,
+      members_inbound_total: roundQty(memberIds.reduce((sum, id) => sum + (rowById.get(id)?.inbound.total ?? 0), 0)),
+      members,
+      any_member_below_target: members.some((m) => m.below_target === true),
+      any_member_below_critical: members.some((m) => m.below_critical === true),
+    };
+  }).sort((a, b) => a.group_id.localeCompare(b.group_id));
+  return { rows, groups, warnings, exceptions: explosion.exceptions, effective };
 }
 
 export type UomConversion = { from_uom_code: string; to_uom_code: string; conversion_factor: number | null; variable_conversion: boolean | null; active: boolean | null };

@@ -181,3 +181,75 @@ export async function saveMtsFinanceSettingHandler(req: Request, ctx: ReqHandler
     return handleError(req, ctx, error, "MTS_FINANCE_SAVE_FAILED", "Could not save the interest %.");
   }
 }
+
+const LOCATION_ROLES = new Set(["COUNTED", "TRANSFER_SOURCE", "EXCLUDED"]);
+
+/** Company plant locations with their PO22 planning role (owner D1/D12); no row = TRANSFER_SOURCE. */
+export async function getMtsLocationPolicyHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = text(url.searchParams.get("company_id"));
+    if (!companyId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id is required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementViewAccess(req, ctx, companyId);
+    if (denied) return denied;
+    const [mapRes, policyRes] = await Promise.all([
+      serviceRoleClient.schema("erp_inventory").from("storage_location_plant_map").select("storage_location_id").eq("company_id", companyId).limit(2000),
+      serviceRoleClient.schema("erp_planning").from("company_planning_location_policy").select("storage_location_id, role, remarks, updated_at").eq("company_id", companyId).limit(2000),
+    ]);
+    if (mapRes.error) throw new Error("MTS_LOCATION_POLICY_LOAD_FAILED");
+    const policy = new Map(((policyRes.data ?? []) as JsonRecord[]).map((row) => [text(row.storage_location_id), row]));
+    const ids = [...new Set(((mapRes.data ?? []) as JsonRecord[]).map((row) => text(row.storage_location_id)).filter(Boolean))];
+    const { data: locations, error } = ids.length === 0 ? { data: [], error: null } : await serviceRoleClient.schema("erp_inventory")
+      .from("storage_location_master").select("id, code, name").in("id", ids);
+    if (error) throw new Error("MTS_LOCATION_POLICY_LOAD_FAILED");
+    const rows = ((locations ?? []) as JsonRecord[]).map((location) => {
+      const row = policy.get(text(location.id));
+      return {
+        storage_location_id: text(location.id),
+        location_code: text(location.code),
+        location_name: text(location.name),
+        role: row ? text(row.role) : "TRANSFER_SOURCE",
+        configured: Boolean(row),
+        remarks: row ? text(row.remarks) || null : null,
+        updated_at: row?.updated_at ?? null,
+      };
+    }).sort((a, b) => a.location_code.localeCompare(b.location_code));
+    return okResponse({ rows, policy_table_ready: !policyRes.error }, ctx.request_id, req);
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_LOCATION_POLICY_LOAD_FAILED", "Could not load the location policy.");
+  }
+}
+
+export async function saveMtsLocationPolicyHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const body = await req.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+    const companyId = text(body.company_id);
+    if (!companyId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id is required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementPolicyAccess(req, ctx, companyId);
+    if (denied) return denied;
+    const raw = Array.isArray(body.rows) ? body.rows as JsonRecord[] : [];
+    if (raw.length === 0 || raw.length > 500) return fail(req, ctx, "MTS_LOCATION_POLICY_INVALID_INPUT", 400, "Send 1–500 location rows.");
+    const { data: mapRows, error: mapError } = await serviceRoleClient.schema("erp_inventory").from("storage_location_plant_map")
+      .select("storage_location_id").eq("company_id", companyId).limit(2000);
+    if (mapError) throw new Error("MTS_LOCATION_POLICY_SAVE_FAILED");
+    const allowed = new Set(((mapRows ?? []) as JsonRecord[]).map((row) => text(row.storage_location_id)));
+    const now = new Date().toISOString();
+    const rows = [];
+    for (const row of raw) {
+      const locationId = text(row.storage_location_id);
+      const role = text(row.role).toUpperCase();
+      if (!allowed.has(locationId) || !LOCATION_ROLES.has(role)) {
+        return fail(req, ctx, "MTS_LOCATION_POLICY_INVALID_INPUT", 400, "Each row needs one of this company's locations and a role COUNTED / TRANSFER_SOURCE / EXCLUDED.");
+      }
+      rows.push({ company_id: companyId, storage_location_id: locationId, role, remarks: text(row.remarks).slice(0, 300) || null, updated_by: ctx.auth_user_id, updated_at: now });
+    }
+    const { error } = await serviceRoleClient.schema("erp_planning").from("company_planning_location_policy")
+      .upsert(rows, { onConflict: "company_id,storage_location_id" });
+    if (error) throw new Error("MTS_LOCATION_POLICY_SAVE_FAILED");
+    return okResponse({ saved: rows.length }, ctx.request_id, req);
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_LOCATION_POLICY_SAVE_FAILED", "Could not save the location policy.");
+  }
+}

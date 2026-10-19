@@ -61,6 +61,7 @@ import {
   type InboundEvent,
   isIsoDate,
   type LeadTimeResult,
+  type LocationRole,
   type MaterialInfo,
   type PackBomInfo,
   partitionPoLineInbound,
@@ -393,6 +394,17 @@ async function loadReservations(companyId: string, materialIds: string[]): Promi
     .map((row) => ({ material_id: text(row.material_id), storage_location_id: text(row.storage_location_id), qty: Number(row.balance_qty ?? 0) }));
 }
 
+/**
+ * Company planning location roles (owner D1/D12). Returns null when the company has no
+ * policy yet (or the table is not deployed), which keeps the legacy required-location rule.
+ */
+export async function loadLocationRoles(companyId: string): Promise<Map<string, LocationRole> | null> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").from("company_planning_location_policy")
+    .select("storage_location_id, role").eq("company_id", companyId).limit(2000);
+  if (error || !data || data.length === 0) return null;
+  return new Map((data as JsonRecord[]).map((row) => [text(row.storage_location_id), text(row.role) as LocationRole]));
+}
+
 type InboundLoad = { events: InboundEvent[]; warnings: Warning[]; poNumbers: number; csnCount: number };
 
 /** Open PO lines of this company → GE / CSN / lot / remainder partition; plus STO CSNs into this company. */
@@ -722,11 +734,12 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     }
     const universeSet = new Set(universe);
     const applyReservations = asOf >= today;
-    const [stockLoad, reservations, inbound, leadTimes] = await Promise.all([
+    const [stockLoad, reservations, inbound, leadTimes, locationRoles] = await Promise.all([
       loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
       applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
       loadInbound(companyId, asOf, materials, universeSet),
       loadLeadTimes(companyId, asOf, universe),
+      loadLocationRoles(companyId),
     ]);
 
     const prodshadeLabels = new Map(masters.prodshadeIds.map((pid) => [pid, text(materialRows.get(pid)?.material_name) || pid]));
@@ -751,6 +764,7 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
       policies: policyLoad.policies,
       leadTimes,
       materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
+      locationRoles: locationRoles ?? undefined,
     };
     const output = buildRequirementRows(input);
     const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
@@ -759,7 +773,7 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     const locationIds = unique(output.rows.flatMap((row) => [
       ...row.stock.required_locations, ...row.stock.other_locations, ...row.pools.map((p) => p.storage_location_id),
     ]));
-    const groupIds = unique(output.rows.flatMap((row) => row.pools.map((p) => p.group_id)));
+    const groupIds = unique([...output.rows.flatMap((row) => row.pools.map((p) => p.group_id)), ...output.groups.map((g) => g.group_id)]);
     const [locationLabels, groupRows, policyUsers] = await Promise.all([
       loadLocationLabels(locationIds),
       groupIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
@@ -797,6 +811,13 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         other_locations: row.stock.other_locations.map(loc),
         intransit_total: row.inbound.total,
         from_stock_qty: row.from_stock_qty,
+        stock_excluded: row.stock.excluded_unrestricted,
+        fixed_demand_qty: row.fixed_demand_qty,
+        group_share_qty: row.group_share_qty,
+        // D1/D12: stock in a transfer-source location (R003, F-series, unconfigured) is shown, not counted.
+        transfer_suggestion: row.stock.other_sloc_unrestricted > 0
+          ? `${row.stock.other_locations.map(loc).join(", ")} → ${unique(row.pools.map((p) => p.storage_location_id)).map(loc).join(" / ") || "required location"}`
+          : null,
         lead_time_effective: row.lead_time?.effective ?? null,
         lead_time_source: row.lead_time?.effective_source ?? "UNKNOWN",
         lead_time_configured_min: row.lead_time?.configured_min ?? null,
@@ -836,6 +857,12 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
       };
     }).sort((a, b) => a.material_type.localeCompare(b.material_type) || a.material_name.localeCompare(b.material_name));
 
+    const groups = output.groups.map((group) => ({
+      ...group,
+      group_label: groupLabel.get(group.group_id) ?? "—",
+      members: group.members.map((member) => ({ ...member, material_name: nameOf(member.material_id), material_code: text(materialRows.get(member.material_id)?.pace_code) || null })),
+    })).sort((a, b) => a.group_label.localeCompare(b.group_label));
+
     const labelWarning = (w: Warning) => ({
       code: w.code,
       message: w.message,
@@ -849,6 +876,9 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     }
     if (masters.ambiguousCount > 0) {
       notes.push({ code: "AMBIGUOUS_SKUS", message: `${masters.ambiguousCount} Prodshade/pack combination(s) match more than one SKU by name and are excluded (same rule as PO21).` });
+    }
+    if (!locationRoles) {
+      notes.push({ code: "LOCATION_POLICY_NOT_SET", message: "No planning location policy for this company yet: stock is counted only at each stroke / Pack BOM line's own location (legacy rule)." });
     }
     notes.push({ code: "CROSS_COMPANY_ALLOCATION_NOT_AVAILABLE", message: "No cross-company production allocation is stored in PO21 yet; all demand is exploded with this company's Stroke and Pack BOM." });
 
@@ -867,10 +897,14 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         open_purchase_orders: inbound.poNumbers,
         open_csns: inbound.csnCount,
         reservations_applied: applyReservations,
-        stock_basis: "Posted stock ledger balance at the start of the as-of day (erp_inventory.get_stock_history).",
+        stock_basis: locationRoles
+          ? "Posted UNRESTRICTED stock at the company's COUNTED locations (pooled), minus open reservations there, at the start of the as-of day."
+          : "Posted stock ledger balance at the start of the as-of day (erp_inventory.get_stock_history), at each line's own location.",
+        location_policy: locationRoles ? "COMPANY_POLICY" : "LEGACY_REQUIRED_LOCATION",
         consumption_basis: "Net P261 − P262 posted from the plan-month start to the day before the as-of date.",
       },
       rows,
+      groups,
       exceptions: output.exceptions.map(labelWarning),
       warnings: [...notes, ...masters.warnings, ...output.warnings, ...inbound.warnings].map(labelWarning),
     }, ctx.request_id, req);
