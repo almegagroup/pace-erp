@@ -112,6 +112,18 @@ operational action.
 No live database query, write, migration application, ACL provisioning,
 deployment, or promotion was part of this evidence.
 
+### 2026-10-19 owner decision — PO22 implementation owner is Claude
+
+The business owner assigned **all remaining PO22 work to Claude**: data inputs
+(vendor MOQ/multiple/Booking Time, item Rate, FX rates, BOE rate, company
+interest %), engine fixes, Requirement-tab alignment, run assembly, Planning
+tab, Store report, cost-to-cost comparison and AI. Codex and ChatGPT do **not**
+implement PO22; they may review a finished step. Codex's existing PO22 commits
+are already on `dev` and are the base Claude builds on. Owner decisions D1–D11
+are in `common:docs/po22-common/OWNER-DECISIONS-2026-10-19-REQUIREMENT-AND-GROUPS.md`.
+"Codex owns / remains implementation owner" wording in older rows below is
+superseded by this decision.
+
 ### 2026-10-19 owner decision — one progressive line on `dev`
 
 Owner: every agent's work goes to `dev`, no agent repeats another's topic,
@@ -134,7 +146,7 @@ only the next unclaimed item for its module.
    record commits, changed paths, equivalence/conflict decision, dependencies,
    and test evidence. A divergent branch becomes read-only evidence.
 4. **One implementation owner per module.** The register assigns PO22 to
-   Codex. For other modules, assign a single owner before implementation; other
+   Claude (owner decision 2026-10-19). For other modules, assign a single owner before implementation; other
    agents may provide review evidence but do not create competing integrations.
 5. **Commit phase evidence together.** Code, tests, migrations, ACL proposal,
    documentation, and this register update belong in the same phase commit
