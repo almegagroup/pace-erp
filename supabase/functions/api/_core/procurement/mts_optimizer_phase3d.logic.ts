@@ -91,7 +91,10 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
     const required = Math.max(0, roundQty((targetFloor ?? 0) - balance));
     if (required <= EPSILON) { buys.push(freeze({ material_id: materialId, required_qty_base: 0, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null, status: "NO_BUY", reason: "Projected closing balance meets the available target policy.", advisory_only: true as const })); continue; }
     if (policy.configured_lead_time_days === null || !Number.isInteger(policy.configured_lead_time_days) || policy.configured_lead_time_days < 0) { buys.push(freeze({ material_id: materialId, required_qty_base: required, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null, status: "UNKNOWN_LEAD_TIME", reason: "Configured plant lead time is missing or invalid; PO-by date is unknown.", advisory_only: true as const })); continue; }
-    const eta = shortageDay ?? input.horizon_end;
+    // A purchase must arrive before the first policy coverage breach, not only
+    // when the projected balance becomes negative.  First negative stock is a
+    // diagnostic risk, never the automatic target consignment date.
+    const eta = criticalDay ?? targetDay ?? shortageDay ?? input.horizon_end;
     buys.push(freeze({ material_id: materialId, required_qty_base: required, recommended_po_qty_base: applyOrderConstraints(required, policy), recommended_po_by: addDays(eta, -policy.configured_lead_time_days), estimated_plant_eta: eta, status: "ADVISORY", reason: "Deterministic target-floor replenishment; lead time already includes processing and plant delivery.", advisory_only: true as const }));
   }
   return freeze({ rows: rows.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.day.localeCompare(b.day)), risks: risks.sort((a, b) => a.material_id.localeCompare(b.material_id)), advisory_buys: buys.sort((a, b) => a.material_id.localeCompare(b.material_id)) });

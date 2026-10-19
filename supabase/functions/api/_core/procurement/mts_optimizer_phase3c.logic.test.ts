@@ -59,6 +59,15 @@ Deno.test("group membership is scoped to its formulation source line, not pooled
   assert(result.exceptions.some((item) => item.code === "NO_ACTIVE_GROUP_MEMBER"), "missing source-scoped membership is explicit");
 });
 
+Deno.test("group member evidence with a mismatched group ID blocks the demand source", () => {
+  const result = allocate(source({
+    stock: [{ source_key: "m1", company_id: "CMP003", material_id: "M1", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 5, uom_code: "KG", posted_at: "2026-10-18" }],
+    demand: [{ source_key: "pool", company_id: "CMP003", product_id: "P1", source_line_id: "L1", required_by: null, demand_kind: "GROUP_POOL", group_id: "G1", material_id: null, uom_evidence: { base_uom_code: "KG", to_base_factors: { KG: 1 }, source: "test" }, qty: 5, uom_code: "KG" }],
+  }), [{ demand_source_key: "pool", group_id: "WRONG-GROUP", material_id: "M1", active: true, source_key: "wrong-member" }]);
+  equal(result.rows.map((row) => [row.allocation_state, row.material_id, row.executable_qty_base, row.uncovered_qty_base]), [["BLOCKED", null, 0, 5]], "wrong group evidence cannot allocate stock");
+  assert(result.exceptions.some((item) => item.code === "GROUP_MEMBER_GROUP_MISMATCH"), "mismatch remains visible");
+});
+
 Deno.test("future inbound is projection evidence and cannot become executable Store quantity", () => {
   const result = allocate(source({
     stock: [{ source_key: "m1", company_id: "CMP003", material_id: "M1", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 2, uom_code: "KG", posted_at: "2026-10-18" }],

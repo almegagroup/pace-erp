@@ -31,6 +31,24 @@ Deno.test("lead time determines advisory PO-by date without adding processing tw
   equal([buy.status, buy.estimated_plant_eta, buy.recommended_po_by, buy.recommended_po_qty_base], ["ADVISORY", "2026-10-20", "2026-10-17", 25], "configured lead time is used once");
 });
 
+Deno.test("arrival target is the first Critical/Target coverage breach, not first negative stock", () => {
+  const result = projectDailyCoverage(input({
+    opening_qty_by_material: { M1: 10 },
+    horizon_end: "2026-10-23",
+    daily_demand: [
+      { source_key: "d1", material_id: "M1", required_by: "2026-10-19", qty_base: 3 },
+      { source_key: "d2", material_id: "M1", required_by: "2026-10-20", qty_base: 3 },
+      { source_key: "d3", material_id: "M1", required_by: "2026-10-21", qty_base: 3 },
+      { source_key: "d4", material_id: "M1", required_by: "2026-10-22", qty_base: 3 },
+    ],
+    policies: [{ ...policy(), target_days: 2, critical_days: 1, configured_lead_time_days: 2 }],
+  }));
+  const risk = result.risks[0];
+  const buy = result.advisory_buys[0];
+  equal([risk.first_below_target_day, risk.first_below_critical_day, risk.first_shortage_day], ["2026-10-20", "2026-10-21", "2026-10-22"], "policy risks are distinct");
+  equal([buy.estimated_plant_eta, buy.recommended_po_by], ["2026-10-21", "2026-10-19"], "critical coverage breach drives the arrival target");
+});
+
 Deno.test("missing Target/Critical policy stays UNKNOWN even when current stock is positive", () => {
   const result = projectDailyCoverage(input({ policies: [] }));
   equal(result.advisory_buys[0].status, "UNKNOWN_POLICY", "policy absence cannot silently become a no-buy decision");

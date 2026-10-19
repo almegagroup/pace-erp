@@ -66,13 +66,13 @@ function materialStates(snapshot: OptimizerInputSnapshot): Map<string, MaterialS
   return result;
 }
 
-function membersByDemand(rows: readonly OptimizerGroupMember[]): Map<string, string[]> {
+function membersByDemandGroup(rows: readonly OptimizerGroupMember[]): Map<string, string[]> {
   const out = new Map<string, Set<string>>();
   for (const row of rows) {
     if (!row.active || !row.demand_source_key || !row.group_id || !row.material_id || !row.source_key) continue;
-    const set = out.get(row.demand_source_key) ?? new Set<string>();
+    const set = out.get(`${row.demand_source_key}\u0000${row.group_id}`) ?? new Set<string>();
     set.add(row.material_id);
-    out.set(row.demand_source_key, set);
+    out.set(`${row.demand_source_key}\u0000${row.group_id}`, set);
   }
   return new Map([...out.entries()].map(([demandSource, members]) => [demandSource, [...members].sort()]));
 }
@@ -95,7 +95,14 @@ function rowFor(demand: OptimizerDemandInput, materialId: string | null, executa
 export function allocateCurrentPhysicalStock(input: OptimizerAllocationInput): OptimizerAllocationResult {
   const snapshot = input.snapshot;
   const states = materialStates(snapshot);
-  const members = membersByDemand(input.group_members);
+  const members = membersByDemandGroup(input.group_members);
+  const suppliedGroupsByDemand = new Map<string, Set<string>>();
+  for (const member of input.group_members) {
+    if (!member.active || !member.demand_source_key || !member.group_id || !member.material_id || !member.source_key) continue;
+    const groups = suppliedGroupsByDemand.get(member.demand_source_key) ?? new Set<string>();
+    groups.add(member.group_id);
+    suppliedGroupsByDemand.set(member.demand_source_key, groups);
+  }
   const rows: OptimizerAllocationRow[] = [];
   const exceptions: OptimizerAllocationException[] = [];
   const demands = [...snapshot.demand].sort(demandSort);
@@ -127,7 +134,13 @@ export function allocateCurrentPhysicalStock(input: OptimizerAllocationInput): O
       rows.push(rowFor(demand, null, 0, remainingNeed, true, "GROUP_ID_MISSING"));
       continue;
     }
-    const candidateIds = members.get(demand.source_key) ?? [];
+    const suppliedGroups = suppliedGroupsByDemand.get(demand.source_key);
+    if (suppliedGroups && !suppliedGroups.has(demand.group_id)) {
+      exceptions.push(freeze({ code: "GROUP_MEMBER_GROUP_MISMATCH", source_key: demand.source_key, material_id: null, message: "Group-member evidence belongs to a different group than the demand source and was rejected." }));
+      rows.push(rowFor(demand, null, 0, remainingNeed, true, "GROUP_MEMBER_GROUP_MISMATCH"));
+      continue;
+    }
+    const candidateIds = members.get(`${demand.source_key}\u0000${demand.group_id}`) ?? [];
     const candidates = candidateIds.map((id) => [id, states.get(id)] as const)
       .filter((pair): pair is readonly [string, MaterialState] => !!pair[1] && pair[1].base_uom_code === demand.base_uom_code && !pair[1].blocked)
       // Prefer the greatest *currently available* eligible quantity; tie-break
