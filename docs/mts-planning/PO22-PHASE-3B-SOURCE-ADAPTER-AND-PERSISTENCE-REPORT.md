@@ -1,5 +1,8 @@
 # PO22 Phase 3B — Source Adapters, Monthly Selection and Snapshot Persistence
 
+> Canonical integration state, accepted-baseline status, branch evidence and
+> next actions are maintained only in `docs/INTEGRATION-REGISTER.md`.
+
 Date: 2026-10-17 (implementation integration updated 2026-10-19)
 Status: source-identity readers, company-scoped evidence/selection APIs, append-only selection-save migration and immutable snapshot persistence service are implemented in code for review. No DEV/PROD write, migration application, ACL provisioning, deployment, allocation solver, transfer or purchase-order action has run.
 

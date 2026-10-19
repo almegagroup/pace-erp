@@ -50,6 +50,13 @@ that also fails, the branches diverged and the business owner decides.
 Two agents never promote at the same time: finish step 3 before the next
 agent starts step 2.
 
+## Canonical integration register
+
+`docs/INTEGRATION-REGISTER.md` is the repository-wide source of truth for
+active agent work, branch evidence, accepted baselines, blockers, and next
+actions. Update its relevant row in the same commit as each phase; its status
+does not override the fast-forward-only rules above.
+
 ## Archive of branches removed in the 2026-10-13 cleanup
 
 Every one of these was verified to be fully contained in `main`
