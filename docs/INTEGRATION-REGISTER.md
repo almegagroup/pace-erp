@@ -51,6 +51,7 @@ for the fast-forward process.
 | Phase 3A normalization, immutable snapshots, fail-closed UOM/stock/inbound policy | `main`: `c7dfe79e`, `dc4a24e6` | Complete source-contract foundation | **Yes** | 13 normalization tests included in current 57-test run | Real source extraction remains a dependency | Codex preserves and regresses before every later phase |
 | Phase 3B pure adapter / table migration foundation | `main`: `ba8aca7e`, `02e4d6cd` | Partial accepted foundation | **Yes** for pure contracts/table migration only | 13 Phase 3B logic tests included in current run | API/reader/selection save were not in accepted baseline | Codex adds controlled implementation below |
 | Phase 3B physical identity readers (PO, GE, CSN/sub-CSN, GRN, lot, reservation, ledger), company scope, selection API, snapshot persistence | `agent/codex`: `74c406d8`, `40cc0b63`, `4b1925cd`; overlapping review evidence `agent/chatgpt`: `e3247a24`…`02e2243a` | Implemented on Codex branch; reimplemented linearly, not history-integrated | **No** — pending explicit fast-forward promotion | 78/78 Deno tests; direct handler/source-reader checks and ACL/company-scope guards pass | Bounded read-only production reconciliation confirmed PO/GE/GRN identity joins and identified STO CSNs as a separate, valid consignee-owned lifecycle family. PO21/formulation demand evidence is now exposed by a company-scoped VIEW endpoint. Persisted combined run assembly and approved migration/ACL application remain pending. | Assemble only verified evidence into a snapshot; Codex remains implementation owner |
+| PO21 effective plan-line version attribution per demand (defect #1) | `d42e60a` on top of `agent/codex` `910ec92` | Implemented by Claude on the Codex line | Promoted to `dev`, **not** `main` | 84/84 Deno tests (78 existing unchanged + 6 new), `deno check` clean, all CI guards pass | Attribution only — CM/NM/`buildRequirementRows()` numbers unchanged (regression test). Adapter fails closed with `PLAN_LINE_ATTRIBUTION_MISSING`. Reader `plan_line_source_ids` = effective versions only (+ `loaded_plan_line_count`). | Codex continues PO22 from `origin/dev` |
 | Phase 3C fixed/group joint dated allocation | `agent/codex`: `2ba56276`, `2ac5bcb1`, `31029d43` | Core deterministic allocator plus verified demand-evidence adapter implemented on Codex branch | **No** — pending explicit fast-forward promotion | 78/78 Deno tests after the adapter | PO21 plan versions, Stroke Lines, Pack BOM INPUT lines and group-member identities now flow through a read-only source reader. Source-to-stock/snapshot run assembly and a complete PM group eligibility decision remain pending. | Assemble verified demand/stock/inbound evidence into one snapshot; Codex |
 | Phase 3D coverage, consignments, MOQ/order multiple, PO-by / ETA recommendations | `agent/codex`: `3c0ce204`, `f2ff8d5f`, `2ac5bcb1` | Daily coverage and advisory buy core implemented on Codex branch | **No** — pending explicit fast-forward promotion | 73/73 Deno tests, including ETA, unallocated group pool, MOQ/multiple, lead-time, missing-policy and coverage-driven arrival cases | Demand reader now exists but is not yet assembled with a persisted snapshot. It never treats projected arrival as executable Store stock; missing Target/Critical remains `UNKNOWN_POLICY`; Critical/Target breach drives ETA rather than first negative balance. Real vendor/route terms are still required for commercial scenarios. | Connect only verified snapshots and commercial evidence; Codex |
 | Phase 3E PO22 planning UI, Store instructions, export/exceptions | None | Pending | No | Not started | Depends on 3D deterministic outputs and ACL rollout | Sequentially after 3D; Codex |
@@ -110,6 +111,16 @@ operational action.
 
 No live database query, write, migration application, ACL provisioning,
 deployment, or promotion was part of this evidence.
+
+### 2026-10-19 owner decision — one progressive line on `dev`
+
+Owner: every agent's work goes to `dev`, no agent repeats another's topic,
+work must be progressive; `dev` → `main` is the owner's later release step.
+See the continuity rule in `docs/BRANCH-WORKFLOW.md`. `dev` carries the Codex
+line (`910ec92`, incl. migration `20261019070346` and the PO22 evidence route)
+plus `d42e60a`; `main` is untouched, so that migration/route reach PROD only at
+the owner's release. Before starting, each agent reads this register and takes
+only the next unclaimed item for its module.
 
 ## Cross-module coordination procedure
 

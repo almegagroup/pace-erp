@@ -57,6 +57,27 @@ active agent work, branch evidence, accepted baselines, blockers, and next
 actions. Update its relevant row in the same commit as each phase; its status
 does not override the fast-forward-only rules above.
 
+## Continuity rule — `dev` may run ahead of `main` (owner decision 2026-10-19)
+
+Pushing to `main` runs `.github/workflows/deploy-prod.yml` (a PROD deploy), so
+`main` moves only on the owner's explicit release decision. Until then:
+
+- Every finished, checked piece of work goes `agent/<name>` → `dev`
+  (fast-forward only). `dev` is the single shared line all three agents build on.
+- **Step 0 of every task becomes** `git merge --ff-only origin/dev` (not
+  `origin/main`). Because `main` is always an ancestor of `dev`, this never
+  loses anything and every agent always starts from everyone's latest work.
+- Promotion check becomes `git merge-base --is-ancestor origin/dev HEAD`, then
+  `git push origin HEAD:dev`. Verify `HEAD == origin/agent/<name> == origin/dev`.
+- Release: on the owner's go, `git push origin origin/dev:main` (fast-forward),
+  after migration/ACL checks for that release. Then `dev == main` again.
+- One agent promotes to `dev` at a time; record it in `docs/INTEGRATION-REGISTER.md`.
+
+If an agent branch has diverged from `dev`, its unique work is first checked
+against `dev`. Work that is already superseded is archived (table below) and,
+with the owner's approval, the branch is re-pointed once to `origin/dev` —
+never merged around.
+
 ## Archive of branches removed in the 2026-10-13 cleanup
 
 Every one of these was verified to be fully contained in `main`
@@ -73,3 +94,4 @@ no commit was lost. To recover one: `git push origin <sha>:refs/heads/<name>`.
 | `feature/ai-core-phase2-mts-contract-20261013` | `210f0d4f12eb2c394da9ff84edf49882c2cab62c` | #647 |
 | `feature/mts-planning-phase1-data-foundation-20261013` | `f349881ea6c64e49fd0bc67e7c0057fa0ae5bde9` | #650 |
 | `pre-so01-excel-upload` | `5494e688fff7783558e9f028cb4139594527c647` | — (2026-10-08 snapshot) |
+| `agent/claude` (pre re-point, 2026-10-19) | `cbe1e957977519879cf7ec24e699e5d59a68fd49` | #675 (closed). Re-pointed to the shared `dev` line with owner approval; its `ec8758b` content is in `main` as `12762593` and later main commits supersede the rest |
