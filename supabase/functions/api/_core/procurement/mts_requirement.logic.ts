@@ -1268,6 +1268,8 @@ export type PoLineInboundInput = {
   open_qty: number;              // PO unit (open = ordered − GRN posted)
   base_per_po_unit: number | null; // ordered_qty_base_uom / ordered_qty
   expected_delivery_date: string | null;
+  /** PO delivery type. BULK POs never get a CSN in this ERP (owner 2026-10-20). */
+  delivery_type?: string | null;
   at_gate: Array<{ qty_base: number; reference: string; date: string | null }>; // GE lines not yet GRN-posted
   csns: Array<{ csn_number: string; status: string; dispatch_qty: number | null; received_qty: number | null; eta: string | null; is_mother_with_children: boolean }>;
   lots: Array<{ lot_number: string; balance_qty: number; delivery_date: string | null }>; // PO unit
@@ -1286,6 +1288,7 @@ const CSN_CLOSED = new Set(["GRD", "GED", "KOF", "CAN"]);
  *   1. arrived at gate, GRN not yet posted (dated the as-of day)
  *   2. dispatched CSNs (TRN / ORD with a dispatch qty) at their ETA to plant
  *   3. PO lot balances at their delivery date
+ *   4. BULK PO: remainder available from the as-of day (call-off, no CSN — owner 2026-10-20)
  *   4. remainder at the earliest ETA of a not-yet-dispatched CSN, else the PO
  *      expected delivery date, else UNKNOWN.
  * The PO line is the ceiling; CSN po_qty is never summed; a mother CSN that
@@ -1332,6 +1335,12 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
         date_source: lot.delivery_date ? "LOT_DELIVERY_DATE" : "NONE", reference: `${ref} · Lot ${lot.lot_number}`,
       });
     }
+  }
+  if (remaining > EPSILON && String(line.delivery_type ?? "").toUpperCase() === "BULK") {
+    // Owner 2026-10-20 (option A): a BULK PO is called off as needed and never gets a CSN, so its
+    // open quantity is available from the as-of day — no CSN ETA is asked for.
+    events.push({ material_id: line.material_id, qty: remaining, date: asOf, kind: "PO_REMAINDER", date_source: "BULK_CALL_OFF", reference: `${ref} (BULK)` });
+    remaining = 0;
   }
   if (remaining > EPSILON) {
     const scheduled = line.csns
@@ -1885,7 +1894,7 @@ export type RequirementInput = Omit<ExplosionInput, "effective"> & {
   inboundEvents: InboundEvent[];
   policies: PolicyRow[];
   leadTimes: Map<string, LeadTimeResult>;
-  /** Every RM/PM material of the company's MTS strokes / Pack BOMs (shown even with zero demand). */
+  /** Every RM/PM material of the company's MTS strokes / Pack BOMs (policy lookups; rows show only planned ones). */
   materialUniverse: string[];
   /** Company planning location roles (owner D1/D12); absent = legacy required-location stock. */
   locationRoles?: Map<string, LocationRole>;
@@ -1979,8 +1988,11 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
     }
   }
 
+  // Owner 2026-10-20: a material of an MTS stroke / Pack BOM whose SKUs have no plan in CM/NM is not
+  // shown (it would only surface unrelated MTO/HPS housekeeping). Rows = materials the effective plan
+  // actually reaches: direct demand, group pool candidates (incl. members that only lend stock).
   const materialIds = [...new Set([
-    ...input.materialUniverse,
+    ...explosion.records.flatMap((r) => r.candidates),
     ...allocation.dailyByMaterial.keys(),
     ...poolsByMaterial.keys(),
   ])].sort();

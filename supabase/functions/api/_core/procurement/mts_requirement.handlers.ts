@@ -572,7 +572,7 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
 async function loadInbound(companyId: string, asOf: string, materials: Map<string, MaterialInfo>, universe: Set<string>): Promise<InboundLoad> {
   const warnings: Warning[] = [];
   const pos = await fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("purchase_order")
-    .select("id, po_number, po_date, expected_delivery_date, order_in_lot")
+    .select("id, po_number, po_date, expected_delivery_date, order_in_lot, delivery_type")
     .eq("company_id", companyId).eq("status", "CONFIRMED").order("id"), "MTS_REQ_PO_LOAD_FAILED");
   const poById = new Map(pos.map((p) => [text(p.id), p]));
   const lines = pos.length === 0 ? [] : (await fetchInChunks<JsonRecord>(pos.map((p) => text(p.id)), (chunk) => serviceRoleClient
@@ -638,6 +638,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       open_qty: Number(line.open_qty ?? 0),
       base_per_po_unit: ratio,
       expected_delivery_date: text(po.expected_delivery_date) || null,
+      delivery_type: text(po.delivery_type) || null,
       at_gate: geLines.filter((g) => text(g.po_line_id) === text(line.id)).flatMap((g) => {
         const gate = gateById.get(text(g.gate_entry_id));
         if (!gate || ["PRUNED", "CANCELLED", "GRN_POSTED"].includes(text(gate.status))) return [];

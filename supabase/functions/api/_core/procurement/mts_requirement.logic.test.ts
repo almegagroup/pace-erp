@@ -455,6 +455,34 @@ Deno.test("Whole pipeline: deterministic, and a source change changes the result
   assert(canonicalJson(changed) !== canonicalJson(first), "stock change → different result");
 });
 
+Deno.test("Owner 2026-10-20: an MTS material the plan does not reach is not shown", () => {
+  const explosion = baseInput({ materials: new Map([...baseInput().materials, ["RM-Z", material("RM-Z", "RM")]]) });
+  const output = buildRequirementRows({
+    ...explosion,
+    planLines: [line({ entry_id: "p1", plan_type: "FINAL", base_qty: 3000 })],
+    demandAt: null, stockRows: [], reservations: [], applyReservations: true, consumptionByMaterial: new Map(),
+    // RM-Z is on an approved MTS stroke whose SKU has no plan, with an open PO missing its CSN ETA.
+    inboundEvents: [{ material_id: "RM-Z", qty: 500, date: null, kind: "PO_REMAINDER", date_source: "NONE", reference: "PO X/1" }],
+    policies: [], leadTimes: new Map(),
+    materialUniverse: ["RM-A", "RM-B", "RM-C", "PM-BAG", "RM-Z"],
+  });
+  assertEqual(output.rows.map((row) => row.material_id), ["PM-BAG", "RM-A", "RM-B", "RM-C"], "RM-Z (no plan) hidden; group member RM-C kept");
+});
+
+Deno.test("Owner 2026-10-20 option A: a BULK PO is available from the as-of day, no CSN ETA asked", () => {
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "RM-SAND", po_number: "ASCP2627-0141", line_number: 1, open_qty: 173220, base_per_po_unit: 1,
+    expected_delivery_date: null, delivery_type: "BULK", at_gate: [], csns: [], lots: [],
+  }, "2026-10-20", warnings);
+  assertEqual(events.map((e) => [e.kind, e.qty, e.date, e.date_source]), [["PO_REMAINDER", 173220, "2026-10-20", "BULK_CALL_OFF"]], "dated today, never ETA-less");
+  const standard = partitionPoLineInbound({
+    material_id: "RM-SAND", po_number: "X", line_number: 1, open_qty: 10, base_per_po_unit: 1,
+    expected_delivery_date: null, delivery_type: "STANDARD", at_gate: [], csns: [], lots: [],
+  }, "2026-10-20", warnings);
+  assertEqual(standard.map((e) => e.date), [null], "a STANDARD PO without CSN still has no ETA");
+});
+
 // ── PO21 plan-line lineage (attribution only — numbers unchanged) ─────────
 function addsTotal(record: DemandRecord): number {
   return record.plan_line_contributions.filter((row) => row.adds_qty).reduce((total, row) => total + row.qty, 0);
