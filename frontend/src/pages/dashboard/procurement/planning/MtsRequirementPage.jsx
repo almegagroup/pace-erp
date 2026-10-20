@@ -25,6 +25,7 @@ import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffol
 import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
+import MtsItemPlanTab from "./MtsItemPlanTab.jsx";
 import {
   getMtsRequirementAccess,
   getMtsRequirementPolicies,
@@ -247,7 +248,7 @@ export default function MtsRequirementPage() {
             </label>
           ) : null}
           <div className="flex flex-wrap gap-1">
-            {[{ id: "action", label: "Action" }, { id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }, { id: "planning", label: "4. Planning" }, { id: "store", label: "5. Store Report" }].map((tab) => (
+            {[{ id: "action", label: "Action" }, { id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }, { id: "planning", label: "4. Planning" }, { id: "item", label: "4A. Item Plan" }, { id: "store", label: "5. Store Report" }].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -280,6 +281,8 @@ export default function MtsRequirementPage() {
           <CostSettingsTab companyId={companyId} access={access} today={today} />
         ) : activeTab === "planning" ? (
           <PlanningTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} access={access} />
+        ) : activeTab === "item" ? (
+          <MtsItemPlanTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
         ) : (
           <StoreReportTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
         )}

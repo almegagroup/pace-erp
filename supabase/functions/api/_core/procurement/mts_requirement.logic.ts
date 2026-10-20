@@ -90,19 +90,27 @@ export type PlanningCalendar = {
   cmDaysLeft: number;     // inclusive: as-of .. CM end
   cmDaysElapsed: number;  // CM start .. day before as-of
   nmDaysInMonth: number;
-  horizon: string[];      // every day CM start .. NM end
+  horizon: string[];      // every day CM start .. horizonEnd
+  /** Plan months exploded: CM, NM, then any extra months (P1 item plan); default CM + NM. */
+  months: string[];
+  /** Last day of the planning horizon (= nmEnd unless extra months are asked for). */
+  horizonEnd: string;
 };
 
 /** CM = the selected plan month; the as-of date must lie inside it. */
-export function buildCalendar(planMonth: string, asOf: string): PlanningCalendar | null {
+export function buildCalendar(planMonth: string, asOf: string, extraMonths = 0): PlanningCalendar | null {
   if (!isIsoDate(planMonth) || planMonth.slice(8) !== "01" || !isIsoDate(asOf)) return null;
+  if (!Number.isInteger(extraMonths) || extraMonths < 0 || extraMonths > 12) return null;
   const cmStart = planMonth;
   const cmEnd = monthEnd(cmStart);
   if (asOf < cmStart || asOf > cmEnd) return null;
   const nmStart = nextMonth(cmStart);
   const nmEnd = monthEnd(nmStart);
+  const months = [cmStart, nmStart];
+  for (let i = 0; i < extraMonths; i += 1) months.push(nextMonth(months[months.length - 1]));
+  const horizonEnd = monthEnd(months[months.length - 1]);
   const horizon: string[] = [];
-  for (let day = cmStart; day <= nmEnd; day = addDays(day, 1)) horizon.push(day);
+  for (let day = cmStart; day <= horizonEnd; day = addDays(day, 1)) horizon.push(day);
   return {
     asOf,
     cmStart,
@@ -114,6 +122,8 @@ export function buildCalendar(planMonth: string, asOf: string): PlanningCalendar
     cmDaysElapsed: daysInclusive(cmStart, addDays(asOf, -1)),
     nmDaysInMonth: daysInclusive(nmStart, nmEnd),
     horizon,
+    months,
+    horizonEnd,
   };
 }
 
@@ -604,7 +614,7 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
   const prodshadeDaily = new Map<string, Map<string, number>>();
   const skuContribKg = new Map<string, Map<string, PlanLineContribution[]>>();
   const prodshadeContrib = new Map<string, Map<string, PlanLineContribution[]>>();
-  const months = [input.calendar.cmStart, input.calendar.nmStart];
+  const months = input.calendar.months ?? [input.calendar.cmStart, input.calendar.nmStart];
   const exceptionKeys = new Set<string>();
   const addException = (key: string, warning: Warning) => {
     if (exceptionKeys.has(key)) return;
@@ -1162,7 +1172,7 @@ export function allocateDemand(
       outer_qty: 0, outer_uom_code: record.outer_uom_code, fill_qty_per_outer: record.fill_qty_per_outer,
       periodDemand: { CM: 0, NM: 0 }, periodFromStock: new Map(),
     };
-    const period: StorePeriod | null = record.day < calendar.asOf ? null : record.day <= calendar.cmEnd ? "CM" : "NM";
+    const period: StorePeriod | null = record.day < calendar.asOf || record.day > calendar.nmEnd ? null : record.day <= calendar.cmEnd ? "CM" : "NM";
     if (period) pool.periodDemand[period] += record.qty;
     pool.total += record.qty;
     pool.outer_qty += record.outer_qty ?? 0;
@@ -1271,7 +1281,7 @@ export function allocateDemand(
   for (const record of fixedRecords) processRecord(record);
   // Method C protection: average daily exclusive (fixed) use over the horizon × Critical / Target
   // days, capped by what pass 1 left. It covers the days after the horizon.
-  const horizonDays = daysInclusive(calendar.asOf, calendar.nmEnd);
+  const horizonDays = daysInclusive(calendar.asOf, calendar.horizonEnd ?? calendar.nmEnd);
   for (const [material, days] of options.protectionDays ?? new Map()) {
     let fixedFromAsOf = 0;
     for (const [day, qty] of dailyByMaterial.get(material) ?? new Map<string, number>()) if (day >= calendar.asOf) fixedFromAsOf += qty;
@@ -1303,10 +1313,31 @@ export type InboundEvent = {
   kind: InboundKind;
   date_source: string;       // e.g. CSN_ETA_TO_PLANT, LOT_DELIVERY_DATE, PO_EXPECTED_DELIVERY, GATE_ENTRY, NONE
   reference: string;         // human document reference (PO / CSN / GE / lot numbers)
+  /** CSN behind this piece (ETD / port dates in the item plan). */
+  csn_id?: string;
+  /** Key of a not-yet-shipped piece the planner may reschedule (P1); absent = cannot be moved. */
+  reschedule_key?: string;
+  /** Source date before a planning reschedule replaced `date`. */
+  original_date?: string | null;
 };
+
+/**
+ * P1 (owner 2026-10-20): a planning-side rescheduled ETA replaces the date of a not-yet-shipped
+ * piece. CSN Tracker itself is never changed; the source date is kept in original_date.
+ */
+export function applyInboundReschedules(events: InboundEvent[], reschedules: ReadonlyMap<string, string | null>): InboundEvent[] {
+  return events.map((event) => {
+    if (!event.reschedule_key || !reschedules.has(event.reschedule_key)) return event;
+    const date = reschedules.get(event.reschedule_key) ?? null;
+    if (!date) return event; // a cleared reschedule = back to the source date
+    return { ...event, original_date: event.date, date, date_source: "PLANNING_RESCHEDULE" };
+  });
+}
 
 export type PoLineInboundInput = {
   material_id: string;
+  /** purchase_order_line id — reschedule key of the remainder / lots (P1). */
+  po_line_id?: string;
   po_number: string;
   line_number: number;
   open_qty: number;              // PO unit (open = ordered − GRN posted)
@@ -1315,7 +1346,7 @@ export type PoLineInboundInput = {
   /** PO delivery type. BULK POs never get a CSN in this ERP (owner 2026-10-20). */
   delivery_type?: string | null;
   at_gate: Array<{ qty_base: number; reference: string; date: string | null }>; // GE lines not yet GRN-posted
-  csns: Array<{ csn_number: string; status: string; dispatch_qty: number | null; received_qty: number | null; eta: string | null; is_mother_with_children: boolean }>;
+  csns: Array<{ id?: string; csn_number: string; status: string; dispatch_qty: number | null; received_qty: number | null; eta: string | null; is_mother_with_children: boolean }>;
   lots: Array<{ lot_number: string; balance_qty: number; delivery_date: string | null }>; // PO unit
   /**
    * Base qty of this still-open line already promised to another company by Sub-CSNs
@@ -1367,6 +1398,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
       events.push({
         material_id: line.material_id, qty, date: csn.eta, kind: "IN_TRANSIT",
         date_source: csn.eta ? "CSN_ETA_TO_PLANT" : "NONE", reference: `${ref} · CSN ${csn.csn_number} (${csn.status})`,
+        ...(csn.id ? { csn_id: csn.id } : {}),
       });
     }
   }
@@ -1377,6 +1409,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
       events.push({
         material_id: line.material_id, qty, date: lot.delivery_date, kind: "SCHEDULED_LOT",
         date_source: lot.delivery_date ? "LOT_DELIVERY_DATE" : "NONE", reference: `${ref} · Lot ${lot.lot_number}`,
+        ...(line.po_line_id ? { reschedule_key: `PO_LOT|${line.po_line_id}|${lot.lot_number}` } : {}),
       });
     }
   }
@@ -1396,6 +1429,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
       material_id: line.material_id, qty: remaining, date, kind: "PO_REMAINDER",
       date_source: csn ? "CSN_ETA_TO_PLANT" : line.expected_delivery_date ? "PO_EXPECTED_DELIVERY" : "NONE",
       reference: csn ? `${ref} · CSN ${csn.csn_number} (${csn.status})` : ref,
+      ...(csn?.id ? { csn_id: csn.id, reschedule_key: `CSN|${csn.id}` } : line.po_line_id ? { reschedule_key: `PO_LINE|${line.po_line_id}` } : {}),
     });
     remaining = 0;
   }
@@ -1539,7 +1573,7 @@ export function coverageDays(
 ): CoverageResult {
   let balance = opening;
   let covered = 0;
-  for (let day = calendar.asOf; day <= calendar.nmEnd; day = addDays(day, 1)) {
+  for (let day = calendar.asOf; day <= (calendar.horizonEnd ?? calendar.nmEnd); day = addDays(day, 1)) {
     balance += inboundByDay?.get(day) ?? 0;
     const demand = demandByDay.get(day) ?? 0;
     if (demand <= EPSILON) { covered += 1; continue; }

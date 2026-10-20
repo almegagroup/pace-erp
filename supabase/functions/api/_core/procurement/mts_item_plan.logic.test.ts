@@ -1,0 +1,112 @@
+import {
+  arrivalStatus,
+  buildForecastPlanLines,
+  familyClosure,
+  familyDayGrid,
+  forecastSkuMonth,
+  forwardCoverDays,
+  referenceMonths,
+  type ForecastInputs,
+} from "./mts_item_plan.logic.ts";
+import { applyInboundReschedules, buildCalendar, type GroupMember, type InboundEvent } from "./mts_requirement.logic.ts";
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+function assertEqual(actual: unknown, expected: unknown, message: string) {
+  const a = JSON.stringify(actual); const e = JSON.stringify(expected);
+  if (a !== e) throw new Error(`${message}\n  expected ${e}\n  actual   ${a}`);
+}
+const near = (actual: number | null, expected: number, message: string) => {
+  if (actual === null || Math.abs(actual - expected) > 0.01) throw new Error(`${message}: expected ${expected}, got ${actual}`);
+};
+const m = (material_id: string, group_id: string, active = true): GroupMember => ({ material_id, group_id, active });
+
+Deno.test("familyClosure: material → its groups → all members → their other groups (owner 2026-10-20)", () => {
+  const groups = new Map<string, GroupMember[]>([
+    ["MHEC", [m("GABROSA", "MHEC"), m("TS", "MHEC"), m("COMBI", "MHEC")]],
+    ["MHEC_PLC", [m("COMBI", "MHEC_PLC"), m("PLC2", "MHEC_PLC")]],
+    ["RDP", [m("VAE", "RDP"), m("DA", "RDP")]],
+    ["OLD", [m("GABROSA", "OLD", false), m("X", "OLD", false)]],
+  ]);
+  const family = familyClosure("GABROSA", groups);
+  assertEqual(family.member_ids, ["COMBI", "GABROSA", "PLC2", "TS"], "transitive members; inactive membership ignored");
+  assertEqual(family.group_ids, ["MHEC", "MHEC_PLC"], "groups reached");
+  assert(family.is_family, "grouped item is a family");
+  const solo = familyClosure("PULMIX", groups);
+  assertEqual([solo.member_ids, solo.is_family], [["PULMIX"], false], "non-group item = itself, no family part");
+});
+
+Deno.test("forecast: ½ seasonal × trend + ½ last-3 plan; trend capped; uncovered month is no data", () => {
+  const covered = new Set(["2025-02-01", "2025-07-01", "2025-08-01", "2025-09-01", "2026-07-01", "2026-08-01", "2026-09-01"]);
+  const dispatch = new Map([
+    ["S|2025-02-01", 10000],
+    ["S|2025-07-01", 1000], ["S|2025-08-01", 1000], ["S|2025-09-01", 1000],
+    ["S|2026-07-01", 1100], ["S|2026-08-01", 1100], ["S|2026-09-01", 1100],
+  ]);
+  const inputs: ForecastInputs = {
+    dispatchKg: dispatch, coveredMonths: covered,
+    planKg: new Map([["S|2026-07-01", 9000], ["S|2026-08-01", 9000], ["S|2026-09-01", 9000]]),
+    plannedMonths: new Set(["2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01"]),
+  };
+  assertEqual(referenceMonths("2026-10-01"), ["2026-07-01", "2026-08-01", "2026-09-01"], "last 3 complete months");
+  const f = forecastSkuMonth("S", "2026-02-01".replace("2026", "2026"), "2026-10-01", inputs);
+  // Feb-2026 target month uses Feb-2025 (10000) × trend 1.1 = 11000; ½ 11000 + ½ 9000 = 10000.
+  assert(f !== null, "forecast exists");
+  near(f!.trend, 1.1, "trend = 1100 / 1000");
+  near(f!.qty_kg, 10000, "owner example: (11000 + 9000) / 2");
+  assertEqual(f!.basis, "SEASONAL_AND_PLAN", "basis");
+  const capped = forecastSkuMonth("S", "2026-02-01", "2026-10-01", { ...inputs, dispatchKg: new Map([...dispatch, ["S|2026-07-01", 5000], ["S|2026-08-01", 5000], ["S|2026-09-01", 5000]]) });
+  near(capped!.trend, 1.3, "trend capped at 1.3");
+  const none = forecastSkuMonth("NEW", "2027-02-01", "2026-10-01", { ...inputs, coveredMonths: new Set(), plannedMonths: new Set() });
+  assert(none === null, "no plan and no covered actuals → no forecast (never invented)");
+  const notPlanned = forecastSkuMonth("NEW", "2027-02-01", "2026-10-01", { ...inputs, coveredMonths: new Set() });
+  near(notPlanned!.qty_kg, 0, "company planned the reference months without this SKU → 0");
+});
+
+Deno.test("buildForecastPlanLines: only months with no PO21 plan; KG → SKU base unit; FORECAST entries", () => {
+  const inputs: ForecastInputs = {
+    dispatchKg: new Map(), coveredMonths: new Set(),
+    planKg: new Map([["S|2026-07-01", 300], ["S|2026-08-01", 300], ["S|2026-09-01", 300]]),
+    plannedMonths: new Set(["2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01", "2026-11-01"]),
+  };
+  const result = buildForecastPlanLines(["S"], ["2026-10-01", "2026-11-01", "2026-12-01"], "2026-10-01", inputs, () => 20);
+  assertEqual(result.forecastMonths, ["2026-12-01"], "planned months are never forecast");
+  assertEqual(result.lines.map((l) => [l.entry_id, l.plan_type, l.base_qty]), [["FORECAST|S|2026-12-01", "ROLLING", 15]], "300 KG ÷ 20 KG per unit");
+});
+
+Deno.test("forwardCoverDays: walks the coming days' use (owner example 60,000 → 23 days)", () => {
+  const uses = [...Array(10).fill(2000), ...Array(30).fill(3000)];
+  near(forwardCoverDays(60000, uses, 0), 23.33, "10 days at 2,000 + 13.33 at 3,000");
+  assert(forwardCoverDays(100, [0, 0], 0) === null, "no use → null");
+  near(forwardCoverDays(0, uses, 0), 0, "nothing → 0");
+});
+
+Deno.test("familyDayGrid: sums members, adds unmet group demand to use and carries it", () => {
+  const rows = [
+    { material_id: "A", day: "D1", opening_qty_base: 100, confirmed_arrival_qty_base: 0, planned_lot_qty_base: 0, demand_qty_base: 10, group_draw_qty_base: 0, closing_qty_base: 90 },
+    { material_id: "B", day: "D1", opening_qty_base: 50, confirmed_arrival_qty_base: 20, planned_lot_qty_base: 0, demand_qty_base: 5, group_draw_qty_base: 5, closing_qty_base: 65 },
+    { material_id: "A", day: "D2", opening_qty_base: 90, confirmed_arrival_qty_base: 0, planned_lot_qty_base: 0, demand_qty_base: 10, group_draw_qty_base: 0, closing_qty_base: 80 },
+    { material_id: "B", day: "D2", opening_qty_base: 65, confirmed_arrival_qty_base: 0, planned_lot_qty_base: 0, demand_qty_base: 5, group_draw_qty_base: 0, closing_qty_base: 60 },
+  ];
+  const grid = familyDayGrid(["D1", "D2"], rows, new Map([["D1", 7]]));
+  assertEqual(grid.map((g) => [g.opening, g.arrivals, g.use, g.closing, g.min_stock]), [[150, 20, 22, 148, 128], [148, 0, 15, 133, 133]], "family = Σ members − carried unmet group demand");
+});
+
+Deno.test("applyInboundReschedules: only keyed (not-shipped) pieces move; cleared = source date", () => {
+  const events: InboundEvent[] = [
+    { material_id: "A", qty: 5, date: "2026-11-10", kind: "PO_REMAINDER", date_source: "CSN_ETA_TO_PLANT", reference: "x", reschedule_key: "CSN|c1" },
+    { material_id: "A", qty: 5, date: "2026-11-01", kind: "IN_TRANSIT", date_source: "CSN_ETA_TO_PLANT", reference: "y", csn_id: "c2" },
+  ];
+  const moved = applyInboundReschedules(events, new Map([["CSN|c1", "2026-11-05"], ["CSN|c2", "2026-10-25"]]));
+  assertEqual(moved.map((e) => [e.date, e.original_date ?? null, e.date_source]), [["2026-11-05", "2026-11-10", "PLANNING_RESCHEDULE"], ["2026-11-01", null, "CSN_ETA_TO_PLANT"]], "in-transit never moves");
+  assertEqual(applyInboundReschedules(events, new Map([["CSN|c1", null]]))[0].date, "2026-11-10", "cleared");
+});
+
+Deno.test("buildCalendar extra months: default unchanged, 6-month horizon when asked", () => {
+  const base = buildCalendar("2026-10-01", "2026-10-20")!;
+  assertEqual([base.months, base.horizonEnd], [["2026-10-01", "2026-11-01"], "2026-11-30"], "default CM + NM");
+  const six = buildCalendar("2026-10-01", "2026-10-20", 4)!;
+  assertEqual([six.months.length, six.horizonEnd, six.nmEnd], [6, "2027-03-31", "2026-11-30"], "CM + NM + 4");
+  assertEqual(arrivalStatus("PO_REMAINDER", "BULK_CALL_OFF"), "BULK", "bulk label");
+});

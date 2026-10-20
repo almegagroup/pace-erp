@@ -1,0 +1,277 @@
+/*
+ * File-Path: frontend/src/pages/dashboard/procurement/planning/MtsItemPlanTab.jsx
+ * Domain: PROCUREMENT / MTS PLANNING
+ * Purpose: PO22 P1 Item Plan (owner 2026-10-20) — pick any RM / PM; a grouped item opens its
+ *          whole family (all members, their exclusive demand, their other groups), a non-group
+ *          item stands alone. Sheet PLANNING-style day grid over ~6 months, arrivals with status
+ *          and ETD / Port / Plant dates, planning-side rescheduled ETA (CSN Tracker is never
+ *          changed), stock per location.
+ *          Design: docs/mts-planning/PO22-P1-FAMILY-PLANNING-DETAIL-2026-10-20.md
+ * Authority: Frontend (numbers come from the backend engine only)
+ */
+
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { pushToast } from "../../../../store/uiToast.js";
+import { getMtsItemPlan, getMtsPlanning, saveMtsInboundReschedule } from "../procurementApi.js";
+
+const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
+const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
+const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true };
+const STATUS_LABEL = { AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
+const STATUS_TONE = { AT_GATE: "bg-emerald-100 text-emerald-800", IN_TRANSIT: "bg-sky-100 text-sky-800", ORDERED: "bg-amber-100 text-amber-800", BULK: "bg-slate-100 text-slate-700", STO: "bg-violet-100 text-violet-800", SUB_CSN: "bg-violet-100 text-violet-800" };
+
+function fmtQty(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  return Number(value).toLocaleString("en-IN", { maximumFractionDigits: 3 });
+}
+function fmtDays(value) {
+  return value === null || value === undefined ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 1 });
+}
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error ?? "");
+}
+
+export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt }) {
+  const queryClient = useQueryClient();
+  const [materialId, setMaterialId] = useState("");
+  const [search, setSearch] = useState("");
+  const [openDay, setOpenDay] = useState("");
+  const [drafts, setDrafts] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  // Material list: same cached CM + NM planning payload as the Planning tab.
+  const planningQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "planning", companyId, planMonth, asOf, demandAt],
+    queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
+    enabled: Boolean(companyId && planMonth && asOf),
+  });
+  const materials = useMemo(() => {
+    const seen = new Map();
+    for (const row of planningQ.data?.daily ?? []) if (!seen.has(row.material_id)) seen.set(row.material_id, `${row.material_code ?? ""} ${row.material_name}`.trim());
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [planningQ.data]);
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return term ? materials.filter(([, label]) => label.toLowerCase().includes(term)) : materials;
+  }, [materials, search]);
+
+  const itemKey = ["procurement", "mts-requirement", "item-plan", companyId, planMonth, asOf, demandAt, materialId];
+  const itemQ = useQuery({
+    queryKey: itemKey,
+    queryFn: () => getMtsItemPlan({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined, material_id: materialId }),
+    enabled: Boolean(companyId && planMonth && asOf && materialId),
+  });
+  const plan = itemQ.data ?? null;
+  const uom = plan?.members?.find((m) => m.is_selected)?.uom ?? "";
+  const memberName = useMemo(() => new Map((plan?.members ?? []).map((m) => [m.material_id, `${m.material_code ?? ""} ${m.material_name}`.trim()])), [plan]);
+  const memberDaily = useMemo(() => {
+    const byDay = new Map();
+    for (const row of plan?.member_daily ?? []) byDay.set(row.day, [...(byDay.get(row.day) ?? []), row]);
+    return byDay;
+  }, [plan]);
+  const monthSource = useMemo(() => new Map((plan?.month_sources ?? []).map((m) => [m.month.slice(0, 7), m.source])), [plan]);
+
+  const gridColumns = [
+    { key: "day", label: "Date", width: "100px", render: (r) => (
+      <button type="button" onClick={() => setOpenDay((d) => (d === r.day ? "" : r.day))} className="text-left text-sky-800 hover:underline">{r.day}</button>
+    ), copyValue: (r) => r.day },
+    { key: "cc", label: "CC", width: "40px", render: (r) => (r.day === plan?.calendar?.as_of ? <span className="font-semibold text-emerald-700">CC</span> : ""), copyValue: (r) => (r.day === plan?.calendar?.as_of ? "CC" : "") },
+    { key: "source", label: "Demand", width: "80px", render: (r) => monthSource.get(r.day.slice(0, 7)) ?? "", copyValue: (r) => monthSource.get(r.day.slice(0, 7)) ?? "" },
+    { key: "opening", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening), copyValue: (r) => r.opening },
+    { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
+    { key: "planned_lot", label: "Engine Lot", width: "110px", align: "right", render: (r) => (r.planned_lot ? <span className="font-semibold text-sky-800">{fmtQty(r.planned_lot)}</span> : ""), copyValue: (r) => r.planned_lot },
+    { key: "use", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.use), copyValue: (r) => r.use },
+    { key: "unmet_group", label: "Group not met", width: "110px", align: "right", render: (r) => (r.unmet_group ? <span className="font-semibold text-rose-700">{fmtQty(r.unmet_group)}</span> : ""), copyValue: (r) => r.unmet_group },
+    { key: "closing", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing)}</span>, copyValue: (r) => r.closing },
+    { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
+    { key: "min_stock", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock), copyValue: (r) => r.min_stock },
+    { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_days), copyValue: (r) => r.min_days ?? "" },
+  ];
+
+  const memberColumns = [
+    { key: "material", label: "Member", width: "260px", render: (m) => <span className={m.is_selected ? "font-semibold text-sky-900" : ""}>{`${m.material_code ?? ""} ${m.material_name}`.trim()}</span>, copyValue: (m) => `${m.material_code ?? ""} ${m.material_name}`.trim() },
+    { key: "role", label: "Used as", width: "260px", render: (m) => [m.exclusive ? "Exclusive" : "", ...m.groups.map((g) => `Group: ${g}`)].filter(Boolean).join(" · ") || "—" },
+    { key: "usable_stock", label: "Counted stock", width: "120px", align: "right", render: (m) => `${fmtQty(m.usable_stock)} ${m.uom ?? ""}`, copyValue: (m) => m.usable_stock },
+    { key: "target", label: "Target / Critical", width: "110px", render: (m) => `${fmtDays(m.target_days)} / ${fmtDays(m.critical_days)}` },
+    { key: "locations", label: "Stock by location (now)", width: "320px", render: (m) => (m.locations.length ? m.locations.map((l) => `${l.location}: ${fmtQty(l.qty)}`).join(" · ") : "—"), copyValue: (m) => m.locations.map((l) => `${l.location}:${l.qty}`).join(" ") },
+  ];
+
+  const arrivalColumns = [
+    { key: "status", label: "Status", width: "150px", render: (a) => <span className={`px-2 py-0.5 text-xs font-semibold ${STATUS_TONE[a.status] ?? ""}`}>{STATUS_LABEL[a.status] ?? a.status}</span>, copyValue: (a) => STATUS_LABEL[a.status] ?? a.status },
+    { key: "material_name", label: "Member", width: "220px", render: (a) => `${a.material_code ?? ""} ${a.material_name}`.trim() },
+    { key: "reference", label: "PO / CSN", width: "300px" },
+    { key: "vendor", label: "Vendor", width: "200px", render: (a) => a.vendor ?? "—" },
+    { key: "qty", label: "Qty", width: "110px", align: "right", render: (a) => `${fmtQty(a.qty)} ${a.uom ?? ""}`, copyValue: (a) => a.qty },
+    { key: "etd", label: "ETD", width: "100px", render: (a) => a.etd ?? "—" },
+    { key: "eta_port", label: "ETA Port", width: "100px", render: (a) => a.eta_port ?? "—" },
+    { key: "eta_plant", label: "ETA Plant", width: "100px", render: (a) => a.eta_plant ?? "—" },
+    {
+      key: "rescheduled_eta", label: "Rescheduled ETA (planning)", width: "180px", filterable: false,
+      render: (a) => (a.reschedule_key ? (
+        <input
+          type="date"
+          value={drafts[a.reschedule_key]?.date ?? a.rescheduled_eta ?? ""}
+          onChange={(event) => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: event.target.value, row: a } }))}
+          className={CELL_INPUT}
+        />
+      ) : <span className="text-xs text-slate-400">cannot move</span>),
+      copyValue: (a) => a.rescheduled_eta ?? "",
+    },
+    {
+      key: "reason", label: "Reason", width: "200px", filterable: false,
+      render: (a) => (a.reschedule_key ? (
+        <input
+          type="text"
+          value={drafts[a.reschedule_key]?.reason ?? ""}
+          placeholder="Why"
+          onChange={(event) => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), reason: event.target.value, row: a } }))}
+          className={`${CELL_INPUT} w-full`}
+        />
+      ) : ""),
+    },
+  ];
+
+  const proposalColumns = [
+    { key: "material_name", label: "Member", width: "220px", render: (b) => memberName.get(b.material_id) ?? b.material_name },
+    { key: "recommended_po_qty_base", label: "Qty", width: "120px", align: "right", render: (b) => (b.recommended_po_qty_base === null ? "—" : `${fmtQty(b.recommended_po_qty_base)} ${b.uom ?? ""}`), copyValue: (b) => b.recommended_po_qty_base ?? "" },
+    { key: "recommended_po_by", label: "PO By", width: "100px", render: (b) => b.recommended_po_by ?? "—" },
+    { key: "estimated_plant_eta", label: "Plant ETA", width: "100px", render: (b) => b.estimated_plant_eta ?? "—" },
+    { key: "vendor_label", label: "Vendor", width: "220px", render: (b) => b.vendor_label ?? "—" },
+    { key: "reason", label: "Why", width: "360px" },
+  ];
+
+  const pending = Object.entries(drafts).filter(([, d]) => d?.row);
+  async function saveReschedules() {
+    setSaving(true);
+    try {
+      await saveMtsInboundReschedule({
+        company_id: companyId,
+        rows: pending.map(([key, d]) => ({
+          reschedule_key: key,
+          material_id: d.row.material_id,
+          original_eta: d.row.eta_plant ?? null,
+          rescheduled_eta: d.date ?? d.row.rescheduled_eta ?? null,
+          reason: d.reason ?? null,
+        })),
+      });
+      pushToast({ message: "Rescheduled dates saved for planning. CSN Tracker is unchanged — update it there when the vendor confirms.", tone: "success" });
+      setDrafts({});
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement"] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function exportExcel() {
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `po22_item_plan_${materialId}_${asOf}.xlsx`,
+        sheetName: "Item Plan",
+        columns: gridColumns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align })),
+        rows: plan?.grid ?? [],
+        getCellValue: (row, column) => gridColumns.find((c) => c.key === column.key)?.copyValue?.(row) ?? row[column.key] ?? "",
+        preambleRows: [
+          ["Item", memberName.get(materialId) ?? ""],
+          ["Family members", (plan?.members ?? []).map((m) => `${m.material_code ?? ""} ${m.material_name}`.trim()).join("; ")],
+          ["As-of", plan?.calendar?.as_of ?? asOf],
+          ["Horizon end", plan?.calendar?.horizon_end ?? ""],
+        ],
+      });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    }
+  }
+
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="grid gap-1 text-sm text-slate-700">
+          <span className="font-medium text-slate-800">Find item</span>
+          <input type="text" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Code or name" className={`${INPUT_CLASS} w-56`} />
+        </label>
+        <label className="grid gap-1 text-sm text-slate-700">
+          <span className="font-medium text-slate-800">Item</span>
+          <select value={materialId} onChange={(event) => { setMaterialId(event.target.value); setOpenDay(""); setDrafts({}); }} className={`${INPUT_CLASS} w-96`}>
+            <option value="">{planningQ.isLoading ? "Loading items…" : "Select an RM / PM…"}</option>
+            {filtered.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+        </label>
+        <button type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "item-plan", companyId] })} disabled={!materialId} className="h-8 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+          {itemQ.isFetching ? "Calculating…" : "Recalculate"}
+        </button>
+        <button type="button" onClick={() => void exportExcel()} disabled={!plan} className="h-8 border border-emerald-600 bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Excel</button>
+      </div>
+      {itemQ.error ? <p className="text-sm text-rose-700">{errorText(itemQ.error)}</p> : null}
+      {!materialId ? <p className="text-sm text-slate-500">Pick an item. A grouped item shows its whole family; a non-group item shows itself.</p> : null}
+      {materialId && itemQ.isLoading ? <p className="text-sm text-slate-500">Calculating ~6 months…</p> : null}
+
+      {plan ? (
+        <>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+            <span className="font-semibold text-slate-800">{plan.family.is_family ? `Family: ${plan.family.groups.map((g) => g.label).join(" · ")}` : "Not in any group — single item"}</span>
+            <span>Horizon {plan.calendar.as_of} → {plan.calendar.horizon_end}</span>
+            <span>Demand: {plan.month_sources.map((m) => `${m.month.slice(0, 7)} ${m.source === "FORECAST" ? "forecast" : "plan"}`).join(" · ")}</span>
+            <span>Unit: {uom || "—"}</span>
+          </div>
+
+          <section className="grid gap-1">
+            <h3 className="text-sm font-semibold text-slate-800">Members</h3>
+            <ErpDenseGrid {...GRID_PROPS} columns={memberColumns} rows={plan.members} rowKey={(m) => m.material_id} maxHeight="25vh" />
+          </section>
+
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+            <section className="grid gap-1">
+              <h3 className="text-sm font-semibold text-slate-800">Day by day {plan.family.is_family ? "(whole family)" : ""} — click a date for each member</h3>
+              <ErpDenseGrid
+                {...GRID_PROPS}
+                columns={gridColumns}
+                rows={plan.grid}
+                rowKey={(r) => r.day}
+                renderExpandedRow={(r) => (openDay === r.day ? (
+                  <div className="grid gap-1 bg-slate-50 p-2 text-xs">
+                    {(memberDaily.get(r.day) ?? []).map((m) => (
+                      <div key={m.material_id} className="flex flex-wrap gap-3">
+                        <span className="w-56 font-semibold text-slate-800">{memberName.get(m.material_id) ?? m.material_id}</span>
+                        <span>Opening {fmtQty(m.opening)}</span>
+                        <span>Arrival {fmtQty(m.arrivals)}</span>
+                        <span>Use {fmtQty(m.use)}{m.group_draw ? ` (for groups ${fmtQty(m.group_draw)})` : ""}</span>
+                        <span>Closing {fmtQty(m.closing)}</span>
+                        <span>Max {fmtDays(m.max_days)} d · Min {fmtDays(m.min_days)} d</span>
+                        <span className={m.critical_days !== null && m.max_days !== null && m.max_days < m.critical_days ? "font-semibold text-rose-700" : m.target_days !== null && m.max_days !== null && m.max_days < m.target_days ? "font-semibold text-amber-700" : ""}>
+                          Target {fmtDays(m.target_days)} / Critical {fmtDays(m.critical_days)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null)}
+                maxHeight="calc(100vh - 360px)"
+              />
+            </section>
+
+            <div className="grid content-start gap-3">
+              <section className="grid gap-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-800">Arrivals / Future Orders</h3>
+                  <button type="button" onClick={() => void saveReschedules()} disabled={saving || pending.length === 0} className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+                    {saving ? "Saving…" : `Save rescheduled dates${pending.length ? ` (${pending.length})` : ""}`}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500">Planning only — CSN Tracker is never changed by the system. Shipped (in transit) lots cannot be moved.</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={arrivalColumns} rows={plan.arrivals} rowKey={(a, i) => `${a.reference}|${a.material_id}|${i}`} emptyMessage="No open PO / CSN / STO for these members." maxHeight="35vh" />
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">Engine proposals (current rule — Engine + AI plan comes in P2)</h3>
+                <ErpDenseGrid {...GRID_PROPS} columns={proposalColumns} rows={plan.proposals} rowKey={(b) => `${b.material_id}|${b.sequence}`} emptyMessage="No buy needed in the horizon." maxHeight="25vh" />
+              </section>
+            </div>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
