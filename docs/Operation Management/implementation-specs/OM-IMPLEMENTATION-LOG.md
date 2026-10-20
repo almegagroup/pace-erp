@@ -112,6 +112,27 @@
 
 ---
 
+### 2026-10-21 — PO22 P1 Item Plan (DONE; PROD rolled out, owner-approved)
+- Design: `docs/mts-planning/PO22-ENGINE-AI-PLANNING-DESIGN-2026-10-20.md` (Engine + AI joint planner,
+  phases P1-P4) and `docs/mts-planning/PO22-P1-FAMILY-PLANNING-DETAIL-2026-10-20.md`.
+- P1 (PR almegagroup/pace-erp#684, merge `b96ef57`): PO22 tab **4A. Item Plan** — any RM / PM; a
+  grouped item opens its whole family (closure over group membership), a non-group item stands
+  alone; ~6-month day grid (forward-walking Max / Min days), member split per day, arrivals with
+  status / ETD / Port / Plant, stock by location, Excel. Months with no PO21 plan get a forecast
+  (½ × same month last year × trend capped 0.7-1.3 + ½ × last 3 months' plan). Engine horizon is a
+  parameter; Requirement / Planning keep CM + NM unchanged. Same PR: materials not mapped to the
+  company (material_company_ext) are never shown in PO22.
+- Planning-side rescheduled ETA: migration `20261021100000_po22_inbound_eta_reschedule`
+  (applied by deploy-prod.yml, version matches local, NOTIFY pgrst done). CSN Tracker is never
+  changed by the system.
+- ACL (R-04 MCP, `docs/mts-planning/acl/PO22-P1-PROD-ACL-ROLLOUT.sql`): new companion resource
+  `PROC_MTS_INBOUND_RESCHEDULE` WRITE → CAP_MTS_PLAN_FULL. Dry run (ROLLBACK) then commit: CMP003
+  v135, CMP005 v31, CMP011 v31; 0 unrelated ACL decisions changed; ALLOW only SUPPLY CHAIN /
+  DIRECTOR / ACL-MASTER (22 user-contexts).
+- Verification: 165 procurement Deno tests pass; `deno check` 96 errors before = after (all
+  pre-existing, other files); ESLint clean; Vite build passes; all guards pass. Not yet done:
+  live click-through on real data (owner to compare RDP / Gabrosa with the sheet).
+
 ### 2026-10-20 — PO21 / PO22 MTS Requirement + Planning release (DONE; PROD rolled out)
 
 Scope CMP003 / CMP005 / CMP011. PR almegagroup/pace-erp#680 (`dev` → `main`).
