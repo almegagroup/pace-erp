@@ -907,6 +907,10 @@ export function saveMtsPlanStrokeSetting(data) {
   return fetchProcurement("POST", "/api/procurement/mts-plan/stroke-settings", data);
 }
 
+export function saveMtsPlanProductionCompany(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-plan/production-company", data);
+}
+
 export function getMtsPlanReport(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/report", undefined, params);
 }

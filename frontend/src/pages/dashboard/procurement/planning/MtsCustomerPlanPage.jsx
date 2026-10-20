@@ -36,6 +36,7 @@ import {
 import ProductGroupDrawer from "./MtsProductGroupDrawer.jsx";
 import {
   getMtsPlanAccess,
+  saveMtsPlanProductionCompany,
   getMtsPlanEntryGrid,
   getMtsPlanHistory,
   getMtsPlanningActuals,
@@ -178,6 +179,9 @@ function PlanEntryTab({ companyId, planMonth, access }) {
   const [urgentTo, setUrgentTo] = useState("");
   const [remarks, setRemarks] = useState("");
   const [drafts, setDrafts] = useState({});
+  // Cross-company production drafts: sku → producing company id ("" = own company). Owner 2026-10-20.
+  const [prodDrafts, setProdDrafts] = useState({});
+  const canSetProduction = Boolean(access?.can_set_production_company);
   const [saving, setSaving] = useState(false);
   const [historyRow, setHistoryRow] = useState(null);
 
@@ -196,7 +200,9 @@ function PlanEntryTab({ companyId, planMonth, access }) {
   const canWriteType = allowedTypes.includes(planType);
   const isBaseType = BASE_TYPES.includes(planType);
 
-  useEffect(() => { setDrafts({}); }, [companyId, planMonth, planType]);
+  useEffect(() => { setDrafts({}); setProdDrafts({}); }, [companyId, planMonth, planType]);
+  const companies = useMemo(() => gridQ.data?.companies ?? [], [gridQ.data]);
+  const producerOf = (row) => (row.sku_material_id in prodDrafts ? prodDrafts[row.sku_material_id] : row.production_company_id ?? "");
 
   const uomChoices = useMemo(() => {
     const units = new Set();
@@ -281,6 +287,28 @@ function PlanEntryTab({ companyId, planMonth, access }) {
     { key: "pack_code", label: "Pack", width: "70px", render: (r) => blankOr(r.pack_code) },
     { key: "base_uom_code", label: "Base UoM", width: "80px", totalUnit: true },
     {
+      // Owner 2026-10-20: tick = this SKU's plan for the month is made at another company (all plan types).
+      key: "cross_company", label: "Cross company", width: "170px", filterable: true,
+      render: (r) => {
+        const producer = producerOf(r);
+        return (
+          <span className="flex items-center gap-1">
+            <input type="checkbox" disabled={!canSetProduction} checked={Boolean(producer)}
+              title={canSetProduction ? "Made at another company" : "Only the procurement team can change this"}
+              onChange={(event) => setProdDrafts((current) => ({ ...current, [r.sku_material_id]: event.target.checked ? (companies.find((c) => !c.is_self)?.id ?? "") : "" }))} />
+            {producer ? (
+              <select disabled={!canSetProduction} value={producer} onChange={(event) => setProdDrafts((current) => ({ ...current, [r.sku_material_id]: event.target.value }))}
+                className="h-6 border border-slate-300 bg-white px-1 text-xs">
+                {companies.map((c) => <option key={c.id} value={c.id} disabled={c.is_self}>{c.code}</option>)}
+              </select>
+            ) : null}
+          </span>
+        );
+      },
+      copyValue: (r) => companies.find((c) => c.id === producerOf(r))?.code ?? "",
+      filterValue: (r) => companies.find((c) => c.id === producerOf(r))?.code ?? "Own",
+    },
+    {
       key: "new_qty", label: isBaseType ? `New ${planType === "FINAL" ? "Final" : "Rolling"} (${entryUom})` : `New Entry (${entryUom})`,
       width: "150px", align: "right", filterable: false,
       render: (r) => qtyInput(r),
@@ -338,6 +366,16 @@ function PlanEntryTab({ companyId, planMonth, access }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drafts, entryUom, planType, rows]);
 
+  async function saveProductionCompanies() {
+    const changed = rows.filter((row) => row.sku_material_id in prodDrafts && (prodDrafts[row.sku_material_id] || "") !== (row.production_company_id || ""));
+    if (changed.length === 0) return 0;
+    const result = await saveMtsPlanProductionCompany({
+      company_id: companyId, plan_month: planMonth,
+      rows: changed.map((row) => ({ sku_material_id: row.sku_material_id, production_company_id: prodDrafts[row.sku_material_id] || null })),
+    });
+    return result?.result?.saved ?? 0;
+  }
+
   async function handleSave() {
     const lines = [];
     for (const row of rows) {
@@ -356,7 +394,7 @@ function PlanEntryTab({ companyId, planMonth, access }) {
       }
       lines.push(line);
     }
-    if (lines.length === 0) {
+    if (lines.length === 0 && prodDraftCount === 0) {
       pushToast({ message: "Enter at least one quantity.", tone: "error" });
       return;
     }
@@ -366,12 +404,21 @@ function PlanEntryTab({ companyId, planMonth, access }) {
     }
     setSaving(true);
     try {
-      const payload = { company_id: companyId, plan_month: planMonth, plan_type: planType, entry_uom_code: entryUom, lines };
-      const result = isBaseType ? await saveMtsPlanBaseLines(payload) : await saveMtsPlanAddonLines(payload);
-      const saved = result?.result?.saved ?? 0;
-      const unchanged = result?.result?.unchanged ?? 0;
-      pushToast({ message: `Saved ${saved} line(s)${unchanged ? `, ${unchanged} unchanged` : ""}.`, tone: "success" });
+      let message = "";
+      if (lines.length > 0) {
+        const payload = { company_id: companyId, plan_month: planMonth, plan_type: planType, entry_uom_code: entryUom, lines };
+        const result = isBaseType ? await saveMtsPlanBaseLines(payload) : await saveMtsPlanAddonLines(payload);
+        const saved = result?.result?.saved ?? 0;
+        const unchanged = result?.result?.unchanged ?? 0;
+        message = `Saved ${saved} line(s)${unchanged ? `, ${unchanged} unchanged` : ""}.`;
+      }
+      if (prodDraftCount > 0) {
+        const savedProducers = await saveProductionCompanies();
+        message = `${message} Producing company set for ${savedProducers} SKU(s).`.trim();
+      }
+      pushToast({ message, tone: "success" });
       setDrafts({});
+      setProdDrafts({});
       await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-plan"] });
     } catch (error) {
       pushToast({ message: errorText(error), tone: "error" });
@@ -381,6 +428,7 @@ function PlanEntryTab({ companyId, planMonth, access }) {
   }
 
   const draftCount = Object.values(drafts).filter((value) => String(value ?? "").trim() !== "").length;
+  const prodDraftCount = rows.filter((row) => row.sku_material_id in prodDrafts && (prodDrafts[row.sku_material_id] || "") !== (row.production_company_id || "")).length;
 
   return (
     <ErpSectionCard eyebrow="Tab 1" title="Plan Entry — Rolling / Final / Additional / Urgent">
@@ -426,17 +474,19 @@ function PlanEntryTab({ companyId, planMonth, access }) {
         <button
           type="button"
           onClick={() => void handleSave()}
-          disabled={!canWriteType || saving || draftCount === 0}
+          disabled={saving || (draftCount === 0 && prodDraftCount === 0) || (draftCount > 0 && !canWriteType)}
           className="h-8 border border-sky-600 bg-sky-600 px-4 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
         >
-          {saving ? "Saving..." : `Save ${draftCount || ""}`.trim()}
+          {saving ? "Saving..." : `Save ${draftCount + prodDraftCount || ""}`.trim()}
         </button>
       </div>
       <p className="mb-2 text-xs text-slate-500">
         How to enter: 1) choose Plan Type and Input UoM; 2) type the quantity in the blue “New …” column (Enter / ↓ goes to the next
         row, or paste a whole column from Excel into the first box); 3) click Save. Effective Plan = Final if entered, else Rolling,
         plus Additional and Urgent Extra; Urgent From Plan only re-phases existing quantity. Every save is versioned. A grey box
-        means that SKU has no verified conversion for the chosen Input UoM.
+        means that SKU has no verified conversion for the chosen Input UoM. Cross company (procurement team): tick it and choose the
+        company code that makes this SKU this month — all its plan types for the month are then planned (RM/PM) at that company,
+        which sells it to this company for dispatch.
         {!canWriteType ? " You can view this plan type but not enter it." : ""}
       </p>
       {(gridQ.data?.ambiguous_skus ?? []).length > 0 ? (
@@ -890,6 +940,12 @@ function ReportTab({ companyId }) {
     const result = [];
     for (const row of reportRows) {
       const actual = Object.fromEntries(months.map((month) => [month, actualBySkuMonth.get(`${row.sku_material_id}|${month}`) ?? null]));
+      // Owner 2026-10-20: another company's plan made here is a PLAN-only row — its
+      // production/dispatch actuals already sit on this company's own SKU row.
+      if (row.incoming_from_company_code) {
+        result.push({ ...row, actual: {}, row_type: "PLAN", row_key: `${row.sku_material_id}|FROM|${row.incoming_from_company_code}|PLAN` });
+        continue;
+      }
       result.push({ ...row, actual, row_type: "PLAN", row_key: `${row.sku_material_id}|PLAN` });
       if (showProduction) result.push({ ...row, actual, row_type: "PRODUCTION", row_key: `${row.sku_material_id}|PRODUCTION` });
       if (showDispatch) result.push({ ...row, actual, row_type: "DISPATCH", row_key: `${row.sku_material_id}|DISPATCH` });
@@ -943,9 +999,11 @@ function ReportTab({ companyId }) {
       const qty = reportCell(r, month);
       if (qty === null) return "";
       const source = reportCellSource(r, month);
+      const madeAt = r.row_type === "PLAN" ? r.made_at?.[month] : null;
       return (
-        <span title={source ?? "Actual quantity unavailable"} className={r.row_type === "PLAN" && r.plan?.[month]?.legacy ? "text-indigo-700" : r.row_type === "PRODUCTION" ? "text-emerald-700" : r.row_type === "DISPATCH" ? "text-sky-700" : ""}>
+        <span title={madeAt ? `Made at ${madeAt} — planned in ${madeAt}'s Requirement, not here` : source ?? "Actual quantity unavailable"} className={r.row_type === "PLAN" && r.plan?.[month]?.legacy ? "text-indigo-700" : r.row_type === "PRODUCTION" ? "text-emerald-700" : r.row_type === "DISPATCH" ? "text-sky-700" : ""}>
           {fmtQty(qty)}
+          {madeAt ? <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">@{madeAt}</span> : null}
         </span>
       );
     },
@@ -1044,7 +1102,7 @@ function ReportTab({ companyId }) {
           </label>
         </div>
         <p className="text-xs text-slate-500">
-          PLAN = effective plan (Final, else Rolling, plus Additional and Urgent Extra). Production and Dispatch are hidden by default. They use imported history through Sep-2026 and posted ERP transactions from Oct-2026; blank means no verified quantity, not zero.
+          PLAN = effective plan (Final, else Rolling, plus Additional and Urgent Extra). Production and Dispatch are hidden by default. They use imported history through Sep-2026 and posted ERP transactions from Oct-2026; blank means no verified quantity, not zero. A plan marked @CODE is made at that company (its Requirement and Planning carry it); rows "(from CODE)" are another company's plan made here.
         </p>
         {(actuals?.warnings ?? []).length > 0 || gridRows.unmappedIdentityCount > 0 ? (
           <div className="grid gap-1 text-xs text-amber-800">

@@ -134,6 +134,12 @@ export type PlanLineVersion = {
   base_qty: number;
   is_cancelled: boolean;
   created_at: string;
+  /**
+   * PO21 cross-company production (owner 2026-10-20): the company that owns this plan line when it
+   * is produced by the company being planned. Absent = the planned company's own line. Each origin's
+   * FINAL-else-ROLLING rule is applied separately, then the demands are added.
+   */
+  origin_company_id?: string;
 };
 
 export type UrgentWindow = { qty: number; from: string; to: string };
@@ -206,10 +212,10 @@ export function effectivePlanAt(lines: PlanLineVersion[], demandAt: string | nul
   const byKey = new Map<string, PlanLineVersion[]>();
   for (const line of latestByEntry.values()) {
     if (line.is_cancelled) continue;
-    const key = `${line.plan_month}|${line.sku_material_id}`;
+    const key = `${line.plan_month}|${line.sku_material_id}|${line.origin_company_id ?? ""}`;
     byKey.set(key, [...(byKey.get(key) ?? []), line]);
   }
-  const result: EffectiveSkuMonth[] = [];
+  const perOrigin: EffectiveSkuMonth[] = [];
   for (const [key, group] of [...byKey.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const [plan_month, sku_material_id] = key.split("|");
     const sum = (rows: PlanLineVersion[]) => rows.reduce((total, row) => total + Number(row.base_qty), 0);
@@ -248,7 +254,7 @@ export function effectivePlanAt(lines: PlanLineVersion[], demandAt: string | nul
       ...group.filter((row) => row.plan_type === "URGENT" && row.urgent_mode === "EXTRA").sort(byEntry).map((row) => ref(row, "URGENT_EXTRA")),
       ...group.filter((row) => row.plan_type === "URGENT" && row.urgent_mode === "FROM_PLAN").sort(byEntry).map((row) => ref(row, "URGENT_FROM_PLAN")),
     ];
-    result.push({
+    perOrigin.push({
       plan_month,
       sku_material_id,
       base_source: baseSource,
@@ -260,7 +266,24 @@ export function effectivePlanAt(lines: PlanLineVersion[], demandAt: string | nul
       contributors,
     });
   }
-  return result;
+  // Several origins of one month × SKU (own plan + plans produced for other companies) add up.
+  const merged = new Map<string, EffectiveSkuMonth>();
+  for (const entry of perOrigin) {
+    const key = `${entry.plan_month}|${entry.sku_material_id}`;
+    const seen = merged.get(key);
+    if (!seen) { merged.set(key, entry); continue; }
+    merged.set(key, {
+      ...seen,
+      base_source: seen.base_source === "FINAL" || entry.base_source === "FINAL" ? "FINAL" : seen.base_source ?? entry.base_source,
+      base_qty: seen.base_qty === null && entry.base_qty === null ? null : roundQty((seen.base_qty ?? 0) + (entry.base_qty ?? 0)),
+      additional_qty: roundQty(seen.additional_qty + entry.additional_qty),
+      urgent_extra: [...seen.urgent_extra, ...entry.urgent_extra],
+      urgent_from_plan: [...seen.urgent_from_plan, ...entry.urgent_from_plan],
+      effective_qty: seen.effective_qty === null && entry.effective_qty === null ? null : roundQty((seen.effective_qty ?? 0) + (entry.effective_qty ?? 0)),
+      contributors: [...(seen.contributors ?? []), ...(entry.contributors ?? [])],
+    });
+  }
+  return [...merged.values()];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

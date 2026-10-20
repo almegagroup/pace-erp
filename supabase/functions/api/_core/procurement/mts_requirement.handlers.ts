@@ -304,12 +304,29 @@ export async function loadFormulationMasters(companyId: string, extraStrokeIds: 
   return { skus, ambiguousCount: ambiguous.length, strokes, currentStrokeByProdshade, groupMembers, packBoms, materialUniverse: universe, prodshadeIds, warnings };
 }
 
+/**
+ * PO21 plan lines this company must plan for (owner 2026-10-20, cross-company production):
+ *   own lines, except SKU-months the procurement team assigned to another producing company;
+ *   plus other companies' lines for SKU-months assigned to this company (tagged origin_company_id).
+ */
 export async function loadPlanLines(companyId: string, months: string[]): Promise<PlanLineVersion[]> {
-  const data = await fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("customer_plan_line")
-    .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at")
-    .eq("company_id", companyId).in("plan_month", months)
-    .order("created_at", { ascending: true }).order("id", { ascending: true }), "MTS_REQ_PLAN_LOAD_FAILED");
-  return data.map((row) => ({
+  const [own, outgoing, incoming] = await Promise.all([
+    fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("customer_plan_line")
+      .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at")
+      .eq("company_id", companyId).in("plan_month", months)
+      .order("created_at", { ascending: true }).order("id", { ascending: true }), "MTS_REQ_PLAN_LOAD_FAILED"),
+    loadProductionAssignments({ company_id: companyId }, months),
+    loadProductionAssignments({ production_company_id: companyId }, months),
+  ]);
+  const away = new Set(outgoing.filter((a) => text(a.production_company_id) && text(a.production_company_id) !== companyId)
+    .map((a) => `${text(a.plan_month).slice(0, 10)}|${text(a.sku_material_id)}`));
+  const incomingKeys = new Set(incoming.map((a) => `${text(a.company_id)}|${text(a.plan_month).slice(0, 10)}|${text(a.sku_material_id)}`));
+  const sourceCompanies = unique(incoming.map((a) => text(a.company_id)));
+  const sourceLines = sourceCompanies.length === 0 ? [] : await fetchInChunks<JsonRecord>(sourceCompanies, (chunk) => serviceRoleClient
+    .schema("erp_planning").from("customer_plan_line")
+    .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at, company_id")
+    .in("company_id", chunk).in("plan_month", months));
+  const toVersion = (row: JsonRecord, origin?: string): PlanLineVersion => ({
     source_id: text(row.id) || undefined,
     entry_id: text(row.entry_id),
     version_no: Number(row.version_no),
@@ -322,7 +339,31 @@ export async function loadPlanLines(companyId: string, months: string[]): Promis
     base_qty: Number(row.base_qty ?? 0),
     is_cancelled: row.is_cancelled === true,
     created_at: text(row.created_at),
-  }));
+    ...(origin ? { origin_company_id: origin } : {}),
+  });
+  return [
+    ...own.filter((row) => !away.has(`${text(row.plan_month).slice(0, 10)}|${text(row.sku_material_id)}`)).map((row) => toVersion(row)),
+    ...sourceLines.filter((row) => incomingKeys.has(`${text(row.company_id)}|${text(row.plan_month).slice(0, 10)}|${text(row.sku_material_id)}`))
+      .sort((a, b) => text(a.created_at).localeCompare(text(b.created_at)) || text(a.id).localeCompare(text(b.id)))
+      .map((row) => toVersion(row, text(row.company_id))),
+  ];
+}
+
+/** Current PO21 production-company assignments (empty when the table is not deployed yet). */
+async function loadProductionAssignments(filter: { company_id?: string; production_company_id?: string }, months: string[]): Promise<JsonRecord[]> {
+  let query = serviceRoleClient.schema("erp_planning").from("customer_plan_production_company")
+    .select("company_id, plan_month, sku_material_id, production_company_id").eq("is_current", true).in("plan_month", months);
+  if (filter.company_id) query = query.eq("company_id", filter.company_id);
+  if (filter.production_company_id) query = query.eq("production_company_id", filter.production_company_id);
+  const { data, error } = await query.limit(5000);
+  if (error) {
+    // Table not deployed yet → no cross-company production (legacy behaviour). Any other error
+    // must stop the run: silently ignoring it could plan a demand twice or not at all.
+    const code = String((error as { code?: string }).code ?? "");
+    if (code === "42P01" || code === "PGRST205" || code === "PGRST106") return [];
+    throw new Error("MTS_REQ_PRODUCTION_COMPANY_LOAD_FAILED");
+  }
+  return (data ?? []) as JsonRecord[];
 }
 
 export async function loadStrokeSettings(companyId: string, months: string[]) {

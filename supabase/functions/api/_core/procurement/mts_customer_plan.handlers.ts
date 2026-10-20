@@ -16,6 +16,9 @@
  *   PROC_MTS_CUSTOMER_PLAN_MAINTAIN  WRITE = Rolling / Final entries + Tab 2
  *   PROC_MTS_PLAN_GROUP_MAINTAIN     WRITE = Product Group (Mother / Child
  *                                    group of Prodshades) layout
+ *   PROC_MTS_PLAN_PRODUCTION_COMPANY WRITE = which company produces a SKU-month
+ *                                    (cross-company production; procurement team,
+ *                                    owner 2026-10-20)
  *   Two resources because they are two different actions (pattern #6): the
  *   owner gives Stores / Logistics / Plant Head add-on entry only, while SCM,
  *   Director and ACL-MASTER also maintain the base plan.
@@ -64,6 +67,7 @@ type MtsPlanHandlerContext = {
 const RESOURCE_PAGE = "PROC_MTS_CUSTOMER_PLAN";
 const RESOURCE_MAINTAIN = "PROC_MTS_CUSTOMER_PLAN_MAINTAIN";
 const RESOURCE_GROUP = "PROC_MTS_PLAN_GROUP_MAINTAIN";
+const RESOURCE_PRODUCTION_COMPANY = "PROC_MTS_PLAN_PRODUCTION_COMPANY";
 const MAX_LINES_PER_SAVE = 1000;
 
 function textValue(value: unknown): string {
@@ -104,6 +108,56 @@ async function requirePlanMaintainAccess(req: Request, ctx: MtsPlanHandlerContex
 async function requirePlanGroupAccess(req: Request, ctx: MtsPlanHandlerContext, companyId: string): Promise<Response | null> {
   const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_GROUP, "WRITE");
   return allowed ? null : planError(req, ctx, "MTS_PLAN_FORBIDDEN", 403, "You cannot maintain Product Groups for this company.");
+}
+
+async function requirePlanProductionCompanyAccess(req: Request, ctx: MtsPlanHandlerContext, companyId: string): Promise<Response | null> {
+  const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_PRODUCTION_COMPANY, "WRITE");
+  return allowed ? null : planError(req, ctx, "MTS_PLAN_FORBIDDEN", 403, "You cannot choose the producing company for this company's plan.");
+}
+
+/** Cross-company production assignments of this company (empty when the table is not deployed). */
+async function loadProductionAssignments(companyId: string, months: string[]): Promise<Map<string, string>> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").from("customer_plan_production_company")
+    .select("plan_month, sku_material_id, production_company_id").eq("company_id", companyId).eq("is_current", true).in("plan_month", months).limit(5000);
+  if (error) {
+    const code = String((error as { code?: string }).code ?? "");
+    if (code === "42P01" || code === "PGRST205" || code === "PGRST106") return new Map();
+    throw new Error("MTS_PLAN_PRODUCTION_COMPANY_LOAD_FAILED");
+  }
+  const result = new Map<string, string>(); // `${month}|${sku}` → producing company id
+  for (const row of (data ?? []) as JsonRecord[]) {
+    if (textValue(row.production_company_id)) result.set(`${textValue(row.plan_month).slice(0, 10)}|${textValue(row.sku_material_id)}`, textValue(row.production_company_id));
+  }
+  return result;
+}
+
+async function loadIncomingEffective(companyId: string, months: string[]): Promise<Array<EffectiveRow & { source_company_id: string }>> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").rpc("customer_plan_effective_incoming", { p_production_company: companyId, p_months: months });
+  if (error) {
+    const code = String((error as { code?: string }).code ?? "");
+    if (code === "42883" || code === "PGRST202" || code === "PGRST106") return [];
+    throw new Error("MTS_PLAN_INCOMING_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[]).map((row) => ({
+    source_company_id: textValue(row.source_company_id),
+    plan_month: textValue(row.plan_month).slice(0, 10),
+    sku_material_id: textValue(row.sku_material_id),
+    effective_qty: numberOrNull(row.effective_qty),
+    base_source: textValue(row.base_source) || null,
+    has_legacy_source: row.has_legacy_source === true,
+    rolling_qty: numberOrNull(row.rolling_qty),
+    final_qty: numberOrNull(row.final_qty),
+    additional_qty: numberOrNull(row.additional_qty),
+    urgent_extra_qty: numberOrNull(row.urgent_extra_qty),
+    urgent_from_plan_qty: numberOrNull(row.urgent_from_plan_qty),
+  }) as EffectiveRow & { source_company_id: string });
+}
+
+/** Company id → company code (codes only in the producing-company dropdown, owner 2026-10-20). */
+async function loadCompanyCodes(): Promise<Map<string, string>> {
+  const { data, error } = await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").limit(500);
+  if (error) throw new Error("MTS_PLAN_COMPANY_LIST_FAILED");
+  return new Map(((data ?? []) as JsonRecord[]).map((c) => [textValue(c.id), textValue(c.company_code)]));
 }
 
 /** company_id from query/body, membership-checked; returns "" if missing. */
@@ -241,10 +295,11 @@ export async function getMtsPlanAccessHandler(req: Request, ctx: MtsPlanHandlerC
     if (!companyId) return planError(req, ctx, "MTS_PLAN_COMPANY_REQUIRED", 400, "company_id is required.");
     const viewDenied = await requirePlanViewAccess(req, ctx, companyId);
     if (viewDenied) return viewDenied;
-    const [canAddon, canMaintain, canManageGroups] = await Promise.all([
+    const [canAddon, canMaintain, canManageGroups, canSetProduction] = await Promise.all([
       canMaintainCompanyResource(ctx, companyId, RESOURCE_PAGE, "WRITE"),
       canMaintainCompanyResource(ctx, companyId, RESOURCE_MAINTAIN, "WRITE"),
       canMaintainCompanyResource(ctx, companyId, RESOURCE_GROUP, "WRITE"),
+      canMaintainCompanyResource(ctx, companyId, RESOURCE_PRODUCTION_COMPANY, "WRITE"),
     ]);
     const allowedPlanTypes: PlanType[] = [
       ...(canMaintain ? BASE_PLAN_TYPES : []),
@@ -256,6 +311,7 @@ export async function getMtsPlanAccessHandler(req: Request, ctx: MtsPlanHandlerC
       can_enter_addon: canAddon || canMaintain,
       can_maintain: canMaintain,
       can_manage_groups: canManageGroups,
+      can_set_production_company: canSetProduction,
       allowed_plan_types: allowedPlanTypes,
     }, ctx.request_id, req);
   } catch (error) {
@@ -279,7 +335,7 @@ export async function getMtsPlanEntryGridHandler(req: Request, ctx: MtsPlanHandl
     if (!isPlanType(planType)) return planError(req, ctx, "MTS_PLAN_INVALID_TYPE", 400, "plan_type is invalid.");
 
     const { skus, ambiguous } = await loadCompanySkus(companyId);
-    const [linesResult, effectiveRows, groups] = await Promise.all([
+    const [linesResult, effectiveRows, groups, production, companyCodes] = await Promise.all([
       serviceRoleClient.schema("erp_planning").from("customer_plan_line")
         .select("id, entry_id, version_no, sku_material_id, entered_qty, entered_uom_code, base_qty, base_uom_code, urgent_mode, urgent_from_date, urgent_to_date, remarks, source_system, created_by, created_at")
         .eq("company_id", companyId).eq("plan_month", planMonth).eq("plan_type", planType)
@@ -287,6 +343,8 @@ export async function getMtsPlanEntryGridHandler(req: Request, ctx: MtsPlanHandl
         .order("created_at", { ascending: true }),
       loadEffective(companyId, [planMonth]),
       loadGroupLayout(companyId),
+      loadProductionAssignments(companyId, [planMonth]),
+      loadCompanyCodes(),
     ]);
     if (linesResult.error) throw new Error("MTS_PLAN_LINES_FAILED");
     const lines = (linesResult.data ?? []) as JsonRecord[];
@@ -341,6 +399,8 @@ export async function getMtsPlanEntryGridHandler(req: Request, ctx: MtsPlanHandl
         is_current_mts_sku: Boolean(meta),
         entry_uom_options: uomOptions.get(skuId) ?? [],
         entries: linesBySku.get(skuId) ?? [],
+        production_company_id: production.get(`${planMonth}|${skuId}`) ?? null,
+        production_company_code: companyCodes.get(production.get(`${planMonth}|${skuId}`) ?? "") ?? null,
         effective: effective ? {
           rolling_qty: effective.rolling_qty,
           final_qty: effective.final_qty,
@@ -358,6 +418,8 @@ export async function getMtsPlanEntryGridHandler(req: Request, ctx: MtsPlanHandl
       plan_month: planMonth,
       plan_type: planType,
       rows,
+      companies: [...companyCodes].filter(([, code]) => code).map(([id, code]) => ({ id, code, is_self: id === companyId }))
+        .sort((a, b) => a.code.localeCompare(b.code)),
       ambiguous_skus: ambiguous.map((a) => ({
         prodshade_label: materialLabel(materials.get(a.prodshade_material_id)),
         pack_code: a.pack_code,
@@ -793,6 +855,64 @@ export async function saveMtsPlanProductGroupsHandler(req: Request, ctx: MtsPlan
   }
 }
 
+// ── GET/POST /api/procurement/mts-plan/production-company ───────────────────
+// Owner 2026-10-20: the procurement team chooses which company produces a SKU-month of this
+// company's plan. The producing company's PO22 then carries that demand.
+export async function getMtsPlanProductionCompanyHandler(req: Request, ctx: MtsPlanHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = await resolveCompany(ctx, url.searchParams.get("company_id"));
+    if (!companyId) return planError(req, ctx, "MTS_PLAN_COMPANY_REQUIRED", 400, "company_id is required.");
+    const accessError = await requirePlanViewAccess(req, ctx, companyId);
+    if (accessError) return accessError;
+    const planMonth = normalizePlanMonth(url.searchParams.get("plan_month"));
+    if (!planMonth) return planError(req, ctx, "MTS_PLAN_INVALID_MONTH", 400, "plan_month must be YYYY-MM.");
+    const [production, companyCodes] = await Promise.all([loadProductionAssignments(companyId, [planMonth]), loadCompanyCodes()]);
+    return okResponse({
+      company_id: companyId,
+      plan_month: planMonth,
+      companies: [...companyCodes].filter(([, code]) => code).map(([id, code]) => ({ id, code, is_self: id === companyId })).sort((a, b) => a.code.localeCompare(b.code)),
+      assignments: [...production].map(([key, producer]) => ({ sku_material_id: key.split("|")[1], production_company_id: producer, production_company_code: companyCodes.get(producer) ?? null })),
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "MTS_PLAN_PRODUCTION_COMPANY_FAILED";
+    if (code === "COMPANY_SCOPE_VIOLATION") return planError(req, ctx, code, 403, "Company is outside your scope.");
+    return planError(req, ctx, "MTS_PLAN_PRODUCTION_COMPANY_FAILED", 500, "Could not load the producing companies.");
+  }
+}
+
+export async function saveMtsPlanProductionCompanyHandler(req: Request, ctx: MtsPlanHandlerContext): Promise<Response> {
+  try {
+    const body = await parseBody(req);
+    const companyId = await resolveCompany(ctx, body.company_id);
+    if (!companyId) return planError(req, ctx, "MTS_PLAN_COMPANY_REQUIRED", 400, "company_id is required.");
+    const accessError = await requirePlanProductionCompanyAccess(req, ctx, companyId);
+    if (accessError) return accessError;
+    const planMonth = normalizePlanMonth(body.plan_month);
+    if (!planMonth) return planError(req, ctx, "MTS_PLAN_INVALID_MONTH", 400, "plan_month must be YYYY-MM.");
+    const rows = (Array.isArray(body.rows) ? body.rows as JsonRecord[] : []).map((row) => ({
+      sku_material_id: textValue(row.sku_material_id),
+      production_company_id: textValue(row.production_company_id) || null,
+      remarks: textValue(row.remarks) || null,
+    }));
+    if (rows.length === 0) return planError(req, ctx, "MTS_PLAN_NO_LINES", 400, "Nothing to save.");
+    if (rows.length > MAX_LINES_PER_SAVE) return planError(req, ctx, "MTS_PLAN_TOO_MANY_LINES", 400, `At most ${MAX_LINES_PER_SAVE} rows per save.`);
+    const { data, error } = await serviceRoleClient.schema("erp_planning").rpc("save_customer_plan_production_company", {
+      p_company_id: companyId, p_plan_month: planMonth, p_actor: ctx.auth_user_id, p_rows: rows,
+    });
+    if (error) {
+      const code = rpcErrorCode(error.message);
+      if (code) return planError(req, ctx, code, 400, String(error.message).replace(/^.*?(MTS_PLAN_[A-Z_]+):\s*/, ""));
+      throw new Error("MTS_PLAN_PRODUCTION_COMPANY_SAVE_FAILED");
+    }
+    return okResponse({ result: data }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "MTS_PLAN_PRODUCTION_COMPANY_SAVE_FAILED";
+    if (code === "COMPANY_SCOPE_VIOLATION") return planError(req, ctx, code, 403, "Company is outside your scope.");
+    return planError(req, ctx, "MTS_PLAN_PRODUCTION_COMPANY_SAVE_FAILED", 500, "Could not save the producing companies.");
+  }
+}
+
 // ── GET /api/procurement/mts-plan/report ────────────────────────────────────
 export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerContext): Promise<Response> {
   try {
@@ -806,13 +926,17 @@ export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerC
     if (months.length === 0) return planError(req, ctx, "MTS_PLAN_MONTHS_REQUIRED", 400, "Select at least one month.");
     if (months.length > MAX_REPORT_MONTHS) return planError(req, ctx, "MTS_PLAN_TOO_MANY_MONTHS", 400, `Select at most ${MAX_REPORT_MONTHS} months.`);
 
-    const [{ skus }, effectiveRows, groups] = await Promise.all([
+    const [{ skus }, effectiveRows, groups, production, incoming, companyCodes] = await Promise.all([
       loadCompanySkus(companyId), loadEffective(companyId, months), loadGroupLayout(companyId),
+      loadProductionAssignments(companyId, months), loadIncomingEffective(companyId, months), loadCompanyCodes(),
     ]);
     const skuIds = [...new Set([...skus.map((s) => s.sku_material_id), ...effectiveRows.map((r) => r.sku_material_id)])];
     const skuMeta = new Map(skus.map((s) => [s.sku_material_id, s]));
-    const materials = await loadMaterials([...skuIds, ...skus.map((s) => s.prodshade_material_id)]);
+    const materials = await loadMaterials([...skuIds, ...skus.map((s) => s.prodshade_material_id), ...incoming.map((r) => r.sku_material_id)]);
     const pivot = pivotPlanReport(skuIds, months, effectiveRows);
+    const madeAt = (skuId: string) => Object.fromEntries(months
+      .map((month) => [month, companyCodes.get(production.get(`${month}|${skuId}`) ?? "") ?? null])
+      .filter(([, code]) => code));
 
     const rows = skuIds.map((skuId) => {
       const material = materials.get(skuId);
@@ -829,8 +953,35 @@ export async function getMtsPlanReportHandler(req: Request, ctx: MtsPlanHandlerC
         pack_code: meta?.pack_code ?? null,
         is_current_mts_sku: Boolean(meta),
         plan: pivot.get(skuId) ?? {},
+        // Owner 2026-10-20: months whose plan another company produces (shown, not planned here in PO22).
+        made_at: madeAt(skuId),
       };
     }).sort((a, b) => a.sku_label.localeCompare(b.sku_label));
+
+    // Plans of other companies that this company produces: added to this company's plan (PLAN rows only;
+    // production actuals stay on this company's own SKU row so they are never counted twice).
+    const incomingKeys = [...new Set(incoming.map((r) => `${r.source_company_id}|${r.sku_material_id}`))];
+    for (const key of incomingKeys) {
+      const [sourceId, skuId] = key.split("|");
+      const material = materials.get(skuId);
+      const meta = skuMeta.get(skuId);
+      const code = companyCodes.get(sourceId) ?? "—";
+      rows.push({
+        sku_material_id: skuId,
+        sku_label: `${materialLabel(material)} (from ${code})`,
+        sku_external_code: textValue(material?.external_code) || null,
+        sku_document_name: textValue(material?.document_name) || null,
+        base_uom_code: textValue(material?.base_uom_code) || null,
+        prodshade_material_id: meta?.prodshade_material_id ?? null,
+        prodshade_label: meta ? materialLabel(materials.get(meta.prodshade_material_id)) : "—",
+        ...(meta ? groups.byProdshade.get(meta.prodshade_material_id) ?? NO_GROUP : NO_GROUP),
+        pack_code: meta?.pack_code ?? null,
+        is_current_mts_sku: Boolean(meta),
+        plan: pivotPlanReport([skuId], months, incoming.filter((r) => r.source_company_id === sourceId)).get(skuId) ?? {},
+        made_at: {},
+        incoming_from_company_code: code,
+      } as typeof rows[number]);
+    }
 
     return okResponse({
       company_id: companyId,

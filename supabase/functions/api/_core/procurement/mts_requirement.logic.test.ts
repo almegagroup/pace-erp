@@ -767,3 +767,17 @@ Deno.test("suggested safety days: Critical = p90 delay vs route (early = 0), Tar
   assertEqual(suggestSafetyDays(35, []), { critical: null, target: 35, samples: 0 }, "no history → Target = route only");
   assertEqual(suggestSafetyDays(null, [4]), { critical: 4, target: null, samples: 1 }, "no route → Target unknown");
 });
+
+Deno.test("PO21 cross-company: each origin keeps FINAL-else-ROLLING, then demands add (no plan lost)", () => {
+  const base = { urgent_mode: null, urgent_from_date: null, urgent_to_date: null, sku_material_id: "SKU", is_cancelled: false, created_at: "2026-10-01T00:00:00Z", plan_month: "2026-11-01" } as const;
+  const lines: PlanLineVersion[] = [
+    { ...base, entry_id: "own-final", version_no: 1, plan_type: "FINAL", base_qty: 100 },
+    { ...base, entry_id: "cmp005-rolling", version_no: 1, plan_type: "ROLLING", base_qty: 50, origin_company_id: "CMP005" },
+    { ...base, entry_id: "cmp005-add", version_no: 1, plan_type: "ADDITIONAL", base_qty: 5, origin_company_id: "CMP005" },
+  ];
+  const [entry] = effectivePlanAt(lines, null);
+  assertEqual([entry.base_qty, entry.additional_qty, entry.effective_qty, entry.contributors?.length], [150, 5, 155, 3], "own FINAL 100 + CMP005 ROLLING 50 + 5");
+  // Without origins the old rule holds: FINAL replaces ROLLING inside one company.
+  const single = effectivePlanAt(lines.map(({ origin_company_id: _o, ...l }) => l), null)[0];
+  assertEqual(single.base_qty, 100, "same company: FINAL wins");
+});
