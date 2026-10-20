@@ -6,6 +6,9 @@
 -- new ACL version per company (CMP003 / CMP005 / CMP011), capture, snapshot, activate, menu
 -- rebuild, then verification that aborts the whole run if any unrelated ACL decision changes
 -- or the PO22 access matrix is wrong.
+-- Dry run on PROD 2026-10-20 (ROLLBACK): 0 unrelated ACL decisions changed; PO22 + cross company
+-- ALLOW only in SUPPLY CHAIN (CMP003 4 users, CMP005 3, CMP011 3), DIRECTOR (2 each) and
+-- ACL-MASTER (2 each). The first dry run caught menu_tree display_order 21 already taken (POTMP).
 BEGIN;
 
 CREATE TEMP TABLE po22_before ON COMMIT DROP AS
@@ -115,11 +118,15 @@ END $$;
 INSERT INTO erp_menu.menu_master (menu_code, resource_code, title, description, route_path, menu_type, universe, is_system, display_order, is_active, created_by, tx_code)
 SELECT 'PROC_MTS_REQUIREMENT', 'PROC_MTS_REQUIREMENT', 'Requirement',
        'MTS Planning: RM/PM Requirement Report and Material Settings (coverage days, MOQ)',
-       '/dashboard/procurement/mts-requirement', 'PAGE', 'ACL', false, 21, true, 'MTS_PLANNING_SETUP', 'PO22'
+       '/dashboard/procurement/mts-requirement', 'PAGE', 'ACL', false, 22, true, 'MTS_PLANNING_SETUP', 'PO22'
 WHERE NOT EXISTS (SELECT 1 FROM erp_menu.menu_master WHERE menu_code = 'PROC_MTS_REQUIREMENT');
 
+-- display_order 21 is already POTMP in PROD (found by the 2026-10-20 dry run): use 22, or the next
+-- free slot if 22 is taken too (ux_menu_tree_order is unique per parent).
 INSERT INTO erp_menu.menu_tree (parent_menu_id, child_menu_id, display_order)
-SELECT p.id, c.id, 21
+SELECT p.id, c.id,
+       CASE WHEN NOT EXISTS (SELECT 1 FROM erp_menu.menu_tree x WHERE x.parent_menu_id = p.id AND x.display_order = 22)
+            THEN 22 ELSE (SELECT max(x.display_order) + 1 FROM erp_menu.menu_tree x WHERE x.parent_menu_id = p.id) END
 FROM erp_menu.menu_master p, erp_menu.menu_master c
 WHERE p.menu_code = 'GRP_ACL_PROCUREMENT' AND c.menu_code = 'PROC_MTS_REQUIREMENT'
   AND NOT EXISTS (SELECT 1 FROM erp_menu.menu_tree t WHERE t.child_menu_id = c.id);
