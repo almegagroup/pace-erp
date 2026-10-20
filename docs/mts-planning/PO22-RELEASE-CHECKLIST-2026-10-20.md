@@ -76,7 +76,9 @@ Run, in order, the files under `docs/mts-planning/acl/` (each is idempotent):
    `PROC_MTS_PLAN_PRODUCTION_COMPANY` (WRITE → `CAP_MTS_PLAN_FULL` = SCM / Director / ACL-MASTER,
    owner: "procurement team")
 
-Then per company (CLAUDE.md §8 second correction — re-capturing an existing version is a silent no-op):
+**All of §4 in one transaction: `docs/mts-planning/acl/PO22-PROD-ACL-ROLLOUT.sql`** (R-04 MCP runbook — provisioning + version bump + verification that aborts on any unrelated change).
+
+What it does per company (CLAUDE.md §8 second correction — re-capturing an existing version is a silent no-op):
 - create a **new** `acl_versions` row (CMP003 → 134, CMP005 → 30, CMP011 → 30)
 - `acl.capture_acl_version_source(new_version, company, actor)`
 - `acl.generate_acl_snapshot(new_version, company)`, activate per runbook
