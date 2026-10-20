@@ -1,4 +1,4 @@
--- REVIEW ONLY — NOT RUN in DEV or PROD.
+-- NOT RUN anywhere. PROD only with explicit owner approval, after the PO22 migrations.
 --
 -- PO22 Phase 3B has no frontend or API yet. This companion script is the
 -- proposed company-level ACL data provisioning needed before a later screen can
@@ -10,8 +10,7 @@
 -- create a PO, modify a CSN, or change the current PO22 calculation):
 --   CAP_MTS_PLAN_FULL            PROC_MTS_OPTIMIZER_INPUT      VIEW
 --   CAP_MTS_PLAN_FULL            PROC_MTS_OPTIMIZER_SELECTION  WRITE
---   CAP_MTS_PLAN_ADDON           PROC_MTS_OPTIMIZER_INPUT      VIEW
---   CAP_MTS_PLAN_ADDON_PLANTHEAD PROC_MTS_OPTIMIZER_INPUT      VIEW
+--   (owner 2026-10-20: PO22 = SCM / ACL-MASTER / Director only — no add-on capabilities)
 --
 -- The same company-scoped PO21 capability grants determine CMP003/CMP005/CMP011
 -- scope. The existing CAP_MTS_PLAN_FULL coverage includes ACL-MASTER/P0076;
@@ -36,7 +35,7 @@ BEGIN;
 DO $$
 DECLARE v_capability text;
 BEGIN
-  FOREACH v_capability IN ARRAY ARRAY['CAP_MTS_PLAN_FULL', 'CAP_MTS_PLAN_ADDON', 'CAP_MTS_PLAN_ADDON_PLANTHEAD'] LOOP
+  FOREACH v_capability IN ARRAY ARRAY['CAP_MTS_PLAN_FULL'] LOOP
     IF NOT EXISTS (SELECT 1 FROM acl.capabilities c WHERE c.capability_code = v_capability) THEN
       RAISE EXCEPTION 'MTS_OPTIMIZER_ACL_CAPABILITY_MISSING: %', v_capability;
     END IF;
@@ -56,9 +55,7 @@ INSERT INTO acl.capability_menu_actions (capability_code, menu_id, action, allow
 SELECT v.capability_code, m.id, v.action, true, false
 FROM (VALUES
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_OPTIMIZER_INPUT',     'VIEW'),
-  ('CAP_MTS_PLAN_FULL',            'PROC_MTS_OPTIMIZER_SELECTION', 'WRITE'),
-  ('CAP_MTS_PLAN_ADDON',           'PROC_MTS_OPTIMIZER_INPUT',     'VIEW'),
-  ('CAP_MTS_PLAN_ADDON_PLANTHEAD', 'PROC_MTS_OPTIMIZER_INPUT',     'VIEW')
+  ('CAP_MTS_PLAN_FULL',            'PROC_MTS_OPTIMIZER_SELECTION', 'WRITE')
 ) AS v(capability_code, menu_code, action)
 JOIN acl.menu_master m ON m.menu_code = v.menu_code
 WHERE NOT EXISTS (

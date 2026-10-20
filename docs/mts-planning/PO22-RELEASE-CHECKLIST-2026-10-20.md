@@ -69,6 +69,9 @@ is) — confirm in the Dashboard anyway.
 Run, in order, the files under `docs/mts-planning/acl/` (each is idempotent):
 1. `MTS-REQUIREMENT-ACL-PROVISIONING.sql` — PO22 menu + `PROC_MTS_REQUIREMENT` / `_POLICY`
 2. `MTS-OPTIMIZER-PHASE-3B-ACL-PROVISIONING.sql` — `PROC_MTS_OPTIMIZER_INPUT` / `_SELECTION`
+   **Owner decision 2026-10-20: PO22 full authority = SCM, ACL-MASTER and Director only** —
+   both files above grant PO22 resources to `CAP_MTS_PLAN_FULL` only (SUPPLY CHAIN / DIRECTOR /
+   ACL-MASTER work contexts, verified PROD). Stores / Logistics / Plant Head do not get PO22.
 3. `MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql` — re-run for the new companion
    `PROC_MTS_PLAN_PRODUCTION_COMPANY` (WRITE → `CAP_MTS_PLAN_FULL` = SCM / Director / ACL-MASTER,
    owner: "procurement team")
@@ -86,7 +89,7 @@ Then per company (CLAUDE.md §8 second correction — re-capturing an existing v
 
 | # | Item | Who | Notes |
 |---|---|---|---|
-| 1 | **Target / Critical days** per material (PO22 Settings) | SCM | Currently 0 everywhere. Use "Suggested T / C (no booking)" + Use button as a start. Without it no stock is protected |
+| 1 | **Target / Critical days** per material (PO22 Settings) | Users (SCM) — owner 2026-10-20 | Currently 0 everywhere. Use "Suggested T / C (no booking)" + Use button as a start. Without it no stock is protected |
 | 2 | Location policy (D12) | SCM | Seeded by migration 3: COUNTED R001 R002 S001 S002 P001 P002; TRANSFER_SOURCE R003; EXCLUDED OT01/OT02, F-series, S003/P003/T003/L003. Review per company in Settings |
 | 3 | Group primary (D3) for CMP005 / CMP011 | SCM | Optional — engine auto-picks when empty and labels it "Engine chose" |
 | 4 | Vendor MOQ / multiple / lot / Booking Time | Procurement | Optional; missing = no rounding / no booking buffer |
@@ -99,8 +102,8 @@ Then per company (CLAUDE.md §8 second correction — re-capturing an existing v
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `AI_CORE_ENABLED=true` | turns on the PO22 AI explanation | only if AI is wanted |
-| `ANTHROPIC_API_KEY` | AI provider key | only if AI is wanted |
+| `AI_CORE_ENABLED=true` | turns on the PO22 AI explanation | **yes — owner wants AI on (2026-10-20)** |
+| `ANTHROPIC_API_KEY` | AI provider key | yes — owner: already set on Render |
 | `PO22_AI_MONTHLY_TOKEN_CAP` | monthly token budget (default 1,000,000) | optional |
 
 Without them the AI button answers "AI explanations are switched off" — everything else works.
@@ -125,8 +128,9 @@ Without them the AI button answers "AI explanations are switched off" — everyt
 
 ## 8. Deploy and smoke test
 
-1. Owner approval → apply §3, §4 on PROD; set §6 if wanted.
-2. Promote `dev` → `main` (fast-forward only); confirm `HEAD` = `origin/dev` = `origin/main`.
+1. PR `dev` → `main`; on merge `.github/workflows/deploy-prod.yml` runs `supabase db push` on PROD
+   (applies the §3 migrations). Then check `schema_migrations` + PostgREST reload.
+2. Then §4 ACL (owner approval) and §6 env.
 3. Wait for Render (API) + frontend deploy.
 4. Smoke test with a procurement user, per company (CMP003, CMP005, CMP011):
    - PO21: Report → "Show in MT" divides KG by 1000; Production / Dispatch totals appear when shown
