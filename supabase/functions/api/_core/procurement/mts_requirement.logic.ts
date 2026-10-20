@@ -1177,10 +1177,16 @@ export function allocateDemand(
   };
   const protection = new Map<string, { critical: number; target: number }>();
 
-  // DEPENDENT ordering: pass 1 (fixed) then pass 2 (group); inside each, chronological — each
-  // record draws from the stock left by the records before it.
+  // DEPENDENT ordering: pass 1 (fixed) then pass 2 (group, narrowest group first); inside each,
+  // chronological — each record draws from the stock left by the records before it.
   const fixedRecords = records.filter((r) => !r.group_id || r.candidates.length <= 1);
-  const groupRecords = records.filter((r) => r.group_id && r.candidates.length > 1);
+  // Method C: a group with fewer usable members is served before a broader one (owner 2026-10-20,
+  // e.g. RDP_TLA = VINNAPAS/VAE only, before RDP which also has RP-4099/ELOTEX); then by date.
+  // Stable sort keeps the chronological order inside each width.
+  const groupRecords = records.filter((r) => r.group_id && r.candidates.length > 1)
+    .map((record, index) => ({ record, index }))
+    .sort((a, b) => a.record.candidates.length - b.record.candidates.length || a.index - b.index)
+    .map((entry) => entry.record);
   for (const record of fixedRecords) processRecord(record);
   // Method C protection: average daily exclusive (fixed) use over the horizon × Critical / Target
   // days, capped by what pass 1 left. It covers the days after the horizon.

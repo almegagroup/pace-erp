@@ -743,3 +743,18 @@ Deno.test("Distribution mode: Sub-CSN share of an open PO line is removed before
   }, "2026-10-20", warnings);
   assertEqual(partial.map((e) => [e.kind, e.qty]), [["PO_REMAINDER", 9000]], "own 9 MT remains");
 });
+
+Deno.test("Method C: a narrower group (fewer members) is served before a broader one sharing a member", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);
+  const alloc = allocateDemand([
+    // broad RDP group is dated first, but the narrow RDP_TLA (only VIN/VAE) must still be secured
+    rec({ day: "2026-11-02", pool_key: "B", group_id: "RDP", use_primary: false, candidates: ["VIN", "RP", "VAE"], qty: 150 }),
+    rec({ day: "2026-11-10", pool_key: "N", group_id: "RDP_TLA", use_primary: false, candidates: ["VIN", "VAE"], qty: 80 }),
+  ], calendar, [
+    { material_id: "VIN", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 80 },
+    { material_id: "RP", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 100 },
+  ], [], true, { locationRoles: roles });
+  assertEqual([alloc.groups.get("RDP_TLA")!.drawnByMaterial.get("VIN"), sum(alloc.groups.get("RDP_TLA")!.uncoveredByDay)], [80, 0], "RDP_TLA fully covered by VIN");
+  assertEqual([alloc.groups.get("RDP")!.drawnByMaterial.get("RP"), sum(alloc.groups.get("RDP")!.uncoveredByDay)], [100, 50], "broad RDP runs on RP; its shortage is the one with alternatives to buy");
+});
