@@ -280,3 +280,10 @@ explains, all ranked together, the user decides:
   - Split — only as a **Sub-CSN** (share of one consignment to another company); a consignment
     can **not** be brought part by part. Shown as a Sub-CSN suggestion only; the user creates it.
   - Advance — allowed; this **is** the rescheduled ETA (§4), not a separate option.
+
+### 11.6 Other-company stock visibility (owner 2026-10-20)
+
+PO22 is used only by the procurement / SCM team, which is centralised and holds multi-company
+access — so other companies' excess may be shown. Rule kept safe: the STO-from-excess option
+shows a company's stock only if the user has that company in their own allowed companies
+(normal company-scope check); a company outside the user's scope is simply not listed.
