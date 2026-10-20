@@ -269,3 +269,14 @@ explains, all ranked together, the user decides:
    demand line and mapped to this company. **Excess = that company's stock above its own Target
    and its own future need** (its plan), so the sender is never put at risk. Shows qty and
    expected arrival (STO lead time from history). Suggestion only — the user raises the STO.
+
+### 11.5 Owner corrections to 11.3 / 11.4 (2026-10-20)
+
+- **Domestic trader** of the same material: allowed, but always the **last** option (ranked after
+  every other option).
+- **Air freight: never.** Not offered as an option.
+- **Existing consignment:**
+  - Increase qty — **not possible** (would have to be in MOQ multiples; waste of money). Removed.
+  - Split — only as a **Sub-CSN** (share of one consignment to another company); a consignment
+    can **not** be brought part by part. Shown as a Sub-CSN suggestion only; the user creates it.
+  - Advance — allowed; this **is** the rescheduled ETA (§4), not a separate option.
