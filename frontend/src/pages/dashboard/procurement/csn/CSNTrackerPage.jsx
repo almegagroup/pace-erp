@@ -85,6 +85,7 @@ const TRACKER_FIELDS = [
   "invoice_date",
   "boe_number",
   "boe_date",
+  "boe_exchange_rate",
   "eta_at_port",
   "eta_at_port_is_manual_override",
   "ata_at_port",
@@ -271,6 +272,7 @@ function buildColumnDefs() {
     { key: "invoice_date", label: "Invoice Date", width: "120px" },
     { key: "boe_number", label: "BOE Number", width: "130px" },
     { key: "boe_date", label: "BOE Date", width: "120px" },
+    { key: "boe_exchange_rate", label: "BOE Rate (₹)", width: "110px" },
     { key: "eta_at_port", label: "ETA Port", width: "120px" },
     { key: "ata_at_port", label: "ATA Port", width: "120px" },
     { key: "transporter_name", label: "Transporter", width: "160px" },
@@ -1431,6 +1433,9 @@ export default function CSNTrackerPage() {
                     </EditField>
                     <EditField label="BOE Date" rowId={currentRow.id} fieldName="boe_date" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                       <input type="date" value={draft.boe_date ?? ""} onChange={(event) => patchDraft("boe_date", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
+                    </EditField>
+                    <EditField label="BOE Exchange Rate (₹)" rowId={currentRow.id} fieldName="boe_exchange_rate" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
+                      <input type="number" min="0" step="0.0001" value={draft.boe_exchange_rate ?? ""} onChange={(event) => patchDraft("boe_exchange_rate", event.target.value)} placeholder="Customs rate on BOE" className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] outline-none focus:border-sky-500" />
                     </EditField>
                   </>
                 ) : null}

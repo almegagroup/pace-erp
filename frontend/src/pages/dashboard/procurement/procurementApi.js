@@ -907,6 +907,10 @@ export function saveMtsPlanStrokeSetting(data) {
   return fetchProcurement("POST", "/api/procurement/mts-plan/stroke-settings", data);
 }
 
+export function saveMtsPlanProductionCompany(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-plan/production-company", data);
+}
+
 export function getMtsPlanReport(params) {
   return fetchProcurement("GET", "/api/procurement/mts-plan/report", undefined, params);
 }
@@ -1839,4 +1843,58 @@ export function getMtsRequirementPolicyHistory(params) {
 
 export function saveMtsRequirementPolicies(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/policies", data);
+}
+
+// PO22 cost settings (owner decisions D10/D11). Plain objects: read `.rows`.
+export function getMtsFxRates(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/fx-rates", undefined, params);
+}
+
+export function saveMtsFxRate(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/fx-rates", data);
+}
+
+export function getMtsFinanceSettings(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/finance-settings", undefined, params);
+}
+
+export function saveMtsFinanceSetting(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/finance-settings", data);
+}
+
+export function getMtsPlanning(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/planning", undefined, params);
+}
+
+export function saveMtsPlanningRun(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/planning/runs", data);
+}
+
+export function listMtsPlanningRuns(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/planning/runs", undefined, params);
+}
+
+export function getMtsPlanningRun(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/planning/run", undefined, params);
+}
+
+export function explainMtsPlanning(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/planning/ai-explain", data);
+}
+
+// PO22 optimizer six-month new-buy selection (Phase 3B endpoints).
+export function getMtsOptimizerSelections(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-optimizer/selections", undefined, params);
+}
+
+export function saveMtsOptimizerSelections(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-optimizer/selections", data);
+}
+
+export function getMtsLocationPolicy(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/location-policy", undefined, params);
+}
+
+export function saveMtsLocationPolicy(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/location-policy", data);
 }

@@ -1,6 +1,6 @@
 -- PO22 Requirement — ACL / menu provisioning (DATA CONFIG, run via MCP).
--- Status: NOT RUN anywhere (2026-10-16). Run on DEV first, PROD only with
---         separate explicit owner approval, after migration 20261016100000.
+-- Status: NOT RUN anywhere. PROD only with explicit owner approval, after the PO22
+--         migrations are applied (main deploy).
 -- TX code: PO22 (verified free on PROD 2026-10-16: PO codes in use PO01–PO14,
 --          PO16–PO19, PO21, POTMP). The script refuses to run if PO22 is taken.
 --
@@ -11,12 +11,12 @@
 -- therefore NOT created here — that needs the sidebar to support a third level
 -- first (owner decision).
 --
--- PROPOSED access (owner to confirm — the brief gives no PO22 access rule):
---   PROC_MTS_REQUIREMENT         VIEW  — everyone who already has PO21:
---                                        CAP_MTS_PLAN_FULL, CAP_MTS_PLAN_ADDON,
---                                        CAP_MTS_PLAN_ADDON_PLANTHEAD
---   PROC_MTS_REQUIREMENT_POLICY  WRITE — Material Settings edit (companion, no menu row):
---                                        CAP_MTS_PLAN_FULL (SCM, Director, ACL-MASTER)
+-- OWNER DECISION 2026-10-20: PO22 full authority = SCM, ACL-MASTER and Director only.
+--   PROC_MTS_REQUIREMENT         VIEW  — CAP_MTS_PLAN_FULL only
+--   PROC_MTS_REQUIREMENT_POLICY  WRITE — CAP_MTS_PLAN_FULL only (companion, no menu row)
+-- CAP_MTS_PLAN_FULL reaches users only through the SUPPLY CHAIN / DIRECTOR / ACL-MASTER
+-- work contexts (verified PROD 2026-10-20 for CMP003/CMP005/CMP011; snapshot = role ∩ work
+-- context). Stores / Logistics / Plant Head (PO21 add-on capabilities) do NOT get PO22.
 -- Reusing the PO21 capabilities keeps the role × work-context grants exactly as
 -- the owner set them for PO21 (MTS-CUSTOMER-PLAN-ACL-PROVISIONING.sql) — no new
 -- capability, so P0076 (ACL-MASTER) is covered through CAP_MTS_PLAN_FULL.
@@ -41,11 +41,15 @@ END $$;
 INSERT INTO erp_menu.menu_master (menu_code, resource_code, title, description, route_path, menu_type, universe, is_system, display_order, is_active, created_by, tx_code)
 SELECT 'PROC_MTS_REQUIREMENT', 'PROC_MTS_REQUIREMENT', 'Requirement',
        'MTS Planning: RM/PM Requirement Report and Material Settings (coverage days, MOQ)',
-       '/dashboard/procurement/mts-requirement', 'PAGE', 'ACL', false, 21, true, 'MTS_PLANNING_SETUP', 'PO22'
+       '/dashboard/procurement/mts-requirement', 'PAGE', 'ACL', false, 22, true, 'MTS_PLANNING_SETUP', 'PO22'
 WHERE NOT EXISTS (SELECT 1 FROM erp_menu.menu_master WHERE menu_code = 'PROC_MTS_REQUIREMENT');
 
+-- display_order 21 is already POTMP in PROD (found by the 2026-10-20 dry run): use 22, or the next
+-- free slot if 22 is taken too (ux_menu_tree_order is unique per parent).
 INSERT INTO erp_menu.menu_tree (parent_menu_id, child_menu_id, display_order)
-SELECT p.id, c.id, 21
+SELECT p.id, c.id,
+       CASE WHEN NOT EXISTS (SELECT 1 FROM erp_menu.menu_tree x WHERE x.parent_menu_id = p.id AND x.display_order = 22)
+            THEN 22 ELSE (SELECT max(x.display_order) + 1 FROM erp_menu.menu_tree x WHERE x.parent_menu_id = p.id) END
 FROM erp_menu.menu_master p, erp_menu.menu_master c
 WHERE p.menu_code = 'GRP_ACL_PROCUREMENT' AND c.menu_code = 'PROC_MTS_REQUIREMENT'
   AND NOT EXISTS (SELECT 1 FROM erp_menu.menu_tree t WHERE t.child_menu_id = c.id);
@@ -62,9 +66,7 @@ INSERT INTO acl.capability_menu_actions (capability_code, menu_id, action, allow
 SELECT v.cap, m.id, v.action, true, v.visible
 FROM (VALUES
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_REQUIREMENT',        'VIEW',  true),
-  ('CAP_MTS_PLAN_FULL',            'PROC_MTS_REQUIREMENT_POLICY', 'WRITE', false),
-  ('CAP_MTS_PLAN_ADDON',           'PROC_MTS_REQUIREMENT',        'VIEW',  true),
-  ('CAP_MTS_PLAN_ADDON_PLANTHEAD', 'PROC_MTS_REQUIREMENT',        'VIEW',  true)
+  ('CAP_MTS_PLAN_FULL',            'PROC_MTS_REQUIREMENT_POLICY', 'WRITE', false)
 ) AS v(cap, menu_code, action, visible)
 JOIN acl.menu_master m ON m.menu_code = v.menu_code
 WHERE EXISTS (SELECT 1 FROM acl.capabilities c WHERE c.capability_code = v.cap)

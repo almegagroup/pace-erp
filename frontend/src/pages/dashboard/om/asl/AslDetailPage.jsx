@@ -105,6 +105,11 @@ export default function AslDetailPage() {
     setForm({
       vendor_material_code: record.vendor_material_code ?? "",
       pack_size_description: record.pack_size_description ?? "",
+      moq_qty: record.moq_qty ?? "",
+      order_multiple_qty: record.order_multiple_qty ?? "",
+      delivery_lot_qty: record.delivery_lot_qty ?? "",
+      supply_uom_code: record.supply_uom_code ?? record.base_uom_code ?? "",
+      booking_time_days: record.booking_time_days ?? "",
     });
     setUomRows((record.uoms ?? []).map((entry) => makeUomRow(entry)));
     setCurrencyRows((record.currencies ?? []).map((entry) => makeCurrencyRow(entry)));
@@ -161,6 +166,12 @@ export default function AslDetailPage() {
         id: record.id,
         vendor_material_code: form.vendor_material_code,
         pack_size_description: form.pack_size_description,
+        // PO22 D4/D6 supply terms; blank clears the value.
+        moq_qty: form.moq_qty === "" ? null : Number(form.moq_qty),
+        order_multiple_qty: form.order_multiple_qty === "" ? null : Number(form.order_multiple_qty),
+        delivery_lot_qty: form.delivery_lot_qty === "" ? null : Number(form.delivery_lot_qty),
+        supply_uom_code: form.supply_uom_code || null,
+        booking_time_days: form.booking_time_days === "" ? null : Number(form.booking_time_days),
         uoms: validUoms.map((row) => ({
           uom_code: row.uom_code,
           conversion_factor: Number(row.conversion_factor),
@@ -298,6 +309,62 @@ export default function AslDetailPage() {
               <div className="grid gap-3 md:grid-cols-2">
                 <ErpFieldPreview label="Vendor Material Code" value={record.vendor_material_code} />
                 <ErpFieldPreview label="Pack Description" value={record.pack_size_description} />
+              </div>
+            )}
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow="Planning (PO22)" title="Supply terms">
+            {editMode ? (
+              <div className="grid gap-3 md:grid-cols-3">
+                {[
+                  ["moq_qty", "MOQ"],
+                  ["order_multiple_qty", "Order Multiple"],
+                  ["delivery_lot_qty", "Delivery Lot Size"],
+                ].map(([key, label]) => (
+                  <ErpDenseFormRow key={key} label={label}>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.0001"
+                      value={form[key]}
+                      onChange={(event) => setField(key, event.target.value)}
+                      placeholder="Blank = none"
+                      className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                    />
+                  </ErpDenseFormRow>
+                ))}
+                <ErpDenseFormRow label="Unit of these quantities">
+                  <select
+                    value={form.supply_uom_code}
+                    onChange={(event) => setField("supply_uom_code", event.target.value)}
+                    className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  >
+                    <option value="">Select UOM</option>
+                    {uoms.map((entry) => (
+                      <option key={entry.id || entry.code} value={entry.code}>
+                        {entry.code} | {entry.name}
+                      </option>
+                    ))}
+                  </select>
+                </ErpDenseFormRow>
+                <ErpDenseFormRow label="Booking Time (days)">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={form.booking_time_days}
+                    onChange={(event) => setField("booking_time_days", event.target.value)}
+                    placeholder="Blank = included in lead time"
+                    className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-sm text-slate-900 outline-none focus:border-sky-500"
+                  />
+                </ErpDenseFormRow>
+              </div>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
+                <ErpFieldPreview label="MOQ" value={record.moq_qty != null ? `${record.moq_qty} ${record.supply_uom_code ?? ""}` : "—"} />
+                <ErpFieldPreview label="Order Multiple" value={record.order_multiple_qty != null ? `${record.order_multiple_qty} ${record.supply_uom_code ?? ""}` : "—"} />
+                <ErpFieldPreview label="Delivery Lot Size" value={record.delivery_lot_qty != null ? `${record.delivery_lot_qty} ${record.supply_uom_code ?? ""}` : "—"} />
+                <ErpFieldPreview label="Booking Time" value={record.booking_time_days != null ? `${record.booking_time_days} days` : "Included in lead time"} />
               </div>
             )}
           </ErpSectionCard>

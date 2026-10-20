@@ -59,6 +59,34 @@ export function dosageSumOf(lines) {
   return lines.reduce((s, l) => s + (parseFloat(l.dosage_pct) || 0), 0);
 }
 
+// business owner, 2026-10-19: a formulation may legitimately carry the same
+// material on more than one line (e.g. White Cement added in two portions),
+// so a duplicate is never blocked -- it is marked in the table and the user
+// confirms it once at save time.
+export function duplicateMaterialIdsOf(lines) {
+  const seen = new Set();
+  const dup = new Set();
+  for (const l of lines) {
+    if (!l.material_id) continue;
+    if (seen.has(l.material_id)) dup.add(l.material_id);
+    seen.add(l.material_id);
+  }
+  return dup;
+}
+
+// [{ label, lineNumbers }] for the confirmation modal, 1-based line numbers.
+export function describeDuplicateLines(lines, materialsByType) {
+  const dup = duplicateMaterialIdsOf(lines);
+  if (dup.size === 0) return [];
+  const labelById = new Map(
+    Object.values(materialsByType ?? {}).flat().map((m) => [m.id, materialLabel(m)]),
+  );
+  return [...dup].map((id) => ({
+    label: labelById.get(id) ?? "—",
+    lineNumbers: lines.map((l, i) => (l.material_id === id ? i + 1 : null)).filter(Boolean),
+  }));
+}
+
 // business owner, 2026-09-30: pace_code must never appear in a material
 // label -- Item Name / Document Name only.
 export function materialLabel(m) {
@@ -113,6 +141,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
   }
 
   const sum = dosageSumOf(lines);
+  const duplicateIds = duplicateMaterialIdsOf(lines);
   const materialLabelById = new Map(
     [...(materialsByType.RM ?? []), ...(materialsByType.INT ?? [])]
       .map((m) => [m.id, materialLabel(m)]),
@@ -152,7 +181,7 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
             const selectedGroup = groups.find((g) => g.id === line.material_group_id);
 
             return (
-              <tr key={i} className="border-b border-slate-100">
+              <tr key={i} className={`border-b border-slate-100 ${duplicateIds.has(line.material_id) ? "bg-amber-50" : ""}`}>
                 <td className={`${td} text-slate-400`}>{i + 1}</td>
                 <td className={td}>
                   <ErpComboboxField
@@ -172,6 +201,11 @@ export function StrokeLinesTable({ lines, setLines, materialsByType, groups, sto
                     placeholder="-- Select material --"
                     disabled={disabled}
                   />
+                  {duplicateIds.has(line.material_id) && (
+                    <span className="inline-block mt-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">
+                      Duplicate
+                    </span>
+                  )}
                 </td>
                 <td className={`${td} text-right`}>
                   <input
@@ -773,6 +807,32 @@ export function PackBomChangeLinesTable({ lines, setLines, materials, groups, on
 // Each is its own BlockingLayer so it registers as the top layer — otherwise
 // a parent DrawerBase's global focusin handler keeps yanking focus back to
 // itself since a plain fixed div isn't part of its layer stack.
+export function DuplicateLinesConfirmModal({ open, items, onCancel, onConfirm }) {
+  return (
+    <BlockingLayer
+      visible={open}
+      onEscape={onCancel}
+      overlayStyle={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.3)", zIndex: 1000100, display: "flex", alignItems: "center", justifyContent: "center" }}
+      dialogStyle={{ background: "white", borderRadius: 4, boxShadow: "0 10px 30px rgba(0,0,0,0.2)", padding: 16, width: 380, display: "flex", flexDirection: "column", gap: 12 }}
+    >
+      <p className="text-sm font-semibold text-slate-700">Duplicate material lines</p>
+      <p className="text-xs text-slate-600">The same material appears on more than one line:</p>
+      <ul className="text-xs text-slate-700 list-disc pl-5">
+        {(items ?? []).map((item) => (
+          <li key={item.label + item.lineNumbers.join(",")}>
+            {item.label} — lines {item.lineNumbers.join(", ")}
+          </li>
+        ))}
+      </ul>
+      <p className="text-xs text-slate-600">Confirm to save with the duplicates, or Cancel to change the lines.</p>
+      <div className="flex justify-end gap-2 mt-1">
+        <button type="button" className="text-xs text-slate-500 px-3 py-1" onClick={onCancel}>Cancel</button>
+        <button type="button" className="text-xs bg-amber-600 text-white rounded px-3 py-1" onClick={onConfirm}>Confirm</button>
+      </div>
+    </BlockingLayer>
+  );
+}
+
 export function GroupCreateModal({ open, groupForm, setGroupForm, onCancel, onCreate }) {
   return (
     <BlockingLayer

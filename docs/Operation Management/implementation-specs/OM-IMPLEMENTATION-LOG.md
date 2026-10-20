@@ -112,6 +112,24 @@
 
 ---
 
+### 2026-10-20 — PO21 / PO22 MTS Requirement + Planning release (DONE in code; rollout pending)
+
+Scope CMP003 / CMP005 / CMP011. PR almegagroup/pace-erp#680 (`dev` → `main`).
+- PO22: Method C allocation (owner D13), Sub-CSN / STO inbound, suggested Target/Critical,
+  Planning (Action tab, Store schedule, R→R-only transfer advice, AI explanation behind
+  `AI_CORE_ENABLED`). PO21: Show in MT, Production/Dispatch group totals, cross-company production.
+- Migrations (R-04 schema; applied by `deploy-prod.yml` on merge): `20261019070346`, `20261019120000`,
+  `20261019130000` (also seeds D12 location roles), `20261019140000`, `20261019150000`, `20261020120000`.
+- ACL (R-04 operational, MCP, PROD): `docs/mts-planning/acl/PO22-PROD-ACL-ROLLOUT.sql` — owner
+  2026-10-20: PO22 = SCM / ACL-MASTER / Director only (`CAP_MTS_PLAN_FULL`); new versions
+  CMP003 v134, CMP005 v30, CMP011 v30; aborts if any unrelated ACL decision changes. Run after merge.
+- Render PROD: `AI_CORE_ENABLED` + `ANTHROPIC_API_KEY` present (owner screenshot 2026-10-20).
+- Users enter Target / Critical days (none in PROD today).
+- Validation: 152 procurement Deno tests, guards, eslint; PROD read-only checks in
+  `docs/mts-planning/PO22-RELEASE-CHECKLIST-2026-10-20.md`. Live click-through pending.
+
+---
+
 ### 2026-10-14 — SO02 bulk-posting clarity correction (DONE in code; rollout pending)
 
 - User-visible SO02 action columns are moved beside the selected DO and made

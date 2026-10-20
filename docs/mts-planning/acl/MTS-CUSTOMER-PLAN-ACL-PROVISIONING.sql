@@ -17,6 +17,7 @@
 --
 -- Resources (route-acl-registry.ts):
 --   PROC_MTS_CUSTOMER_PLAN           page resource: VIEW (all reads), WRITE (Additional/Urgent)
+--   PROC_MTS_PLAN_PRODUCTION_COMPANY companion: WRITE (Cross company producer, owner 2026-10-20 = procurement team)
 --   PROC_MTS_CUSTOMER_PLAN_MAINTAIN  companion (acl.menu_master only, no menu row):
 --                                    WRITE (Rolling/Final + Tab 2)
 --   PROC_MTS_PLAN_GROUP_MAINTAIN     companion: WRITE (Product Group layout —
@@ -69,7 +70,8 @@ SELECT v.code, v.name, v.descr, true
 FROM (VALUES
   ('PROC_MTS_CUSTOMER_PLAN', 'MTS Customer Plan', 'Page view; Additional / Urgent plan entry'),
   ('PROC_MTS_CUSTOMER_PLAN_MAINTAIN', 'MTS Customer Plan — Maintain', 'Rolling / Final plan entry and Tab 2 stroke setup (companion resource, no menu row)'),
-  ('PROC_MTS_PLAN_GROUP_MAINTAIN', 'MTS Customer Plan — Product Group', 'Mother / Child Product Group layout of Prodshades (companion resource, no menu row)')
+  ('PROC_MTS_PLAN_GROUP_MAINTAIN', 'MTS Customer Plan — Product Group', 'Mother / Child Product Group layout of Prodshades (companion resource, no menu row)'),
+  ('PROC_MTS_PLAN_PRODUCTION_COMPANY', 'MTS Customer Plan — Cross company', 'Choose which company produces a plan month x SKU (procurement team; companion resource, no menu row)')
 ) AS v(code, name, descr)
 WHERE NOT EXISTS (SELECT 1 FROM acl.menu_master m WHERE m.menu_code = v.code);
 
@@ -91,6 +93,7 @@ FROM (VALUES
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_CUSTOMER_PLAN',          'WRITE', true),
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_CUSTOMER_PLAN_MAINTAIN', 'WRITE', false),
   ('CAP_MTS_PLAN_FULL',            'PROC_MTS_PLAN_GROUP_MAINTAIN',    'WRITE', false),
+  ('CAP_MTS_PLAN_FULL',            'PROC_MTS_PLAN_PRODUCTION_COMPANY','WRITE', false),
   ('CAP_MTS_PLAN_ADDON',           'PROC_MTS_CUSTOMER_PLAN',          'VIEW',  true),
   ('CAP_MTS_PLAN_ADDON',           'PROC_MTS_CUSTOMER_PLAN',          'WRITE', true),
   ('CAP_MTS_PLAN_ADDON_PLANTHEAD', 'PROC_MTS_CUSTOMER_PLAN',          'VIEW',  true),

@@ -322,6 +322,49 @@ async function replaceVmiPaymentTerms(
   }
 }
 
+const SUPPLY_QTY_FIELDS = ["moq_qty", "order_multiple_qty", "delivery_lot_qty"] as const;
+
+/**
+ * PO22 D4/D6 supply terms (MOQ, order multiple, delivery lot + unit, Booking Time).
+ * Only fields present in the body are returned; "" / null clears a field.
+ * Throws OM_INVALID_SUPPLY_TERMS for a bad number.
+ */
+function parseSupplyTerms(body: JsonRecord): JsonRecord {
+  const patch: JsonRecord = {};
+  for (const field of SUPPLY_QTY_FIELDS) {
+    if (body[field] === undefined) continue;
+    const raw = body[field];
+    if (raw === null || toTrimmedString(raw) === "") { patch[field] = null; continue; }
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) throw new Error("OM_INVALID_SUPPLY_TERMS");
+    patch[field] = value;
+  }
+  if (body.supply_uom_code !== undefined) {
+    patch.supply_uom_code = toTrimmedString(body.supply_uom_code).toUpperCase() || null;
+  }
+  if (body.booking_time_days !== undefined) {
+    const raw = body.booking_time_days;
+    if (raw === null || toTrimmedString(raw) === "") patch.booking_time_days = null;
+    else {
+      const value = Number(raw);
+      if (!Number.isInteger(value) || value < 0) throw new Error("OM_INVALID_SUPPLY_TERMS");
+      patch.booking_time_days = value;
+    }
+  }
+  return patch;
+}
+
+/** A supply quantity needs its unit, and the unit must exist in uom_master. */
+async function validateSupplyTerms(patch: JsonRecord, existing: JsonRecord | null): Promise<void> {
+  const merged = { ...(existing ?? {}), ...patch };
+  const hasQty = SUPPLY_QTY_FIELDS.some((field) => merged[field] !== null && merged[field] !== undefined);
+  const uom = toTrimmedString(merged.supply_uom_code);
+  if (hasQty && !uom) throw new Error("OM_INVALID_SUPPLY_TERMS");
+  if (patch.supply_uom_code && !(await loadExistingUomCodes([String(patch.supply_uom_code)])).has(String(patch.supply_uom_code))) {
+    throw new Error("OM_INVALID_SUPPLY_TERMS");
+  }
+}
+
 export async function createVendorMaterialInfoHandler(
   req: Request,
   ctx: OmHandlerContext,
@@ -358,11 +401,14 @@ export async function createVendorMaterialInfoHandler(
     }
 
     const paymentTermList = normalizePaymentTermList(body.payment_terms);
+    const supplyTerms = parseSupplyTerms(body);
+    await validateSupplyTerms(supplyTerms, null);
 
     const { data, error } = await serviceRoleClient
       .schema("erp_master")
       .from("vendor_material_info")
       .insert({
+        ...supplyTerms,
         vendor_id: vendorId,
         material_id: materialId,
         vendor_material_code: toTrimmedString(body.vendor_material_code) || null,
@@ -557,6 +603,11 @@ export async function updateVendorMaterialInfoHandler(
     }
     if (body.currency_code !== undefined) {
       updates.last_purchase_currency = body.currency_code;
+    }
+    const supplyTerms = parseSupplyTerms(body);
+    if (Object.keys(supplyTerms).length > 0) {
+      await validateSupplyTerms(supplyTerms, existing as JsonRecord);
+      Object.assign(updates, supplyTerms);
     }
 
     let uomList: ReturnType<typeof normalizeUomList> | null = null;

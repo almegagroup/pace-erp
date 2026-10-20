@@ -31,6 +31,7 @@ import { listUoms, listMaterials, listMaterialCategoryGroups, createMaterialCate
 import {
   PO_TYPE_OPTIONS_BY_MATERIAL_TYPE, friendlyStrokeErr, dosageSumOf, Field,
   StrokeLinesTable, GroupCreateModal, MemberAddModal,
+  DuplicateLinesConfirmModal, describeDuplicateLines,
 } from "./strokeShared.jsx";
 import { formatSum } from "./productionPrecision.js";
 
@@ -94,6 +95,7 @@ export default function StrokeApprovalPage() {
   const [groupModal, setGroupModal] = useState(null);
   const [groupForm, setGroupForm] = useState({ group_name: "", description: "" });
   const [memberModal, setMemberModal] = useState(null);
+  const [dupConfirm, setDupConfirm] = useState(null); // { items, proceed } | null
   const [memberMaterialId, setMemberMaterialId] = useState("");
 
   function toast(msg, tone = "success") {
@@ -251,7 +253,7 @@ export default function StrokeApprovalPage() {
   }
 
   // Save = Approve: PATCH the edited header+lines, then Approve in one action.
-  async function handleSaveApprove(row) {
+  async function handleSaveApprove(row, duplicatesConfirmed = false) {
     if (!editForm || !editLines) return;
     setAttemptedSave(true);
     if (!editForm.default_storage_location_id) {
@@ -268,6 +270,11 @@ export default function StrokeApprovalPage() {
     }
     const sum = dosageSumOf(editLines);
     if (Math.abs(sum - 100) > 0.01) { toast(`Dosage must sum to 100. Current: ${formatSum(sum, "0")}%`, "error"); return; }
+    if (!duplicatesConfirmed) {
+      // Duplicate material lines are allowed but must be confirmed once per save.
+      const items = describeDuplicateLines(editLines, lineMaterialsByType);
+      if (items.length > 0) { setDupConfirm({ items, proceed: () => handleSaveApprove(row, true) }); return; }
+    }
     setSaving(true);
     try {
       await updateStrokeMaster(row.id, {
@@ -698,6 +705,12 @@ export default function StrokeApprovalPage() {
         )}
       </ErpSectionCard>
 
+      <DuplicateLinesConfirmModal
+        open={Boolean(dupConfirm)}
+        items={dupConfirm?.items}
+        onCancel={() => setDupConfirm(null)}
+        onConfirm={() => { const proceed = dupConfirm?.proceed; setDupConfirm(null); proceed?.(); }}
+      />
       <GroupCreateModal
         open={Boolean(groupModal)}
         groupForm={groupForm}

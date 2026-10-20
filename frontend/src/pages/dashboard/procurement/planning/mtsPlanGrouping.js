@@ -60,10 +60,11 @@ export function exportUnitSums(bucket) {
   return entries.length === 1 ? Number(entries[0][1]) : formatUnitSums(bucket);
 }
 
-function makeTotal(kind, key, label, sample, sums, units) {
+function makeTotal(kind, key, label, sample, sums, units, split = null) {
   return {
     __total: kind,
-    row_key: `__total|${kind}|${key}`,
+    row_key: `__total|${kind}|${key}${split === null ? "" : `|${split}`}`,
+    row_type: split ?? undefined,
     total_label: label,
     mother_group_name: kind === "GRAND" ? "" : (sample.mother_group_name ?? (kind === "MOTHER" ? NOT_GROUPED_LABEL : "")),
     child_group_name: kind === "CHILD" || kind === "PRODSHADE" ? (sample.child_group_name ?? "") : "",
@@ -77,11 +78,14 @@ function makeTotal(kind, key, label, sample, sums, units) {
  * @param rows      SKU rows (each with mother/child group names, prodshade_label, sku_label)
  * @param fields    [{ key, total: (row) => ({ qty, unit }) | null }]
  * @param unitOf    (row) => unit shown in the UoM column of a total row
+ * @param options   { splitBy?: (row) => string } — separate total rows per value (e.g. PLAN /
+ *                  PRODUCTION / DISPATCH), never summed together; in first-seen order.
  */
-export function buildGroupedRows(rows, fields, unitOf) {
+export function buildGroupedRows(rows, fields, unitOf, options = {}) {
   const sorted = [...rows].sort(compareByGroup);
   const out = [];
-  const level = () => ({ sums: {}, units: new Set(), sample: null, key: null });
+  const splitOf = options.splitBy ?? (() => null);
+  const level = () => ({ sums: {}, units: new Set(), sample: null, key: null, bySplit: new Map() });
   let ps = level();
   let child = level();
   let mother = level();
@@ -89,25 +93,31 @@ export function buildGroupedRows(rows, fields, unitOf) {
 
   const push = (acc, row) => {
     acc.sample ??= row;
-    for (const field of fields) addTo(acc.sums, field.key, field.total(row));
+    const split = splitOf(row);
+    const bucket = acc.bySplit.get(split) ?? { sums: {}, units: new Set() };
+    for (const field of fields) addTo(bucket.sums, field.key, field.total(row));
     const unit = unitOf?.(row);
-    if (unit) acc.units.add(unit);
+    if (unit) bucket.units.add(unit);
+    acc.bySplit.set(split, bucket);
+  };
+  const emit = (kind, acc, label) => {
+    for (const [split, bucket] of acc.bySplit) out.push(makeTotal(kind, `${acc.key}`, label, acc.sample, bucket.sums, bucket.units, split));
   };
   const flushProdshade = () => {
     if (!ps.sample) return;
-    out.push(makeTotal("PRODSHADE", `${ps.key}`, "Prodshade Total", ps.sample, ps.sums, ps.units));
+    emit("PRODSHADE", ps, "Prodshade Total");
     ps = level();
   };
   const flushChild = () => {
     if (!child.sample) return;
     if (child.sample.child_group_name) {
-      out.push(makeTotal("CHILD", `${child.key}`, "Child Group Total", child.sample, child.sums, child.units));
+      emit("CHILD", child, "Child Group Total");
     }
     child = level();
   };
   const flushMother = () => {
     if (!mother.sample) return;
-    out.push(makeTotal("MOTHER", `${mother.key}`, mother.sample.mother_group_name ? "Mother Group Total" : `${NOT_GROUPED_LABEL} Total`, mother.sample, mother.sums, mother.units));
+    emit("MOTHER", mother, mother.sample.mother_group_name ? "Mother Group Total" : `${NOT_GROUPED_LABEL} Total`);
     mother = level();
   };
 
@@ -123,7 +133,7 @@ export function buildGroupedRows(rows, fields, unitOf) {
     push(ps, row); push(child, row); push(mother, row); push(grand, row);
   }
   flushProdshade(); flushChild(); flushMother();
-  if (grand.sample) out.push(makeTotal("GRAND", "all", "Grand Total", grand.sample, grand.sums, grand.units));
+  if (grand.sample) { grand.key = "all"; emit("GRAND", grand, "Grand Total"); }
   return out;
 }
 
@@ -142,6 +152,7 @@ export function withTotalCells(columns) {
       if (column.key === "sku_label") return row.total_label;
       if (["mother_group_name", "child_group_name", "prodshade_label"].includes(column.key)) return row[column.key] ?? "";
       if (column.totalUnit) return row.unit_label;
+      if (column.key === "row_type") return row.row_type ?? "";
       return "";
     };
     return {

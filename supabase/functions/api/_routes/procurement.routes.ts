@@ -94,11 +94,13 @@ import {
   getMtsPlanEntryGridHandler,
   getMtsPlanHistoryHandler,
   getMtsPlanProductGroupsHandler,
+  getMtsPlanProductionCompanyHandler,
   getMtsPlanReportHandler,
   getMtsPlanStrokeSettingsHandler,
   saveMtsPlanAddonLinesHandler,
   saveMtsPlanBaseLinesHandler,
   saveMtsPlanProductGroupsHandler,
+  saveMtsPlanProductionCompanyHandler,
   saveMtsPlanStrokeSettingHandler,
 } from "../_core/procurement/mts_customer_plan.handlers.ts";
 import {
@@ -108,6 +110,28 @@ import {
   getMtsRequirementReportHandler,
   saveMtsRequirementPoliciesHandler,
 } from "../_core/procurement/mts_requirement.handlers.ts";
+import {
+  getMtsFinanceSettingsHandler,
+  getMtsFxRatesHandler,
+  getMtsLocationPolicyHandler,
+  saveMtsLocationPolicyHandler,
+  saveMtsFinanceSettingHandler,
+  saveMtsFxRateHandler,
+} from "../_core/procurement/mts_planning_cost.handlers.ts";
+import {
+  explainMtsPlanningHandler,
+  getMtsPlanningHandler,
+  getMtsPlanningRunHandler,
+  listMtsPlanningRunsHandler,
+  saveMtsPlanningRunHandler,
+} from "../_core/procurement/mts_planning.handlers.ts";
+import {
+  getMtsOptimizerLifecycleEvidenceHandler,
+  getMtsOptimizerRequirementDemandEvidenceHandler,
+  getMtsOptimizerSelectionsHandler,
+  listMtsOptimizerSnapshotsHandler,
+  saveMtsOptimizerSelectionsHandler,
+} from "../_core/procurement/mts_optimizer_phase3b.handlers.ts";
 import { getDocumentFlowHandler } from "../_core/procurement/document_flow.handlers.ts";
 import {
   createReportLayoutHandler,
@@ -801,6 +825,10 @@ export async function dispatchProcurementRoutes(
       return await getMtsPlanProductGroupsHandler(req, ctx);
     case "POST:/api/procurement/mts-plan/product-groups":
       return await saveMtsPlanProductGroupsHandler(req, ctx);
+    case "GET:/api/procurement/mts-plan/production-company":
+      return await getMtsPlanProductionCompanyHandler(req, ctx);
+    case "POST:/api/procurement/mts-plan/production-company":
+      return await saveMtsPlanProductionCompanyHandler(req, ctx);
     case "GET:/api/procurement/mts-requirement/access":
       return await getMtsRequirementAccessHandler(req, ctx);
     case "GET:/api/procurement/mts-requirement/report":
@@ -811,6 +839,38 @@ export async function dispatchProcurementRoutes(
       return await getMtsRequirementPolicyHistoryHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/policies":
       return await saveMtsRequirementPoliciesHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/fx-rates":
+      return await getMtsFxRatesHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/fx-rates":
+      return await saveMtsFxRateHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/finance-settings":
+      return await getMtsFinanceSettingsHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/finance-settings":
+      return await saveMtsFinanceSettingHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/location-policy":
+      return await getMtsLocationPolicyHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/location-policy":
+      return await saveMtsLocationPolicyHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/planning":
+      return await getMtsPlanningHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/planning/runs":
+      return await saveMtsPlanningRunHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/planning/runs":
+      return await listMtsPlanningRunsHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/planning/run":
+      return await getMtsPlanningRunHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/planning/ai-explain":
+      return await explainMtsPlanningHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
+      return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/requirement-demand-evidence":
+      return await getMtsOptimizerRequirementDemandEvidenceHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/selections":
+      return await getMtsOptimizerSelectionsHandler(req, ctx);
+    case "POST:/api/procurement/mts-optimizer/selections":
+      return await saveMtsOptimizerSelectionsHandler(req, ctx);
+    case "GET:/api/procurement/mts-optimizer/snapshots":
+      return await listMtsOptimizerSnapshotsHandler(req, ctx);
     case "GET:/api/procurement/document-flow":
       return await getDocumentFlowHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger":

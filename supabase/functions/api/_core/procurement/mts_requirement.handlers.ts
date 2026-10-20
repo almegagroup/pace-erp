@@ -55,15 +55,19 @@ import {
   buildToBaseFactors,
   canonicalJson,
   computeLeadTime,
+  suggestSafetyDays,
   type ConfiguredLeadTime,
   consumptionFromConsBucket,
   type GroupMember,
   type InboundEvent,
   isIsoDate,
   type LeadTimeResult,
+  type LocationRole,
   type MaterialInfo,
   type PackBomInfo,
+  type PlanningCalendar,
   partitionPoLineInbound,
+  rToRTransferRoute,
   type PlanLineVersion,
   type PoLineInboundInput,
   type PolicyRow,
@@ -79,7 +83,7 @@ import {
 } from "./mts_requirement.logic.ts";
 
 type JsonRecord = Record<string, unknown>;
-type ReqHandlerContext = {
+export type ReqHandlerContext = {
   context: Extract<ContextResolution, { status: "RESOLVED" }>;
   request_id: string;
   auth_user_id: string;
@@ -91,6 +95,7 @@ const RESOURCE_POLICY = "PROC_MTS_REQUIREMENT_POLICY";
 const OPEN_RESERVATION_STATUSES = ["OPEN", "PARTIAL"];
 const OPEN_PO_LINE_STATUSES = ["OPEN", "PARTIALLY_RECEIVED"];
 const OPEN_CSN_STATUSES = ["ORD", "TRN"];
+const EPSILON_QTY = 0.000001;
 const MAX_POLICY_ROWS_PER_SAVE = 2000;
 // Stock-history RPC rows = materials × locations × stock types; 40 materials per
 // call keeps one call well inside one PostgREST page.
@@ -104,7 +109,7 @@ const num = (value: unknown): number | null => {
 };
 const unique = (values: Array<string | null | undefined>) => [...new Set(values.filter((v): v is string => Boolean(v)))];
 
-function fail(req: Request, ctx: ReqHandlerContext, code: string, status: number, message: string): Response {
+export function fail(req: Request, ctx: ReqHandlerContext, code: string, status: number, message: string): Response {
   return errorResponse(code, message, ctx.request_id, "NONE", status, {}, req);
 }
 
@@ -115,23 +120,23 @@ export function todayInIndia(nowMs = Date.now()): string {
 
 // Named require*Access so company-scope-write-acl-guard.mjs recognises the
 // target-company check inside each handler body.
-async function requireRequirementViewAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
+export async function requireRequirementViewAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
   const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_PAGE, "VIEW");
   return allowed ? null : fail(req, ctx, "MTS_REQ_FORBIDDEN", 403, "You do not have access to the MTS Requirement for this company.");
 }
-async function requireRequirementPolicyAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
+export async function requireRequirementPolicyAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
   const allowed = await canMaintainCompanyResource(ctx, companyId, RESOURCE_POLICY, "WRITE");
   return allowed ? null : fail(req, ctx, "MTS_REQ_FORBIDDEN", 403, "You cannot change Material Settings for this company.");
 }
 
-async function resolveCompany(ctx: ReqHandlerContext, raw: unknown): Promise<string> {
+export async function resolveCompany(ctx: ReqHandlerContext, raw: unknown): Promise<string> {
   const companyId = text(raw);
   if (!companyId) return "";
   await assertCompanyScope(ctx, companyId);
   return companyId;
 }
 
-function handleError(req: Request, ctx: ReqHandlerContext, error: unknown, fallbackCode: string, message: string): Response {
+export function handleError(req: Request, ctx: ReqHandlerContext, error: unknown, fallbackCode: string, message: string): Response {
   const code = error instanceof Error ? error.message : fallbackCode;
   if (code === "COMPANY_SCOPE_VIOLATION") return fail(req, ctx, code, 403, "Company is outside your scope.");
   console.error(`[mts_requirement] ${fallbackCode}`, code);
@@ -141,7 +146,7 @@ function handleError(req: Request, ctx: ReqHandlerContext, error: unknown, fallb
 // ─────────────────────────────────────────────────────────────────────────────
 // Loaders (read-only)
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadMaterialRows(ids: string[]): Promise<Map<string, JsonRecord>> {
+export async function loadMaterialRows(ids: string[]): Promise<Map<string, JsonRecord>> {
   const list = unique(ids);
   if (list.length === 0) return new Map();
   const rows = await fetchInChunks<JsonRecord>(list, (chunk) => serviceRoleClient
@@ -151,7 +156,7 @@ async function loadMaterialRows(ids: string[]): Promise<Map<string, JsonRecord>>
   return new Map(rows.map((row) => [text(row.id), row]));
 }
 
-async function loadConversions(ids: string[]): Promise<Map<string, UomConversion[]>> {
+export async function loadConversions(ids: string[]): Promise<Map<string, UomConversion[]>> {
   const list = unique(ids);
   const rows = list.length === 0 ? [] : await fetchInChunks<JsonRecord>(list, (chunk) => serviceRoleClient
     .schema("erp_master").from("material_uom_conversion")
@@ -165,7 +170,7 @@ async function loadConversions(ids: string[]): Promise<Map<string, UomConversion
   return byMaterial;
 }
 
-type FormulationMasters = {
+export type FormulationMasters = {
   skus: Map<string, SkuInfo>;
   ambiguousCount: number;
   strokes: Map<string, StrokeInfo>;
@@ -183,7 +188,7 @@ type FormulationMasters = {
  * RM/PM material universe = every material on those strokes / BOMs and their
  * group members (owner: one policy per individual material).
  */
-async function loadFormulationMasters(companyId: string, extraStrokeIds: string[]): Promise<FormulationMasters> {
+export async function loadFormulationMasters(companyId: string, extraStrokeIds: string[]): Promise<FormulationMasters> {
   const warnings: Warning[] = [];
   const { skus: companySkus, ambiguous } = await loadCompanySkus(companyId);
   const prodshadeIds = unique(companySkus.map((s) => s.prodshade_material_id));
@@ -220,18 +225,20 @@ async function loadFormulationMasters(companyId: string, extraStrokeIds: string[
       .in("stroke_master_id", chunk)),
     bomIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(bomIds, (chunk) => serviceRoleClient
       .schema("erp_production").from("pack_bom_line")
-      .select("pack_bom_id, line_type, material_id, qty, uom_code, storage_location_id, material_group_id")
+      .select("id, pack_bom_id, line_type, material_id, qty, uom_code, storage_location_id, material_group_id")
       .in("pack_bom_id", chunk)),
   ]);
 
   const groupIds = unique([...strokeLines, ...bomLines].map((l) => text(l.material_group_id)));
   const memberRows = groupIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
     .schema("erp_master").from("material_category_group_member")
-    .select("group_id, material_id, active").in("group_id", chunk));
+    .select("id, group_id, material_id, active").in("group_id", chunk));
   const groupMembers = new Map<string, GroupMember[]>();
   for (const member of memberRows) {
     const key = text(member.group_id);
-    groupMembers.set(key, [...(groupMembers.get(key) ?? []), { material_id: text(member.material_id), active: member.active !== false }]);
+    groupMembers.set(key, [...(groupMembers.get(key) ?? []), {
+      material_id: text(member.material_id), active: member.active !== false, group_id: key, source_id: text(member.id) || undefined,
+    }]);
   }
 
   const strokes = new Map<string, StrokeInfo>();
@@ -275,6 +282,7 @@ async function loadFormulationMasters(companyId: string, extraStrokeIds: string[
       output_qty: num(output?.qty),
       output_uom_code: text(output?.uom_code) || null,
       inputs: lines.filter((l) => text(l.line_type) === "INPUT").map((l) => ({
+        pack_bom_line_id: text(l.id) || undefined,
         material_id: text(l.material_id),
         qty: Number(l.qty ?? 0),
         uom_code: text(l.uom_code),
@@ -297,12 +305,30 @@ async function loadFormulationMasters(companyId: string, extraStrokeIds: string[
   return { skus, ambiguousCount: ambiguous.length, strokes, currentStrokeByProdshade, groupMembers, packBoms, materialUniverse: universe, prodshadeIds, warnings };
 }
 
-async function loadPlanLines(companyId: string, months: string[]): Promise<PlanLineVersion[]> {
-  const data = await fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("customer_plan_line")
-    .select("entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at")
-    .eq("company_id", companyId).in("plan_month", months)
-    .order("created_at", { ascending: true }).order("id", { ascending: true }), "MTS_REQ_PLAN_LOAD_FAILED");
-  return data.map((row) => ({
+/**
+ * PO21 plan lines this company must plan for (owner 2026-10-20, cross-company production):
+ *   own lines, except SKU-months the procurement team assigned to another producing company;
+ *   plus other companies' lines for SKU-months assigned to this company (tagged origin_company_id).
+ */
+export async function loadPlanLines(companyId: string, months: string[]): Promise<PlanLineVersion[]> {
+  const [own, outgoing, incoming] = await Promise.all([
+    fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("customer_plan_line")
+      .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at")
+      .eq("company_id", companyId).in("plan_month", months)
+      .order("created_at", { ascending: true }).order("id", { ascending: true }), "MTS_REQ_PLAN_LOAD_FAILED"),
+    loadProductionAssignments({ company_id: companyId }, months),
+    loadProductionAssignments({ production_company_id: companyId }, months),
+  ]);
+  const away = new Set(outgoing.filter((a) => text(a.production_company_id) && text(a.production_company_id) !== companyId)
+    .map((a) => `${text(a.plan_month).slice(0, 10)}|${text(a.sku_material_id)}`));
+  const incomingKeys = new Set(incoming.map((a) => `${text(a.company_id)}|${text(a.plan_month).slice(0, 10)}|${text(a.sku_material_id)}`));
+  const sourceCompanies = unique(incoming.map((a) => text(a.company_id)));
+  const sourceLines = sourceCompanies.length === 0 ? [] : await fetchInChunks<JsonRecord>(sourceCompanies, (chunk) => serviceRoleClient
+    .schema("erp_planning").from("customer_plan_line")
+    .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at, company_id")
+    .in("company_id", chunk).in("plan_month", months));
+  const toVersion = (row: JsonRecord, origin?: string): PlanLineVersion => ({
+    source_id: text(row.id) || undefined,
     entry_id: text(row.entry_id),
     version_no: Number(row.version_no),
     plan_month: text(row.plan_month).slice(0, 10),
@@ -314,10 +340,34 @@ async function loadPlanLines(companyId: string, months: string[]): Promise<PlanL
     base_qty: Number(row.base_qty ?? 0),
     is_cancelled: row.is_cancelled === true,
     created_at: text(row.created_at),
-  }));
+    ...(origin ? { origin_company_id: origin } : {}),
+  });
+  return [
+    ...own.filter((row) => !away.has(`${text(row.plan_month).slice(0, 10)}|${text(row.sku_material_id)}`)).map((row) => toVersion(row)),
+    ...sourceLines.filter((row) => incomingKeys.has(`${text(row.company_id)}|${text(row.plan_month).slice(0, 10)}|${text(row.sku_material_id)}`))
+      .sort((a, b) => text(a.created_at).localeCompare(text(b.created_at)) || text(a.id).localeCompare(text(b.id)))
+      .map((row) => toVersion(row, text(row.company_id))),
+  ];
 }
 
-async function loadStrokeSettings(companyId: string, months: string[]) {
+/** Current PO21 production-company assignments (empty when the table is not deployed yet). */
+async function loadProductionAssignments(filter: { company_id?: string; production_company_id?: string }, months: string[]): Promise<JsonRecord[]> {
+  let query = serviceRoleClient.schema("erp_planning").from("customer_plan_production_company")
+    .select("company_id, plan_month, sku_material_id, production_company_id").eq("is_current", true).in("plan_month", months);
+  if (filter.company_id) query = query.eq("company_id", filter.company_id);
+  if (filter.production_company_id) query = query.eq("production_company_id", filter.production_company_id);
+  const { data, error } = await query.limit(5000);
+  if (error) {
+    // Table not deployed yet → no cross-company production (legacy behaviour). Any other error
+    // must stop the run: silently ignoring it could plan a demand twice or not at all.
+    const code = String((error as { code?: string }).code ?? "");
+    if (code === "42P01" || code === "PGRST205" || code === "PGRST106") return [];
+    throw new Error("MTS_REQ_PRODUCTION_COMPANY_LOAD_FAILED");
+  }
+  return (data ?? []) as JsonRecord[];
+}
+
+export async function loadStrokeSettings(companyId: string, months: string[]) {
   const [settings, decisionData] = await Promise.all([
     fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("stroke_plan_setting")
       .select("id, plan_month, prodshade_material_id, version_no, created_at")
@@ -389,7 +439,134 @@ async function loadReservations(companyId: string, materialIds: string[]): Promi
     .map((row) => ({ material_id: text(row.material_id), storage_location_id: text(row.storage_location_id), qty: Number(row.balance_qty ?? 0) }));
 }
 
-type InboundLoad = { events: InboundEvent[]; warnings: Warning[]; poNumbers: number; csnCount: number };
+/**
+ * Company planning location roles (owner D1/D12). Returns null when the company has no
+ * policy yet (or the table is not deployed), which keeps the legacy required-location rule.
+ */
+export async function loadLocationRoles(companyId: string): Promise<Map<string, LocationRole> | null> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").from("company_planning_location_policy")
+    .select("storage_location_id, role").eq("company_id", companyId).limit(2000);
+  if (error || !data || data.length === 0) return null;
+  return new Map((data as JsonRecord[]).map((row) => [text(row.storage_location_id), text(row.role) as LocationRole]));
+}
+
+type InboundLoad = {
+  events: InboundEvent[]; warnings: Warning[]; poNumbers: number; csnCount: number;
+  /** material → posted stock here already promised to another company (open Sub-CSN / STO). */
+  committedTransferOut: Map<string, number>;
+};
+
+type SubCsnTransfers = {
+  /** PO line id → base qty of the still-open line promised to other companies. */
+  committedByPoLine: Map<string, number>;
+  committedStockByMaterial: Map<string, number>;
+  events: InboundEvent[];
+  warnings: Warning[];
+};
+
+const STO_CLOSED_STATUSES = new Set(["CLOSED", "CANCELLED"]);
+
+/**
+ * Distribution mode (owner 2026-10-20, design §88.3–§88.5). A Sub-CSN splits one company's PO
+ * between companies. The PO company receives (GE + GRN) the full quantity, then sends each share
+ * on an STO (the Sub-CSN turns in place into that STO's CSN). Until a share is put on a Delivery
+ * Order (which reserves the stock and marks the STO line dispatched):
+ *   - sending company: the share is not its own — removed from the open PO line first, and from
+ *     its posted stock for whatever part of the line has already been received (received first);
+ *   - receiving company: the share is an incoming quantity on the Sub-CSN / STO date.
+ * Once on a Delivery Order the share is handled by the reservation (sender) and by the STO CSN
+ * in transit (receiver), so it is not counted here again.
+ */
+async function loadSubCsnTransfers(companyId: string, materials: Map<string, MaterialInfo>, universe: Set<string>): Promise<SubCsnTransfers> {
+  const result: SubCsnTransfers = { committedByPoLine: new Map(), committedStockByMaterial: new Map(), events: [], warnings: [] };
+  const subs = await fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("consignment_note")
+    .select("id, csn_number, status, company_id, consignee_company_id, vendor_id, material_id, po_id, po_line_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_id, sto_line_id")
+    .not("mother_csn_id", "is", null).in("status", OPEN_CSN_STATUSES)
+    .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId},vendor_id.eq.${companyId}`).order("id"), "MTS_REQ_SUB_CSN_LOAD_FAILED");
+  const relevant = subs.filter((s) => universe.has(text(s.material_id)));
+  if (relevant.length === 0) return result;
+  const stoIds = unique(relevant.map((s) => text(s.sto_id)).filter(Boolean));
+  const stoLineIds = unique(relevant.map((s) => text(s.sto_line_id)).filter(Boolean));
+  const poLineIds = unique(relevant.map((s) => text(s.po_line_id)).filter(Boolean));
+  const poIds = unique(relevant.map((s) => text(s.po_id)).filter(Boolean));
+  const [stos, stoLines, poLines, pos] = await Promise.all([
+    stoIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(stoIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, status, sending_company_id, receiving_company_id").in("id", chunk)),
+    stoLineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("stock_transfer_order_line").select("id, quantity, dispatched_qty, uom_code, line_status, expected_delivery_date").in("id", chunk)),
+    poLineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(poLineIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order_line").select("id, ordered_qty, ordered_qty_base_uom, po_uom_code, open_qty, line_status").in("id", chunk)),
+    poIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(poIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order").select("id, po_number").in("id", chunk)),
+  ]);
+  const stoById = new Map(stos.map((r) => [text(r.id), r]));
+  const stoLineById = new Map(stoLines.map((r) => [text(r.id), r]));
+  const poLineById = new Map(poLines.map((r) => [text(r.id), r]));
+  const poNumberById = new Map(pos.map((r) => [text(r.id), text(r.po_number)]));
+  const ratioOf = (line: JsonRecord | undefined) => {
+    const ordered = Number(line?.ordered_qty ?? 0);
+    const orderedBase = Number(line?.ordered_qty_base_uom ?? 0);
+    return ordered > 0 && orderedBase > 0 ? orderedBase / ordered : null;
+  };
+  const committedPerLine = new Map<string, { materialId: string; qty: number }>();
+  for (const sub of relevant) {
+    const materialId = text(sub.material_id);
+    const material = materials.get(materialId);
+    const poLine = poLineById.get(text(sub.po_line_id));
+    const ref = `Sub-CSN ${text(sub.csn_number)} · PO ${poNumberById.get(text(sub.po_id)) || "?"}`;
+    let sender: string; let receiver: string; let qtyBase: number | null; let date: string | null;
+    if (text(sub.sto_id)) {
+      const sto = stoById.get(text(sub.sto_id));
+      const line = stoLineById.get(text(sub.sto_line_id));
+      if (!sto || !line || STO_CLOSED_STATUSES.has(text(sto.status)) || text(line.line_status) === "KNOCKED_OFF") continue;
+      sender = text(sto.sending_company_id);
+      receiver = text(sto.receiving_company_id);
+      const open = Math.max(0, Number(line.quantity ?? 0) - Number(line.dispatched_qty ?? 0));
+      if (open <= EPSILON_QTY) continue;
+      qtyBase = toMaterialBase(material, open, text(line.uom_code));
+      date = text(line.expected_delivery_date) || text(sub.eta_to_plant_calculated) || null;
+    } else {
+      sender = text(sub.company_id);
+      receiver = text(sub.consignee_company_id);
+      if (!receiver || receiver === sender) continue;
+      const share = Number(sub.dispatch_qty ?? 0) - Number(sub.total_received_qty ?? 0);
+      if (!(Number(sub.dispatch_qty ?? 0) > EPSILON_QTY)) {
+        result.warnings.push({ code: "SUB_CSN_QTY_MISSING", message: `${ref}: the Sub-CSN has no quantity yet, so its share is still counted at the PO company. Enter the Sub-CSN quantity in CSN Tracker.`, material_id: materialId });
+        continue;
+      }
+      if (share <= EPSILON_QTY) continue;
+      const unit = text(sub.po_uom_code).toUpperCase();
+      const ratio = ratioOf(poLine);
+      qtyBase = ratio && unit === text(poLine?.po_uom_code).toUpperCase() ? share * ratio : toMaterialBase(material, share, unit);
+      date = text(sub.eta_to_plant_calculated) || null;
+    }
+    if (qtyBase === null) {
+      result.warnings.push({ code: "SUB_CSN_UOM_CONVERSION_MISSING", message: `${ref}: unit has no verified conversion; the transfer is not counted.`, material_id: materialId });
+      continue;
+    }
+    if (receiver === companyId && sender !== companyId) {
+      result.events.push({ material_id: materialId, qty: qtyBase, date, kind: "SUB_CSN_PLANNED", date_source: date ? "SUB_CSN_ETA" : "NONE", reference: `${ref} (planned transfer from another company)` });
+    } else if (sender === companyId && receiver !== companyId) {
+      const key = text(sub.po_line_id) || `stock:${text(sub.id)}`;
+      const entry = committedPerLine.get(key) ?? { materialId, qty: 0 };
+      entry.qty += qtyBase;
+      committedPerLine.set(key, entry);
+    }
+  }
+  // Split each PO line's promised quantity: received part first (already in our stock), rest from the open line.
+  for (const [key, { materialId, qty }] of committedPerLine) {
+    const line = poLineById.get(key);
+    const ratio = ratioOf(line);
+    const isOpen = !!line && OPEN_PO_LINE_STATUSES.includes(text(line.line_status));
+    const receivedBase = line && ratio ? Math.max(0, Number(line.ordered_qty ?? 0) - Number(line.open_qty ?? 0)) * ratio : qty;
+    const openBase = isOpen && ratio ? Math.max(0, Number(line!.open_qty ?? 0)) * ratio : 0;
+    const fromStock = Math.min(qty, receivedBase);
+    const fromOpen = Math.min(qty - fromStock, openBase);
+    if (fromStock > EPSILON_QTY) result.committedStockByMaterial.set(materialId, (result.committedStockByMaterial.get(materialId) ?? 0) + fromStock);
+    if (fromOpen > EPSILON_QTY) result.committedByPoLine.set(key, fromOpen);
+  }
+  return result;
+}
 
 /** Open PO lines of this company → GE / CSN / lot / remainder partition; plus STO CSNs into this company. */
 async function loadInbound(companyId: string, asOf: string, materials: Map<string, MaterialInfo>, universe: Set<string>): Promise<InboundLoad> {
@@ -406,22 +583,27 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
   const lineIds = lines.map((l) => text(l.id));
   const lotLineIds = lines.filter((l) => poById.get(text(l.po_id))?.order_in_lot === true).map((l) => text(l.id));
 
-  const [geLines, csns, lots, stoCsns] = await Promise.all([
+  const [geLines, csns, lots, stoCsns, transfers] = await Promise.all([
     lineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("gate_entry_line")
       .select("po_line_id, ge_qty, uom_code, gate_entry_id, grn_posted")
       .in("po_line_id", chunk).eq("grn_posted", false)),
     lineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("consignment_note")
-      .select("id, csn_number, status, po_line_id, dispatch_qty, total_received_qty, eta_to_plant_calculated, is_mother_csn, consignee_company_id")
+      .select("id, csn_number, status, po_line_id, dispatch_qty, total_received_qty, eta_to_plant_calculated, is_mother_csn, consignee_company_id, sto_id")
       .in("po_line_id", chunk).in("status", OPEN_CSN_STATUSES)),
     lotLineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : serviceRoleClient.schema("erp_procurement")
       .rpc("po_lot_balances", { p_po_line_ids: lotLineIds, p_exclude_ge_line_id: null })
       .then(({ data, error }) => { if (error) throw new Error("MTS_REQ_LOT_LOAD_FAILED"); return (data ?? []) as JsonRecord[]; }),
     fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("consignment_note")
-      .select("id, csn_number, status, material_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_line_id")
-      .eq("consignee_company_id", companyId).not("sto_line_id", "is", null).in("status", OPEN_CSN_STATUSES).order("id"), "MTS_REQ_STO_CSN_LOAD_FAILED"),
+      .select("id, csn_number, status, company_id, consignee_company_id, material_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_line_id")
+      // An STO CSN's company is the receiving company (consignee blank), or the consignee when set.
+      .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId}`)
+      .not("sto_line_id", "is", null).in("status", OPEN_CSN_STATUSES).order("id"), "MTS_REQ_STO_CSN_LOAD_FAILED")
+      .then((rows) => rows.filter((c) => (text(c.consignee_company_id) || text(c.company_id)) === companyId)),
+    loadSubCsnTransfers(companyId, materials, universe),
   ]);
+  warnings.push(...transfers.warnings);
   const geIds = unique(geLines.map((g) => text(g.gate_entry_id)));
   const csnIds = csns.map((c) => text(c.id));
   const [gateHeaders, children] = await Promise.all([
@@ -442,7 +624,8 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
     const ratio = ordered > 0 && orderedBase > 0 ? orderedBase / ordered : null;
     const poUom = text(line.po_uom_code).toUpperCase();
     const material = materials.get(materialId);
-    const lineCsns = csns.filter((c) => text(c.po_line_id) === text(line.id));
+    // A Sub-CSN mapped to an STO belongs to that STO now (counted by loadSubCsnTransfers / STO CSNs).
+    const lineCsns = csns.filter((c) => text(c.po_line_id) === text(line.id) && !text(c.sto_id));
     // Cross-company receipt: the goods land at the consignee, not here.
     const foreign = lineCsns.filter((c) => text(c.consignee_company_id) && text(c.consignee_company_id) !== companyId);
     if (foreign.length > 0) {
@@ -477,6 +660,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       })),
       lots: lots.filter((lot) => text(lot.po_line_id) === text(line.id) && !["CANCELLED", "CLOSED"].includes(text(lot.status)))
         .map((lot) => ({ lot_number: text(lot.lot_number), balance_qty: Number(lot.balance_qty ?? 0), delivery_date: text(lot.delivery_date) || null })),
+      committed_transfer_base: transfers.committedByPoLine.get(text(line.id)) ?? 0,
     };
     events.push(...partitionPoLineInbound(input, asOf, warnings));
   }
@@ -495,7 +679,8 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       date_source: text(csn.eta_to_plant_calculated) ? "CSN_ETA_TO_PLANT" : "NONE", reference: `STO CSN ${text(csn.csn_number)} (${text(csn.status)})`,
     });
   }
-  return { events, warnings, poNumbers: pos.length, csnCount: csns.length + stoCsns.length };
+  events.push(...transfers.events);
+  return { events, warnings, poNumbers: pos.length, csnCount: csns.length + stoCsns.length, committedTransferOut: transfers.committedStockByMaterial };
 }
 
 /** Configured vendor transit + observed (ERP received CSNs + imported history) per material. */
@@ -503,18 +688,22 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
   if (universe.length === 0) return new Map();
   const [vmiRows, vendorMapRows, receivedCsns, historyRes] = await Promise.all([
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
-      .select("vendor_id, material_id").eq("status", "ACTIVE").in("material_id", chunk)),
+      .select("vendor_id, material_id, booking_time_days").eq("status", "ACTIVE").in("material_id", chunk)),
     fetchAllPages(() => serviceRoleClient.schema("erp_master").from("vendor_company_map").select("id, vendor_id").eq("company_id", companyId).eq("active", true).order("id"), "MTS_REQ_VENDOR_MAP_LOAD_FAILED"),
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_procurement").from("consignment_note")
-      .select("material_id, po_id, grn_date").eq("company_id", companyId).eq("status", "GRD").not("grn_date", "is", null).in("material_id", chunk)),
+      .select("material_id, po_id, grn_date, vendor_id, csn_type, lr_date, etd, gate_entry_date").eq("company_id", companyId).eq("status", "GRD").not("grn_date", "is", null).in("material_id", chunk)),
     serviceRoleClient.rpc("history_lead_time_samples", { p_company_id: companyId }),
   ]);
   const companyVendors = new Set(vendorMapRows.map((v) => text(v.vendor_id)));
   const vendorsByMaterial = new Map<string, string[]>();
+  // D6: optional vendor × material Booking Time (PO → vendor dispatch); blank = 0.
+  const bookingDays = new Map<string, number>();
   for (const row of vmiRows) {
     const vendorId = text(row.vendor_id);
     if (!companyVendors.has(vendorId)) continue;
     const key = text(row.material_id);
+    const booking = num(row.booking_time_days);
+    if (booking !== null && booking > 0) bookingDays.set(`${vendorId}|${key}`, booking);
     vendorsByMaterial.set(key, unique([...(vendorsByMaterial.get(key) ?? []), vendorId]));
   }
   const vendorIds = unique([...vendorsByMaterial.values()].flat());
@@ -567,25 +756,46 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
     const configured: ConfiguredLeadTime[] = [];
     for (const vendorId of vendorsByMaterial.get(materialId) ?? []) {
       const label = vendorLabel.get(vendorId) ?? "—";
+      const booking = bookingDays.get(`${vendorId}|${materialId}`) ?? 0;
+      const bookingText = booking > 0 ? `booking ${booking} + ` : "";
       for (const row of domesticRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
-        configured.push({ vendor_label: label, route: "DOMESTIC", days: Number(row.transit_days ?? 0), detail: `transit ${Number(row.transit_days ?? 0)}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), route_days: Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
       }
       for (const row of importRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
         const sail = Number(row.sail_time_days ?? 0);
         const clearance = Number(row.clearance_days ?? 0);
         const inlandDays = inland.get(text(row.port_of_discharge_id));
-        const days = sail + clearance + (inlandDays ?? 0);
-        configured.push({ vendor_label: label, route: "IMPORT", days, detail: `sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
+        const days = booking + sail + clearance + (inlandDays ?? 0);
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
       }
     }
-    result.set(materialId, computeLeadTime(configured, observed.get(materialId) ?? []));
+    // Suggested safety days: how late received shipments arrived against their route time.
+    const routeByVendor = new Map<string, number>();
+    for (const c of configured) {
+      if (c.vendor_id && c.route_days !== undefined) routeByVendor.set(`${c.vendor_id}|${c.route}`, Math.max(routeByVendor.get(`${c.vendor_id}|${c.route}`) ?? 0, c.route_days));
+    }
+    const delays: number[] = [];
+    for (const csn of receivedCsns.filter((c) => text(c.material_id) === materialId)) {
+      const route = text(csn.csn_type).toUpperCase() === "IMPORT" ? "IMPORT" : "DOMESTIC";
+      const routeDays = routeByVendor.get(`${text(csn.vendor_id)}|${route}`);
+      const dispatch = text(route === "IMPORT" ? csn.etd : csn.lr_date);
+      const arrival = text(csn.gate_entry_date) || text(csn.grn_date);
+      if (routeDays === undefined || !dispatch || !arrival || arrival < dispatch) continue;
+      delays.push(Math.round((Date.parse(`${arrival}T00:00:00Z`) - Date.parse(`${dispatch}T00:00:00Z`)) / 86_400_000) - routeDays);
+    }
+    const routeOnly = configured.map((c) => c.route_days).filter((d): d is number => d !== undefined);
+    const suggestion = suggestSafetyDays(routeOnly.length ? Math.max(...routeOnly) : null, delays);
+    result.set(materialId, {
+      ...computeLeadTime(configured, observed.get(materialId) ?? []),
+      suggested_critical_days: suggestion.critical, suggested_target_days: suggestion.target, delay_sample_count: suggestion.samples,
+    });
   }
   return result;
 }
 
 async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[]; raw: JsonRecord[] }> {
   const raw = await fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, source_system, created_by, created_at")
+    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, source_system, created_by, created_at")
     .eq("company_id", companyId).eq("is_current", true).order("id"), "MTS_REQ_POLICY_LOAD_FAILED");
   return {
     raw,
@@ -598,12 +808,13 @@ async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[];
       moq_uom_code: text(row.moq_uom_code) || null,
       moq_source: (text(row.moq_source) || "NONE") as PolicyRow["moq_source"],
       moq_active: row.moq_active === true,
+      carrying_rate_per_uom: num(row.carrying_rate_per_uom),
       version_no: Number(row.version_no ?? 1),
     })),
   };
 }
 
-function materialInfoMap(rows: Map<string, JsonRecord>, conversions: Map<string, UomConversion[]>): Map<string, MaterialInfo> {
+export function materialInfoMap(rows: Map<string, JsonRecord>, conversions: Map<string, UomConversion[]>): Map<string, MaterialInfo> {
   const result = new Map<string, MaterialInfo>();
   for (const [id, row] of rows) {
     const base = text(row.base_uom_code);
@@ -618,7 +829,7 @@ function materialInfoMap(rows: Map<string, JsonRecord>, conversions: Map<string,
   return result;
 }
 
-async function loadLocationLabels(ids: string[]): Promise<Map<string, string>> {
+export async function loadLocationLabels(ids: string[]): Promise<Map<string, string>> {
   const list = unique(ids);
   if (list.length === 0) return new Map();
   const rows = await fetchInChunks<JsonRecord>(list, (chunk) => serviceRoleClient.schema("erp_inventory").from("storage_location_master")
@@ -666,6 +877,77 @@ export async function getMtsRequirementAccessHandler(req: Request, ctx: ReqHandl
   }
 }
 
+/**
+ * Loads every source and runs the approved Requirement pipeline once. Shared by the
+ * Requirement report and the Planning (Phase 3D) view so both use identical numbers.
+ */
+export async function computeRequirement(companyId: string, calendar: PlanningCalendar, asOf: string, today: string, demandAt: string | null) {
+  const months = [calendar.cmStart, calendar.nmStart];
+
+  const [planLines, settings, policyLoad] = await Promise.all([
+    loadPlanLines(companyId, months),
+    loadStrokeSettings(companyId, months),
+    loadPolicies(companyId),
+  ]);
+  const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
+  const masters = await loadFormulationMasters(companyId, periodStrokeIds);
+  const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+  const skuIds = [...masters.skus.keys()];
+  const [materialRows, conversions] = await Promise.all([
+    loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]),
+    loadConversions([...universe, ...skuIds]),
+  ]);
+  const materials = materialInfoMap(materialRows, conversions);
+  for (const [skuId, sku] of masters.skus) {
+    const info = materials.get(skuId);
+    sku.base_uom_code = info?.base_uom_code ?? "";
+    // KG per one SKU base unit: 1 for KG, else a fixed master conversion to KG (never guessed).
+    const baseUnit = (info?.base_uom_code ?? "").toUpperCase();
+    sku.kg_per_base_unit = !info ? null : baseUnit === "KG" ? 1 : buildToBaseFactors("KG", conversions.get(skuId) ?? [])[baseUnit] ?? null;
+  }
+  const universeSet = new Set(universe);
+  const applyReservations = asOf >= today;
+  const [stockLoad, reservations, inbound, leadTimes, locationRoles] = await Promise.all([
+    loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
+    applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
+    loadInbound(companyId, asOf, materials, universeSet),
+    loadLeadTimes(companyId, asOf, universe),
+    loadLocationRoles(companyId),
+  ]);
+
+  const prodshadeLabels = new Map(masters.prodshadeIds.map((pid) => [pid, text(materialRows.get(pid)?.material_name) || pid]));
+  const input = {
+    calendar,
+    skus: masters.skus,
+    currentStrokeByProdshade: masters.currentStrokeByProdshade,
+    strokes: masters.strokes,
+    strokeSettings: settings.strokeSettings,
+    primaryDecisions: settings.primaryDecisions,
+    groupMembers: masters.groupMembers,
+    packBoms: masters.packBoms,
+    materials,
+    prodshadeLabels,
+    planLines,
+    demandAt,
+    stockRows: stockLoad.stock,
+    reservations,
+    applyReservations,
+    consumptionByMaterial: stockLoad.consumption,
+    inboundEvents: inbound.events,
+    policies: policyLoad.policies,
+    leadTimes,
+    materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
+    locationRoles: locationRoles ?? undefined,
+    committedTransferOut: inbound.committedTransferOut,
+  };
+  const output = buildRequirementRows(input);
+  const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
+  return {
+    calendar, planLines, settings, policyLoad, masters, materialRows, materials, applyReservations,
+    inbound, leadTimes, locationRoles, input, output, fingerprint,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/procurement/mts-requirement/report?company_id&plan_month=YYYY-MM&as_of=YYYY-MM-DD[&demand_at=ISO]
 // ─────────────────────────────────────────────────────────────────────────────
@@ -687,69 +969,15 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     const demandAtRaw = text(url.searchParams.get("demand_at"));
     const demandAt = demandAtRaw && Number.isFinite(Date.parse(demandAtRaw)) ? new Date(demandAtRaw).toISOString() : null;
     if (demandAtRaw && !demandAt) return fail(req, ctx, "MTS_REQ_INVALID_DEMAND_AT", 400, "demand_at must be an ISO date-time.");
-    const months = [calendar.cmStart, calendar.nmStart];
-
-    const [planLines, settings, policyLoad] = await Promise.all([
-      loadPlanLines(companyId, months),
-      loadStrokeSettings(companyId, months),
-      loadPolicies(companyId),
-    ]);
-    const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
-    const masters = await loadFormulationMasters(companyId, periodStrokeIds);
-    const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
-    const skuIds = [...masters.skus.keys()];
-    const [materialRows, conversions] = await Promise.all([
-      loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]),
-      loadConversions([...universe, ...skuIds]),
-    ]);
-    const materials = materialInfoMap(materialRows, conversions);
-    for (const [skuId, sku] of masters.skus) {
-      const info = materials.get(skuId);
-      sku.base_uom_code = info?.base_uom_code ?? "";
-      // KG per one SKU base unit: 1 for KG, else a fixed master conversion to KG (never guessed).
-      const baseUnit = (info?.base_uom_code ?? "").toUpperCase();
-      sku.kg_per_base_unit = !info ? null : baseUnit === "KG" ? 1 : buildToBaseFactors("KG", conversions.get(skuId) ?? [])[baseUnit] ?? null;
-    }
-    const universeSet = new Set(universe);
-    const applyReservations = asOf >= today;
-    const [stockLoad, reservations, inbound, leadTimes] = await Promise.all([
-      loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
-      applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
-      loadInbound(companyId, asOf, materials, universeSet),
-      loadLeadTimes(companyId, asOf, universe),
-    ]);
-
-    const prodshadeLabels = new Map(masters.prodshadeIds.map((pid) => [pid, text(materialRows.get(pid)?.material_name) || pid]));
-    const input = {
-      calendar,
-      skus: masters.skus,
-      currentStrokeByProdshade: masters.currentStrokeByProdshade,
-      strokes: masters.strokes,
-      strokeSettings: settings.strokeSettings,
-      primaryDecisions: settings.primaryDecisions,
-      groupMembers: masters.groupMembers,
-      packBoms: masters.packBoms,
-      materials,
-      prodshadeLabels,
-      planLines,
-      demandAt,
-      stockRows: stockLoad.stock,
-      reservations,
-      applyReservations,
-      consumptionByMaterial: stockLoad.consumption,
-      inboundEvents: inbound.events,
-      policies: policyLoad.policies,
-      leadTimes,
-      materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
-    };
-    const output = buildRequirementRows(input);
-    const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
+    const {
+      planLines, settings, policyLoad, masters, materialRows, applyReservations, inbound, locationRoles, output, fingerprint,
+    } = await computeRequirement(companyId, calendar, asOf, today, demandAt);
 
     // Labels (R-01: never show raw ids).
     const locationIds = unique(output.rows.flatMap((row) => [
       ...row.stock.required_locations, ...row.stock.other_locations, ...row.pools.map((p) => p.storage_location_id),
     ]));
-    const groupIds = unique(output.rows.flatMap((row) => row.pools.map((p) => p.group_id)));
+    const groupIds = unique([...output.rows.flatMap((row) => row.pools.map((p) => p.group_id)), ...output.groups.map((g) => g.group_id)]);
     const [locationLabels, groupRows, policyUsers] = await Promise.all([
       loadLocationLabels(locationIds),
       groupIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
@@ -787,6 +1015,20 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         other_locations: row.stock.other_locations.map(loc),
         intransit_total: row.inbound.total,
         from_stock_qty: row.from_stock_qty,
+        stock_excluded: row.stock.excluded_unrestricted,
+        stock_committed_transfer_out: row.stock.committed_transfer_out,
+        stock_exclusive_protected: row.stock.exclusive_protected,
+        stock_protection_used: row.stock.protection_used,
+        fixed_demand_qty: row.fixed_demand_qty,
+        group_share_qty: row.group_share_qty,
+        // D1/D12: stock in a transfer-source location (R003, unconfigured) is shown, not counted.
+        // R→R advisory only: stock outside R stores is shown as "held at", never as a transfer.
+        transfer_suggestion: row.stock.other_sloc_unrestricted > 0
+          ? (() => {
+            const route = rToRTransferRoute(row.stock.other_locations.map(loc), [...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id ?? "")].map(loc));
+            return route ? `${route.from} → ${route.to}` : `Held at ${row.stock.other_locations.map(loc).join(", ")} (not an R→R transfer)`;
+          })()
+          : null,
         lead_time_effective: row.lead_time?.effective ?? null,
         lead_time_source: row.lead_time?.effective_source ?? "UNKNOWN",
         lead_time_configured_min: row.lead_time?.configured_min ?? null,
@@ -795,7 +1037,7 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         lead_time_observed_max: row.lead_time?.observed_max ?? null,
         lead_time_observed_p90: row.lead_time?.observed_p90 ?? null,
         lead_time_observed_count: row.lead_time?.observed_count ?? 0,
-        lead_time_routes: row.lead_time?.configured_routes ?? [],
+        lead_time_routes: (row.lead_time?.configured_routes ?? []).map(({ vendor_id: _vendor, ...route }) => route),
         moq_qty: row.policy?.moq_qty ?? null,
         moq_uom_code: row.policy?.moq_uom_code ?? null,
         moq_source: row.policy?.moq_source ?? null,
@@ -826,6 +1068,12 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
       };
     }).sort((a, b) => a.material_type.localeCompare(b.material_type) || a.material_name.localeCompare(b.material_name));
 
+    const groups = output.groups.map(({ uncovered_by_day: _uncovered, ...group }) => ({
+      ...group,
+      group_label: groupLabel.get(group.group_id) ?? "—",
+      members: group.members.map((member) => ({ ...member, material_name: nameOf(member.material_id), material_code: text(materialRows.get(member.material_id)?.pace_code) || null })),
+    })).sort((a, b) => a.group_label.localeCompare(b.group_label));
+
     const labelWarning = (w: Warning) => ({
       code: w.code,
       message: w.message,
@@ -839,6 +1087,9 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     }
     if (masters.ambiguousCount > 0) {
       notes.push({ code: "AMBIGUOUS_SKUS", message: `${masters.ambiguousCount} Prodshade/pack combination(s) match more than one SKU by name and are excluded (same rule as PO21).` });
+    }
+    if (!locationRoles) {
+      notes.push({ code: "LOCATION_POLICY_NOT_SET", message: "No planning location policy for this company yet: stock is counted only at each stroke / Pack BOM line's own location (legacy rule)." });
     }
     notes.push({ code: "CROSS_COMPANY_ALLOCATION_NOT_AVAILABLE", message: "No cross-company production allocation is stored in PO21 yet; all demand is exploded with this company's Stroke and Pack BOM." });
 
@@ -857,10 +1108,14 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         open_purchase_orders: inbound.poNumbers,
         open_csns: inbound.csnCount,
         reservations_applied: applyReservations,
-        stock_basis: "Posted stock ledger balance at the start of the as-of day (erp_inventory.get_stock_history).",
+        stock_basis: locationRoles
+          ? "Posted UNRESTRICTED stock at the company's COUNTED locations (pooled), minus open reservations there, at the start of the as-of day."
+          : "Posted stock ledger balance at the start of the as-of day (erp_inventory.get_stock_history), at each line's own location.",
+        location_policy: locationRoles ? "COMPANY_POLICY" : "LEGACY_REQUIRED_LOCATION",
         consumption_basis: "Net P261 − P262 posted from the plan-month start to the day before the as-of date.",
       },
       rows,
+      groups,
       exceptions: output.exceptions.map(labelWarning),
       warnings: [...notes, ...masters.warnings, ...output.warnings, ...inbound.warnings].map(labelWarning),
     }, ctx.request_id, req);
@@ -922,6 +1177,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
             moq_source: text(current.moq_source) || "NONE",
             moq_active: current.moq_active === true,
             remarks: text(current.remarks) || null,
+            carrying_rate_per_uom: num(current.carrying_rate_per_uom),
             source_system: text(current.source_system),
             updated_by: users.get(text(current.created_by)) ?? "—",
             updated_at: current.created_at,
@@ -932,6 +1188,9 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
           lead_time_configured_max: lead?.configured_max ?? null,
           lead_time_observed_max: lead?.observed_max ?? null,
           lead_time_observed_count: lead?.observed_count ?? 0,
+          suggested_critical_days: lead?.suggested_critical_days ?? null,
+          suggested_target_days: lead?.suggested_target_days ?? null,
+          delay_sample_count: lead?.delay_sample_count ?? 0,
         };
       })
       .sort((a, b) => a.material_type.localeCompare(b.material_type) || a.material_name.localeCompare(b.material_name));
@@ -954,7 +1213,7 @@ export async function getMtsRequirementPolicyHistoryHandler(req: Request, ctx: R
     const materialId = text(url.searchParams.get("material_id"));
     if (!materialId) return fail(req, ctx, "MTS_REQ_INVALID_INPUT", 400, "material_id is required.");
     const { data, error } = await serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, source_system, created_by, created_at")
+      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, source_system, created_by, created_at")
       .eq("company_id", companyId).eq("material_id", materialId)
       .order("created_at", { ascending: false }).range(0, 999);
     if (error) throw new Error("MTS_REQ_POLICY_HISTORY_FAILED");
@@ -972,6 +1231,7 @@ export async function getMtsRequirementPolicyHistoryHandler(req: Request, ctx: R
         moq_source: text(r.moq_source),
         moq_active: r.moq_active === true,
         remarks: text(r.remarks) || null,
+        carrying_rate_per_uom: num(r.carrying_rate_per_uom),
         source_system: text(r.source_system),
         updated_by: users.get(text(r.created_by)) ?? "—",
         updated_at: r.created_at,
@@ -1011,7 +1271,7 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
         return fail(req, ctx, "MTS_REQ_POLICY_MATERIAL_NOT_IN_COMPANY", 400, "A material on this save is not used by this company's MTS Strokes / Pack BOMs.");
       }
       if (!isIsoDate(effectiveFrom)) return fail(req, ctx, "MTS_REQ_POLICY_INVALID_INPUT", 400, "Every row needs a valid Effective From date (YYYY-MM-DD).");
-      const numericFields = ["target_cov_days", "critical_cov_days", "moq_qty"] as const;
+      const numericFields = ["target_cov_days", "critical_cov_days", "moq_qty", "carrying_rate_per_uom"] as const;
       for (const field of numericFields) {
         if (row[field] !== null && row[field] !== undefined && row[field] !== "" && num(row[field]) === null) {
           return fail(req, ctx, "MTS_REQ_POLICY_INVALID_INPUT", 400, `${field} must be a number.`);
@@ -1027,6 +1287,7 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
         moq_source: text(row.moq_source).toUpperCase() || "NONE",
         moq_active: row.moq_active === true,
         remarks: text(row.remarks) || null,
+        carrying_rate_per_uom: num(row.carrying_rate_per_uom),
         source_ref: row.source_ref && typeof row.source_ref === "object" ? row.source_ref : null,
       });
     }
