@@ -305,17 +305,12 @@ function riskMatch(row, filter) {
   }
 }
 
-function buildReportColumns(expanded, toggleExpanded) {
+function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty) {
   return [
     textColumn("material_name", "Material (ITEMS)", "identity", { width: "260px" }),
     textColumn("material_code", "Material Code", "identity", { width: "110px" }),
     textColumn("material_type", "TYPE", "identity", { width: "60px" }),
     textColumn("base_uom_code", "UoM", "identity", { width: "60px" }),
-    textColumn("user_pack_qty", "Pack Qty (CM + NM)", "identity", {
-      width: "240px",
-      read: (r) => packSourceSummary(r.pools),
-      render: (r) => dash(packSourceSummary(r.pools)),
-    }),
     qtyColumn("priority_score", "Identifier (0–3)", "identity", { width: "100px" }),
     textColumn("reorder_flag", "ID2 (at reorder level)", "identity", { width: "130px", read: (r) => (r.reorder_flag === null ? "" : yesNo(r.reorder_flag)), render: (r) => flag(r.reorder_flag) }),
     textColumn("identifier", "Status", "identity", { width: "120px", render: (r) => badge(r.identifier) }),
@@ -404,6 +399,26 @@ function buildReportColumns(expanded, toggleExpanded) {
     qtyColumn("safety_day_stock", "Safety Day Stock (Target × prorata)", "leadtime", { width: "160px" }),
     qtyColumn("lead_time_stock", "Lead time Stock", "leadtime"),
     qtyColumn("total_stock_level", "Total Stock", "leadtime"),
+    // Owner 2026-10-20: information only — last column, collapsed by default (header Show / Hide),
+    // always exported in full to Excel.
+    {
+      key: "user_pack_qty",
+      label: (
+        <span className="flex items-center gap-2">
+          Pack Qty (CM + NM)
+          <button type="button" onClick={togglePackQty} className="h-5 border border-slate-400 bg-white px-1.5 text-[10px] normal-case tracking-normal text-slate-800 hover:bg-slate-100">
+            {showPackQty ? "Hide" : "Show"}
+          </button>
+        </span>
+      ),
+      exportLabel: "Pack Qty (CM + NM)",
+      group: "identity",
+      width: showPackQty ? "420px" : "170px",
+      filterable: false,
+      render: (r) => (showPackQty ? dash(packSourceSummary(r.pools)) : <span className="text-slate-300">…</span>),
+      copyValue: (r) => packSourceSummary(r.pools) ?? "",
+      exportValue: (r) => packSourceSummary(r.pools) ?? "",
+    },
   ];
 }
 
@@ -523,7 +538,9 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
   });
   const report = reportQ.data ?? null;
   const toggleExpanded = useCallback((id) => setExpanded((current) => (current === id ? "" : id)), []);
-  const allColumns = useMemo(() => buildReportColumns(expanded, toggleExpanded), [expanded, toggleExpanded]);
+  const [showPackQty, setShowPackQty] = useState(false);
+  const togglePackQty = useCallback(() => setShowPackQty((current) => !current), []);
+  const allColumns = useMemo(() => buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty), [expanded, toggleExpanded, showPackQty, togglePackQty]);
   const columns = useMemo(() => allColumns.filter((c) => c.group === "identity" || !hiddenGroups.has(c.group)), [allColumns, hiddenGroups]);
   const rows = useMemo(() => (report?.rows ?? [])
     .filter((row) => typeFilter === "ALL" || row.material_type === typeFilter)
@@ -548,7 +565,7 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
       await downloadColoredExcelFile({
         fileName: `po22_requirement_${planMonth}_${asOf}.xlsx`,
         sheetName: "Requirement",
-        columns: exportColumns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align, numFmt: c.numFmt })),
+        columns: exportColumns.map((c) => ({ key: c.key, label: c.exportLabel ?? c.label, width: c.width, align: c.align, numFmt: c.numFmt })),
         rows: exportRows,
         getCellValue: (row, column) => exportColumns.find((c) => c.key === column.key)?.exportValue?.(row) ?? "",
         preambleRows: [
