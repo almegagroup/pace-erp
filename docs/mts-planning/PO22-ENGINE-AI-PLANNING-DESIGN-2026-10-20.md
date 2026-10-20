@@ -180,3 +180,30 @@ planned production** of the prodshade (PM: per outer pack × packs).
 **Family total per day** = Σ exclusive qty of every member + Σ every group pool qty (each counted
 once — never per member, so no double count). The family grid shows the total and, under it,
 each member's split (exclusive + drawn for groups) as decided by Method C.
+
+## 11. Owner additions (2026-10-20, later)
+
+1. **Full-page display like IN03.**
+2. **Layout like the sheet's PLANNING tab:** family day grid; **Future Orders** block (vendor, PO
+   date, ETD, ETA Port, ETA Plant, qty, Max / Min days); **Location Transfer instructions and
+   suggestions** (R001 ↔ R002) below it.
+3. **Engine + AI make the plan, not only suggest.** The plan is pre-filled; the user can edit it:
+   increase / decrease a lot qty, set or change *Quantity to Dispatch*, move the **calibration
+   row** (the date the system calibrated) to another date. Every edit → full recompute → AI verdict.
+4. **Import PO date already past (back-calculated PO date ≤ today)** — proposal, pending owner
+   confirmation:
+   - First use what exists: other members' surplus, advancing ordered-not-shipped lots
+     (rescheduled ETA), R001 ↔ R002 transfer.
+   - **Bridge order (domestic)** only for the gap up to the earliest feasible import arrival,
+     labelled "Bridge — import too late"; vendor fixed MOQ respected (any excess reduces the
+     import qty).
+   - **Import order still placed** at the earliest feasible date for the remaining group +
+     exclusive need (import was needed for group optimisation and exclusive coverage).
+   - Show the extra cost (on-time import vs bridge) and AI's lesson (which day the order was
+     due, why it was missed, suggested Safety-day / lead-time change).
+   - No domestic vendor: Critical alert with the stop date + possible actions (other member,
+     user-created Sub-CSN from another company, fastest import).
+
+Open: Q-A meaning of "calibration row" (sheet CC reset of opening to book stock?); Q-B bridge
+qty = gap only vs domestic vendor MOQ; Q-C bridge placed into the plan automatically or flagged
+first (extra cost).
