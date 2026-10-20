@@ -112,7 +112,7 @@
 
 ---
 
-### 2026-10-20 — PO21 / PO22 MTS Requirement + Planning release (DONE in code; rollout pending)
+### 2026-10-20 — PO21 / PO22 MTS Requirement + Planning release (DONE; PROD rolled out)
 
 Scope CMP003 / CMP005 / CMP011. PR almegagroup/pace-erp#680 (`dev` → `main`).
 - PO22: Method C allocation (owner D13), Sub-CSN / STO inbound, suggested Target/Critical,
@@ -125,6 +125,10 @@ Scope CMP003 / CMP005 / CMP011. PR almegagroup/pace-erp#680 (`dev` → `main`).
   CMP003 v134, CMP005 v30, CMP011 v30; aborts if any unrelated ACL decision changes. Run after merge.
 - Render PROD: `AI_CORE_ENABLED` + `ANTHROPIC_API_KEY` present (owner screenshot 2026-10-20).
 - Users enter Target / Critical days (none in PROD today).
+- **PROD rollout 2026-10-20:** PR #680 merged (`892bfeb`); `deploy-prod.yml` run 39363189949 applied all
+  six migrations (verified objects + D12 seed; `NOTIFY pgrst`; migration integrity 689 / `in_sync=true`).
+  ACL runbook committed: active versions CMP003 v134, CMP005 v30, CMP011 v30; verification passed (0 unrelated
+  ACL changes); PO22 menu visible only to SUPPLY CHAIN / DIRECTOR / ACL-MASTER users.
 - Validation: 152 procurement Deno tests, guards, eslint; PROD read-only checks in
   `docs/mts-planning/PO22-RELEASE-CHECKLIST-2026-10-20.md`. Live click-through pending.
 
