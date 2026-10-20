@@ -224,3 +224,32 @@ first (extra cost).
     ₹Y extra working capital"). The engine compares the options (another vendor with a smaller
     MOQ, another member's surplus, shifting / skipping one import cycle) and picks the lowest
     total cost; AI explains; the user decides.
+
+### 11.2 Correction (owner challenge 2026-10-20): a bridge only covers where it is allowed
+
+The earlier line "the next import's need date moves later" is only true for the part of demand
+the bridge material may legally serve.
+
+- Every demand line has its own allowed materials (stroke / Pack BOM line + its group). A domestic
+  bridge material covers **only** the demand lines where it is an allowed candidate (normally a
+  group pool it belongs to).
+- The import material's **exclusive** demand, and every group the domestic material is not a
+  member of, is **not** covered by the bridge. That part still sets the import's need date — it
+  does not move.
+- The engine splits the import need into: (a) substitutable part (bridge may cover → only this
+  part's date can move) and (b) non-substitutable part (exclusive / other groups → date fixed).
+- If (b) cannot be met before the earliest possible import arrival: Critical alert per prodshade
+  with the stop date, the shortfall qty, and the options found in 11.3.
+
+### 11.3 Alternative routes for the same material (owner: yes, system + AI search them)
+
+When the normal route is too late, the engine lists every **known** route for the **same
+material**, ranked by arrival date then total cost:
+- other vendors of the same material (ASL / vendor-material info, purchase history), incl. a
+  domestic trader / stockist of an import material;
+- the same vendor by a faster mode where a lead time for it is on record (e.g. air vs sea);
+- advancing an already ordered, not shipped lot (rescheduled ETA);
+- another company's stock or in-transit lot — **suggestion only**; the user creates the Sub-CSN
+  (cross-company movement stays user-created).
+AI explains the trade-off. Routes not on record cannot be invented: AI says "no faster route on
+record — consider sourcing a local trader" instead.
