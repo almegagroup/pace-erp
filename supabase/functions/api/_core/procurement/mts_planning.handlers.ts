@@ -22,7 +22,7 @@ import {
   requireRequirementViewAccess,
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
-import { assemblePlanningInput, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, type MemberCost, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy } from "./mts_optimizer_phase3d.types.ts";
 import { type CostOption, costOption, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
@@ -218,10 +218,22 @@ export async function computePlanning(p: PlanningParams) {
   const dailyUseOf = (id: string, demand: ReadonlyArray<{ material_id: string | null; qty_base: number }>) =>
     demand.filter((d) => d.material_id === id).reduce((s, d) => s + d.qty_base, 0) / horizonDays;
   const carryingOf = (id: string) => req.output.rows.find((r) => r.material_id === id)?.policy?.carrying_rate_per_uom ?? null;
-  // Pass 1: fastest feasible vendor → when and how much is needed.
-  const pass1 = assemblePlanningInput(baseArgs);
-  const projection1 = projectDailyCoverage(pass1.input);
   const costInputs = await loadCostInputs(p.companyId, calendar.asOf, p.today, universe, vendorTerms, req.materials);
+  const rowDailyUse = (id: string) => {
+    const row = req.output.rows.find((r) => r.material_id === id);
+    return row ? [...row.daily_demand.values()].reduce((s, q) => s + q, 0) / horizonDays : 0;
+  };
+  // Owner 2026-10-20: nothing selected for a group → engine picks the member with the lowest total cost.
+  const memberCost = (id: string, qty: number, needDay: string): MemberCost | null => {
+    const terms = vendorTerms.get(id) ?? [];
+    if (terms.length === 0) return null;
+    const probe = { material_id: id, required_qty_base: qty, need_date: needDay, estimated_plant_eta: needDay } as unknown as OptimizerAdvisoryBuy;
+    const best = costOptionsFor(probe, terms, costInputs, calendar.asOf, rowDailyUse(id), carryingOf(id))[0];
+    return best ? { feasible: best.feasible, total_cost: best.total_cost, lead_time_days: best.lead_time_days } : null;
+  };
+  // Pass 1: fastest feasible vendor → when and how much is needed.
+  const pass1 = assemblePlanningInput({ ...baseArgs, memberCost });
+  const projection1 = projectDailyCoverage(pass1.input);
   const vendorOverride = new Map<string, string>();
   for (const buy of projection1.advisory_buys) {
     if ((buy.status !== "ADVISORY" && buy.status !== "ADVISORY_LATE") || buy.sequence !== 1) continue;
@@ -231,7 +243,7 @@ export async function computePlanning(p: PlanningParams) {
     if (term) vendorOverride.set(buy.material_id, term.vendor_id);
   }
   // Pass 2: cheapest feasible vendor's MOQ / multiple / lead time.
-  const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, vendorOverride }) : pass1;
+  const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, memberCost, vendorOverride }) : pass1;
   const projection = vendorOverride.size ? projectDailyCoverage(assembly.input) : projection1;
 
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");

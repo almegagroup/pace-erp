@@ -1407,7 +1407,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "month", label: "Month", width: "90px", render: (a) => String(a.month).slice(0, 7) },
     { key: "uncovered_qty", label: "Group shortage", width: "120px", align: "right", render: (a) => fmtQty(a.uncovered_qty), copyValue: (a) => a.uncovered_qty },
     { key: "assigned_material_name", label: "Planned through member", width: "240px", render: (a) => (a.assigned_material_name ?? <span className="font-semibold text-rose-700">Select a member for new buy</span>), copyValue: (a) => a.assigned_material_name ?? "" },
-    { key: "reason", label: "Basis", width: "160px", render: (a) => ({ SINGLE_SELECTED: "Your selection", CHEAPEST_SELECTED: "Cheapest of selected", NONE_SELECTED: "Nothing selected" }[a.reason] ?? a.reason) },
+    { key: "reason", label: "Basis", width: "160px", render: (a) => ({ SINGLE_SELECTED: "Your selection", CHEAPEST_SELECTED: "Cheapest of selected", AUTO_SELECTED: "Engine chose (nothing selected) — lowest total cost", NONE_SELECTED: "No member has a vendor — set up a vendor" }[a.reason] ?? a.reason) },
   ];
   const dailyColumns = [
     { key: "day", label: "Date", width: "100px" },

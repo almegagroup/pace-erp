@@ -4,8 +4,9 @@
  *
  * Owner decisions (common:docs/po22-common/OWNER-DECISIONS-2026-10-19-REQUIREMENT-AND-GROUPS.md):
  *   D3  group shortage is bought through the member the user selected for new buy in that month
- *       (six-month selection); several selected → cheapest last purchase price; none → stays a
- *       group risk ("select a member"), never charged to a member automatically.
+ *       (six-month selection); several selected → cheapest last purchase price. Nothing selected
+ *       → (owner 2026-10-20, replaces "stays a group risk") the engine picks the member itself,
+ *       labelled AUTO_SELECTED; only when no member has a vendor does it stay a group risk.
  *   Method C rule 6 (owner 2026-10-20): before that buy, the projection meets the group demand
  *       from the members' free stock — MOQ excess, arrivals — above their own Target days.
  *   D4  MOQ / order multiple / delivery lot come from the vendor-material master.
@@ -35,7 +36,8 @@ export type GroupAssignment = {
   group_id: string;
   month: string;
   assigned_material_id: string | null;
-  reason: "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "NONE_SELECTED";
+  /** AUTO_SELECTED: nothing selected, engine picked (owner 2026-10-20); NONE_SELECTED: no member has a vendor. */
+  reason: "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "AUTO_SELECTED" | "NONE_SELECTED";
   uncovered_qty: number;
 };
 
@@ -66,6 +68,26 @@ export function selectGroupMember(
   return { material_id: priced[0], reason: "CHEAPEST_SELECTED" };
 }
 
+/** Cost of buying `qty` of a member by `needDay` through its best vendor (null = no vendor). */
+export type MemberCost = { feasible: boolean; total_cost: number | null; lead_time_days: number | null };
+
+/**
+ * Owner 2026-10-20: when nothing is selected for a month the engine picks the member itself —
+ * among members whose vendor can arrive by the need date, the lowest total cost (price + landed
+ * cost + Rate + interest); if none can arrive in time, the fastest. No vendor at all → null.
+ */
+export function autoPickGroupMember(memberIds: readonly string[], costOf: (materialId: string) => MemberCost | null): string | null {
+  const options = [...memberIds].sort().map((id) => ({ id, cost: costOf(id) })).filter((o): o is { id: string; cost: MemberCost } => !!o.cost);
+  const inTime = options.filter((o) => o.cost.feasible);
+  if (inTime.length > 0) {
+    return inTime.sort((a, b) => (a.cost.total_cost ?? Number.POSITIVE_INFINITY) - (b.cost.total_cost ?? Number.POSITIVE_INFINITY)
+      || (a.cost.lead_time_days ?? Number.POSITIVE_INFINITY) - (b.cost.lead_time_days ?? Number.POSITIVE_INFINITY) || a.id.localeCompare(b.id))[0].id;
+  }
+  const withLead = options.filter((o) => o.cost.lead_time_days !== null);
+  return withLead.sort((a, b) => a.cost.lead_time_days! - b.cost.lead_time_days!
+    || (a.cost.total_cost ?? Number.POSITIVE_INFINITY) - (b.cost.total_cost ?? Number.POSITIVE_INFINITY) || a.id.localeCompare(b.id))[0]?.id ?? null;
+}
+
 export function assemblePlanningInput(args: {
   calendar: PlanningCalendar;
   rows: readonly RequirementRow[];
@@ -78,6 +100,8 @@ export function assemblePlanningInput(args: {
   policyMoqBase: ReadonlyMap<string, number | null>;
   /** Cost-ranked vendor per material (pass 2); absent = fastest feasible vendor. */
   vendorOverride?: ReadonlyMap<string, string>;
+  /** Full cost of a member buy (handler); absent = last price + lead-time feasibility. */
+  memberCost?: (materialId: string, qty: number, needDay: string) => MemberCost | null;
 }): PlanningAssembly {
   const { calendar } = args;
   const inHorizon = (day: string) => day >= calendar.asOf && day <= calendar.nmEnd;
@@ -120,6 +144,26 @@ export function assemblePlanningInput(args: {
     });
   }
 
+  const leadOf = (t: VendorTerm | null) => (!t || t.route_days === null ? null : (t.booking_days ?? 0) + t.route_days);
+  const fallbackCost = (id: string, _qty: number, needDay: string): MemberCost | null => {
+    const vendor = chooseVendor(args.vendorTerms.get(id) ?? []);
+    if (!vendor) return null;
+    const lead = leadOf(vendor);
+    const arrive = lead === null ? null : new Date(Date.parse(`${calendar.asOf}T00:00:00Z`) + lead * 86_400_000).toISOString().slice(0, 10);
+    return { feasible: arrive !== null && arrive <= needDay, total_cost: vendor.last_price, lead_time_days: lead };
+  };
+  const costOf = args.memberCost ?? fallbackCost;
+  // First uncovered day and total uncovered qty per group × month (the basis of an auto pick).
+  const monthNeed = new Map<string, { first: string; qty: number }>();
+  for (const group of args.groups) {
+    for (const [day, qty] of group.uncovered_by_day) {
+      if (!inHorizon(day) || qty <= EPSILON) continue;
+      const k = `${group.group_id}|${monthStart(day)}`;
+      const seen = monthNeed.get(k) ?? { first: day, qty: 0 };
+      monthNeed.set(k, { first: day < seen.first ? day : seen.first, qty: seen.qty + qty });
+    }
+  }
+
   const assignments: GroupAssignment[] = [];
   const assignedByKey = new Map<string, GroupAssignment>();
   for (const group of args.groups) {
@@ -129,7 +173,12 @@ export function assemblePlanningInput(args: {
       const key = `${group.group_id}|${month}`;
       let assignment = assignedByKey.get(key);
       if (!assignment) {
-        const pick = selectGroupMember(group.member_ids, args.selections.get(month) ?? new Set(), priceOf);
+        let pick = selectGroupMember(group.member_ids, args.selections.get(month) ?? new Set(), priceOf);
+        if (pick.reason === "NONE_SELECTED") {
+          const need = monthNeed.get(key)!;
+          const auto = autoPickGroupMember(group.member_ids, (id) => costOf(id, need.qty, need.first));
+          if (auto) pick = { material_id: auto, reason: "AUTO_SELECTED" };
+        }
         assignment = { group_id: group.group_id, month, assigned_material_id: pick.material_id, reason: pick.reason, uncovered_qty: 0 };
         assignedByKey.set(key, assignment);
         assignments.push(assignment);
