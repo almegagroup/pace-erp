@@ -207,3 +207,20 @@ each member's split (exclusive + drawn for groups) as decided by Method C.
 Open: Q-A meaning of "calibration row" (sheet CC reset of opening to book stock?); Q-B bridge
 qty = gap only vs domestic vendor MOQ; Q-C bridge placed into the plan automatically or flagged
 first (extra cost).
+
+### 11.1 Owner answers (2026-10-20) + fixed-MOQ rule for bridge / import
+
+- **Calibration row = the sheet's CC row** (the day the opening is reset to the actual book stock).
+  The user can move it to another date.
+- **Bridge order:** placed into the plan automatically **and** highlighted as an alert.
+- **Fixed MOQ is never broken, neither domestic nor import.** Quantities are rounded up to the
+  MOQ / multiple; the engine adjusts **timing**, not quantity below MOQ:
+  - *Domestic bridge, need 10 MT, MOQ 25 MT* → buy 25 MT. The extra 15 MT covers further days
+    (15 MT ÷ daily use), so the next import's need date moves later by that many days.
+  - *Import MOQ also fixed* → the import is not cut below its MOQ; its **date moves later** until
+    the arrival lands when cover falls to Target. Only quantity above the MOQ (in multiples) can be
+    reduced.
+  - If an MOQ forces cover above Max days, it is shown as an alert ("MOQ forces X days above Max,
+    ₹Y extra working capital"). The engine compares the options (another vendor with a smaller
+    MOQ, another member's surplus, shifting / skipping one import cycle) and picks the lowest
+    total cost; AI explains; the user decides.
