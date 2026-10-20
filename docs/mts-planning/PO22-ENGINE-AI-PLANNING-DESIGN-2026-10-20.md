@@ -153,20 +153,30 @@ the new run; lots already received or in the past drop out.
 
 ---
 
-## 9. Open questions for the owner
+## 9. Owner answers (2026-10-20)
 
-1. **"Mixed MOQ"** — does this mean the vendor's fixed MOQ (system must not change it)? Or a
-   case where one item has several vendors with different MOQs?
-2. **Rescheduled ETA** — kept only in planning (CSN Tracker unchanged), or should it also be
-   visible / editable in CSN Tracker?
-3. **Demand beyond the PO21 plan** for the ~6-month horizon: use PO21 plans when entered,
-   otherwise the average of the last N months' actual consumption? Which N?
-4. **Ordering cost** — is there a known cost per order (import: CHA, documentation, freight
-   minimum; domestic: freight), or should Max days / MOQ advice use only money tied up for now?
-</content>
-</invoke>
-<invoke name="Bash">
-<parameter name="command">cd /tmp/wt-dev && cp docs/mts-planning/PO22-ENGINE-AI-PLANNING-DESIGN-2026-10-20.md /tmp/claude-0/-home-user-pace-erp/3a269f15-c264-5891-93aa-2f56c1fcf06d/scratchpad/ && git add docs/mts-planning/PO22-ENGINE-AI-PLANNING-DESIGN-2026-10-20.md && git commit -q -m "docs(po22): Engine + AI full planning design draft (owner explanation 2026-10-20)
+1. **MOQ:** "Mixed MOQ" = **Fixed MOQ** (the vendor's). The system never changes it; it plans and
+   optimises inside it. The system advises only where no vendor MOQ exists.
+2. **Rescheduled ETA:** kept **in Planning**. CSN Tracker is not changed by the system; the user
+   updates the CSN themselves when needed.
+3. **Demand beyond the PO21 plan** (~6-month horizon): when PO21 has no plan for a month, use
+   (a) historical data for the same months, plus (b) the last 3 months' plans, plus (c) the
+   production and dispatch trend. *(Weighting of a/b/c to be proposed in the P1 detail and shown
+   to the owner before building.)*
+4. **Ordering cost:** taken from **AC01 (Landed Cost)** where available; otherwise Max days / MOQ
+   advice uses cost-to-cost comparison + working capital (money tied up) only.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_013jKozMvAYeqq79pYQGbFXz" && git push -q origin HEAD:dev && git log --oneline -1
+## 10. How the prorata works (owner question 2026-10-20)
+
+Demand comes from the stroke line (RM) or Pack BOM line (PM): **qty = dosage % × that day's
+planned production** of the prodshade (PM: per outer pack × packs).
+
+| Material is … | Its demand |
+|---|---|
+| **Only exclusive** (directly on a stroke / BOM line, no group) | That line's whole qty is its own. |
+| **Only in a group** | No fixed share. The group line's qty is one **pool**; each day Method C decides which member supplies it: narrow group first, the primary first when "Use Primary = Yes", otherwise the member with the most free stock above its own Safety days; the rest is bought (engine / AI choose the member + vendor). |
+| **Both exclusive and in a group** | Its own exclusive qty first (protected), **plus** whatever share Method C draws from it for the group pool(s) — only from stock above its own Safety days. |
+
+**Family total per day** = Σ exclusive qty of every member + Σ every group pool qty (each counted
+once — never per member, so no double count). The family grid shows the total and, under it,
+each member's split (exclusive + drawn for groups) as decided by Method C.
