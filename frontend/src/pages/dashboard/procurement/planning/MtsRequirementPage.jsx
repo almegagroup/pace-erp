@@ -24,6 +24,7 @@ import { resolveDefaultTransactionCompanyId } from "../../../../components/input
 import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
+import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
 import {
   getMtsRequirementAccess,
   getMtsRequirementPolicies,
@@ -185,7 +186,7 @@ export default function MtsRequirementPage() {
   const today = todayLocal();
   const [companyIdInput, setCompanyId] = useState("");
   const companyId = companyIdInput || resolveDefaultTransactionCompanyId(runtimeContext);
-  const [activeTab, setActiveTab] = useState("report");
+  const [activeTab, setActiveTab] = useState("action");
   const [planMonth, setPlanMonthState] = useState(today.slice(0, 7));
   const [asOf, setAsOf] = useState(today);
   const [demandMode, setDemandMode] = useState("CURRENT");
@@ -246,7 +247,7 @@ export default function MtsRequirementPage() {
             </label>
           ) : null}
           <div className="flex flex-wrap gap-1">
-            {[{ id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }, { id: "planning", label: "4. Planning" }, { id: "store", label: "5. Store Report" }].map((tab) => (
+            {[{ id: "action", label: "Action" }, { id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }, { id: "planning", label: "4. Planning" }, { id: "store", label: "5. Store Report" }].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -264,6 +265,8 @@ export default function MtsRequirementPage() {
 
         {!companyId ? (
           <p className="text-sm text-slate-500">Select a company.</p>
+        ) : activeTab === "action" ? (
+          <ActionTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} onOpen={setActiveTab} />
         ) : activeTab === "report" ? (
           <ReportTab
             companyId={companyId}
@@ -1340,6 +1343,45 @@ function usePlanningQuery(companyId, planMonth, asOf, demandAt) {
     queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
     enabled: Boolean(companyId && planMonth && asOf),
   });
+}
+
+/** Owner: Critical + Replenishment in one simple list — what to do, by when, why. */
+function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
+  const planningQ = usePlanningQuery(companyId, planMonth, asOf, demandAt);
+  const rows = useMemo(() => buildActionRows(planningQ.data ?? null), [planningQ.data]);
+  const counts = useMemo(() => Object.fromEntries(Object.keys(ACTION_LEVELS).map((level) => [level, rows.filter((r) => r.level === level).length])), [rows]);
+  const levelTone = { URGENT: "bg-rose-100 text-rose-800", SOON: "bg-amber-100 text-amber-800", PLAN: "bg-sky-100 text-sky-800", FIX_DATA: "bg-slate-100 text-slate-700" };
+  const columns = [
+    { key: "level", label: "Priority", width: "100px", render: (r) => <span className={`px-2 py-0.5 text-xs font-semibold ${levelTone[r.level]}`}>{ACTION_LEVELS[r.level].label}</span>, copyValue: (r) => ACTION_LEVELS[r.level].label },
+    { key: "action", label: "What to do", width: "240px", render: (r) => <span className="font-semibold text-slate-800">{r.action}</span> },
+    { key: "material", label: "Material / Group", width: "260px" },
+    { key: "code", label: "Code", width: "100px", render: (r) => dash(r.code) },
+    { key: "by_when", label: "By when", width: "100px", render: (r) => dash(r.by_when) },
+    { key: "qty", label: "Qty", width: "120px", align: "right", render: (r) => (r.qty === null || r.qty === undefined ? "—" : `${fmtQty(r.qty)} ${r.uom ?? ""}`), copyValue: (r) => r.qty ?? "" },
+    { key: "vendor", label: "Vendor", width: "220px", render: (r) => dash(r.vendor) },
+    { key: "shortage_day", label: "Runs out", width: "100px", render: (r) => (r.shortage_day ? <span className="font-semibold text-rose-700">{r.shortage_day}</span> : "—"), copyValue: (r) => r.shortage_day ?? "" },
+    { key: "why", label: "Why", width: "420px" },
+  ];
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        {Object.entries(ACTION_LEVELS).map(([level, meta]) => (
+          <span key={level} className={`px-2 py-1 font-semibold ${levelTone[level]}`}>{meta.label}: {counts[level] ?? 0}</span>
+        ))}
+        <span className="text-xs text-slate-500">Advisory only — never creates a PO. Details and vendor cost comparison are in 4. Planning.</span>
+        <button type="button" onClick={() => onOpen("planning")} className="h-8 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Open Planning</button>
+      </div>
+      {planningQ.error ? <p className="text-sm text-rose-700">{errorText(planningQ.error)}</p> : null}
+      <ErpDenseGrid
+        {...GRID_PROPS}
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.id}
+        emptyMessage={planningQ.isLoading ? "Calculating…" : "Nothing to do — every material is covered through next month."}
+        maxHeight="65vh"
+      />
+    </div>
+  );
 }
 
 function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
