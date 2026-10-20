@@ -471,7 +471,11 @@ export async function explainMtsPlanningHandler(req: Request, ctx: ReqHandlerCon
     const { data: reserved, error: reserveError } = await serviceRoleClient.schema("erp_planning").rpc("reserve_mts_ai_budget", {
       p_company_id: companyId, p_month: month, p_tokens: reserve, p_cap: cap,
     });
-    if (reserveError) return fail(req, ctx, "AI_BUDGET_UNAVAILABLE", 503, "AI budget tracking is not available yet.");
+    if (reserveError) {
+      // Keep the real database reason in the server log (it was invisible in the first PROD incident).
+      console.error("[mts_planning] AI_BUDGET_UNAVAILABLE", reserveError.code ?? "", reserveError.message ?? "");
+      return fail(req, ctx, "AI_BUDGET_UNAVAILABLE", 503, "AI budget tracking is not available yet. Planning itself still works.");
+    }
     if (reserved !== true) return fail(req, ctx, "AI_BUDGET_EXCEEDED", 429, "This company's monthly AI budget is used up. Planning itself still works.");
     let used = 0;
     try {
@@ -488,7 +492,8 @@ export async function explainMtsPlanningHandler(req: Request, ctx: ReqHandlerCon
       const code = error instanceof AiProviderError ? error.code : "UNAVAILABLE";
       return fail(req, ctx, code === "NOT_CONFIGURED" ? "AI_NOT_CONFIGURED" : "AI_PROVIDER_UNAVAILABLE", code === "NOT_CONFIGURED" ? 503 : 502, "The AI explanation is not available right now. Planning itself still works.");
     } finally {
-      await serviceRoleClient.schema("erp_planning").rpc("settle_mts_ai_budget", { p_company_id: companyId, p_month: month, p_reserved: reserve, p_used: used });
+      const { error: settleError } = await serviceRoleClient.schema("erp_planning").rpc("settle_mts_ai_budget", { p_company_id: companyId, p_month: month, p_reserved: reserve, p_used: used });
+      if (settleError) console.error("[mts_planning] AI budget settle failed", settleError.code ?? "", settleError.message ?? "");
     }
   } catch (error) {
     return handleError(req, ctx, error, "MTS_PLANNING_AI_FAILED", "Could not prepare the AI explanation.");
