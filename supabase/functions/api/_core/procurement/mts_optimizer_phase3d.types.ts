@@ -47,6 +47,30 @@ export type OptimizerMaterialPlanningPolicy = Readonly<{
   configured_lead_time_days: number | null;
   booking_time_days?: number | null;
   route_lead_time_days?: number | null;
+  /**
+   * P2 (owner 2026-10-20): days of cover a lot adds beyond Target — Max days = Target + cycle.
+   * Absent / null = legacy rule (restore just above Target).
+   */
+  cycle_days?: number | null;
+  /**
+   * P2: every vendor that can supply this material. Each lot picks the cheapest one that arrives
+   * in time, else the fastest (a bridge). Its fixed MOQ / multiple / lot are never broken.
+   */
+  vendor_options?: readonly OptimizerVendorOption[];
+}>;
+
+export type OptimizerVendorOption = Readonly<{
+  vendor_id: string;
+  /** Booking + route; null = unknown (option skipped). */
+  lead_time_days: number | null;
+  booking_time_days?: number | null;
+  moq_qty_base: number | null;
+  order_multiple_qty_base: number | null;
+  delivery_lot_qty_base?: number | null;
+  /** Comparable INR cost per base unit (price × FX + landed); null = unknown (ranked last). */
+  unit_cost: number | null;
+  /** Best order cycle for this vendor (economic, working-capital aware); null = use policy.cycle_days. */
+  cycle_days: number | null;
 }>;
 
 /** Members of a group whose demand rows carry this group_id (Method C rule 6). */
@@ -133,6 +157,14 @@ export type OptimizerAdvisoryBuy = Readonly<{
   status: "NO_BUY" | "UNKNOWN_POLICY" | "UNKNOWN_LEAD_TIME" | "ADVISORY" | "ADVISORY_LATE";
   reason: string;
   advisory_only: true;
+  /** P2: vendor chosen for this lot (vendor_options); absent = legacy single vendor. */
+  vendor_id?: string | null;
+  /** P2: cover the order is sized to (Target + cycle). */
+  max_cover_days?: number | null;
+  /** P2: a faster, costlier vendor because the cheapest one cannot arrive in time. */
+  bridge?: boolean;
+  /** P2: the cheapest vendor that would have been used if there were time. */
+  cheapest_vendor_id?: string | null;
 }>;
 
 export type OptimizerProjectionResult = Readonly<{

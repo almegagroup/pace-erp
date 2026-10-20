@@ -114,6 +114,26 @@ function qtyToRestore(demand: readonly number[], index: number, closing: number,
   return Math.max(0, roundQty(need - closing));
 }
 
+/**
+ * P2 (owner 2026-10-20): the vendor for a lot needed on `needDay` — the cheapest option that can
+ * arrive in time; if none can, the fastest (late). `bridge` = the cheapest overall cannot make it
+ * and a costlier one is used for this lot. null = no option with a known lead time.
+ */
+export function pickVendorOption(policy: OptimizerMaterialPlanningPolicy, needDay: string, asOf: string) {
+  const options = (policy.vendor_options ?? []).filter((o) => validDays(o.lead_time_days));
+  if (options.length === 0) return null;
+  const cost = (o: { unit_cost: number | null }) => (o.unit_cost === null ? Number.POSITIVE_INFINITY : o.unit_cost);
+  const byCost = [...options].sort((a, b) => cost(a) - cost(b) || a.lead_time_days! - b.lead_time_days! || a.vendor_id.localeCompare(b.vendor_id));
+  const inTime = byCost.filter((o) => addDays(needDay, -o.lead_time_days!) >= asOf);
+  const cheapest = byCost[0];
+  if (inTime.length > 0) {
+    const option = inTime[0];
+    return { option, bridge: option.vendor_id !== cheapest.vendor_id, cheapest: cheapest.vendor_id };
+  }
+  const fastest = [...options].sort((a, b) => a.lead_time_days! - b.lead_time_days! || cost(a) - cost(b) || a.vendor_id.localeCompare(b.vendor_id))[0];
+  return { option: fastest, bridge: fastest.vendor_id !== cheapest.vendor_id, cheapest: cheapest.vendor_id };
+}
+
 type MaterialState = {
   id: string;
   policy: OptimizerMaterialPlanningPolicy | undefined;
@@ -286,20 +306,32 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
               const lots = [...last.lots, { lot_no: last.lots.length + 1, plant_eta: day, qty_base: lot }];
               st.buys[st.buys.length - 1] = freeze({ ...last, lots });
             } else {
-              const orderQty = applyOrderConstraints(required, policy!);
+              // P2: pick the vendor for this lot, size it to Max days (Target + cycle).
+              const pick = pickVendorOption(policy!, day, input.as_of);
+              const lotLead = pick ? pick.option.lead_time_days : leadTime;
+              const cycle = pick?.option.cycle_days ?? policy!.cycle_days ?? null;
+              const sizedRequired = cycle !== null && cycle > 0 ? qtyToRestore(demand, index, closing, target! + cycle) : required;
+              const constraints = pick
+                ? { ...policy!, vendor_moq_qty_base: pick.option.moq_qty_base, order_multiple_qty_base: pick.option.order_multiple_qty_base, delivery_lot_qty_base: pick.option.delivery_lot_qty_base ?? null }
+                : policy!;
+              const orderQty = applyOrderConstraints(sizedRequired, constraints);
+              const p2 = pick || cycle !== null
+                ? { vendor_id: pick?.option.vendor_id ?? null, max_cover_days: cycle !== null ? roundQty(target! + cycle) : null, bridge: pick?.bridge ?? false, cheapest_vendor_id: pick?.cheapest ?? null }
+                : {};
               st.sequence += 1;
-              if (leadTime === null) {
+              if (lotLead === null) {
                 st.buys.push(freeze({
-                  material_id: materialId, sequence: st.sequence, required_qty_base: required, recommended_po_qty_base: orderQty, recommended_po_by: null,
+                  material_id: materialId, sequence: st.sequence, required_qty_base: sizedRequired, recommended_po_qty_base: orderQty, recommended_po_by: null,
                   estimated_plant_eta: day, need_date: day, lots: [], total_lead_time_days: null, status: "UNKNOWN_LEAD_TIME",
                   reason: "Lead time is missing (vendor route lead time / Booking Time); PO-by date is unknown and no lot is projected.", advisory_only: true as const,
+                  ...p2,
                 }));
                 st.pendingUntil = allDays.length; // one unknown-lead-time recommendation is enough
               } else if (orderQty !== null) {
-                const lots = splitIntoLots(orderQty, policy!.delivery_lot_qty_base);
-                const poBy = addDays(day, -leadTime);
+                const lots = splitIntoLots(orderQty, constraints.delivery_lot_qty_base);
+                const poBy = addDays(day, -lotLead);
                 const late = poBy < input.as_of;
-                const eta = late ? addDays(input.as_of, leadTime) : day;
+                const eta = late ? addDays(input.as_of, lotLead) : day;
                 const etaIndex = allDays.indexOf(eta);
                 const firstLot = lots.shift()!;
                 st.queuedLots.push(...lots);
@@ -318,13 +350,16 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
                   st.pendingUntil = allDays.length; // earliest arrival is after the horizon
                 }
                 st.buys.push(freeze({
-                  material_id: materialId, sequence: st.sequence, required_qty_base: required, recommended_po_qty_base: orderQty,
-                  recommended_po_by: late ? input.as_of : poBy, estimated_plant_eta: eta, need_date: day, lots: plannedLots, total_lead_time_days: leadTime,
+                  material_id: materialId, sequence: st.sequence, required_qty_base: sizedRequired, recommended_po_qty_base: orderQty,
+                  recommended_po_by: late ? input.as_of : poBy, estimated_plant_eta: eta, need_date: day, lots: plannedLots, total_lead_time_days: lotLead,
                   status: late ? "ADVISORY_LATE" : "ADVISORY",
                   reason: late
                     ? `PO-by date ${poBy} has already passed; ordering today arrives ${eta}. The cover gap until then stays visible.`
-                    : "Deterministic Target-cover replenishment; lead time = Booking Time + route lead time.",
+                    : pick?.bridge
+                      ? "Bridge: the cheapest vendor cannot arrive in time, so this lot uses the fastest vendor; the cheaper vendor takes the later lots."
+                      : cycle !== null ? "Sized to Max days (Target + best order cycle); vendor MOQ / multiple respected." : "Deterministic Target-cover replenishment; lead time = Booking Time + route lead time.",
                   advisory_only: true as const,
+                  ...p2,
                 }));
               }
             }

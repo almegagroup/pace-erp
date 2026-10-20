@@ -100,3 +100,29 @@ export function landedAdder(rows: ReadonlyArray<{ total_cost: number; received_b
   const cost = valid.reduce((s, r) => s + r.total_cost, 0);
   return { adder: Math.round((cost / qty) * 10000) / 10000, basis: valid.every((r) => r.status === "POSTED") ? "FINAL" : "PROVISIONAL" };
 }
+
+/*
+ * P2 Max days (owner 2026-10-20: engine + AI, never user-entered; working capital matters).
+ * Best order cycle = economic order interval √(2·S / (D·H)):
+ *   S = cost of one order (average AC01 landed cost per GRN of this vendor + material)
+ *   D = average daily use, H = money tied up per unit per day = price (INR) × interest % / 365.
+ * Clamped to 7 – 90 days. Missing data → null (the caller uses DEFAULT_CYCLE_DAYS and says so).
+ * Max days = Target + cycle.
+ */
+export const MIN_CYCLE_DAYS = 7;
+export const MAX_CYCLE_DAYS = 90;
+export const DEFAULT_CYCLE_DAYS = 30;
+
+export function economicCycleDays(input: { order_cost: number | null; unit_price_inr: number | null; interest_pct: number | null; daily_use: number }): number | null {
+  const { order_cost: s, unit_price_inr: p, interest_pct: i, daily_use: d } = input;
+  if (s === null || p === null || i === null || !(s > 0) || !(p > 0) || !(i > 0) || !(d > 0)) return null;
+  const holdingPerDay = p * (i / 100) / 365;
+  const days = Math.sqrt((2 * s) / (d * holdingPerDay));
+  return Math.min(MAX_CYCLE_DAYS, Math.max(MIN_CYCLE_DAYS, Math.round(days)));
+}
+
+/** Average landed cost of one order (per GRN) for a vendor + material; null = no history. */
+export function averageOrderCost(rows: ReadonlyArray<{ total_cost: number }>): number | null {
+  const valid = rows.filter((r) => Number.isFinite(r.total_cost) && r.total_cost > 0);
+  return valid.length === 0 ? null : Math.round((valid.reduce((s, r) => s + r.total_cost, 0) / valid.length) * 100) / 100;
+}
