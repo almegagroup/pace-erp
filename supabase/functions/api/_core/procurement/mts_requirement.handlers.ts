@@ -48,6 +48,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { leadTimeMetrics } from "./historical_procurement.logic.ts";
 import { loadCompanySkus } from "./mts_customer_plan.handlers.ts";
+import { buildForecastPlanLines, referenceMonths, type SkuForecast } from "./mts_item_plan.logic.ts";
 import { normalizePlanMonth, rpcErrorCode } from "./mts_customer_plan.logic.ts";
 import {
   buildCalendar,
@@ -66,6 +67,9 @@ import {
   type MaterialInfo,
   type PackBomInfo,
   type PlanningCalendar,
+  applyCompanyMaterialMapping,
+  applyInboundReschedules,
+  effectivePlanAt,
   partitionPoLineInbound,
   rToRTransferRoute,
   type PlanLineVersion,
@@ -170,6 +174,13 @@ export async function loadConversions(ids: string[]): Promise<Map<string, UomCon
   return byMaterial;
 }
 
+/** Material ids with an ACTIVE company mapping (erp_master.material_company_ext). */
+export async function loadCompanyMappedMaterialIds(companyId: string): Promise<Set<string>> {
+  const rows = await fetchAllPages(() => serviceRoleClient.schema("erp_master").from("material_company_ext")
+    .select("material_id").eq("company_id", companyId).eq("status", "ACTIVE").order("material_id"), "MTS_REQ_COMPANY_MAPPING_LOAD_FAILED");
+  return new Set(rows.map((r) => text(r.material_id)).filter(Boolean));
+}
+
 export type FormulationMasters = {
   skus: Map<string, SkuInfo>;
   ambiguousCount: number;
@@ -178,6 +189,8 @@ export type FormulationMasters = {
   groupMembers: Map<string, GroupMember[]>;
   packBoms: Map<string, PackBomInfo>;
   materialUniverse: string[];
+  /** Materials with an ACTIVE company mapping (material_company_ext) — nothing else is shown. */
+  mappedMaterialIds: Set<string>;
   prodshadeIds: string[];
   warnings: Warning[];
 };
@@ -230,15 +243,32 @@ export async function loadFormulationMasters(companyId: string, extraStrokeIds: 
   ]);
 
   const groupIds = unique([...strokeLines, ...bomLines].map((l) => text(l.material_group_id)));
-  const memberRows = groupIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
-    .schema("erp_master").from("material_category_group_member")
-    .select("id, group_id, material_id, active").in("group_id", chunk));
+  const [memberRows, mappedMaterialIds] = await Promise.all([
+    groupIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
+      .schema("erp_master").from("material_category_group_member")
+      .select("id, group_id, material_id, active").in("group_id", chunk)),
+    loadCompanyMappedMaterialIds(companyId),
+  ]);
+  const directMaterialIds = [
+    ...strokeLines.map((l) => text(l.material_id)),
+    ...bomLines.filter((l) => text(l.line_type) === "INPUT").map((l) => text(l.material_id)),
+  ];
+  const mapping = applyCompanyMaterialMapping({
+    directMaterialIds,
+    members: memberRows.map((member) => ({
+      material_id: text(member.material_id), active: member.active !== false, group_id: text(member.group_id), source_id: text(member.id) || undefined,
+    })),
+    mapped: mappedMaterialIds,
+  });
   const groupMembers = new Map<string, GroupMember[]>();
-  for (const member of memberRows) {
-    const key = text(member.group_id);
-    groupMembers.set(key, [...(groupMembers.get(key) ?? []), {
-      material_id: text(member.material_id), active: member.active !== false, group_id: key, source_id: text(member.id) || undefined,
-    }]);
+  for (const member of mapping.members) {
+    const key = member.group_id ?? "";
+    groupMembers.set(key, [...(groupMembers.get(key) ?? []), member]);
+  }
+  if (mapping.unmappedMembers.length > 0) {
+    const codes = await loadMaterialRows(mapping.unmappedMembers);
+    const label = (id: string) => text(codes.get(id)?.pace_code) || text(codes.get(id)?.material_name) || id;
+    warnings.push({ code: "GROUP_MEMBER_NOT_MAPPED_TO_COMPANY", message: `Group member(s) not mapped to this company are left out of the group pool: ${mapping.unmappedMembers.map(label).join(", ")}.` });
   }
 
   const strokes = new Map<string, StrokeInfo>();
@@ -292,17 +322,13 @@ export async function loadFormulationMasters(companyId: string, extraStrokeIds: 
     });
   }
 
-  const universe = unique([
-    ...strokeLines.map((l) => text(l.material_id)),
-    ...bomLines.filter((l) => text(l.line_type) === "INPUT").map((l) => text(l.material_id)),
-    ...memberRows.filter((m) => m.active !== false).map((m) => text(m.material_id)),
-  ]);
+  const universe = mapping.universe;
 
   const skus = new Map<string, SkuInfo>();
   for (const sku of companySkus) {
     skus.set(sku.sku_material_id, { sku_material_id: sku.sku_material_id, prodshade_material_id: sku.prodshade_material_id, base_uom_code: "", kg_per_base_unit: null });
   }
-  return { skus, ambiguousCount: ambiguous.length, strokes, currentStrokeByProdshade, groupMembers, packBoms, materialUniverse: universe, prodshadeIds, warnings };
+  return { skus, ambiguousCount: ambiguous.length, strokes, currentStrokeByProdshade, groupMembers, packBoms, materialUniverse: universe, mappedMaterialIds, prodshadeIds, warnings };
 }
 
 /**
@@ -633,6 +659,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
     }
     const input: PoLineInboundInput = {
       material_id: materialId,
+      po_line_id: text(line.id),
       po_number: text(po.po_number),
       line_number: Number(line.line_number ?? 0),
       open_qty: Number(line.open_qty ?? 0),
@@ -652,6 +679,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
         return [{ qty_base: base, reference: `GE ${text(gate.ge_number)}`, date: text(gate.ge_date) || null }];
       }),
       csns: lineCsns.filter((c) => !foreign.includes(c)).map((c) => ({
+        id: text(c.id),
         csn_number: text(c.csn_number),
         status: text(c.status),
         dispatch_qty: num(c.dispatch_qty),
@@ -678,6 +706,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
     events.push({
       material_id: materialId, qty: base, date: text(csn.eta_to_plant_calculated) || null, kind: "STO_IN_TRANSIT",
       date_source: text(csn.eta_to_plant_calculated) ? "CSN_ETA_TO_PLANT" : "NONE", reference: `STO CSN ${text(csn.csn_number)} (${text(csn.status)})`,
+      csn_id: text(csn.id),
     });
   }
   events.push(...transfers.events);
@@ -878,12 +907,68 @@ export async function getMtsRequirementAccessHandler(req: Request, ctx: ReqHandl
   }
 }
 
+/** Current planning-side rescheduled ETAs (empty when the table is not deployed yet). */
+async function loadInboundReschedules(companyId: string): Promise<Map<string, string | null>> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").from("inbound_eta_reschedule")
+    .select("reschedule_key, rescheduled_eta").eq("company_id", companyId).eq("is_current", true).limit(5000);
+  if (error) {
+    const code = String((error as { code?: string }).code ?? "");
+    if (code === "42P01" || code === "PGRST205" || code === "PGRST106") return new Map();
+    throw new Error("MTS_REQ_RESCHEDULE_LOAD_FAILED");
+  }
+  return new Map(((data ?? []) as JsonRecord[]).map((r) => [text(r.reschedule_key), text(r.rescheduled_eta).slice(0, 10) || null]));
+}
+
+/**
+ * Forecast for horizon months with no PO21 plan (owner 2026-10-20): history + ERP dispatch
+ * actuals (history_planning_actuals, KG) and the last 3 months' effective plan.
+ */
+async function loadBeyondPlanForecast(
+  companyId: string, asOf: string, months: string[], planLines: PlanLineVersion[], skus: Map<string, SkuInfo>,
+) {
+  const asOfMonth = `${asOf.slice(0, 7)}-01`;
+  const refs = referenceMonths(asOfMonth);
+  const shift = (month: string, delta: number) => {
+    const y = Number(month.slice(0, 4)); const m = Number(month.slice(5, 7)) - 1 + delta;
+    return `${y + Math.floor(m / 12)}-${String((((m % 12) + 12) % 12) + 1).padStart(2, "0")}-01`;
+  };
+  const from = shift(asOfMonth, -27);
+  const [actualsRes, refLines] = await Promise.all([
+    serviceRoleClient.rpc("history_planning_actuals", { p_company_id: companyId, p_from: from, p_to_exclusive: asOfMonth }),
+    loadPlanLines(companyId, refs),
+  ]);
+  if (actualsRes.error) throw new Error("MTS_REQ_FORECAST_ACTUALS_FAILED");
+  const result = (actualsRes.data ?? {}) as JsonRecord;
+  const coverage = (result.coverage ?? {}) as Record<string, unknown>;
+  const asMonths = (value: unknown) => (Array.isArray(value) ? value : []).map((m) => text(m).slice(0, 10));
+  const coveredMonths = new Set([...asMonths(coverage.DISPATCH), ...asMonths(coverage.ERP_LIVE)]);
+  const dispatchKg = new Map<string, number>();
+  for (const row of (Array.isArray(result.rows) ? result.rows : []) as JsonRecord[]) {
+    if (text(row.metric) !== "DISPATCH") continue;
+    const key = `${text(row.material_id)}|${text(row.month).slice(0, 10)}`;
+    dispatchKg.set(key, (dispatchKg.get(key) ?? 0) + Number(row.qty ?? 0));
+  }
+  const planKg = new Map<string, number>();
+  for (const entry of effectivePlanAt(refLines, null)) {
+    const factor = skus.get(entry.sku_material_id)?.kg_per_base_unit;
+    if (!factor || entry.effective_qty === null) continue;
+    const key = `${entry.sku_material_id}|${entry.plan_month}`;
+    planKg.set(key, (planKg.get(key) ?? 0) + entry.effective_qty * factor);
+  }
+  const plannedMonths = new Set([...planLines, ...refLines].filter((l) => !l.is_cancelled).map((l) => l.plan_month));
+  return buildForecastPlanLines([...skus.keys()], months, asOfMonth, { dispatchKg, coveredMonths, planKg, plannedMonths },
+    (sku) => skus.get(sku)?.kg_per_base_unit ?? null);
+}
+
 /**
  * Loads every source and runs the approved Requirement pipeline once. Shared by the
  * Requirement report and the Planning (Phase 3D) view so both use identical numbers.
  */
-export async function computeRequirement(companyId: string, calendar: PlanningCalendar, asOf: string, today: string, demandAt: string | null) {
-  const months = [calendar.cmStart, calendar.nmStart];
+export async function computeRequirement(
+  companyId: string, calendar: PlanningCalendar, asOf: string, today: string, demandAt: string | null,
+  options: { forecastBeyondPlan?: boolean } = {},
+) {
+  const months = calendar.months;
 
   const [planLines, settings, policyLoad] = await Promise.all([
     loadPlanLines(companyId, months),
@@ -892,7 +977,7 @@ export async function computeRequirement(companyId: string, calendar: PlanningCa
   ]);
   const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
   const masters = await loadFormulationMasters(companyId, periodStrokeIds);
-  const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+  const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
   const skuIds = [...masters.skus.keys()];
   const [materialRows, conversions] = await Promise.all([
     loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]),
@@ -906,15 +991,23 @@ export async function computeRequirement(companyId: string, calendar: PlanningCa
     const baseUnit = (info?.base_uom_code ?? "").toUpperCase();
     sku.kg_per_base_unit = !info ? null : baseUnit === "KG" ? 1 : buildToBaseFactors("KG", conversions.get(skuId) ?? [])[baseUnit] ?? null;
   }
+  // P1 (owner 2026-10-20): horizon months without any PO21 plan get a forecast.
+  const forecast = options.forecastBeyondPlan && months.length > 2
+    ? await loadBeyondPlanForecast(companyId, asOf, months, planLines, masters.skus)
+    : { lines: [] as PlanLineVersion[], forecasts: [] as SkuForecast[], forecastMonths: [] as string[] };
+  planLines.push(...forecast.lines);
   const universeSet = new Set(universe);
   const applyReservations = asOf >= today;
-  const [stockLoad, reservations, inbound, leadTimes, locationRoles] = await Promise.all([
+  const [stockLoad, reservations, inboundRaw, leadTimes, locationRoles, reschedules] = await Promise.all([
     loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
     applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
     loadInbound(companyId, asOf, materials, universeSet),
     loadLeadTimes(companyId, asOf, universe),
     loadLocationRoles(companyId),
+    loadInboundReschedules(companyId),
   ]);
+  // Planning-side rescheduled ETAs (CSN Tracker itself is never changed).
+  const inbound = { ...inboundRaw, events: applyInboundReschedules(inboundRaw.events, reschedules) };
 
   const prodshadeLabels = new Map(masters.prodshadeIds.map((pid) => [pid, text(materialRows.get(pid)?.material_name) || pid]));
   const input = {
@@ -938,6 +1031,7 @@ export async function computeRequirement(companyId: string, calendar: PlanningCa
     policies: policyLoad.policies,
     leadTimes,
     materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
+    mappedMaterialIds: [...masters.mappedMaterialIds].sort(),
     locationRoles: locationRoles ?? undefined,
     committedTransferOut: inbound.committedTransferOut,
   };
@@ -945,7 +1039,7 @@ export async function computeRequirement(companyId: string, calendar: PlanningCa
   const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
   return {
     calendar, planLines, settings, policyLoad, masters, materialRows, materials, applyReservations,
-    inbound, leadTimes, locationRoles, input, output, fingerprint,
+    inbound, leadTimes, locationRoles, input, output, fingerprint, forecast, reschedules,
   };
 }
 
@@ -1092,7 +1186,22 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     if (!locationRoles) {
       notes.push({ code: "LOCATION_POLICY_NOT_SET", message: "No planning location policy for this company yet: stock is counted only at each stroke / Pack BOM line's own location (legacy rule)." });
     }
-    notes.push({ code: "CROSS_COMPANY_ALLOCATION_NOT_AVAILABLE", message: "No cross-company production allocation is stored in PO21 yet; all demand is exploded with this company's Stroke and Pack BOM." });
+    // PO21 cross-company production (owner 2026-10-20): say exactly what moved in / out, never a stale "not available".
+    const outgoing = await loadProductionAssignments({ company_id: companyId }, [calendar.cmStart, calendar.nmStart]);
+    const away = outgoing.filter((a) => text(a.production_company_id) && text(a.production_company_id) !== companyId);
+    const incomingKeys = unique(planLines.filter((l) => l.origin_company_id).map((l) => `${l.origin_company_id}|${l.plan_month}|${l.sku_material_id}`));
+    if (incomingKeys.length > 0 || away.length > 0) {
+      const codeIds = unique([...incomingKeys.map((k) => k.split("|")[0]), ...away.map((a) => text(a.production_company_id))]);
+      const { data: codeRows } = await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", codeIds);
+      const codeOf = new Map(((codeRows ?? []) as JsonRecord[]).map((c) => [text(c.id), text(c.company_code)]));
+      const countBy = (ids: string[]) => [...ids.reduce((m, id) => m.set(id, (m.get(id) ?? 0) + 1), new Map<string, number>())]
+        .map(([id, n]) => `${n} from ${codeOf.get(id) ?? "another company"}`).join(", ");
+      const parts = [
+        incomingKeys.length > 0 ? `made here for other companies: ${countBy(incomingKeys.map((k) => k.split("|")[0])).replace(/ from /g, " SKU-month(s) of ")}` : "",
+        away.length > 0 ? `this company's SKU-months made elsewhere (not planned here): ${countBy(away.map((a) => text(a.production_company_id))).replace(/ from /g, " at ")}` : "",
+      ].filter(Boolean);
+      notes.push({ code: "CROSS_COMPANY_PRODUCTION", message: `PO21 cross-company production in CM/NM — ${parts.join("; ")}.` });
+    }
 
     return okResponse({
       company_id: companyId,
@@ -1144,7 +1253,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
       loadPolicies(companyId),
       canMaintainCompanyResource(ctx, companyId, RESOURCE_POLICY, "WRITE"),
     ]);
-    const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+    const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
     const [materialRows, conversions, leadTimes] = await Promise.all([
       loadMaterialRows(universe),
       loadConversions(universe),
@@ -1263,7 +1372,7 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
     // A policy may only be saved for a material of this company's MTS strokes / Pack BOMs
     // (or one that already has a policy here) — never for an unrelated material.
     const [masters, policyLoad] = await Promise.all([loadFormulationMasters(companyId, []), loadPolicies(companyId)]);
-    const allowed = new Set([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+    const allowed = new Set([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
     const rows = [];
     for (const row of raw) {
       const materialId = text(row.material_id);

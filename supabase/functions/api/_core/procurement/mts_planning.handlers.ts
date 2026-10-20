@@ -41,9 +41,13 @@ const num = (value: unknown): number | null => {
 };
 const unique = (values: Array<string | null | undefined>) => [...new Set(values.filter((v): v is string => Boolean(v)))];
 
-type PlanningParams = { companyId: string; planMonth: string; asOf: string; demandAt: string | null; today: string };
+type PlanningParams = {
+  companyId: string; planMonth: string; asOf: string; demandAt: string | null; today: string;
+  /** P1 item plan: months after NM (horizon = CM + NM + extra) with a beyond-plan forecast. */
+  extraMonths?: number;
+};
 
-function readParams(url: URL | JsonRecord, today: string): { params?: Omit<PlanningParams, "companyId">; error?: [string, string] } {
+export function readParams(url: URL | JsonRecord, today: string): { params?: Omit<PlanningParams, "companyId">; error?: [string, string] } {
   const get = (key: string) => (url instanceof URL ? url.searchParams.get(key) : (url[key] as string | undefined) ?? null);
   const planMonth = normalizePlanMonth(get("plan_month"));
   if (!planMonth) return { error: ["MTS_REQ_INVALID_MONTH", "plan_month must be YYYY-MM."] };
@@ -204,9 +208,9 @@ function costOptionsFor(
 
 /** Full planning payload (labels resolved, R-01: no raw ids shown). */
 export async function computePlanning(p: PlanningParams) {
-  const calendar = buildCalendar(p.planMonth, p.asOf);
+  const calendar = buildCalendar(p.planMonth, p.asOf, p.extraMonths ?? 0);
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
-  const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt);
+  const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, { forecastBeyondPlan: (p.extraMonths ?? 0) > 0 });
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
   const [vendorTerms, selections] = await Promise.all([
@@ -215,7 +219,7 @@ export async function computePlanning(p: PlanningParams) {
   ]);
   const policyMoqBase = new Map(req.output.rows.map((r) => [r.material_id, moqInBase(r.policy, req.materials.get(r.material_id))]));
   const baseArgs = { calendar, rows: req.output.rows, groups: req.output.groups, policies: req.policyLoad.policies, vendorTerms, selections: selections.map, policyMoqBase };
-  const horizonDays = Math.max(1, Math.round((Date.parse(`${calendar.nmEnd}T00:00:00Z`) - Date.parse(`${calendar.asOf}T00:00:00Z`)) / 86_400_000) + 1);
+  const horizonDays = Math.max(1, Math.round((Date.parse(`${calendar.horizonEnd}T00:00:00Z`) - Date.parse(`${calendar.asOf}T00:00:00Z`)) / 86_400_000) + 1);
   const dailyUseOf = (id: string, demand: ReadonlyArray<{ material_id: string | null; qty_base: number }>) =>
     demand.filter((d) => d.material_id === id).reduce((s, d) => s + d.qty_base, 0) / horizonDays;
   const carryingOf = (id: string) => req.output.rows.find((r) => r.material_id === id)?.policy?.carrying_rate_per_uom ?? null;
@@ -295,7 +299,7 @@ export async function computePlanning(p: PlanningParams) {
   for (const row of req.output.rows) row.inbound_events.forEach((event, index) => eventRef.set(`A|${row.material_id}|${index}|${event.reference}`, event.reference));
 
   const activeMaterials = new Set(projection.rows.filter((r) => r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0).map((r) => r.material_id));
-  return {
+  const payload = {
     company_id: p.companyId,
     calendar: { as_of: calendar.asOf, cm_start: calendar.cmStart, cm_end: calendar.cmEnd, nm_start: calendar.nmStart, nm_end: calendar.nmEnd },
     demand_version: { demand_at: p.demandAt, label: p.demandAt ? `Plan as at ${p.demandAt}` : "Current effective plan" },
@@ -346,6 +350,10 @@ export async function computePlanning(p: PlanningParams) {
       uom: uom(row.material_id),
     })),
   };
+  // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
+  const internal = { req, assembly, projection, calendar };
+  Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
+  return payload as typeof payload & { readonly _internal: typeof internal };
 }
 
 /** PO21 product groups (mother → child → prodshade) of the company; read-only. */

@@ -1882,6 +1882,15 @@ export function explainMtsPlanning(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/planning/ai-explain", data);
 }
 
+// PO22 P1 item / family plan (~6 months) and planning-side rescheduled ETA (CSN Tracker untouched).
+export function getMtsItemPlan(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/item-plan", undefined, params);
+}
+
+export function saveMtsInboundReschedule(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/inbound-reschedule", data);
+}
+
 // PO22 optimizer six-month new-buy selection (Phase 3B endpoints).
 export function getMtsOptimizerSelections(params) {
   return fetchProcurement("GET", "/api/procurement/mts-optimizer/selections", undefined, params);

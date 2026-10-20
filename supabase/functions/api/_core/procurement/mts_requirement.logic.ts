@@ -90,19 +90,27 @@ export type PlanningCalendar = {
   cmDaysLeft: number;     // inclusive: as-of .. CM end
   cmDaysElapsed: number;  // CM start .. day before as-of
   nmDaysInMonth: number;
-  horizon: string[];      // every day CM start .. NM end
+  horizon: string[];      // every day CM start .. horizonEnd
+  /** Plan months exploded: CM, NM, then any extra months (P1 item plan); default CM + NM. */
+  months: string[];
+  /** Last day of the planning horizon (= nmEnd unless extra months are asked for). */
+  horizonEnd: string;
 };
 
 /** CM = the selected plan month; the as-of date must lie inside it. */
-export function buildCalendar(planMonth: string, asOf: string): PlanningCalendar | null {
+export function buildCalendar(planMonth: string, asOf: string, extraMonths = 0): PlanningCalendar | null {
   if (!isIsoDate(planMonth) || planMonth.slice(8) !== "01" || !isIsoDate(asOf)) return null;
+  if (!Number.isInteger(extraMonths) || extraMonths < 0 || extraMonths > 12) return null;
   const cmStart = planMonth;
   const cmEnd = monthEnd(cmStart);
   if (asOf < cmStart || asOf > cmEnd) return null;
   const nmStart = nextMonth(cmStart);
   const nmEnd = monthEnd(nmStart);
+  const months = [cmStart, nmStart];
+  for (let i = 0; i < extraMonths; i += 1) months.push(nextMonth(months[months.length - 1]));
+  const horizonEnd = monthEnd(months[months.length - 1]);
   const horizon: string[] = [];
-  for (let day = cmStart; day <= nmEnd; day = addDays(day, 1)) horizon.push(day);
+  for (let day = cmStart; day <= horizonEnd; day = addDays(day, 1)) horizon.push(day);
   return {
     asOf,
     cmStart,
@@ -114,6 +122,8 @@ export function buildCalendar(planMonth: string, asOf: string): PlanningCalendar
     cmDaysElapsed: daysInclusive(cmStart, addDays(asOf, -1)),
     nmDaysInMonth: daysInclusive(nmStart, nmEnd),
     horizon,
+    months,
+    horizonEnd,
   };
 }
 
@@ -505,6 +515,8 @@ export type ExplosionInput = {
   packBoms: Map<string, PackBomInfo>;
   materials: Map<string, MaterialInfo>;
   prodshadeLabels: Map<string, string>;
+  /** Material ids mapped to the company (sorted); absent = no mapping filter (legacy / tests). */
+  mappedMaterialIds?: string[];
 };
 
 export type ExplosionResult = {
@@ -602,12 +614,27 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
   const prodshadeDaily = new Map<string, Map<string, number>>();
   const skuContribKg = new Map<string, Map<string, PlanLineContribution[]>>();
   const prodshadeContrib = new Map<string, Map<string, PlanLineContribution[]>>();
-  const months = [input.calendar.cmStart, input.calendar.nmStart];
+  const months = input.calendar.months ?? [input.calendar.cmStart, input.calendar.nmStart];
   const exceptionKeys = new Set<string>();
   const addException = (key: string, warning: Warning) => {
     if (exceptionKeys.has(key)) return;
     exceptionKeys.add(key);
     exceptions.push(warning);
+  };
+  // Owner 2026-10-20: a material not mapped to the company is never a candidate there.
+  const mapped = input.mappedMaterialIds ? new Set(input.mappedMaterialIds) : null;
+  const keepMapped = (candidates: string[], materialId: string, keyPart: string, scope: Warning): string[] => {
+    if (!mapped) return candidates;
+    const kept = candidates.filter((id) => mapped.has(id));
+    if (kept.length === 0) {
+      addException(`NOT_MAPPED|${keyPart}`, {
+        ...scope,
+        code: "MATERIAL_NOT_MAPPED_TO_COMPANY",
+        message: "This material is not mapped to the company and its group has no mapped member; its demand is not shown. Map it to the company or correct the Stroke / Pack BOM.",
+        material_id: materialId,
+      });
+    }
+    return kept;
   };
 
   // SKU day demand in KG.
@@ -742,6 +769,8 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           usePrimary = resolveUsePrimary(input.primaryDecisions, stroke.stroke_master_id, line.material_group_id, month);
           candidates = usePrimary ? [line.material_id, ...members] : [...members];
         }
+        candidates = keepMapped(candidates, line.material_id, line.stroke_line_id, { prodshade_material_id: prodshadeId, code: "", message: "" });
+        if (candidates.length === 0) continue;
         const rmQty = (Number(line.dosage_pct) / 100) * qty;
         if (rmQty <= EPSILON) continue;
         const dayContrib = prodshadeContrib.get(prodshadeId)?.get(day) ?? [];
@@ -809,6 +838,8 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
         continue;
       }
       const members = activeMembers(input, line.material_group_id).filter((id) => id !== line.material_id);
+      const pmCandidates = keepMapped([line.material_id, ...members], line.material_id, `${bom.pack_bom_id}|${line.material_id}`, { sku_material_id: skuId, code: "", message: "" });
+      if (pmCandidates.length === 0) continue;
       for (const day of [...daily.keys()].sort()) {
         const kg = daily.get(day) ?? 0;
         const qty = (kg / kgPerOuter) * perOuterBase;
@@ -817,7 +848,7 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           day,
           kind: "PM",
           pool_key: `PM|${bom.pack_bom_id}|${line.material_id}`,
-          candidates: [line.material_id, ...members],
+          candidates: pmCandidates,
           storage_location_id: line.storage_location_id,
           qty,
           prodshade_material_id: sku.prodshade_material_id,
@@ -857,6 +888,29 @@ export type ReservationRow = { material_id: string; storage_location_id: string;
  * a pure R stock and nothing is suggested); the destination is an R store among the counted /
  * required locations, or UNKNOWN — never S/P/F, never a fabricated location.
  */
+/**
+ * Owner 2026-10-20: a material that is not mapped to the company (no ACTIVE
+ * erp_master.material_company_ext row) is never shown in that company's PO22.
+ * Unmapped group members are dropped from the pool (the company cannot stock or
+ * buy them); an unmapped material named directly on a stroke / Pack BOM keeps
+ * its demand out of the universe and is reported, never silently counted.
+ */
+export function applyCompanyMaterialMapping(input: {
+  directMaterialIds: readonly string[];
+  members: readonly GroupMember[];
+  mapped: ReadonlySet<string>;
+}): { members: GroupMember[]; universe: string[]; unmappedDirect: string[]; unmappedMembers: string[] } {
+  const members = input.members.filter((m) => input.mapped.has(m.material_id));
+  const unmappedMembers = [...new Set(input.members.filter((m) => !input.mapped.has(m.material_id)).map((m) => m.material_id))].sort();
+  const direct = [...new Set(input.directMaterialIds.filter(Boolean))];
+  const unmappedDirect = direct.filter((id) => !input.mapped.has(id)).sort();
+  const universe = [...new Set([
+    ...direct.filter((id) => input.mapped.has(id)),
+    ...members.filter((m) => m.active).map((m) => m.material_id),
+  ])];
+  return { members, universe, unmappedDirect, unmappedMembers };
+}
+
 export const isRawStoreCode = (code: string) => /^R\d/i.test(code.trim());
 export function rToRTransferRoute(sourceCodes: readonly string[], destinationCodes: readonly string[]): { from: string; to: string } | null {
   const sources = [...new Set(sourceCodes.filter(Boolean))];
@@ -1118,7 +1172,7 @@ export function allocateDemand(
       outer_qty: 0, outer_uom_code: record.outer_uom_code, fill_qty_per_outer: record.fill_qty_per_outer,
       periodDemand: { CM: 0, NM: 0 }, periodFromStock: new Map(),
     };
-    const period: StorePeriod | null = record.day < calendar.asOf ? null : record.day <= calendar.cmEnd ? "CM" : "NM";
+    const period: StorePeriod | null = record.day < calendar.asOf || record.day > calendar.nmEnd ? null : record.day <= calendar.cmEnd ? "CM" : "NM";
     if (period) pool.periodDemand[period] += record.qty;
     pool.total += record.qty;
     pool.outer_qty += record.outer_qty ?? 0;
@@ -1227,7 +1281,7 @@ export function allocateDemand(
   for (const record of fixedRecords) processRecord(record);
   // Method C protection: average daily exclusive (fixed) use over the horizon × Critical / Target
   // days, capped by what pass 1 left. It covers the days after the horizon.
-  const horizonDays = daysInclusive(calendar.asOf, calendar.nmEnd);
+  const horizonDays = daysInclusive(calendar.asOf, calendar.horizonEnd ?? calendar.nmEnd);
   for (const [material, days] of options.protectionDays ?? new Map()) {
     let fixedFromAsOf = 0;
     for (const [day, qty] of dailyByMaterial.get(material) ?? new Map<string, number>()) if (day >= calendar.asOf) fixedFromAsOf += qty;
@@ -1259,10 +1313,31 @@ export type InboundEvent = {
   kind: InboundKind;
   date_source: string;       // e.g. CSN_ETA_TO_PLANT, LOT_DELIVERY_DATE, PO_EXPECTED_DELIVERY, GATE_ENTRY, NONE
   reference: string;         // human document reference (PO / CSN / GE / lot numbers)
+  /** CSN behind this piece (ETD / port dates in the item plan). */
+  csn_id?: string;
+  /** Key of a not-yet-shipped piece the planner may reschedule (P1); absent = cannot be moved. */
+  reschedule_key?: string;
+  /** Source date before a planning reschedule replaced `date`. */
+  original_date?: string | null;
 };
+
+/**
+ * P1 (owner 2026-10-20): a planning-side rescheduled ETA replaces the date of a not-yet-shipped
+ * piece. CSN Tracker itself is never changed; the source date is kept in original_date.
+ */
+export function applyInboundReschedules(events: InboundEvent[], reschedules: ReadonlyMap<string, string | null>): InboundEvent[] {
+  return events.map((event) => {
+    if (!event.reschedule_key || !reschedules.has(event.reschedule_key)) return event;
+    const date = reschedules.get(event.reschedule_key) ?? null;
+    if (!date) return event; // a cleared reschedule = back to the source date
+    return { ...event, original_date: event.date, date, date_source: "PLANNING_RESCHEDULE" };
+  });
+}
 
 export type PoLineInboundInput = {
   material_id: string;
+  /** purchase_order_line id — reschedule key of the remainder / lots (P1). */
+  po_line_id?: string;
   po_number: string;
   line_number: number;
   open_qty: number;              // PO unit (open = ordered − GRN posted)
@@ -1271,7 +1346,7 @@ export type PoLineInboundInput = {
   /** PO delivery type. BULK POs never get a CSN in this ERP (owner 2026-10-20). */
   delivery_type?: string | null;
   at_gate: Array<{ qty_base: number; reference: string; date: string | null }>; // GE lines not yet GRN-posted
-  csns: Array<{ csn_number: string; status: string; dispatch_qty: number | null; received_qty: number | null; eta: string | null; is_mother_with_children: boolean }>;
+  csns: Array<{ id?: string; csn_number: string; status: string; dispatch_qty: number | null; received_qty: number | null; eta: string | null; is_mother_with_children: boolean }>;
   lots: Array<{ lot_number: string; balance_qty: number; delivery_date: string | null }>; // PO unit
   /**
    * Base qty of this still-open line already promised to another company by Sub-CSNs
@@ -1323,6 +1398,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
       events.push({
         material_id: line.material_id, qty, date: csn.eta, kind: "IN_TRANSIT",
         date_source: csn.eta ? "CSN_ETA_TO_PLANT" : "NONE", reference: `${ref} · CSN ${csn.csn_number} (${csn.status})`,
+        ...(csn.id ? { csn_id: csn.id } : {}),
       });
     }
   }
@@ -1333,6 +1409,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
       events.push({
         material_id: line.material_id, qty, date: lot.delivery_date, kind: "SCHEDULED_LOT",
         date_source: lot.delivery_date ? "LOT_DELIVERY_DATE" : "NONE", reference: `${ref} · Lot ${lot.lot_number}`,
+        ...(line.po_line_id ? { reschedule_key: `PO_LOT|${line.po_line_id}|${lot.lot_number}` } : {}),
       });
     }
   }
@@ -1352,6 +1429,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
       material_id: line.material_id, qty: remaining, date, kind: "PO_REMAINDER",
       date_source: csn ? "CSN_ETA_TO_PLANT" : line.expected_delivery_date ? "PO_EXPECTED_DELIVERY" : "NONE",
       reference: csn ? `${ref} · CSN ${csn.csn_number} (${csn.status})` : ref,
+      ...(csn?.id ? { csn_id: csn.id, reschedule_key: `CSN|${csn.id}` } : line.po_line_id ? { reschedule_key: `PO_LINE|${line.po_line_id}` } : {}),
     });
     remaining = 0;
   }
@@ -1495,7 +1573,7 @@ export function coverageDays(
 ): CoverageResult {
   let balance = opening;
   let covered = 0;
-  for (let day = calendar.asOf; day <= calendar.nmEnd; day = addDays(day, 1)) {
+  for (let day = calendar.asOf; day <= (calendar.horizonEnd ?? calendar.nmEnd); day = addDays(day, 1)) {
     balance += inboundByDay?.get(day) ?? 0;
     const demand = demandByDay.get(day) ?? 0;
     if (demand <= EPSILON) { covered += 1; continue; }

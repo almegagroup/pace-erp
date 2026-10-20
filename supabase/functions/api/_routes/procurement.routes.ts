@@ -125,6 +125,7 @@ import {
   listMtsPlanningRunsHandler,
   saveMtsPlanningRunHandler,
 } from "../_core/procurement/mts_planning.handlers.ts";
+import { getMtsItemPlanHandler, saveInboundRescheduleHandler } from "../_core/procurement/mts_item_plan.handlers.ts";
 import {
   getMtsOptimizerLifecycleEvidenceHandler,
   getMtsOptimizerRequirementDemandEvidenceHandler,
@@ -861,6 +862,10 @@ export async function dispatchProcurementRoutes(
       return await getMtsPlanningRunHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/planning/ai-explain":
       return await explainMtsPlanningHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/item-plan":
+      return await getMtsItemPlanHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/inbound-reschedule":
+      return await saveInboundRescheduleHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/lifecycle-evidence":
       return await getMtsOptimizerLifecycleEvidenceHandler(req, ctx);
     case "GET:/api/procurement/mts-optimizer/requirement-demand-evidence":

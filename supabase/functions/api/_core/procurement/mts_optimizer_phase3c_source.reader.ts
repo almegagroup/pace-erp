@@ -84,6 +84,7 @@ export async function readOptimizerRequirementDemandEvidence(
     packBoms: masters.packBoms,
     materials,
     prodshadeLabels: new Map(masters.prodshadeIds.map((id) => [id, id])),
+    mappedMaterialIds: [...masters.mappedMaterialIds].sort(),
   });
   const adapted = adaptRequirementDemandToOptimizer(companyId, explosion.records, masters.groupMembers, materials);
   return Object.freeze({

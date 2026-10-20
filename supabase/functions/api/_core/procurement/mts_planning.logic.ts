@@ -104,7 +104,7 @@ export function assemblePlanningInput(args: {
   memberCost?: (materialId: string, qty: number, needDay: string) => MemberCost | null;
 }): PlanningAssembly {
   const { calendar } = args;
-  const inHorizon = (day: string) => day >= calendar.asOf && day <= calendar.nmEnd;
+  const inHorizon = (day: string) => day >= calendar.asOf && day <= (calendar.horizonEnd ?? calendar.nmEnd);
   const chosen = new Map<string, VendorTerm | null>();
   const opening: Record<string, number> = {};
   const demand: OptimizerDailyDemand[] = [];
@@ -195,7 +195,7 @@ export function assemblePlanningInput(args: {
   }
   return {
     input: {
-      as_of: calendar.asOf, horizon_end: calendar.nmEnd, opening_qty_by_material: opening, daily_demand: demand, confirmed_arrivals: arrivals, policies,
+      as_of: calendar.asOf, horizon_end: calendar.horizonEnd ?? calendar.nmEnd, opening_qty_by_material: opening, daily_demand: demand, confirmed_arrivals: arrivals, policies,
       // Method C rule 6: members' free stock (incl. MOQ excess and arrivals) covers the group first.
       groups: args.groups.map((group) => ({ group_id: group.group_id, member_ids: group.member_ids })),
     },
