@@ -818,6 +818,8 @@ function ReportTab({ companyId }) {
   const [executed, setExecuted] = useState("");
   const [showProduction, setShowProduction] = useState(false);
   const [showDispatch, setShowDispatch] = useState(false);
+  // Owner 2026-10-20: show every KG quantity (plan, production, dispatch, totals) in MT (÷ 1000).
+  const [showMt, setShowMt] = useState(false);
 
   const selectedMonths = useMemo(() => Object.entries(monthsByYear)
     .flatMap(([year, months]) => months.map((m) => `${year}-${String(m).padStart(2, "0")}`))
@@ -902,7 +904,13 @@ function ReportTab({ companyId }) {
     if (uom === "MT") return Number(kg) / 1000;
     return null;
   }
+  const isKg = (row) => String(row.base_uom_code ?? "").toUpperCase() === "KG";
+  const displayUom = (row) => (showMt && isKg(row) ? "MT" : row.base_uom_code);
   function reportCell(row, month) {
+    const qty = reportCellBase(row, month);
+    return qty !== null && showMt && isKg(row) ? Number(qty) / 1000 : qty;
+  }
+  function reportCellBase(row, month) {
     if (row.row_type === "PLAN") return row.plan?.[month]?.qty ?? null;
     const actual = row.actual?.[month];
     const kg = row.row_type === "PRODUCTION" ? actual?.production_kg : actual?.dispatch_kg;
@@ -923,8 +931,8 @@ function ReportTab({ companyId }) {
     { key: "sku_document_name", label: "Document Name", width: "260px", render: (r) => blankOr(r.sku_document_name) },
     { key: "prodshade_label", label: "Prodshade", width: "240px" },
     { key: "pack_code", label: "Pack", width: "70px", render: (r) => blankOr(r.pack_code) },
-    { key: "base_uom_code", label: "UoM", width: "70px", totalUnit: true },
-    { key: "row_type", label: "Type", width: "80px" },
+    { key: "base_uom_code", label: "UoM", width: "70px", totalUnit: true, render: (r) => displayUom(r), copyValue: (r) => displayUom(r) },
+    { key: "row_type", label: "Type", width: "100px" },
   ];
   const monthColumns = months.map((month) => ({
     key: `m_${month}`,
@@ -943,17 +951,17 @@ function ReportTab({ companyId }) {
     },
     copyValue: (r) => reportCell(r, month) ?? "",
     filterValue: (r) => fmtQty(reportCell(r, month)),
-    // Existing group subtotal rows remain PLAN totals; adding actual rows must
-    // never silently combine plan with production or dispatch.
-    total: (r) => r.row_type === "PLAN" ? ({ qty: reportCell(r, month), unit: r.base_uom_code }) : null,
+    // Owner 2026-10-20: Plan, Production and Dispatch each get their own Prodshade / Child /
+    // Mother / Grand total rows (split by row_type) — never summed with each other.
+    total: (r) => ({ qty: reportCell(r, month), unit: displayUom(r) }),
   }));
   const columns = withTotalCells([...fixedColumns, ...monthColumns]);
   const totalFields = columns.filter((column) => column.total);
   const decorateReportRows = useCallback(
-    (visibleRows) => buildGroupedRows(visibleRows, totalFields, (row) => row.base_uom_code),
-    // totalFields depends only on the months of this report.
+    (visibleRows) => buildGroupedRows(visibleRows, totalFields, (row) => displayUom(row), { splitBy: (row) => row.row_type }),
+    // totalFields depends only on the months of this report and the MT toggle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [months.join(",")],
+    [months.join(","), showMt],
   );
 
   async function exportExcel() {
@@ -1029,6 +1037,10 @@ function ReportTab({ companyId }) {
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={showDispatch} onChange={(event) => setShowDispatch(event.target.checked)} />
             Show Dispatch
+          </label>
+          <label className="flex items-center gap-1 text-sm text-slate-700">
+            <input type="checkbox" checked={showMt} onChange={(event) => setShowMt(event.target.checked)} />
+            Show in MT
           </label>
         </div>
         <p className="text-xs text-slate-500">
