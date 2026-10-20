@@ -10,6 +10,7 @@
 import {
   addDays,
   allocateDemand,
+  applyCompanyMaterialMapping,
   bucketInbound,
   buildCalendar,
   buildRequirementRows,
@@ -467,6 +468,40 @@ Deno.test("Owner 2026-10-20: an MTS material the plan does not reach is not show
     materialUniverse: ["RM-A", "RM-B", "RM-C", "PM-BAG", "RM-Z"],
   });
   assertEqual(output.rows.map((row) => row.material_id), ["PM-BAG", "RM-A", "RM-B", "RM-C"], "RM-Z (no plan) hidden; group member RM-C kept");
+});
+
+Deno.test("Owner 2026-10-20: a material not mapped to the company is never shown there", () => {
+  const explosion = baseInput();
+  const output = buildRequirementRows({
+    ...explosion,
+    mappedMaterialIds: ["RM-A", "RM-B"],
+    planLines: [line({ entry_id: "p1", plan_type: "FINAL", base_qty: 3000 })],
+    demandAt: null, stockRows: [{ material_id: "RM-C", storage_location_id: "R1", stock_type_code: "UNRESTRICTED", qty: 900 }],
+    reservations: [], applyReservations: true, consumptionByMaterial: new Map(),
+    inboundEvents: [], policies: [], leadTimes: new Map(),
+    materialUniverse: ["RM-A", "RM-B"],
+  });
+  const ids = output.rows.map((row) => row.material_id);
+  assert(!ids.includes("RM-C") && !ids.includes("PM-BAG"), `unmapped RM-C / PM-BAG hidden, got ${ids.join(",")}`);
+  assert(ids.includes("RM-A") && ids.includes("RM-B"), "mapped materials still shown");
+  const all = JSON.stringify(output);
+  assert(all.includes("MATERIAL_NOT_MAPPED_TO_COMPANY"), "unmapped direct material with demand is reported, not silently dropped");
+});
+
+Deno.test("applyCompanyMaterialMapping: unmapped members leave the pool, unmapped direct lines are listed", () => {
+  const result = applyCompanyMaterialMapping({
+    directMaterialIds: ["RM-A", "RM-X", "RM-A"],
+    members: [
+      { material_id: "RM-A", active: true, group_id: "G1" },
+      { material_id: "RM-Y", active: true, group_id: "G1" },
+      { material_id: "RM-B", active: false, group_id: "G1" },
+    ],
+    mapped: new Set(["RM-A", "RM-B"]),
+  });
+  assertEqual(result.members.map((m) => m.material_id), ["RM-A", "RM-B"], "RM-Y dropped from the pool");
+  assertEqual(result.universe.sort(), ["RM-A"], "inactive member not in universe; unmapped never");
+  assertEqual(result.unmappedDirect, ["RM-X"], "direct unmapped listed");
+  assertEqual(result.unmappedMembers, ["RM-Y"], "member unmapped listed");
 });
 
 Deno.test("Owner 2026-10-20 option A: a BULK PO is available from the as-of day, no CSN ETA asked", () => {

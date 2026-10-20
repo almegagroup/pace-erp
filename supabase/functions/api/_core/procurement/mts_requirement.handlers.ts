@@ -66,6 +66,7 @@ import {
   type MaterialInfo,
   type PackBomInfo,
   type PlanningCalendar,
+  applyCompanyMaterialMapping,
   partitionPoLineInbound,
   rToRTransferRoute,
   type PlanLineVersion,
@@ -170,6 +171,13 @@ export async function loadConversions(ids: string[]): Promise<Map<string, UomCon
   return byMaterial;
 }
 
+/** Material ids with an ACTIVE company mapping (erp_master.material_company_ext). */
+export async function loadCompanyMappedMaterialIds(companyId: string): Promise<Set<string>> {
+  const rows = await fetchAllPages(() => serviceRoleClient.schema("erp_master").from("material_company_ext")
+    .select("material_id").eq("company_id", companyId).eq("status", "ACTIVE").order("material_id"), "MTS_REQ_COMPANY_MAPPING_LOAD_FAILED");
+  return new Set(rows.map((r) => text(r.material_id)).filter(Boolean));
+}
+
 export type FormulationMasters = {
   skus: Map<string, SkuInfo>;
   ambiguousCount: number;
@@ -178,6 +186,8 @@ export type FormulationMasters = {
   groupMembers: Map<string, GroupMember[]>;
   packBoms: Map<string, PackBomInfo>;
   materialUniverse: string[];
+  /** Materials with an ACTIVE company mapping (material_company_ext) — nothing else is shown. */
+  mappedMaterialIds: Set<string>;
   prodshadeIds: string[];
   warnings: Warning[];
 };
@@ -230,15 +240,32 @@ export async function loadFormulationMasters(companyId: string, extraStrokeIds: 
   ]);
 
   const groupIds = unique([...strokeLines, ...bomLines].map((l) => text(l.material_group_id)));
-  const memberRows = groupIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
-    .schema("erp_master").from("material_category_group_member")
-    .select("id, group_id, material_id, active").in("group_id", chunk));
+  const [memberRows, mappedMaterialIds] = await Promise.all([
+    groupIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
+      .schema("erp_master").from("material_category_group_member")
+      .select("id, group_id, material_id, active").in("group_id", chunk)),
+    loadCompanyMappedMaterialIds(companyId),
+  ]);
+  const directMaterialIds = [
+    ...strokeLines.map((l) => text(l.material_id)),
+    ...bomLines.filter((l) => text(l.line_type) === "INPUT").map((l) => text(l.material_id)),
+  ];
+  const mapping = applyCompanyMaterialMapping({
+    directMaterialIds,
+    members: memberRows.map((member) => ({
+      material_id: text(member.material_id), active: member.active !== false, group_id: text(member.group_id), source_id: text(member.id) || undefined,
+    })),
+    mapped: mappedMaterialIds,
+  });
   const groupMembers = new Map<string, GroupMember[]>();
-  for (const member of memberRows) {
-    const key = text(member.group_id);
-    groupMembers.set(key, [...(groupMembers.get(key) ?? []), {
-      material_id: text(member.material_id), active: member.active !== false, group_id: key, source_id: text(member.id) || undefined,
-    }]);
+  for (const member of mapping.members) {
+    const key = member.group_id ?? "";
+    groupMembers.set(key, [...(groupMembers.get(key) ?? []), member]);
+  }
+  if (mapping.unmappedMembers.length > 0) {
+    const codes = await loadMaterialRows(mapping.unmappedMembers);
+    const label = (id: string) => text(codes.get(id)?.pace_code) || text(codes.get(id)?.material_name) || id;
+    warnings.push({ code: "GROUP_MEMBER_NOT_MAPPED_TO_COMPANY", message: `Group member(s) not mapped to this company are left out of the group pool: ${mapping.unmappedMembers.map(label).join(", ")}.` });
   }
 
   const strokes = new Map<string, StrokeInfo>();
@@ -292,17 +319,13 @@ export async function loadFormulationMasters(companyId: string, extraStrokeIds: 
     });
   }
 
-  const universe = unique([
-    ...strokeLines.map((l) => text(l.material_id)),
-    ...bomLines.filter((l) => text(l.line_type) === "INPUT").map((l) => text(l.material_id)),
-    ...memberRows.filter((m) => m.active !== false).map((m) => text(m.material_id)),
-  ]);
+  const universe = mapping.universe;
 
   const skus = new Map<string, SkuInfo>();
   for (const sku of companySkus) {
     skus.set(sku.sku_material_id, { sku_material_id: sku.sku_material_id, prodshade_material_id: sku.prodshade_material_id, base_uom_code: "", kg_per_base_unit: null });
   }
-  return { skus, ambiguousCount: ambiguous.length, strokes, currentStrokeByProdshade, groupMembers, packBoms, materialUniverse: universe, prodshadeIds, warnings };
+  return { skus, ambiguousCount: ambiguous.length, strokes, currentStrokeByProdshade, groupMembers, packBoms, materialUniverse: universe, mappedMaterialIds, prodshadeIds, warnings };
 }
 
 /**
@@ -892,7 +915,7 @@ export async function computeRequirement(companyId: string, calendar: PlanningCa
   ]);
   const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
   const masters = await loadFormulationMasters(companyId, periodStrokeIds);
-  const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+  const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
   const skuIds = [...masters.skus.keys()];
   const [materialRows, conversions] = await Promise.all([
     loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]),
@@ -938,6 +961,7 @@ export async function computeRequirement(companyId: string, calendar: PlanningCa
     policies: policyLoad.policies,
     leadTimes,
     materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
+    mappedMaterialIds: [...masters.mappedMaterialIds].sort(),
     locationRoles: locationRoles ?? undefined,
     committedTransferOut: inbound.committedTransferOut,
   };
@@ -1159,7 +1183,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
       loadPolicies(companyId),
       canMaintainCompanyResource(ctx, companyId, RESOURCE_POLICY, "WRITE"),
     ]);
-    const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+    const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
     const [materialRows, conversions, leadTimes] = await Promise.all([
       loadMaterialRows(universe),
       loadConversions(universe),
@@ -1278,7 +1302,7 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
     // A policy may only be saved for a material of this company's MTS strokes / Pack BOMs
     // (or one that already has a policy here) — never for an unrelated material.
     const [masters, policyLoad] = await Promise.all([loadFormulationMasters(companyId, []), loadPolicies(companyId)]);
-    const allowed = new Set([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id)]);
+    const allowed = new Set([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
     const rows = [];
     for (const row of raw) {
       const materialId = text(row.material_id);

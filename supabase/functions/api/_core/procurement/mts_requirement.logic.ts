@@ -505,6 +505,8 @@ export type ExplosionInput = {
   packBoms: Map<string, PackBomInfo>;
   materials: Map<string, MaterialInfo>;
   prodshadeLabels: Map<string, string>;
+  /** Material ids mapped to the company (sorted); absent = no mapping filter (legacy / tests). */
+  mappedMaterialIds?: string[];
 };
 
 export type ExplosionResult = {
@@ -608,6 +610,21 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
     if (exceptionKeys.has(key)) return;
     exceptionKeys.add(key);
     exceptions.push(warning);
+  };
+  // Owner 2026-10-20: a material not mapped to the company is never a candidate there.
+  const mapped = input.mappedMaterialIds ? new Set(input.mappedMaterialIds) : null;
+  const keepMapped = (candidates: string[], materialId: string, keyPart: string, scope: Warning): string[] => {
+    if (!mapped) return candidates;
+    const kept = candidates.filter((id) => mapped.has(id));
+    if (kept.length === 0) {
+      addException(`NOT_MAPPED|${keyPart}`, {
+        ...scope,
+        code: "MATERIAL_NOT_MAPPED_TO_COMPANY",
+        message: "This material is not mapped to the company and its group has no mapped member; its demand is not shown. Map it to the company or correct the Stroke / Pack BOM.",
+        material_id: materialId,
+      });
+    }
+    return kept;
   };
 
   // SKU day demand in KG.
@@ -742,6 +759,8 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           usePrimary = resolveUsePrimary(input.primaryDecisions, stroke.stroke_master_id, line.material_group_id, month);
           candidates = usePrimary ? [line.material_id, ...members] : [...members];
         }
+        candidates = keepMapped(candidates, line.material_id, line.stroke_line_id, { prodshade_material_id: prodshadeId, code: "", message: "" });
+        if (candidates.length === 0) continue;
         const rmQty = (Number(line.dosage_pct) / 100) * qty;
         if (rmQty <= EPSILON) continue;
         const dayContrib = prodshadeContrib.get(prodshadeId)?.get(day) ?? [];
@@ -809,6 +828,8 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
         continue;
       }
       const members = activeMembers(input, line.material_group_id).filter((id) => id !== line.material_id);
+      const pmCandidates = keepMapped([line.material_id, ...members], line.material_id, `${bom.pack_bom_id}|${line.material_id}`, { sku_material_id: skuId, code: "", message: "" });
+      if (pmCandidates.length === 0) continue;
       for (const day of [...daily.keys()].sort()) {
         const kg = daily.get(day) ?? 0;
         const qty = (kg / kgPerOuter) * perOuterBase;
@@ -817,7 +838,7 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
           day,
           kind: "PM",
           pool_key: `PM|${bom.pack_bom_id}|${line.material_id}`,
-          candidates: [line.material_id, ...members],
+          candidates: pmCandidates,
           storage_location_id: line.storage_location_id,
           qty,
           prodshade_material_id: sku.prodshade_material_id,
@@ -857,6 +878,29 @@ export type ReservationRow = { material_id: string; storage_location_id: string;
  * a pure R stock and nothing is suggested); the destination is an R store among the counted /
  * required locations, or UNKNOWN — never S/P/F, never a fabricated location.
  */
+/**
+ * Owner 2026-10-20: a material that is not mapped to the company (no ACTIVE
+ * erp_master.material_company_ext row) is never shown in that company's PO22.
+ * Unmapped group members are dropped from the pool (the company cannot stock or
+ * buy them); an unmapped material named directly on a stroke / Pack BOM keeps
+ * its demand out of the universe and is reported, never silently counted.
+ */
+export function applyCompanyMaterialMapping(input: {
+  directMaterialIds: readonly string[];
+  members: readonly GroupMember[];
+  mapped: ReadonlySet<string>;
+}): { members: GroupMember[]; universe: string[]; unmappedDirect: string[]; unmappedMembers: string[] } {
+  const members = input.members.filter((m) => input.mapped.has(m.material_id));
+  const unmappedMembers = [...new Set(input.members.filter((m) => !input.mapped.has(m.material_id)).map((m) => m.material_id))].sort();
+  const direct = [...new Set(input.directMaterialIds.filter(Boolean))];
+  const unmappedDirect = direct.filter((id) => !input.mapped.has(id)).sort();
+  const universe = [...new Set([
+    ...direct.filter((id) => input.mapped.has(id)),
+    ...members.filter((m) => m.active).map((m) => m.material_id),
+  ])];
+  return { members, universe, unmappedDirect, unmappedMembers };
+}
+
 export const isRawStoreCode = (code: string) => /^R\d/i.test(code.trim());
 export function rToRTransferRoute(sourceCodes: readonly string[], destinationCodes: readonly string[]): { from: string; to: string } | null {
   const sources = [...new Set(sourceCodes.filter(Boolean))];
