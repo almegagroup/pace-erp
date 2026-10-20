@@ -1,0 +1,136 @@
+# PO22 — Owner decisions, 2026-10-19 (Requirement tab, R003, groups)
+
+**Recorded by:** Claude, from the business owner's own answers in chat on 2026-10-19.
+**Authority:** These are explicit owner decisions. Where they conflict with an older
+document (Phase 2D contract, matrix, findings), **this file wins** for the points below.
+**Read with:** `CLAUDE-FINDINGS-2026-10-19-SHEETS-AND-STATE.md` (sheet formulas and gaps).
+
+## D1 — R003 is shown, never counted as stock (supersedes Phase 2D §4 / §10 test 5)
+- Stock in R003 is **displayed**, but is **not** counted in available stock, coverage or allocation.
+- If an item has stock in R003, it is **referred for transfer**, e.g. an advisory `R003 → R001` suggestion.
+- Phase 2D §4 said "do not exclude R003" and §10 test 5 said "posted unrestricted R003 stock counts". **Both are replaced by D1.**
+- CMP003 OT01/OT02 stay hard-excluded as before.
+
+## D2 — Requirement tab: keep the sheet's purpose, never its bugs
+The ERP Requirement tab must do everything the sheet's REQUIREMENT tab does. The known sheet bugs are **not** carried into the ERP.
+
+Column-by-column choice (proposed by Claude in chat and not objected to by the owner. The owner then answered the group questions below):
+
+| Topic | Use | Rule |
+|---|---|---|
+| Current Req | Sheet | Remaining CM = month requirement − consumption so far (whole-month value also shown) |
+| Prorata (CM, NM, Total) | Sheet | **Daily rate**, not a quantity |
+| Current Stock | ERP | Live ledger, R+S unrestricted posted − reservations; **R003 excluded (D1)**; OT01/OT02 excluded |
+| In-transit | ERP | PO/GE/CSN/lot partition, shown split: dispatched vs open PO |
+| Coverage days | ERP | Date-wise walk with dated arrivals |
+| Below Target / Critical | Sheet | Inclusive (`<=`) |
+| Safety Day Stock | Sheet | Target days × daily rate |
+| Current Balance | Sheet | `+` = shortage |
+| Identifier 0–3 / ID2 | Sheet | Priority score / reorder-level flag |
+| Lead time | ERP | Configured vendor lead time; fallback = sheet (max tracker lead time + 4) |
+| NM Req Days | ERP | `min(NM days, max(0, Target − CM days left))` |
+| Lot trigger | New | First day coverage falls to/below Target (not the sheet's exact `= Target+1`) |
+
+Sheet bugs **not** to copy: CMP011 double consumption in Current Balance; "Status of NM" identical branches; "Cov till NM" dividing by a sum of rates; CMP011 first-row-only stock VLOOKUP; dead `#N/A` CURRENT MONTH PRORATA column.
+
+Note: this intentionally relaxes the Phase 2D "PO22 CM/NM numbers unchanged" rule for the column meanings above. NM Req Days stays as is.
+
+## D3 — Group items
+- Every stroke line is either **fixed** (one material only) or **group** (any member; Use Primary = Yes → primary first).
+- Fixed demand is covered first from its own material's stock, by date. Members' remaining stock forms the group's available stock. A material in several groups gives its leftover to the group that needs it earliest. Stock is never counted twice.
+- The Requirement tab shows a **group row** (like the sheet) with member rows underneath (stock split: fixed vs group).
+- **Target and Critical days are per member material, not per group**, and **can change over time.** They must be dated, effective-from versions. The existing PO22 Material Settings policy (`material_requirement_policy`: company × material × `effective_from`, append-only versions) already supports this.
+  - Implication: each member's coverage is checked against its own dated Target/Critical. Each member's demand is its fixed demand plus its allocated share of group demand. The group row shows totals and flags any member below its own Target/Critical.
+- **MOQ / order multiple is per material + vendor** (purchase is always of a material).
+  - Source decided in D4 below: vendor-material master.
+- Buy suggestion is per material: a group shortage is bought through the member chosen by the user's six-month selection (or the cheapest eligible member when commercial data exists). The excess of an MOQ lot is used first in later months.
+
+## Worked example (illustrative, not company data)
+RDP group = ELOTEX-60W + VAE DA1100. Product A needs ELOTEX (fixed) 2t; Products B and C need RDP (group) 10t. Stock: ELOTEX 5t, VAE 4t.
+
+| Row | Need | Available | Short |
+|---|---:|---:|---:|
+| ELOTEX-60W (fixed, A) | 2t | 2t | 0 |
+| RDP group (B, C) | 10t | 7t (ELOTEX 3t + VAE 4t) | 3t |
+
+Buy: the selected member (e.g. VAE) 3t. If VAE's MOQ is 25t, the PO is 25t and the 22t remainder is used first next month.
+
+## D4 — MOQ / order multiple live in the vendor-material master
+- New fields on `erp_master.vendor_material_info` (vendor × material): MOQ and order multiple (with UOM).
+- `material_requirement_policy` keeps Target / Critical only for planning purposes; its existing MOQ field is no longer the planning source once the vendor fields exist.
+- `vendor_material_info` has no company column: the vendor's MOQ/multiple is the same for every company, but every company still plans and buys independently (no pooling).
+
+## D5 — Overdue ETA (CSN Tracker is the source)
+- Arrival date comes from the CSN Tracker (`eta_to_plant_calculated` and its actual-date cascade).
+- If the ETA is already past and the material has not arrived, the user is told: "ETA passed — update this CSN in CSN Tracker".
+- If the user updates the CSN, the new date is used. Until then the arrival is assumed **today** (never dropped, so no double buy).
+
+## D6 — Booking Time + lead time
+- PROD finding (2026-10-19, read-only): the masters hold **route time only**. Import = `sail_time_days` (8 rows, 7–31 d) + `clearance_days` (5 d) + `port_plant_transit_master` (5 ports, 1–4 d); the PO delivery date is the ETA-at-port. Domestic = `transit_days` per company × vendor (CMP003 67 rows, CMP005 22, CMP011 13); the PO delivery date is the dispatch date. `material_plant_ext.lead_time_days` is empty. **PO-to-dispatch (vendor processing) time is not stored anywhere.**
+- Decision: new optional field **Booking Time** (days) on the vendor-material master. Blank = 0 (processing already included in route time). The user fills it where needed.
+- Total lead time = Booking Time + route lead time. PO-by date = need date − total lead time.
+
+## D7 — Daily phasing
+Monthly PO21 plan is spread evenly over that month's own calendar days (30, 31, 28/29). This is the current ERP behaviour. Urgent windows and Tab 2 stroke periods still apply. The report labels it as a forecast, not confirmed production dates.
+
+## D8 — Scope: everything in the first go-live (supersedes Phase 2D §12 staging of 3F)
+The first go-live includes Requirement tab, Planning tab, buy recommendations, joint fixed/group allocation, Store report, **commercial cost comparison and AI** (an AI API is already purchased), plus R→R suggestions.
+Cost-to-cost comparison must cover the full cash cycle, not only landed cost:
+1. landed cost (price, freight, duty, clearance …),
+2. when cash goes out (vendor payment term / LC),
+3. when cash comes back: payment timing of the **FG customers** whose products consume that material,
+4. financing cost for the gap between cash out and cash in,
+5. holding cost of the safety stock kept.
+AI explains and proposes scenarios; numbers come only from a deterministic rerun (Phase 2D §8 boundary unchanged).
+Owner states all data exists; Claude to verify location/fill-rate in PROD (read-only) before build.
+
+## D9 — All companies together
+CMP003, CMP005 and CMP011 go live together under the same rules. Company-specific differences are handled through manual/configurable data fields, not code differences. (This makes the CMP003 sheet `AA3` NM-Req-Days formula non-blocking: the ERP rule `min(NM days, max(0, Target − CM days left))` applies to all companies.)
+
+## D8 data check — PROD read-only, 2026-10-19 (Claude)
+| Need | PROD evidence | State |
+|---|---|---|
+| Vendor payment term (cash out) | Every PO in CMP003/005/011 has `payment_term_id`; 130/132 vendor-material rows have a default term; terms are CREDIT 10–90 days (+3 ADVANCE in CMP003) | ✅ present |
+| LC | No PO uses an LC term (`lc_type = N_A` everywhere, `lc_required` false), including the 10 import POs | ✅ no LC today (support kept for future terms) |
+| Customer payment term (cash in) | CMP003: 1,001 sales invoices since 2026-09-02, 1 customer, 15 days from invoice / from bill received. CMP005: 10 SOs, CMP011: 7 SOs, all 15 days, **0 sales invoices in ERP** | ⚠️ term present; CMP005/011 invoices not in ERP |
+| Actual customer collection date | No receipt/collection table; `sales_invoice` has no paid/received/due date column | ❌ missing — use term-based expected date unless a source (e.g. Tally) is provided |
+| "Bill received" date (PT-017 reference) | No column on `sales_invoice` | ❌ missing |
+| Actual vendor payment date | No AP payment table | ❌ missing — use term-based expected date |
+| Landed cost | CMP003 26 POSTED; CMP005 42 DRAFT; CMP011 4 POSTED + 39 DRAFT | ✅ present (DRAFT = provisional) |
+| Purchase price / currency | 90/132 vendor-material rows have last price; PO lines 249 INR + 13 USD; vendor-material currency defaults 127 INR / 5 USD | ⚠️ partial |
+| FX rate | No exchange-rate table | ❌ missing — manual input needed for USD |
+| Financing / interest rate | No table or field | ❌ missing — manual company setting needed |
+| Holding cost of safety stock | Target days exist (policy table); no holding-cost rate | ❌ rate missing — derive from interest rate (+ optional storage %) |
+| FG ↔ material linkage | Stroke Master (RM) + Pack BOM (PM) per SKU; PO21 plan has SKU but no customer | ✅ (customer per company, single customer in CMP003) |
+
+## D10 — Cost inputs (owner answers to the D8 data gaps, 2026-10-19)
+1. **Vendor payment date (cash out):** use AC01's dates. Precedence: Actual Payment Date (coming later via AC02 Vendor Ledger, provision required now) > Revised Payment Date (`goods_receipt.revised_payment_date`) > Scheduled Payment Date. Code check: AC01 shows `payment_days` (term credit days), `revised_payment_date` and an `actual_payment_date` column whose source is pending AC02. Scheduled date is not a stored column; it is derived as term reference date + credit days. For a proposed (not yet ordered) buy: vendor-material default term from the planned receipt date.
+2. **"Bill received" / invoice-based terms:** the invoice date is entered in CSN Tracker; follow the payment term's scheduled date and the revised date when present, and the actual payment date when it exists.
+3. **FX rate:** for a proposed buy, the rate of the planning day. For an existing import CSN, the rate on its BOE date. If the BOE date is blank, use the current rate. (A dated rate source is needed; none exists in PROD today.)
+4. **Carrying rate:** new column **Rate** next to the safety/Target days in PO22 Material Settings, per item, an amount **per UOM**. Blank = cost is landed cost only. Filled = rate × qty is added to landed cost. It carries forward month to month. The user can change it for all items or selected items in any month; the change applies from that month onward (effective-dated, same mechanism as Target/Critical).
+
+## D11 — Final cost model and FX source (owner approved, 2026-10-19)
+- **Customer cash-in (FG):** sales invoice date + payment term for now; provision for an actual received date later.
+- **FX rate:** auto-fetched daily into an ERP rate table (date, currency, rate, source); the user can override; holidays and failed fetches use the last available rate, flagged "stale". Import CSN gets an optional **BOE exchange rate** field (the customs rate printed on the BOE).
+  - Precedence: BOE rate on the CSN > table rate on the BOE date > today's table rate (when the BOE date is blank). A proposed buy uses the planning-day rate.
+- **Cost = landed cost + item Rate (if filled) + financing**, two separate inputs:
+  - (a) **Item Rate** in PO22 Material Settings: per item, an amount per UOM, for physical carrying cost (storage, handling, deterioration). Effective-dated monthly carry-forward (D10.4).
+  - (b) **Company interest %** per year (effective-dated company setting), for money tied up. Financing = value × % × days from vendor cash-out to customer cash-in. Safety stock held longer increases the days, so no separate safety-stock cost is needed.
+
+## D12 — Counted stock locations (owner, 2026-10-19)
+- Counted: R-series RM stores (R001, R002), shop floor S001/S002, and packing P001/P002. PM requirement is met from P001/P002 stock.
+- Shown, not counted, referred for transfer: R003 (D1).
+- Not counted: OT01/OT02, finished-goods F-series, admix S003/P003/T003/L003.
+- The stock rules inside the engine stay as decided (unrestricted posted only, valid reservations deducted, no QA/blocked, stock counted once).
+- Held as a per-company location setting so a company can differ (D9).
+
+## D13 — Method C allocation, final rules (owner, 2026-10-20)
+Approved order (a higher rule never gives way to a lower one):
+1. Every material's own (exclusive) demand is met first.
+2. Each material keeps Target days (Critical inside) of its own use as protected stock; groups never get it. No Target set = nothing protected.
+3. A group with fewer members is served before a broader group sharing a member (e.g. RDP_TLA before RDP).
+4. A group draws first from the member with the **most free stock**; the primary goes first **only on a tie**.
+5. Members' free stock above their own Target days — including proposed MOQ/lot excess and confirmed arrivals — covers group demand before anything is bought (rule 6 of the chat proposal).
+6. Only the rest is bought, through the member selected for that month (D3). **Replaces D3's "nothing selected → stays a group risk":** when nothing is selected the engine picks the member itself — among members whose vendor can arrive by the need date, the lowest total cost (price + landed cost + Rate + interest); if none can arrive in time, the fastest — and labels it "Engine chose". It stays a group risk only when no member has a vendor.
+Emergency on today's stock: if a group has no free stock left, protected stock is used (Target part, then Critical part) so production does not stop, with a "buy this material soon" warning.
+Implemented on `dev`: `fab7f6f` (rules 4, 6) and the auto-pick commit after it.

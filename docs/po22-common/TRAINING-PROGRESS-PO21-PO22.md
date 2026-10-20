@@ -1,0 +1,33 @@
+# PO21 / PO22 Owner Training — Lesson Progress (resume point for any agent)
+
+**Started:** 2026-10-20 · **Trainer:** Claude (owner-assigned) · **Language:** Bengali, ERP labels in English.
+**PROD revision at start:** `main` = `892bfeb` (PR almegagroup/pace-erp#680), ACL CMP003 v134 / CMP005 v30 / CMP011 v30.
+
+## Rules (owner, 2026-10-20)
+- One lesson at a time, in the business sequence below. Exact page / tab / button / field each time.
+- Read-only by default. Any save or operational change: explain consequences and get owner approval first.
+- A lesson is COMPLETED **only** when the owner writes "বুঝেছি, পরেরটা শেখাও।" — a screenshot is not completion.
+- If Claude resets or another agent takes over: resume from the **first lesson not marked COMPLETED**.
+
+## Sequence
+PO21: 1 Company & Plan Month · 2 Plan Entry · 3 FINAL / ROLLING / ADDITIONAL / URGENT · 4 SKU & ProdShade ·
+5 Stroke Master & effective dates · 6 Use Primary & material groups · 7 Pack BOM & quantities ·
+8 Cross-company production · 9 Save, edit, versioning & reports · 10 Production & Dispatch reporting ·
+11 How the effective plan reaches PO22.
+PO22: 12 Company, month & as-of · 13 Requirement Report · 14 Material Settings · 15 Stock & Cost Settings ·
+16 Planning · 17 Daily planning, allocation, vendor & lot · 18 PO By, ETA & future CSN · 19 Explain with AI ·
+20 Store Report · 21 End-to-end scenario & reconciliation.
+
+## Lesson log
+| # | Topic | Page / control | Owner questions → answers | Confirmed? | Issues found | Next |
+|---|---|---|---|---|---|---|
+| 1 | PO21 Company & Plan Month | Procurement → PO21 MTS Customer Plan: Company selector, Plan Month, tab buttons, Product Group button, Access line | — | IN PROGRESS (taught 2026-10-20, awaiting confirmation) | — | Lesson 2 Plan Entry (only after confirmation) |
+
+## Issues raised during training
+| Date | Issue | Status |
+|---|---|---|
+| 2026-10-20 | PO22 Explain with AI → 503 `AI_BUDGET_UNAVAILABLE`. Root cause (PROD postgres log 03:57:57Z): `permission denied for table mts_ai_usage` — migration `20261019150000` granted service_role only SELECT; `reserve_mts_ai_budget` (not SECURITY DEFINER) needs INSERT + UPDATE. Header "Last sync failed \| Saving planning / AI explain" is the same request (label built from URL), not a separate planning-save failure. Fix (owner-authorized): migration `20261020150000` GRANT INSERT, UPDATE + handler logs real DB error + regression test; PR almegagroup/pace-erp#682 merged, PROD verified INSERT/UPDATE = true. | FIXED IN PROD — awaiting owner's live Explain-with-AI click to confirm |
+| 2026-10-20 | Action tab asked "Enter CSN ETA" for BULK POs (PROD: BULK lines never get a CSN). Owner chose option A: BULK open qty available from as-of day. | MERGED to main 0a3e8b1 (PR almegagroup/pace-erp#683) — awaiting owner check in PO22 Action |
+| 2026-10-20 | MTO/HPS items shown: they sit on an approved MTS stroke whose SKU has no plan (56750000 → HIMFLOWCRETE HWR 9F02, Hansa 201). Owner: "MTS but no plan → don't show". | MERGED to main 0a3e8b1 (PR #683) — awaiting owner check |
+| 2026-10-20 | PM_UOM_CONVERSION_MISSING: PM-00050 CEMENT TILE GROUT 1KG POUCH base NOS, Pack BOM line in PKT (qty 20), no PKT↔NOS conversion → 9 SKUs' pouch demand skipped. Owner 2026-10-20: "all NOS". Verified posted P261 legs already 1:1 NOS (e.g. 9400000683: 3200 = 4 legs × 800). PROD data fix (owner-authorized, one transaction, count-asserted): uom_code PKT→NOS on pack_bom_line 18 (CMP003 9 + CMP005 9), packing_order_line 18, reservation_document 18 (closed); quantities/stock untouched. No other PM line without a conversion remains. **Corrected same day:** pack code 209 declares inner_uom_code = PKT and the primary-container PM line must carry it (pack_bom PROD_BOM_INNER_LAYER_MISSING), so the relabel was reverted (all 54 rows back to PKT, count-asserted) and instead Material Master conversion PM-00050 1 PKT = 1 NOS was added. | FIXED IN PROD (data, corrected) |
+
