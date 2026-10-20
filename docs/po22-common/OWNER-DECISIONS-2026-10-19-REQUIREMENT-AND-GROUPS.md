@@ -123,3 +123,14 @@ CMP003, CMP005 and CMP011 go live together under the same rules. Company-specifi
 - Not counted: OT01/OT02, finished-goods F-series, admix S003/P003/T003/L003.
 - The stock rules inside the engine stay as decided (unrestricted posted only, valid reservations deducted, no QA/blocked, stock counted once).
 - Held as a per-company location setting so a company can differ (D9).
+
+## D13 — Method C allocation, final rules (owner, 2026-10-20)
+Approved order (a higher rule never gives way to a lower one):
+1. Every material's own (exclusive) demand is met first.
+2. Each material keeps Target days (Critical inside) of its own use as protected stock; groups never get it. No Target set = nothing protected.
+3. A group with fewer members is served before a broader group sharing a member (e.g. RDP_TLA before RDP).
+4. A group draws first from the member with the **most free stock**; the primary goes first **only on a tie**.
+5. Members' free stock above their own Target days — including proposed MOQ/lot excess and confirmed arrivals — covers group demand before anything is bought (rule 6 of the chat proposal).
+6. Only the rest is bought, through the member selected for that month (D3). **Replaces D3's "nothing selected → stays a group risk":** when nothing is selected the engine picks the member itself — among members whose vendor can arrive by the need date, the lowest total cost (price + landed cost + Rate + interest); if none can arrive in time, the fastest — and labels it "Engine chose". It stays a group risk only when no member has a vendor.
+Emergency on today's stock: if a group has no free stock left, protected stock is used (Target part, then Critical part) so production does not stop, with a "buy this material soon" warning.
+Implemented on `dev`: `fab7f6f` (rules 4, 6) and the auto-pick commit after it.
