@@ -767,7 +767,7 @@ export function materialInfoMap(rows: Map<string, JsonRecord>, conversions: Map<
   return result;
 }
 
-async function loadLocationLabels(ids: string[]): Promise<Map<string, string>> {
+export async function loadLocationLabels(ids: string[]): Promise<Map<string, string>> {
   const list = unique(ids);
   if (list.length === 0) return new Map();
   const rows = await fetchInChunks<JsonRecord>(list, (chunk) => serviceRoleClient.schema("erp_inventory").from("storage_location_master")

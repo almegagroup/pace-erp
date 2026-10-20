@@ -1666,12 +1666,15 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
   const runsQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-runs", companyId], queryFn: () => listMtsPlanningRuns({ company_id: companyId }), enabled: Boolean(companyId), retry: false });
   const runQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-run", companyId, runId], queryFn: () => getMtsPlanningRun({ company_id: companyId, id: runId }), enabled: Boolean(companyId && runId) });
   const source = runId ? runQ.data?.run?.result ?? null : liveQ.data ?? null;
-  const rows = useMemo(() => source?.store_rows ?? [], [source]);
+  // Owner: product rows grouped by parent → child product group, then product.
+  const rows = useMemo(() => [...(source?.store_rows ?? [])].sort((a, b) =>
+    String(a.mother_group ?? "~").localeCompare(String(b.mother_group ?? "~")) || String(a.child_group ?? "~").localeCompare(String(b.child_group ?? "~"))
+    || String(a.product).localeCompare(String(b.product)) || String(a.period).localeCompare(String(b.period))), [source]);
   const materialSummary = useMemo(() => {
     const map = new Map();
     for (const r of rows) {
       const key = r.material_id ?? `group:${r.group_id}`;
-      const seen = map.get(key) ?? { key, material_name: r.material_name, group_label: r.material_id ? "" : r.group_label, uom: r.uom, executable_qty: 0, not_backed_qty: 0 };
+      const seen = map.get(key) ?? { key, material_name: r.material_name, document_name: r.material_document_name, group_label: r.material_id ? "" : r.group_label, uom: r.uom, executable_qty: 0, not_backed_qty: 0, transfer_hint: r.transfer_hint ?? null };
       seen.executable_qty += r.executable_qty;
       seen.not_backed_qty += r.not_backed_qty;
       map.set(key, seen);
@@ -1691,22 +1694,28 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
   }, [rows]);
 
   const productColumns = [
-    { key: "product", label: "Product", width: "240px" },
+    { key: "mother_group", label: "Parent group", width: "160px", render: (r) => dash(r.mother_group) },
+    { key: "child_group", label: "Child group", width: "160px", render: (r) => dash(r.child_group) },
+    { key: "product", label: "Product (prodshade / SKU)", width: "240px" },
     { key: "source", label: "Stroke / Pack BOM", width: "240px" },
-    { key: "period", label: "Period", width: "90px", render: (r) => (r.period === "CM" ? "CM (rest)" : "NM") },
+    { key: "period_label", label: "Period", width: "150px", render: (r) => r.period_label ?? (r.period === "CM" ? "CM (rest)" : "NM"), copyValue: (r) => r.period_label ?? r.period },
     { key: "line_type", label: "Line", width: "70px" },
-    { key: "group_label", label: "Group", width: "180px", render: (r) => dash(r.group_label) },
+    { key: "group_label", label: "Material group", width: "180px", render: (r) => dash(r.group_label) },
+    { key: "material_document_name", label: "Document name", width: "220px", render: (r) => dash(r.material_document_name) },
     { key: "material_name", label: "Material to use", width: "240px", render: (r) => (r.material_id ? r.material_name : <span className="text-rose-700">{r.material_name}</span>) },
     { key: "demand_qty", label: "Line demand", width: "110px", align: "right", render: (r) => fmtQty(r.demand_qty), copyValue: (r) => r.demand_qty },
     { key: "executable_qty", label: "From physical stock", width: "130px", align: "right", render: (r) => (r.executable_qty ? <span className="font-semibold text-emerald-800">{fmtQty(r.executable_qty)}</span> : ""), copyValue: (r) => r.executable_qty },
     { key: "not_backed_qty", label: "Not yet backed (future / short)", width: "180px", align: "right", render: (r) => (r.not_backed_qty ? <span className="text-rose-700">{fmtQty(r.not_backed_qty)}</span> : ""), copyValue: (r) => r.not_backed_qty },
     { key: "uom", label: "UoM", width: "60px", render: (r) => dash(r.uom) },
+    { key: "transfer_hint", label: "Transfer first", width: "320px", render: (r) => (r.transfer_hint ? <span className="font-semibold text-amber-800">{r.transfer_hint}</span> : "—"), copyValue: (r) => r.transfer_hint ?? "" },
   ];
   const materialColumns = [
     { key: "material_name", label: "Material", width: "260px", render: (m) => (m.group_label ? `${m.group_label} (not assigned)` : m.material_name) },
+    { key: "document_name", label: "Document name", width: "220px", render: (m) => dash(m.document_name) },
     { key: "executable_qty", label: "From physical stock", width: "140px", align: "right", render: (m) => fmtQty(m.executable_qty), copyValue: (m) => m.executable_qty },
     { key: "not_backed_qty", label: "Not yet backed", width: "140px", align: "right", render: (m) => fmtQty(m.not_backed_qty), copyValue: (m) => m.not_backed_qty },
     { key: "uom", label: "UoM", width: "60px", render: (m) => dash(m.uom) },
+    { key: "transfer_hint", label: "Transfer first", width: "320px", render: (m) => (m.transfer_hint ? <span className="font-semibold text-amber-800">{m.transfer_hint}</span> : "—"), copyValue: (m) => m.transfer_hint ?? "" },
   ];
   const groupColumnsSummary = [
     { key: "group_label", label: "Group", width: "240px" },

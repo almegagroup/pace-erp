@@ -203,3 +203,36 @@ export function assemblePlanningInput(args: {
     group_assignments: assignments.map((a) => ({ ...a, uncovered_qty: Math.round(a.uncovered_qty * 1e6) / 1e6 })),
   };
 }
+
+// ── Store usage schedule helpers (owner 2026-10-19) ─────────────────────────────────────────
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthName = (isoDay: string) => `${MONTH_NAMES[Number(isoDay.slice(5, 7)) - 1]} ${isoDay.slice(0, 4)}`;
+
+/** Owner: show the month name when the period is a whole month; a partial CM shows its start day. */
+export function storePeriodLabel(period: "CM" | "NM", calendar: PlanningCalendar): string {
+  if (period === "NM") return monthName(calendar.nmStart);
+  return calendar.asOf === calendar.cmStart ? monthName(calendar.cmStart) : `${monthName(calendar.cmStart)} (from ${Number(calendar.asOf.slice(8, 10))})`;
+}
+
+/**
+ * Transfer instruction per material: stock sitting in a transfer-source location (e.g. R003) that
+ * the schedule needs because counted stock does not back it. Qty = min(that stock, not-backed qty).
+ */
+export function storeTransferHints(
+  rows: readonly RequirementRow[],
+  notBackedByMaterial: ReadonlyMap<string, number>,
+  locationLabel: (id: string) => string,
+  uomOf: (id: string) => string | null,
+): Map<string, string> {
+  const hints = new Map<string, string>();
+  for (const row of rows) {
+    const short = notBackedByMaterial.get(row.material_id) ?? 0;
+    const available = row.stock.other_sloc_unrestricted;
+    if (short <= EPSILON || available <= EPSILON) continue;
+    const qty = Math.round(Math.min(short, available) * 1000) / 1000;
+    const from = row.stock.other_locations.map(locationLabel).join(", ") || "another location";
+    const to = [...new Set([...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)])].map(locationLabel).join(" / ") || "the required location";
+    hints.set(row.material_id, `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${from} to ${to}`.replace(/\s+/g, " ").trim());
+  }
+  return hints;
+}

@@ -1,4 +1,4 @@
-import { assemblePlanningInput, autoPickGroupMember, chooseVendor, selectGroupMember, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, autoPickGroupMember, chooseVendor, selectGroupMember, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -52,4 +52,17 @@ Deno.test("auto pick: in-time members by lowest total cost; none in time → fas
   equal(autoPickGroupMember(["A", "B", "C"], cost({ A: { feasible: true, total_cost: 500, lead_time_days: 30 }, B: { feasible: true, total_cost: 400, lead_time_days: 40 }, C: { feasible: false, total_cost: 100, lead_time_days: 90 } })), "B", "cheapest that arrives in time (C is cheaper but late)");
   equal(autoPickGroupMember(["A", "B"], cost({ A: { feasible: false, total_cost: 100, lead_time_days: 60 }, B: { feasible: false, total_cost: 900, lead_time_days: 20 } })), "B", "nobody in time → fastest");
   equal(autoPickGroupMember(["A", "B"], cost({})), null, "no vendor → stays a group risk");
+});
+
+Deno.test("store schedule: month name for a whole month, start day for a partial CM", () => {
+  equal(storePeriodLabel("NM", buildCalendar("2026-10-01", "2026-10-20")!), "November 2026", "NM is always a whole month");
+  equal(storePeriodLabel("CM", buildCalendar("2026-10-01", "2026-10-01")!), "October 2026", "CM from day 1");
+  equal(storePeriodLabel("CM", buildCalendar("2026-10-01", "2026-10-20")!), "October 2026 (from 20)", "partial CM");
+});
+
+Deno.test("store schedule: transfer hint only for what counted stock cannot back", () => {
+  const r = { ...row("A", 0, []), stock: { ...row("A", 0, []).stock, other_sloc_unrestricted: 500, other_locations: ["L3"], required_locations: ["L1"] } };
+  const hints = storeTransferHints([r], new Map([["A", 120]]), (id) => ({ L1: "R001", L3: "R003" } as Record<string, string>)[id] ?? id, () => "KG");
+  equal(hints.get("A"), "Transfer 120 KG from R003 to R001", "only the 120 short");
+  equal(storeTransferHints([r], new Map(), () => "x", () => "KG").size, 0, "nothing short → no transfer");
 });

@@ -16,13 +16,14 @@ import { buildCalendar, isIsoDate, moqInBase, toMaterialBase } from "./mts_requi
 import {
   computeRequirement,
   fail,
+  loadLocationLabels,
   handleError,
   type ReqHandlerContext,
   requireRequirementPolicyAccess,
   requireRequirementViewAccess,
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
-import { assemblePlanningInput, type MemberCost, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy } from "./mts_optimizer_phase3d.types.ts";
 import { type CostOption, costOption, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
@@ -257,6 +258,39 @@ export async function computePlanning(p: PlanningParams) {
     return stroke ? `${nameOf(stroke.prodshade_material_id)} · Stroke ${stroke.stroke_number}` : "—";
   };
   const uom = (id: string | null) => (id ? text(req.materialRows.get(id)?.base_uom_code) || null : null);
+  const documentName = (id: string | null) => (id ? text(req.materialRows.get(id)?.document_name) || null : null);
+  // Store schedule (owner 2026-10-19): product parent/child group, transfer instruction.
+  const [productGroups, locationLabels] = await Promise.all([
+    loadProdshadeGroups(p.companyId),
+    loadLocationLabels(unique(req.output.rows.flatMap((r) => [...r.stock.required_locations, ...r.stock.other_locations, ...r.pools.map((pool) => pool.storage_location_id ?? "")]).filter(Boolean))),
+  ]);
+  const notBacked = new Map<string, number>();
+  const groupShort = new Map<string, number>();
+  for (const row of req.output.store_rows) {
+    if (row.material_id !== null) notBacked.set(row.material_id, (notBacked.get(row.material_id) ?? 0) + row.not_backed_qty);
+    else if (row.group_id) groupShort.set(row.group_id, (groupShort.get(row.group_id) ?? 0) + row.not_backed_qty);
+  }
+  // A group remainder is backed by its members' transfer-source stock, largest first, never twice.
+  const rowById = new Map(req.output.rows.map((r) => [r.material_id, r]));
+  const transferLeft = new Map(req.output.rows.map((r) => [r.material_id, Math.max(0, r.stock.other_sloc_unrestricted - (notBacked.get(r.material_id) ?? 0))]));
+  const groupTransferNeed = new Map<string, number>(); // material → qty to transfer for groups
+  // DEPENDENT: each group consumes the transfer stock the previous groups left.
+  for (const [groupId, short] of [...groupShort].sort(([a], [b]) => a.localeCompare(b))) {
+    let remaining = short;
+    const members = (req.output.groups.find((g) => g.group_id === groupId)?.member_ids ?? []).slice().sort((a, b) => (transferLeft.get(b) ?? 0) - (transferLeft.get(a) ?? 0) || a.localeCompare(b));
+    for (const member of members) {
+      if (remaining <= 0.000001) break;
+      const take = Math.min(remaining, transferLeft.get(member) ?? 0);
+      if (take <= 0.000001) continue;
+      transferLeft.set(member, (transferLeft.get(member) ?? 0) - take);
+      groupTransferNeed.set(member, (groupTransferNeed.get(member) ?? 0) + take);
+      remaining -= take;
+    }
+  }
+  const transferHint = storeTransferHints(req.output.rows, notBacked, (id) => locationLabels.get(id) ?? "—", uom);
+  const groupHint = storeTransferHints([...groupTransferNeed.keys()].map((id) => rowById.get(id)!).filter(Boolean), groupTransferNeed, (id) => locationLabels.get(id) ?? "—", uom);
+  const prodshadesOf = (row: { kind: string; prodshade_ids: string[]; sku_ids: string[] }) =>
+    unique(row.kind === "PM" ? row.sku_ids.map((sku) => req.masters.skus.get(sku)?.prodshade_material_id ?? "").filter(Boolean) : row.prodshade_ids);
   const eventRef = new Map<string, string>();
   for (const row of req.output.rows) row.inbound_events.forEach((event, index) => eventRef.set(`A|${row.material_id}|${index}|${event.reference}`, event.reference));
 
@@ -298,6 +332,12 @@ export async function computePlanning(p: PlanningParams) {
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
     store_rows: req.output.store_rows.map((row) => ({
       ...row,
+      period_label: storePeriodLabel(row.period, calendar),
+      mother_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.mother ?? "")).filter(Boolean).join("; ") || null,
+      child_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.child ?? "")).filter(Boolean).join("; ") || null,
+      material_document_name: documentName(row.material_id),
+      transfer_hint: row.material_id ? transferHint.get(row.material_id) ?? null
+        : (req.output.groups.find((g) => g.group_id === row.group_id)?.member_ids ?? []).map((id) => groupHint.get(id) ? `${nameOf(id)}: ${groupHint.get(id)}` : "").filter(Boolean).join("; ") || null,
       product: row.kind === "PM" ? row.sku_ids.map(nameOf).join("; ") : row.prodshade_ids.map(nameOf).join("; "),
       source: row.kind === "PM" ? `Pack BOM (${row.sku_ids.map(nameOf).join("; ")})` : row.stroke_ids.map(strokeLabel).join("; "),
       group_label: row.group_id ? groupLabel.get(row.group_id) ?? "—" : null,
@@ -306,6 +346,25 @@ export async function computePlanning(p: PlanningParams) {
       uom: uom(row.material_id),
     })),
   };
+}
+
+/** PO21 product groups (mother → child → prodshade) of the company; read-only. */
+async function loadProdshadeGroups(companyId: string): Promise<Map<string, { mother: string; child: string }>> {
+  const [mothers, children, members] = await Promise.all([
+    serviceRoleClient.schema("erp_planning").from("prodshade_mother_group").select("id, group_name").eq("company_id", companyId).eq("is_active", true),
+    serviceRoleClient.schema("erp_planning").from("prodshade_child_group").select("id, group_name, mother_group_id").eq("company_id", companyId).eq("is_active", true),
+    serviceRoleClient.schema("erp_planning").from("prodshade_group_member").select("prodshade_material_id, child_group_id").eq("company_id", companyId).eq("is_active", true),
+  ]);
+  const result = new Map<string, { mother: string; child: string }>();
+  if (mothers.error || children.error || members.error) return result; // groups are labels only; never block planning
+  const motherName = new Map(((mothers.data ?? []) as JsonRecord[]).map((m) => [text(m.id), text(m.group_name)]));
+  const childById = new Map(((children.data ?? []) as JsonRecord[]).map((c) => [text(c.id), c]));
+  for (const member of (members.data ?? []) as JsonRecord[]) {
+    const child = childById.get(text(member.child_group_id));
+    if (!child) continue;
+    result.set(text(member.prodshade_material_id), { mother: motherName.get(text(child.mother_group_id)) ?? "", child: text(child.group_name) });
+  }
+  return result;
 }
 
 export async function getMtsPlanningHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
