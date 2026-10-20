@@ -95,3 +95,17 @@ For a month M with **no PO21 plan**, per SKU:
    exactly the sheet's same-day rate?
 3. **Where the page lives** — inside PO22 as a full-page view (no new menu code), OK?
 4. **Rescheduled ETA rights** — SCM / Director / ACL-MASTER only, OK?
+
+## 8. Owner answers (2026-10-20)
+
+1. Forecast formula (§4): **OK** (½ / ½, trend cap 0.7 – 1.3).
+2. Max / Min days: **forward-walking use** (yes).
+3. Page: **inside PO22** (the full-page Planning view that already exists there). It is **not only a
+   family page** — the user can pick **any individual item**. If the item belongs to a group, family
+   rules apply (closure, prodshade prorata, Method C); if not (e.g. Pulmix 4033, RM-00075, no group)
+   there is no family part, everything else is the same (day grid, arrivals, Future Orders,
+   transfers, Max / Min days).
+4. Reschedule: **the system never writes into CSN Tracker.** It shows the suggested / planned
+   reschedule in the report; the user changes the CSN. The planning-side rescheduled ETA (§5) is
+   kept as a planning value; who may enter it = PO22 full authority (SCM / Director / ACL-MASTER)
+   unless the owner says otherwise.
