@@ -55,6 +55,7 @@ import {
   buildToBaseFactors,
   canonicalJson,
   computeLeadTime,
+  suggestSafetyDays,
   type ConfiguredLeadTime,
   consumptionFromConsBucket,
   type GroupMember,
@@ -648,7 +649,7 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
       .select("vendor_id, material_id, booking_time_days").eq("status", "ACTIVE").in("material_id", chunk)),
     fetchAllPages(() => serviceRoleClient.schema("erp_master").from("vendor_company_map").select("id, vendor_id").eq("company_id", companyId).eq("active", true).order("id"), "MTS_REQ_VENDOR_MAP_LOAD_FAILED"),
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_procurement").from("consignment_note")
-      .select("material_id, po_id, grn_date").eq("company_id", companyId).eq("status", "GRD").not("grn_date", "is", null).in("material_id", chunk)),
+      .select("material_id, po_id, grn_date, vendor_id, csn_type, lr_date, etd, gate_entry_date").eq("company_id", companyId).eq("status", "GRD").not("grn_date", "is", null).in("material_id", chunk)),
     serviceRoleClient.rpc("history_lead_time_samples", { p_company_id: companyId }),
   ]);
   const companyVendors = new Set(vendorMapRows.map((v) => text(v.vendor_id)));
@@ -716,17 +717,36 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
       const booking = bookingDays.get(`${vendorId}|${materialId}`) ?? 0;
       const bookingText = booking > 0 ? `booking ${booking} + ` : "";
       for (const row of domesticRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
-        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), route_days: Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
       }
       for (const row of importRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
         const sail = Number(row.sail_time_days ?? 0);
         const clearance = Number(row.clearance_days ?? 0);
         const inlandDays = inland.get(text(row.port_of_discharge_id));
         const days = booking + sail + clearance + (inlandDays ?? 0);
-        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
       }
     }
-    result.set(materialId, computeLeadTime(configured, observed.get(materialId) ?? []));
+    // Suggested safety days: how late received shipments arrived against their route time.
+    const routeByVendor = new Map<string, number>();
+    for (const c of configured) {
+      if (c.vendor_id && c.route_days !== undefined) routeByVendor.set(`${c.vendor_id}|${c.route}`, Math.max(routeByVendor.get(`${c.vendor_id}|${c.route}`) ?? 0, c.route_days));
+    }
+    const delays: number[] = [];
+    for (const csn of receivedCsns.filter((c) => text(c.material_id) === materialId)) {
+      const route = text(csn.csn_type).toUpperCase() === "IMPORT" ? "IMPORT" : "DOMESTIC";
+      const routeDays = routeByVendor.get(`${text(csn.vendor_id)}|${route}`);
+      const dispatch = text(route === "IMPORT" ? csn.etd : csn.lr_date);
+      const arrival = text(csn.gate_entry_date) || text(csn.grn_date);
+      if (routeDays === undefined || !dispatch || !arrival || arrival < dispatch) continue;
+      delays.push(Math.round((Date.parse(`${arrival}T00:00:00Z`) - Date.parse(`${dispatch}T00:00:00Z`)) / 86_400_000) - routeDays);
+    }
+    const routeOnly = configured.map((c) => c.route_days).filter((d): d is number => d !== undefined);
+    const suggestion = suggestSafetyDays(routeOnly.length ? Math.max(...routeOnly) : null, delays);
+    result.set(materialId, {
+      ...computeLeadTime(configured, observed.get(materialId) ?? []),
+      suggested_critical_days: suggestion.critical, suggested_target_days: suggestion.target, delay_sample_count: suggestion.samples,
+    });
   }
   return result;
 }
@@ -1122,6 +1142,9 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
           lead_time_configured_max: lead?.configured_max ?? null,
           lead_time_observed_max: lead?.observed_max ?? null,
           lead_time_observed_count: lead?.observed_count ?? 0,
+          suggested_critical_days: lead?.suggested_critical_days ?? null,
+          suggested_target_days: lead?.suggested_target_days ?? null,
+          delay_sample_count: lead?.delay_sample_count ?? 0,
         };
       })
       .sort((a, b) => a.material_type.localeCompare(b.material_type) || a.material_name.localeCompare(b.material_name));

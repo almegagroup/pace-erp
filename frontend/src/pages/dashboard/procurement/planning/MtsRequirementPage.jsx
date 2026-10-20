@@ -972,6 +972,24 @@ function SettingsTab({ companyId, asOf, access, today }) {
       filterValue: (r) => (errors[r.material_id] ? "Error" : drafts[r.material_id] ? "Unsaved" : ""),
     },
     {
+      key: "suggested", label: "Suggested T / C (no booking)", width: "210px", filterable: false,
+      render: (r) => (r.suggested_target_days === null && r.suggested_critical_days === null ? <span className="text-slate-400">No route / history</span> : (
+        <span className="flex items-center gap-2">
+          <span title={`Critical = p90 of how late ${r.delay_sample_count} received shipment(s) arrived vs route time; Target = route time + Critical. Booking Time not included.`}>
+            T {fmtDays(r.suggested_target_days) || "—"} / C {fmtDays(r.suggested_critical_days) || "—"}
+            <span className="text-xs text-slate-500"> ({r.delay_sample_count} shipments)</span>
+          </span>
+          {canEdit && r.suggested_target_days !== null ? (
+            <button type="button" onClick={() => {
+              setField(r.material_id, "target_cov_days", String(r.suggested_target_days));
+              if (r.suggested_critical_days !== null) setField(r.material_id, "critical_cov_days", String(r.suggested_critical_days));
+            }} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Use</button>
+          ) : null}
+        </span>
+      )),
+      copyValue: (r) => `${r.suggested_target_days ?? ""}/${r.suggested_critical_days ?? ""}`,
+    },
+    {
       key: "lead_time", label: "Lead Time (verified)", width: "200px",
       render: (r) => (r.lead_time_effective === null ? <span className="text-slate-400">Unknown</span> : `${fmtDays(r.lead_time_effective)} d · ${r.lead_time_source}`),
       copyValue: (r) => r.lead_time_effective ?? "",

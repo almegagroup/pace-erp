@@ -16,6 +16,7 @@ import {
   buildToBaseFactors,
   canonicalJson,
   computeLeadTime,
+  suggestSafetyDays,
   computeMaterialMetrics,
   consumptionFromConsBucket,
   coverageDays,
@@ -758,4 +759,11 @@ Deno.test("Method C: a narrower group (fewer members) is served before a broader
   ], [], true, { locationRoles: roles });
   assertEqual([alloc.groups.get("RDP_TLA")!.drawnByMaterial.get("VIN"), sum(alloc.groups.get("RDP_TLA")!.uncoveredByDay)], [80, 0], "RDP_TLA fully covered by VIN");
   assertEqual([alloc.groups.get("RDP")!.drawnByMaterial.get("RP"), sum(alloc.groups.get("RDP")!.uncoveredByDay)], [100, 50], "broad RDP runs on RP; its shortage is the one with alternatives to buy");
+});
+
+Deno.test("suggested safety days: Critical = p90 delay vs route (early = 0), Target = route + Critical, no booking", () => {
+  // route 35 d; 10 shipments late by 0..9 days (two arrived early → 0)
+  assertEqual(suggestSafetyDays(35, [-3, -1, 2, 3, 4, 5, 6, 7, 8, 9]), { critical: 9, target: 44, samples: 10 }, "p90 of 0,0,2..9 = 8.1 → 9 (rounded up)");
+  assertEqual(suggestSafetyDays(35, []), { critical: null, target: 35, samples: 0 }, "no history → Target = route only");
+  assertEqual(suggestSafetyDays(null, [4]), { critical: 4, target: null, samples: 1 }, "no route → Target unknown");
 });

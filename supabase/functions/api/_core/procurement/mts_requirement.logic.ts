@@ -1350,7 +1350,11 @@ export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. Lead time
 // ─────────────────────────────────────────────────────────────────────────────
-export type ConfiguredLeadTime = { vendor_label: string; route: "DOMESTIC" | "IMPORT"; days: number; detail: string; vendor_id?: string };
+export type ConfiguredLeadTime = {
+  vendor_label: string; route: "DOMESTIC" | "IMPORT"; days: number; detail: string; vendor_id?: string;
+  /** Route time only (transit / sail + clearance + inland), Booking Time excluded. */
+  route_days?: number;
+};
 export type LeadTimeResult = {
   configured_min: number | null;
   configured_max: number | null;
@@ -1362,7 +1366,26 @@ export type LeadTimeResult = {
   legacy_equivalent: number | null; // observed max + 4 (sheet: MAXIFS(CONSOILI_MVT!R, material) + 4)
   effective: number | null;
   effective_source: "CONFIGURED_MAX" | "LEGACY_MAX_PLUS_4" | "UNKNOWN";
+  /** Owner-approved suggestion (advisory, never applied automatically), Booking Time excluded. */
+  suggested_critical_days?: number | null;
+  suggested_target_days?: number | null;
+  delay_sample_count?: number;
 };
+
+/**
+ * Suggested safety days (owner 2026-10-19, Booking Time excluded):
+ *   Suggested Critical = p90 of how many days received shipments arrived later than their route
+ *                        time (arrival − dispatch − route days; early = 0);
+ *   Suggested Target   = longest route time of the material's vendors + Suggested Critical.
+ * No delay history → Critical unknown and Target = route time alone (still a lower bound).
+ */
+export function suggestSafetyDays(routeOnlyMaxDays: number | null, delayDays: number[]): { critical: number | null; target: number | null; samples: number } {
+  const valid = delayDays.filter((d) => Number.isFinite(d)).map((d) => Math.max(0, d)).sort((a, b) => a - b);
+  const p90 = percentile(valid, 0.9);
+  const critical = p90 === null ? null : Math.ceil(p90);
+  const target = routeOnlyMaxDays === null ? null : routeOnlyMaxDays + (critical ?? 0);
+  return { critical, target, samples: valid.length };
+}
 
 export const LEGACY_LEAD_TIME_BUFFER_DAYS = 4;
 
