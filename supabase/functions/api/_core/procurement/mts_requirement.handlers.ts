@@ -93,6 +93,7 @@ const RESOURCE_POLICY = "PROC_MTS_REQUIREMENT_POLICY";
 const OPEN_RESERVATION_STATUSES = ["OPEN", "PARTIAL"];
 const OPEN_PO_LINE_STATUSES = ["OPEN", "PARTIALLY_RECEIVED"];
 const OPEN_CSN_STATUSES = ["ORD", "TRN"];
+const EPSILON_QTY = 0.000001;
 const MAX_POLICY_ROWS_PER_SAVE = 2000;
 // Stock-history RPC rows = materials × locations × stock types; 40 materials per
 // call keeps one call well inside one PostgREST page.
@@ -406,7 +407,123 @@ export async function loadLocationRoles(companyId: string): Promise<Map<string, 
   return new Map((data as JsonRecord[]).map((row) => [text(row.storage_location_id), text(row.role) as LocationRole]));
 }
 
-type InboundLoad = { events: InboundEvent[]; warnings: Warning[]; poNumbers: number; csnCount: number };
+type InboundLoad = {
+  events: InboundEvent[]; warnings: Warning[]; poNumbers: number; csnCount: number;
+  /** material → posted stock here already promised to another company (open Sub-CSN / STO). */
+  committedTransferOut: Map<string, number>;
+};
+
+type SubCsnTransfers = {
+  /** PO line id → base qty of the still-open line promised to other companies. */
+  committedByPoLine: Map<string, number>;
+  committedStockByMaterial: Map<string, number>;
+  events: InboundEvent[];
+  warnings: Warning[];
+};
+
+const STO_CLOSED_STATUSES = new Set(["CLOSED", "CANCELLED"]);
+
+/**
+ * Distribution mode (owner 2026-10-20, design §88.3–§88.5). A Sub-CSN splits one company's PO
+ * between companies. The PO company receives (GE + GRN) the full quantity, then sends each share
+ * on an STO (the Sub-CSN turns in place into that STO's CSN). Until a share is put on a Delivery
+ * Order (which reserves the stock and marks the STO line dispatched):
+ *   - sending company: the share is not its own — removed from the open PO line first, and from
+ *     its posted stock for whatever part of the line has already been received (received first);
+ *   - receiving company: the share is an incoming quantity on the Sub-CSN / STO date.
+ * Once on a Delivery Order the share is handled by the reservation (sender) and by the STO CSN
+ * in transit (receiver), so it is not counted here again.
+ */
+async function loadSubCsnTransfers(companyId: string, materials: Map<string, MaterialInfo>, universe: Set<string>): Promise<SubCsnTransfers> {
+  const result: SubCsnTransfers = { committedByPoLine: new Map(), committedStockByMaterial: new Map(), events: [], warnings: [] };
+  const subs = await fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("consignment_note")
+    .select("id, csn_number, status, company_id, consignee_company_id, vendor_id, material_id, po_id, po_line_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_id, sto_line_id")
+    .not("mother_csn_id", "is", null).in("status", OPEN_CSN_STATUSES)
+    .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId},vendor_id.eq.${companyId}`).order("id"), "MTS_REQ_SUB_CSN_LOAD_FAILED");
+  const relevant = subs.filter((s) => universe.has(text(s.material_id)));
+  if (relevant.length === 0) return result;
+  const stoIds = unique(relevant.map((s) => text(s.sto_id)).filter(Boolean));
+  const stoLineIds = unique(relevant.map((s) => text(s.sto_line_id)).filter(Boolean));
+  const poLineIds = unique(relevant.map((s) => text(s.po_line_id)).filter(Boolean));
+  const poIds = unique(relevant.map((s) => text(s.po_id)).filter(Boolean));
+  const [stos, stoLines, poLines, pos] = await Promise.all([
+    stoIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(stoIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, status, sending_company_id, receiving_company_id").in("id", chunk)),
+    stoLineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(stoLineIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("stock_transfer_order_line").select("id, quantity, dispatched_qty, uom_code, line_status, expected_delivery_date").in("id", chunk)),
+    poLineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(poLineIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order_line").select("id, ordered_qty, ordered_qty_base_uom, po_uom_code, open_qty, line_status").in("id", chunk)),
+    poIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(poIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order").select("id, po_number").in("id", chunk)),
+  ]);
+  const stoById = new Map(stos.map((r) => [text(r.id), r]));
+  const stoLineById = new Map(stoLines.map((r) => [text(r.id), r]));
+  const poLineById = new Map(poLines.map((r) => [text(r.id), r]));
+  const poNumberById = new Map(pos.map((r) => [text(r.id), text(r.po_number)]));
+  const ratioOf = (line: JsonRecord | undefined) => {
+    const ordered = Number(line?.ordered_qty ?? 0);
+    const orderedBase = Number(line?.ordered_qty_base_uom ?? 0);
+    return ordered > 0 && orderedBase > 0 ? orderedBase / ordered : null;
+  };
+  const committedPerLine = new Map<string, { materialId: string; qty: number }>();
+  for (const sub of relevant) {
+    const materialId = text(sub.material_id);
+    const material = materials.get(materialId);
+    const poLine = poLineById.get(text(sub.po_line_id));
+    const ref = `Sub-CSN ${text(sub.csn_number)} · PO ${poNumberById.get(text(sub.po_id)) || "?"}`;
+    let sender: string; let receiver: string; let qtyBase: number | null; let date: string | null;
+    if (text(sub.sto_id)) {
+      const sto = stoById.get(text(sub.sto_id));
+      const line = stoLineById.get(text(sub.sto_line_id));
+      if (!sto || !line || STO_CLOSED_STATUSES.has(text(sto.status)) || text(line.line_status) === "KNOCKED_OFF") continue;
+      sender = text(sto.sending_company_id);
+      receiver = text(sto.receiving_company_id);
+      const open = Math.max(0, Number(line.quantity ?? 0) - Number(line.dispatched_qty ?? 0));
+      if (open <= EPSILON_QTY) continue;
+      qtyBase = toMaterialBase(material, open, text(line.uom_code));
+      date = text(line.expected_delivery_date) || text(sub.eta_to_plant_calculated) || null;
+    } else {
+      sender = text(sub.company_id);
+      receiver = text(sub.consignee_company_id);
+      if (!receiver || receiver === sender) continue;
+      const share = Number(sub.dispatch_qty ?? 0) - Number(sub.total_received_qty ?? 0);
+      if (!(Number(sub.dispatch_qty ?? 0) > EPSILON_QTY)) {
+        result.warnings.push({ code: "SUB_CSN_QTY_MISSING", message: `${ref}: the Sub-CSN has no quantity yet, so its share is still counted at the PO company. Enter the Sub-CSN quantity in CSN Tracker.`, material_id: materialId });
+        continue;
+      }
+      if (share <= EPSILON_QTY) continue;
+      const unit = text(sub.po_uom_code).toUpperCase();
+      const ratio = ratioOf(poLine);
+      qtyBase = ratio && unit === text(poLine?.po_uom_code).toUpperCase() ? share * ratio : toMaterialBase(material, share, unit);
+      date = text(sub.eta_to_plant_calculated) || null;
+    }
+    if (qtyBase === null) {
+      result.warnings.push({ code: "SUB_CSN_UOM_CONVERSION_MISSING", message: `${ref}: unit has no verified conversion; the transfer is not counted.`, material_id: materialId });
+      continue;
+    }
+    if (receiver === companyId && sender !== companyId) {
+      result.events.push({ material_id: materialId, qty: qtyBase, date, kind: "SUB_CSN_PLANNED", date_source: date ? "SUB_CSN_ETA" : "NONE", reference: `${ref} (planned transfer from another company)` });
+    } else if (sender === companyId && receiver !== companyId) {
+      const key = text(sub.po_line_id) || `stock:${text(sub.id)}`;
+      const entry = committedPerLine.get(key) ?? { materialId, qty: 0 };
+      entry.qty += qtyBase;
+      committedPerLine.set(key, entry);
+    }
+  }
+  // Split each PO line's promised quantity: received part first (already in our stock), rest from the open line.
+  for (const [key, { materialId, qty }] of committedPerLine) {
+    const line = poLineById.get(key);
+    const ratio = ratioOf(line);
+    const isOpen = !!line && OPEN_PO_LINE_STATUSES.includes(text(line.line_status));
+    const receivedBase = line && ratio ? Math.max(0, Number(line.ordered_qty ?? 0) - Number(line.open_qty ?? 0)) * ratio : qty;
+    const openBase = isOpen && ratio ? Math.max(0, Number(line!.open_qty ?? 0)) * ratio : 0;
+    const fromStock = Math.min(qty, receivedBase);
+    const fromOpen = Math.min(qty - fromStock, openBase);
+    if (fromStock > EPSILON_QTY) result.committedStockByMaterial.set(materialId, (result.committedStockByMaterial.get(materialId) ?? 0) + fromStock);
+    if (fromOpen > EPSILON_QTY) result.committedByPoLine.set(key, fromOpen);
+  }
+  return result;
+}
 
 /** Open PO lines of this company → GE / CSN / lot / remainder partition; plus STO CSNs into this company. */
 async function loadInbound(companyId: string, asOf: string, materials: Map<string, MaterialInfo>, universe: Set<string>): Promise<InboundLoad> {
@@ -423,22 +540,27 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
   const lineIds = lines.map((l) => text(l.id));
   const lotLineIds = lines.filter((l) => poById.get(text(l.po_id))?.order_in_lot === true).map((l) => text(l.id));
 
-  const [geLines, csns, lots, stoCsns] = await Promise.all([
+  const [geLines, csns, lots, stoCsns, transfers] = await Promise.all([
     lineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("gate_entry_line")
       .select("po_line_id, ge_qty, uom_code, gate_entry_id, grn_posted")
       .in("po_line_id", chunk).eq("grn_posted", false)),
     lineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("consignment_note")
-      .select("id, csn_number, status, po_line_id, dispatch_qty, total_received_qty, eta_to_plant_calculated, is_mother_csn, consignee_company_id")
+      .select("id, csn_number, status, po_line_id, dispatch_qty, total_received_qty, eta_to_plant_calculated, is_mother_csn, consignee_company_id, sto_id")
       .in("po_line_id", chunk).in("status", OPEN_CSN_STATUSES)),
     lotLineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : serviceRoleClient.schema("erp_procurement")
       .rpc("po_lot_balances", { p_po_line_ids: lotLineIds, p_exclude_ge_line_id: null })
       .then(({ data, error }) => { if (error) throw new Error("MTS_REQ_LOT_LOAD_FAILED"); return (data ?? []) as JsonRecord[]; }),
     fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("consignment_note")
-      .select("id, csn_number, status, material_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_line_id")
-      .eq("consignee_company_id", companyId).not("sto_line_id", "is", null).in("status", OPEN_CSN_STATUSES).order("id"), "MTS_REQ_STO_CSN_LOAD_FAILED"),
+      .select("id, csn_number, status, company_id, consignee_company_id, material_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_line_id")
+      // An STO CSN's company is the receiving company (consignee blank), or the consignee when set.
+      .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId}`)
+      .not("sto_line_id", "is", null).in("status", OPEN_CSN_STATUSES).order("id"), "MTS_REQ_STO_CSN_LOAD_FAILED")
+      .then((rows) => rows.filter((c) => (text(c.consignee_company_id) || text(c.company_id)) === companyId)),
+    loadSubCsnTransfers(companyId, materials, universe),
   ]);
+  warnings.push(...transfers.warnings);
   const geIds = unique(geLines.map((g) => text(g.gate_entry_id)));
   const csnIds = csns.map((c) => text(c.id));
   const [gateHeaders, children] = await Promise.all([
@@ -459,7 +581,8 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
     const ratio = ordered > 0 && orderedBase > 0 ? orderedBase / ordered : null;
     const poUom = text(line.po_uom_code).toUpperCase();
     const material = materials.get(materialId);
-    const lineCsns = csns.filter((c) => text(c.po_line_id) === text(line.id));
+    // A Sub-CSN mapped to an STO belongs to that STO now (counted by loadSubCsnTransfers / STO CSNs).
+    const lineCsns = csns.filter((c) => text(c.po_line_id) === text(line.id) && !text(c.sto_id));
     // Cross-company receipt: the goods land at the consignee, not here.
     const foreign = lineCsns.filter((c) => text(c.consignee_company_id) && text(c.consignee_company_id) !== companyId);
     if (foreign.length > 0) {
@@ -494,6 +617,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       })),
       lots: lots.filter((lot) => text(lot.po_line_id) === text(line.id) && !["CANCELLED", "CLOSED"].includes(text(lot.status)))
         .map((lot) => ({ lot_number: text(lot.lot_number), balance_qty: Number(lot.balance_qty ?? 0), delivery_date: text(lot.delivery_date) || null })),
+      committed_transfer_base: transfers.committedByPoLine.get(text(line.id)) ?? 0,
     };
     events.push(...partitionPoLineInbound(input, asOf, warnings));
   }
@@ -512,7 +636,8 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       date_source: text(csn.eta_to_plant_calculated) ? "CSN_ETA_TO_PLANT" : "NONE", reference: `STO CSN ${text(csn.csn_number)} (${text(csn.status)})`,
     });
   }
-  return { events, warnings, poNumbers: pos.length, csnCount: csns.length + stoCsns.length };
+  events.push(...transfers.events);
+  return { events, warnings, poNumbers: pos.length, csnCount: csns.length + stoCsns.length, committedTransferOut: transfers.committedStockByMaterial };
 }
 
 /** Configured vendor transit + observed (ERP received CSNs + imported history) per material. */
@@ -751,6 +876,7 @@ export async function computeRequirement(companyId: string, calendar: PlanningCa
     leadTimes,
     materialUniverse: universe.filter((id) => ["RM", "PM"].includes(materials.get(id)?.material_type ?? "")),
     locationRoles: locationRoles ?? undefined,
+    committedTransferOut: inbound.committedTransferOut,
   };
   const output = buildRequirementRows(input);
   const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
@@ -828,6 +954,9 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         intransit_total: row.inbound.total,
         from_stock_qty: row.from_stock_qty,
         stock_excluded: row.stock.excluded_unrestricted,
+        stock_committed_transfer_out: row.stock.committed_transfer_out,
+        stock_exclusive_protected: row.stock.exclusive_protected,
+        stock_protection_used: row.stock.protection_used,
         fixed_demand_qty: row.fixed_demand_qty,
         group_share_qty: row.group_share_qty,
         // D1/D12: stock in a transfer-source location (R003, F-series, unconfigured) is shown, not counted.

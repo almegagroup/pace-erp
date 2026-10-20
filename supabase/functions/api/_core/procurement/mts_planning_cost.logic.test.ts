@@ -15,7 +15,7 @@ Deno.test("FX: manual beats auto on the same date; earlier date is stale; INR = 
 });
 
 Deno.test("FX D11: BOE rate > table rate on BOE date > today", () => {
-  equal(pickCsnFxRate(rows, "USD", "2026-10-19", "2026-10-16", 84).source, "BOE", "BOE rate");
+  equal(pickCsnFxRate(rows, "USD", "2026-10-19", "2026-10-16", 84)?.source, "BOE", "BOE rate");
   equal(pickCsnFxRate(rows, "USD", "2026-10-19", "2026-10-16", null)?.inr_per_unit, 83.1, "BOE date rate");
   equal(pickCsnFxRate(rows, "USD", "2026-10-19", null, null)?.inr_per_unit, 83.5, "today when BOE date blank");
 });

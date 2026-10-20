@@ -21,7 +21,7 @@ function row(id: string, stock: number, daily: Array<[string, number]>, target =
   return {
     material_id: id, kind: "RM",
     metrics: {} as RequirementRow["metrics"],
-    stock: { usable_at_required: stock, unrestricted_at_required: stock, reserved_at_required: 0, other_sloc_unrestricted: 0, excluded_unrestricted: 0, quality_inspection: 0, blocked: 0, other_stock_types: 0, required_locations: [], other_locations: [] },
+    stock: { usable_at_required: stock, unrestricted_at_required: stock, reserved_at_required: 0, other_sloc_unrestricted: 0, excluded_unrestricted: 0, quality_inspection: 0, blocked: 0, other_stock_types: 0, required_locations: [], other_locations: [], committed_transfer_out: 0, exclusive_protected: 0, protection_used: 0 },
     inbound: { overdue: 0, cm: 0, nm: 0, later: 0, unknown: 0, total: 0, dispatched: 0, open_po: 0 },
     inbound_events: [], pools: [], lead_time: null,
     policy: { material_id: id, effective_from: "2026-01-01", target_cov_days: target, critical_cov_days: 2, moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 1 },

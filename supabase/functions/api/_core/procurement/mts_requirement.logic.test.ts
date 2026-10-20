@@ -665,3 +665,81 @@ Deno.test("Store report rows reconcile: executable + not backed = line demand; e
   near(executableA, 500, "RM-A executable = its 500 counted stock, never the 1000 in transit");
   assert(output.store_rows.every((r) => r.executable_qty === 0 || r.not_backed_qty === 0), "a row is either executable or not backed");
 });
+
+// ── Owner Method C (2026-10-20): exclusive protection, free stock, most-free-first ─────────
+Deno.test("Method C: primary keeps Target days of its exclusive use; group runs on free stock, most free first", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!; // horizon Nov 1 .. Dec 31 = 61 days
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);
+  const records = [
+    rec({ day: "2026-11-02", pool_key: "X", candidates: ["GAB"], qty: 610 }),                                       // exclusive: 10/day
+    rec({ day: "2026-11-03", pool_key: "G", group_id: "MHEC", use_primary: true, candidates: ["GAB", "TS", "COMBI"], qty: 2000 }),
+  ];
+  const stockRows = [
+    { material_id: "GAB", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 1500 },
+    { material_id: "TS", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 400 },
+    { material_id: "COMBI", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 5000 },
+  ];
+  const alloc = allocateDemand(records, calendar, stockRows, [], true, {
+    locationRoles: roles, protectionDays: new Map([["GAB", { critical_days: 10, target_days: 30 }]]),
+  });
+  // GAB: 1500 − 610 exclusive = 890 left; protected 10/day × 30 = 300 → free 590 (primary first).
+  assertEqual(alloc.stock.get("GAB")!.exclusive_protected, 300, "Target days of exclusive use protected");
+  const group = alloc.groups.size === 0 ? null : alloc.groups.get("MHEC");
+  assertEqual(group, null, "Use Primary = Yes is not a group-owned pool");
+  assertEqual([alloc.groupShareByMaterial.get("GAB"), alloc.groupShareByMaterial.get("COMBI"), alloc.groupShareByMaterial.get("TS") ?? 0], [590, 1410, 0], "primary free stock, then most free (COMBI), TS untouched");
+  assertEqual(alloc.stock.get("GAB")!.protection_used, 0, "no protected stock used");
+});
+
+Deno.test("Method C: Use Primary = No / group-owned pool draws the member with most free stock first", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);
+  const alloc = allocateDemand([rec({ pool_key: "G", group_id: "RDP", use_primary: false, candidates: ["A", "B", "C"], qty: 150 })], calendar, [
+    { material_id: "A", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 100 },
+    { material_id: "B", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 300 },
+    { material_id: "C", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 200 },
+  ], [], true, { locationRoles: roles });
+  const drawn = alloc.groups.get("RDP")!.drawnByMaterial;
+  assertEqual([drawn.get("A") ?? 0, drawn.get("B"), drawn.get("C") ?? 0], [0, 150, 0], "B (most free) covers it");
+});
+
+Deno.test("Method C fallback: group uses protected stock (Target part, then Critical) only when free stock runs out, and warns", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);
+  const records = [
+    rec({ day: "2026-11-02", pool_key: "X", candidates: ["A"], qty: 610 }), // 10/day
+    rec({ day: "2026-11-03", pool_key: "G", group_id: "G", use_primary: false, candidates: ["A", "B"], qty: 300 }),
+  ];
+  const alloc = allocateDemand(records, calendar, [
+    { material_id: "A", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 1010 }, // 400 left: critical 100, target 300
+    { material_id: "B", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 50 },
+  ], [], true, { locationRoles: roles, protectionDays: new Map([["A", { critical_days: 10, target_days: 30 }]]) });
+  const drawn = alloc.groups.get("G")!.drawnByMaterial;
+  // free: A 100, B 50 → 150; then Target part of A (200) → 150 more; Critical part untouched.
+  assertEqual([drawn.get("A"), drawn.get("B")], [250, 50], "free first, then protected Target part");
+  assertEqual(alloc.stock.get("A")!.protection_used, 150, "protected stock used is recorded");
+  assertEqual(sum(alloc.groups.get("G")!.uncoveredByDay), 0, "production does not stop");
+});
+
+Deno.test("Distribution mode: stock promised to another company by a Sub-CSN is not usable here", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);
+  const alloc = allocateDemand([rec({ candidates: ["MHEC"], qty: 20000 })], calendar, [
+    { material_id: "MHEC", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 24000 },
+  ], [], true, { locationRoles: roles, committedTransferOut: new Map([["MHEC", 15000]]) });
+  assertEqual([alloc.stock.get("MHEC")!.usable_at_required, alloc.stock.get("MHEC")!.committed_transfer_out, sum(alloc.fromStockByMaterial.get("MHEC"))], [9000, 15000, 9000], "24 MT GR'd, 15 MT goes to other companies");
+});
+
+Deno.test("Distribution mode: Sub-CSN share of an open PO line is removed before the remainder", () => {
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "MHEC", po_number: "PO125", line_number: 1, open_qty: 24000, base_per_po_unit: 1, expected_delivery_date: "2026-11-17",
+    at_gate: [], csns: [{ csn_number: "M", status: "ORD", dispatch_qty: 0, received_qty: 0, eta: "2026-11-17", is_mother_with_children: true }], lots: [],
+    committed_transfer_base: 24000,
+  }, "2026-10-20", warnings);
+  assertEqual(events.length, 0, "everything is for other companies → nothing inbound for the PO company");
+  const partial = partitionPoLineInbound({
+    material_id: "MHEC", po_number: "PO125", line_number: 1, open_qty: 24000, base_per_po_unit: 1, expected_delivery_date: "2026-11-17",
+    at_gate: [], csns: [], lots: [], committed_transfer_base: 15000,
+  }, "2026-10-20", warnings);
+  assertEqual(partial.map((e) => [e.kind, e.qty]), [["PO_REMAINDER", 9000]], "own 9 MT remains");
+});

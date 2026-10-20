@@ -171,6 +171,15 @@ function textColumn(key, label, group, options = {}) {
   };
 }
 
+const INBOUND_KIND_LABELS = {
+  AT_GATE: "At gate (GRN pending)",
+  IN_TRANSIT: "In transit (CSN)",
+  SCHEDULED_LOT: "PO lot",
+  PO_REMAINDER: "Open PO",
+  STO_IN_TRANSIT: "STO in transit",
+  SUB_CSN_PLANNED: "Sub-CSN transfer (planned)",
+};
+
 export default function MtsRequirementPage() {
   const { runtimeContext } = useMenu();
   const today = todayLocal();
@@ -339,6 +348,9 @@ function buildReportColumns(expanded, toggleExpanded) {
     qtyColumn("stock_other_sloc", "Not counted — transfer (R003 / F…)", "stock", { width: "170px" }),
     textColumn("transfer_suggestion", "Transfer Suggestion", "stock", { width: "200px", render: (r) => (r.transfer_suggestion ? <span className="font-semibold text-amber-800">{r.transfer_suggestion}</span> : dash(null)) }),
     qtyColumn("stock_excluded", "Excluded (OT…)", "stock", { width: "110px" }),
+    qtyColumn("stock_committed_transfer_out", "Promised to other company (Sub-CSN)", "stock", { width: "170px" }),
+    qtyColumn("stock_exclusive_protected", "Kept for own exclusive use", "stock", { width: "150px" }),
+    qtyColumn("stock_protection_used", "Protected stock used by groups", "stock", { width: "160px" }),
     qtyColumn("fixed_demand_qty", "Own fixed demand (CM+NM)", "stock", { width: "150px" }),
     qtyColumn("group_share_qty", "Used by groups (CM+NM)", "stock", { width: "140px" }),
     qtyColumn("stock_qa", "QA Stock", "stock", { width: "90px" }),
@@ -461,7 +473,7 @@ function SourceDetail({ row }) {
     { key: "prodshades", label: "Prodshade(s) (PO21 plan)", width: "260px", render: (p) => p.prodshades.join("; "), copyValue: (p) => p.prodshades.join("; ") },
   ];
   const inboundColumns = [
-    { key: "kind", label: "Kind", width: "120px" },
+    { key: "kind", label: "Kind", width: "150px", render: (e) => INBOUND_KIND_LABELS[e.kind] ?? e.kind, copyValue: (e) => INBOUND_KIND_LABELS[e.kind] ?? e.kind },
     { key: "reference", label: "Document (PO / CSN / GE / Lot)", width: "360px" },
     { key: "date", label: "ETA to Plant", width: "100px", render: (e) => e.date ?? "UNKNOWN", copyValue: (e) => e.date ?? "UNKNOWN" },
     { key: "date_source", label: "Date Source", width: "180px" },

@@ -846,6 +846,15 @@ export type MaterialStockPosition = {
   other_stock_types: number;       // IN_TRANSIT / FOR_REPROCESS / RESERVED stock types
   required_locations: string[];    // counted (pooled mode) or required locations
   other_locations: string[];       // transfer-source locations holding stock
+  /**
+   * Posted stock already promised to another company by an open Sub-CSN / its STO (owner
+   * 2026-10-20, Distribution mode). Taken out of usable stock; it leaves on the STO.
+   */
+  committed_transfer_out: number;
+  /** Method C: usable stock kept back for this material's own exclusive use after the horizon. */
+  exclusive_protected: number;
+  /** Method C fallback: protected stock a group still had to use (shortage would stop production). */
+  protection_used: number;
 };
 
 /** Company planning role of a storage location (owner D1/D12). */
@@ -902,14 +911,22 @@ export function isGroupOwnedPool(record: Pick<DemandRecord, "group_id" | "kind" 
 export type AllocationOptions = {
   /** Company location policy; when present stock is pooled over COUNTED locations (owner D12). */
   locationRoles?: Map<string, LocationRole>;
+  /** material → base qty of posted stock promised to another company (open Sub-CSN / STO). */
+  committedTransferOut?: Map<string, number>;
+  /** material → Critical / Target days that protect its own exclusive use from group draws (Method C). */
+  protectionDays?: Map<string, { critical_days: number | null; target_days: number | null }>;
 };
 
 /**
  * Same "count once" rule production uses (computeMtsAutoDeriveRowsForGroup,
  * process_order.handlers.ts), with the owner's D3 order:
  *   pass 1 — FIXED lines (one material only) draw from their own material's stock, by date;
- *   pass 2 — GROUP lines draw from what is left, by date: the procurement target first
- *            (primary when Use Primary = Yes), then other members smallest-available-first.
+ *   pass 2 — GROUP lines draw from what is left, by date (owner Method C, 2026-10-20):
+ *            each member first keeps Critical, then Target days of its own exclusive use after
+ *            the horizon (protected); a group uses only the free stock above that — the primary
+ *            first when Use Primary = Yes, then the member with the most free stock. Only if the
+ *            group would still be short does it use protected stock (Target part, then Critical
+ *            part), recorded as protection_used so the member's own buy is triggered.
  * Uncovered fixed / Use-Primary-Yes demand is attributed to candidates[0]; uncovered
  * material-null group demand (Use Primary = No, PM groups) stays with the group.
  * Days before the as-of date are already consumed and attributed to the target.
@@ -950,6 +967,7 @@ export function allocateDemand(
         usable_at_required: 0, unrestricted_at_required: 0, reserved_at_required: 0, other_sloc_unrestricted: 0,
         excluded_unrestricted: 0, quality_inspection: 0, blocked: 0, other_stock_types: 0,
         required_locations: pooled ? [] : [...(requiredLocations.get(material) ?? [])].sort(), other_locations: [],
+        committed_transfer_out: 0, exclusive_protected: 0, protection_used: 0,
       };
       stock.set(material, pos);
     }
@@ -1026,6 +1044,27 @@ export function allocateDemand(
     }
   }
 
+  // Owner 2026-10-20 (Distribution mode): stock promised to another company by an open Sub-CSN
+  // leaves on its STO, so it is never usable here. Largest location first in legacy mode.
+  for (const [material, qty] of options.committedTransferOut ?? new Map<string, number>()) {
+    if (!(qty > EPSILON)) continue;
+    const pos = position(material);
+    pos.committed_transfer_out += qty;
+    let left = qty;
+    const keys = pooled
+      ? [material]
+      : [...usable.keys()].filter((key) => key.startsWith(`${material}|`))
+        .sort((a, b) => (usable.get(b) ?? 0) - (usable.get(a) ?? 0) || a.localeCompare(b));
+    for (const key of keys) {
+      if (left <= EPSILON) break;
+      const have = usable.get(key) ?? 0;
+      const taken = Math.min(have, left);
+      usable.set(key, have - taken);
+      left -= taken;
+    }
+    pos.usable_at_required = Math.max(0, pos.usable_at_required - (qty - left));
+  }
+
   const dailyByMaterial = new Map<string, Map<string, number>>();
   const fromStockByMaterial = new Map<string, Map<string, number>>();
   const fixedByMaterial = new Map<string, number>();
@@ -1092,29 +1131,72 @@ export function allocateDemand(
       return;
     }
     const keyOf = (material: string) => (pooled ? material : `${material}|${record.storage_location_id}`);
-    const ordered = [
-      target,
-      ...record.candidates.slice(1).sort((a, b) =>
-        (usable.get(keyOf(a)) ?? 0) - (usable.get(keyOf(b)) ?? 0) || a.localeCompare(b)),
-    ];
     let remaining = record.qty;
-    for (const material of ordered) {
-      if (remaining <= EPSILON) break;
+    const draw = (material: string, limit: number) => {
       const available = usable.get(keyOf(material)) ?? 0;
-      if (available <= EPSILON) continue;
-      const draw = Math.min(available, remaining);
-      usable.set(keyOf(material), available - draw);
-      attribute(material, draw, true);
-      remaining -= draw;
+      const qty = Math.min(available, remaining, limit);
+      if (qty <= EPSILON) return 0;
+      usable.set(keyOf(material), available - qty);
+      attribute(material, qty, true);
+      remaining -= qty;
+      return qty;
+    };
+    if (isFixed) {
+      draw(target, Infinity);
+      if (remaining > EPSILON) uncovered(remaining);
+      return;
+    }
+    // Method C tiers: free stock above Target protection, then the Target part, then the Critical part.
+    const floors = (material: string): [number, number, number] => {
+      const p = protection.get(material);
+      return [p?.target ?? 0, p?.critical ?? 0, 0];
+    };
+    const headroom = (material: string, tier: number) => Math.max(0, totalUsable(material) - floors(material)[tier]);
+    const primaryFirst = record.use_primary === true && !groupOwned;
+    for (let tier = 0; tier < 3 && remaining > EPSILON; tier += 1) {
+      const rest = (primaryFirst ? record.candidates.slice(1) : record.candidates)
+        .map((material, index) => ({ material, index, free: headroom(material, tier) }))
+        .sort((a, b) => b.free - a.free || a.index - b.index)
+        .map((entry) => entry.material);
+      const ordered = primaryFirst ? [target, ...rest] : rest;
+      for (const material of ordered) {
+        if (remaining <= EPSILON) break;
+        const taken = draw(material, headroom(material, tier));
+        if (tier > 0 && taken > EPSILON) position(material).protection_used += taken;
+      }
     }
     if (remaining > EPSILON) uncovered(remaining);
   };
+
+  // Usable left for a material across every key (pooled: one key; legacy: all its locations).
+  const totalUsable = (material: string): number => {
+    if (pooled) return usable.get(material) ?? 0;
+    let total = 0;
+    for (const [key, qty] of usable) if (key.startsWith(`${material}|`)) total += qty;
+    return total;
+  };
+  const protection = new Map<string, { critical: number; target: number }>();
 
   // DEPENDENT ordering: pass 1 (fixed) then pass 2 (group); inside each, chronological — each
   // record draws from the stock left by the records before it.
   const fixedRecords = records.filter((r) => !r.group_id || r.candidates.length <= 1);
   const groupRecords = records.filter((r) => r.group_id && r.candidates.length > 1);
   for (const record of fixedRecords) processRecord(record);
+  // Method C protection: average daily exclusive (fixed) use over the horizon × Critical / Target
+  // days, capped by what pass 1 left. It covers the days after the horizon.
+  const horizonDays = daysInclusive(calendar.asOf, calendar.nmEnd);
+  for (const [material, days] of options.protectionDays ?? new Map()) {
+    let fixedFromAsOf = 0;
+    for (const [day, qty] of dailyByMaterial.get(material) ?? new Map<string, number>()) if (day >= calendar.asOf) fixedFromAsOf += qty;
+    if (!(fixedFromAsOf > EPSILON) || !(horizonDays > 0)) continue;
+    const rate = fixedFromAsOf / horizonDays;
+    const left = totalUsable(material);
+    const target = Math.min(left, rate * Math.max(0, Number(days.target_days ?? 0), Number(days.critical_days ?? 0)));
+    const critical = Math.min(target, rate * Math.max(0, Number(days.critical_days ?? 0)));
+    if (target <= EPSILON) continue;
+    protection.set(material, { critical, target });
+    position(material).exclusive_protected = target;
+  }
   for (const record of groupRecords) processRecord(record);
   return { dailyByMaterial, fromStockByMaterial, fixedByMaterial, groupShareByMaterial, groups, pools, stock };
 }
@@ -1122,7 +1204,11 @@ export function allocateDemand(
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Inbound supply: one dated event per physical unit (owner Q-T06)
 // ─────────────────────────────────────────────────────────────────────────────
-export type InboundKind = "AT_GATE" | "IN_TRANSIT" | "SCHEDULED_LOT" | "PO_REMAINDER" | "STO_IN_TRANSIT";
+/**
+ * SUB_CSN_PLANNED: this company's share of another company's PO, planned by a Sub-CSN (or its
+ * not-yet-dispatched STO line) — Distribution mode, owner 2026-10-20. Not dispatched yet.
+ */
+export type InboundKind = "AT_GATE" | "IN_TRANSIT" | "SCHEDULED_LOT" | "PO_REMAINDER" | "STO_IN_TRANSIT" | "SUB_CSN_PLANNED";
 export type InboundEvent = {
   material_id: string;
   qty: number;               // material base unit
@@ -1142,6 +1228,11 @@ export type PoLineInboundInput = {
   at_gate: Array<{ qty_base: number; reference: string; date: string | null }>; // GE lines not yet GRN-posted
   csns: Array<{ csn_number: string; status: string; dispatch_qty: number | null; received_qty: number | null; eta: string | null; is_mother_with_children: boolean }>;
   lots: Array<{ lot_number: string; balance_qty: number; delivery_date: string | null }>; // PO unit
+  /**
+   * Base qty of this still-open line already promised to another company by Sub-CSNs
+   * (owner 2026-10-20). Removed first; it is counted at the consignee instead.
+   */
+  committed_transfer_base?: number;
 };
 
 const CSN_CLOSED = new Set(["GRD", "GED", "KOF", "CAN"]);
@@ -1155,7 +1246,8 @@ const CSN_CLOSED = new Set(["GRD", "GED", "KOF", "CAN"]);
  *   4. remainder at the earliest ETA of a not-yet-dispatched CSN, else the PO
  *      expected delivery date, else UNKNOWN.
  * The PO line is the ceiling; CSN po_qty is never summed; a mother CSN that
- * has sub-CSNs is skipped (its children carry the quantity).
+ * has sub-CSNs is skipped (its children carry the quantity). Quantity promised
+ * to another company by a Sub-CSN (committed_transfer_base) is removed first.
  */
 export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, warnings: Warning[]): InboundEvent[] {
   const events: InboundEvent[] = [];
@@ -1170,6 +1262,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
     remaining -= piece;
     return piece;
   };
+  take(Number(line.committed_transfer_base ?? 0));
   for (const gate of line.at_gate) {
     const qty = take(gate.qty_base);
     if (qty > EPSILON) events.push({ material_id: line.material_id, qty, date: asOf, kind: "AT_GATE", date_source: "GATE_ENTRY_AWAITING_GRN", reference: `${ref} · ${gate.reference}` });
@@ -1236,7 +1329,7 @@ export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar
   const assumeToday = (qty: number) => buckets.byDay.set(calendar.asOf, (buckets.byDay.get(calendar.asOf) ?? 0) + qty);
   for (const event of events) {
     buckets.total += event.qty;
-    if (event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER") buckets.open_po += event.qty;
+    if (event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || event.kind === "SUB_CSN_PLANNED") buckets.open_po += event.qty;
     else buckets.dispatched += event.qty;
     if (!event.date) { buckets.unknown += event.qty; assumeToday(event.qty); continue; }
     if (event.date < calendar.asOf) { buckets.overdue += event.qty; assumeToday(event.qty); continue; }
@@ -1730,6 +1823,8 @@ export type RequirementInput = Omit<ExplosionInput, "effective"> & {
   materialUniverse: string[];
   /** Company planning location roles (owner D1/D12); absent = legacy required-location stock. */
   locationRoles?: Map<string, LocationRole>;
+  /** material → posted stock promised to another company by an open Sub-CSN / STO (base qty). */
+  committedTransferOut?: Map<string, number>;
 };
 
 /**
@@ -1775,8 +1870,20 @@ export function moqInBase(policy: PolicyRow | null, material: MaterialInfo | und
 export function buildRequirementRows(input: RequirementInput): RequirementOutput {
   const effective = effectivePlanAt(input.planLines, input.demandAt);
   const explosion = explodeDemand({ ...input, effective });
-  const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations, { locationRoles: input.locationRoles });
+  const protectionDays = new Map<string, { critical_days: number | null; target_days: number | null }>();
+  for (const materialId of new Set([...input.materialUniverse, ...explosion.records.flatMap((r) => r.candidates)])) {
+    const policy = effectivePolicy(input.policies, materialId, input.calendar.asOf);
+    if (policy) protectionDays.set(materialId, { critical_days: policy.critical_cov_days, target_days: policy.target_cov_days });
+  }
+  const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations, {
+    locationRoles: input.locationRoles, committedTransferOut: input.committedTransferOut, protectionDays,
+  });
   const warnings = [...explosion.warnings];
+  for (const [materialId, pos] of allocation.stock) {
+    if (pos.protection_used > EPSILON) {
+      warnings.push({ code: "EXCLUSIVE_PROTECTION_USED", message: `A group had no free stock left and used ${roundQty(pos.protection_used)} of this material's protected stock (kept for its own exclusive use). Buy this material soon.`, material_id: materialId });
+    }
+  }
   const eventsByMaterial = new Map<string, InboundEvent[]>();
   for (const event of input.inboundEvents) eventsByMaterial.set(event.material_id, [...(eventsByMaterial.get(event.material_id) ?? []), event]);
 
@@ -1814,6 +1921,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
   const emptyStock = (): MaterialStockPosition => ({
     usable_at_required: 0, unrestricted_at_required: 0, reserved_at_required: 0, other_sloc_unrestricted: 0,
     excluded_unrestricted: 0, quality_inspection: 0, blocked: 0, other_stock_types: 0, required_locations: [], other_locations: [],
+    committed_transfer_out: 0, exclusive_protected: 0, protection_used: 0,
   });
 
   const rows: RequirementRow[] = materialIds.map((materialId) => {
@@ -1856,6 +1964,9 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
         quality_inspection: roundQty(stock.quality_inspection),
         blocked: roundQty(stock.blocked),
         other_stock_types: roundQty(stock.other_stock_types),
+        committed_transfer_out: roundQty(stock.committed_transfer_out),
+        exclusive_protected: roundQty(stock.exclusive_protected),
+        protection_used: roundQty(stock.protection_used),
       },
       inbound: {
         overdue: roundQty(bucketTotals.overdue), cm: roundQty(bucketTotals.cm), nm: roundQty(bucketTotals.nm),
