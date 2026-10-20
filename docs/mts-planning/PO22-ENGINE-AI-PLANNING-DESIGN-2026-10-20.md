@@ -253,3 +253,19 @@ material**, ranked by arrival date then total cost:
   (cross-company movement stays user-created).
 AI explains the trade-off. Routes not on record cannot be invented: AI says "no faster route on
 record — consider sourcing a local trader" instead.
+
+### 11.4 More options when the situation is out of control (owner 2026-10-20)
+
+Added to the 11.3 list; the engine computes each option's effect (days gained, cost, risk), AI
+explains, all ranked together, the user decides:
+
+1. **Safety compromise** — use the item's own protected stock: first from Target down to Critical
+   (alert), below Critical only with the user's explicit acceptance (shows the stop date it moves).
+   Method C already marks this case today ("used protected stock").
+2. **Tweak an existing consignment** — increase / split / advance the qty of an ordered-not-shipped
+   PO / CSN (vendor permitting). Stored as a planning overlay like the rescheduled ETA (§4);
+   the PO / CSN itself is changed by the user.
+3. **STO from another company's excess** — same material, or another group member allowed on the
+   demand line and mapped to this company. **Excess = that company's stock above its own Target
+   and its own future need** (its plan), so the sender is never put at risk. Shows qty and
+   expected arrival (STO lead time from history). Suggestion only — the user raises the STO.
