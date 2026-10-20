@@ -94,3 +94,42 @@ Deno.test("missing lead time gives one UNKNOWN_LEAD_TIME recommendation, no fabr
   const result = projectDailyCoverage(input({ policies: [policy({ route_lead_time_days: null, configured_lead_time_days: null })] }));
   equal(result.advisory_buys.map((b) => [b.status, b.recommended_po_by]), [["UNKNOWN_LEAD_TIME", null]], "single unknown");
 });
+
+// ── Owner Method C rule 6 (2026-10-20): members' free stock — MOQ excess, arrivals — covers a group first ──
+function groupInput(withGroups: boolean, extra: Partial<OptimizerProjectionInput> = {}): OptimizerProjectionInput {
+  const groupRows = daily(2, "2026-10-12", "2026-10-21", "B").map((row) => ({ ...row, source_key: `G|${row.required_by}`, group_id: "G" }));
+  return input({
+    opening_qty_by_material: { A: 10, B: 0 },
+    daily_demand: [...daily(1, "2026-10-01", "2026-10-31", "A"), ...groupRows],
+    policies: [policy({ material_id: "A", vendor_moq_qty_base: 60 }), policy({ material_id: "B" })],
+    groups: withGroups ? [{ group_id: "G", member_ids: ["A", "B"] }] : undefined,
+    ...extra,
+  });
+}
+
+Deno.test("Rule 6: another member's MOQ excess covers the group before the assigned member is bought", () => {
+  const without = projectDailyCoverage(groupInput(false));
+  equal(without.advisory_buys.filter((b) => b.material_id === "B" && b.status === "ADVISORY").length > 0, true, "old: group shortage always bought through B");
+  const withRule = projectDailyCoverage(groupInput(true));
+  const drawnFromA = withRule.rows.filter((r) => r.material_id === "A").reduce((s, r) => s + r.group_draw_qty_base, 0);
+  equal(drawnFromA, 20, "A's 60 MOQ lot leaves excess above its Target; the whole group need (20) comes from it");
+  equal(withRule.advisory_buys.filter((b) => b.material_id === "B").map((b) => b.status), ["NO_BUY"], "nothing bought through B");
+  equal(withRule.risks.find((r) => r.material_id === "A")!.first_shortage_day, null, "A never runs short for its own use");
+});
+
+Deno.test("Rule 6: a member's free stock is only what is above Target days of its own demand", () => {
+  // A has 12 on hand, own use 1/day, Target 5 → only what is above ~6 days of its own use is free.
+  const result = projectDailyCoverage(groupInput(true, { opening_qty_by_material: { A: 12, B: 0 }, policies: [policy({ material_id: "A", route_lead_time_days: null, configured_lead_time_days: null }), policy({ material_id: "B" })] }));
+  const firstGroupDay = result.rows.find((r) => r.material_id === "A" && r.day === "2026-10-12")!;
+  equal(firstGroupDay.group_draw_qty_base, 0, "by Oct 12 A has only its protected stock left; group not served from it");
+  equal(result.advisory_buys.some((b) => b.material_id === "B" && b.status === "ADVISORY"), true, "the rest is bought through B");
+});
+
+Deno.test("Rule 6: a confirmed arrival of a member can serve the group", () => {
+  const result = projectDailyCoverage(groupInput(true, {
+    policies: [policy({ material_id: "A" }), policy({ material_id: "B" })],
+    confirmed_arrivals: [{ source_key: "csn", material_id: "A", eta_to_plant: "2026-10-05", qty_base: 50, lifecycle_kind: "IN_TRANSIT" }],
+  }));
+  equal(result.rows.filter((r) => r.material_id === "A").reduce((s, r) => s + r.group_draw_qty_base, 0), 20, "arrival on A covers the group");
+  equal(result.advisory_buys.filter((b) => b.material_id === "B").map((b) => b.status), ["NO_BUY"], "no buy through B");
+});

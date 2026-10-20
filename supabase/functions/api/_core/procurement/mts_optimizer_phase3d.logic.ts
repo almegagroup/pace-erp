@@ -87,9 +87,10 @@ function coverageAt(policy: OptimizerMaterialPlanningPolicy | undefined, day: st
  * average horizon daily demand is used. null = no demand at all (cover is not meaningful).
  */
 function makeCoverFn(demand: readonly number[]) {
-  const total = demand.reduce((sum, qty) => sum + qty, 0);
-  const average = demand.length === 0 ? 0 : total / demand.length;
+  // Totals are read on each call: rule 6 group draws add to `demand` while the projection runs.
   return (balance: number, fromIndex: number): number | null => {
+    const total = demand.reduce((sum, qty) => sum + qty, 0);
+    const average = demand.length === 0 ? 0 : total / demand.length;
     if (total <= EPSILON) return null;
     if (balance <= EPSILON) return 0;
     let remaining = balance;
@@ -113,26 +114,64 @@ function qtyToRestore(demand: readonly number[], index: number, closing: number,
   return Math.max(0, roundQty(need - closing));
 }
 
+type MaterialState = {
+  id: string;
+  policy: OptimizerMaterialPlanningPolicy | undefined;
+  demand: number[];
+  groupDraw: number[];
+  cover: (balance: number, fromIndex: number) => number | null;
+  leadTime: number | null;
+  plannedByIndex: Map<number, number>;
+  queuedLots: number[];
+  pendingUntil: number;
+  sequence: number;
+  balance: number;
+  firstShortage: string | null;
+  firstCritical: string | null;
+  firstTarget: string | null;
+  buys: OptimizerAdvisoryBuy[];
+  // per-day working values
+  opening: number;
+  arrival: number;
+  planned: number;
+  closing: number;
+};
+
 /**
- * Projects confirmed lifecycle arrivals plus proposed lots. Material-null GROUP_POOL demand is
- * reported per group and is never assigned to, or copied onto, a member material.
+ * Projects confirmed lifecycle arrivals plus proposed lots, all materials day by day.
+ * Material-null GROUP_POOL demand is reported per group and is never copied onto a member.
+ * With `groups` (Method C rule 6) a group's demand is first met from the members' free stock;
+ * DEPENDENT ordering: each day, every material's own balance first, then group draws (narrowest
+ * group first), then replenishment planning — later days see the stock earlier draws left.
  */
 export function projectDailyCoverage(input: OptimizerProjectionInput): OptimizerProjectionResult {
   if (!ISO_DAY.test(input.as_of) || !ISO_DAY.test(input.horizon_end) || input.horizon_end < input.as_of) throw new Error("PHASE3D_INVALID_HORIZON");
   const policyByMaterial = new Map(input.policies.map((policy) => [policy.material_id, policy]));
   if (policyByMaterial.size !== input.policies.length) throw new Error("PHASE3D_DUPLICATE_POLICY");
   const allDays = days(input.as_of, input.horizon_end);
+  const dayIndex = new Map(allDays.map((day, index) => [day, index]));
+  const groupMembers = new Map((input.groups ?? []).map((g) => [g.group_id, [...g.member_ids]]));
 
   const demandByDay = new Map<string, number>();
   const pool = new Map<string, { qty: number; first: string | null }>();
+  const addPool = (groupKey: string, day: string, qty: number) => {
+    const seen = pool.get(groupKey) ?? { qty: 0, first: null };
+    pool.set(groupKey, { qty: roundQty(seen.qty + qty), first: seen.first === null || day < seen.first ? day : seen.first });
+  };
+  /** day index → group → assigned material ('' = none) → qty (rule 6). */
+  const groupDemand = new Map<number, Map<string, Map<string, number>>>();
   for (const row of input.daily_demand) {
     if (!validQty(row.qty_base) || row.required_by === null || !ISO_DAY.test(row.required_by)) continue;
     if (row.required_by < input.as_of || row.required_by > input.horizon_end) continue;
-    if (row.material_id === null) {
-      const groupKey = row.group_id ?? "";
-      const seen = pool.get(groupKey) ?? { qty: 0, first: null };
-      pool.set(groupKey, { qty: roundQty(seen.qty + row.qty_base), first: seen.first === null || row.required_by < seen.first ? row.required_by : seen.first });
-    } else add(demandByDay, key(row.material_id, row.required_by), row.qty_base);
+    if (row.group_id && groupMembers.has(row.group_id)) {
+      const index = dayIndex.get(row.required_by)!;
+      const byGroup = groupDemand.get(index) ?? new Map<string, Map<string, number>>();
+      const byMaterial = byGroup.get(row.group_id) ?? new Map<string, number>();
+      byMaterial.set(row.material_id ?? "", roundQty((byMaterial.get(row.material_id ?? "") ?? 0) + row.qty_base));
+      byGroup.set(row.group_id, byMaterial);
+      groupDemand.set(index, byGroup);
+    } else if (row.material_id === null) addPool(row.group_id ?? "", row.required_by, row.qty_base);
+    else add(demandByDay, key(row.material_id, row.required_by), row.qty_base);
   }
 
   const arrivalByDay = new Map<string, number>();
@@ -158,62 +197,104 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
     ...Object.keys(input.opening_qty_by_material),
     ...[...demandByDay.keys()].map((entry) => entry.split("|")[0]),
     ...input.confirmed_arrivals.map((row) => row.material_id),
+    ...input.daily_demand.filter((row) => row.group_id && groupMembers.has(row.group_id) && row.material_id).map((row) => row.material_id as string),
   ]);
-  const rows: OptimizerDailyProjectionRow[] = [];
-  const risks: OptimizerMaterialRisk[] = [];
-  const buys: OptimizerAdvisoryBuy[] = [];
-
+  const states = new Map<string, MaterialState>();
   for (const materialId of [...materialIds].sort()) {
     const opening0 = Number(input.opening_qty_by_material[materialId] ?? 0);
     if (!validQty(opening0)) throw new Error(`PHASE3D_INVALID_OPENING_QTY:${materialId}`);
     const policy = policyByMaterial.get(materialId);
     const demand = allDays.map((day) => demandByDay.get(key(materialId, day)) ?? 0);
-    const cover = makeCoverFn(demand);
-    const leadTime = policy ? totalLeadTimeDays(policy) : null;
-    const plannedByIndex = new Map<number, number>();
-    const queuedLots: number[] = [];
-    let pendingUntil = -1;
-    let sequence = 0;
-    let balance = opening0;
-    let firstShortage: string | null = null;
-    let firstCritical: string | null = null;
-    let firstTarget: string | null = null;
-    const materialBuys: OptimizerAdvisoryBuy[] = [];
+    states.set(materialId, {
+      id: materialId, policy, demand, groupDraw: allDays.map(() => 0), cover: makeCoverFn(demand),
+      leadTime: policy ? totalLeadTimeDays(policy) : null, plannedByIndex: new Map(), queuedLots: [], pendingUntil: -1, sequence: 0,
+      balance: opening0, firstShortage: null, firstCritical: null, firstTarget: null, buys: [], opening: 0, arrival: 0, planned: 0, closing: 0,
+    });
+  }
+  const ordered = [...states.values()];
+  const rows: OptimizerDailyProjectionRow[] = [];
 
-    allDays.forEach((day, index) => {
-      const opening = balance;
-      const arrival = arrivalByDay.get(key(materialId, day)) ?? 0;
-      const need = demand[index];
+  /** Free stock of a member after day `index`: closing above Target days of its own demand. */
+  const freeAfter = (st: MaterialState, index: number, day: string): number => {
+    const { target } = coverageAt(st.policy, day);
+    const reserve = target === null ? 0 : qtyToRestore(st.demand, index, 0, target);
+    return Math.max(0, roundQty(st.closing - reserve));
+  };
+
+  allDays.forEach((day, index) => {
+    // 1. Own balance before any decision.
+    for (const st of ordered) {
+      st.opening = st.balance;
+      st.arrival = arrivalByDay.get(key(st.id, day)) ?? 0;
+      st.planned = st.plannedByIndex.get(index) ?? 0;
+      st.closing = roundQty(st.opening + st.arrival + st.planned - st.demand[index]);
+    }
+
+    // 2. Rule 6: group demand from members' free stock (narrowest group first), rest to the
+    //    assigned member (a buy) or the group pool.
+    const byGroup = groupDemand.get(index);
+    if (byGroup) {
+      const groupOrder = [...byGroup.keys()].sort((a, b) => groupMembers.get(a)!.length - groupMembers.get(b)!.length || a.localeCompare(b));
+      for (const groupId of groupOrder) {
+        for (const [assigned, qty] of [...byGroup.get(groupId)!].sort(([a], [b]) => a.localeCompare(b))) {
+          let remaining = qty;
+          const members = groupMembers.get(groupId)!.map((id) => states.get(id)).filter((st): st is MaterialState => !!st)
+            .map((st) => ({ st, free: freeAfter(st, index, day) }))
+            .sort((a, b) => b.free - a.free || Number(b.st.id === assigned) - Number(a.st.id === assigned) || a.st.id.localeCompare(b.st.id));
+          for (const { st, free } of members) {
+            if (remaining <= EPSILON) break;
+            const draw = roundQty(Math.min(free, remaining));
+            if (draw <= EPSILON) continue;
+            st.demand[index] = roundQty(st.demand[index] + draw);
+            st.groupDraw[index] = roundQty(st.groupDraw[index] + draw);
+            st.closing = roundQty(st.closing - draw);
+            remaining = roundQty(remaining - draw);
+          }
+          if (remaining > EPSILON) {
+            const target = assigned ? states.get(assigned) : undefined;
+            if (target) {
+              target.demand[index] = roundQty(target.demand[index] + remaining);
+              target.closing = roundQty(target.closing - remaining);
+            } else addPool(groupId, day, remaining);
+          }
+        }
+      }
+    }
+
+    // 3. Replenishment (D2) and 4. the day's row, per material.
+    for (const st of ordered) {
+      const { policy, demand, cover, leadTime } = st;
+      const materialId = st.id;
       const { target, critical } = coverageAt(policy, day);
-      let planned = plannedByIndex.get(index) ?? 0;
-      let closing = roundQty(opening + arrival + planned - need);
+      let planned = st.planned;
+      let closing = st.closing;
 
       // D2: a proposed lot is needed on the first day cover falls to/below Target, unless one is pending.
-      const canPlan = !!policy && target !== null && critical !== null && index > pendingUntil;
+      const canPlan = !!policy && target !== null && critical !== null && index > st.pendingUntil;
       if (canPlan) {
         const currentCover = cover(closing, index);
         if (currentCover !== null && currentCover <= target!) {
           const required = qtyToRestore(demand, index, closing, target!);
           if (required > EPSILON) {
-            if (queuedLots.length > 0) {
+            if (st.queuedLots.length > 0) {
               // Next dated lot of an already recommended order (no new PO).
-              const lot = queuedLots.shift()!;
+              const lot = st.queuedLots.shift()!;
               planned = roundQty(planned + lot);
-              plannedByIndex.set(index, planned);
+              st.plannedByIndex.set(index, planned);
               closing = roundQty(closing + lot);
-              const last = materialBuys[materialBuys.length - 1];
+              const last = st.buys[st.buys.length - 1];
               const lots = [...last.lots, { lot_no: last.lots.length + 1, plant_eta: day, qty_base: lot }];
-              materialBuys[materialBuys.length - 1] = freeze({ ...last, lots });
+              st.buys[st.buys.length - 1] = freeze({ ...last, lots });
             } else {
               const orderQty = applyOrderConstraints(required, policy!);
-              sequence += 1;
+              st.sequence += 1;
               if (leadTime === null) {
-                materialBuys.push(freeze({
-                  material_id: materialId, sequence, required_qty_base: required, recommended_po_qty_base: orderQty, recommended_po_by: null,
+                st.buys.push(freeze({
+                  material_id: materialId, sequence: st.sequence, required_qty_base: required, recommended_po_qty_base: orderQty, recommended_po_by: null,
                   estimated_plant_eta: day, need_date: day, lots: [], total_lead_time_days: null, status: "UNKNOWN_LEAD_TIME",
                   reason: "Lead time is missing (vendor route lead time / Booking Time); PO-by date is unknown and no lot is projected.", advisory_only: true as const,
                 }));
-                pendingUntil = allDays.length; // one unknown-lead-time recommendation is enough
+                st.pendingUntil = allDays.length; // one unknown-lead-time recommendation is enough
               } else if (orderQty !== null) {
                 const lots = splitIntoLots(orderQty, policy!.delivery_lot_qty_base);
                 const poBy = addDays(day, -leadTime);
@@ -221,23 +302,23 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
                 const eta = late ? addDays(input.as_of, leadTime) : day;
                 const etaIndex = allDays.indexOf(eta);
                 const firstLot = lots.shift()!;
-                queuedLots.push(...lots);
+                st.queuedLots.push(...lots);
                 const plannedLots: OptimizerPlannedLot[] = [];
                 if (etaIndex === index) {
                   planned = roundQty(planned + firstLot);
-                  plannedByIndex.set(index, planned);
+                  st.plannedByIndex.set(index, planned);
                   closing = roundQty(closing + firstLot);
                   plannedLots.push({ lot_no: 1, plant_eta: day, qty_base: firstLot });
                 } else if (etaIndex > index) {
-                  plannedByIndex.set(etaIndex, roundQty((plannedByIndex.get(etaIndex) ?? 0) + firstLot));
+                  st.plannedByIndex.set(etaIndex, roundQty((st.plannedByIndex.get(etaIndex) ?? 0) + firstLot));
                   plannedLots.push({ lot_no: 1, plant_eta: eta, qty_base: firstLot });
-                  pendingUntil = etaIndex;
+                  st.pendingUntil = etaIndex;
                 } else {
                   plannedLots.push({ lot_no: 1, plant_eta: eta, qty_base: firstLot });
-                  pendingUntil = allDays.length; // earliest arrival is after the horizon
+                  st.pendingUntil = allDays.length; // earliest arrival is after the horizon
                 }
-                materialBuys.push(freeze({
-                  material_id: materialId, sequence, required_qty_base: required, recommended_po_qty_base: orderQty,
+                st.buys.push(freeze({
+                  material_id: materialId, sequence: st.sequence, required_qty_base: required, recommended_po_qty_base: orderQty,
                   recommended_po_by: late ? input.as_of : poBy, estimated_plant_eta: eta, need_date: day, lots: plannedLots, total_lead_time_days: leadTime,
                   status: late ? "ADVISORY_LATE" : "ADVISORY",
                   reason: late
@@ -251,34 +332,38 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
         }
       }
 
-      balance = closing;
+      st.balance = closing;
       const maxCover = cover(closing, index);
-      const minStock = roundQty(closing - arrival - planned);
+      const minStock = roundQty(closing - st.arrival - planned);
       const minCover = cover(minStock, index);
-      if (firstShortage === null && closing < -EPSILON) firstShortage = day;
-      if (firstCritical === null && critical !== null && maxCover !== null && maxCover <= critical) firstCritical = day;
-      if (firstTarget === null && target !== null && maxCover !== null && maxCover <= target) firstTarget = day;
+      if (st.firstShortage === null && closing < -EPSILON) st.firstShortage = day;
+      if (st.firstCritical === null && critical !== null && maxCover !== null && maxCover <= critical) st.firstCritical = day;
+      if (st.firstTarget === null && target !== null && maxCover !== null && maxCover <= target) st.firstTarget = day;
       rows.push(freeze({
-        material_id: materialId, day, opening_qty_base: roundQty(opening), confirmed_arrival_qty_base: arrival, planned_lot_qty_base: planned,
-        demand_qty_base: need, closing_qty_base: closing, max_cover_days: maxCover, min_stock_qty_base: minStock, min_cover_days: minCover,
-        target_days: target, critical_days: critical, executable_arrival: false as const,
+        material_id: materialId, day, opening_qty_base: roundQty(st.opening), confirmed_arrival_qty_base: st.arrival, planned_lot_qty_base: planned,
+        demand_qty_base: demand[index], group_draw_qty_base: st.groupDraw[index], closing_qty_base: closing, max_cover_days: maxCover,
+        min_stock_qty_base: minStock, min_cover_days: minCover, target_days: target, critical_days: critical, executable_arrival: false as const,
       }));
-    });
+    }
+  });
 
-    risks.push(freeze({ material_id: materialId, first_shortage_day: firstShortage, first_below_critical_day: firstCritical, first_below_target_day: firstTarget, projected_closing_qty_base: roundQty(balance) }));
-    const anyCoverage = allDays.some((day) => { const c = coverageAt(policy, day); return c.target !== null && c.critical !== null; });
-    if (!policy || !anyCoverage) {
+  const risks: OptimizerMaterialRisk[] = [];
+  const buys: OptimizerAdvisoryBuy[] = [];
+  for (const st of ordered) {
+    risks.push(freeze({ material_id: st.id, first_shortage_day: st.firstShortage, first_below_critical_day: st.firstCritical, first_below_target_day: st.firstTarget, projected_closing_qty_base: roundQty(st.balance) }));
+    const anyCoverage = allDays.some((day) => { const c = coverageAt(st.policy, day); return c.target !== null && c.critical !== null; });
+    if (!st.policy || !anyCoverage) {
       buys.push(freeze({
-        material_id: materialId, sequence: 0, required_qty_base: Math.max(0, roundQty(-balance)), recommended_po_qty_base: null, recommended_po_by: null,
-        estimated_plant_eta: null, need_date: null, lots: [], total_lead_time_days: leadTime, status: "UNKNOWN_POLICY",
+        material_id: st.id, sequence: 0, required_qty_base: Math.max(0, roundQty(-st.balance)), recommended_po_qty_base: null, recommended_po_by: null,
+        estimated_plant_eta: null, need_date: null, lots: [], total_lead_time_days: st.leadTime, status: "UNKNOWN_POLICY",
         reason: "Target/Critical policy is missing; no new-buy quantity is authorized.", advisory_only: true as const,
       }));
-    } else if (materialBuys.length === 0) {
+    } else if (st.buys.length === 0) {
       buys.push(freeze({
-        material_id: materialId, sequence: 0, required_qty_base: 0, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null,
-        need_date: null, lots: [], total_lead_time_days: leadTime, status: "NO_BUY", reason: "Projected cover stays above Target through the horizon.", advisory_only: true as const,
+        material_id: st.id, sequence: 0, required_qty_base: 0, recommended_po_qty_base: null, recommended_po_by: null, estimated_plant_eta: null,
+        need_date: null, lots: [], total_lead_time_days: st.leadTime, status: "NO_BUY", reason: "Projected cover stays above Target through the horizon.", advisory_only: true as const,
       }));
-    } else buys.push(...materialBuys);
+    } else buys.push(...st.buys);
   }
 
   const groupPoolRisks: OptimizerGroupPoolRisk[] = [...pool.entries()].sort(([a], [b]) => a.localeCompare(b))

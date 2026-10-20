@@ -6,6 +6,8 @@
  *   D3  group shortage is bought through the member the user selected for new buy in that month
  *       (six-month selection); several selected → cheapest last purchase price; none → stays a
  *       group risk ("select a member"), never charged to a member automatically.
+ *   Method C rule 6 (owner 2026-10-20): before that buy, the projection meets the group demand
+ *       from the members' free stock — MOQ excess, arrivals — above their own Target days.
  *   D4  MOQ / order multiple / delivery lot come from the vendor-material master.
  *   D6  lead time = Booking Time (blank = 0) + route lead time of that vendor.
  */
@@ -143,7 +145,11 @@ export function assemblePlanningInput(args: {
     }
   }
   return {
-    input: { as_of: calendar.asOf, horizon_end: calendar.nmEnd, opening_qty_by_material: opening, daily_demand: demand, confirmed_arrivals: arrivals, policies },
+    input: {
+      as_of: calendar.asOf, horizon_end: calendar.nmEnd, opening_qty_by_material: opening, daily_demand: demand, confirmed_arrivals: arrivals, policies,
+      // Method C rule 6: members' free stock (incl. MOQ excess and arrivals) covers the group first.
+      groups: args.groups.map((group) => ({ group_id: group.group_id, member_ids: group.member_ids })),
+    },
     chosen_vendor: chosen,
     group_assignments: assignments.map((a) => ({ ...a, uncovered_qty: Math.round(a.uncovered_qty * 1e6) / 1e6 })),
   };

@@ -923,8 +923,8 @@ export type AllocationOptions = {
  *   pass 1 — FIXED lines (one material only) draw from their own material's stock, by date;
  *   pass 2 — GROUP lines draw from what is left, by date (owner Method C, 2026-10-20):
  *            each member first keeps Critical, then Target days of its own exclusive use after
- *            the horizon (protected); a group uses only the free stock above that — the primary
- *            first when Use Primary = Yes, then the member with the most free stock. Only if the
+ *            the horizon (protected); a group uses only the free stock above that, the member
+ *            with the most free stock first (the primary only breaks a tie). Only if the
  *            group would still be short does it use protected stock (Target part, then Critical
  *            part), recorded as protection_used so the member's own buy is triggered.
  * Uncovered fixed / Use-Primary-Yes demand is attributed to candidates[0]; uncovered
@@ -1152,13 +1152,13 @@ export function allocateDemand(
       return [p?.target ?? 0, p?.critical ?? 0, 0];
     };
     const headroom = (material: string, tier: number) => Math.max(0, totalUsable(material) - floors(material)[tier]);
-    const primaryFirst = record.use_primary === true && !groupOwned;
+    // Method C rule 4: the member with the most free stock first; the primary (candidates[0])
+    // goes first only on a tie.
     for (let tier = 0; tier < 3 && remaining > EPSILON; tier += 1) {
-      const rest = (primaryFirst ? record.candidates.slice(1) : record.candidates)
+      const ordered = record.candidates
         .map((material, index) => ({ material, index, free: headroom(material, tier) }))
         .sort((a, b) => b.free - a.free || a.index - b.index)
         .map((entry) => entry.material);
-      const ordered = primaryFirst ? [target, ...rest] : rest;
       for (const material of ordered) {
         if (remaining <= EPSILON) break;
         const taken = draw(material, headroom(material, tier));

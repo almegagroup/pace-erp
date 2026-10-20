@@ -49,6 +49,9 @@ export type OptimizerMaterialPlanningPolicy = Readonly<{
   route_lead_time_days?: number | null;
 }>;
 
+/** Members of a group whose demand rows carry this group_id (Method C rule 6). */
+export type OptimizerGroupMembers = Readonly<{ group_id: string; member_ids: readonly string[] }>;
+
 export type OptimizerProjectionInput = Readonly<{
   as_of: string;
   horizon_end: string;
@@ -57,6 +60,14 @@ export type OptimizerProjectionInput = Readonly<{
   daily_demand: readonly OptimizerDailyDemand[];
   confirmed_arrivals: readonly OptimizerConfirmedArrival[];
   policies: readonly OptimizerMaterialPlanningPolicy[];
+  /**
+   * Method C rule 6 (owner 2026-10-20). When given, a demand row with this group_id is first met
+   * each day from the members' projected free stock — above Target days of their own demand,
+   * including proposed MOQ/lot excess and confirmed arrivals — most free first (the row's
+   * material_id breaks a tie). Only the rest stays on row.material_id (a buy) or, when that is
+   * null, a group pool risk.
+   */
+  groups?: readonly OptimizerGroupMembers[];
 }>;
 
 export type OptimizerDailyProjectionRow = Readonly<{
@@ -67,6 +78,8 @@ export type OptimizerDailyProjectionRow = Readonly<{
   /** Proposed (not ordered) delivery lot arriving this day. */
   planned_lot_qty_base: number;
   demand_qty_base: number;
+  /** Part of demand_qty_base that is group demand met from this material's free stock (rule 6). */
+  group_draw_qty_base: number;
   closing_qty_base: number;
   /** Whole days the closing balance covers (sheet "Max Days"). */
   max_cover_days: number | null;

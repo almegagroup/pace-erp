@@ -667,7 +667,7 @@ Deno.test("Store report rows reconcile: executable + not backed = line demand; e
 });
 
 // ── Owner Method C (2026-10-20): exclusive protection, free stock, most-free-first ─────────
-Deno.test("Method C: primary keeps Target days of its exclusive use; group runs on free stock, most free first", () => {
+Deno.test("Method C: primary keeps Target days of its exclusive use; group runs on free stock, most free first (rule 4)", () => {
   const calendar = buildCalendar("2026-11-01", "2026-11-01")!; // horizon Nov 1 .. Dec 31 = 61 days
   const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);
   const records = [
@@ -686,7 +686,8 @@ Deno.test("Method C: primary keeps Target days of its exclusive use; group runs 
   assertEqual(alloc.stock.get("GAB")!.exclusive_protected, 300, "Target days of exclusive use protected");
   const group = alloc.groups.size === 0 ? null : alloc.groups.get("MHEC");
   assertEqual(group, null, "Use Primary = Yes is not a group-owned pool");
-  assertEqual([alloc.groupShareByMaterial.get("GAB"), alloc.groupShareByMaterial.get("COMBI"), alloc.groupShareByMaterial.get("TS") ?? 0], [590, 1410, 0], "primary free stock, then most free (COMBI), TS untouched");
+  // Rule 4: most free stock first (COMBI 5000 > GAB 590 > TS 400); the primary only breaks a tie.
+  assertEqual([alloc.groupShareByMaterial.get("GAB") ?? 0, alloc.groupShareByMaterial.get("COMBI"), alloc.groupShareByMaterial.get("TS") ?? 0], [0, 2000, 0], "most free (COMBI) covers it; GAB keeps its free stock too");
   assertEqual(alloc.stock.get("GAB")!.protection_used, 0, "no protected stock used");
 });
 
