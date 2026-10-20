@@ -1092,7 +1092,22 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     if (!locationRoles) {
       notes.push({ code: "LOCATION_POLICY_NOT_SET", message: "No planning location policy for this company yet: stock is counted only at each stroke / Pack BOM line's own location (legacy rule)." });
     }
-    notes.push({ code: "CROSS_COMPANY_ALLOCATION_NOT_AVAILABLE", message: "No cross-company production allocation is stored in PO21 yet; all demand is exploded with this company's Stroke and Pack BOM." });
+    // PO21 cross-company production (owner 2026-10-20): say exactly what moved in / out, never a stale "not available".
+    const outgoing = await loadProductionAssignments({ company_id: companyId }, [calendar.cmStart, calendar.nmStart]);
+    const away = outgoing.filter((a) => text(a.production_company_id) && text(a.production_company_id) !== companyId);
+    const incomingKeys = unique(planLines.filter((l) => l.origin_company_id).map((l) => `${l.origin_company_id}|${l.plan_month}|${l.sku_material_id}`));
+    if (incomingKeys.length > 0 || away.length > 0) {
+      const codeIds = unique([...incomingKeys.map((k) => k.split("|")[0]), ...away.map((a) => text(a.production_company_id))]);
+      const { data: codeRows } = await serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", codeIds);
+      const codeOf = new Map(((codeRows ?? []) as JsonRecord[]).map((c) => [text(c.id), text(c.company_code)]));
+      const countBy = (ids: string[]) => [...ids.reduce((m, id) => m.set(id, (m.get(id) ?? 0) + 1), new Map<string, number>())]
+        .map(([id, n]) => `${n} from ${codeOf.get(id) ?? "another company"}`).join(", ");
+      const parts = [
+        incomingKeys.length > 0 ? `made here for other companies: ${countBy(incomingKeys.map((k) => k.split("|")[0])).replace(/ from /g, " SKU-month(s) of ")}` : "",
+        away.length > 0 ? `this company's SKU-months made elsewhere (not planned here): ${countBy(away.map((a) => text(a.production_company_id))).replace(/ from /g, " at ")}` : "",
+      ].filter(Boolean);
+      notes.push({ code: "CROSS_COMPANY_PRODUCTION", message: `PO21 cross-company production in CM/NM — ${parts.join("; ")}.` });
+    }
 
     return okResponse({
       company_id: companyId,
