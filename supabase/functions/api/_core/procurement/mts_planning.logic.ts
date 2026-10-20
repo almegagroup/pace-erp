@@ -12,7 +12,7 @@
  *   D4  MOQ / order multiple / delivery lot come from the vendor-material master.
  *   D6  lead time = Booking Time (blank = 0) + route lead time of that vendor.
  */
-import { monthStart, type GroupRequirementRow, type PlanningCalendar, type PolicyRow, type RequirementRow } from "./mts_requirement.logic.ts";
+import { monthStart, rToRTransferRoute, type GroupRequirementRow, type PlanningCalendar, type PolicyRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import type { OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput } from "./mts_optimizer_phase3d.types.ts";
 
 export type VendorTerm = {
@@ -217,6 +217,7 @@ export function storePeriodLabel(period: "CM" | "NM", calendar: PlanningCalendar
 /**
  * Transfer instruction per material: stock sitting in a transfer-source location (e.g. R003) that
  * the schedule needs because counted stock does not back it. Qty = min(that stock, not-backed qty).
+ * R→R advisory only (rToRTransferRoute); never posts anything.
  */
 export function storeTransferHints(
   rows: readonly RequirementRow[],
@@ -229,10 +230,13 @@ export function storeTransferHints(
     const short = notBackedByMaterial.get(row.material_id) ?? 0;
     const available = row.stock.other_sloc_unrestricted;
     if (short <= EPSILON || available <= EPSILON) continue;
+    const route = rToRTransferRoute(
+      row.stock.other_locations.map(locationLabel),
+      [...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)].map(locationLabel),
+    );
+    if (!route) continue; // R→R only — stock outside R stores is never a transfer instruction
     const qty = Math.round(Math.min(short, available) * 1000) / 1000;
-    const from = row.stock.other_locations.map(locationLabel).join(", ") || "another location";
-    const to = [...new Set([...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)])].map(locationLabel).join(" / ") || "the required location";
-    hints.set(row.material_id, `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${from} to ${to}`.replace(/\s+/g, " ").trim());
+    hints.set(row.material_id, `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${route.from} to ${route.to}`.replace(/\s+/g, " ").trim());
   }
   return hints;
 }

@@ -65,4 +65,11 @@ Deno.test("store schedule: transfer hint only for what counted stock cannot back
   const hints = storeTransferHints([r], new Map([["A", 120]]), (id) => ({ L1: "R001", L3: "R003" } as Record<string, string>)[id] ?? id, () => "KG");
   equal(hints.get("A"), "Transfer 120 KG from R003 to R001", "only the 120 short");
   equal(storeTransferHints([r], new Map(), () => "x", () => "KG").size, 0, "nothing short → no transfer");
+  const toShopFloor = { ...r, stock: { ...r.stock, required_locations: ["L1", "S1"] } };
+  const labels = (id: string) => ({ L1: "R001", L3: "R003", S1: "S001", F1: "F001" } as Record<string, string>)[id] ?? id;
+  equal(storeTransferHints([toShopFloor], new Map([["A", 120]]), labels, () => "KG").get("A"), "Transfer 120 KG from R003 to R001", "never R→S");
+  const onlyShopFloor = { ...r, stock: { ...r.stock, required_locations: ["S1"] } };
+  equal(storeTransferHints([onlyShopFloor], new Map([["A", 120]]), labels, () => "KG").get("A"), "Transfer 120 KG from R003 to an R store (destination UNKNOWN)", "no R destination → UNKNOWN, not fabricated");
+  const fromFg = { ...r, stock: { ...r.stock, other_locations: ["F1"] } };
+  equal(storeTransferHints([fromFg], new Map([["A", 120]]), labels, () => "KG").size, 0, "F/S stock is never an R→R transfer");
 });

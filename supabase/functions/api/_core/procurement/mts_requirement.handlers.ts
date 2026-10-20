@@ -67,6 +67,7 @@ import {
   type PackBomInfo,
   type PlanningCalendar,
   partitionPoLineInbound,
+  rToRTransferRoute,
   type PlanLineVersion,
   type PoLineInboundInput,
   type PolicyRow,
@@ -1020,9 +1021,13 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         stock_protection_used: row.stock.protection_used,
         fixed_demand_qty: row.fixed_demand_qty,
         group_share_qty: row.group_share_qty,
-        // D1/D12: stock in a transfer-source location (R003, F-series, unconfigured) is shown, not counted.
+        // D1/D12: stock in a transfer-source location (R003, unconfigured) is shown, not counted.
+        // R→R advisory only: stock outside R stores is shown as "held at", never as a transfer.
         transfer_suggestion: row.stock.other_sloc_unrestricted > 0
-          ? `${row.stock.other_locations.map(loc).join(", ")} → ${unique(row.pools.map((p) => p.storage_location_id)).map(loc).join(" / ") || "required location"}`
+          ? (() => {
+            const route = rToRTransferRoute(row.stock.other_locations.map(loc), [...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id ?? "")].map(loc));
+            return route ? `${route.from} → ${route.to}` : `Held at ${row.stock.other_locations.map(loc).join(", ")} (not an R→R transfer)`;
+          })()
           : null,
         lead_time_effective: row.lead_time?.effective ?? null,
         lead_time_source: row.lead_time?.effective_source ?? "UNKNOWN",

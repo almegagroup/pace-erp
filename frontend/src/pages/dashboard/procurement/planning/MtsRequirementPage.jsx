@@ -1282,7 +1282,7 @@ function CostSettingsTab({ companyId, access, today }) {
       <section className="grid gap-2">
         <h3 className="text-sm font-semibold text-slate-800">Stock locations</h3>
         <p className="text-xs text-slate-500">
-          Counted = usable stock (pooled across all counted locations). Shown + transfer referral = visible, never counted, the Requirement suggests moving it (e.g. R003, F-series).
+          Counted = usable stock (pooled across all counted locations). Shown + transfer referral = visible, never counted, the Requirement suggests an R→R move only between R stores (e.g. R003 → R001); stock elsewhere is only shown as "held at".
           Excluded = ignored (OT01 / OT02). A location not set yet behaves as &quot;Shown + transfer referral&quot;.
         </p>
         {canEdit ? (

@@ -851,6 +851,20 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
 export type StockRow = { material_id: string; storage_location_id: string; stock_type_code: string; qty: number };
 export type ReservationRow = { material_id: string; storage_location_id: string; qty: number };
 
+/**
+ * R→R advisory route (source contract §5, owner D1/D12): a transfer is only ever suggested between
+ * raw-material stores (R-series codes). Every source must be an R store (otherwise the qty is not
+ * a pure R stock and nothing is suggested); the destination is an R store among the counted /
+ * required locations, or UNKNOWN — never S/P/F, never a fabricated location.
+ */
+export const isRawStoreCode = (code: string) => /^R\d/i.test(code.trim());
+export function rToRTransferRoute(sourceCodes: readonly string[], destinationCodes: readonly string[]): { from: string; to: string } | null {
+  const sources = [...new Set(sourceCodes.filter(Boolean))];
+  if (sources.length === 0 || !sources.every(isRawStoreCode)) return null;
+  const to = [...new Set(destinationCodes.filter((code) => isRawStoreCode(code) && !sources.includes(code)))];
+  return { from: sources.join(", "), to: to.length > 0 ? to.join(" / ") : "an R store (destination UNKNOWN)" };
+}
+
 export type MaterialStockPosition = {
   /**
    * Usable stock = UNRESTRICTED − open reservations. With a company location policy
@@ -860,7 +874,7 @@ export type MaterialStockPosition = {
   usable_at_required: number;
   unrestricted_at_required: number;
   reserved_at_required: number;
-  /** Shown, never counted: TRANSFER_SOURCE locations (e.g. R003, F-series) → transfer referral. */
+  /** Shown, never counted: TRANSFER_SOURCE locations (e.g. R003; unconfigured locations too) → R→R transfer referral when an R store. */
   other_sloc_unrestricted: number;
   /** Not counted and not referred (e.g. OT01 / OT02 / admix shop floor). */
   excluded_unrestricted: number;

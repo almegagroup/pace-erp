@@ -4,8 +4,8 @@
  *            common:docs/po22-common/OWNER-DECISIONS-2026-10-19-REQUIREMENT-AND-GROUPS.md).
  *
  *   role COUNTED          stock counts as usable (pooled over all counted locations of the company);
- *   role TRANSFER_SOURCE  stock is shown, never counted, and referred for a transfer (R003, F-series);
- *   role EXCLUDED         stock is neither counted nor referred (OT01 / OT02, admix S/P/T/L 003).
+ *   role TRANSFER_SOURCE  stock is shown, never counted, and referred for an R→R transfer (R003 only);
+ *   role EXCLUDED         stock is neither counted nor referred (OT01 / OT02, F-series FG, admix S/P/T/L 003).
  *   A plant location without a row is treated as TRANSFER_SOURCE by the engine (shown, not counted).
  *
  *   Seeds CMP003 / CMP005 / CMP011 from erp_inventory.storage_location_plant_map by location code
@@ -36,7 +36,7 @@ INSERT INTO erp_planning.company_planning_location_policy (company_id, storage_l
 SELECT m.company_id, s.id,
        CASE
          WHEN s.code IN ('R001', 'R002', 'S001', 'S002', 'P001', 'P002') THEN 'COUNTED'
-         WHEN s.code = 'R003' OR s.code LIKE 'F%' THEN 'TRANSFER_SOURCE'
+         WHEN s.code = 'R003' THEN 'TRANSFER_SOURCE'
          ELSE 'EXCLUDED'
        END,
        'Seeded from owner decision D12 (2026-10-19)'
