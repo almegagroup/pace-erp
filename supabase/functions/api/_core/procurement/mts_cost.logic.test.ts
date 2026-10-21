@@ -47,3 +47,11 @@ Deno.test("P2 economicCycleDays: √(2S/(D·H)), clamped 7–90, null when data 
   if (economicCycleDays({ order_cost: null, unit_price_inr: 340, interest_pct: 12, daily_use: 4400 }) !== null) throw new Error("missing S");
   if (averageOrderCost([{ total_cost: 100 }, { total_cost: 300 }, { total_cost: 0 }]) !== 200) throw new Error("avg order cost");
 });
+
+Deno.test("cost (owner 2026-10-21): a lower price can lose on payment term, freight and MOQ excess", () => {
+  // A: ₹98, advance 60 days, freight paid by us ₹4, MOQ 5000 for a 1000 need. B: ₹100, 60 days credit, FOR.
+  const a = costOption(vendor({ vendor_label: "A", price: 98, landed_adder: 4, advance: true, lead_time_days: 60, vendor_credit_days: null, order_qty: 5000 }), context);
+  const b = costOption(vendor({ vendor_label: "B", price: 100, landed_adder: 0, vendor_credit_days: 60, order_qty: 1000 }), context);
+  equal(rankCostOptions([a, b]).map((o) => o.vendor_label), ["B", "A"], "B wins on full cost despite the higher price");
+  if (!(a.excess_cost! > 0 && a.days_money_tied! > b.days_money_tied!)) throw new Error("A pays for MOQ excess and longer money tie-up");
+});

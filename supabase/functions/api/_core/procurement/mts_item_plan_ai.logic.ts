@@ -48,7 +48,7 @@ export type AiPlanContext = {
   members: Array<{ code: string | null; name: string; exclusive: boolean; groups: string[]; stock: number; target_days: number | null; critical_days: number | null }>;
   weekly: Array<{ week_start: string; opening: number; arrivals: number; planned_lot: number; use: number; closing: number; min_max_days: number | null }>;
   arrivals: Array<{ code: string | null; reference: string; status: string; qty: number; eta_plant: string | null; advice: string | null }>;
-  future_orders: Array<{ code: string | null; vendor: string | null; qty: number; po_by: string | null; eta_plant: string | null; bridge: boolean; late: boolean; max_days_planned: number | null }>;
+  future_orders: Array<{ code: string | null; vendor: string | null; qty: number; po_by: string | null; eta_plant: string | null; bridge: boolean; late: boolean; max_days_planned: number | null; unit_total_cost?: number | null; freight_term?: string | null; cost_missing?: readonly string[] }>;
   user_lots: Array<{ code: string | null; plant_eta: string; qty: number }>;
   alternatives: string[];
   metrics: PlanMetrics;
@@ -58,7 +58,7 @@ export type AiPlanContext = {
 export function buildItemPlanAiPrompt(c: AiPlanContext): string {
   const L: string[] = [];
   L.push("You are the AI planner of an ERP procurement team, planning together with a deterministic engine. Plan this item / family for the horizon below.");
-  L.push("Rules: use only the numbers given; you may PROPOSE extra lots (material code, plant date, qty) — the engine will re-simulate them and show their real effect; never claim a PO, CSN or transfer was created; respect each vendor's fixed MOQ; do not move in-transit stock; prefer: group member spare → R store transfer → advancing ordered lots → other company → other vendor → safety compromise → trader last.");
+  L.push("Rules: use only the numbers given; you may PROPOSE extra lots (material code, plant date, qty) — the engine will re-simulate them and show their real effect; never claim a PO, CSN or transfer was created; respect each vendor's fixed MOQ; compare vendors on FULL cost (price × FX + landed/freight + interest under the payment term + Item Rate + MOQ excess), not price alone; do not move in-transit stock; prefer: group member spare → R store transfer → advancing ordered lots → other company → other vendor → safety compromise → trader last.");
   L.push("Goals in order: no production stop (no shortage), keep every member at or above its Target days, then hold as little stock (working capital) as possible above Max days.");
   L.push(`ITEM: ${clean(c.item_label)} (${c.is_family ? `family of ${c.members.length}, groups ${c.groups.map(clean).join("; ")}` : "single item, no group"}); unit ${clean(c.uom)}; horizon ${c.horizon.from} → ${c.horizon.to}.`);
   L.push("MEMBERS:");
@@ -71,7 +71,7 @@ export function buildItemPlanAiPrompt(c: AiPlanContext): string {
   }
   if (c.future_orders.length) {
     L.push("ENGINE FUTURE ORDERS:");
-    for (const f of c.future_orders.slice(0, 25)) L.push(`- ${clean(f.code)} ${clean(f.vendor)} ${n(f.qty)} PO by ${clean(f.po_by) || "?"} plant ${clean(f.eta_plant) || "?"}${f.bridge ? " BRIDGE" : ""}${f.late ? " LATE" : ""}; sized to ${n(f.max_days_planned)} d`);
+    for (const f of c.future_orders.slice(0, 25)) L.push(`- ${clean(f.code)} ${clean(f.vendor)} ${n(f.qty)} PO by ${clean(f.po_by) || "?"} plant ${clean(f.eta_plant) || "?"}${f.bridge ? " BRIDGE" : ""}${f.late ? " LATE" : ""}; sized to ${n(f.max_days_planned)} d${f.unit_total_cost != null ? `; full cost ₹${n(f.unit_total_cost)}/unit` : ""}${f.freight_term ? `; freight ${clean(f.freight_term)}` : ""}${f.cost_missing?.length ? `; cost missing: ${f.cost_missing.map(clean).join(", ")}` : ""}`);
   }
   if (c.user_lots.length) {
     L.push("LOTS THE USER FIXED (keep them unless clearly harmful):");

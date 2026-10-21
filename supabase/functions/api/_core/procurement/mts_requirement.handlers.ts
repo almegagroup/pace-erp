@@ -876,7 +876,7 @@ export async function loadLocationLabels(ids: string[]): Promise<Map<string, str
  * truncate as data grows — CLAUDE.md §8E family). `build` must return a fresh
  * query with a stable ORDER BY each call.
  */
-async function fetchAllPages(build: () => unknown, errorCode: string): Promise<JsonRecord[]> {
+export async function fetchAllPages(build: () => unknown, errorCode: string): Promise<JsonRecord[]> {
   const pageSize = 1000;
   const rows: JsonRecord[] = [];
   for (let from = 0; ; from += pageSize) {

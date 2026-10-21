@@ -318,5 +318,16 @@ Decisions taken while building (owner may change any of them):
 - **User lots** are planned on their date; the engine buys only what is still needed. Every
   save is a version. CC date can be moved to an earlier day.
 
+- **Vendor per lot = full cost, not price (owner 2026-10-21).** Each vendor is compared on the
+  full cost of a typical lot (daily use × best cycle): last price × FX + AC01 landed adder +
+  interest on money tied up under the vendor's payment term (advance = paid lead time early) +
+  Item Rate (carrying) + cost of the MOQ excess, ÷ lot qty. Freight term comes from the latest PO
+  for that vendor + item (2 years): FOR = freight inside the price; FREIGHT_SEPARATE /
+  EX_TRANSPORTER_GODOWN = paid by us via AC01 landed cost, flagged as "freight missing" when AC01
+  has no history (never assumed 0 silently). Future Orders show "Full cost / unit", "Freight" and
+  "Cost gaps"; the AI prompt gets the same numbers. A different vendor per lot is not mandatory:
+  the same vendor repeats whenever it is still cheapest in time. Open: a stickiness rule (keep
+  the previous vendor unless another is X% cheaper) — waiting for the owner.
+
 Release needs (owner approval): PR dev → main (migrations `20261021120000` apply on merge) and
 ACL for `PROC_MTS_ITEM_PLAN_EDIT` (`docs/mts-planning/acl/PO22-P4-ITEM-PLAN-EDIT-ACL-PROVISIONING.sql`).

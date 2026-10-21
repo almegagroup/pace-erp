@@ -211,6 +211,7 @@ export async function buildItemPlan(companyId: string, params: ItemPlanParams, m
           max_days_on_arrival: at?.max_cover_days ?? null, min_days_on_arrival: at?.min_cover_days ?? null,
           max_days_planned: b.max_cover_days ?? null, max_days_basis: b.max_days_basis ?? null,
           bridge: b.bridge === true, late: b.status === "ADVISORY_LATE", cheapest_vendor: b.cheapest_vendor_label ?? null,
+          unit_total_cost: b.vendor_unit_total_cost ?? null, freight_term: b.vendor_freight_term ?? null, cost_missing: b.vendor_cost_missing ?? [],
           reason: b.reason,
         };
       }));
@@ -493,7 +494,7 @@ export async function reviewMtsItemPlanWithAiHandler(req: Request, ctx: ReqHandl
       members: before.members.map((m) => ({ code: m.material_code, name: m.material_name, exclusive: m.exclusive, groups: m.groups, stock: m.usable_stock, target_days: m.target_days, critical_days: m.critical_days })),
       weekly: weeklySummary(before.grid),
       arrivals: before.arrivals.map((a) => ({ code: a.material_code, reference: a.reference, status: a.status, qty: a.qty, eta_plant: a.rescheduled_eta ?? a.eta_plant, advice: a.advice?.reason ?? null })),
-      future_orders: before.future_orders.map((f) => ({ code: f.material_code, vendor: f.vendor, qty: f.qty, po_by: f.po_by, eta_plant: f.eta_plant, bridge: f.bridge, late: f.late, max_days_planned: f.max_days_planned })),
+      future_orders: before.future_orders.map((f) => ({ code: f.material_code, vendor: f.vendor, qty: f.qty, po_by: f.po_by, eta_plant: f.eta_plant, bridge: f.bridge, late: f.late, max_days_planned: f.max_days_planned, unit_total_cost: f.unit_total_cost, freight_term: f.freight_term, cost_missing: f.cost_missing })),
       user_lots: before.user_lots.map((l) => ({ code: codeOf.get(l.material_id) ?? null, plant_eta: l.plant_eta, qty: l.qty_base })),
       alternatives: before.alternatives.flatMap((a) => a.options.map((o) => `${a.material_code ?? ""} ${o.kind}: ${o.detail}`)),
       metrics: before.metrics, question: text(body.question) || null,

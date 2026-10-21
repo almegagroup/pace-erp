@@ -16,6 +16,9 @@ import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
 import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario } from "../procurementApi.js";
 
+// Owner 2026-10-21: FOR = freight inside the price; otherwise we pay it (AC01 landed cost).
+const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we pay)", EX_TRANSPORTER_GODOWN: "Ex godown (we pay)" };
+
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
 const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true };
@@ -163,6 +166,9 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (o) => o.eta_plant ?? "—" },
     { key: "days", label: "Max / Min days on arrival", width: "150px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
     { key: "max_days_planned", label: "Planned Max days", width: "130px", render: (o) => (o.max_days_planned === null ? "—" : `${fmtDays(o.max_days_planned)}${o.max_days_basis === "DEFAULT" ? " (default — no cost data)" : ""}`), copyValue: (o) => o.max_days_planned ?? "" },
+    { key: "unit_total_cost", label: "Full cost / unit (₹)", width: "150px", render: (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "—" : o.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })), copyValue: (o) => o.unit_total_cost ?? "" },
+    { key: "freight_term", label: "Freight", width: "130px", render: (o) => FREIGHT_LABEL[o.freight_term] ?? o.freight_term ?? "—" },
+    { key: "cost_missing", label: "Cost gaps", width: "220px", render: (o) => (o.cost_missing?.length ? `Missing: ${o.cost_missing.join(", ")}` : "Complete"), copyValue: (o) => (o.cost_missing ?? []).join("; ") },
     { key: "reason", label: "Why", width: "360px", render: (o) => (o.bridge && o.cheapest_vendor ? `${o.reason} Cheapest: ${o.cheapest_vendor}.` : o.reason) },
     {
       key: "fix", label: "Change", width: "90px", filterable: false,
