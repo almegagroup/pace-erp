@@ -136,11 +136,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
     {
       // Sheet PLANNING "Quantity to Dispatch": the engine's lots, overwritten by typing your own.
-      key: "planned_lot", label: "Quantity to Dispatch", width: "130px", align: "right", filterable: false,
+      key: "planned_lot", label: "Quantity to Dispatch", width: "170px", align: "right", filterable: false,
       render: (r) => {
         const own = ownDispatch.get(r.day);
         const shown = own ?? (r.planned_lot || "");
-        return (
+        const input = (
           <input
             key={`${r.day}|${shown}`}
             type="number"
@@ -152,6 +152,14 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             className={`h-6 w-24 border px-1 text-right text-xs outline-none ${own !== undefined ? "border-sky-500 bg-sky-100 font-semibold text-sky-900" : r.planned_lot ? "border-slate-300 bg-white font-semibold text-sky-800" : "border-transparent bg-transparent hover:border-slate-300"}`}
           />
         );
+        // Same day as an engine lot (or another member's lot): show the extra so the row adds up.
+        const extra = own !== undefined ? Math.round(((r.planned_lot ?? 0) - own) * 1000) / 1000 : 0;
+        return extra > 0.001 ? (
+          <span className="flex items-center justify-end gap-1">
+            {input}
+            <span className="text-[10px] text-slate-600" title="Engine lot on the same day">{`+${fmtQty(extra)} engine`}</span>
+          </span>
+        ) : input;
       },
       copyValue: (r) => r.planned_lot,
     },
