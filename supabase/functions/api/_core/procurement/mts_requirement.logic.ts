@@ -1624,6 +1624,30 @@ export function effectivePolicy(rows: PolicyRow[], materialId: string, asOf: str
   return best;
 }
 
+/** What-if Safety / Target days for one simulation run (never saved). */
+export type PolicyOverride = { target_cov_days: number | null; critical_cov_days: number | null };
+
+/**
+ * Simulation only: replaces Target / Critical days of the given materials on every policy row
+ * (all effective dates), so the run behaves as if those days were set. A material with no policy
+ * row gets a minimal one. MOQ and carrying rate stay as saved.
+ */
+export function applyPolicyOverrides(rows: readonly PolicyRow[], overrides: ReadonlyMap<string, PolicyOverride>): PolicyRow[] {
+  if (overrides.size === 0) return [...rows];
+  const result = rows.map((row) => {
+    const o = overrides.get(row.material_id);
+    return o ? { ...row, target_cov_days: o.target_cov_days, critical_cov_days: o.critical_cov_days } : row;
+  });
+  for (const [materialId, o] of overrides) {
+    if (rows.some((row) => row.material_id === materialId)) continue;
+    result.push({
+      material_id: materialId, effective_from: "1900-01-01", target_cov_days: o.target_cov_days, critical_cov_days: o.critical_cov_days,
+      moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 0, carrying_rate_per_uom: null,
+    });
+  }
+  return result;
+}
+
 /**
  * NM REQ DAYS (ERP, date-aware): how many days of next month must already be
  * covered now so that cover from the as-of date reaches Target days:

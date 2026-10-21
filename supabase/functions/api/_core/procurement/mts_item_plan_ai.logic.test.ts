@@ -1,4 +1,4 @@
-import { buildItemPlanAiPrompt, parseAiLots, planMetrics, weeklySummary, type GridRow } from "./mts_item_plan_ai.logic.ts";
+import { buildItemPlanAiPrompt, buildWhatIfTargetPrompt, parseAiLots, pickTargetCandidate, planMetrics, type TargetCandidateResult, weeklySummary, type GridRow } from "./mts_item_plan_ai.logic.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -31,4 +31,35 @@ Deno.test("P4 prompt: carries the goals, members, options and never ids", () => 
   });
   assert(prompt.includes("no production stop") && prompt.includes("RM-00083") && prompt.includes("Can we skip December?"), "content");
   assert(!/[0-9a-f]{8}-[0-9a-f]{4}-/.test(prompt), "no uuid leaks into the prompt");
+});
+
+Deno.test("What-if: days at/below Critical counted against the given Critical", () => {
+  const m = planMetrics([g("2026-11-01", 100, 10), g("2026-11-02", 60, 4), g("2026-11-03", 50, 3)], 20, null, 4);
+  assertEqual([m.days_below_target, m.days_below_critical], [3, 2], "below target 3, below critical 2");
+  assertEqual(planMetrics([g("2026-11-01", 100, 10)], 20, null).days_below_critical, 0, "no Critical → 0");
+});
+
+const cand = (target: number, shortage: number, belowCritical: number, value: number | null, isCurrent = false): TargetCandidateResult => ({
+  target_days: target, critical_days: 10, is_current: isCurrent,
+  metrics: { shortage_days: shortage, first_shortage_day: null, days_below_target: 0, days_below_critical: belowCritical, lowest_max_days: null, average_closing: 0, average_stock_value: value },
+  order_count: 1, order_qty: 100, order_value: null, order_value_partial: false,
+});
+
+Deno.test("What-if pick: lowest money among candidates no riskier than today", () => {
+  const pick = pickTargetCandidate([cand(10, 2, 5, 500), cand(15, 0, 1, 800), cand(20, 0, 1, 1000, true), cand(25, 0, 0, 1200)]);
+  assertEqual(pick?.target_days, 15, "15 days: no shortage, Critical days not worse, cheaper");
+  assert(pick!.reason.includes("200"), "reason shows the saving");
+});
+
+Deno.test("What-if pick: keeps today when nothing lower is safe; null when none is safe", () => {
+  assertEqual(pickTargetCandidate([cand(15, 1, 3, 800), cand(20, 0, 1, 1000, true)])?.target_days, 20, "keep current");
+  assertEqual(pickTargetCandidate([cand(15, 1, 3, 800), cand(20, 2, 1, 1000, true)]), null, "none safe");
+  assertEqual(pickTargetCandidate([cand(15, 0, 0, null), cand(20, 0, 0, null, true)])?.target_days, 15, "no cost → lowest Target");
+});
+
+Deno.test("What-if prompt: engine numbers only, no ids", () => {
+  const p = buildWhatIfTargetPrompt({ item_label: "VAE 5010 3fa85f64-5717-4562-b3fc-2c963f66afa6", uom: "KG", horizon: { from: "2026-10-21", to: "2027-03-31" },
+    current_target: 20, current_critical: 10, results: [cand(15, 0, 1, 800), cand(20, 0, 1, 1000, true)], engine_pick: { target_days: 15, reason: "cheaper" } });
+  assert(!p.includes("3fa85f64"), "uuid stripped");
+  assert(p.includes("Target 20 (current)") && p.includes("Engine pick: 15 days"), "candidates and pick shown");
 });

@@ -70,6 +70,8 @@ import {
   type PlanningCalendar,
   applyCompanyMaterialMapping,
   applyInboundReschedules,
+  applyPolicyOverrides,
+  type PolicyOverride,
   effectivePlanAt,
   partitionPoLineInbound,
   rToRTransferRoute,
@@ -969,15 +971,24 @@ async function loadBeyondPlanForecast(
  */
 export async function computeRequirement(
   companyId: string, calendar: PlanningCalendar, asOf: string, today: string, demandAt: string | null,
-  options: { forecastBeyondPlan?: boolean } = {},
+  options: {
+    forecastBeyondPlan?: boolean;
+    /** Simulation only (never saved): reschedule key → date (null = back to source date). */
+    rescheduleOverrides?: ReadonlyMap<string, string | null>;
+    /** Simulation only (never saved): what-if Target / Critical days per material. */
+    policyOverrides?: ReadonlyMap<string, PolicyOverride>;
+  } = {},
 ) {
   const months = calendar.months;
 
-  const [planLines, settings, policyLoad] = await Promise.all([
+  const [planLines, settings, loadedPolicies] = await Promise.all([
     loadPlanLines(companyId, months),
     loadStrokeSettings(companyId, months),
     loadPolicies(companyId),
   ]);
+  const policyLoad = options.policyOverrides?.size
+    ? { ...loadedPolicies, policies: applyPolicyOverrides(loadedPolicies.policies, options.policyOverrides) }
+    : loadedPolicies;
   const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
   const masters = await loadFormulationMasters(companyId, periodStrokeIds);
   const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
@@ -1010,7 +1021,10 @@ export async function computeRequirement(
     loadInboundReschedules(companyId),
   ]);
   // Planning-side rescheduled ETAs (CSN Tracker itself is never changed).
-  const inbound = { ...inboundRaw, events: applyInboundReschedules(inboundRaw.events, reschedules) };
+  const effectiveReschedules = options.rescheduleOverrides?.size
+    ? new Map([...reschedules, ...options.rescheduleOverrides])
+    : reschedules;
+  const inbound = { ...inboundRaw, events: applyInboundReschedules(inboundRaw.events, effectiveReschedules) };
 
   const prodshadeLabels = new Map(masters.prodshadeIds.map((pid) => [pid, text(materialRows.get(pid)?.material_name) || pid]));
   const input = {

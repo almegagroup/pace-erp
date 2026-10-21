@@ -331,3 +331,43 @@ Decisions taken while building (owner may change any of them):
 
 Release needs (owner approval): PR dev → main (migrations `20261021120000` apply on merge) and
 ACL for `PROC_MTS_ITEM_PLAN_EDIT` (`docs/mts-planning/acl/PO22-P4-ITEM-PLAN-EDIT-ACL-PROVISIONING.sql`).
+
+## 13. Preview before saving, what-if Safety days, vendor × date (owner 2026-10-21)
+
+Owner: "Safety days 20 → system + AI see 15 is better — how is it shown? Move a CSN row on the
+Planning page up / down (prepone / postpone). Which vendor's item on which date — what happens?
+Can I type my own qty and see Min / Max days change?"
+
+- **Simulation, never saved.** `computeRequirement` / `computePlanning` / `buildItemPlan` take
+  simulation-only overrides: moved arrival dates (reschedule key → date, on top of the saved
+  ones) and what-if Target / Critical days per material (`applyPolicyOverrides`: every effective
+  row of that item; MOQ and Item Rate kept). Nothing is written; CSN Tracker is never touched.
+- **4A Item Plan — Preview.** Move an arrival date, edit Your lots (own qty / date / vendor) or
+  pick a Target from the what-if table, then **Preview**: the day grid (Closing, Min days, Max
+  days), arrivals, future orders, alternatives and transfers switch to the engine's preview,
+  with a Saved-plan vs Preview line (shortage days, days ≤ Target, days ≤ Critical, lowest Max
+  days, average stock and money, new orders). "Back to saved plan" closes it; Save stays separate.
+  `POST /api/procurement/mts-requirement/item-plan/simulate` (PROC_MTS_REQUIREMENT VIEW).
+- **Vendor on a lot + vendor × date compare.** Each member's vendors (MM03 link + company map)
+  with lead days, earliest plant date if ordered today, MOQ / multiple, full cost per unit
+  (§12), freight and cost gaps. Given a date and qty the table shows: arrives by the date?, the
+  real lot (MOQ / multiple), lot value; ★ = lowest value arriving in time. "Add as my lot" /
+  "Add & preview". A user lot with a vendor is flagged **too early** (date before that vendor's
+  earliest arrival) or **below MOQ**. The engine plans the lot on its date and qty as given; the
+  vendor is the user's choice and is used for the flags and value.
+- **What-if Safety days.** Up to 4 Target values besides today's; the engine re-plans the item at
+  each (Critical kept, lowered only if above the new Target) and compares shortage days, days at /
+  below **today's** Critical (so candidates compare), lowest Max days, average stock and money,
+  new orders and their value. **Engine pick:** no shortage, not more days at Critical than today,
+  lowest average money (unknown cost → lowest Target); none safe → keep today's and fix supply.
+  Optional AI verdict (same monthly budget) explains / challenges using only these numbers.
+  "Preview" shows the day grid at that Target; "Use" saves a new policy version from the as-of
+  date (Material Settings rights). `POST .../item-plan/what-if-target` (VIEW).
+- **Planning tab — Arrivals prepone / postpone.** Every not-yet-shipped CSN / PO piece
+  (`reschedulable_arrivals`) with −7/−1/+1/+7 buttons or a date, reason, **Preview** (before →
+  after per affected material: runs out, below Critical / Target from, lowest Min days, new
+  orders, first PO by; green better, red worse) and **Save new dates** (the existing planning
+  reschedule store, PROC_MTS_INBOUND_RESCHEDULE WRITE). `POST .../planning/reschedule-preview` (VIEW).
+
+No migration and no new ACL resource: the three new routes are VIEW on PROC_MTS_REQUIREMENT;
+saving uses the existing reschedule / scenario / policy endpoints and their rights.

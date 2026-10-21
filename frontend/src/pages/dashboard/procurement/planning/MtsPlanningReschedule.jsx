@@ -1,0 +1,168 @@
+/*
+ * File-Path: frontend/src/pages/dashboard/procurement/planning/MtsPlanningReschedule.jsx
+ * Domain: PROCUREMENT / MTS PLANNING
+ * Purpose: PO22 Planning tab (owner 2026-10-21) — move not-yet-shipped CSN / PO arrivals earlier
+ *          (prepone) or later (postpone), Preview the engine's before / after for every affected
+ *          material, then Save. Planning side only: CSN Tracker is never changed.
+ * Authority: Frontend (numbers come from the backend engine only)
+ */
+
+import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { pushToast } from "../../../../store/uiToast.js";
+import { previewMtsPlanningReschedule, saveMtsInboundReschedule } from "../procurementApi.js";
+
+const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
+const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true };
+
+function fmtQty(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  return Number(value).toLocaleString("en-IN", { maximumFractionDigits: 3 });
+}
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error ?? "");
+}
+function shiftDays(from, to) {
+  if (!from || !to) return null;
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+}
+function addDays(day, n) {
+  return day ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : "";
+}
+
+export default function MtsPlanningReschedule({ companyId, planMonth, asOf, demandAt, arrivals }) {
+  const queryClient = useQueryClient();
+  const [drafts, setDrafts] = useState({});
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const current = (a) => a.rescheduled_eta ?? a.eta_plant ?? "";
+  const changed = useMemo(
+    () => (arrivals ?? []).filter((a) => drafts[a.reschedule_key]?.date && drafts[a.reschedule_key].date !== (a.rescheduled_eta ?? a.eta_plant ?? "")),
+    [arrivals, drafts],
+  );
+  const setDate = (a, date) => { setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date } })); setPreview(null); };
+
+  async function runPreview() {
+    setBusy(true);
+    try {
+      setPreview(await previewMtsPlanningReschedule({
+        company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined,
+        reschedules: changed.map((a) => ({ reschedule_key: a.reschedule_key, date: drafts[a.reschedule_key].date })),
+      }));
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      await saveMtsInboundReschedule({
+        company_id: companyId,
+        rows: changed.map((a) => ({
+          reschedule_key: a.reschedule_key, material_id: a.material_id, original_eta: a.eta_plant ?? null,
+          rescheduled_eta: drafts[a.reschedule_key].date, reason: drafts[a.reschedule_key].reason || null,
+        })),
+      });
+      pushToast({ message: "New arrival dates saved for planning. CSN Tracker is unchanged — update it there when the vendor confirms.", tone: "success" });
+      setDrafts({});
+      setPreview(null);
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement"] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const columns = [
+    { key: "material_name", label: "Material", width: "240px", render: (a) => `${a.material_code ?? ""} ${a.material_name}`.trim() },
+    { key: "reference", label: "PO / CSN", width: "280px" },
+    { key: "qty", label: "Qty", width: "110px", align: "right", render: (a) => `${fmtQty(a.qty)} ${a.uom ?? ""}`, copyValue: (a) => a.qty },
+    { key: "eta_plant", label: "Source ETA (CSN / PO)", width: "130px", render: (a) => a.eta_plant ?? "—" },
+    { key: "rescheduled_eta", label: "Saved planning ETA", width: "130px", render: (a) => a.rescheduled_eta ?? "—" },
+    {
+      key: "move", label: "Move", width: "150px", filterable: false,
+      render: (a) => (
+        <span className="flex gap-1">
+          {[-7, -1, 1, 7].map((n) => (
+            <button key={n} type="button" onClick={() => setDate(a, addDays(drafts[a.reschedule_key]?.date || current(a), n))} disabled={!current(a)} className="h-6 border border-slate-300 bg-white px-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" title={n < 0 ? "Prepone" : "Postpone"}>{n > 0 ? `+${n}` : n}</button>
+          ))}
+        </span>
+      ),
+    },
+    {
+      key: "new_date", label: "New plant date", width: "150px", filterable: false,
+      render: (a) => <input type="date" value={drafts[a.reschedule_key]?.date ?? current(a)} onChange={(event) => setDate(a, event.target.value)} className={CELL_INPUT} />,
+      copyValue: (a) => drafts[a.reschedule_key]?.date ?? "",
+    },
+    {
+      key: "shift", label: "Shift", width: "110px",
+      render: (a) => {
+        const n = shiftDays(current(a), drafts[a.reschedule_key]?.date);
+        return !n ? "" : <span className={`font-semibold ${n < 0 ? "text-emerald-700" : "text-amber-700"}`}>{n < 0 ? `Prepone ${-n} d` : `Postpone ${n} d`}</span>;
+      },
+    },
+    {
+      key: "reason", label: "Reason", width: "200px", filterable: false,
+      render: (a) => <input type="text" value={drafts[a.reschedule_key]?.reason ?? ""} placeholder="Why" onChange={(event) => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), reason: event.target.value } }))} className={`${CELL_INPUT} w-full`} />,
+    },
+  ];
+
+  const cell = (b, a, key, worseIfEarlier) => {
+    const before = b[key];
+    const after = a[key];
+    if (before === after) return <span>{before ?? "—"}</span>;
+    const worse = worseIfEarlier ? (after !== null && (before === null || after < before)) : (after !== null && before !== null && after < before);
+    return <span className={worse ? "font-semibold text-rose-700" : "font-semibold text-emerald-700"}>{before ?? "—"} → {after ?? "—"}</span>;
+  };
+
+  return (
+    <section className="grid gap-1 border border-indigo-200 bg-indigo-50 p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold text-slate-800">Arrivals — prepone / postpone</h3>
+        <button type="button" onClick={() => void runPreview()} disabled={busy || changed.length === 0} className="h-7 border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">{busy ? "Engine is calculating…" : `Preview${changed.length ? ` (${changed.length})` : ""}`}</button>
+        <button type="button" onClick={() => void save()} disabled={saving || changed.length === 0} className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">{saving ? "Saving…" : "Save new dates"}</button>
+        {changed.length ? <button type="button" onClick={() => { setDrafts({}); setPreview(null); }} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Reset</button> : null}
+        <span className="text-xs text-slate-500">Only not-yet-shipped pieces can move. Planning side only — CSN Tracker is never changed.</span>
+      </div>
+      <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={arrivals ?? []} rowKey={(a) => a.reschedule_key} emptyMessage="No movable arrival (every open piece is already shipped)." maxHeight="35vh" />
+      {preview ? (
+        <div className="grid gap-1 text-xs">
+          <h4 className="font-semibold text-indigo-900">Effect (preview — not saved). Green = better, red = worse.</h4>
+          {(preview.rows ?? []).length === 0 ? <p className="text-slate-600">No material changes its risk or buy plan in CM + NM.</p> : (
+            <div className="overflow-x-auto">
+              <table>
+                <thead>
+                  <tr className="text-left text-slate-600">
+                    <th className="pr-3">Material</th><th className="pr-3">Moved</th><th className="pr-3">Runs out</th><th className="pr-3">Below Critical from</th>
+                    <th className="pr-3">Below Target from</th><th className="pr-3">Lowest Min days</th><th className="pr-3">New orders</th><th>First PO by</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.rows.map((r) => (
+                    <tr key={r.material_id} className="align-top">
+                      <td className="pr-3 font-semibold">{`${r.material_code ?? ""} ${r.material_name}`.trim()}</td>
+                      <td className="pr-3">{r.moved.length ? r.moved.map((m) => `${m.reference}: ${m.from ?? "—"} → ${m.to ?? "—"}`).join("; ") : "— (shares a group)"}</td>
+                      <td className="pr-3">{cell(r.before, r.after, "first_shortage_day", true)}</td>
+                      <td className="pr-3">{cell(r.before, r.after, "first_below_critical_day", true)}</td>
+                      <td className="pr-3">{cell(r.before, r.after, "first_below_target_day", true)}</td>
+                      <td className="pr-3">{cell(r.before, r.after, "lowest_min_days", false)}</td>
+                      <td className="pr-3">{r.before.new_orders === r.after.new_orders ? r.before.new_orders : `${r.before.new_orders} → ${r.after.new_orders}`}</td>
+                      <td>{r.before.first_po_by === r.after.first_po_by ? r.before.first_po_by ?? "—" : `${r.before.first_po_by ?? "—"} → ${r.after.first_po_by ?? "—"}`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-slate-500">{preview.note}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}

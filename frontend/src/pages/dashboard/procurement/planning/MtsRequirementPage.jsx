@@ -26,6 +26,7 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
 import MtsItemPlanTab from "./MtsItemPlanTab.jsx";
+import MtsPlanningReschedule from "./MtsPlanningReschedule.jsx";
 import {
   getMtsRequirementAccess,
   getMtsRequirementPolicies,
@@ -1576,6 +1577,8 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
           maxHeight="40vh"
         />
       </section>
+
+      <MtsPlanningReschedule companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandAt} arrivals={plan?.reschedulable_arrivals ?? []} />
 
       {(plan?.arrival_flags ?? []).length > 0 ? (
         <section className="grid gap-1">
