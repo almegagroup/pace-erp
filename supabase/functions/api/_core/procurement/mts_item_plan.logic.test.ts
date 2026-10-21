@@ -1,5 +1,8 @@
 import {
   arrivalStatus,
+  companySpare,
+  locationTransfers,
+  rescheduleAdvice,
   buildForecastPlanLines,
   familyClosure,
   familyDayGrid,
@@ -109,4 +112,35 @@ Deno.test("buildCalendar extra months: default unchanged, 6-month horizon when a
   const six = buildCalendar("2026-10-01", "2026-10-20", 4)!;
   assertEqual([six.months.length, six.horizonEnd, six.nmEnd], [6, "2027-03-31", "2026-11-30"], "CM + NM + 4");
   assertEqual(arrivalStatus("PO_REMAINDER", "BULK_CALL_OFF"), "BULK", "bulk label");
+});
+
+Deno.test("P2 rescheduleAdvice: advance when needed earlier, postpone when not needed, quiet when on time", () => {
+  const days = (n: number) => Array.from({ length: n }, (_, i) => new Date(Date.parse("2026-11-01T00:00:00Z") + i * 86_400_000).toISOString().slice(0, 10));
+  // 100 stock, use 10/day, Target 3 days; arrival 100 on day 20.
+  const mk = (eta: string) => {
+    let bal = 100;
+    return days(40).map((day) => { if (day === eta) bal += 100; bal -= 10; return { day, closing: bal, use: 10, target_days: 3 }; });
+  };
+  const late = rescheduleAdvice(mk("2026-11-20"), "2026-11-20", 100)!;
+  assert(late.shift_days < 0, `should advance, got ${JSON.stringify(late)}`);
+  assertEqual(late.suggested_eta, "2026-11-07", "cover without it falls to 3 days on day 7");
+  const early = rescheduleAdvice(mk("2026-11-02"), "2026-11-02", 100)!;
+  assert(early.shift_days > 0, "should postpone");
+  assert(rescheduleAdvice(mk("2026-11-07"), "2026-11-07", 100) === null, "on time → no advice");
+});
+
+Deno.test("P2 locationTransfers: shop floor S00n counts with R00n; short store filled from spare store, both ways", () => {
+  const t = locationTransfers([
+    { location: "R001", need: 100, stock: 400 }, { location: "S001", need: 50, stock: 0 },
+    { location: "R002", need: 300, stock: 100 }, { location: "S002", need: 0, stock: 20 },
+    { location: "F001", need: 0, stock: 999 },
+  ]);
+  assertEqual(t, [{ from: "R001", to: "R002", qty: 180 }], "R002 short 180, R001 spare 250");
+  assertEqual(locationTransfers([{ location: "R001", need: 500, stock: 0 }, { location: "R002", need: 0, stock: 200 }]), [{ from: "R002", to: "R001", qty: 200 }], "other direction, capped by spare");
+});
+
+Deno.test("P2 companySpare: never takes the sender below its own Target", () => {
+  const rows = [{ closing: 1000, use: 10, target_days: 30 }, { closing: 800, use: 10, target_days: 30 }];
+  assertEqual(companySpare(rows), 500, "min closing 800 − 30 days × 10");
+  assertEqual(companySpare([{ closing: 100, use: 10, target_days: 30 }]), 0, "no spare");
 });
