@@ -42,11 +42,24 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
   const [saving, setSaving] = useState(false);
   const current = (a) => a.rescheduled_eta ?? a.eta_plant ?? "";
   const changed = useMemo(
-    () => (arrivals ?? []).filter((a) => drafts[a.reschedule_key]?.date && drafts[a.reschedule_key].date !== (a.rescheduled_eta ?? a.eta_plant ?? "")),
+    () => (arrivals ?? []).filter((a) => {
+      const d = drafts[a.reschedule_key];
+      // A "back to CSN date" draft clears the saved planning date.
+      if (d?.clear) return Boolean(a.rescheduled_eta);
+      return Boolean(d?.date) && d.date !== (a.rescheduled_eta ?? a.eta_plant ?? "");
+    }),
     [arrivals, drafts],
   );
   const setDate = (a, date, reason) => {
     setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date, ...(reason ? { reason } : {}) } }));
+    setPreview(null);
+  };
+  const undo = (a) => {
+    setDrafts((d) => { const next = { ...d }; delete next[a.reschedule_key]; return next; });
+    setPreview(null);
+  };
+  const backToSource = (a) => {
+    setDrafts((d) => ({ ...d, [a.reschedule_key]: { clear: true, reason: "Back to CSN / PO date" } }));
     setPreview(null);
   };
   const engineMoves = (arrivals ?? []).filter((a) => a.optimum?.shift_days);
@@ -60,7 +73,7 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
     try {
       setPreview(await previewMtsPlanningReschedule({
         company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined,
-        reschedules: changed.map((a) => ({ reschedule_key: a.reschedule_key, date: drafts[a.reschedule_key].date })),
+        reschedules: changed.map((a) => ({ reschedule_key: a.reschedule_key, date: drafts[a.reschedule_key].clear ? null : drafts[a.reschedule_key].date })),
       }));
     } catch (error) {
       pushToast({ message: errorText(error), tone: "error" });
@@ -76,7 +89,7 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
         company_id: companyId,
         rows: changed.map((a) => ({
           reschedule_key: a.reschedule_key, material_id: a.material_id, original_eta: a.eta_plant ?? null,
-          rescheduled_eta: drafts[a.reschedule_key].date, reason: drafts[a.reschedule_key].reason || null,
+          rescheduled_eta: drafts[a.reschedule_key].clear ? null : drafts[a.reschedule_key].date, reason: drafts[a.reschedule_key].reason || null,
         })),
       });
       pushToast({ message: "New arrival dates saved for planning. CSN Tracker is unchanged — update it there when the vendor confirms.", tone: "success" });
@@ -128,13 +141,28 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
     },
     {
       key: "new_date", label: "New plant date", width: "150px", filterable: false,
-      render: (a) => <input type="date" value={drafts[a.reschedule_key]?.date ?? current(a)} onChange={(event) => setDate(a, event.target.value)} className={CELL_INPUT} />,
-      copyValue: (a) => drafts[a.reschedule_key]?.date ?? "",
+      render: (a) => (drafts[a.reschedule_key]?.clear
+        ? <span className="text-xs font-semibold text-sky-800">{`Back to CSN date ${a.eta_plant ?? "—"}`}</span>
+        : <input type="date" value={drafts[a.reschedule_key]?.date ?? current(a)} onChange={(event) => setDate(a, event.target.value)} className={CELL_INPUT} />),
+      copyValue: (a) => (drafts[a.reschedule_key]?.clear ? a.eta_plant ?? "" : drafts[a.reschedule_key]?.date ?? ""),
+    },
+    {
+      key: "undo", label: "Undo", width: "170px", filterable: false,
+      render: (a) => (
+        <span className="flex gap-1">
+          {drafts[a.reschedule_key] ? (
+            <button type="button" onClick={() => undo(a)} title="Drop this unsaved change" className="h-6 border border-slate-300 bg-white px-1.5 text-xs text-slate-700 hover:bg-slate-50">Undo</button>
+          ) : null}
+          {a.rescheduled_eta && !drafts[a.reschedule_key]?.clear ? (
+            <button type="button" onClick={() => backToSource(a)} title="Remove the saved planning date — the CSN / PO date is used again" className="h-6 border border-sky-300 bg-white px-1.5 text-xs text-sky-800 hover:bg-sky-50">Back to CSN date</button>
+          ) : null}
+        </span>
+      ),
     },
     {
       key: "shift", label: "Shift", width: "110px",
       render: (a) => {
-        const n = shiftDays(current(a), drafts[a.reschedule_key]?.date);
+        const n = shiftDays(current(a), drafts[a.reschedule_key]?.clear ? a.eta_plant : drafts[a.reschedule_key]?.date);
         return !n ? "" : <span className={`font-semibold ${n < 0 ? "text-emerald-700" : "text-amber-700"}`}>{n < 0 ? `Prepone ${-n} d` : `Postpone ${n} d`}</span>;
       },
     },
@@ -159,7 +187,7 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
         <button type="button" onClick={useAllEngineDates} disabled={engineMoves.length === 0} className="h-7 border border-amber-600 bg-white px-2 text-xs font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50">{`Use all engine dates${engineMoves.length ? ` (${engineMoves.length})` : ""}`}</button>
         <button type="button" onClick={() => void runPreview()} disabled={busy || changed.length === 0} className="h-7 border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">{busy ? "Engine is calculating…" : `Preview${changed.length ? ` (${changed.length})` : ""}`}</button>
         <button type="button" onClick={() => void save()} disabled={saving || changed.length === 0} className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">{saving ? "Saving…" : "Save new dates"}</button>
-        {changed.length ? <button type="button" onClick={() => { setDrafts({}); setPreview(null); }} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Reset</button> : null}
+        {changed.length ? <button type="button" onClick={() => { setDrafts({}); setPreview(null); }} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Undo all</button> : null}
         <span className="text-xs text-slate-500">Engine best date = every day of CM + NM tried: fewest stock-out / below-Critical / below-Target days, then the latest date (least money held). Only not-yet-shipped pieces can move; CSN Tracker is never changed.</span>
       </div>
       <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={arrivals ?? []} rowKey={(a) => a.reschedule_key} emptyMessage="No movable arrival (every open piece is already shipped)." maxHeight="35vh" />

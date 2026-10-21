@@ -131,15 +131,27 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "eta_port", label: "ETA Port", width: "100px", render: (a) => a.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (a) => a.eta_plant ?? "—" },
     {
-      key: "rescheduled_eta", label: "Rescheduled ETA (planning)", width: "180px", filterable: false,
-      render: (a) => (a.reschedule_key ? (
-        <input
-          type="date"
-          value={drafts[a.reschedule_key]?.date ?? a.rescheduled_eta ?? ""}
-          onChange={(event) => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: event.target.value, row: a } }))}
-          className={CELL_INPUT}
-        />
-      ) : <span className="text-xs text-slate-400">cannot move</span>),
+      key: "rescheduled_eta", label: "Rescheduled ETA (planning)", width: "260px", filterable: false,
+      render: (a) => (!a.reschedule_key ? <span className="text-xs text-slate-400">cannot move</span> : drafts[a.reschedule_key]?.clear ? (
+        <span className="flex items-center gap-1 text-xs font-semibold text-sky-800">
+          {`Back to CSN date ${a.eta_plant ?? "—"}`}
+          <button type="button" onClick={() => undoDraft(a.reschedule_key)} className="h-6 border border-slate-300 bg-white px-1.5 text-xs font-normal text-slate-700 hover:bg-slate-50">Undo</button>
+        </span>
+      ) : (
+        <span className="flex items-center gap-1">
+          <input
+            type="date"
+            value={drafts[a.reschedule_key]?.date ?? a.rescheduled_eta ?? ""}
+            onChange={(event) => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: event.target.value, row: a } }))}
+            className={CELL_INPUT}
+          />
+          {drafts[a.reschedule_key] ? (
+            <button type="button" onClick={() => undoDraft(a.reschedule_key)} title="Drop this unsaved change" className="h-6 border border-slate-300 bg-white px-1.5 text-xs text-slate-700 hover:bg-slate-50">Undo</button>
+          ) : a.rescheduled_eta ? (
+            <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { clear: true, reason: "Back to CSN / PO date", row: a } }))} title="Remove the saved planning date — the CSN / PO date is used again" className="h-6 border border-sky-300 bg-white px-1.5 text-xs text-sky-800 hover:bg-sky-50">Back to CSN date</button>
+          ) : null}
+        </span>
+      )),
       copyValue: (a) => a.rescheduled_eta ?? "",
     },
     {
@@ -218,6 +230,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   });
 
   const pending = Object.entries(drafts).filter(([, d]) => d?.row);
+  const undoDraft = (key) => setDrafts((d) => { const next = { ...d }; delete next[key]; return next; });
   async function saveReschedules() {
     setSaving(true);
     try {
@@ -227,7 +240,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
           reschedule_key: key,
           material_id: d.row.material_id,
           original_eta: d.row.eta_plant ?? null,
-          rescheduled_eta: d.date ?? d.row.rescheduled_eta ?? null,
+          rescheduled_eta: d.clear ? null : d.date || d.row.rescheduled_eta || null,
           reason: d.reason ?? null,
         })),
       });
@@ -284,7 +297,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   async function runPreview({ label, lots, targetOverrides } = {}) {
     setPreviewBusy(true);
     try {
-      const reschedules = pending.map(([key, d]) => ({ reschedule_key: key, date: d.date ?? d.row.rescheduled_eta ?? null }));
+      const reschedules = pending.map(([key, d]) => ({ reschedule_key: key, date: d.clear ? null : d.date || d.row.rescheduled_eta || null }));
       const manualLots = (lots ?? lotDraft ?? plan?.scenario?.manual_lots ?? []).filter((l) => Number(l.qty_base) > 0).map((l) => ({ ...l, qty_base: Number(l.qty_base) }));
       const result = await simulateMtsItemPlan({
         company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId,
@@ -430,6 +443,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                     {saving ? "Saving…" : `Save rescheduled dates${pending.length ? ` (${pending.length})` : ""}`}
                   </button>
                   <button type="button" onClick={() => setDrafts((d) => ({ ...d, ...Object.fromEntries(plan.arrivals.filter((x) => x.advice).map((x) => [x.reschedule_key, { ...(d[x.reschedule_key] ?? {}), date: x.advice.suggested_eta, reason: x.advice.reason, row: x }])) }))} disabled={!plan.arrivals.some((x) => x.advice)} className="h-7 border border-amber-600 bg-white px-2 text-xs font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50">Use all engine dates</button>
+                  {pending.length ? <button type="button" onClick={() => { setDrafts({}); setPreview(null); }} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Undo all</button> : null}
                   <button type="button" onClick={() => void runPreview()} disabled={previewBusy || pending.length === 0} className="h-7 border border-indigo-600 bg-white px-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-50 disabled:opacity-50">Preview</button>
                 </div>
                 <p className="text-xs text-slate-500">Engine best date: every day of the horizon is tried for each not-yet-shipped piece — fewest stock-out / below-Critical / below-Target days, then the latest date (least money held). Preview checks all moves together. Planning only — CSN Tracker is never changed. Shipped lots cannot be moved.</p>
