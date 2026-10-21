@@ -1891,6 +1891,19 @@ export function getMtsItemPlanOtherCompanies(params) {
   return fetchProcurement("GET", "/api/procurement/mts-requirement/item-plan/other-companies", undefined, params);
 }
 
+// PO22 P4: the user's plan edits (versions) and the Engine + AI review.
+export function saveMtsItemPlanScenario(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/item-plan/scenario", data);
+}
+
+export function listMtsItemPlanScenarios(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/item-plan/scenarios", undefined, params);
+}
+
+export function reviewMtsItemPlanWithAi(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/item-plan/ai-review", data);
+}
+
 export function saveMtsInboundReschedule(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/inbound-reschedule", data);
 }

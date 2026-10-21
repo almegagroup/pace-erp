@@ -14,7 +14,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
-import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, saveMtsInboundReschedule } from "../procurementApi.js";
+import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario } from "../procurementApi.js";
 
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
@@ -40,6 +40,16 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   const [openDay, setOpenDay] = useState("");
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(false);
+  // P4: calibration (CC) date the user may move; empty = the page's As-of date.
+  const [ccDate, setCcDate] = useState("");
+  const effAsOf = ccDate || asOf;
+  const effMonth = effAsOf ? effAsOf.slice(0, 7) : planMonth;
+  // P4: the user's own lots (draft while editing; null = not editing), AI review result.
+  const [lotDraft, setLotDraft] = useState(null);
+  const [question, setQuestion] = useState("");
+  const [aiResult, setAiResult] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
 
   // Material list: same cached CM + NM planning payload as the Planning tab.
   const planningQ = useQuery({
@@ -57,10 +67,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     return term ? materials.filter(([, label]) => label.toLowerCase().includes(term)) : materials;
   }, [materials, search]);
 
-  const itemKey = ["procurement", "mts-requirement", "item-plan", companyId, planMonth, asOf, demandAt, materialId];
+  const itemKey = ["procurement", "mts-requirement", "item-plan", companyId, effMonth, effAsOf, demandAt, materialId];
   const itemQ = useQuery({
     queryKey: itemKey,
-    queryFn: () => getMtsItemPlan({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined, material_id: materialId }),
+    queryFn: () => getMtsItemPlan({ company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId }),
     enabled: Boolean(companyId && planMonth && asOf && materialId),
   });
   const plan = itemQ.data ?? null;
@@ -154,6 +164,12 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "days", label: "Max / Min days on arrival", width: "150px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
     { key: "max_days_planned", label: "Planned Max days", width: "130px", render: (o) => (o.max_days_planned === null ? "—" : `${fmtDays(o.max_days_planned)}${o.max_days_basis === "DEFAULT" ? " (default — no cost data)" : ""}`), copyValue: (o) => o.max_days_planned ?? "" },
     { key: "reason", label: "Why", width: "360px", render: (o) => (o.bridge && o.cheapest_vendor ? `${o.reason} Cheapest: ${o.cheapest_vendor}.` : o.reason) },
+    {
+      key: "fix", label: "Change", width: "90px", filterable: false,
+      render: (o) => (
+        <button type="button" title="Take this lot into Your lots to change its date / qty" onClick={() => setLotDraft((d) => [...(d ?? plan?.scenario?.manual_lots ?? []), { material_id: o.material_id, plant_eta: o.eta_plant, qty_base: o.qty, vendor_id: null }])} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Fix / edit</button>
+      ),
+    },
   ];
   const transferColumns = [
     { key: "material_name", label: "Member", width: "220px", render: (t) => `${t.material_code ?? ""} ${t.material_name}`.trim() },
@@ -165,8 +181,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
   const [otherOpen, setOtherOpen] = useState(false);
   const otherQ = useQuery({
-    queryKey: ["procurement", "mts-requirement", "item-plan-other", companyId, planMonth, asOf, demandAt, materialId],
-    queryFn: () => getMtsItemPlanOtherCompanies({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined, material_ids: (plan?.members ?? []).map((m) => m.material_id).join(",") }),
+    queryKey: ["procurement", "mts-requirement", "item-plan-other", companyId, effMonth, effAsOf, demandAt, materialId],
+    queryFn: () => getMtsItemPlanOtherCompanies({ company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_ids: (plan?.members ?? []).map((m) => m.material_id).join(",") }),
     enabled: Boolean(otherOpen && plan),
   });
 
@@ -191,6 +207,43 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       pushToast({ message: errorText(error), tone: "error" });
     } finally {
       setSaving(false);
+    }
+  }
+
+  const versionsQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "item-plan-versions", companyId, materialId],
+    queryFn: () => listMtsItemPlanScenarios({ company_id: companyId, material_id: materialId }),
+    enabled: Boolean(showVersions && companyId && materialId),
+  });
+
+  async function saveLots(lots, source, note) {
+    setSaving(true);
+    try {
+      const result = await saveMtsItemPlanScenario({ company_id: companyId, material_id: materialId, manual_lots: lots, source, note });
+      pushToast({ message: `Plan saved as version ${result?.result?.version_no ?? ""}. Recalculating…`, tone: "success" });
+      setLotDraft(null);
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "item-plan"] });
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "item-plan-versions", companyId, materialId] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function askAi() {
+    setAiBusy(true);
+    setAiResult(null);
+    try {
+      const result = await reviewMtsItemPlanWithAi({
+        company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId,
+        ...(lotDraft ? { manual_lots: lotDraft } : {}), question: question || undefined,
+      });
+      setAiResult(result);
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setAiBusy(false);
     }
   }
 
@@ -224,10 +277,14 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
         </label>
         <label className="grid gap-1 text-sm text-slate-700">
           <span className="font-medium text-slate-800">Item</span>
-          <select value={materialId} onChange={(event) => { setMaterialId(event.target.value); setOpenDay(""); setDrafts({}); setOtherOpen(false); }} className={`${INPUT_CLASS} w-96`}>
+          <select value={materialId} onChange={(event) => { setMaterialId(event.target.value); setOpenDay(""); setDrafts({}); setOtherOpen(false); setLotDraft(null); setAiResult(null); }} className={`${INPUT_CLASS} w-96`}>
             <option value="">{planningQ.isLoading ? "Loading items…" : "Select an RM / PM…"}</option>
             {filtered.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
+        </label>
+        <label className="grid gap-1 text-sm text-slate-700" title="Calibration (CC): the day the opening is the actual book stock">
+          <span className="font-medium text-slate-800">CC date</span>
+          <input type="date" value={effAsOf} max={asOf} onChange={(event) => setCcDate(event.target.value === asOf ? "" : event.target.value)} className={INPUT_CLASS} />
         </label>
         <button type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "item-plan", companyId] })} disabled={!materialId} className="h-8 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
           {itemQ.isFetching ? "Calculating…" : "Recalculate"}
@@ -296,6 +353,77 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 <h3 className="text-sm font-semibold text-slate-800">Future Orders — Engine plan</h3>
                 <p className="text-xs text-slate-500">Each lot: cheapest vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. Advisory — no PO is created.</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={plan.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}`} emptyMessage="No new order needed in the horizon." maxHeight="30vh" />
+              </section>
+              <section className="grid gap-1 border border-sky-200 bg-sky-50 p-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-800">Your lots {plan.scenario?.version_no ? `(version ${plan.scenario.version_no}${plan.scenario.source === "AI_APPLIED" ? ", AI applied" : ""})` : ""}</h3>
+                  {lotDraft === null ? (
+                    <button type="button" onClick={() => setLotDraft([...(plan.scenario?.manual_lots ?? [])])} className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Edit my lots</button>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => setLotDraft((d) => [...d, { material_id: materialId, plant_eta: effAsOf, qty_base: 0, vendor_id: null }])} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Add lot</button>
+                      <button type="button" disabled={saving} onClick={() => void saveLots(lotDraft.filter((l) => Number(l.qty_base) > 0), "USER", null)} className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">{saving ? "Saving…" : "Save & recalculate"}</button>
+                      <button type="button" onClick={() => setLotDraft(null)} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Cancel</button>
+                    </>
+                  )}
+                  <button type="button" onClick={() => setShowVersions((v) => !v)} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">{showVersions ? "Hide versions" : "Versions"}</button>
+                </div>
+                <p className="text-xs text-slate-500">Lots you fix stay as you set them; the engine plans the rest around them. Planning only — no PO is created.</p>
+                {(lotDraft ?? plan.user_lots ?? []).length === 0 ? <p className="text-xs text-slate-500">None — the plan is fully Engine + AI.</p> : (
+                  <table className="text-xs">
+                    <thead><tr className="text-left text-slate-600"><th className="pr-2">Member</th><th className="pr-2">Plant date</th><th className="pr-2">Qty</th><th /></tr></thead>
+                    <tbody>
+                      {(lotDraft ?? plan.user_lots).map((l, i) => (
+                        <tr key={`${l.material_id}|${i}`}>
+                          <td className="pr-2">
+                            {lotDraft ? (
+                              <select value={l.material_id} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, material_id: event.target.value } : x)))} className={CELL_INPUT}>
+                                {(plan.members ?? []).map((m) => <option key={m.material_id} value={m.material_id}>{`${m.material_code ?? ""} ${m.material_name}`.trim()}</option>)}
+                              </select>
+                            ) : memberName.get(l.material_id) ?? "—"}
+                          </td>
+                          <td className="pr-2">{lotDraft ? <input type="date" value={l.plant_eta} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, plant_eta: event.target.value } : x)))} className={CELL_INPUT} /> : l.plant_eta}</td>
+                          <td className="pr-2">{lotDraft ? <input type="number" min="0" value={l.qty_base} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, qty_base: event.target.value } : x)))} className={`${CELL_INPUT} w-28`} /> : fmtQty(l.qty_base)}</td>
+                          <td>{lotDraft ? <button type="button" onClick={() => setLotDraft((d) => d.filter((_, j) => j !== i))} className="text-rose-700 hover:underline">Remove</button> : null}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {showVersions ? (
+                  <ul className="ml-4 list-disc text-xs text-slate-700">
+                    {(versionsQ.data?.rows ?? []).map((v) => <li key={v.id}>v{v.version_no}{v.is_current ? " (current)" : ""} · {v.source === "AI_APPLIED" ? "AI applied" : "user"} · {v.lot_count} lot(s) · {v.created_by_name} · {String(v.created_at).slice(0, 16).replace("T", " ")}{v.note ? ` — ${v.note}` : ""}</li>)}
+                    {versionsQ.isLoading ? <li>Loading…</li> : null}
+                  </ul>
+                ) : null}
+              </section>
+              <section className="grid gap-1 border border-violet-200 bg-violet-50 p-2">
+                <h3 className="text-sm font-semibold text-slate-800">AI planner</h3>
+                <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={2} placeholder="Optional: tell the AI what you changed or want (e.g. 'import is delayed 3 weeks — what now?')" className="border border-slate-300 bg-white p-1 text-xs" />
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => void askAi()} disabled={aiBusy} className="h-7 border border-violet-600 bg-violet-600 px-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{aiBusy ? "AI is planning…" : lotDraft ? "Ask AI about my draft" : "Ask AI to plan"}</button>
+                  <span className="text-xs text-slate-500">The engine re-simulates every AI lot; numbers below are the engine's.</span>
+                </div>
+                {aiResult ? (
+                  <div className="grid gap-2 text-xs">
+                    <p className="whitespace-pre-wrap text-slate-800">{aiResult.verdict}</p>
+                    <table>
+                      <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th>Avg stock value</th></tr></thead>
+                      <tbody>
+                        {[["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]].filter(([, m]) => m).map(([label, m]) => (
+                          <tr key={label}><td className="pr-3 font-semibold">{label}</td><td className="pr-3">{m.shortage_days}</td><td className="pr-3">{m.days_below_target}</td><td className="pr-3">{fmtDays(m.lowest_max_days)}</td><td className="pr-3">{fmtQty(m.average_closing)}</td><td>{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {(aiResult.proposed_lots ?? []).length ? (
+                      <>
+                        <ul className="ml-4 list-disc">{aiResult.proposed_lots.map((l, i) => <li key={i}>{l.material_code}: {fmtQty(l.qty)} on {l.plant_eta}{l.reason ? ` — ${l.reason}` : ""}</li>)}</ul>
+                        <button type="button" disabled={saving} onClick={() => void saveLots([...(lotDraft ?? plan.scenario?.manual_lots ?? []), ...aiResult.proposed_lots.map((l) => ({ material_id: l.material_id, plant_eta: l.plant_eta, qty_base: l.qty, vendor_id: null }))], "AI_APPLIED", "AI proposal applied")} className="h-7 w-max border border-violet-600 bg-white px-2 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:opacity-50">Apply AI lots to my plan</button>
+                      </>
+                    ) : <p className="text-slate-600">AI proposes no extra lots.</p>}
+                    {(aiResult.rejected ?? []).length ? <p className="text-slate-500">Not used: {aiResult.rejected.join("; ")}</p> : null}
+                  </div>
+                ) : null}
               </section>
               <section className="grid gap-1">
                 <h3 className="text-sm font-semibold text-slate-800">Location transfer instructions</h3>
