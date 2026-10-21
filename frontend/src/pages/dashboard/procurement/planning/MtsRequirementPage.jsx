@@ -1548,9 +1548,9 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "planned_lot_qty_base", label: "Proposed Lot", width: "110px", align: "right", render: (r) => (r.planned_lot_qty_base ? <span className="font-semibold text-sky-800">{fmtQty(r.planned_lot_qty_base)}</span> : ""), copyValue: (r) => r.planned_lot_qty_base },
     { key: "demand_qty_base", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.demand_qty_base), copyValue: (r) => r.demand_qty_base },
     { key: "closing_qty_base", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing_qty_base < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing_qty_base)}</span>, copyValue: (r) => r.closing_qty_base },
-    { key: "max_cover_days", label: "Max Days", width: "80px", align: "right", render: (r) => (r.max_cover_days ?? "—") },
+    { key: "max_cover_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_cover_days) || "—", copyValue: (r) => r.max_cover_days ?? "" },
     { key: "min_stock_qty_base", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock_qty_base), copyValue: (r) => r.min_stock_qty_base },
-    { key: "min_cover_days", label: "Min Days", width: "80px", align: "right", render: (r) => (r.min_cover_days ?? "—") },
+    { key: "min_cover_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_cover_days) || "—", copyValue: (r) => r.min_cover_days ?? "" },
     { key: "target_days", label: "Target / Critical", width: "110px", render: (r) => `${fmtDays(r.target_days) || "—"} / ${fmtDays(r.critical_days) || "—"}` },
   ];
 
