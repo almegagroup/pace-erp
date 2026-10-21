@@ -34,8 +34,26 @@ function fmtQty(value) {
   if (value === null || value === undefined || value === "") return "—";
   return Number(value).toLocaleString("en-IN", { maximumFractionDigits: 3 });
 }
+/** Days are whole, rounded down like the sheet (49.7 days of stock = 49 full days). */
 function fmtDays(value) {
-  return value === null || value === undefined ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 1 });
+  return value === null || value === undefined ? "—" : String(Math.floor(Number(value) + 1e-9));
+}
+const GAP_LABEL = {
+  NO_TARGET_CRITICAL: "no Target / Critical days (set in 2. Material Settings)",
+  NO_VENDOR: "no vendor linked (MM03 vendor–material link)",
+  NO_LEAD_TIME: "no lead time (vendor route / Booking Time)",
+};
+
+/** A closed-by-default tool on the right side: title + what it is for. */
+function Fold({ title, hint, open = false, children }) {
+  return (
+    <details open={open} className="border border-slate-200 bg-white">
+      <summary className="cursor-pointer select-none px-2 py-1.5 text-sm font-semibold text-slate-800 hover:bg-slate-50">
+        {title} <span className="ml-1 text-xs font-normal text-slate-500">— {hint}</span>
+      </summary>
+      <div className="grid gap-2 p-2">{children}</div>
+    </details>
+  );
 }
 function errorText(error) {
   return error instanceof Error ? error.message : String(error ?? "");
@@ -164,7 +182,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       copyValue: (r) => r.planned_lot,
     },
     { key: "use", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.use), copyValue: (r) => r.use },
-    { key: "unmet_group", label: "Group not met", width: "110px", align: "right", render: (r) => (r.unmet_group ? <span className="font-semibold text-rose-700">{fmtQty(r.unmet_group)}</span> : ""), copyValue: (r) => r.unmet_group },
+    // Group demand that no member's stock could carry that day (shortage of the whole group).
+    { key: "unmet_group", label: "Group shortfall", width: "110px", align: "right", render: (r) => (r.unmet_group >= 0.001 ? <span className="font-semibold text-rose-700" title="Group demand no member had stock for">{fmtQty(r.unmet_group)}</span> : ""), copyValue: (r) => (r.unmet_group >= 0.001 ? r.unmet_group : "") },
     { key: "closing", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing)}</span>, copyValue: (r) => r.closing },
     { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
     { key: "min_stock", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock), copyValue: (r) => r.min_stock },
@@ -460,13 +479,28 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             </div>
           ) : null}
 
+          {(plan.plan_gaps ?? []).length > 0 ? (
+            <div className="grid gap-1 border-2 border-rose-400 bg-rose-50 p-2 text-xs text-rose-900">
+              <span className="font-semibold">Engine cannot place lots for these members — stock can run out with no order shown:</span>
+              <ul className="ml-4 list-disc">
+                {plan.plan_gaps.map((g) => (
+                  <li key={g.material_id}>
+                    <span className="font-semibold">{`${g.material_code ?? ""} ${g.material_name}`.trim()}</span>: {g.issues.map((i) => GAP_LABEL[i] ?? i).join("; ")}
+                    {g.first_shortage_day ? <span className="font-semibold"> — runs out {g.first_shortage_day}</span> : null}
+                  </li>
+                ))}
+              </ul>
+              <span>Until these are set you can still type your own Quantity to Dispatch in the grid.</span>
+            </div>
+          ) : null}
+
           <section className="grid gap-1">
             <h3 className="text-sm font-semibold text-slate-800">Members</h3>
             <ErpDenseGrid {...GRID_PROPS} columns={memberColumns} rows={plan.members} rowKey={(m) => m.material_id} maxHeight="25vh" />
           </section>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-            <section className="grid gap-1">
+          <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+            <section className="grid content-start gap-1">
               <h3 className="text-sm font-semibold text-slate-800">Day by day {plan.family.is_family ? "(whole family)" : ""} — click a date for each member{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
               <ErpDenseGrid
                 {...GRID_PROPS}
@@ -585,6 +619,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   </ul>
                 ) : null}
               </section>
+              <p className="text-xs text-slate-500">Tools — open when needed:</p>
+              <Fold title="Compare vendors" hint="which vendor, which date, how much: arrives in time?, real lot after MOQ, full cost">
               <VendorDateCompare
                 key={`vendor|${materialId}`}
                 plan={plan}
@@ -596,6 +632,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   if (andPreview) void runPreview({ lots: next });
                 }}
               />
+              </Fold>
+              <Fold title="What-if Safety days" hint="try other Target days: risk vs money, engine pick, AI view, Use">
               <TargetWhatIf
                 key={`target|${materialId}|${effAsOf}`}
                 plan={plan}
@@ -607,8 +645,9 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 onPreviewTarget={(r) => void runPreview({ label: `Target ${r.target_days} / Critical ${r.critical_days ?? "—"} days`, targetOverrides: [{ material_id: materialId, target_days: r.target_days, critical_days: r.critical_days }] })}
                 onSaved={() => queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement"] })}
               />
+              </Fold>
+              <Fold title="AI planner" hint="AI reviews this plan and proposes lots; the engine re-checks every number">
               <section className="grid gap-1 border border-violet-200 bg-violet-50 p-2">
-                <h3 className="text-sm font-semibold text-slate-800">AI planner</h3>
                 <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={2} placeholder="Optional: tell the AI what you changed or want (e.g. 'import is delayed 3 weeks — what now?')" className="border border-slate-300 bg-white p-1 text-xs" />
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={() => void askAi()} disabled={aiBusy} className="h-7 border border-violet-600 bg-violet-600 px-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{aiBusy ? "AI is planning…" : lotDraft ? "Ask AI about my draft" : "Ask AI to plan"}</button>
@@ -635,11 +674,13 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   </div>
                 ) : null}
               </section>
+              </Fold>
+              <Fold title="Location transfer instructions" hint="R001 ↔ R002 stock moves the Store should make" open={(view.transfers ?? []).length > 0}>
               <section className="grid gap-1">
-                <h3 className="text-sm font-semibold text-slate-800">Location transfer instructions</h3>
                 <p className="text-xs text-slate-500">{plan.transfer_note}</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={transferColumns} rows={view.transfers ?? []} rowKey={(t, i) => `${t.material_id}|${t.from}|${t.to}|${i}`} emptyMessage="No R ↔ R transfer needed." maxHeight="20vh" />
               </section>
+              </Fold>
               {(view.alternatives ?? []).length > 0 ? (
                 <section className="grid gap-1">
                   <h3 className="text-sm font-semibold text-rose-800">Below Target — options in order</h3>
@@ -653,9 +694,9 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   ))}
                 </section>
               ) : null}
+              <Fold title="Other companies' spare stock" hint="same material above Target in your other companies (STO / Sub-CSN idea)">
               <section className="grid gap-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-slate-800">Other companies' spare stock</h3>
                   <button type="button" onClick={() => setOtherOpen(true)} disabled={otherQ.isFetching} className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
                     {otherQ.isFetching ? "Checking…" : "Check other companies"}
                   </button>
@@ -670,6 +711,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   </div>
                 ) : null}
               </section>
+              </Fold>
             </div>
           </div>
         </>

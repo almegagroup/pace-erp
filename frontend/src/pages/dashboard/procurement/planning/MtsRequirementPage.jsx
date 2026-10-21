@@ -98,10 +98,11 @@ function fmtQty(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 3 }) : "";
 }
+/** Days are whole, rounded down like the sheet (owner 2026-10-21). */
 function fmtDays(value) {
   if (value === null || value === undefined) return "";
   const n = Number(value);
-  return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "";
+  return Number.isFinite(n) ? String(Math.floor(n + 1e-9)) : "";
 }
 /**
  * A material row can contain PM demand from several Pack BOMs, so this is a
@@ -160,8 +161,8 @@ function qtyColumn(key, label, group, options = {}) {
     render: (row) => format(read(row)),
     copyValue: (row) => read(row) ?? "",
     filterValue: (row) => format(read(row)),
-    exportValue: (row) => (read(row) === null || read(row) === undefined ? "" : Number(read(row))),
-    numFmt: options.days ? "0.0" : "#,##0.###",
+    exportValue: (row) => (read(row) === null || read(row) === undefined ? "" : options.days ? Math.floor(Number(read(row)) + 1e-9) : Number(read(row))),
+    numFmt: options.days ? "0" : "#,##0.###",
   };
 }
 function textColumn(key, label, group, options = {}) {

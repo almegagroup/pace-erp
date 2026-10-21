@@ -20,8 +20,9 @@ function fmtQty(value) {
   if (value === null || value === undefined || value === "") return "—";
   return Number(value).toLocaleString("en-IN", { maximumFractionDigits: 3 });
 }
+/** Days are whole, rounded down like the sheet. */
 function fmtDays(value) {
-  return value === null || value === undefined ? "—" : Number(value).toLocaleString("en-IN", { maximumFractionDigits: 1 });
+  return value === null || value === undefined ? "—" : String(Math.floor(Number(value) + 1e-9));
 }
 function errorText(error) {
   return error instanceof Error ? error.message : String(error ?? "");

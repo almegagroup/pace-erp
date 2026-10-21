@@ -20,6 +20,11 @@ const BORDER = { top: { style: "thin", color: { argb: "FFBFBFBF" } }, left: { st
 
 const STATUS_LABEL = { AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
 
+/** Days are whole, rounded down (sheet ROUNDDOWN). */
+function days(value) {
+  const n = num(value);
+  return n === null ? null : Math.floor(n + 1e-9);
+}
 function num(value) {
   if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
@@ -147,13 +152,14 @@ function writeBlocks(sheet, companies, kind) {
     const title = sheet.addRow([`${companyLabel(b.company)} — ${b.title}${b.is_family ? ` (family: ${b.members.join(", ")})` : ""}`]);
     title.getCell(1).font = { bold: true };
     title.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TITLE_FILL } };
-    const facts = [`Unit ${b.uom ?? "—"}`, `Target ${b.target_days ?? "—"} d`, `Critical ${b.critical_days ?? "—"} d`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : ""].filter(Boolean).join(" · ");
+    const facts = [`Unit ${b.uom ?? "—"}`, `Target ${b.target_days ?? "—"} d`, `Critical ${b.critical_days ?? "—"} d`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "",
+      (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
     const factRow = sheet.addRow([facts]);
-    if (b.first_shortage_day) factRow.getCell(1).font = { bold: true, color: { argb: RED } };
+    if (b.first_shortage_day || (b.gaps ?? []).length) factRow.getCell(1).font = { bold: true, color: { argb: RED } };
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
-        day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.max_days), num(r.min_stock), num(r.min_days),
+        day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), days(r.max_days), num(r.min_stock), days(r.min_days),
         r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
         r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"), r.best_dates.filter(Boolean).join("\n"),
       ]);
@@ -167,7 +173,7 @@ function writeBlocks(sheet, companies, kind) {
       p.getCell(1).font = { bold: true, italic: true };
       styleHeader(sheet.addRow(PRED_HEAD));
       for (const x of b.prediction) {
-        const row = sheet.addRow([x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), num(x.max_days), num(x.min_days), x.material, x.supplier ?? "", day(x.po_by)]);
+        const row = sheet.addRow([x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), days(x.max_days), days(x.min_days), x.material, x.supplier ?? "", day(x.po_by)]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
       }
     }
