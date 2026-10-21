@@ -23,6 +23,7 @@ import {
   consumptionFromConsBucket,
   coverageDays,
   effectivePlanAt,
+  applyPolicyOverrides,
   effectivePolicy,
   explodeDemand,
   type ExplosionInput,
@@ -851,4 +852,20 @@ Deno.test("P3 safetySuggestionReason: route + late margin + sample size, or says
   if (!reason.includes("route 35 d") || !reason.includes("6 d late-arrival margin") || !reason.includes("12 shipments")) throw new Error(reason);
   if (!safetySuggestionReason(20, null, 0)!.includes("no shipment history")) throw new Error("no-history wording");
   if (safetySuggestionReason(null, null, 0) !== null) throw new Error("nothing to say → null");
+});
+
+Deno.test("What-if policy overrides: every effective row of the item, others untouched, missing item added", () => {
+  const policies: PolicyRow[] = [
+    { material_id: "RM-A", effective_from: "2026-10-01", target_cov_days: 40, critical_cov_days: 20, moq_qty: 2, moq_uom_code: "MT", moq_source: "COMPANY", moq_active: true, version_no: 1 },
+    { material_id: "RM-A", effective_from: "2026-11-15", target_cov_days: 60, critical_cov_days: 25, moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 2 },
+    { material_id: "RM-B", effective_from: "2026-10-01", target_cov_days: 30, critical_cov_days: 15, moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 1 },
+  ];
+  const out = applyPolicyOverrides(policies, new Map([["RM-A", { target_cov_days: 15, critical_cov_days: 10 }], ["RM-C", { target_cov_days: 20, critical_cov_days: 10 }]]));
+  assertEqual(effectivePolicy(out, "RM-A", "2026-10-20")!.target_cov_days, 15, "older row overridden");
+  assertEqual(effectivePolicy(out, "RM-A", "2026-11-20")!.critical_cov_days, 10, "newer row overridden");
+  assertEqual(effectivePolicy(out, "RM-A", "2026-10-20")!.moq_qty, 2, "MOQ kept");
+  assertEqual(effectivePolicy(out, "RM-B", "2026-10-20")!.target_cov_days, 30, "other item untouched");
+  assertEqual(effectivePolicy(out, "RM-C", "2026-10-20")!.target_cov_days, 20, "item without policy gets one");
+  assertEqual(policies[0].target_cov_days, 40, "input not mutated");
+  assertEqual(applyPolicyOverrides(policies, new Map()).length, 3, "no overrides → same rows");
 });

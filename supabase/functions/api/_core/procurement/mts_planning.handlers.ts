@@ -12,7 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
-import { buildCalendar, isIsoDate, moqInBase, toMaterialBase } from "./mts_requirement.logic.ts";
+import { buildCalendar, isIsoDate, moqInBase, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   computeRequirement,
   fetchAllPages,
@@ -48,6 +48,10 @@ type PlanningParams = {
   extraMonths?: number;
   /** P4: lots the user fixed (or applied from AI); the engine plans the rest around them. */
   manualLots?: OptimizerManualLot[];
+  /** Simulation only (never saved): reschedule key → plant date. */
+  rescheduleOverrides?: ReadonlyMap<string, string | null>;
+  /** Simulation only (never saved): what-if Target / Critical days per material. */
+  policyOverrides?: ReadonlyMap<string, PolicyOverride>;
 };
 
 export function readParams(url: URL | JsonRecord, today: string): { params?: Omit<PlanningParams, "companyId">; error?: [string, string] } {
@@ -233,7 +237,9 @@ function costOptionsFor(
 export async function computePlanning(p: PlanningParams) {
   const calendar = buildCalendar(p.planMonth, p.asOf, p.extraMonths ?? 0);
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
-  const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, { forecastBeyondPlan: (p.extraMonths ?? 0) > 0 });
+  const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, {
+    forecastBeyondPlan: (p.extraMonths ?? 0) > 0, rescheduleOverrides: p.rescheduleOverrides, policyOverrides: p.policyOverrides,
+  });
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
   const [vendorTerms, selections] = await Promise.all([
@@ -431,6 +437,14 @@ export async function computePlanning(p: PlanningParams) {
     })),
     group_risks: projection.group_pool_risks.map((g) => ({ ...g, group_label: g.group_id ? groupLabel.get(g.group_id) ?? "—" : "—" })),
     group_assignments: assembly.group_assignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
+    // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
+    // (planning side only; CSN Tracker is never changed).
+    reschedulable_arrivals: req.output.rows.flatMap((row) => row.inbound_events.filter((event) => event.reschedule_key).map((event) => ({
+      material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+      reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
+      eta_plant: event.original_date !== undefined ? event.original_date : event.date,
+      rescheduled_eta: event.original_date !== undefined ? event.date : null,
+    }))).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
     store_rows: req.output.store_rows.map((row) => ({
       ...row,
@@ -449,7 +463,7 @@ export async function computePlanning(p: PlanningParams) {
     })),
   };
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, calendar, vendorOptions };
+  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

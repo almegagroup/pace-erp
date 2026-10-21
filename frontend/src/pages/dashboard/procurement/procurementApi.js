@@ -1904,6 +1904,19 @@ export function reviewMtsItemPlanWithAi(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/item-plan/ai-review", data);
 }
 
+// Owner 2026-10-21: previews — nothing is saved.
+export function simulateMtsItemPlan(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/item-plan/simulate", data);
+}
+
+export function whatIfMtsItemPlanTarget(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/item-plan/what-if-target", data);
+}
+
+export function previewMtsPlanningReschedule(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/planning/reschedule-preview", data);
+}
+
 export function saveMtsInboundReschedule(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/inbound-reschedule", data);
 }

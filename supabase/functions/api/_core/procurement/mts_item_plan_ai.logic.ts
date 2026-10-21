@@ -18,21 +18,25 @@ export type PlanMetrics = {
   shortage_days: number;
   first_shortage_day: string | null;
   days_below_target: number;
+  /** Days the family's Max days sit at or below the selected item's Critical days. */
+  days_below_critical: number;
   lowest_max_days: number | null;
   average_closing: number;
   /** Σ closing × unit cost / days — average money held in stock (null = no price). */
   average_stock_value: number | null;
 };
 
-export function planMetrics(grid: readonly GridRow[], familyTargetDays: number | null, unitCost: number | null): PlanMetrics {
+export function planMetrics(grid: readonly GridRow[], familyTargetDays: number | null, unitCost: number | null, familyCriticalDays: number | null = null): PlanMetrics {
   const shortage = grid.filter((g) => g.closing < -0.000001);
   const below = familyTargetDays === null ? [] : grid.filter((g) => g.max_days !== null && g.max_days <= familyTargetDays);
+  const belowCritical = familyCriticalDays === null ? [] : grid.filter((g) => g.max_days !== null && g.max_days <= familyCriticalDays);
   const maxDays = grid.map((g) => g.max_days).filter((d): d is number => d !== null);
   const avgClosing = grid.length ? grid.reduce((s, g) => s + Math.max(0, g.closing), 0) / grid.length : 0;
   return {
     shortage_days: shortage.length,
     first_shortage_day: shortage[0]?.day ?? null,
     days_below_target: below.length,
+    days_below_critical: belowCritical.length,
     lowest_max_days: maxDays.length ? Math.min(...maxDays) : null,
     average_closing: Math.round(avgClosing * 100) / 100,
     average_stock_value: unitCost === null ? null : Math.round(avgClosing * unitCost * 100) / 100,
@@ -130,4 +134,71 @@ export function weeklySummary(grid: readonly GridRow[]): AiPlanContext["weekly"]
     });
   }
   return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// What-if Safety (Target) days (owner 2026-10-21): the engine re-plans the item at each candidate
+// Target, compares risk and money, and recommends the lowest-money candidate that is not riskier
+// than today's setting. The AI only explains / challenges; the numbers are always the engine's.
+// ─────────────────────────────────────────────────────────────────────────────
+export type TargetCandidateResult = {
+  target_days: number;
+  critical_days: number | null;
+  is_current: boolean;
+  metrics: PlanMetrics;
+  order_count: number;
+  order_qty: number;
+  /** Σ lot qty × full cost per unit; null when no lot has a cost. */
+  order_value: number | null;
+  /** Some lots had no cost, so order_value is partial. */
+  order_value_partial: boolean;
+};
+
+/**
+ * Engine pick: candidates with no shortage day and no more days at / below Critical than the
+ * current setting; among them the lowest average money in stock (unknown cost → lowest Target).
+ * Null when no candidate is safe.
+ */
+export function pickTargetCandidate(results: readonly TargetCandidateResult[]): { target_days: number; reason: string } | null {
+  const current = results.find((r) => r.is_current) ?? null;
+  const allowedCritical = current?.metrics.days_below_critical ?? 0;
+  const safe = results.filter((r) => r.metrics.shortage_days === 0 && r.metrics.days_below_critical <= allowedCritical);
+  if (safe.length === 0) return null;
+  const withValue = safe.filter((r) => r.metrics.average_stock_value !== null);
+  const best = withValue.length
+    ? [...withValue].sort((a, b) => a.metrics.average_stock_value! - b.metrics.average_stock_value! || a.target_days - b.target_days)[0]
+    : [...safe].sort((a, b) => a.target_days - b.target_days)[0];
+  const saving = current && best !== current && current.metrics.average_stock_value !== null && best.metrics.average_stock_value !== null
+    ? Math.round((current.metrics.average_stock_value - best.metrics.average_stock_value) * 100) / 100
+    : null;
+  const reason = best === current
+    ? `Keep ${best.target_days} days: no lower Target stays free of shortage without more days at Critical.`
+    : `${best.target_days} days: no shortage, days at / below Critical ${best.metrics.days_below_critical} (now ${allowedCritical})`
+      + (saving !== null ? `, average money in stock lower by ₹${saving}.` : ", least stock held.");
+  return { target_days: best.target_days, reason };
+}
+
+export function buildWhatIfTargetPrompt(input: {
+  item_label: string; uom: string | null; horizon: { from: string; to: string };
+  current_target: number | null; current_critical: number | null;
+  results: readonly TargetCandidateResult[]; engine_pick: { target_days: number; reason: string } | null;
+}): string {
+  const rows = input.results.map((r) => [
+    `Target ${r.target_days}${r.is_current ? " (current)" : ""}`, `Critical ${n(r.critical_days)}`,
+    `shortage days ${r.metrics.shortage_days}`, `days at/below Critical ${r.metrics.days_below_critical}`,
+    `lowest Max days ${n(r.metrics.lowest_max_days)}`, `avg stock ${n(r.metrics.average_closing)}`,
+    `avg money in stock ${n(r.metrics.average_stock_value)}`, `orders ${r.order_count} (${n(r.order_qty)} ${clean(input.uom)})`,
+    `order value ${n(r.order_value)}${r.order_value_partial ? " (partial)" : ""}`,
+  ].join(", "));
+  return [
+    "You are the supply-chain planner for an MTS raw / pack material. The ERP engine re-planned the item",
+    "at several Safety (Target) days. Every number below comes from the engine — do not invent numbers.",
+    `Item: ${clean(input.item_label)}. Horizon ${input.horizon.from} to ${input.horizon.to}.`,
+    `Current Target ${n(input.current_target)} days, Critical ${n(input.current_critical)} days.`,
+    "Candidates:", ...rows.map((r) => `- ${r}`),
+    `Engine pick: ${input.engine_pick ? `${input.engine_pick.target_days} days — ${clean(input.engine_pick.reason)}` : "none is safe"}.`,
+    "Answer in at most 6 short lines, plain English: which Target you recommend and why (risk vs money),",
+    "whether you agree with the engine, and any risk the numbers do not show (vendor delay, demand jump).",
+    "Never recommend a Target with shortage days.",
+  ].join("\n").slice(0, ITEM_PLAN_AI_MAX_PROMPT_CHARS);
 }
