@@ -1904,6 +1904,11 @@ export function reviewMtsItemPlanWithAi(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/item-plan/ai-review", data);
 }
 
+// Owner 2026-10-21: Rolling Plan export data, one company per call.
+export function getMtsRollingPlan(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/rolling-plan", undefined, params);
+}
+
 // Owner 2026-10-21: previews — nothing is saved.
 export function simulateMtsItemPlan(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/item-plan/simulate", data);

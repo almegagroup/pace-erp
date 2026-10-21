@@ -27,6 +27,7 @@ import { pushToast } from "../../../../store/uiToast.js";
 import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
 import MtsItemPlanTab from "./MtsItemPlanTab.jsx";
 import MtsPlanningReschedule from "./MtsPlanningReschedule.jsx";
+import MtsRollingPlanDownload from "./MtsRollingPlanDownload.jsx";
 import {
   getMtsRequirementAccess,
   getMtsRequirementPolicies,
@@ -248,6 +249,7 @@ export default function MtsRequirementPage() {
               <input type="datetime-local" value={demandAt} onChange={(event) => setDemandAt(event.target.value)} className={INPUT_CLASS} />
             </label>
           ) : null}
+          <MtsRollingPlanDownload runtimeContext={runtimeContext} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
           <div className="flex flex-wrap gap-1">
             {[{ id: "action", label: "Action" }, { id: "report", label: "1. Requirement Report" }, { id: "settings", label: "2. Material Settings" }, { id: "cost", label: "3. Stock & Cost Settings" }, { id: "planning", label: "4. Planning" }, { id: "item", label: "4A. Item Plan" }, { id: "store", label: "5. Store Report" }].map((tab) => (
               <button

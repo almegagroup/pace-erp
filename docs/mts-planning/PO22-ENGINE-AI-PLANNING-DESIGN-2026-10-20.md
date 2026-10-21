@@ -407,3 +407,28 @@ port → plant days from received import CSNs, Import ETD = Date − the vendor'
 days (route lead without booking); then the ETA list (Arrivals) and the suggestions /
 instructions. Clearing an engine lot's quantity does not forbid a lot that day — the engine still
 places what is needed.
+
+## 14. Rolling Plan Excel for management (owner 2026-10-21)
+
+Owner: the old `rolling_plan_<date>.xlsx` (PLAN, RDP, MHEC, <co>_RM_PM, <co>_PLANNING_SHEET) must come
+out of the ERP as one compact file. Decisions: **all companies in one file**; **no hand-made
+families** — every family (material group) and every single item gets its block, only the
+relevant rows; **no planner remarks**.
+
+`Download Rolling Plan` (PO22 header) fetches every company in the user's access one after another
+(`GET /api/procurement/mts-requirement/rolling-plan`, PROC_MTS_REQUIREMENT VIEW; one Engine run per
+company over CM + NM + 1 month with every saved user lot and reschedule) plus the PO21 plan report,
+and writes one workbook (exceljs, dynamic import):
+
+| Tab | Content |
+|---|---|
+| SUMMARY | per company: horizon, materials planned, runs out, below Critical / Target, new orders (late) and value, arrivals ETA passed / no ETA, moves advised; "Needs attention" list; companies skipped and why |
+| PLAN | PO21 effective plan, Mother → Child group with TOTAL PLAN rows, columns company × 3 months |
+| RM_PLANNING / PM_PLANNING | one block per family / item per company: title (members), Target / Critical, RUNS OUT date; rows = today + every arrival day + every day the planner fixed a quantity (Date, Opening, ETA to Plant, Quantity to Dispatch, Pro-rata, Closing, Max Days, Min Stk, Min Days, PO / CSN, Qty, Supplier, ST, Engine best date); then **Prediction** (Engine / Planner, Import ETD, LCL-ETD / Port ETA, Date, Quantity, Max, Min, Material, Supplier, PO by) |
+| <Company> RM_PM | requirement rows with demand (old columns + Critical Cov, Runs out on, Below Critical from), worst first |
+| BUY_PLAN | every engine order: PO by, qty, plant ETA, lots, supplier, full cost / unit, value, cost gaps, late, why |
+| STORE_INSTRUCTIONS | Store Report lines with stock backing and "Transfer first" |
+| ARRIVALS | every open PO / CSN / STO piece: supplier, status, CSN / PO ETA, planning ETA, ETA passed / missing, engine best date and why |
+
+Names only (no PACE codes). A block is shown when any member has use, an arrival or a lot in
+the horizon. Supplier of an arrival = the CSN's vendor, else the PO's vendor.
