@@ -143,13 +143,28 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       copyValue: (a) => a.rescheduled_eta ?? "",
     },
     {
-      key: "advice", label: "Engine advice", width: "260px",
+      key: "now_days", label: "Min / Max on arrival", width: "130px", align: "right",
+      render: (a) => (a.optimum ? `${fmtDays(a.optimum.current.min_days)} / ${fmtDays(a.optimum.current.max_days)}` : "—"),
+      copyValue: (a) => (a.optimum ? `${a.optimum.current.min_days ?? ""}/${a.optimum.current.max_days ?? ""}` : ""),
+    },
+    {
+      key: "advice", label: "Engine best date", width: "170px",
       render: (a) => (a.advice ? (
-        <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title="Use this date">
-          {a.advice.shift_days < 0 ? `Advance ${-a.advice.shift_days} d → ${a.advice.suggested_eta}` : `Postpone ${a.advice.shift_days} d → ${a.advice.suggested_eta}`}
+        <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title={a.advice.reason}>
+          {`${a.advice.suggested_eta} (${a.advice.shift_days < 0 ? `prepone ${-a.advice.shift_days} d` : `postpone ${a.advice.shift_days} d`})`}
         </button>
-      ) : ""),
-      copyValue: (a) => (a.advice ? `${a.advice.shift_days} d → ${a.advice.suggested_eta}` : ""),
+      ) : a.optimum ? <span className="text-xs text-emerald-700">Date is fine</span> : ""),
+      copyValue: (a) => (a.advice ? a.advice.suggested_eta : ""),
+    },
+    {
+      key: "best_days", label: "At best date: Min / Max", width: "150px", align: "right",
+      render: (a) => (a.advice ? `${fmtDays(a.optimum.best.min_days)} / ${fmtDays(a.optimum.best.max_days)}` : ""),
+      copyValue: (a) => (a.advice ? `${a.optimum.best.min_days ?? ""}/${a.optimum.best.max_days ?? ""}` : ""),
+    },
+    {
+      key: "why", label: "Why", width: "320px",
+      render: (a) => (a.optimum ? <span className="text-xs">{a.optimum.reason}</span> : ""),
+      copyValue: (a) => a.optimum?.reason ?? "",
     },
     {
       key: "reason", label: "Reason", width: "200px", filterable: false,
@@ -414,9 +429,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   <button type="button" onClick={() => void saveReschedules()} disabled={saving || pending.length === 0} className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
                     {saving ? "Saving…" : `Save rescheduled dates${pending.length ? ` (${pending.length})` : ""}`}
                   </button>
+                  <button type="button" onClick={() => setDrafts((d) => ({ ...d, ...Object.fromEntries(plan.arrivals.filter((x) => x.advice).map((x) => [x.reschedule_key, { ...(d[x.reschedule_key] ?? {}), date: x.advice.suggested_eta, reason: x.advice.reason, row: x }])) }))} disabled={!plan.arrivals.some((x) => x.advice)} className="h-7 border border-amber-600 bg-white px-2 text-xs font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50">Use all engine dates</button>
                   <button type="button" onClick={() => void runPreview()} disabled={previewBusy || pending.length === 0} className="h-7 border border-indigo-600 bg-white px-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-50 disabled:opacity-50">Preview</button>
                 </div>
-                <p className="text-xs text-slate-500">Planning only — CSN Tracker is never changed by the system. Shipped (in transit) lots cannot be moved.</p>
+                <p className="text-xs text-slate-500">Engine best date: every day of the horizon is tried for each not-yet-shipped piece — fewest stock-out / below-Critical / below-Target days, then the latest date (least money held). Preview checks all moves together. Planning only — CSN Tracker is never changed. Shipped lots cannot be moved.</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={arrivalColumns} rows={view.arrivals} rowKey={(a, i) => `${a.reference}|${a.material_id}|${i}`} emptyMessage="No open PO / CSN / STO for these members." maxHeight="35vh" />
               </section>
               <section className="grid gap-1">

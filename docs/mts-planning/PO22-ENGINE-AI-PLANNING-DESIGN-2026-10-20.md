@@ -371,3 +371,19 @@ Can I type my own qty and see Min / Max days change?"
 
 No migration and no new ACL resource: the three new routes are VIEW on PROC_MTS_REQUIREMENT;
 saving uses the existing reschedule / scenario / policy endpoints and their rights.
+
+### 13.1 Engine best date per consignment (owner 2026-10-21, later)
+
+Owner: "a consignment connects on 12 December; its row shows Min and Max — the system should
+optimise and show which date is better." Each not-yet-shipped piece row (4A Arrivals and the
+Planning tab) now shows **Min / Max days on arrival** today, the **Engine best date** with the
+**Min / Max at that date** and **why**. `optimizeArrivalDate` tries every day of the horizon
+(4A ~6 months, Planning CM + NM): moving one piece changes closing only between the old and new
+date and a day's cover depends only on its own closing, so each day is scored once with and once
+without the piece and every date is O(1). Order: fewest stock-out days → fewest days below Critical
+→ fewest days below Target (the arrival day also counts its Min days) → latest date (least money).
+Prepone only when strictly safer ("vendor must be able to deliver"); moves within 3 days are not
+advised. Several pieces of one material are optimised earliest first, each seeing the earlier
+ones moved (`optimizeArrivalSet`), so two pieces never fix the same gap. Other arrivals, group
+re-allocation and the engine's new lots stay fixed in this estimate — "Use all engine dates" then
+**Preview** gives the full engine result before Save. Replaces the earlier first-day-at-Target rule.

@@ -22,7 +22,7 @@ import {
 } from "./mts_item_plan_ai.logic.ts";
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
-import { arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, rescheduleAdvice, storeKey } from "./mts_item_plan.logic.ts";
+import { type ArrivalOptimum, arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, optimizeArrivalSet, storeKey } from "./mts_item_plan.logic.ts";
 import type { OptimizerDailyProjectionRow, OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import type { PolicyOverride } from "./mts_requirement.logic.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
@@ -196,7 +196,7 @@ export async function buildItemPlan(
         eta_plant: event.original_date !== undefined ? event.original_date : event.date,
         rescheduled_eta: event.original_date !== undefined ? event.date : null,
         reschedule_key: event.reschedule_key ?? null,
-        advice: adviceFor({ material_id: id, reschedule_key: event.reschedule_key ?? null, eta: event.date, qty: event.qty }),
+        ...adviceFor(id, event.reschedule_key ?? null),
       };
     })).sort((a, b) => String(a.rescheduled_eta ?? a.eta_plant ?? "9999").localeCompare(String(b.rescheduled_eta ?? b.eta_plant ?? "9999")));
 
@@ -237,9 +237,20 @@ export async function buildItemPlan(
         };
       }));
 
-    const memberDays = (id: string) => (rowsByMember.get(id) ?? []).map((r) => ({ day: r.day, closing: r.closing_qty_base, use: r.demand_qty_base, target_days: r.target_days }));
-    const adviceFor = (a: { material_id: string; reschedule_key: string | null; eta: string | null; qty: number }) =>
-      a.reschedule_key ? rescheduleAdvice(memberDays(a.material_id), a.eta, a.qty) : null;
+    const memberDays = (id: string) => (rowsByMember.get(id) ?? []).map((r) => ({ day: r.day, closing: r.closing_qty_base, use: r.demand_qty_base, target_days: r.target_days, critical_days: r.critical_days }));
+    // Owner 2026-10-21: best plant date per movable arrival, tried on every day of the horizon.
+    const optimumByKey = new Map<string, ArrivalOptimum>();
+    for (const id of memberIds) {
+      const pieces = (rowById.get(id)?.inbound_events ?? []).filter((e) => e.reschedule_key).map((e) => ({ key: e.reschedule_key as string, eta: e.date, qty: e.qty }));
+      if (pieces.length) for (const [key, value] of optimizeArrivalSet(memberDays(id), pieces)) optimumByKey.set(key, value);
+    }
+    const adviceFor = (_id: string, key: string | null) => {
+      const optimum = key ? optimumByKey.get(key) ?? null : null;
+      return {
+        optimum,
+        advice: optimum && optimum.shift_days !== 0 ? { suggested_eta: optimum.best.eta, shift_days: optimum.shift_days, reason: optimum.reason } : null,
+      };
+    };
 
     const poolLocation = new Map<string, string | null>();
     for (const id of memberIds) for (const pool of rowById.get(id)?.pools ?? []) poolLocation.set(pool.pool_key, pool.storage_location_id);

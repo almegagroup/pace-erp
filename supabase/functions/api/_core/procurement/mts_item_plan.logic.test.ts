@@ -2,6 +2,8 @@ import {
   arrivalStatus,
   companySpare,
   locationTransfers,
+  optimizeArrivalDate,
+  optimizeArrivalSet,
   rescheduleAdvice,
   buildForecastPlanLines,
   familyClosure,
@@ -143,4 +145,40 @@ Deno.test("P2 companySpare: never takes the sender below its own Target", () => 
   const rows = [{ closing: 1000, use: 10, target_days: 30 }, { closing: 800, use: 10, target_days: 30 }];
   assertEqual(companySpare(rows), 500, "min closing 800 − 30 days × 10");
   assertEqual(companySpare([{ closing: 100, use: 10, target_days: 30 }]), 0, "no spare");
+});
+
+Deno.test("Arrival optimizer: tries every day — advance when it removes risk, postpone when safe, keep when best", () => {
+  const days = (n: number) => Array.from({ length: n }, (_, i) => new Date(Date.parse("2026-11-01T00:00:00Z") + i * 86_400_000).toISOString().slice(0, 10));
+  // 100 stock, use 10/day, Target 3 / Critical 1 days; one arrival of 100.
+  const mk = (eta: string) => {
+    let bal = 100;
+    return days(40).map((day) => { if (day === eta) bal += 100; bal -= 10; return { day, closing: bal, use: 10, target_days: 3, critical_days: 1 }; });
+  };
+  const late = optimizeArrivalDate(mk("2026-11-20"), "2026-11-20", 100)!;
+  assert(late.shift_days < 0, `should prepone, got ${JSON.stringify(late)}`);
+  assert(late.current.shortage_days > 0 && late.best.shortage_days < late.current.shortage_days, "fewer stock-out days");
+  assert(late.best.days_below_target <= late.current.days_below_target, "not more days below Target");
+  assert(late.reason.startsWith("Prepone"), late.reason);
+  const early = optimizeArrivalDate(mk("2026-11-02"), "2026-11-02", 100)!;
+  assert(early.shift_days > 0, `should postpone, got ${JSON.stringify(early)}`);
+  assertEqual([early.best.shortage_days, early.best.days_below_critical], [early.current.shortage_days, early.current.days_below_critical], "postpone never adds risk");
+  const best = optimizeArrivalDate(mk(late.best.eta), late.best.eta, 100)!;
+  assertEqual(best.shift_days, 0, "already optimal → stays");
+  assert(optimizeArrivalDate([], "2026-11-01", 100) === null && optimizeArrivalDate(mk("2026-11-05"), null, 100) === null, "no data → null");
+  // Min / Max days on the arrival day = cover without / with the piece.
+  assert(late.best.max_days! > late.best.min_days!, "max > min on arrival day");
+});
+
+Deno.test("Arrival optimizer: a piece beyond the horizon is not preponed without a gain; two pieces never fix the same gap", () => {
+  const days = (n: number) => Array.from({ length: n }, (_, i) => new Date(Date.parse("2026-11-01T00:00:00Z") + i * 86_400_000).toISOString().slice(0, 10));
+  let bal = 1000;
+  const safe = days(30).map((day) => { bal -= 10; return { day, closing: bal, use: 10, target_days: 3, critical_days: 1 }; });
+  assertEqual(optimizeArrivalDate(safe, "2027-02-01", 100)!.shift_days, 0, "no gain → stays");
+  // 100 stock, two pieces of 100 both on day 25: the first goes to the first gap, the second later.
+  const mk = () => { let b = 100; return days(40).map((day) => { if (day === "2026-11-25") b += 200; b -= 10; return { day, closing: b, use: 10, target_days: 3, critical_days: 1 }; }); };
+  const set = optimizeArrivalSet(mk(), [{ key: "A", eta: "2026-11-25", qty: 100 }, { key: "B", eta: "2026-11-25", qty: 100 }]);
+  const a = set.get("A")!; const b = set.get("B")!;
+  assert(a.best.eta !== b.best.eta, `different dates, got ${a.best.eta} / ${b.best.eta}`);
+  assert(b.best.eta > a.best.eta, "second piece covers the later gap");
+  assertEqual(b.current.eta, "2026-11-25", "current = today's date");
 });
