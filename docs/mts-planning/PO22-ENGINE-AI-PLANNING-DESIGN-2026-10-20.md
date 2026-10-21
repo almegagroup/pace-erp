@@ -326,8 +326,8 @@ Decisions taken while building (owner may change any of them):
   EX_TRANSPORTER_GODOWN = paid by us via AC01 landed cost, flagged as "freight missing" when AC01
   has no history (never assumed 0 silently). Future Orders show "Full cost / unit", "Freight" and
   "Cost gaps"; the AI prompt gets the same numbers. A different vendor per lot is not mandatory:
-  the same vendor repeats whenever it is still cheapest in time. Open: a stickiness rule (keep
-  the previous vendor unless another is X% cheaper) — waiting for the owner.
+  the same vendor repeats whenever it is still cheapest in time. No stickiness rule (owner
+  2026-10-21): the best fit on the conditions wins every lot; the same vendor repeating is fine.
 
 Release needs (owner approval): PR dev → main (migrations `20261021120000` apply on merge) and
 ACL for `PROC_MTS_ITEM_PLAN_EDIT` (`docs/mts-planning/acl/PO22-P4-ITEM-PLAN-EDIT-ACL-PROVISIONING.sql`).
