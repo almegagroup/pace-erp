@@ -224,3 +224,88 @@ export function arrivalStatus(kind: string, dateSource: string): ArrivalStatus {
   if (dateSource === "BULK_CALL_OFF") return "BULK";
   return "ORDERED";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P2 — reschedule advice for not-yet-shipped arrivals (owner 2026-10-20).
+// The ideal plant date of an arrival = the first day this member's cover, WITHOUT that arrival,
+// falls to its Target. Earlier than the ETA → advance; much later → postpone (money not tied up).
+// Advice only: the planner may store a rescheduled ETA; CSN Tracker is changed by the user.
+// ─────────────────────────────────────────────────────────────────────────────
+export type MemberProjectionDay = { day: string; closing: number; use: number; target_days: number | null };
+
+export const RESCHEDULE_TOLERANCE_DAYS = 3;
+
+export function rescheduleAdvice(rows: readonly MemberProjectionDay[], eta: string | null, qty: number): { suggested_eta: string; shift_days: number; reason: string } | null {
+  if (!eta || rows.length === 0 || !(qty > EPSILON)) return null;
+  const uses = rows.map((r) => r.use);
+  let ideal: string | null = null;
+  for (let i = 0; i < rows.length; i += 1) {
+    const target = rows[i].target_days;
+    if (target === null) continue;
+    const without = rows[i].closing - (rows[i].day >= eta ? qty : 0);
+    const cover = forwardCoverDays(without, uses, i + 1);
+    if (cover !== null && cover <= target) { ideal = rows[i].day; break; }
+  }
+  if (ideal === null) {
+    const last = rows[rows.length - 1].day;
+    if (last <= eta) return null;
+    const shift = Math.round((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${eta}T00:00:00Z`)) / 86_400_000);
+    return shift > RESCHEDULE_TOLERANCE_DAYS ? { suggested_eta: last, shift_days: shift, reason: "Not needed within the horizon — postpone to free working capital." } : null;
+  }
+  const shift = Math.round((Date.parse(`${ideal}T00:00:00Z`) - Date.parse(`${eta}T00:00:00Z`)) / 86_400_000);
+  if (Math.abs(shift) <= RESCHEDULE_TOLERANCE_DAYS) return null;
+  return shift < 0
+    ? { suggested_eta: ideal, shift_days: shift, reason: `Without it, cover falls to Target on ${ideal} — advance ${-shift} days.` }
+    : { suggested_eta: ideal, shift_days: shift, reason: `Not needed before ${ideal} — postpone ${shift} days to free working capital.` };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P2 — R store ↔ R store transfer instructions (owner: R001 / R002 both ways).
+// Need of store Rn = demand of lines located at Rn or its shop floor Sn (S00n fed from R00n —
+// assumption shown on screen). Short stores are filled from stores with more than their own need.
+// ─────────────────────────────────────────────────────────────────────────────
+export type LocationNeed = { location: string; need: number; stock: number };
+export type TransferInstruction = { from: string; to: string; qty: number };
+
+export function storeKey(locationCode: string): string | null {
+  const m = /^[RS](\d+)$/i.exec(locationCode.trim());
+  return m ? `R${m[1].padStart(3, "0")}` : null;
+}
+
+export function locationTransfers(needs: readonly LocationNeed[]): TransferInstruction[] {
+  const byStore = new Map<string, { need: number; stock: number }>();
+  for (const n of needs) {
+    const store = storeKey(n.location);
+    if (!store) continue;
+    const seen = byStore.get(store) ?? { need: 0, stock: 0 };
+    byStore.set(store, { need: seen.need + n.need, stock: seen.stock + n.stock });
+  }
+  const short = [...byStore].map(([store, v]) => ({ store, qty: v.need - v.stock })).filter((s) => s.qty > EPSILON).sort((a, b) => b.qty - a.qty || a.store.localeCompare(b.store));
+  const spare = [...byStore].map(([store, v]) => ({ store, qty: v.stock - v.need })).filter((s) => s.qty > EPSILON).sort((a, b) => b.qty - a.qty || a.store.localeCompare(b.store));
+  const out: TransferInstruction[] = [];
+  // DEPENDENT: each shortage consumes the spare the previous ones left.
+  for (const s of short) {
+    let remaining = s.qty;
+    for (const p of spare) {
+      if (remaining <= EPSILON) break;
+      const qty = Math.min(remaining, p.qty);
+      if (qty <= EPSILON) continue;
+      out.push({ from: p.store, to: s.store, qty: round(qty) });
+      p.qty -= qty; remaining -= qty;
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P2 — another company's spare stock (owner: suggestion only; user raises the STO / Sub-CSN).
+// Spare = the lowest projected closing over the horizon minus that company's own Target days of
+// average use — so the sender is never put below its own Target.
+// ─────────────────────────────────────────────────────────────────────────────
+export function companySpare(rows: readonly { closing: number; use: number; target_days: number | null }[]): number {
+  if (rows.length === 0) return 0;
+  const avgUse = rows.reduce((s, r) => s + r.use, 0) / rows.length;
+  const target = Math.max(0, ...rows.map((r) => r.target_days ?? 0));
+  const minClosing = Math.min(...rows.map((r) => r.closing));
+  return Math.max(0, round(minClosing - target * avgUse));
+}

@@ -1,4 +1,4 @@
-import { costOption, landedAdder, rankCostOptions, type CostVendorInput } from "./mts_cost.logic.ts";
+import { averageOrderCost, costOption, economicCycleDays, landedAdder, rankCostOptions, type CostVendorInput } from "./mts_cost.logic.ts";
 
 function equal(actual: unknown, expected: unknown, message: string) { if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${message}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`); }
 const vendor = (over: Partial<CostVendorInput>): CostVendorInput => ({
@@ -35,4 +35,23 @@ Deno.test("cost: unknown components are reported; unpriced or infeasible options
 Deno.test("landed adder from AC01 history", () => {
   equal(landedAdder([{ total_cost: 5000, received_base_qty: 1000, status: "POSTED" }, { total_cost: 2500, received_base_qty: 500, status: "DRAFT" }]), { adder: 5, basis: "PROVISIONAL" }, "draft makes it provisional");
   equal(landedAdder([]), { adder: null, basis: "NONE" }, "no history");
+});
+
+Deno.test("P2 economicCycleDays: √(2S/(D·H)), clamped 7–90, null when data is missing", () => {
+  // S 50,000 per order, price 340/kg, interest 12 %, use 4,400 kg/day → H = 0.1118/kg/day
+  // √(100000 / (4400 × 0.11178)) = √203.3 ≈ 14.3 → 14 days.
+  const days = economicCycleDays({ order_cost: 50000, unit_price_inr: 340, interest_pct: 12, daily_use: 4400 });
+  if (days !== 14) throw new Error(`expected 14, got ${days}`);
+  if (economicCycleDays({ order_cost: 1, unit_price_inr: 340, interest_pct: 12, daily_use: 4400 }) !== 7) throw new Error("min clamp");
+  if (economicCycleDays({ order_cost: 1e9, unit_price_inr: 1, interest_pct: 1, daily_use: 1 }) !== 90) throw new Error("max clamp");
+  if (economicCycleDays({ order_cost: null, unit_price_inr: 340, interest_pct: 12, daily_use: 4400 }) !== null) throw new Error("missing S");
+  if (averageOrderCost([{ total_cost: 100 }, { total_cost: 300 }, { total_cost: 0 }]) !== 200) throw new Error("avg order cost");
+});
+
+Deno.test("cost (owner 2026-10-21): a lower price can lose on payment term, freight and MOQ excess", () => {
+  // A: ₹98, advance 60 days, freight paid by us ₹4, MOQ 5000 for a 1000 need. B: ₹100, 60 days credit, FOR.
+  const a = costOption(vendor({ vendor_label: "A", price: 98, landed_adder: 4, advance: true, lead_time_days: 60, vendor_credit_days: null, order_qty: 5000 }), context);
+  const b = costOption(vendor({ vendor_label: "B", price: 100, landed_adder: 0, vendor_credit_days: 60, order_qty: 1000 }), context);
+  equal(rankCostOptions([a, b]).map((o) => o.vendor_label), ["B", "A"], "B wins on full cost despite the higher price");
+  if (!(a.excess_cost! > 0 && a.days_money_tied! > b.days_money_tied!)) throw new Error("A pays for MOQ excess and longer money tie-up");
 });

@@ -13,7 +13,7 @@
  *   D6  lead time = Booking Time (blank = 0) + route lead time of that vendor.
  */
 import { monthStart, rToRTransferRoute, type GroupRequirementRow, type PlanningCalendar, type PolicyRow, type RequirementRow } from "./mts_requirement.logic.ts";
-import type { OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput } from "./mts_optimizer_phase3d.types.ts";
+import type { OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 
 export type VendorTerm = {
   vendor_id: string;
@@ -102,6 +102,10 @@ export function assemblePlanningInput(args: {
   vendorOverride?: ReadonlyMap<string, string>;
   /** Full cost of a member buy (handler); absent = last price + lead-time feasibility. */
   memberCost?: (materialId: string, qty: number, needDay: string) => MemberCost | null;
+  /** P2: every vendor of a material with comparable cost and best cycle; each lot picks one. */
+  vendorOptions?: ReadonlyMap<string, readonly OptimizerVendorOption[]>;
+  /** P2: material order cycle when no vendor option gives one (Max days = Target + cycle). */
+  cycleDays?: ReadonlyMap<string, number | null>;
 }): PlanningAssembly {
   const { calendar } = args;
   const inHorizon = (day: string) => day >= calendar.asOf && day <= (calendar.horizonEnd ?? calendar.nmEnd);
@@ -141,6 +145,11 @@ export function assemblePlanningInput(args: {
       configured_lead_time_days: row.lead_time?.effective ?? null,
       booking_time_days: vendor?.booking_days ?? null,
       route_lead_time_days: vendor?.route_days ?? null,
+      ...(args.cycleDays?.has(id) ? { cycle_days: args.cycleDays.get(id) ?? null } : {}),
+      // A fixed policy MOQ (no vendor MOQ) still applies to every vendor option.
+      ...(args.vendorOptions?.get(id)?.length ? {
+        vendor_options: args.vendorOptions.get(id)!.map((o) => (o.moq_qty_base === null && policyMoq !== null ? { ...o, moq_qty_base: policyMoq } : o)),
+      } : {}),
     });
   }
 

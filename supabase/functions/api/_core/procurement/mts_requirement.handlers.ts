@@ -56,6 +56,7 @@ import {
   buildToBaseFactors,
   canonicalJson,
   computeLeadTime,
+  safetySuggestionReason,
   suggestSafetyDays,
   type ConfiguredLeadTime,
   consumptionFromConsBucket,
@@ -814,10 +815,12 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
       delays.push(Math.round((Date.parse(`${arrival}T00:00:00Z`) - Date.parse(`${dispatch}T00:00:00Z`)) / 86_400_000) - routeDays);
     }
     const routeOnly = configured.map((c) => c.route_days).filter((d): d is number => d !== undefined);
-    const suggestion = suggestSafetyDays(routeOnly.length ? Math.max(...routeOnly) : null, delays);
+    const routeMax = routeOnly.length ? Math.max(...routeOnly) : null;
+    const suggestion = suggestSafetyDays(routeMax, delays);
     result.set(materialId, {
       ...computeLeadTime(configured, observed.get(materialId) ?? []),
       suggested_critical_days: suggestion.critical, suggested_target_days: suggestion.target, delay_sample_count: suggestion.samples,
+      suggestion_reason: safetySuggestionReason(routeMax, suggestion.critical, suggestion.samples),
     });
   }
   return result;
@@ -873,7 +876,7 @@ export async function loadLocationLabels(ids: string[]): Promise<Map<string, str
  * truncate as data grows — CLAUDE.md §8E family). `build` must return a fresh
  * query with a stable ORDER BY each call.
  */
-async function fetchAllPages(build: () => unknown, errorCode: string): Promise<JsonRecord[]> {
+export async function fetchAllPages(build: () => unknown, errorCode: string): Promise<JsonRecord[]> {
   const pageSize = 1000;
   const rows: JsonRecord[] = [];
   for (let from = 0; ; from += pageSize) {
@@ -1301,6 +1304,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
           suggested_critical_days: lead?.suggested_critical_days ?? null,
           suggested_target_days: lead?.suggested_target_days ?? null,
           delay_sample_count: lead?.delay_sample_count ?? 0,
+          suggestion_reason: lead?.suggestion_reason ?? null,
         };
       })
       .sort((a, b) => a.material_type.localeCompare(b.material_type) || a.material_name.localeCompare(b.material_name));

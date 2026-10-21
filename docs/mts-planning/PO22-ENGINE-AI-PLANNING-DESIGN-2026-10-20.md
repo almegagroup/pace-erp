@@ -287,3 +287,47 @@ PO22 is used only by the procurement / SCM team, which is centralised and holds 
 access — so other companies' excess may be shown. Rule kept safe: the STO-from-excess option
 shows a company's stock only if the user has that company in their own allowed companies
 (normal company-scope check); a company outside the user's scope is simply not listed.
+
+## 12. Build status (2026-10-21) — P1 in PROD; P2-P4 built on `dev`, not yet released
+
+| Phase | Built | Commits |
+|---|---|---|
+| P1 Item / family plan | PROD (PR almegagroup/pace-erp#684, ACL v135 / v31 / v31) | `0d39a24` |
+| P2 Engine plan | `dev` | `236b6ec`, `bfbf333`, `102b583` |
+| P3 Settings advice | `dev` | `7273275` |
+| P4 AI loop + user lots | `dev` | `7d75870`, `cf40aa4` |
+
+Decisions taken while building (owner may change any of them):
+- **Max days = Target + best order cycle.** Cycle = economic order interval √(2·S/(D·H)):
+  S = average AC01 landed cost per GRN of that vendor + material, D = average daily use,
+  H = price (INR) × interest % / 365; clamped 7–90 days. **No cost data → 30 days, shown as
+  "default"** (AI / owner can refine). Max days is never user-entered.
+- **Vendor per lot:** cheapest (price × FX + landed) that arrives in time; if none, the fastest
+  → flagged *Bridge* with the cheapest vendor named. Fixed vendor / policy MOQ never broken.
+- **ETD** = PO-by + Booking Time; **ETA Port** = plant ETA − median port→plant days of that
+  material's received CSNs (blank when no history).
+- **Reschedule advice:** ideal plant date = first day the member's cover without that arrival
+  falls to Target; shown only when ≥ 3 days off.
+- **R ↔ R transfers:** need of R00n = lines located at R00n or S00n (**assumption: shop floor
+  S00n is fed from store R00n**); short store filled from spare store, both directions.
+- **Other company spare** = lowest projected closing − that company's own Target days of use;
+  only companies in the user's scope with PO22 view; suggestion only.
+- **AI planner:** AI gets the plan summary and returns a verdict + extra lots in JSON; lots are
+  validated (family member, horizon date, positive qty) and **re-simulated by the engine**;
+  only engine numbers are shown; applying saves a new version (source AI_APPLIED).
+- **User lots** are planned on their date; the engine buys only what is still needed. Every
+  save is a version. CC date can be moved to an earlier day.
+
+- **Vendor per lot = full cost, not price (owner 2026-10-21).** Each vendor is compared on the
+  full cost of a typical lot (daily use × best cycle): last price × FX + AC01 landed adder +
+  interest on money tied up under the vendor's payment term (advance = paid lead time early) +
+  Item Rate (carrying) + cost of the MOQ excess, ÷ lot qty. Freight term comes from the latest PO
+  for that vendor + item (2 years): FOR = freight inside the price; FREIGHT_SEPARATE /
+  EX_TRANSPORTER_GODOWN = paid by us via AC01 landed cost, flagged as "freight missing" when AC01
+  has no history (never assumed 0 silently). Future Orders show "Full cost / unit", "Freight" and
+  "Cost gaps"; the AI prompt gets the same numbers. A different vendor per lot is not mandatory:
+  the same vendor repeats whenever it is still cheapest in time. No stickiness rule (owner
+  2026-10-21): the best fit on the conditions wins every lot; the same vendor repeating is fine.
+
+Release needs (owner approval): PR dev → main (migrations `20261021120000` apply on merge) and
+ACL for `PROC_MTS_ITEM_PLAN_EDIT` (`docs/mts-planning/acl/PO22-P4-ITEM-PLAN-EDIT-ACL-PROVISIONING.sql`).

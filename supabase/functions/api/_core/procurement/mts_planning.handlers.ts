@@ -15,6 +15,7 @@ import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
 import { buildCalendar, isIsoDate, moqInBase, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   computeRequirement,
+  fetchAllPages,
   fail,
   loadLocationLabels,
   handleError,
@@ -25,8 +26,8 @@ import {
 } from "./mts_requirement.handlers.ts";
 import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
-import type { OptimizerAdvisoryBuy } from "./mts_optimizer_phase3d.types.ts";
-import { type CostOption, costOption, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
+import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
+import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
@@ -45,6 +46,8 @@ type PlanningParams = {
   companyId: string; planMonth: string; asOf: string; demandAt: string | null; today: string;
   /** P1 item plan: months after NM (horizon = CM + NM + extra) with a beyond-plan forecast. */
   extraMonths?: number;
+  /** P4: lots the user fixed (or applied from AI); the engine plans the rest around them. */
+  manualLots?: OptimizerManualLot[];
 };
 
 export function readParams(url: URL | JsonRecord, today: string): { params?: Omit<PlanningParams, "companyId">; error?: [string, string] } {
@@ -128,6 +131,10 @@ type CostInputs = {
   customerCreditDays: number | null;
   fxByCurrency: Map<string, { inr: number | null; source: string | null; stale: boolean }>;
   landedByVendorMaterial: Map<string, { adder: number | null; basis: "FINAL" | "PROVISIONAL" | "NONE" }>;
+  /** P2: average landed cost of one order (per GRN) per vendor + material. */
+  orderCostByVendorMaterial: Map<string, number | null>;
+  /** Owner 2026-10-21: freight term of the latest PO per vendor + material (FOR / FREIGHT_SEPARATE / …). */
+  freightTermByVendorMaterial: Map<string, string>;
 };
 
 async function loadCostInputs(companyId: string, asOf: string, today: string, universe: string[], vendorTerms: Map<string, VendorTerm[]>, materials: Awaited<ReturnType<typeof computeRequirement>>["materials"]): Promise<CostInputs> {
@@ -175,7 +182,23 @@ async function loadCostInputs(companyId: string, asOf: string, today: string, un
     history.set(key, [...(history.get(key) ?? []), { total_cost: lc.total, received_base_qty: base, status: lc.status }]);
   }
   const landedByVendorMaterial = new Map([...history].map(([key, rows]) => [key, landedAdder(rows)]));
-  return { interestPct, customerCreditDays, fxByCurrency, landedByVendorMaterial };
+  const orderCostByVendorMaterial = new Map([...history].map(([key, rows]) => [key, averageOrderCost(rows)]));
+  // Freight term of the latest PO per vendor + material (2 years).
+  const poSince = new Date(Date.parse(`${today}T00:00:00Z`) - 730 * 86_400_000).toISOString().slice(0, 10);
+  const recentPos = await fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("purchase_order")
+    .select("id, vendor_id, freight_term, po_date").eq("company_id", companyId).gte("po_date", poSince).order("id"), "MTS_PLANNING_FREIGHT_TERM_READ_FAILED");
+  const poById = new Map(recentPos.map((po) => [text(po.id), po]));
+  const poLines = recentPos.length === 0 || universe.length === 0 ? [] : await fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient
+    .schema("erp_procurement").from("purchase_order_line").select("po_id, material_id").in("material_id", chunk));
+  const freightTermByVendorMaterial = new Map<string, string>();
+  const freightDate = new Map<string, string>();
+  for (const line of poLines) {
+    const po = poById.get(text(line.po_id));
+    if (!po || !text(po.freight_term)) continue;
+    const key = `${text(po.vendor_id)}|${text(line.material_id)}`;
+    if ((freightDate.get(key) ?? "") <= text(po.po_date)) { freightDate.set(key, text(po.po_date)); freightTermByVendorMaterial.set(key, text(po.freight_term).toUpperCase()); }
+  }
+  return { interestPct, customerCreditDays, fxByCurrency, landedByVendorMaterial, orderCostByVendorMaterial, freightTermByVendorMaterial };
 }
 
 function costOptionsFor(
@@ -228,6 +251,52 @@ export async function computePlanning(p: PlanningParams) {
     const row = req.output.rows.find((r) => r.material_id === id);
     return row ? [...row.daily_demand.values()].reduce((s, q) => s + q, 0) / horizonDays : 0;
   };
+  // P2 (owner 2026-10-20): every vendor option with comparable cost (price × FX + landed) and its
+  // best order cycle (Max days = Target + cycle); each lot then picks its own vendor.
+  const vendorOptions = new Map<string, OptimizerVendorOption[]>();
+  const cycleDays = new Map<string, number | null>();
+  const cycleBasis = new Map<string, "ECONOMIC" | "DEFAULT">();
+  for (const row of req.output.rows) {
+    const id = row.material_id;
+    const use = rowDailyUse(id);
+    const options = (vendorTerms.get(id) ?? []).map((term) => {
+      const currency = (term.currency ?? "INR").toUpperCase();
+      const fx = costInputs.fxByCurrency.get(currency)?.inr ?? null;
+      const priceInr = term.last_price !== null && fx !== null ? term.last_price * fx : null;
+      const landed = costInputs.landedByVendorMaterial.get(`${term.vendor_id}|${id}`) ?? { adder: null, basis: "NONE" as const };
+      const lead = term.route_days === null ? null : (term.booking_days ?? 0) + term.route_days;
+      const cycle = economicCycleDays({ order_cost: costInputs.orderCostByVendorMaterial.get(`${term.vendor_id}|${id}`) ?? null, unit_price_inr: priceInr, interest_pct: costInputs.interestPct, daily_use: use });
+      // Owner 2026-10-21: compare vendors on the FULL cost of a typical lot — price × FX + landed
+      // + interest on money tied up under the payment term + Item Rate + MOQ excess — not price only.
+      const typicalLot = use > 0 ? use * (cycle ?? DEFAULT_CYCLE_DAYS) : 0;
+      let orderQty: number | null = null;
+      try {
+        orderQty = typicalLot > 0 ? applyOrderConstraints(typicalLot, { material_id: id, target_days: null, critical_days: null, vendor_moq_qty_base: term.moq_base, order_multiple_qty_base: term.multiple_base, configured_lead_time_days: null }) : null;
+      } catch { orderQty = null; }
+      const full = typicalLot > 0 ? costOption({
+        vendor_label: term.vendor_label, price: term.last_price, currency, fx_inr: fx, fx_source: null,
+        landed_adder: landed.adder, landed_basis: landed.basis, vendor_credit_days: term.credit_days ?? null, advance: term.advance ?? false,
+        order_qty: orderQty, lead_time_days: lead, feasible: true,
+      }, { required_qty: typicalLot, daily_use: use, carrying_rate: carryingOf(id), interest_pct: costInputs.interestPct, customer_credit_days: costInputs.customerCreditDays }) : null;
+      const freightTerm = costInputs.freightTermByVendorMaterial.get(`${term.vendor_id}|${id}`) ?? null;
+      const missing = [...(full?.missing ?? (priceInr === null ? ["price"] : []))];
+      // We pay the freight but AC01 has no landed history for this vendor → freight is unknown, not 0.
+      if (freightTerm && freightTerm !== "FOR" && landed.basis === "NONE") missing.push(`freight (${freightTerm === "FREIGHT_SEPARATE" ? "freight separate" : "ex godown"} — paid by us, no AC01 history)`);
+      const unitCost = full?.total_cost !== null && full?.total_cost !== undefined && typicalLot > 0
+        ? full.total_cost / typicalLot
+        : priceInr === null ? null : priceInr + (landed.adder ?? 0);
+      return {
+        vendor_id: term.vendor_id, lead_time_days: lead, booking_time_days: term.booking_days, moq_qty_base: term.moq_base,
+        order_multiple_qty_base: term.multiple_base, delivery_lot_qty_base: term.lot_base,
+        unit_cost: unitCost === null ? null : Math.round(unitCost * 10000) / 10000, cycle_days: cycle,
+        freight_term: freightTerm, cost_missing: missing,
+      };
+    });
+    if (options.length) vendorOptions.set(id, options);
+    const best = options.map((o) => o.cycle_days).filter((d): d is number => d !== null);
+    cycleDays.set(id, best.length ? Math.min(...best) : DEFAULT_CYCLE_DAYS);
+    cycleBasis.set(id, best.length ? "ECONOMIC" : "DEFAULT");
+  }
   // Owner 2026-10-20: nothing selected for a group → engine picks the member with the lowest total cost.
   const memberCost = (id: string, qty: number, needDay: string): MemberCost | null => {
     const terms = vendorTerms.get(id) ?? [];
@@ -237,8 +306,9 @@ export async function computePlanning(p: PlanningParams) {
     return best ? { feasible: best.feasible, total_cost: best.total_cost, lead_time_days: best.lead_time_days } : null;
   };
   // Pass 1: fastest feasible vendor → when and how much is needed.
-  const pass1 = assemblePlanningInput({ ...baseArgs, memberCost });
-  const projection1 = projectDailyCoverage(pass1.input);
+  const pass1 = assemblePlanningInput({ ...baseArgs, memberCost, vendorOptions, cycleDays });
+  const manual = p.manualLots?.length ? { manual_lots: p.manualLots } : {};
+  const projection1 = projectDailyCoverage({ ...pass1.input, ...manual });
   const vendorOverride = new Map<string, string>();
   for (const buy of projection1.advisory_buys) {
     if ((buy.status !== "ADVISORY" && buy.status !== "ADVISORY_LATE") || buy.sequence !== 1) continue;
@@ -248,8 +318,8 @@ export async function computePlanning(p: PlanningParams) {
     if (term) vendorOverride.set(buy.material_id, term.vendor_id);
   }
   // Pass 2: cheapest feasible vendor's MOQ / multiple / lead time.
-  const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, memberCost, vendorOverride }) : pass1;
-  const projection = vendorOverride.size ? projectDailyCoverage(assembly.input) : projection1;
+  const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, memberCost, vendorOverride, vendorOptions, cycleDays }) : pass1;
+  const projection = vendorOverride.size ? projectDailyCoverage({ ...assembly.input, ...manual }) : projection1;
 
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
@@ -316,15 +386,43 @@ export async function computePlanning(p: PlanningParams) {
     daily: projection.rows.filter((row) => activeMaterials.has(row.material_id)).map((row) => ({ ...row, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id) })),
     risks: projection.risks.map((risk) => ({ ...risk, material_name: nameOf(risk.material_id), material_code: codeOf(risk.material_id) })),
     buys: projection.advisory_buys.map((buy) => {
-      const vendor = assembly.chosen_vendor.get(buy.material_id) ?? null;
+      // P2: the lot's own vendor when the engine chose one per lot.
+      const lotVendor = buy.vendor_id ? (vendorTerms.get(buy.material_id) ?? []).find((t) => t.vendor_id === buy.vendor_id) ?? null : null;
+      const vendor = lotVendor ?? assembly.chosen_vendor.get(buy.material_id) ?? null;
+      const cheapestLabel = buy.cheapest_vendor_id ? (vendorTerms.get(buy.material_id) ?? []).find((t) => t.vendor_id === buy.cheapest_vendor_id)?.vendor_label ?? null : null;
       return {
         ...buy, material_name: nameOf(buy.material_id), material_code: codeOf(buy.material_id), uom: uom(buy.material_id),
         vendor_label: vendor?.vendor_label ?? null, vendor_moq_base: vendor?.moq_base ?? null, vendor_multiple_base: vendor?.multiple_base ?? null,
         vendor_lot_base: vendor?.lot_base ?? null, booking_time_days: vendor?.booking_days ?? null, route_lead_time_days: vendor?.route_days ?? null,
-        vendor_basis: vendorOverride.has(buy.material_id) ? "LOWEST_TOTAL_COST" : vendor ? "FASTEST_FEASIBLE" : null,
+        vendor_basis: lotVendor ? (buy.bridge ? "BRIDGE" : "CHEAPEST_IN_TIME") : vendorOverride.has(buy.material_id) ? "LOWEST_TOTAL_COST" : vendor ? "FASTEST_FEASIBLE" : null,
+        cheapest_vendor_label: cheapestLabel,
+        // Owner 2026-10-21: what the chosen vendor's comparable cost includes / misses.
+        ...(() => {
+          const option = buy.vendor_id ? (vendorOptions.get(buy.material_id) ?? []).find((o) => o.vendor_id === buy.vendor_id) : undefined;
+          return option ? { vendor_unit_total_cost: option.unit_cost, vendor_freight_term: option.freight_term ?? null, vendor_cost_missing: option.cost_missing ?? [] } : {};
+        })(),
+        max_days_basis: cycleBasis.get(buy.material_id) ?? null,
         cost_options: buy.status === "ADVISORY" || buy.status === "ADVISORY_LATE"
           ? costOptionsFor(buy, vendorTerms.get(buy.material_id) ?? [], costInputs, calendar.asOf, dailyUseOf(buy.material_id, assembly.input.daily_demand), carryingOf(buy.material_id))
           : [],
+      };
+    }),
+    // P3 (owner 2026-10-20): engine advice per material — best order cycle, Max days, best lot
+    // where the vendor has no fixed MOQ. Shown next to the user's values in Material Settings.
+    material_advice: req.output.rows.filter((r) => r.kind === "RM" || r.kind === "PM").map((r) => {
+      const use = rowDailyUse(r.material_id);
+      const cycle = cycleDays.get(r.material_id) ?? null;
+      const target = r.policy?.target_cov_days ?? null;
+      const options = vendorOptions.get(r.material_id) ?? [];
+      const vendorMoq = options.some((o) => o.moq_qty_base !== null);
+      const bestLot = cycle !== null && use > 0 ? Math.ceil(use * cycle) : null;
+      return {
+        material_id: r.material_id, daily_use: Math.round(use * 1000) / 1000, cycle_days: cycle,
+        cycle_basis: cycleBasis.get(r.material_id) ?? null, max_days: target !== null && cycle !== null ? target + cycle : null,
+        vendor_moq_fixed: vendorMoq, best_lot_qty: vendorMoq ? null : bestLot,
+        reason: cycleBasis.get(r.material_id) === "ECONOMIC"
+          ? `Best order cycle ${cycle} d: order cost (AC01 landed per GRN) balanced against money tied up (price × interest).`
+          : `No order-cost / price / interest data yet — default ${cycle} d cycle.`,
       };
     }),
     groups: req.output.groups.map((g) => ({
@@ -351,7 +449,7 @@ export async function computePlanning(p: PlanningParams) {
     })),
   };
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, calendar };
+  const internal = { req, assembly, projection, calendar, vendorOptions };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

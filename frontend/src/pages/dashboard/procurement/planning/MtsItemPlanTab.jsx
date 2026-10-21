@@ -14,7 +14,10 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
-import { getMtsItemPlan, getMtsPlanning, saveMtsInboundReschedule } from "../procurementApi.js";
+import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario } from "../procurementApi.js";
+
+// Owner 2026-10-21: FOR = freight inside the price; otherwise we pay it (AC01 landed cost).
+const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we pay)", EX_TRANSPORTER_GODOWN: "Ex godown (we pay)" };
 
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
@@ -40,6 +43,16 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   const [openDay, setOpenDay] = useState("");
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(false);
+  // P4: calibration (CC) date the user may move; empty = the page's As-of date.
+  const [ccDate, setCcDate] = useState("");
+  const effAsOf = ccDate || asOf;
+  const effMonth = effAsOf ? effAsOf.slice(0, 7) : planMonth;
+  // P4: the user's own lots (draft while editing; null = not editing), AI review result.
+  const [lotDraft, setLotDraft] = useState(null);
+  const [question, setQuestion] = useState("");
+  const [aiResult, setAiResult] = useState(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
 
   // Material list: same cached CM + NM planning payload as the Planning tab.
   const planningQ = useQuery({
@@ -57,10 +70,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     return term ? materials.filter(([, label]) => label.toLowerCase().includes(term)) : materials;
   }, [materials, search]);
 
-  const itemKey = ["procurement", "mts-requirement", "item-plan", companyId, planMonth, asOf, demandAt, materialId];
+  const itemKey = ["procurement", "mts-requirement", "item-plan", companyId, effMonth, effAsOf, demandAt, materialId];
   const itemQ = useQuery({
     queryKey: itemKey,
-    queryFn: () => getMtsItemPlan({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined, material_id: materialId }),
+    queryFn: () => getMtsItemPlan({ company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId }),
     enabled: Boolean(companyId && planMonth && asOf && materialId),
   });
   const plan = itemQ.data ?? null;
@@ -120,6 +133,15 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       copyValue: (a) => a.rescheduled_eta ?? "",
     },
     {
+      key: "advice", label: "Engine advice", width: "260px",
+      render: (a) => (a.advice ? (
+        <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title="Use this date">
+          {a.advice.shift_days < 0 ? `Advance ${-a.advice.shift_days} d → ${a.advice.suggested_eta}` : `Postpone ${a.advice.shift_days} d → ${a.advice.suggested_eta}`}
+        </button>
+      ) : ""),
+      copyValue: (a) => (a.advice ? `${a.advice.shift_days} d → ${a.advice.suggested_eta}` : ""),
+    },
+    {
       key: "reason", label: "Reason", width: "200px", filterable: false,
       render: (a) => (a.reschedule_key ? (
         <input
@@ -133,14 +155,42 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     },
   ];
 
-  const proposalColumns = [
-    { key: "material_name", label: "Member", width: "220px", render: (b) => memberName.get(b.material_id) ?? b.material_name },
-    { key: "recommended_po_qty_base", label: "Qty", width: "120px", align: "right", render: (b) => (b.recommended_po_qty_base === null ? "—" : `${fmtQty(b.recommended_po_qty_base)} ${b.uom ?? ""}`), copyValue: (b) => b.recommended_po_qty_base ?? "" },
-    { key: "recommended_po_by", label: "PO By", width: "100px", render: (b) => b.recommended_po_by ?? "—" },
-    { key: "estimated_plant_eta", label: "Plant ETA", width: "100px", render: (b) => b.estimated_plant_eta ?? "—" },
-    { key: "vendor_label", label: "Vendor", width: "220px", render: (b) => b.vendor_label ?? "—" },
-    { key: "reason", label: "Why", width: "360px" },
+  const orderColumns = [
+    { key: "flag", label: "", width: "90px", render: (o) => (o.bridge ? <span className="bg-rose-100 px-1.5 py-0.5 text-xs font-semibold text-rose-800">Bridge</span> : o.late ? <span className="bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800">Late</span> : ""), copyValue: (o) => (o.bridge ? "Bridge" : o.late ? "Late" : "") },
+    { key: "material_name", label: "Member", width: "200px", render: (o) => `${o.material_code ?? ""} ${o.material_name}`.trim() },
+    { key: "vendor", label: "Vendor", width: "200px", render: (o) => o.vendor ?? "—" },
+    { key: "qty", label: "Qty", width: "110px", align: "right", render: (o) => `${fmtQty(o.qty)} ${o.uom ?? ""}`, copyValue: (o) => o.qty },
+    { key: "po_by", label: "PO by", width: "100px", render: (o) => o.po_by ?? "—" },
+    { key: "etd", label: "ETD", width: "100px", render: (o) => o.etd ?? "—" },
+    { key: "eta_port", label: "ETA Port", width: "100px", render: (o) => o.eta_port ?? "—" },
+    { key: "eta_plant", label: "ETA Plant", width: "100px", render: (o) => o.eta_plant ?? "—" },
+    { key: "days", label: "Max / Min days on arrival", width: "150px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
+    { key: "max_days_planned", label: "Planned Max days", width: "130px", render: (o) => (o.max_days_planned === null ? "—" : `${fmtDays(o.max_days_planned)}${o.max_days_basis === "DEFAULT" ? " (default — no cost data)" : ""}`), copyValue: (o) => o.max_days_planned ?? "" },
+    { key: "unit_total_cost", label: "Full cost / unit (₹)", width: "150px", render: (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "—" : o.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })), copyValue: (o) => o.unit_total_cost ?? "" },
+    { key: "freight_term", label: "Freight", width: "130px", render: (o) => FREIGHT_LABEL[o.freight_term] ?? o.freight_term ?? "—" },
+    { key: "cost_missing", label: "Cost gaps", width: "220px", render: (o) => (o.cost_missing?.length ? `Missing: ${o.cost_missing.join(", ")}` : "Complete"), copyValue: (o) => (o.cost_missing ?? []).join("; ") },
+    { key: "reason", label: "Why", width: "360px", render: (o) => (o.bridge && o.cheapest_vendor ? `${o.reason} Cheapest: ${o.cheapest_vendor}.` : o.reason) },
+    {
+      key: "fix", label: "Change", width: "90px", filterable: false,
+      render: (o) => (
+        <button type="button" title="Take this lot into Your lots to change its date / qty" onClick={() => setLotDraft((d) => [...(d ?? plan?.scenario?.manual_lots ?? []), { material_id: o.material_id, plant_eta: o.eta_plant, qty_base: o.qty, vendor_id: null }])} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Fix / edit</button>
+      ),
+    },
   ];
+  const transferColumns = [
+    { key: "material_name", label: "Member", width: "220px", render: (t) => `${t.material_code ?? ""} ${t.material_name}`.trim() },
+    { key: "from", label: "From", width: "80px" },
+    { key: "to", label: "To", width: "80px" },
+    { key: "qty", label: "Qty", width: "110px", align: "right", render: (t) => `${fmtQty(t.qty)} ${t.uom ?? ""}`, copyValue: (t) => t.qty },
+    { key: "by", label: "By", width: "100px" },
+  ];
+  const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
+  const [otherOpen, setOtherOpen] = useState(false);
+  const otherQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "item-plan-other", companyId, effMonth, effAsOf, demandAt, materialId],
+    queryFn: () => getMtsItemPlanOtherCompanies({ company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_ids: (plan?.members ?? []).map((m) => m.material_id).join(",") }),
+    enabled: Boolean(otherOpen && plan),
+  });
 
   const pending = Object.entries(drafts).filter(([, d]) => d?.row);
   async function saveReschedules() {
@@ -163,6 +213,43 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       pushToast({ message: errorText(error), tone: "error" });
     } finally {
       setSaving(false);
+    }
+  }
+
+  const versionsQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "item-plan-versions", companyId, materialId],
+    queryFn: () => listMtsItemPlanScenarios({ company_id: companyId, material_id: materialId }),
+    enabled: Boolean(showVersions && companyId && materialId),
+  });
+
+  async function saveLots(lots, source, note) {
+    setSaving(true);
+    try {
+      const result = await saveMtsItemPlanScenario({ company_id: companyId, material_id: materialId, manual_lots: lots, source, note });
+      pushToast({ message: `Plan saved as version ${result?.result?.version_no ?? ""}. Recalculating…`, tone: "success" });
+      setLotDraft(null);
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "item-plan"] });
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "item-plan-versions", companyId, materialId] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function askAi() {
+    setAiBusy(true);
+    setAiResult(null);
+    try {
+      const result = await reviewMtsItemPlanWithAi({
+        company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId,
+        ...(lotDraft ? { manual_lots: lotDraft } : {}), question: question || undefined,
+      });
+      setAiResult(result);
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setAiBusy(false);
     }
   }
 
@@ -196,10 +283,14 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
         </label>
         <label className="grid gap-1 text-sm text-slate-700">
           <span className="font-medium text-slate-800">Item</span>
-          <select value={materialId} onChange={(event) => { setMaterialId(event.target.value); setOpenDay(""); setDrafts({}); }} className={`${INPUT_CLASS} w-96`}>
+          <select value={materialId} onChange={(event) => { setMaterialId(event.target.value); setOpenDay(""); setDrafts({}); setOtherOpen(false); setLotDraft(null); setAiResult(null); }} className={`${INPUT_CLASS} w-96`}>
             <option value="">{planningQ.isLoading ? "Loading items…" : "Select an RM / PM…"}</option>
             {filtered.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
+        </label>
+        <label className="grid gap-1 text-sm text-slate-700" title="Calibration (CC): the day the opening is the actual book stock">
+          <span className="font-medium text-slate-800">CC date</span>
+          <input type="date" value={effAsOf} max={asOf} onChange={(event) => setCcDate(event.target.value === asOf ? "" : event.target.value)} className={INPUT_CLASS} />
         </label>
         <button type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "item-plan", companyId] })} disabled={!materialId} className="h-8 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
           {itemQ.isFetching ? "Calculating…" : "Recalculate"}
@@ -265,8 +356,115 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 <ErpDenseGrid {...GRID_PROPS} columns={arrivalColumns} rows={plan.arrivals} rowKey={(a, i) => `${a.reference}|${a.material_id}|${i}`} emptyMessage="No open PO / CSN / STO for these members." maxHeight="35vh" />
               </section>
               <section className="grid gap-1">
-                <h3 className="text-sm font-semibold text-slate-800">Engine proposals (current rule — Engine + AI plan comes in P2)</h3>
-                <ErpDenseGrid {...GRID_PROPS} columns={proposalColumns} rows={plan.proposals} rowKey={(b) => `${b.material_id}|${b.sequence}`} emptyMessage="No buy needed in the horizon." maxHeight="25vh" />
+                <h3 className="text-sm font-semibold text-slate-800">Future Orders — Engine plan</h3>
+                <p className="text-xs text-slate-500">Each lot: cheapest vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. Advisory — no PO is created.</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={plan.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}`} emptyMessage="No new order needed in the horizon." maxHeight="30vh" />
+              </section>
+              <section className="grid gap-1 border border-sky-200 bg-sky-50 p-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-800">Your lots {plan.scenario?.version_no ? `(version ${plan.scenario.version_no}${plan.scenario.source === "AI_APPLIED" ? ", AI applied" : ""})` : ""}</h3>
+                  {lotDraft === null ? (
+                    <button type="button" onClick={() => setLotDraft([...(plan.scenario?.manual_lots ?? [])])} className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Edit my lots</button>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => setLotDraft((d) => [...d, { material_id: materialId, plant_eta: effAsOf, qty_base: 0, vendor_id: null }])} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Add lot</button>
+                      <button type="button" disabled={saving} onClick={() => void saveLots(lotDraft.filter((l) => Number(l.qty_base) > 0), "USER", null)} className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">{saving ? "Saving…" : "Save & recalculate"}</button>
+                      <button type="button" onClick={() => setLotDraft(null)} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Cancel</button>
+                    </>
+                  )}
+                  <button type="button" onClick={() => setShowVersions((v) => !v)} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">{showVersions ? "Hide versions" : "Versions"}</button>
+                </div>
+                <p className="text-xs text-slate-500">Lots you fix stay as you set them; the engine plans the rest around them. Planning only — no PO is created.</p>
+                {(lotDraft ?? plan.user_lots ?? []).length === 0 ? <p className="text-xs text-slate-500">None — the plan is fully Engine + AI.</p> : (
+                  <table className="text-xs">
+                    <thead><tr className="text-left text-slate-600"><th className="pr-2">Member</th><th className="pr-2">Plant date</th><th className="pr-2">Qty</th><th /></tr></thead>
+                    <tbody>
+                      {(lotDraft ?? plan.user_lots).map((l, i) => (
+                        <tr key={`${l.material_id}|${i}`}>
+                          <td className="pr-2">
+                            {lotDraft ? (
+                              <select value={l.material_id} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, material_id: event.target.value } : x)))} className={CELL_INPUT}>
+                                {(plan.members ?? []).map((m) => <option key={m.material_id} value={m.material_id}>{`${m.material_code ?? ""} ${m.material_name}`.trim()}</option>)}
+                              </select>
+                            ) : memberName.get(l.material_id) ?? "—"}
+                          </td>
+                          <td className="pr-2">{lotDraft ? <input type="date" value={l.plant_eta} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, plant_eta: event.target.value } : x)))} className={CELL_INPUT} /> : l.plant_eta}</td>
+                          <td className="pr-2">{lotDraft ? <input type="number" min="0" value={l.qty_base} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, qty_base: event.target.value } : x)))} className={`${CELL_INPUT} w-28`} /> : fmtQty(l.qty_base)}</td>
+                          <td>{lotDraft ? <button type="button" onClick={() => setLotDraft((d) => d.filter((_, j) => j !== i))} className="text-rose-700 hover:underline">Remove</button> : null}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {showVersions ? (
+                  <ul className="ml-4 list-disc text-xs text-slate-700">
+                    {(versionsQ.data?.rows ?? []).map((v) => <li key={v.id}>v{v.version_no}{v.is_current ? " (current)" : ""} · {v.source === "AI_APPLIED" ? "AI applied" : "user"} · {v.lot_count} lot(s) · {v.created_by_name} · {String(v.created_at).slice(0, 16).replace("T", " ")}{v.note ? ` — ${v.note}` : ""}</li>)}
+                    {versionsQ.isLoading ? <li>Loading…</li> : null}
+                  </ul>
+                ) : null}
+              </section>
+              <section className="grid gap-1 border border-violet-200 bg-violet-50 p-2">
+                <h3 className="text-sm font-semibold text-slate-800">AI planner</h3>
+                <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={2} placeholder="Optional: tell the AI what you changed or want (e.g. 'import is delayed 3 weeks — what now?')" className="border border-slate-300 bg-white p-1 text-xs" />
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => void askAi()} disabled={aiBusy} className="h-7 border border-violet-600 bg-violet-600 px-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50">{aiBusy ? "AI is planning…" : lotDraft ? "Ask AI about my draft" : "Ask AI to plan"}</button>
+                  <span className="text-xs text-slate-500">The engine re-simulates every AI lot; numbers below are the engine's.</span>
+                </div>
+                {aiResult ? (
+                  <div className="grid gap-2 text-xs">
+                    <p className="whitespace-pre-wrap text-slate-800">{aiResult.verdict}</p>
+                    <table>
+                      <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th>Avg stock value</th></tr></thead>
+                      <tbody>
+                        {[["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]].filter(([, m]) => m).map(([label, m]) => (
+                          <tr key={label}><td className="pr-3 font-semibold">{label}</td><td className="pr-3">{m.shortage_days}</td><td className="pr-3">{m.days_below_target}</td><td className="pr-3">{fmtDays(m.lowest_max_days)}</td><td className="pr-3">{fmtQty(m.average_closing)}</td><td>{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {(aiResult.proposed_lots ?? []).length ? (
+                      <>
+                        <ul className="ml-4 list-disc">{aiResult.proposed_lots.map((l, i) => <li key={i}>{l.material_code}: {fmtQty(l.qty)} on {l.plant_eta}{l.reason ? ` — ${l.reason}` : ""}</li>)}</ul>
+                        <button type="button" disabled={saving} onClick={() => void saveLots([...(lotDraft ?? plan.scenario?.manual_lots ?? []), ...aiResult.proposed_lots.map((l) => ({ material_id: l.material_id, plant_eta: l.plant_eta, qty_base: l.qty, vendor_id: null }))], "AI_APPLIED", "AI proposal applied")} className="h-7 w-max border border-violet-600 bg-white px-2 text-xs font-semibold text-violet-800 hover:bg-violet-100 disabled:opacity-50">Apply AI lots to my plan</button>
+                      </>
+                    ) : <p className="text-slate-600">AI proposes no extra lots.</p>}
+                    {(aiResult.rejected ?? []).length ? <p className="text-slate-500">Not used: {aiResult.rejected.join("; ")}</p> : null}
+                  </div>
+                ) : null}
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">Location transfer instructions</h3>
+                <p className="text-xs text-slate-500">{plan.transfer_note}</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={transferColumns} rows={plan.transfers ?? []} rowKey={(t, i) => `${t.material_id}|${t.from}|${t.to}|${i}`} emptyMessage="No R ↔ R transfer needed." maxHeight="20vh" />
+              </section>
+              {(plan.alternatives ?? []).length > 0 ? (
+                <section className="grid gap-1">
+                  <h3 className="text-sm font-semibold text-rose-800">Below Target — options in order</h3>
+                  {plan.alternatives.map((alt) => (
+                    <div key={alt.material_id} className="border border-rose-200 bg-rose-50 p-2 text-xs">
+                      <div className="font-semibold text-slate-800">{`${alt.material_code ?? ""} ${alt.material_name}`.trim()} — below Target {alt.first_below_target_day ?? "—"}{alt.first_shortage_day ? `, runs out ${alt.first_shortage_day}` : ""}</div>
+                      <ol className="ml-4 list-decimal">
+                        {alt.options.map((o) => <li key={o.kind}><span className="font-semibold">{ALT_LABEL[o.kind] ?? o.kind}</span>{o.qty !== null ? ` — ${fmtQty(o.qty)}` : ""}: {o.detail}</li>)}
+                      </ol>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
+              <section className="grid gap-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-800">Other companies' spare stock</h3>
+                  <button type="button" onClick={() => setOtherOpen(true)} disabled={otherQ.isFetching} className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                    {otherQ.isFetching ? "Checking…" : "Check other companies"}
+                  </button>
+                </div>
+                {otherQ.error ? <p className="text-xs text-rose-700">{errorText(otherQ.error)}</p> : null}
+                {otherQ.data ? (
+                  <div className="text-xs text-slate-700">
+                    {(otherQ.data.spare ?? []).length === 0 ? `No spare above their own Target in: ${(otherQ.data.companies_checked ?? []).join(", ") || "no other company in your access"}.` : (
+                      <ul className="ml-4 list-disc">{otherQ.data.spare.map((x) => <li key={`${x.company_id}|${x.material_id}`}>{x.company}: {x.material_name} — {fmtQty(x.spare_qty)} spare</li>)}</ul>
+                    )}
+                    <p className="text-slate-500">{otherQ.data.note}</p>
+                  </div>
+                ) : null}
               </section>
             </div>
           </div>

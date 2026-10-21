@@ -133,3 +133,43 @@ Deno.test("Rule 6: a confirmed arrival of a member can serve the group", () => {
   equal(result.rows.filter((r) => r.material_id === "A").reduce((s, r) => s + r.group_draw_qty_base, 0), 20, "arrival on A covers the group");
   equal(result.advisory_buys.filter((b) => b.material_id === "B").map((b) => b.status), ["NO_BUY"], "no buy through B");
 });
+
+Deno.test("P2: lot sized to Max days = Target + cycle, not just back to Target (no tiny daily lots)", () => {
+  const result = projectDailyCoverage(input({ horizon_end: "2026-12-31", daily_demand: daily(1, "2026-10-01", "2026-12-31"), policies: [policy({ cycle_days: 20 })] }));
+  const buys = result.advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
+  // Target 5 + cycle 20 = 25 days of 1/day per lot → about one lot every 20 days, not one per day.
+  if (buys.length > 5) throw new Error(`expected few lots, got ${buys.length}`);
+  equal(buys[0].max_cover_days, 25, "max cover days carried on the buy");
+  if (!(buys[0].recommended_po_qty_base! >= 20)) throw new Error(`lot should cover the cycle, got ${buys[0].recommended_po_qty_base}`);
+});
+
+Deno.test("P2: cheapest vendor in time is used; when it is too late a faster vendor bridges and is flagged", () => {
+  const options = [
+    { vendor_id: "IMPORT", lead_time_days: 40, moq_qty_base: null, order_multiple_qty_base: null, unit_cost: 100, cycle_days: 20 },
+    { vendor_id: "DOMESTIC", lead_time_days: 3, moq_qty_base: null, order_multiple_qty_base: null, unit_cost: 130, cycle_days: 10 },
+  ];
+  const result = projectDailyCoverage(input({ horizon_end: "2027-01-31", daily_demand: daily(1, "2026-10-01", "2027-01-31"), policies: [policy({ vendor_options: options })] }));
+  const buys = result.advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
+  equal([buys[0].vendor_id, buys[0].bridge, buys[0].cheapest_vendor_id], ["DOMESTIC", true, "IMPORT"], "first need is too early for import → domestic bridge");
+  const later = buys.find((b) => b.vendor_id === "IMPORT");
+  if (!later) throw new Error("later lots must come from the cheaper import vendor once it can arrive in time");
+  equal(later.bridge, false, "import lot is not a bridge");
+});
+
+Deno.test("P2: a fixed vendor MOQ is never broken — need 10, MOQ 25 → 25, and the next lot moves later", () => {
+  const options = [{ vendor_id: "V", lead_time_days: 3, moq_qty_base: 25, order_multiple_qty_base: null, unit_cost: 10, cycle_days: 5 }];
+  const result = projectDailyCoverage(input({ horizon_end: "2026-12-31", daily_demand: daily(1, "2026-10-01", "2026-12-31"), policies: [policy({ vendor_options: options })] }));
+  const buys = result.advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
+  for (const b of buys) if (b.recommended_po_qty_base! < 25) throw new Error(`lot below MOQ: ${b.recommended_po_qty_base}`);
+  const gap = (Date.parse(`${buys[1].need_date}T00:00:00Z`) - Date.parse(`${buys[0].need_date}T00:00:00Z`)) / 86_400_000;
+  if (gap < 20) throw new Error(`MOQ excess should push the next lot ~25 days later, got ${gap}`);
+});
+
+Deno.test("P4: a user-fixed lot is planned on its date and the engine only buys what is still needed", () => {
+  const base = projectDailyCoverage(input({ horizon_end: "2026-11-30", daily_demand: daily(1, "2026-10-01", "2026-11-30"), policies: [policy({ cycle_days: 10 })] }));
+  const withUser = projectDailyCoverage(input({ horizon_end: "2026-11-30", daily_demand: daily(1, "2026-10-01", "2026-11-30"), policies: [policy({ cycle_days: 10 })],
+    manual_lots: [{ material_id: "M1", plant_eta: "2026-10-03", qty_base: 40 }] }));
+  equal(row(withUser, "2026-10-03").planned_lot_qty_base, 40, "user lot sits on its date");
+  const count = (r: ReturnType<typeof projectDailyCoverage>) => r.advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE").length;
+  if (!(count(withUser) < count(base))) throw new Error(`engine should buy less after a user lot: ${count(withUser)} vs ${count(base)}`);
+});

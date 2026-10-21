@@ -10,8 +10,11 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
-import { arrivalStatus, dayRange, familyClosure, familyDayGrid } from "./mts_item_plan.logic.ts";
-import type { OptimizerDailyProjectionRow } from "./mts_optimizer_phase3d.types.ts";
+import { buildItemPlanAiPrompt, ITEM_PLAN_AI_MAX_PROMPT_CHARS, parseAiLots, planMetrics, weeklySummary } from "./mts_item_plan_ai.logic.ts";
+import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
+import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
+import { arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, rescheduleAdvice, storeKey } from "./mts_item_plan.logic.ts";
+import type { OptimizerDailyProjectionRow, OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
 import {
   fail,
@@ -32,6 +35,26 @@ const ITEM_PLAN_EXTRA_MONTHS = 4;
 const RESOURCE_RESCHEDULE = "PROC_MTS_INBOUND_RESCHEDULE";
 const MAX_RESCHEDULE_ROWS = 200;
 
+type ItemPlanParams = NonNullable<ReturnType<typeof readParams>["params"]>;
+
+/** P4: lots the user fixed for this item (current version); empty before the first save. */
+export async function loadCurrentScenario(companyId: string, materialId: string): Promise<{ version_no: number | null; source: string | null; note: string | null; manual_lots: OptimizerManualLot[] }> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").from("mts_item_plan_scenario")
+    .select("version_no, source, note, overrides").eq("company_id", companyId).eq("material_id", materialId).eq("is_current", true).maybeSingle();
+  if (error) {
+    const code = String((error as { code?: string }).code ?? "");
+    if (code === "42P01" || code === "PGRST205" || code === "PGRST106") return { version_no: null, source: null, note: null, manual_lots: [] };
+    throw new Error("MTS_SCENARIO_LOAD_FAILED");
+  }
+  const row = (data ?? null) as JsonRecord | null;
+  const lots = Array.isArray((row?.overrides as JsonRecord | undefined)?.manual_lots) ? (row!.overrides as { manual_lots: JsonRecord[] }).manual_lots : [];
+  return {
+    version_no: row ? Number(row.version_no) : null, source: row ? text(row.source) : null, note: row ? text(row.note) || null : null,
+    manual_lots: lots.map((l) => ({ material_id: text(l.material_id), plant_eta: text(l.plant_eta).slice(0, 10), qty_base: Number(l.qty_base ?? 0), vendor_id: text(l.vendor_id) || null }))
+      .filter((l) => l.material_id && /^\d{4}-\d{2}-\d{2}$/.test(l.plant_eta) && l.qty_base > 0),
+  };
+}
+
 export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
@@ -45,12 +68,22 @@ export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext
     const parsed = readParams(url, todayInIndia());
     if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
 
-    const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ITEM_PLAN_EXTRA_MONTHS });
-    const { req: reqData, projection, assembly, calendar } = plan._internal;
+    const scenario = await loadCurrentScenario(companyId, materialId);
+    const payload = await buildItemPlan(companyId, parsed.params!, materialId, scenario.manual_lots);
+    return okResponse({ ...payload, scenario: { version_no: scenario.version_no, source: scenario.source, note: scenario.note, manual_lots: scenario.manual_lots } }, ctx.request_id, req);
+  } catch (error) {
+    if (error instanceof Error && error.message === "MTS_ITEM_PLAN_MATERIAL_NOT_PLANNED") return fail(req, ctx, error.message, 404, "This material is not used by this company's planned MTS products.");
+    if (error instanceof Error && error.message === "MTS_REQ_AS_OF_OUTSIDE_MONTH") return fail(req, ctx, error.message, 400, "As-of date must lie inside the selected plan month.");
+    return handleError(req, ctx, error, "MTS_ITEM_PLAN_FAILED", "Could not calculate the item plan.");
+  }
+}
+
+/** One item / family plan (P1-P4). Shared by GET, the AI review and simulations. */
+export async function buildItemPlan(companyId: string, params: ItemPlanParams, materialId: string, manualLots: OptimizerManualLot[]) {
+    const plan = await computePlanning({ companyId, ...params, extraMonths: ITEM_PLAN_EXTRA_MONTHS, manualLots });
+    const { req: reqData, projection, assembly, calendar, vendorOptions } = plan._internal;
     const rowById = new Map(reqData.output.rows.map((r) => [r.material_id, r]));
-    if (!rowById.has(materialId)) {
-      return fail(req, ctx, "MTS_ITEM_PLAN_MATERIAL_NOT_PLANNED", 404, "This material is not used by this company's planned MTS products.");
-    }
+    if (!rowById.has(materialId)) throw new Error("MTS_ITEM_PLAN_MATERIAL_NOT_PLANNED");
 
     // Family (owner): a grouped item opens its whole family; a non-group item stands alone.
     const family = familyClosure(materialId, reqData.masters.groupMembers);
@@ -89,7 +122,7 @@ export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext
     }
 
     const csnIds = unique(memberIds.flatMap((id) => (rowById.get(id)?.inbound_events ?? []).map((e) => e.csn_id)));
-    const [groupRows, csnRows, stockRows] = await Promise.all([
+    const [groupRows, csnRows, stockRows, historyCsns] = await Promise.all([
       family.group_ids.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(family.group_ids, (chunk) => serviceRoleClient
         .schema("erp_master").from("material_category_group").select("id, group_code, group_name").in("id", chunk)),
       csnIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(csnIds, (chunk) => serviceRoleClient
@@ -98,6 +131,10 @@ export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext
       fetchInChunks<JsonRecord>(memberIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
         .select("material_id, storage_location_id, stock_type_code, quantity").eq("company_id", companyId)
         .eq("stock_type_code", "UNRESTRICTED").in("material_id", chunk)),
+      // Port → plant days from received import CSNs (for future-order ETA Port).
+      fetchInChunks<JsonRecord>(memberIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("consignment_note")
+        .select("material_id, ata_at_port, eta_at_port, gate_entry_date").eq("company_id", companyId).eq("status", "GRD")
+        .not("gate_entry_date", "is", null).in("material_id", chunk)),
     ]);
     const groupLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ")]));
     const csnById = new Map(csnRows.map((c) => [text(c.id), c]));
@@ -126,7 +163,7 @@ export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext
       };
     });
 
-    const arrivals = memberIds.flatMap((id) => (rowById.get(id)?.inbound_events ?? []).map((event) => {
+    const buildArrivals = () => memberIds.flatMap((id) => (rowById.get(id)?.inbound_events ?? []).map((event) => {
       const csn = event.csn_id ? csnById.get(event.csn_id) : undefined;
       return {
         material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id),
@@ -138,6 +175,7 @@ export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext
         eta_plant: event.original_date !== undefined ? event.original_date : event.date,
         rescheduled_eta: event.original_date !== undefined ? event.date : null,
         reschedule_key: event.reschedule_key ?? null,
+        advice: adviceFor({ material_id: id, reschedule_key: event.reschedule_key ?? null, eta: event.date, qty: event.qty }),
       };
     })).sort((a, b) => String(a.rescheduled_eta ?? a.eta_plant ?? "9999").localeCompare(String(b.rescheduled_eta ?? b.eta_plant ?? "9999")));
 
@@ -148,8 +186,97 @@ export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext
       target_days: r.target_days, critical_days: r.critical_days,
     }));
 
+    // ── P2: future orders (engine plan), reschedule advice, R ↔ R transfers ──
+    const rowsByMember = new Map<string, OptimizerDailyProjectionRow[]>();
+    for (const r of memberRows) rowsByMember.set(r.material_id, [...(rowsByMember.get(r.material_id) ?? []), r]);
+    const portToPlant = new Map<string, number>();
+    for (const id of memberIds) {
+      const gaps = historyCsns.filter((c) => text(c.material_id) === id)
+        .map((c) => { const port = text(c.ata_at_port || c.eta_at_port).slice(0, 10); const gate = text(c.gate_entry_date).slice(0, 10); return port && gate ? (Date.parse(`${gate}T00:00:00Z`) - Date.parse(`${port}T00:00:00Z`)) / 86_400_000 : null; })
+        .filter((g): g is number => g !== null && g >= 0 && g <= 60).sort((a, b) => a - b);
+      if (gaps.length) portToPlant.set(id, Math.round(gaps[Math.floor(gaps.length / 2)]));
+    }
+    const addDaysIso = (day: string | null, n: number | null) => (day && n !== null ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : null);
+    const coverOn = (id: string, day: string | null) => rowsByMember.get(id)?.find((r) => r.day === day) ?? null;
+    const futureOrders = plan.buys
+      .filter((b) => memberSet.has(b.material_id) && (b.status === "ADVISORY" || b.status === "ADVISORY_LATE"))
+      .flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }]).map((lot) => {
+        const at = coverOn(b.material_id, lot.plant_eta);
+        const p2p = portToPlant.get(b.material_id) ?? null;
+        return {
+          material_id: b.material_id, material_code: codeOf(b.material_id), material_name: nameOf(b.material_id), uom: uomOf(b.material_id),
+          sequence: b.sequence, lot_no: lot.lot_no, vendor: b.vendor_label ?? null, qty: round(lot.qty_base),
+          po_by: b.recommended_po_by, etd: addDaysIso(b.recommended_po_by, b.booking_time_days ?? null),
+          eta_port: p2p !== null ? addDaysIso(lot.plant_eta, -p2p) : null, eta_plant: lot.plant_eta,
+          max_days_on_arrival: at?.max_cover_days ?? null, min_days_on_arrival: at?.min_cover_days ?? null,
+          max_days_planned: b.max_cover_days ?? null, max_days_basis: b.max_days_basis ?? null,
+          bridge: b.bridge === true, late: b.status === "ADVISORY_LATE", cheapest_vendor: b.cheapest_vendor_label ?? null,
+          unit_total_cost: b.vendor_unit_total_cost ?? null, freight_term: b.vendor_freight_term ?? null, cost_missing: b.vendor_cost_missing ?? [],
+          reason: b.reason,
+        };
+      }));
+
+    const memberDays = (id: string) => (rowsByMember.get(id) ?? []).map((r) => ({ day: r.day, closing: r.closing_qty_base, use: r.demand_qty_base, target_days: r.target_days }));
+    const adviceFor = (a: { material_id: string; reschedule_key: string | null; eta: string | null; qty: number }) =>
+      a.reschedule_key ? rescheduleAdvice(memberDays(a.material_id), a.eta, a.qty) : null;
+
+    const poolLocation = new Map<string, string | null>();
+    for (const id of memberIds) for (const pool of rowById.get(id)?.pools ?? []) poolLocation.set(pool.pool_key, pool.storage_location_id);
+    const poolLocationLabels = await loadLocationLabels(unique([...poolLocation.values()]));
+    const transfers = memberIds.flatMap((id) => {
+      const needs = new Map<string, { need: number; stock: number }>();
+      for (const r of reqData.output.store_rows) {
+        if (r.material_id !== id) continue;
+        const loc = poolLocationLabels.get(poolLocation.get(r.pool_key) ?? "") ?? null;
+        if (!loc || !storeKey(loc)) continue;
+        const seen = needs.get(loc) ?? { need: 0, stock: 0 };
+        needs.set(loc, { ...seen, need: seen.need + r.executable_qty + r.not_backed_qty });
+      }
+      for (const st of stockRows.filter((x) => text(x.material_id) === id)) {
+        const loc = locationLabels.get(text(st.storage_location_id)) ?? null;
+        if (!loc || !storeKey(loc)) continue;
+        const seen = needs.get(loc) ?? { need: 0, stock: 0 };
+        needs.set(loc, { ...seen, stock: seen.stock + Number(st.quantity ?? 0) });
+      }
+      return locationTransfers([...needs].map(([location, v]) => ({ location, ...v })))
+        .map((t) => ({ material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id), ...t, by: calendar.asOf }));
+    });
+
+    // P2 alternatives when a member falls below Target (owner order): group members' spare →
+    // R ↔ R transfer → reschedule → other company (STO / Sub-CSN, on request) → other vendor →
+    // safety compromise (Target → Critical; below Critical only with the user's OK) → trader last.
+    const spareOf = (id: string) => companySpare(memberDays(id));
+    const alternatives = plan.risks.filter((r) => memberSet.has(r.material_id) && (r.first_below_target_day || r.first_shortage_day)).map((risk) => {
+      const id = risk.material_id;
+      const days = memberDays(id);
+      const avgUse = days.length ? days.reduce((sum, d) => sum + d.use, 0) / days.length : 0;
+      const target = days.find((d) => d.target_days !== null)?.target_days ?? null;
+      const critical = (rowsByMember.get(id) ?? []).find((r) => r.critical_days !== null)?.critical_days ?? null;
+      const options: Array<{ rank: number; kind: string; detail: string; qty: number | null }> = [];
+      const memberSpare = memberIds.filter((m) => m !== id && family.is_family).map((m) => ({ m, spare: spareOf(m) })).filter((x) => x.spare > 0);
+      if (memberSpare.length) options.push({ rank: 1, kind: "GROUP_MEMBER", qty: round(memberSpare.reduce((s2, x) => s2 + x.spare, 0)), detail: memberSpare.map((x) => `${nameOf(x.m)}: ${round(x.spare)}`).join("; ") + " (only where the member is allowed on the line)" });
+      const tr = transfers.filter((t) => t.material_id === id);
+      if (tr.length) options.push({ rank: 2, kind: "TRANSFER", qty: round(tr.reduce((s2, t) => s2 + t.qty, 0)), detail: tr.map((t) => `${t.from} → ${t.to}: ${t.qty}`).join("; ") });
+      const adv = buildArrivals().filter((a) => a.material_id === id && a.advice && a.advice.shift_days < 0);
+      if (adv.length) options.push({ rank: 3, kind: "RESCHEDULE", qty: round(adv.reduce((s2, a) => s2 + a.qty, 0)), detail: adv.map((a) => `${a.reference}: advance ${-a.advice!.shift_days} d`).join("; ") });
+      options.push({ rank: 4, kind: "OTHER_COMPANY", qty: null, detail: "Use 'Check other companies' — STO / Sub-CSN is raised by the user." });
+      const vendors = futureOrders.filter((f) => f.material_id === id && (f.bridge || f.late));
+      if (vendors.length) options.push({ rank: 5, kind: "OTHER_VENDOR", qty: round(vendors.reduce((s2, f) => s2 + f.qty, 0)), detail: vendors.map((f) => `${f.vendor ?? "—"} (${f.bridge ? `bridge; cheapest ${f.cheapest_vendor ?? "—"} too late` : "late"})`).join("; ") });
+      if (target !== null && critical !== null && target > critical) options.push({ rank: 6, kind: "SAFETY_COMPROMISE", qty: round((target - critical) * avgUse), detail: `Use protected stock from ${target} down to ${critical} days (alert); below Critical only with your OK.` });
+      options.push({ rank: 7, kind: "TRADER", qty: null, detail: "Last resort: a domestic trader of the same material (none on record — source one if needed)." });
+      return { material_id: id, material_code: codeOf(id), material_name: nameOf(id), first_below_target_day: risk.first_below_target_day, first_shortage_day: risk.first_shortage_day, options };
+    });
+
+    // P4: lots the user fixed, and the numbers the AI review compares before / after.
+    const userLots = manualLots.filter((l) => memberSet.has(l.material_id)).map((l) => ({
+      ...l, material_code: codeOf(l.material_id), material_name: nameOf(l.material_id), uom: uomOf(l.material_id),
+    }));
+    const unitCosts = (vendorOptions.get(materialId) ?? []).map((o) => o.unit_cost).filter((c): c is number => c !== null);
+    const selectedTarget = rowById.get(materialId)?.policy?.target_cov_days ?? null;
+    const metrics = planMetrics(grid, selectedTarget, unitCosts.length ? Math.min(...unitCosts) : null);
+
     const forecastMonths = new Set(reqData.forecast.forecastMonths);
-    return okResponse({
+    return {
       company_id: companyId,
       material_id: materialId,
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
@@ -162,16 +289,18 @@ export async function getMtsItemPlanHandler(req: Request, ctx: ReqHandlerContext
       members,
       grid,
       member_daily: memberDaily,
-      arrivals,
+      arrivals: buildArrivals(),
+      future_orders: futureOrders,
+      transfers,
+      alternatives,
+      user_lots: userLots,
+      metrics,
+      transfer_note: "Shop floor S00n is fed from store R00n (assumption). Advice only — the Store posts the transfer.",
       // Engine proposals with the current lot rule (P2 replaces this with the Engine + AI plan).
       proposals: plan.buys.filter((b) => memberSet.has(b.material_id) && (b.status === "ADVISORY" || b.status === "ADVISORY_LATE")),
       risks: plan.risks.filter((r) => memberSet.has(r.material_id)),
       calculated_at: new Date().toISOString(),
-    }, ctx.request_id, req);
-  } catch (error) {
-    if (error instanceof Error && error.message === "MTS_REQ_AS_OF_OUTSIDE_MONTH") return fail(req, ctx, error.message, 400, "As-of date must lie inside the selected plan month.");
-    return handleError(req, ctx, error, "MTS_ITEM_PLAN_FAILED", "Could not calculate the item plan.");
-  }
+    };
 }
 
 export async function saveInboundRescheduleHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
@@ -203,5 +332,216 @@ export async function saveInboundRescheduleHandler(req: Request, ctx: ReqHandler
     return okResponse({ result: data }, ctx.request_id, req);
   } catch (error) {
     return handleError(req, ctx, error, "MTS_RESCHEDULE_SAVE_FAILED", "Could not save the rescheduled dates.");
+  }
+}
+
+// GET /api/procurement/mts-requirement/item-plan/other-companies?company_id&plan_month&as_of&material_ids=a,b
+// Spare stock of the same materials in the user's other companies (owner: suggestion only).
+export async function getMtsItemPlanOtherCompaniesHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = text(url.searchParams.get("company_id"));
+    const materialIds = unique(text(url.searchParams.get("material_ids")).split(",").map((v) => v.trim())).slice(0, 50);
+    if (!companyId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id is required.");
+    if (materialIds.length === 0) return fail(req, ctx, "MTS_ITEM_PLAN_MATERIAL_REQUIRED", 400, "material_ids is required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementViewAccess(req, ctx, companyId);
+    if (denied) return denied;
+    const parsed = readParams(url, todayInIndia());
+    if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
+
+    // Companies where these materials are mapped; only those inside the user's own scope + PO22 access.
+    const mapRows = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_company_ext")
+      .select("company_id, material_id").eq("status", "ACTIVE").in("material_id", chunk));
+    const candidates = unique(mapRows.map((r) => text(r.company_id))).filter((id) => id !== companyId);
+    const checks = await Promise.all(candidates.map(async (other) => {
+      try { await assertCompanyScope(ctx, other); } catch { return null; }
+      return await canMaintainCompanyResource(ctx, other, "PROC_MTS_REQUIREMENT", "VIEW") ? other : null;
+    }));
+    const allowed = checks.filter((id): id is string => Boolean(id));
+    const companyRows = allowed.length === 0 ? [] : await fetchInChunks<JsonRecord>(allowed, (chunk) => serviceRoleClient.schema("erp_master")
+      .from("companies").select("id, company_code, company_name").in("id", chunk));
+    const label = new Map(companyRows.map((c) => [text(c.id), [text(c.company_code), text(c.company_name)].filter(Boolean).join(" — ")]));
+    const perCompany = await Promise.all(allowed.map(async (other) => {
+      const results: JsonRecord[] = [];
+      try {
+        const plan = await computePlanning({ companyId: other, ...parsed.params! });
+        const rows = plan._internal.projection.rows;
+        for (const id of materialIds) {
+          const mine = rows.filter((r) => r.material_id === id).map((r) => ({ closing: r.closing_qty_base, use: r.demand_qty_base, target_days: r.target_days }));
+          const spare = mine.length ? companySpare(mine) : Number(plan._internal.req.output.rows.find((r) => r.material_id === id)?.stock.usable_at_required ?? 0);
+          if (spare > 0) {
+            results.push({
+              company_id: other, company: label.get(other) ?? "—", material_id: id,
+              material_name: text(plan._internal.req.materialRows.get(id)?.material_name) || "—",
+              spare_qty: round(spare), basis: mine.length ? "ABOVE_OWN_TARGET_THROUGH_HORIZON" : "NOT_USED_THERE",
+            });
+          }
+        }
+      } catch (error) {
+        console.error("[mts_item_plan] other company spare failed", other, error instanceof Error ? error.message : error);
+      }
+      return results;
+    }));
+    const results = perCompany.flat();
+    return okResponse({ companies_checked: allowed.map((id) => label.get(id) ?? "—"), spare: results, note: "Suggestion only — raise the STO / Sub-CSN yourself." }, ctx.request_id, req);
+  } catch (error) {
+    if (error instanceof Error && error.message === "MTS_REQ_AS_OF_OUTSIDE_MONTH") return fail(req, ctx, error.message, 400, "As-of date must lie inside the selected plan month.");
+    return handleError(req, ctx, error, "MTS_ITEM_PLAN_OTHER_FAILED", "Could not check the other companies.");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P4 (owner 2026-10-20): the user's plan edits (versions) and the Engine + AI review.
+// ─────────────────────────────────────────────────────────────────────────────
+const RESOURCE_ITEM_PLAN_EDIT = "PROC_MTS_ITEM_PLAN_EDIT";
+const ITEM_PLAN_AI_MAX_OUTPUT_TOKENS = 1500;
+
+function readManualLots(raw: unknown): OptimizerManualLot[] {
+  return (Array.isArray(raw) ? raw as JsonRecord[] : []).slice(0, 200).map((l) => ({
+    material_id: text(l.material_id), plant_eta: text(l.plant_eta).slice(0, 10), qty_base: Number(l.qty_base ?? l.qty ?? 0), vendor_id: text(l.vendor_id) || null,
+  })).filter((l) => l.material_id && /^\d{4}-\d{2}-\d{2}$/.test(l.plant_eta) && Number.isFinite(l.qty_base) && l.qty_base > 0);
+}
+
+// POST /api/procurement/mts-requirement/item-plan/scenario  { company_id, material_id, manual_lots, source?, note? }
+export async function saveMtsItemPlanScenarioHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const body = await req.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+    const companyId = text(body.company_id);
+    const materialId = text(body.material_id);
+    if (!companyId || !materialId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id and material_id are required.");
+    await assertCompanyScope(ctx, companyId);
+    if (!await canMaintainCompanyResource(ctx, companyId, RESOURCE_ITEM_PLAN_EDIT, "WRITE")) {
+      return fail(req, ctx, "MTS_SCENARIO_FORBIDDEN", 403, "You cannot change the plan for this company.");
+    }
+    const lots = readManualLots(body.manual_lots);
+    // Every lot must be for a material mapped to this company (never another company's item).
+    const ids = unique(lots.map((l) => l.material_id));
+    if (ids.length) {
+      const mapped = await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient.schema("erp_master").from("material_company_ext")
+        .select("material_id").eq("company_id", companyId).eq("status", "ACTIVE").in("material_id", chunk));
+      const ok = new Set(mapped.map((m) => text(m.material_id)));
+      if (ids.some((id) => !ok.has(id))) return fail(req, ctx, "MTS_SCENARIO_MATERIAL_NOT_IN_COMPANY", 400, "A lot is for a material not mapped to this company.");
+    }
+    const source = text(body.source) === "AI_APPLIED" ? "AI_APPLIED" : "USER";
+    const { data, error } = await serviceRoleClient.schema("erp_planning").rpc("save_mts_item_plan_scenario", {
+      p_company_id: companyId, p_material_id: materialId, p_actor: ctx.auth_user_id,
+      p_overrides: { manual_lots: lots }, p_source: source, p_note: text(body.note).slice(0, 500) || null,
+    });
+    if (error) {
+      const code = /\b(MTS_SCENARIO_[A-Z_]+)\b/.exec(String(error.message ?? ""))?.[1];
+      if (code) return fail(req, ctx, code, 400, String(error.message).replace(/^.*?(MTS_[A-Z_]+):\s*/, ""));
+      throw new Error("MTS_SCENARIO_SAVE_FAILED");
+    }
+    return okResponse({ result: data }, ctx.request_id, req);
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_SCENARIO_SAVE_FAILED", "Could not save the plan changes.");
+  }
+}
+
+// GET /api/procurement/mts-requirement/item-plan/scenarios?company_id&material_id  (plan versions)
+export async function listMtsItemPlanScenariosHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = text(url.searchParams.get("company_id"));
+    const materialId = text(url.searchParams.get("material_id"));
+    if (!companyId || !materialId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id and material_id are required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementViewAccess(req, ctx, companyId);
+    if (denied) return denied;
+    const { data, error } = await serviceRoleClient.schema("erp_planning").from("mts_item_plan_scenario")
+      .select("id, version_no, is_current, source, note, overrides, created_by, created_at")
+      .eq("company_id", companyId).eq("material_id", materialId).order("version_no", { ascending: false }).limit(100);
+    if (error) throw new Error("MTS_SCENARIO_LOAD_FAILED");
+    const rows = (data ?? []) as JsonRecord[];
+    const users = await resolveUserDisplayNames(rows.map((r) => text(r.created_by)));
+    return okResponse({
+      rows: rows.map(({ created_by, overrides, ...r }) => ({
+        ...r, lot_count: Array.isArray((overrides as JsonRecord | null)?.manual_lots) ? ((overrides as JsonRecord).manual_lots as unknown[]).length : 0,
+        created_by_name: users.get(text(created_by)) ?? "—",
+      })),
+    }, ctx.request_id, req);
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_SCENARIO_LOAD_FAILED", "Could not list plan versions.");
+  }
+}
+
+// POST /api/procurement/mts-requirement/item-plan/ai-review
+//   { company_id, plan_month, as_of, demand_at?, material_id, manual_lots?, question? }
+// Engine plan (+ the user's lots, saved or a draft) → AI verdict + proposed lots → the engine
+// re-simulates the proposal and returns the real effect (before / after). Nothing is saved.
+export async function reviewMtsItemPlanWithAiHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const body = await req.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+    const companyId = text(body.company_id);
+    const materialId = text(body.material_id);
+    if (!companyId || !materialId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id and material_id are required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementViewAccess(req, ctx, companyId);
+    if (denied) return denied;
+    if (process.env.AI_CORE_ENABLED !== "true") return fail(req, ctx, "AI_NOT_ENABLED", 403, "AI planning is switched off for this environment.");
+    const parsed = readParams(body, todayInIndia());
+    if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
+    const lots = Array.isArray(body.manual_lots) ? readManualLots(body.manual_lots) : (await loadCurrentScenario(companyId, materialId)).manual_lots;
+    const before = await buildItemPlan(companyId, parsed.params!, materialId, lots);
+
+    const codeOf = new Map(before.members.map((m) => [m.material_id, m.material_code]));
+    const prompt = buildItemPlanAiPrompt({
+      item_label: before.members.find((m) => m.is_selected)?.material_name ?? "—",
+      is_family: before.family.is_family, groups: before.family.groups.map((g) => g.label),
+      uom: before.members.find((m) => m.is_selected)?.uom ?? null,
+      horizon: { from: before.calendar.as_of, to: before.calendar.horizon_end },
+      members: before.members.map((m) => ({ code: m.material_code, name: m.material_name, exclusive: m.exclusive, groups: m.groups, stock: m.usable_stock, target_days: m.target_days, critical_days: m.critical_days })),
+      weekly: weeklySummary(before.grid),
+      arrivals: before.arrivals.map((a) => ({ code: a.material_code, reference: a.reference, status: a.status, qty: a.qty, eta_plant: a.rescheduled_eta ?? a.eta_plant, advice: a.advice?.reason ?? null })),
+      future_orders: before.future_orders.map((f) => ({ code: f.material_code, vendor: f.vendor, qty: f.qty, po_by: f.po_by, eta_plant: f.eta_plant, bridge: f.bridge, late: f.late, max_days_planned: f.max_days_planned, unit_total_cost: f.unit_total_cost, freight_term: f.freight_term, cost_missing: f.cost_missing })),
+      user_lots: before.user_lots.map((l) => ({ code: codeOf.get(l.material_id) ?? null, plant_eta: l.plant_eta, qty: l.qty_base })),
+      alternatives: before.alternatives.flatMap((a) => a.options.map((o) => `${a.material_code ?? ""} ${o.kind}: ${o.detail}`)),
+      metrics: before.metrics, question: text(body.question) || null,
+    });
+
+    const cap = Math.max(1, Number(process.env.PO22_AI_MONTHLY_TOKEN_CAP ?? 1_000_000) || 1_000_000);
+    const reserve = Math.ceil(prompt.length / 3) + ITEM_PLAN_AI_MAX_OUTPUT_TOKENS;
+    const month = `${todayInIndia().slice(0, 7)}-01`;
+    const { data: reserved, error: reserveError } = await serviceRoleClient.schema("erp_planning").rpc("reserve_mts_ai_budget", {
+      p_company_id: companyId, p_month: month, p_tokens: reserve, p_cap: cap,
+    });
+    if (reserveError) {
+      console.error("[mts_item_plan] AI_BUDGET_UNAVAILABLE", reserveError.code ?? "", reserveError.message ?? "");
+      return fail(req, ctx, "AI_BUDGET_UNAVAILABLE", 503, "AI budget tracking is not available. The engine plan still works.");
+    }
+    if (reserved !== true) return fail(req, ctx, "AI_BUDGET_EXCEEDED", 429, "This company's monthly AI budget is used up. The engine plan still works.");
+    let used = 0;
+    let aiText = "";
+    let model = "";
+    try {
+      const result = await generateAiText({ prompt, maxTokens: ITEM_PLAN_AI_MAX_OUTPUT_TOKENS, maxPromptChars: ITEM_PLAN_AI_MAX_PROMPT_CHARS });
+      used = result.usage.input_tokens + result.usage.output_tokens;
+      aiText = result.text; model = result.model;
+    } catch (error) {
+      const code = error instanceof AiProviderError ? error.code : "UNAVAILABLE";
+      return fail(req, ctx, code === "NOT_CONFIGURED" ? "AI_NOT_CONFIGURED" : "AI_PROVIDER_UNAVAILABLE", code === "NOT_CONFIGURED" ? 503 : 502, "The AI planner is not available right now. The engine plan still works.");
+    } finally {
+      const { error: settleError } = await serviceRoleClient.schema("erp_planning").rpc("settle_mts_ai_budget", { p_company_id: companyId, p_month: month, p_reserved: reserve, p_used: used });
+      if (settleError) console.error("[mts_item_plan] AI budget settle failed", settleError.code ?? "", settleError.message ?? "");
+    }
+
+    const codeToMaterial = new Map(before.members.filter((m) => m.material_code).map((m) => [m.material_code as string, m.material_id]));
+    const parsedAi = parseAiLots(aiText, codeToMaterial, { from: before.calendar.as_of, to: before.calendar.horizon_end });
+    // The engine, not the AI, says what the proposal does.
+    let after: JsonRecord | null = null;
+    if (parsedAi.lots.length) {
+      const simulated = await buildItemPlan(companyId, parsed.params!, materialId, [...lots, ...parsedAi.lots.map((l) => ({ material_id: l.material_id, plant_eta: l.plant_eta, qty_base: l.qty, vendor_id: null }))]);
+      after = { metrics: simulated.metrics, future_orders: simulated.future_orders };
+    }
+    return okResponse({
+      verdict: parsedAi.verdict, proposed_lots: parsedAi.lots, rejected: parsedAi.rejected,
+      metrics_before: before.metrics, metrics_after: after?.metrics ?? null, future_orders_after: after?.future_orders ?? null,
+      model, note: "AI proposals are re-simulated by the engine. Nothing is saved until you apply them; no PO is created.",
+    }, ctx.request_id, req);
+  } catch (error) {
+    if (error instanceof Error && error.message === "MTS_ITEM_PLAN_MATERIAL_NOT_PLANNED") return fail(req, ctx, error.message, 404, "This material is not used by this company's planned MTS products.");
+    if (error instanceof Error && error.message === "MTS_REQ_AS_OF_OUTSIDE_MONTH") return fail(req, ctx, error.message, 400, "As-of date must lie inside the selected plan month.");
+    return handleError(req, ctx, error, "MTS_ITEM_PLAN_AI_FAILED", "Could not prepare the AI review.");
   }
 }
