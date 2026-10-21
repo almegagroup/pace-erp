@@ -1887,6 +1887,10 @@ export function getMtsItemPlan(params) {
   return fetchProcurement("GET", "/api/procurement/mts-requirement/item-plan", undefined, params);
 }
 
+export function getMtsItemPlanOtherCompanies(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/item-plan/other-companies", undefined, params);
+}
+
 export function saveMtsInboundReschedule(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/inbound-reschedule", data);
 }

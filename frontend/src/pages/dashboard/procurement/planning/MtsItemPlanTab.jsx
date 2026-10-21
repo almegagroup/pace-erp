@@ -14,7 +14,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
-import { getMtsItemPlan, getMtsPlanning, saveMtsInboundReschedule } from "../procurementApi.js";
+import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, saveMtsInboundReschedule } from "../procurementApi.js";
 
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
@@ -120,6 +120,15 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       copyValue: (a) => a.rescheduled_eta ?? "",
     },
     {
+      key: "advice", label: "Engine advice", width: "260px",
+      render: (a) => (a.advice ? (
+        <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title="Use this date">
+          {a.advice.shift_days < 0 ? `Advance ${-a.advice.shift_days} d → ${a.advice.suggested_eta}` : `Postpone ${a.advice.shift_days} d → ${a.advice.suggested_eta}`}
+        </button>
+      ) : ""),
+      copyValue: (a) => (a.advice ? `${a.advice.shift_days} d → ${a.advice.suggested_eta}` : ""),
+    },
+    {
       key: "reason", label: "Reason", width: "200px", filterable: false,
       render: (a) => (a.reschedule_key ? (
         <input
@@ -133,14 +142,33 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     },
   ];
 
-  const proposalColumns = [
-    { key: "material_name", label: "Member", width: "220px", render: (b) => memberName.get(b.material_id) ?? b.material_name },
-    { key: "recommended_po_qty_base", label: "Qty", width: "120px", align: "right", render: (b) => (b.recommended_po_qty_base === null ? "—" : `${fmtQty(b.recommended_po_qty_base)} ${b.uom ?? ""}`), copyValue: (b) => b.recommended_po_qty_base ?? "" },
-    { key: "recommended_po_by", label: "PO By", width: "100px", render: (b) => b.recommended_po_by ?? "—" },
-    { key: "estimated_plant_eta", label: "Plant ETA", width: "100px", render: (b) => b.estimated_plant_eta ?? "—" },
-    { key: "vendor_label", label: "Vendor", width: "220px", render: (b) => b.vendor_label ?? "—" },
-    { key: "reason", label: "Why", width: "360px" },
+  const orderColumns = [
+    { key: "flag", label: "", width: "90px", render: (o) => (o.bridge ? <span className="bg-rose-100 px-1.5 py-0.5 text-xs font-semibold text-rose-800">Bridge</span> : o.late ? <span className="bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800">Late</span> : ""), copyValue: (o) => (o.bridge ? "Bridge" : o.late ? "Late" : "") },
+    { key: "material_name", label: "Member", width: "200px", render: (o) => `${o.material_code ?? ""} ${o.material_name}`.trim() },
+    { key: "vendor", label: "Vendor", width: "200px", render: (o) => o.vendor ?? "—" },
+    { key: "qty", label: "Qty", width: "110px", align: "right", render: (o) => `${fmtQty(o.qty)} ${o.uom ?? ""}`, copyValue: (o) => o.qty },
+    { key: "po_by", label: "PO by", width: "100px", render: (o) => o.po_by ?? "—" },
+    { key: "etd", label: "ETD", width: "100px", render: (o) => o.etd ?? "—" },
+    { key: "eta_port", label: "ETA Port", width: "100px", render: (o) => o.eta_port ?? "—" },
+    { key: "eta_plant", label: "ETA Plant", width: "100px", render: (o) => o.eta_plant ?? "—" },
+    { key: "days", label: "Max / Min days on arrival", width: "150px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
+    { key: "max_days_planned", label: "Planned Max days", width: "130px", render: (o) => (o.max_days_planned === null ? "—" : `${fmtDays(o.max_days_planned)}${o.max_days_basis === "DEFAULT" ? " (default — no cost data)" : ""}`), copyValue: (o) => o.max_days_planned ?? "" },
+    { key: "reason", label: "Why", width: "360px", render: (o) => (o.bridge && o.cheapest_vendor ? `${o.reason} Cheapest: ${o.cheapest_vendor}.` : o.reason) },
   ];
+  const transferColumns = [
+    { key: "material_name", label: "Member", width: "220px", render: (t) => `${t.material_code ?? ""} ${t.material_name}`.trim() },
+    { key: "from", label: "From", width: "80px" },
+    { key: "to", label: "To", width: "80px" },
+    { key: "qty", label: "Qty", width: "110px", align: "right", render: (t) => `${fmtQty(t.qty)} ${t.uom ?? ""}`, copyValue: (t) => t.qty },
+    { key: "by", label: "By", width: "100px" },
+  ];
+  const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
+  const [otherOpen, setOtherOpen] = useState(false);
+  const otherQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "item-plan-other", companyId, planMonth, asOf, demandAt, materialId],
+    queryFn: () => getMtsItemPlanOtherCompanies({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined, material_ids: (plan?.members ?? []).map((m) => m.material_id).join(",") }),
+    enabled: Boolean(otherOpen && plan),
+  });
 
   const pending = Object.entries(drafts).filter(([, d]) => d?.row);
   async function saveReschedules() {
@@ -196,7 +224,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
         </label>
         <label className="grid gap-1 text-sm text-slate-700">
           <span className="font-medium text-slate-800">Item</span>
-          <select value={materialId} onChange={(event) => { setMaterialId(event.target.value); setOpenDay(""); setDrafts({}); }} className={`${INPUT_CLASS} w-96`}>
+          <select value={materialId} onChange={(event) => { setMaterialId(event.target.value); setOpenDay(""); setDrafts({}); setOtherOpen(false); }} className={`${INPUT_CLASS} w-96`}>
             <option value="">{planningQ.isLoading ? "Loading items…" : "Select an RM / PM…"}</option>
             {filtered.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
@@ -265,8 +293,44 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 <ErpDenseGrid {...GRID_PROPS} columns={arrivalColumns} rows={plan.arrivals} rowKey={(a, i) => `${a.reference}|${a.material_id}|${i}`} emptyMessage="No open PO / CSN / STO for these members." maxHeight="35vh" />
               </section>
               <section className="grid gap-1">
-                <h3 className="text-sm font-semibold text-slate-800">Engine proposals (current rule — Engine + AI plan comes in P2)</h3>
-                <ErpDenseGrid {...GRID_PROPS} columns={proposalColumns} rows={plan.proposals} rowKey={(b) => `${b.material_id}|${b.sequence}`} emptyMessage="No buy needed in the horizon." maxHeight="25vh" />
+                <h3 className="text-sm font-semibold text-slate-800">Future Orders — Engine plan</h3>
+                <p className="text-xs text-slate-500">Each lot: cheapest vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. Advisory — no PO is created.</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={plan.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}`} emptyMessage="No new order needed in the horizon." maxHeight="30vh" />
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">Location transfer instructions</h3>
+                <p className="text-xs text-slate-500">{plan.transfer_note}</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={transferColumns} rows={plan.transfers ?? []} rowKey={(t, i) => `${t.material_id}|${t.from}|${t.to}|${i}`} emptyMessage="No R ↔ R transfer needed." maxHeight="20vh" />
+              </section>
+              {(plan.alternatives ?? []).length > 0 ? (
+                <section className="grid gap-1">
+                  <h3 className="text-sm font-semibold text-rose-800">Below Target — options in order</h3>
+                  {plan.alternatives.map((alt) => (
+                    <div key={alt.material_id} className="border border-rose-200 bg-rose-50 p-2 text-xs">
+                      <div className="font-semibold text-slate-800">{`${alt.material_code ?? ""} ${alt.material_name}`.trim()} — below Target {alt.first_below_target_day ?? "—"}{alt.first_shortage_day ? `, runs out ${alt.first_shortage_day}` : ""}</div>
+                      <ol className="ml-4 list-decimal">
+                        {alt.options.map((o) => <li key={o.kind}><span className="font-semibold">{ALT_LABEL[o.kind] ?? o.kind}</span>{o.qty !== null ? ` — ${fmtQty(o.qty)}` : ""}: {o.detail}</li>)}
+                      </ol>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
+              <section className="grid gap-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-800">Other companies' spare stock</h3>
+                  <button type="button" onClick={() => setOtherOpen(true)} disabled={otherQ.isFetching} className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                    {otherQ.isFetching ? "Checking…" : "Check other companies"}
+                  </button>
+                </div>
+                {otherQ.error ? <p className="text-xs text-rose-700">{errorText(otherQ.error)}</p> : null}
+                {otherQ.data ? (
+                  <div className="text-xs text-slate-700">
+                    {(otherQ.data.spare ?? []).length === 0 ? `No spare above their own Target in: ${(otherQ.data.companies_checked ?? []).join(", ") || "no other company in your access"}.` : (
+                      <ul className="ml-4 list-disc">{otherQ.data.spare.map((x) => <li key={`${x.company_id}|${x.material_id}`}>{x.company}: {x.material_name} — {fmtQty(x.spare_qty)} spare</li>)}</ul>
+                    )}
+                    <p className="text-slate-500">{otherQ.data.note}</p>
+                  </div>
+                ) : null}
               </section>
             </div>
           </div>
