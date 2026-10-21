@@ -931,6 +931,55 @@ export default function CSNTrackerPage() {
     [visibleColumns, expandedRowId, rows]
   );
 
+  const [exporting, setExporting] = useState(false);
+  // Excel export (owner 2026-10-21, same approach as Stock History): every row the
+  // current filters match — not just this page — with the visible columns, the
+  // tracker's red flags kept as red text and numbers written as numbers.
+  async function handleExportExcel() {
+    if (!effectiveCompanyId) return;
+    setExporting(true);
+    try {
+      const pageSize = 200;
+      const allRows = [];
+      for (let offset = 0; offset < 20000; offset += pageSize) {
+        const result = await getCSNTracker({
+          company_id: effectiveCompanyId,
+          status: status || undefined,
+          csn_type: csnType || undefined,
+          date_field: dateFields[0] || "created_at",
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          search: debouncedSearch || undefined,
+          limit: pageSize,
+          offset,
+        });
+        const batch = Array.isArray(result?.data) ? result.data : [];
+        allRows.push(...batch.map((row) => ({ ...row, ...computeDerived(row) })));
+        if (batch.length < pageSize || allRows.length >= Number(result?.total ?? 0)) break;
+      }
+      const numericKeys = new Set(["order_qty", "balance_qty", "dispatch_qty", "po_rate", "rebate_rate", "etd_vs_atd_days", "eta_vs_ata_days", "baseline_vs_actual_days", "lr_vs_ge_days"]);
+      const boolKeys = new Set(["soft_copy_received", "hard_copy_received", "indent_required", "has_rebate"]);
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `csn_tracker_${todayIso()}.xlsx`,
+        sheetName: "CSN Tracker",
+        columns: visibleColumns,
+        rows: allRows,
+        getCellValue: (row, column) => {
+          const value = row?.[column.key];
+          if (boolKeys.has(column.key)) return formatBool(value);
+          if (numericKeys.has(column.key) && value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) return Number(value);
+          return value ?? "";
+        },
+        getCellColor: (row, column) => (evaluateRedFields(row).has(column.key) ? { fontArgb: "FFBE123C", bold: true } : null),
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "CSN_TRACKER_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const currentRow = rows.find((row) => row.id === expandedRowId) || null;
   const currentGroupOptions = currentRow?.material_group_options || [];
   const subCsnsForCurrentRow = useMemo(
@@ -1021,6 +1070,12 @@ export default function CSNTrackerPage() {
                 <div className="flex items-center gap-1">
                   <IconActionButton glyph="CL" title="Columns" onClick={() => setShowColumns(true)} />
                   <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} />
+                  <IconActionButton
+                    glyph={exporting ? "..." : "XLS"}
+                    title={exporting ? "Exporting" : "Export Excel (all rows of the current filters)"}
+                    onClick={() => void handleExportExcel()}
+                    disabled={exporting || total === 0}
+                  />
                   <IconActionButton
                     glyph="RF"
                     title={trackerQuery.isFetching ? "Refreshing" : "Refresh"}
