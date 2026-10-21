@@ -164,3 +164,12 @@ Deno.test("P2: a fixed vendor MOQ is never broken — need 10, MOQ 25 → 25, an
   const gap = (Date.parse(`${buys[1].need_date}T00:00:00Z`) - Date.parse(`${buys[0].need_date}T00:00:00Z`)) / 86_400_000;
   if (gap < 20) throw new Error(`MOQ excess should push the next lot ~25 days later, got ${gap}`);
 });
+
+Deno.test("P4: a user-fixed lot is planned on its date and the engine only buys what is still needed", () => {
+  const base = projectDailyCoverage(input({ horizon_end: "2026-11-30", daily_demand: daily(1, "2026-10-01", "2026-11-30"), policies: [policy({ cycle_days: 10 })] }));
+  const withUser = projectDailyCoverage(input({ horizon_end: "2026-11-30", daily_demand: daily(1, "2026-10-01", "2026-11-30"), policies: [policy({ cycle_days: 10 })],
+    manual_lots: [{ material_id: "M1", plant_eta: "2026-10-03", qty_base: 40 }] }));
+  equal(row(withUser, "2026-10-03").planned_lot_qty_base, 40, "user lot sits on its date");
+  const count = (r: ReturnType<typeof projectDailyCoverage>) => r.advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE").length;
+  if (!(count(withUser) < count(base))) throw new Error(`engine should buy less after a user lot: ${count(withUser)} vs ${count(base)}`);
+});

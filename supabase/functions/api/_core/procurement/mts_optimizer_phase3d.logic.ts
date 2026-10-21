@@ -218,6 +218,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
     ...[...demandByDay.keys()].map((entry) => entry.split("|")[0]),
     ...input.confirmed_arrivals.map((row) => row.material_id),
     ...input.daily_demand.filter((row) => row.group_id && groupMembers.has(row.group_id) && row.material_id).map((row) => row.material_id as string),
+    ...(input.manual_lots ?? []).map((lot) => lot.material_id),
   ]);
   const states = new Map<string, MaterialState>();
   for (const materialId of [...materialIds].sort()) {
@@ -230,6 +231,13 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
       leadTime: policy ? totalLeadTimeDays(policy) : null, plannedByIndex: new Map(), queuedLots: [], pendingUntil: -1, sequence: 0,
       balance: opening0, firstShortage: null, firstCritical: null, firstTarget: null, buys: [], opening: 0, arrival: 0, planned: 0, closing: 0,
     });
+  }
+  // P4: user-fixed lots are planned lots on their date (a date outside the horizon is ignored).
+  for (const lot of input.manual_lots ?? []) {
+    const st = states.get(lot.material_id);
+    const index = dayIndex.get(lot.plant_eta);
+    if (!st || index === undefined || !validQty(lot.qty_base) || lot.qty_base <= EPSILON) continue;
+    st.plannedByIndex.set(index, roundQty((st.plannedByIndex.get(index) ?? 0) + lot.qty_base));
   }
   const ordered = [...states.values()];
   const rows: OptimizerDailyProjectionRow[] = [];

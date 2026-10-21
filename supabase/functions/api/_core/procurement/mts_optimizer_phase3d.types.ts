@@ -92,7 +92,14 @@ export type OptimizerProjectionInput = Readonly<{
    * null, a group pool risk.
    */
   groups?: readonly OptimizerGroupMembers[];
+  /**
+   * P4 (owner 2026-10-20): lots the user fixed (added / changed an engine lot). They enter the
+   * projection as planned lots on their plant date; the engine plans only what is still needed.
+   */
+  manual_lots?: readonly OptimizerManualLot[];
 }>;
+
+export type OptimizerManualLot = Readonly<{ material_id: string; plant_eta: string; qty_base: number; vendor_id?: string | null }>;
 
 export type OptimizerDailyProjectionRow = Readonly<{
   material_id: string;

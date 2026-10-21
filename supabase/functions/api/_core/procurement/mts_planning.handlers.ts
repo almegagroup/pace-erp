@@ -25,7 +25,7 @@ import {
 } from "./mts_requirement.handlers.ts";
 import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
-import type { OptimizerAdvisoryBuy, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
+import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
@@ -45,6 +45,8 @@ type PlanningParams = {
   companyId: string; planMonth: string; asOf: string; demandAt: string | null; today: string;
   /** P1 item plan: months after NM (horizon = CM + NM + extra) with a beyond-plan forecast. */
   extraMonths?: number;
+  /** P4: lots the user fixed (or applied from AI); the engine plans the rest around them. */
+  manualLots?: OptimizerManualLot[];
 };
 
 export function readParams(url: URL | JsonRecord, today: string): { params?: Omit<PlanningParams, "companyId">; error?: [string, string] } {
@@ -266,7 +268,8 @@ export async function computePlanning(p: PlanningParams) {
   };
   // Pass 1: fastest feasible vendor → when and how much is needed.
   const pass1 = assemblePlanningInput({ ...baseArgs, memberCost, vendorOptions, cycleDays });
-  const projection1 = projectDailyCoverage(pass1.input);
+  const manual = p.manualLots?.length ? { manual_lots: p.manualLots } : {};
+  const projection1 = projectDailyCoverage({ ...pass1.input, ...manual });
   const vendorOverride = new Map<string, string>();
   for (const buy of projection1.advisory_buys) {
     if ((buy.status !== "ADVISORY" && buy.status !== "ADVISORY_LATE") || buy.sequence !== 1) continue;
@@ -277,7 +280,7 @@ export async function computePlanning(p: PlanningParams) {
   }
   // Pass 2: cheapest feasible vendor's MOQ / multiple / lead time.
   const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, memberCost, vendorOverride, vendorOptions, cycleDays }) : pass1;
-  const projection = vendorOverride.size ? projectDailyCoverage(assembly.input) : projection1;
+  const projection = vendorOverride.size ? projectDailyCoverage({ ...assembly.input, ...manual }) : projection1;
 
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
@@ -402,7 +405,7 @@ export async function computePlanning(p: PlanningParams) {
     })),
   };
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, calendar };
+  const internal = { req, assembly, projection, calendar, vendorOptions };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }
