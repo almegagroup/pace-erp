@@ -16,7 +16,7 @@ const company = (id, name, extra = {}) => ({
   buys: [{ material: "VAE A", type: "RM", uom: "KG", late: false, po_by: "2026-10-01", qty: 25000, plant_eta: "2026-11-10", lots: "", supplier: "CELANESE", full_cost_per_unit: 20, value: 500000, cost_missing: "", reason: "Covers to Max days" }],
   store: [{ period: "CM (rest)", product: "Putty", source: "Stroke 1", line_type: "FIXED", group: null, material: "VAE A", uom: "KG", demand_qty: 100, from_stock: 100, not_backed: 0, transfer: null }],
   arrivals: [{ material: "VAE A", uom: "KG", reference: "PO ACP/PO80/2026-27/1", supplier: "DAIREN", status: "IN_TRANSIT", qty: 24750, source_eta: "2026-11-06", planning_eta: null, overdue: false, no_eta: false, movable: true, engine_best_date: "2026-10-30", engine_reason: "Prepone 7 d" }],
-  plan: { months: ["2026-10", "2026-11", "2026-12"], rows: [{ sku_label: "AP EXT PTY 40 KG", base_uom_code: "BAG", mother_group_name: "PUTTY", child_group_name: "EXT PUTTY", plan: { "2026-10": { qty: 8371 }, "2026-11": { qty: 8565 } } }] },
+  plan: { months: ["2026-10", "2026-11", "2026-12"], rows: [{ sku_label: "AP EXT PTY 40 KG", base_uom_code: "BAG", mother_group_name: "PUTTY", child_group_name: "EXT PUTTY", plan: { "2026-10": { qty: 8371, base_source: "FINAL" }, "2026-11": { qty: 8565, base_source: "ROLLING" } } }] },
   notes: [],
   ...extra,
 });
@@ -39,6 +39,7 @@ test("PLAN matrix: company × month columns, empty SKUs dropped", () => {
   assert.equal(m.columns.length, 4);
   assert.equal(m.entries.length, 1);
   assert.equal(m.entries[0].qty.get("a|2026-10"), 8371);
+  assert.deepEqual(m.columns.slice(0, 3).map((c) => c.basis), ["FINAL", "ROLLING", "No plan"], "plan basis per month");
 });
 
 test("sheet names: 31 chars, no illegal characters, unique", () => {

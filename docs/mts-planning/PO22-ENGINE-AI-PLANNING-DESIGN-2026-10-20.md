@@ -415,7 +415,7 @@ out of the ERP as one compact file. Decisions: **all companies in one file**; **
 families** — every family (material group) and every single item gets its block, only the
 relevant rows; **no planner remarks**.
 
-`Download Rolling Plan` (PO22 header) fetches every company in the user's access one after another
+`Download Plan (Excel)` (PO22 header; works for the Final and the Rolling plan alike — demand is the PO21 effective plan, Final where a Final exists, else Rolling; PLAN tab shows the basis per company-month) fetches every company in the user's access one after another
 (`GET /api/procurement/mts-requirement/rolling-plan`, PROC_MTS_REQUIREMENT VIEW; one Engine run per
 company over CM + NM + 1 month with every saved user lot and reschedule) plus the PO21 plan report,
 and writes one workbook (exceljs, dynamic import):
