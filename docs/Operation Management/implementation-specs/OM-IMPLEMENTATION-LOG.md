@@ -112,6 +112,22 @@
 
 ---
 
+### 2026-10-21 — PO22 P2–P4 Engine + AI Item Plan (DONE; PROD rolled out, owner-approved)
+
+- Engine: lots sized to Max days (Target + economic cycle); vendor chosen per lot on full cost
+  (price × FX, AC01 landed/freight, interest under the payment term, Item Rate, MOQ excess);
+  bridge when the cheapest vendor is late; no vendor stickiness rule (owner). Item Plan: Future
+  Orders (full cost / freight / cost gaps), reschedule advice, R00n↔R00n transfers,
+  alternatives, other-company spare. Settings advice (reason, best vs yours, engine Max days).
+  User-fixed lots (versions) + AI planner whose lots the engine re-simulates before / after.
+- PR almegagroup/pace-erp#685 merged (`4c5ca19`); deploy-prod applied migration
+  `20261021120000` (table, RPC, append-only trigger verified), then `NOTIFY pgrst`.
+- ACL `PROC_MTS_ITEM_PLAN_EDIT` WRITE → CAP_MTS_PLAN_FULL: dry run (rolled back, verified),
+  then commit via `docs/mts-planning/acl/PO22-P4-PROD-ACL-ROLLOUT.sql`: CMP003 v136, CMP005 v32,
+  CMP011 v32; 22 user-contexts, only SUPPLY CHAIN / DIRECTOR / ACL-MASTER; no other decision
+  changed. Render deploy live.
+- Not yet: owner click-through on real data (RDP / Gabrosa against the sheet, Pulmix).
+
 ### 2026-10-21 — PO22 P1 Item Plan (DONE; PROD rolled out, owner-approved)
 - Design: `docs/mts-planning/PO22-ENGINE-AI-PLANNING-DESIGN-2026-10-20.md` (Engine + AI joint planner,
   phases P1-P4) and `docs/mts-planning/PO22-P1-FAMILY-PLANNING-DETAIL-2026-10-20.md`.

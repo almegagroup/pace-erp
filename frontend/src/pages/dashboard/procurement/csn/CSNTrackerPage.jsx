@@ -33,7 +33,22 @@ import {
   updateCSN,
 } from "../procurementApi.js";
 
-const LIMIT = 100;
+// Rows fetched per request when loading the whole filtered set (the endpoint caps a page at 200).
+const PAGE_SIZE = 200;
+const MAX_ROWS = 20000;
+
+// Owner 2026-10-21: the grid holds every CSN of the current server filters, so its
+// all-column search, Excel column filters and range copy work on everything, not one page.
+async function fetchAllTrackerRows(params) {
+  const all = [];
+  for (let offset = 0; offset < MAX_ROWS; offset += PAGE_SIZE) {
+    const result = await getCSNTracker({ ...params, limit: PAGE_SIZE, offset });
+    const batch = Array.isArray(result?.data) ? result.data : [];
+    all.push(...batch);
+    if (batch.length < PAGE_SIZE || all.length >= Number(result?.total ?? 0)) break;
+  }
+  return { data: all, total: all.length };
+}
 const STATUS_OPTIONS = ["ORD", "TRN", "GED", "GRD", "CAN", "KOF"];
 const STATUS_LABELS = {
   ORD: "Ordered",
@@ -460,52 +475,18 @@ function IconActionButton({ glyph, title, onClick, disabled = false, tone = "neu
   );
 }
 
-function CompactPaginationStrip({ page, totalPages, startIndex, endIndex, totalItems, onPrev, onNext }) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-      <div>
-        Rows {startIndex}-{endIndex} of {totalItems}
-      </div>
-      <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={onPrev}
-          disabled={page <= 1}
-          className="inline-flex h-[24px] min-w-[38px] items-center justify-center border border-slate-300 bg-white px-1.5 text-[10px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Prev
-        </button>
-        <div className="min-w-[66px] text-center text-[10px] font-semibold text-slate-700">
-          Page {page}/{totalPages}
-        </div>
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={page >= totalPages}
-          className="inline-flex h-[24px] min-w-[38px] items-center justify-center border border-slate-300 bg-white px-1.5 text-[10px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Next
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function CSNTrackerPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
   useEffect(() => requestWideWorkspace(), []);
   const [companyId, setCompanyId] = useState("");
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [status, setStatus] = useState("");
   const [csnType, setCsnType] = useState("");
   const [dateFields, setDateFields] = useState(["created_at"]);
   const [dateFieldPickerOpen, setDateFieldPickerOpen] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [page, setPage] = useState(1);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [expandedRowId, setExpandedRowId] = useState("");
@@ -525,14 +506,6 @@ export default function CSNTrackerPage() {
   const columns = useMemo(() => buildColumnDefs(), []);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      setDebouncedSearch(search.trim().toLowerCase());
-      setPage(1);
-    }, 250);
-    return () => window.clearTimeout(timeoutId);
-  }, [search]);
-
-  useEffect(() => {
     function handleOutsideClick(event) {
       if (dateFieldPickerRef.current && !dateFieldPickerRef.current.contains(event.target)) {
         setDateFieldPickerOpen(false);
@@ -543,18 +516,15 @@ export default function CSNTrackerPage() {
   }, []);
 
   const trackerQuery = useQuery({
-    queryKey: ["csn-tracker", effectiveCompanyId, status, csnType, dateFields[0], dateFrom, dateTo, debouncedSearch, page],
+    queryKey: ["csn-tracker", effectiveCompanyId, status, csnType, dateFields[0], dateFrom, dateTo],
     queryFn: () =>
-      getCSNTracker({
+      fetchAllTrackerRows({
         company_id: effectiveCompanyId || undefined,
         status: status || undefined,
         csn_type: csnType || undefined,
         date_field: dateFields[0] || "created_at",
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
-        search: debouncedSearch || undefined,
-        limit: LIMIT,
-        offset: (page - 1) * LIMIT,
       }),
     enabled: Boolean(effectiveCompanyId),
   });
@@ -611,9 +581,8 @@ export default function CSNTrackerPage() {
   });
 
   const total = Number(trackerQuery.data?.total ?? 0);
-  const totalPages = Math.max(1, Math.ceil(total / LIMIT));
-  const startIndex = total === 0 ? 0 : (page - 1) * LIMIT + 1;
-  const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
+  // What the grid shows after its own search / column filters — the Excel export takes exactly these.
+  const [shownRows, setShownRows] = useState(null);
   const visibleColumns = useMemo(
     () => columns.filter((column) => visibleColumnKeys.includes(column.key)),
     [columns, visibleColumnKeys]
@@ -931,6 +900,37 @@ export default function CSNTrackerPage() {
     [visibleColumns, expandedRowId, rows]
   );
 
+  const [exporting, setExporting] = useState(false);
+  // Excel export (owner 2026-10-21, same approach as Stock History): every row the
+  // grid shows (server filters + its search / column filters), with the visible columns,
+  // the tracker's red flags kept as red text and numbers written as numbers.
+  async function handleExportExcel() {
+    setExporting(true);
+    try {
+      const allRows = shownRows ?? rows;
+      const numericKeys = new Set(["order_qty", "balance_qty", "dispatch_qty", "po_rate", "rebate_rate", "etd_vs_atd_days", "eta_vs_ata_days", "baseline_vs_actual_days", "lr_vs_ge_days"]);
+      const boolKeys = new Set(["soft_copy_received", "hard_copy_received", "indent_required", "has_rebate"]);
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `csn_tracker_${todayIso()}.xlsx`,
+        sheetName: "CSN Tracker",
+        columns: visibleColumns,
+        rows: allRows,
+        getCellValue: (row, column) => {
+          const value = row?.[column.key];
+          if (boolKeys.has(column.key)) return formatBool(value);
+          if (numericKeys.has(column.key) && value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) return Number(value);
+          return value ?? "";
+        },
+        getCellColor: (row, column) => (evaluateRedFields(row).has(column.key) ? { fontArgb: "FFBE123C", bold: true } : null),
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "CSN_TRACKER_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const currentRow = rows.find((row) => row.id === expandedRowId) || null;
   const currentGroupOptions = currentRow?.material_group_options || [];
   const subCsnsForCurrentRow = useMemo(
@@ -1022,6 +1022,12 @@ export default function CSNTrackerPage() {
                   <IconActionButton glyph="CL" title="Columns" onClick={() => setShowColumns(true)} />
                   <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} />
                   <IconActionButton
+                    glyph={exporting ? "..." : "XLS"}
+                    title={exporting ? "Exporting" : "Export Excel (the rows the grid shows)"}
+                    onClick={() => void handleExportExcel()}
+                    disabled={exporting || total === 0}
+                  />
+                  <IconActionButton
                     glyph="RF"
                     title={trackerQuery.isFetching ? "Refreshing" : "Refresh"}
                     onClick={() => void invalidateTracker()}
@@ -1035,7 +1041,6 @@ export default function CSNTrackerPage() {
                   value={companyId}
                   onChange={(nextValue) => {
                     setCompanyId(nextValue);
-                    setPage(1);
                   }}
                   label="Company"
                 />
@@ -1046,7 +1051,6 @@ export default function CSNTrackerPage() {
                     value={status}
                     onChange={(event) => {
                       setStatus(event.target.value);
-                      setPage(1);
                     }}
                     className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   >
@@ -1065,7 +1069,6 @@ export default function CSNTrackerPage() {
                     value={csnType}
                     onChange={(event) => {
                       setCsnType(event.target.value);
-                      setPage(1);
                     }}
                     className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   >
@@ -1101,7 +1104,6 @@ export default function CSNTrackerPage() {
                                   ? [...current, option.value]
                                   : current.filter((value) => value !== option.value)
                               );
-                              setPage(1);
                             }}
                           />
                           {option.label}
@@ -1118,7 +1120,6 @@ export default function CSNTrackerPage() {
                     value={dateFrom}
                     onChange={(event) => {
                       setDateFrom(event.target.value);
-                      setPage(1);
                     }}
                     className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   />
@@ -1131,7 +1132,6 @@ export default function CSNTrackerPage() {
                     value={dateTo}
                     onChange={(event) => {
                       setDateTo(event.target.value);
-                      setPage(1);
                     }}
                     className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   />
@@ -1162,15 +1162,6 @@ export default function CSNTrackerPage() {
                     </button>
                   </div>
                 </label>
-                <label className="grid min-w-0 gap-1 text-[11px] font-medium text-slate-600">
-                  Search
-                  <input
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="CSN, vendor, material, PO"
-                    className="h-[26px] min-w-0 border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none placeholder:text-slate-400 focus:border-sky-500"
-                  />
-                </label>
               </div>
             </div>
           ),
@@ -1180,22 +1171,19 @@ export default function CSNTrackerPage() {
           title: "",
           children: (
             <div className="grid gap-2">
-              <CompactPaginationStrip
-                page={page}
-                totalPages={totalPages}
-                startIndex={startIndex}
-                endIndex={endIndex}
-                totalItems={total}
-                onPrev={() => setPage((current) => Math.max(1, current - 1))}
-                onNext={() => setPage((current) => Math.min(totalPages, current + 1))}
-              />
+              <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
+                {trackerQuery.isFetching ? "Loading..." : `Rows ${shownRows ? shownRows.length : rows.length} of ${total}`}
+              </div>
               <ErpDenseGrid
                 columns={gridColumns}
                 rows={rows}
                 rowKey={(row) => row.id}
                 onRowActivate={(row) => resetDraft(row)}
                 getRowProps={(row) => ({ onDoubleClick: () => resetDraft(row) })}
-                cellNavigate
+                rangeSelect
+                columnFilter
+                searchBar
+                onFilteredRowsChange={setShownRows}
                 virtualize
                 emptyMessage={trackerQuery.isLoading ? "Loading consignment tracker..." : "No CSNs matched the current filter."}
               />
