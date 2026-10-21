@@ -226,7 +226,7 @@ export async function buildItemPlan(
         const p2p = portToPlant.get(b.material_id) ?? null;
         return {
           material_id: b.material_id, material_code: codeOf(b.material_id), material_name: nameOf(b.material_id), uom: uomOf(b.material_id),
-          sequence: b.sequence, lot_no: lot.lot_no, vendor: b.vendor_label ?? null, qty: round(lot.qty_base),
+          sequence: b.sequence, lot_no: lot.lot_no, vendor: b.vendor_label ?? null, vendor_id: b.vendor_id ?? null, qty: round(lot.qty_base),
           po_by: b.recommended_po_by, etd: addDaysIso(b.recommended_po_by, b.booking_time_days ?? null),
           eta_port: p2p !== null ? addDaysIso(lot.plant_eta, -p2p) : null, eta_plant: lot.plant_eta,
           max_days_on_arrival: at?.max_cover_days ?? null, min_days_on_arrival: at?.min_cover_days ?? null,
@@ -303,10 +303,13 @@ export async function buildItemPlan(
     // cost, so the user can compare vendor × date before fixing a lot.
     const vendorChoices = memberIds.map((id) => ({
       material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id),
+      // Median port → plant days from received import CSNs (null = no history).
+      port_to_plant_days: portToPlant.get(id) ?? null,
       options: (vendorOptions.get(id) ?? []).map((o) => ({
         vendor_id: o.vendor_id,
         vendor_label: (vendorTerms.get(id) ?? []).find((t) => t.vendor_id === o.vendor_id)?.vendor_label ?? "—",
-        lead_time_days: o.lead_time_days, earliest_plant_eta: addDaysIso(calendar.asOf, o.lead_time_days),
+        lead_time_days: o.lead_time_days, booking_time_days: o.booking_time_days ?? null,
+        earliest_plant_eta: addDaysIso(calendar.asOf, o.lead_time_days),
         moq_qty: o.moq_qty_base, order_multiple_qty: o.order_multiple_qty_base,
         unit_total_cost: o.unit_cost, freight_term: o.freight_term ?? null, cost_missing: o.cost_missing ?? [],
       })).sort((a, b) => (a.unit_total_cost ?? Infinity) - (b.unit_total_cost ?? Infinity) || a.vendor_label.localeCompare(b.vendor_label)),
@@ -326,6 +329,29 @@ export async function buildItemPlan(
         lot_value: choice?.unit_total_cost !== null && choice?.unit_total_cost !== undefined ? round(l.qty_base * choice.unit_total_cost) : null,
       };
     });
+    // Owner 2026-10-21 (sheet PLANNING "Prediction"): every Quantity to Dispatch — engine lots and
+    // the user's own — with Max / Min days on that date (family grid, as on the left) and the dates
+    // worked back from the plant date: Port ETA = Date − port → plant days (received import CSNs),
+    // Import ETD = Date − the vendor's dispatch → plant days (route lead without booking).
+    const gridByDay = new Map(grid.map((g) => [g.day, g]));
+    const legsFor = (id: string, vendorId: string | null | undefined, plantDate: string | null) => {
+      const option = vendorId ? (vendorOptions.get(id) ?? []).find((o) => o.vendor_id === vendorId) : undefined;
+      const transit = option && option.lead_time_days !== null ? option.lead_time_days - (option.booking_time_days ?? 0) : null;
+      const p2p = portToPlant.get(id) ?? null;
+      return {
+        port_eta: p2p !== null ? addDaysIso(plantDate, -p2p) : null,
+        import_etd: transit !== null ? addDaysIso(plantDate, -transit) : null,
+      };
+    };
+    const prediction = [
+      ...futureOrders.map((f) => ({ source: "ENGINE" as const, material_id: f.material_id, vendor_id: f.vendor_id, vendor: f.vendor, date: f.eta_plant, qty: f.qty })),
+      ...userLots.map((l) => ({ source: "YOU" as const, material_id: l.material_id, vendor_id: l.vendor_id ?? null, vendor: l.vendor_label, date: l.plant_eta as string | null, qty: round(l.qty_base) })),
+    ].map((r) => ({
+      ...r, material_code: codeOf(r.material_id), material_name: nameOf(r.material_id), uom: uomOf(r.material_id),
+      ...legsFor(r.material_id, r.vendor_id, r.date),
+      max_days: r.date ? gridByDay.get(r.date)?.max_days ?? null : null,
+      min_days: r.date ? gridByDay.get(r.date)?.min_days ?? null : null,
+    })).sort((a, b) => String(a.date ?? "9999").localeCompare(String(b.date ?? "9999")));
     const unitCosts = (vendorOptions.get(materialId) ?? []).map((o) => o.unit_cost).filter((c): c is number => c !== null);
     const selectedTarget = rowById.get(materialId)?.policy?.target_cov_days ?? null;
     const selectedCritical = rowById.get(materialId)?.policy?.critical_cov_days ?? null;
@@ -350,6 +376,7 @@ export async function buildItemPlan(
       transfers,
       alternatives,
       user_lots: userLots,
+      prediction,
       vendor_choices: vendorChoices,
       metrics,
       unit_cost_for_metrics: unitCosts.length ? Math.min(...unitCosts) : null,

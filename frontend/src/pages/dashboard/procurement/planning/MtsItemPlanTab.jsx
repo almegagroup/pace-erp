@@ -96,6 +96,36 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   }, [view]);
   const monthSource = useMemo(() => new Map((plan?.month_sources ?? []).map((m) => [m.month.slice(0, 7), m.source])), [plan]);
 
+  // Your own Quantity to Dispatch per day for the selected item (draft first, else saved).
+  const ownDispatch = useMemo(() => {
+    const map = new Map();
+    for (const l of lotDraft ?? plan?.scenario?.manual_lots ?? []) {
+      if (l.material_id === materialId && Number(l.qty_base) > 0) map.set(l.plant_eta, (map.get(l.plant_eta) ?? 0) + Number(l.qty_base));
+    }
+    return map;
+  }, [lotDraft, plan, materialId]);
+  function setDispatchQty(day, value) {
+    const qty = Number(value);
+    const base = lotDraft ?? plan?.scenario?.manual_lots ?? [];
+    const same = (l) => l.plant_eta === day && l.material_id === materialId;
+    const vendorId = base.find(same)?.vendor_id ?? null;
+    const next = [...base.filter((l) => !same(l)), ...(qty > 0 ? [{ material_id: materialId, plant_eta: day, qty_base: qty, vendor_id: vendorId }] : [])];
+    setLotDraft(next);
+    void runPreview({ lots: next, label: "Quantity to Dispatch changed" });
+  }
+
+  const predictionColumns = [
+    { key: "source", label: "", width: "60px", render: (p) => (p.source === "YOU" ? <span className="bg-sky-100 px-1.5 py-0.5 text-xs font-semibold text-sky-800">You</span> : <span className="bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">Engine</span>), copyValue: (p) => (p.source === "YOU" ? "You" : "Engine") },
+    { key: "import_etd", label: "Import ETD", width: "100px", render: (p) => p.import_etd ?? "—" },
+    { key: "port_eta", label: "LCL-ETD / Port ETA", width: "120px", render: (p) => p.port_eta ?? "—" },
+    { key: "date", label: "Date", width: "100px", render: (p) => <span className="font-semibold">{p.date ?? "—"}</span>, copyValue: (p) => p.date ?? "" },
+    { key: "qty", label: "Quantity to Dispatch", width: "130px", align: "right", render: (p) => `${fmtQty(p.qty)} ${p.uom ?? ""}`, copyValue: (p) => p.qty },
+    { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (p) => fmtDays(p.max_days), copyValue: (p) => p.max_days ?? "" },
+    { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (p) => fmtDays(p.min_days), copyValue: (p) => p.min_days ?? "" },
+    { key: "material_name", label: "Member", width: "200px", render: (p) => `${p.material_code ?? ""} ${p.material_name}`.trim() },
+    { key: "vendor", label: "Supplier", width: "200px", render: (p) => p.vendor ?? "—" },
+  ];
+
   const gridColumns = [
     { key: "day", label: "Date", width: "100px", render: (r) => (
       <button type="button" onClick={() => setOpenDay((d) => (d === r.day ? "" : r.day))} className="text-left text-sky-800 hover:underline">{r.day}</button>
@@ -104,7 +134,27 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "source", label: "Demand", width: "80px", render: (r) => monthSource.get(r.day.slice(0, 7)) ?? "", copyValue: (r) => monthSource.get(r.day.slice(0, 7)) ?? "" },
     { key: "opening", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening), copyValue: (r) => r.opening },
     { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
-    { key: "planned_lot", label: "Engine Lot", width: "110px", align: "right", render: (r) => (r.planned_lot ? <span className="font-semibold text-sky-800">{fmtQty(r.planned_lot)}</span> : ""), copyValue: (r) => r.planned_lot },
+    {
+      // Sheet PLANNING "Quantity to Dispatch": the engine's lots, overwritten by typing your own.
+      key: "planned_lot", label: "Quantity to Dispatch", width: "130px", align: "right", filterable: false,
+      render: (r) => {
+        const own = ownDispatch.get(r.day);
+        const shown = own ?? (r.planned_lot || "");
+        return (
+          <input
+            key={`${r.day}|${shown}`}
+            type="number"
+            min="0"
+            defaultValue={shown}
+            title={own !== undefined ? "Your quantity (not saved until you Save)" : r.planned_lot ? "Engine lot — type to change" : "Type a quantity to dispatch on this day"}
+            onBlur={(event) => { if (String(event.target.value) !== String(shown)) setDispatchQty(r.day, event.target.value); }}
+            onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+            className={`h-6 w-24 border px-1 text-right text-xs outline-none ${own !== undefined ? "border-sky-500 bg-sky-100 font-semibold text-sky-900" : r.planned_lot ? "border-slate-300 bg-white font-semibold text-sky-800" : "border-transparent bg-transparent hover:border-slate-300"}`}
+          />
+        );
+      },
+      copyValue: (r) => r.planned_lot,
+    },
     { key: "use", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.use), copyValue: (r) => r.use },
     { key: "unmet_group", label: "Group not met", width: "110px", align: "right", render: (r) => (r.unmet_group ? <span className="font-semibold text-rose-700">{fmtQty(r.unmet_group)}</span> : ""), copyValue: (r) => r.unmet_group },
     { key: "closing", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing)}</span>, copyValue: (r) => r.closing },
@@ -383,7 +433,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             <div className="grid gap-1 border-2 border-indigo-400 bg-indigo-50 p-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold text-indigo-900">PREVIEW — not saved ({preview.label}). Grids below show the preview.</span>
-                <button type="button" onClick={() => setPreview(null)} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Back to saved plan</button>
+                <button type="button" onClick={() => { setPreview(null); setLotDraft(null); }} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Back to saved plan</button>
+                {lotDraft ? <button type="button" disabled={saving} onClick={() => void saveLots(lotDraft.filter((l) => Number(l.qty_base) > 0).map((l) => ({ ...l, qty_base: Number(l.qty_base) })), "USER", null)} className="h-6 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">{saving ? "Saving…" : "Save my quantities"}</button> : null}
               </div>
               <table>
                 <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">First shortage</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Days ≤ Critical</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th className="pr-3">Avg money in stock</th><th>New orders</th></tr></thead>
@@ -436,6 +487,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             </section>
 
             <div className="grid content-start gap-3">
+              <section className="grid gap-1 border border-amber-300 bg-amber-50 p-2">
+                <h3 className="text-sm font-semibold text-slate-800">Prediction — every Quantity to Dispatch{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
+                <p className="text-xs text-slate-500">Engine lots and your own (type in the grid's Quantity to Dispatch). Max / Min days on that date; Port ETA and Import ETD worked back from the plant date (port → plant days from received CSNs, vendor transit time).</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={predictionColumns} rows={view.prediction ?? []} rowKey={(p, i) => `${p.source}|${p.material_id}|${p.date}|${i}`} emptyMessage="No dispatch needed in the horizon." maxHeight="30vh" />
+              </section>
               <section className="grid gap-1">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-semibold text-slate-800">Arrivals / Future Orders</h3>

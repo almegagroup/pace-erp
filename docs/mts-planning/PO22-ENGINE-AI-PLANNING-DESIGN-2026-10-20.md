@@ -387,3 +387,23 @@ advised. Several pieces of one material are optimised earliest first, each seein
 ones moved (`optimizeArrivalSet`), so two pieces never fix the same gap. Other arrivals, group
 re-allocation and the engine's new lots stay fixed in this estimate — "Use all engine dates" then
 **Preview** gives the full engine result before Save. Replaces the earlier first-day-at-Target rule.
+
+### 13.2 Sheet PLANNING "Quantity to Dispatch" + "Prediction" (owner 2026-10-21, later)
+
+Read from the Jayashree REPORTS_ALL PLANNING tab: column G "Quantity to Dispatch" is a formula
+(after the last known ETA, a QTY PER LOT is placed the day after Max days falls to MIN STOCK
+days) that the planner overwrites by hand; the right-side "Prediction" (R:W) is
+`QUERY(D8:L194, "SELECT D,G,J,L WHERE G>0")` — every dispatch row with its Max / Min days — plus
+LCL-ETD / Port ETA = Date − ETA/ETD days and Import ETD = that − transit time; further right an
+ETA list (Date, PO, Qty, Supplier, Status).
+
+4A Item Plan now matches it: the grid's **Quantity to Dispatch** column (was "Engine Lot") is
+typed in directly per day; a typed quantity becomes your lot for the selected item, the engine
+re-plans around it at once (Preview) and Closing / Max / Min change on every later day; "Save my
+quantities" stores it as a plan version, "Back to saved plan" drops it. The right side opens
+with **Prediction** (Engine / You, Import ETD, LCL-ETD / Port ETA, Date, Quantity to Dispatch,
+Max Days, Min Days, Member, Supplier), worked back from the plant date: Port ETA = Date − median
+port → plant days from received import CSNs, Import ETD = Date − the vendor's dispatch → plant
+days (route lead without booking); then the ETA list (Arrivals) and the suggestions /
+instructions. Clearing an engine lot's quantity does not forbid a lot that day — the engine still
+places what is needed.
