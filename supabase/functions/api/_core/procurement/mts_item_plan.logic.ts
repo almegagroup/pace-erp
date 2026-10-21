@@ -260,6 +260,117 @@ export function rescheduleAdvice(rows: readonly MemberProjectionDay[], eta: stri
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Owner 2026-10-21: the best date for one not-yet-shipped arrival, tried on EVERY day of the
+// horizon (not a rule of thumb). Moving one piece only changes the closing between the old and the
+// new date, and a day's cover depends only on its own closing, so each day is scored once with and
+// once without the piece and every candidate date is then O(1) from prefix sums.
+// Order of preference: fewest stock-out days → fewest days below Critical → fewest days below
+// Target → latest date (least money held). Other arrivals and lots stay where they are; group
+// re-allocation and the engine's own new lots are not re-planned here (Preview does that).
+// ─────────────────────────────────────────────────────────────────────────────
+export type ArrivalDay = MemberProjectionDay & { critical_days?: number | null };
+export type ArrivalScore = {
+  eta: string;
+  /** Cover on the arrival day without / with the piece (sheet Min Days / Max Days). */
+  min_days: number | null;
+  max_days: number | null;
+  shortage_days: number;
+  days_below_critical: number;
+  days_below_target: number;
+  first_below_target_day: string | null;
+};
+export type ArrivalOptimum = { current: ArrivalScore; best: ArrivalScore; shift_days: number; reason: string } | null;
+
+export function optimizeArrivalDate(rows: readonly ArrivalDay[], eta: string | null, qty: number): ArrivalOptimum {
+  if (!eta || rows.length === 0 || !(qty > EPSILON)) return null;
+  const n = rows.length;
+  const uses = rows.map((r) => r.use);
+  // Closing without this piece; the piece counts from its own day onwards.
+  const base = rows.map((r) => r.closing - (r.day >= eta ? qty : 0));
+  const coverBase = base.map((b, i) => forwardCoverDays(b, uses, i + 1));
+  const coverPlus = base.map((b, i) => forwardCoverDays(b + qty, uses, i + 1));
+  const flags = (closing: number, cover: number | null, row: ArrivalDay) => ({
+    short: closing < -EPSILON ? 1 : 0,
+    critical: row.critical_days !== null && row.critical_days !== undefined && cover !== null && cover < row.critical_days ? 1 : 0,
+    target: row.target_days !== null && cover !== null && cover < row.target_days ? 1 : 0,
+  });
+  const without = rows.map((r, i) => flags(base[i], coverBase[i], r));
+  const withIt = rows.map((r, i) => flags(base[i] + qty, coverPlus[i], r));
+  // pre[k] = Σ over days < k without the piece; suf[k] = Σ over days ≥ k with it.
+  const pre = [{ short: 0, critical: 0, target: 0 }];
+  for (let i = 0; i < n; i += 1) pre.push({ short: pre[i].short + without[i].short, critical: pre[i].critical + without[i].critical, target: pre[i].target + without[i].target });
+  const suf = Array.from({ length: n + 1 }, () => ({ short: 0, critical: 0, target: 0 }));
+  for (let i = n - 1; i >= 0; i -= 1) suf[i] = { short: suf[i + 1].short + withIt[i].short, critical: suf[i + 1].critical + withIt[i].critical, target: suf[i + 1].target + withIt[i].target };
+  const firstBelow = (k: number) => {
+    for (let i = 0; i < n; i += 1) if ((i < k ? without[i] : withIt[i]).target || (i === k && without[i].target)) return rows[i].day;
+    return null;
+  };
+  // On the arrival day itself the stock before the piece (Min days) must also hold the line.
+  const arrivalDayExtra = (k: number, field: "short" | "critical" | "target") => (k < n ? Math.max(0, without[k][field] - withIt[k][field]) : 0);
+  const key = (k: number) => (["short", "critical", "target"] as const).map((f) => pre[k][f] + suf[k][f] + arrivalDayExtra(k, f));
+  const score = (k: number): ArrivalScore => {
+    const [shortage, critical, target] = key(k);
+    return {
+      eta: k < n ? rows[k].day : eta,
+      min_days: k < n ? coverBase[k] : null,
+      max_days: k < n ? coverPlus[k] : null,
+      shortage_days: shortage, days_below_critical: critical, days_below_target: target,
+      first_below_target_day: firstBelow(k),
+    };
+  };
+  const currentIndex = rows.findIndex((r) => r.day >= eta);
+  const current = score(currentIndex === -1 ? n : currentIndex);
+  let bestIndex = 0;
+  for (let k = 1; k < n; k += 1) {
+    const a = key(k); const b = key(bestIndex);
+    if (a[0] < b[0] || (a[0] === b[0] && (a[1] < b[1] || (a[1] === b[1] && a[2] <= b[2])))) bestIndex = k; // ties → later day
+  }
+  const best = score(bestIndex);
+  const worseOrSame = (x: ArrivalScore, y: ArrivalScore) =>
+    x.shortage_days > y.shortage_days || (x.shortage_days === y.shortage_days && (x.days_below_critical > y.days_below_critical || (x.days_below_critical === y.days_below_critical && x.days_below_target >= y.days_below_target)));
+  // Keep the current date when it is already as safe and within the tolerance, or strictly safer.
+  const shift = Math.round((Date.parse(`${best.eta}T00:00:00Z`) - Date.parse(`${eta}T00:00:00Z`)) / 86_400_000);
+  if (!worseOrSame(current, best)) return { current, best: current, shift_days: 0, reason: "Current date is already the best." };
+  const sameRisk = current.shortage_days === best.shortage_days && current.days_below_critical === best.days_below_critical && current.days_below_target === best.days_below_target;
+  // Prepone only when it is strictly safer; small moves are not worth a vendor call.
+  if (sameRisk && (shift < 0 || Math.abs(shift) <= RESCHEDULE_TOLERANCE_DAYS)) return { current, best: current, shift_days: 0, reason: "Current date is fine." };
+  const gain = [
+    current.shortage_days !== best.shortage_days ? `stock-out days ${current.shortage_days} → ${best.shortage_days}` : "",
+    current.days_below_critical !== best.days_below_critical ? `days below Critical ${current.days_below_critical} → ${best.days_below_critical}` : "",
+    current.days_below_target !== best.days_below_target ? `days below Target ${current.days_below_target} → ${best.days_below_target}` : "",
+  ].filter(Boolean).join(", ");
+  const reason = shift < 0
+    ? `Prepone ${-shift} d to ${best.eta}: ${gain || "safer"}. Vendor must be able to deliver by then.`
+    : sameRisk
+      ? `Postpone ${shift} d to ${best.eta}: same safety, less money held${bestIndex === n - 1 ? " (not needed within the horizon)" : ""}.`
+      : `Postpone ${shift} d to ${best.eta}: ${gain}.`;
+  return { current, best, shift_days: shift, reason };
+}
+
+/**
+ * Several movable pieces of one material: optimised one after another (earliest first), each
+ * seeing the earlier ones already at their best date, so two pieces never "fix" the same gap.
+ * `current` is always the piece's own date in today's plan.
+ */
+export function optimizeArrivalSet(
+  rows: readonly ArrivalDay[], pieces: ReadonlyArray<{ key: string; eta: string | null; qty: number }>,
+): Map<string, ArrivalOptimum> {
+  const result = new Map<string, ArrivalOptimum>();
+  let working = rows.map((r) => ({ ...r }));
+  for (const piece of [...pieces].sort((a, b) => String(a.eta ?? "9999").localeCompare(String(b.eta ?? "9999")) || a.key.localeCompare(b.key))) {
+    const own = optimizeArrivalDate(rows, piece.eta, piece.qty);
+    const seq = optimizeArrivalDate(working, piece.eta, piece.qty);
+    if (!own || !seq) { result.set(piece.key, null); continue; }
+    result.set(piece.key, { ...seq, current: own.current });
+    if (seq.shift_days !== 0 && piece.eta) {
+      const from = piece.eta; const to = seq.best.eta;
+      working = working.map((r) => ({ ...r, closing: r.closing - (r.day >= from ? piece.qty : 0) + (r.day >= to ? piece.qty : 0) }));
+    }
+  }
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // P2 — R store ↔ R store transfer instructions (owner: R001 / R002 both ways).
 // Need of store Rn = demand of lines located at Rn or its shop floor Sn (S00n fed from R00n —
 // assumption shown on screen). Short stores are filled from stores with more than their own need.

@@ -371,3 +371,64 @@ Can I type my own qty and see Min / Max days change?"
 
 No migration and no new ACL resource: the three new routes are VIEW on PROC_MTS_REQUIREMENT;
 saving uses the existing reschedule / scenario / policy endpoints and their rights.
+
+### 13.1 Engine best date per consignment (owner 2026-10-21, later)
+
+Owner: "a consignment connects on 12 December; its row shows Min and Max — the system should
+optimise and show which date is better." Each not-yet-shipped piece row (4A Arrivals and the
+Planning tab) now shows **Min / Max days on arrival** today, the **Engine best date** with the
+**Min / Max at that date** and **why**. `optimizeArrivalDate` tries every day of the horizon
+(4A ~6 months, Planning CM + NM): moving one piece changes closing only between the old and new
+date and a day's cover depends only on its own closing, so each day is scored once with and once
+without the piece and every date is O(1). Order: fewest stock-out days → fewest days below Critical
+→ fewest days below Target (the arrival day also counts its Min days) → latest date (least money).
+Prepone only when strictly safer ("vendor must be able to deliver"); moves within 3 days are not
+advised. Several pieces of one material are optimised earliest first, each seeing the earlier
+ones moved (`optimizeArrivalSet`), so two pieces never fix the same gap. Other arrivals, group
+re-allocation and the engine's new lots stay fixed in this estimate — "Use all engine dates" then
+**Preview** gives the full engine result before Save. Replaces the earlier first-day-at-Target rule.
+
+### 13.2 Sheet PLANNING "Quantity to Dispatch" + "Prediction" (owner 2026-10-21, later)
+
+Read from the Jayashree REPORTS_ALL PLANNING tab: column G "Quantity to Dispatch" is a formula
+(after the last known ETA, a QTY PER LOT is placed the day after Max days falls to MIN STOCK
+days) that the planner overwrites by hand; the right-side "Prediction" (R:W) is
+`QUERY(D8:L194, "SELECT D,G,J,L WHERE G>0")` — every dispatch row with its Max / Min days — plus
+LCL-ETD / Port ETA = Date − ETA/ETD days and Import ETD = that − transit time; further right an
+ETA list (Date, PO, Qty, Supplier, Status).
+
+4A Item Plan now matches it: the grid's **Quantity to Dispatch** column (was "Engine Lot") is
+typed in directly per day; a typed quantity becomes your lot for the selected item, the engine
+re-plans around it at once (Preview) and Closing / Max / Min change on every later day; "Save my
+quantities" stores it as a plan version, "Back to saved plan" drops it. The right side opens
+with **Prediction** (Engine / You, Import ETD, LCL-ETD / Port ETA, Date, Quantity to Dispatch,
+Max Days, Min Days, Member, Supplier), worked back from the plant date: Port ETA = Date − median
+port → plant days from received import CSNs, Import ETD = Date − the vendor's dispatch → plant
+days (route lead without booking); then the ETA list (Arrivals) and the suggestions /
+instructions. Clearing an engine lot's quantity does not forbid a lot that day — the engine still
+places what is needed.
+
+## 14. Rolling Plan Excel for management (owner 2026-10-21)
+
+Owner: the old `rolling_plan_<date>.xlsx` (PLAN, RDP, MHEC, <co>_RM_PM, <co>_PLANNING_SHEET) must come
+out of the ERP as one compact file. Decisions: **all companies in one file**; **no hand-made
+families** — every family (material group) and every single item gets its block, only the
+relevant rows; **no planner remarks**.
+
+`Download Rolling Plan` (PO22 header) fetches every company in the user's access one after another
+(`GET /api/procurement/mts-requirement/rolling-plan`, PROC_MTS_REQUIREMENT VIEW; one Engine run per
+company over CM + NM + 1 month with every saved user lot and reschedule) plus the PO21 plan report,
+and writes one workbook (exceljs, dynamic import):
+
+| Tab | Content |
+|---|---|
+| SUMMARY | per company: horizon, materials planned, runs out, below Critical / Target, new orders (late) and value, arrivals ETA passed / no ETA, moves advised; "Needs attention" list; companies skipped and why |
+| PLAN | PO21 effective plan, Mother → Child group with TOTAL PLAN rows, columns company × 3 months |
+| RM_PLANNING / PM_PLANNING | one block per family / item per company: title (members), Target / Critical, RUNS OUT date; rows = today + every arrival day + every day the planner fixed a quantity (Date, Opening, ETA to Plant, Quantity to Dispatch, Pro-rata, Closing, Max Days, Min Stk, Min Days, PO / CSN, Qty, Supplier, ST, Engine best date); then **Prediction** (Engine / Planner, Import ETD, LCL-ETD / Port ETA, Date, Quantity, Max, Min, Material, Supplier, PO by) |
+| <Company> RM_PM | requirement rows with demand (old columns + Critical Cov, Runs out on, Below Critical from), worst first |
+| BUY_PLAN | every engine order: PO by, qty, plant ETA, lots, supplier, full cost / unit, value, cost gaps, late, why |
+| STORE_INSTRUCTIONS | Store Report lines with stock backing and "Transfer first" |
+| ARRIVALS | every open PO / CSN / STO piece: supplier, status, CSN / PO ETA, planning ETA, ETA passed / missing, engine best date and why |
+
+Names only (no PACE codes). A block is shown when any member has use, an arrival or a lot in
+the horizon. Supplier of an arrival = the CSN's vendor, else the PO's vendor.

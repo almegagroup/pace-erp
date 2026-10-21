@@ -399,6 +399,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/mts-requirement/item-plan/scenario":  { skipAcl: false, resourceCode: "PROC_MTS_ITEM_PLAN_EDIT", action: "WRITE" },
   "GET:/api/procurement/mts-requirement/item-plan/scenarios":  { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "POST:/api/procurement/mts-requirement/item-plan/ai-review": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+  "GET:/api/procurement/mts-requirement/rolling-plan": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "POST:/api/procurement/mts-requirement/item-plan/simulate": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "POST:/api/procurement/mts-requirement/item-plan/what-if-target": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "POST:/api/procurement/mts-requirement/planning/reschedule-preview": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },

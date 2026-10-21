@@ -24,6 +24,7 @@ import {
   requireRequirementViewAccess,
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
+import { optimizeArrivalSet } from "./mts_item_plan.logic.ts";
 import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
@@ -439,12 +440,21 @@ export async function computePlanning(p: PlanningParams) {
     group_assignments: assembly.group_assignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
-    reschedulable_arrivals: req.output.rows.flatMap((row) => row.inbound_events.filter((event) => event.reschedule_key).map((event) => ({
-      material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
-      reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
-      eta_plant: event.original_date !== undefined ? event.original_date : event.date,
-      rescheduled_eta: event.original_date !== undefined ? event.date : null,
-    }))).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
+    reschedulable_arrivals: req.output.rows.flatMap((row) => {
+      const pieces = row.inbound_events.filter((event) => event.reschedule_key);
+      if (pieces.length === 0) return [];
+      // Owner 2026-10-21: best plant date per piece, tried on every day of CM + NM.
+      const days = projection.rows.filter((r) => r.material_id === row.material_id)
+        .map((r) => ({ day: r.day, closing: r.closing_qty_base, use: r.demand_qty_base, target_days: r.target_days, critical_days: r.critical_days }));
+      const optimum = optimizeArrivalSet(days, pieces.map((e) => ({ key: e.reschedule_key as string, eta: e.date, qty: e.qty })));
+      return pieces.map((event) => ({
+        material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+        reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
+        eta_plant: event.original_date !== undefined ? event.original_date : event.date,
+        rescheduled_eta: event.original_date !== undefined ? event.date : null,
+        optimum: optimum.get(event.reschedule_key as string) ?? null,
+      }));
+    }).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
     store_rows: req.output.store_rows.map((row) => ({
       ...row,

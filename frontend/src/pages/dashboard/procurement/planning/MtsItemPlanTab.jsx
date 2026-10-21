@@ -96,6 +96,36 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   }, [view]);
   const monthSource = useMemo(() => new Map((plan?.month_sources ?? []).map((m) => [m.month.slice(0, 7), m.source])), [plan]);
 
+  // Your own Quantity to Dispatch per day for the selected item (draft first, else saved).
+  const ownDispatch = useMemo(() => {
+    const map = new Map();
+    for (const l of lotDraft ?? plan?.scenario?.manual_lots ?? []) {
+      if (l.material_id === materialId && Number(l.qty_base) > 0) map.set(l.plant_eta, (map.get(l.plant_eta) ?? 0) + Number(l.qty_base));
+    }
+    return map;
+  }, [lotDraft, plan, materialId]);
+  function setDispatchQty(day, value) {
+    const qty = Number(value);
+    const base = lotDraft ?? plan?.scenario?.manual_lots ?? [];
+    const same = (l) => l.plant_eta === day && l.material_id === materialId;
+    const vendorId = base.find(same)?.vendor_id ?? null;
+    const next = [...base.filter((l) => !same(l)), ...(qty > 0 ? [{ material_id: materialId, plant_eta: day, qty_base: qty, vendor_id: vendorId }] : [])];
+    setLotDraft(next);
+    void runPreview({ lots: next, label: "Quantity to Dispatch changed" });
+  }
+
+  const predictionColumns = [
+    { key: "source", label: "", width: "60px", render: (p) => (p.source === "YOU" ? <span className="bg-sky-100 px-1.5 py-0.5 text-xs font-semibold text-sky-800">You</span> : <span className="bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">Engine</span>), copyValue: (p) => (p.source === "YOU" ? "You" : "Engine") },
+    { key: "import_etd", label: "Import ETD", width: "100px", render: (p) => p.import_etd ?? "—" },
+    { key: "port_eta", label: "LCL-ETD / Port ETA", width: "120px", render: (p) => p.port_eta ?? "—" },
+    { key: "date", label: "Date", width: "100px", render: (p) => <span className="font-semibold">{p.date ?? "—"}</span>, copyValue: (p) => p.date ?? "" },
+    { key: "qty", label: "Quantity to Dispatch", width: "130px", align: "right", render: (p) => `${fmtQty(p.qty)} ${p.uom ?? ""}`, copyValue: (p) => p.qty },
+    { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (p) => fmtDays(p.max_days), copyValue: (p) => p.max_days ?? "" },
+    { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (p) => fmtDays(p.min_days), copyValue: (p) => p.min_days ?? "" },
+    { key: "material_name", label: "Member", width: "200px", render: (p) => `${p.material_code ?? ""} ${p.material_name}`.trim() },
+    { key: "vendor", label: "Supplier", width: "200px", render: (p) => p.vendor ?? "—" },
+  ];
+
   const gridColumns = [
     { key: "day", label: "Date", width: "100px", render: (r) => (
       <button type="button" onClick={() => setOpenDay((d) => (d === r.day ? "" : r.day))} className="text-left text-sky-800 hover:underline">{r.day}</button>
@@ -104,7 +134,35 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "source", label: "Demand", width: "80px", render: (r) => monthSource.get(r.day.slice(0, 7)) ?? "", copyValue: (r) => monthSource.get(r.day.slice(0, 7)) ?? "" },
     { key: "opening", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening), copyValue: (r) => r.opening },
     { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
-    { key: "planned_lot", label: "Engine Lot", width: "110px", align: "right", render: (r) => (r.planned_lot ? <span className="font-semibold text-sky-800">{fmtQty(r.planned_lot)}</span> : ""), copyValue: (r) => r.planned_lot },
+    {
+      // Sheet PLANNING "Quantity to Dispatch": the engine's lots, overwritten by typing your own.
+      key: "planned_lot", label: "Quantity to Dispatch", width: "170px", align: "right", filterable: false,
+      render: (r) => {
+        const own = ownDispatch.get(r.day);
+        const shown = own ?? (r.planned_lot || "");
+        const input = (
+          <input
+            key={`${r.day}|${shown}`}
+            type="number"
+            min="0"
+            defaultValue={shown}
+            title={own !== undefined ? "Your quantity (not saved until you Save)" : r.planned_lot ? "Engine lot — type to change" : "Type a quantity to dispatch on this day"}
+            onBlur={(event) => { if (String(event.target.value) !== String(shown)) setDispatchQty(r.day, event.target.value); }}
+            onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+            className={`h-6 w-24 border px-1 text-right text-xs outline-none ${own !== undefined ? "border-sky-500 bg-sky-100 font-semibold text-sky-900" : r.planned_lot ? "border-slate-300 bg-white font-semibold text-sky-800" : "border-transparent bg-transparent hover:border-slate-300"}`}
+          />
+        );
+        // Same day as an engine lot (or another member's lot): show the extra so the row adds up.
+        const extra = own !== undefined ? Math.round(((r.planned_lot ?? 0) - own) * 1000) / 1000 : 0;
+        return extra > 0.001 ? (
+          <span className="flex items-center justify-end gap-1">
+            {input}
+            <span className="text-[10px] text-slate-600" title="Engine lot on the same day">{`+${fmtQty(extra)} engine`}</span>
+          </span>
+        ) : input;
+      },
+      copyValue: (r) => r.planned_lot,
+    },
     { key: "use", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.use), copyValue: (r) => r.use },
     { key: "unmet_group", label: "Group not met", width: "110px", align: "right", render: (r) => (r.unmet_group ? <span className="font-semibold text-rose-700">{fmtQty(r.unmet_group)}</span> : ""), copyValue: (r) => r.unmet_group },
     { key: "closing", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing)}</span>, copyValue: (r) => r.closing },
@@ -131,25 +189,52 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "eta_port", label: "ETA Port", width: "100px", render: (a) => a.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (a) => a.eta_plant ?? "—" },
     {
-      key: "rescheduled_eta", label: "Rescheduled ETA (planning)", width: "180px", filterable: false,
-      render: (a) => (a.reschedule_key ? (
-        <input
-          type="date"
-          value={drafts[a.reschedule_key]?.date ?? a.rescheduled_eta ?? ""}
-          onChange={(event) => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: event.target.value, row: a } }))}
-          className={CELL_INPUT}
-        />
-      ) : <span className="text-xs text-slate-400">cannot move</span>),
+      key: "rescheduled_eta", label: "Rescheduled ETA (planning)", width: "260px", filterable: false,
+      render: (a) => (!a.reschedule_key ? <span className="text-xs text-slate-400">cannot move</span> : drafts[a.reschedule_key]?.clear ? (
+        <span className="flex items-center gap-1 text-xs font-semibold text-sky-800">
+          {`Back to CSN date ${a.eta_plant ?? "—"}`}
+          <button type="button" onClick={() => undoDraft(a.reschedule_key)} className="h-6 border border-slate-300 bg-white px-1.5 text-xs font-normal text-slate-700 hover:bg-slate-50">Undo</button>
+        </span>
+      ) : (
+        <span className="flex items-center gap-1">
+          <input
+            type="date"
+            value={drafts[a.reschedule_key]?.date ?? a.rescheduled_eta ?? ""}
+            onChange={(event) => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: event.target.value, row: a } }))}
+            className={CELL_INPUT}
+          />
+          {drafts[a.reschedule_key] ? (
+            <button type="button" onClick={() => undoDraft(a.reschedule_key)} title="Drop this unsaved change" className="h-6 border border-slate-300 bg-white px-1.5 text-xs text-slate-700 hover:bg-slate-50">Undo</button>
+          ) : a.rescheduled_eta ? (
+            <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { clear: true, reason: "Back to CSN / PO date", row: a } }))} title="Remove the saved planning date — the CSN / PO date is used again" className="h-6 border border-sky-300 bg-white px-1.5 text-xs text-sky-800 hover:bg-sky-50">Back to CSN date</button>
+          ) : null}
+        </span>
+      )),
       copyValue: (a) => a.rescheduled_eta ?? "",
     },
     {
-      key: "advice", label: "Engine advice", width: "260px",
+      key: "now_days", label: "Min / Max on arrival", width: "130px", align: "right",
+      render: (a) => (a.optimum ? `${fmtDays(a.optimum.current.min_days)} / ${fmtDays(a.optimum.current.max_days)}` : "—"),
+      copyValue: (a) => (a.optimum ? `${a.optimum.current.min_days ?? ""}/${a.optimum.current.max_days ?? ""}` : ""),
+    },
+    {
+      key: "advice", label: "Engine best date", width: "170px",
       render: (a) => (a.advice ? (
-        <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title="Use this date">
-          {a.advice.shift_days < 0 ? `Advance ${-a.advice.shift_days} d → ${a.advice.suggested_eta}` : `Postpone ${a.advice.shift_days} d → ${a.advice.suggested_eta}`}
+        <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title={a.advice.reason}>
+          {`${a.advice.suggested_eta} (${a.advice.shift_days < 0 ? `prepone ${-a.advice.shift_days} d` : `postpone ${a.advice.shift_days} d`})`}
         </button>
-      ) : ""),
-      copyValue: (a) => (a.advice ? `${a.advice.shift_days} d → ${a.advice.suggested_eta}` : ""),
+      ) : a.optimum ? <span className="text-xs text-emerald-700">Date is fine</span> : ""),
+      copyValue: (a) => (a.advice ? a.advice.suggested_eta : ""),
+    },
+    {
+      key: "best_days", label: "At best date: Min / Max", width: "150px", align: "right",
+      render: (a) => (a.advice ? `${fmtDays(a.optimum.best.min_days)} / ${fmtDays(a.optimum.best.max_days)}` : ""),
+      copyValue: (a) => (a.advice ? `${a.optimum.best.min_days ?? ""}/${a.optimum.best.max_days ?? ""}` : ""),
+    },
+    {
+      key: "why", label: "Why", width: "320px",
+      render: (a) => (a.optimum ? <span className="text-xs">{a.optimum.reason}</span> : ""),
+      copyValue: (a) => a.optimum?.reason ?? "",
     },
     {
       key: "reason", label: "Reason", width: "200px", filterable: false,
@@ -203,6 +288,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   });
 
   const pending = Object.entries(drafts).filter(([, d]) => d?.row);
+  const undoDraft = (key) => setDrafts((d) => { const next = { ...d }; delete next[key]; return next; });
   async function saveReschedules() {
     setSaving(true);
     try {
@@ -212,7 +298,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
           reschedule_key: key,
           material_id: d.row.material_id,
           original_eta: d.row.eta_plant ?? null,
-          rescheduled_eta: d.date ?? d.row.rescheduled_eta ?? null,
+          rescheduled_eta: d.clear ? null : d.date || d.row.rescheduled_eta || null,
           reason: d.reason ?? null,
         })),
       });
@@ -269,7 +355,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   async function runPreview({ label, lots, targetOverrides } = {}) {
     setPreviewBusy(true);
     try {
-      const reschedules = pending.map(([key, d]) => ({ reschedule_key: key, date: d.date ?? d.row.rescheduled_eta ?? null }));
+      const reschedules = pending.map(([key, d]) => ({ reschedule_key: key, date: d.clear ? null : d.date || d.row.rescheduled_eta || null }));
       const manualLots = (lots ?? lotDraft ?? plan?.scenario?.manual_lots ?? []).filter((l) => Number(l.qty_base) > 0).map((l) => ({ ...l, qty_base: Number(l.qty_base) }));
       const result = await simulateMtsItemPlan({
         company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId,
@@ -355,7 +441,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             <div className="grid gap-1 border-2 border-indigo-400 bg-indigo-50 p-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold text-indigo-900">PREVIEW — not saved ({preview.label}). Grids below show the preview.</span>
-                <button type="button" onClick={() => setPreview(null)} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Back to saved plan</button>
+                <button type="button" onClick={() => { setPreview(null); setLotDraft(null); }} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Back to saved plan</button>
+                {lotDraft ? <button type="button" disabled={saving} onClick={() => void saveLots(lotDraft.filter((l) => Number(l.qty_base) > 0).map((l) => ({ ...l, qty_base: Number(l.qty_base) })), "USER", null)} className="h-6 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">{saving ? "Saving…" : "Save my quantities"}</button> : null}
               </div>
               <table>
                 <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">First shortage</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Days ≤ Critical</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th className="pr-3">Avg money in stock</th><th>New orders</th></tr></thead>
@@ -408,15 +495,22 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             </section>
 
             <div className="grid content-start gap-3">
+              <section className="grid gap-1 border border-amber-300 bg-amber-50 p-2">
+                <h3 className="text-sm font-semibold text-slate-800">Prediction — every Quantity to Dispatch{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
+                <p className="text-xs text-slate-500">Engine lots and your own (type in the grid's Quantity to Dispatch). Max / Min days on that date; Port ETA and Import ETD worked back from the plant date (port → plant days from received CSNs, vendor transit time).</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={predictionColumns} rows={view.prediction ?? []} rowKey={(p, i) => `${p.source}|${p.material_id}|${p.date}|${i}`} emptyMessage="No dispatch needed in the horizon." maxHeight="30vh" />
+              </section>
               <section className="grid gap-1">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-semibold text-slate-800">Arrivals / Future Orders</h3>
                   <button type="button" onClick={() => void saveReschedules()} disabled={saving || pending.length === 0} className="h-7 border border-sky-600 bg-sky-600 px-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
                     {saving ? "Saving…" : `Save rescheduled dates${pending.length ? ` (${pending.length})` : ""}`}
                   </button>
+                  <button type="button" onClick={() => setDrafts((d) => ({ ...d, ...Object.fromEntries(plan.arrivals.filter((x) => x.advice).map((x) => [x.reschedule_key, { ...(d[x.reschedule_key] ?? {}), date: x.advice.suggested_eta, reason: x.advice.reason, row: x }])) }))} disabled={!plan.arrivals.some((x) => x.advice)} className="h-7 border border-amber-600 bg-white px-2 text-xs font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50">Use all engine dates</button>
+                  {pending.length ? <button type="button" onClick={() => { setDrafts({}); setPreview(null); }} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Undo all</button> : null}
                   <button type="button" onClick={() => void runPreview()} disabled={previewBusy || pending.length === 0} className="h-7 border border-indigo-600 bg-white px-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-50 disabled:opacity-50">Preview</button>
                 </div>
-                <p className="text-xs text-slate-500">Planning only — CSN Tracker is never changed by the system. Shipped (in transit) lots cannot be moved.</p>
+                <p className="text-xs text-slate-500">Engine best date: every day of the horizon is tried for each not-yet-shipped piece — fewest stock-out / below-Critical / below-Target days, then the latest date (least money held). Preview checks all moves together. Planning only — CSN Tracker is never changed. Shipped lots cannot be moved.</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={arrivalColumns} rows={view.arrivals} rowKey={(a, i) => `${a.reference}|${a.material_id}|${i}`} emptyMessage="No open PO / CSN / STO for these members." maxHeight="35vh" />
               </section>
               <section className="grid gap-1">
