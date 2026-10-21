@@ -1,5 +1,6 @@
 /*
- * PO22 Rolling Plan Excel (owner 2026-10-21) — the old "rolling_plan" workbook built from ERP:
+ * PO22 Plan Excel (owner 2026-10-21) — the old "rolling_plan" workbook built from ERP, for the
+ * Final or the Rolling plan alike (PO21 effective plan: Final where it exists, else Rolling):
  * every company the user can see in one file. Tabs:
  *   SUMMARY · PLAN (PO21, company × 3 months) · RM_PLANNING · PM_PLANNING (family / item blocks:
  *   today + arrival rows, then Prediction) · <Company>_RM_PM (requirement) · BUY_PLAN ·
@@ -84,6 +85,11 @@ export function buildPlanMatrix(companies) {
   }
   const entries = [...bySku.values()].filter((e) => [...e.qty.values()].some((q) => q !== 0))
     .sort((a, b) => a.mother.localeCompare(b.mother) || a.child.localeCompare(b.child) || a.sku.localeCompare(b.sku));
+  // Which plan each company-month is built on: FINAL where a Final exists, else ROLLING (per SKU).
+  for (const col of columns) {
+    const sources = new Set((col.company.plan?.rows ?? []).map((r) => r.plan?.[col.month]?.base_source).filter(Boolean));
+    col.basis = sources.size === 0 ? "No plan" : sources.size === 1 ? [...sources][0] : [...sources].sort().join(" + ");
+  }
   return { columns, entries };
 }
 
@@ -92,6 +98,7 @@ function writePlan(sheet, companies) {
   const top = sheet.addRow(["", "", ...columns.map((col, i) => (i === 0 || columns[i - 1].company !== col.company ? companyLabel(col.company) : ""))]);
   top.font = { bold: true };
   styleHeader(sheet.addRow(["DESCRIPTION", "UoM", ...columns.map((c) => c.month.slice(0, 7))]));
+  styleHeader(sheet.addRow(["Plan basis", "", ...columns.map((c) => c.basis)]));
   let currentMother = null;
   let currentChild = null;
   let groupRows = [];
@@ -123,7 +130,7 @@ function writePlan(sheet, companies) {
   }
   flush();
   widths(sheet, [44, 8, ...columns.map(() => 12)]);
-  sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 2 }];
+  sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 3 }];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,9 +184,9 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
 
   // SUMMARY
   const summary = wb.addWorksheet(sheetName("SUMMARY", used));
-  const head = summary.addRow([`MTS Rolling Plan — as of ${asOf}`]);
+  const head = summary.addRow([`MTS Plan — as of ${asOf}`]);
   head.getCell(1).font = { bold: true, size: 14 };
-  summary.addRow([`Generated ${new Date().toLocaleString("en-IN")} · Engine + planner plan · advisory: no PO is created by this file`]);
+  summary.addRow([`Generated ${new Date().toLocaleString("en-IN")} · Demand = PO21 effective plan: Final where a Final exists, else Rolling (+ Additional, Urgent Extra) · advisory: no PO is created by this file`]);
   summary.addRow([]);
   addTable(summary, [
     { label: "Company", value: (c) => companyLabel(c) },

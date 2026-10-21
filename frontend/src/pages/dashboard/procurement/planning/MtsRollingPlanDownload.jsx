@@ -1,7 +1,7 @@
 /*
  * File-Path: frontend/src/pages/dashboard/procurement/planning/MtsRollingPlanDownload.jsx
  * Domain: PROCUREMENT / MTS PLANNING
- * Purpose: PO22 "Download Rolling Plan" (owner 2026-10-21) — every company the user can see, one
+ * Purpose: PO22 "Download Plan (Excel)" (owner 2026-10-21; Final or Rolling — PO21 effective plan) — every company the user can see, one
  *          Excel file for higher management (see rollingPlanWorkbook.js for the tabs). Companies are
  *          fetched one after another to keep the backend load flat; a company without access is
  *          listed on the Summary tab, never silently dropped.
@@ -49,8 +49,8 @@ export default function MtsRollingPlanDownload({ runtimeContext, planMonth, asOf
       setBusy("Building Excel…");
       if (skipped.length) companies[0].notes = [...skipped, ...(companies[0].notes ?? [])];
       const { downloadRollingPlanWorkbook } = await import("./rollingPlanWorkbook.js");
-      await downloadRollingPlanWorkbook({ companies, asOf, fileName: `rolling_plan_${asOf.replaceAll("-", "")}.xlsx` });
-      pushToast({ message: `Rolling plan downloaded (${companies.length} compan${companies.length === 1 ? "y" : "ies"}${skipped.length ? `, ${skipped.length} skipped — see Summary` : ""}).`, tone: "success" });
+      await downloadRollingPlanWorkbook({ companies, asOf, fileName: `mts_plan_${asOf.replaceAll("-", "")}.xlsx` });
+      pushToast({ message: `Plan downloaded (${companies.length} compan${companies.length === 1 ? "y" : "ies"}${skipped.length ? `, ${skipped.length} skipped — see Summary` : ""}).`, tone: "success" });
     } catch (error) {
       pushToast({ message: errorText(error), tone: "error" });
     } finally {
@@ -66,7 +66,7 @@ export default function MtsRollingPlanDownload({ runtimeContext, planMonth, asOf
       title="All your companies in one Excel: Summary, PLAN, RM / PM planning with Prediction, RM_PM per company, Buy Plan, Store Instructions, Arrivals"
       className="h-8 border border-emerald-600 bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
     >
-      {busy ? `Preparing ${busy}` : "Download Rolling Plan"}
+      {busy ? `Preparing ${busy}` : "Download Plan (Excel)"}
     </button>
   );
 }
