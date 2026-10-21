@@ -276,7 +276,7 @@ export default function MtsRequirementPage() {
             demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""}
           />
         ) : activeTab === "settings" ? (
-          <SettingsTab companyId={companyId} asOf={asOf} access={access} today={today} />
+          <SettingsTab companyId={companyId} planMonth={planMonth} asOf={asOf} access={access} today={today} />
         ) : activeTab === "cost" ? (
           <CostSettingsTab companyId={companyId} access={access} today={today} />
         ) : activeTab === "planning" ? (
@@ -813,8 +813,12 @@ function parseSheetImport(rawText, rows) {
   return { matched, unmatched };
 }
 
-function SettingsTab({ companyId, asOf, access, today }) {
+function SettingsTab({ companyId, planMonth, asOf, access, today }) {
   const queryClient = useQueryClient();
+  // P3: engine advice (best cycle, Max days, best lot) from the cached planning run.
+  const [showAdvice, setShowAdvice] = useState(false);
+  const adviceQ = usePlanningQuery(showAdvice ? companyId : "", planMonth, asOf, "");
+  const adviceByMaterial = useMemo(() => new Map((adviceQ.data?.material_advice ?? []).map((a) => [a.material_id, a])), [adviceQ.data]);
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState("");
@@ -995,7 +999,7 @@ function SettingsTab({ companyId, asOf, access, today }) {
       key: "suggested", label: "Suggested T / C (no booking)", width: "210px", filterable: false,
       render: (r) => (r.suggested_target_days === null && r.suggested_critical_days === null ? <span className="text-slate-400">No route / history</span> : (
         <span className="flex items-center gap-2">
-          <span title={`Critical = p90 of how late ${r.delay_sample_count} received shipment(s) arrived vs route time; Target = route time + Critical. Booking Time not included.`}>
+          <span title={r.suggestion_reason ?? `Critical = p90 of how late ${r.delay_sample_count} received shipment(s) arrived vs route time; Target = route time + Critical. Booking Time not included.`}>
             T {fmtDays(r.suggested_target_days) || "—"} / C {fmtDays(r.suggested_critical_days) || "—"}
             <span className="text-xs text-slate-500"> ({r.delay_sample_count} shipments)</span>
           </span>
@@ -1008,6 +1012,42 @@ function SettingsTab({ companyId, asOf, access, today }) {
         </span>
       )),
       copyValue: (r) => `${r.suggested_target_days ?? ""}/${r.suggested_critical_days ?? ""}`,
+    },
+    {
+      key: "best_vs_yours", label: "Best vs yours", width: "220px", filterable: false,
+      render: (r) => {
+        const yours = valueOf(r, "target_cov_days");
+        if (r.suggested_target_days === null || yours === "" || yours === null || yours === undefined) return <span className="text-slate-400">—</span>;
+        const diff = Number(yours) - Number(r.suggested_target_days);
+        if (Math.abs(diff) < 0.5) return <span className="text-xs text-emerald-700">Same as best</span>;
+        return <span className="text-xs text-amber-700" title={r.suggestion_reason ?? ""}>Best {fmtDays(r.suggested_target_days)}, you keep {fmtDays(yours)} ({diff > 0 ? "+" : ""}{fmtDays(diff)} d){valueOf(r, "remarks") ? "" : " — add the reason in Remarks"}</span>;
+      },
+      copyValue: (r) => r.suggestion_reason ?? "",
+    },
+    {
+      key: "engine_advice", label: "Engine: Max days / best lot", width: "260px", filterable: false,
+      render: (r) => {
+        if (!showAdvice) return <span className="text-slate-400 text-xs">Load advice ↑</span>;
+        const a = adviceByMaterial.get(r.material_id);
+        if (!a) return <span className="text-slate-400 text-xs">{adviceQ.isFetching ? "Calculating…" : "Not planned"}</span>;
+        return (
+          <span className="flex items-center gap-2 text-xs" title={a.reason}>
+            <span>Max {fmtDays(a.max_days) || "—"} d · cycle {fmtDays(a.cycle_days)} d{a.cycle_basis === "DEFAULT" ? " (default)" : ""}</span>
+            {a.vendor_moq_fixed ? <span className="text-slate-500">vendor MOQ fixed</span> : a.best_lot_qty !== null ? (
+              <>
+                <span>lot {fmtQty(a.best_lot_qty)} {r.base_uom_code ?? ""}</span>
+                {canEdit ? (
+                  <button type="button" onClick={() => {
+                    setField(r.material_id, "moq_qty", String(a.best_lot_qty));
+                    if (r.base_uom_code) setField(r.material_id, "moq_uom_code", r.base_uom_code);
+                  }} className="h-6 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">Use</button>
+                ) : null}
+              </>
+            ) : null}
+          </span>
+        );
+      },
+      copyValue: (r) => { const a = adviceByMaterial.get(r.material_id); return a ? `${a.max_days ?? ""}|${a.best_lot_qty ?? ""}` : ""; },
     },
     {
       key: "lead_time", label: "Lead Time (verified)", width: "200px",
@@ -1139,6 +1179,14 @@ function SettingsTab({ companyId, asOf, access, today }) {
           className="h-8 border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
         >
           {showImport ? "Close import" : "Import from REQUIREMENT sheet"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowAdvice((value) => !value)}
+          className="h-8 border border-sky-300 bg-sky-50 px-3 text-sm font-semibold text-sky-900 hover:bg-sky-100"
+          title="Engine advice: best order cycle, Max days, best lot where the vendor has no fixed MOQ"
+        >
+          {showAdvice ? (adviceQ.isFetching ? "Calculating advice…" : "Hide engine advice") : "Load engine advice"}
         </button>
         <span className="flex items-center gap-1 text-xs text-slate-600">
           Rate for all shown rows

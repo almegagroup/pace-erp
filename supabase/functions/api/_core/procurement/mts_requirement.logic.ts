@@ -1494,7 +1494,19 @@ export type LeadTimeResult = {
   suggested_critical_days?: number | null;
   suggested_target_days?: number | null;
   delay_sample_count?: number;
+  /** P3: why this suggestion (route + late-arrival margin + sample size). */
+  suggestion_reason?: string | null;
 };
+
+/** P3 (owner 2026-10-20): the reason shown next to the suggested Target / Critical days. */
+export function safetySuggestionReason(routeDays: number | null, critical: number | null, samples: number): string | null {
+  if (routeDays === null && critical === null) return null;
+  const parts: string[] = [];
+  if (routeDays !== null) parts.push(`route ${routeDays} d`);
+  if (critical !== null) parts.push(`+ ${critical} d late-arrival margin (9 of 10 of the last ${samples} shipment${samples === 1 ? "" : "s"} arrived within it)`);
+  else parts.push("+ no shipment history yet for a late-arrival margin");
+  return `Target = ${parts.join(" ")}; Critical = that margin.`;
+}
 
 /**
  * Suggested safety days (owner 2026-10-19, Booking Time excluded):

@@ -360,6 +360,24 @@ export async function computePlanning(p: PlanningParams) {
           : [],
       };
     }),
+    // P3 (owner 2026-10-20): engine advice per material — best order cycle, Max days, best lot
+    // where the vendor has no fixed MOQ. Shown next to the user's values in Material Settings.
+    material_advice: req.output.rows.filter((r) => r.kind === "RM" || r.kind === "PM").map((r) => {
+      const use = rowDailyUse(r.material_id);
+      const cycle = cycleDays.get(r.material_id) ?? null;
+      const target = r.policy?.target_cov_days ?? null;
+      const options = vendorOptions.get(r.material_id) ?? [];
+      const vendorMoq = options.some((o) => o.moq_qty_base !== null);
+      const bestLot = cycle !== null && use > 0 ? Math.ceil(use * cycle) : null;
+      return {
+        material_id: r.material_id, daily_use: Math.round(use * 1000) / 1000, cycle_days: cycle,
+        cycle_basis: cycleBasis.get(r.material_id) ?? null, max_days: target !== null && cycle !== null ? target + cycle : null,
+        vendor_moq_fixed: vendorMoq, best_lot_qty: vendorMoq ? null : bestLot,
+        reason: cycleBasis.get(r.material_id) === "ECONOMIC"
+          ? `Best order cycle ${cycle} d: order cost (AC01 landed per GRN) balanced against money tied up (price × interest).`
+          : `No order-cost / price / interest data yet — default ${cycle} d cycle.`,
+      };
+    }),
     groups: req.output.groups.map((g) => ({
       group_id: g.group_id, group_label: groupLabel.get(g.group_id) ?? "—", kind: g.kind,
       members: g.member_ids.map((id) => ({ material_id: id, material_name: nameOf(id), material_code: codeOf(id) })),

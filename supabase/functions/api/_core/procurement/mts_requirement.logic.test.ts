@@ -17,6 +17,7 @@ import {
   buildToBaseFactors,
   canonicalJson,
   computeLeadTime,
+  safetySuggestionReason,
   suggestSafetyDays,
   computeMaterialMetrics,
   consumptionFromConsBucket,
@@ -843,4 +844,11 @@ Deno.test("PO21 cross-company: each origin keeps FINAL-else-ROLLING, then demand
   // Without origins the old rule holds: FINAL replaces ROLLING inside one company.
   const single = effectivePlanAt(lines.map(({ origin_company_id: _o, ...l }) => l), null)[0];
   assertEqual(single.base_qty, 100, "same company: FINAL wins");
+});
+
+Deno.test("P3 safetySuggestionReason: route + late margin + sample size, or says no history", () => {
+  const reason = safetySuggestionReason(35, 6, 12)!;
+  if (!reason.includes("route 35 d") || !reason.includes("6 d late-arrival margin") || !reason.includes("12 shipments")) throw new Error(reason);
+  if (!safetySuggestionReason(20, null, 0)!.includes("no shipment history")) throw new Error("no-history wording");
+  if (safetySuggestionReason(null, null, 0) !== null) throw new Error("nothing to say → null");
 });
