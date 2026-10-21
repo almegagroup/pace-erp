@@ -155,6 +155,8 @@ export type FamilyDayRow = {
 };
 
 /** Whole + fractional days `balance` covers from `fromIndex`, walking the coming days' use (owner: forward). */
+export const wholeDays = (days: number | null) => (days === null ? null : Math.floor(days + 1e-9));
+
 export function forwardCoverDays(balance: number, uses: readonly number[], fromIndex: number): number | null {
   const tail = uses.slice(fromIndex);
   const total = tail.reduce((s, u) => s + u, 0);
@@ -194,8 +196,9 @@ export function familyDayGrid(
     return {
       day: s.day, opening: round(opening), arrivals: round(s.arrivals), planned_lot: round(s.planned_lot),
       use: round(uses[index]), unmet_group: round(s.unmet), closing: round(closing),
-      max_days: forwardCoverDays(closing, uses, index + 1), min_stock: round(minStock),
-      min_days: forwardCoverDays(minStock, uses, index + 1),
+      // Whole days, rounded down (sheet ROUNDDOWN): 49.7 days of stock is 49 full days.
+      max_days: wholeDays(forwardCoverDays(closing, uses, index + 1)), min_stock: round(minStock),
+      min_days: wholeDays(forwardCoverDays(minStock, uses, index + 1)),
     };
   });
 }
@@ -231,6 +234,12 @@ export function arrivalStatus(kind: string, dateSource: string): ArrivalStatus {
 // falls to its Target. Earlier than the ETA → advance; much later → postpone (money not tied up).
 // Advice only: the planner may store a rescheduled ETA; CSN Tracker is changed by the user.
 // ─────────────────────────────────────────────────────────────────────────────
+/** PO number of an arrival reference "PO <po_number>/<line> · …" (null for STO / Sub-CSN pieces). */
+export function poNumberOfReference(reference: string): string | null {
+  const m = /^PO (.+?)\/\d+(?:\s|$|\s·|\s\()/.exec(`${reference} `);
+  return m ? m[1] : null;
+}
+
 export type MemberProjectionDay = { day: string; closing: number; use: number; target_days: number | null };
 
 export const RESCHEDULE_TOLERANCE_DAYS = 3;
@@ -312,8 +321,8 @@ export function optimizeArrivalDate(rows: readonly ArrivalDay[], eta: string | n
     const [shortage, critical, target] = key(k);
     return {
       eta: k < n ? rows[k].day : eta,
-      min_days: k < n ? coverBase[k] : null,
-      max_days: k < n ? coverPlus[k] : null,
+      min_days: k < n ? wholeDays(coverBase[k]) : null,
+      max_days: k < n ? wholeDays(coverPlus[k]) : null,
       shortage_days: shortage, days_below_critical: critical, days_below_target: target,
       first_below_target_day: firstBelow(k),
     };

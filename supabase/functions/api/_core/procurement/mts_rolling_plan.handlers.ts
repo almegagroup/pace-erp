@@ -12,7 +12,7 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
-import { arrivalStatus, type ArrivalOptimum, dayRange, familyClosure, familyDayGrid } from "./mts_item_plan.logic.ts";
+import { arrivalStatus, type ArrivalOptimum, dayRange, familyClosure, familyDayGrid, poNumberOfReference } from "./mts_item_plan.logic.ts";
 import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
@@ -100,7 +100,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       if (gaps.length) portToPlant.set(id, Math.round(gaps[Math.floor(gaps.length / 2)]));
     }
     const supplierOf = (reference: string, csnId?: string) => {
-      const po = /^PO ([^/]+(?:\/[^/\s]+)*)\/\d+/.exec(reference)?.[1] ?? null;
+      const po = poNumberOfReference(reference);
       return (csnId ? vendorByCsn.get(csnId) : null) ?? (po ? vendorByPo.get(po) ?? null : null);
     };
     const optimumByKey = new Map<string, ArrivalOptimum>(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
@@ -178,6 +178,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         target_days: selected?.policy?.target_cov_days ?? null,
         critical_days: selected?.policy?.critical_cov_days ?? null,
         first_shortage_day: grid.find((g) => g.closing < -0.000001)?.day ?? null,
+        // Why the engine places no lot (owner 2026-10-21): shown on the block title line.
+        gaps: memberIds.flatMap((m) => {
+          const r = rowById.get(m);
+          const out: string[] = [];
+          if (r?.policy?.target_cov_days == null || r?.policy?.critical_cov_days == null) out.push(`${nameOf(m)}: no Target/Critical`);
+          if ((vendorOptions.get(m) ?? []).length === 0) out.push(`${nameOf(m)}: no vendor`);
+          return out;
+        }),
         rows, prediction,
       });
     }

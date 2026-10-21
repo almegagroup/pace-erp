@@ -3,6 +3,7 @@ import {
   companySpare,
   locationTransfers,
   optimizeArrivalDate,
+  poNumberOfReference,
   optimizeArrivalSet,
   rescheduleAdvice,
   buildForecastPlanLines,
@@ -181,4 +182,11 @@ Deno.test("Arrival optimizer: a piece beyond the horizon is not preponed without
   assert(a.best.eta !== b.best.eta, `different dates, got ${a.best.eta} / ${b.best.eta}`);
   assert(b.best.eta > a.best.eta, "second piece covers the later gap");
   assertEqual(b.current.eta, "2026-11-25", "current = today's date");
+});
+
+Deno.test("poNumberOfReference: PO numbers with slashes, line, CSN suffix; none for STO", () => {
+  assertEqual(poNumberOfReference("PO ASC/PO112/2026-27/1 · CSN 3000000225 (TRN)"), "ASC/PO112/2026-27", "slashed number");
+  assertEqual(poNumberOfReference("PO ASC/PO207/2026-27/1"), "ASC/PO207/2026-27", "no suffix");
+  assertEqual(poNumberOfReference("PO 9300000123/2 (BULK)"), "9300000123", "bulk");
+  assertEqual(poNumberOfReference("STO 123 · CSN 9"), null, "not a PO");
 });

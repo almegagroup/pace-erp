@@ -22,7 +22,9 @@ import {
 } from "./mts_item_plan_ai.logic.ts";
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
-import { type ArrivalOptimum, arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, optimizeArrivalSet, storeKey } from "./mts_item_plan.logic.ts";
+import {
+  type ArrivalOptimum, arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, optimizeArrivalSet, poNumberOfReference, storeKey, wholeDays,
+} from "./mts_item_plan.logic.ts";
 import type { OptimizerDailyProjectionRow, OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import type { PolicyOverride } from "./mts_requirement.logic.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
@@ -159,7 +161,12 @@ export async function buildItemPlan(
     ]);
     const groupLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ")]));
     const csnById = new Map(csnRows.map((c) => [text(c.id), c]));
-    const vendorIds = unique(csnRows.map((c) => text(c.vendor_id)));
+    // Supplier of a not-yet-shipped PO piece = the PO's vendor (owner 2026-10-21: was blank).
+    const poNumbers = unique(memberIds.flatMap((id) => (rowById.get(id)?.inbound_events ?? []).map((e) => poNumberOfReference(e.reference))));
+    const poRows = poNumbers.length === 0 ? [] : await fetchInChunks<JsonRecord>(poNumbers, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order").select("po_number, vendor_id").eq("company_id", companyId).in("po_number", chunk));
+    const poVendor = new Map(poRows.map((p) => [text(p.po_number), text(p.vendor_id)]));
+    const vendorIds = unique([...csnRows.map((c) => text(c.vendor_id)), ...poRows.map((p) => text(p.vendor_id))]);
     const [vendorRows, locationLabels] = await Promise.all([
       vendorIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(vendorIds, (chunk) => serviceRoleClient
         .schema("erp_master").from("vendor_master").select("id, vendor_code, vendor_name").in("id", chunk)),
@@ -169,8 +176,13 @@ export async function buildItemPlan(
 
     const members = memberIds.map((id) => {
       const row = rowById.get(id);
+      // Owner 2026-10-21: excluded locations (OT01 / OT02…) are not in the plan, so not shown;
+      // transfer-source locations are shown as "not counted".
+      const counted = new Set(row?.stock.required_locations ?? []);
+      const other = new Set(row?.stock.other_locations ?? []);
       const locations = stockRows.filter((s) => text(s.material_id) === id && Number(s.quantity ?? 0) > 0.000001)
-        .map((s) => ({ location: locationLabels.get(text(s.storage_location_id)) ?? "—", qty: round(Number(s.quantity)) }))
+        .filter((s) => counted.has(text(s.storage_location_id)) || other.has(text(s.storage_location_id)))
+        .map((s) => ({ location: `${locationLabels.get(text(s.storage_location_id)) ?? "—"}${other.has(text(s.storage_location_id)) ? " (not counted)" : ""}`, qty: round(Number(s.quantity)) }))
         .sort((a, b) => a.location.localeCompare(b.location));
       return {
         material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id),
@@ -190,7 +202,7 @@ export async function buildItemPlan(
         material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id),
         reference: event.reference, qty: round(event.qty),
         status: arrivalStatus(event.kind, event.date_source),
-        vendor: csn ? vendorLabel.get(text(csn.vendor_id)) ?? null : null,
+        vendor: (csn ? vendorLabel.get(text(csn.vendor_id)) : null) ?? vendorLabel.get(poVendor.get(poNumberOfReference(event.reference) ?? "") ?? "") ?? null,
         etd: csn ? text(csn.etd).slice(0, 10) || null : null,
         eta_port: csn ? text(csn.eta_at_port).slice(0, 10) || null : null,
         eta_plant: event.original_date !== undefined ? event.original_date : event.date,
@@ -203,7 +215,7 @@ export async function buildItemPlan(
     const memberDaily = memberRows.map((r) => ({
       material_id: r.material_id, day: r.day, opening: round(r.opening_qty_base), arrivals: round(r.confirmed_arrival_qty_base),
       planned_lot: round(r.planned_lot_qty_base), use: round(r.demand_qty_base), group_draw: round(r.group_draw_qty_base),
-      closing: round(r.closing_qty_base), max_days: r.max_cover_days, min_days: r.min_cover_days,
+      closing: round(r.closing_qty_base), max_days: wholeDays(r.max_cover_days), min_days: wholeDays(r.min_cover_days),
       target_days: r.target_days, critical_days: r.critical_days,
     }));
 
@@ -229,7 +241,7 @@ export async function buildItemPlan(
           sequence: b.sequence, lot_no: lot.lot_no, vendor: b.vendor_label ?? null, vendor_id: b.vendor_id ?? null, qty: round(lot.qty_base),
           po_by: b.recommended_po_by, etd: addDaysIso(b.recommended_po_by, b.booking_time_days ?? null),
           eta_port: p2p !== null ? addDaysIso(lot.plant_eta, -p2p) : null, eta_plant: lot.plant_eta,
-          max_days_on_arrival: at?.max_cover_days ?? null, min_days_on_arrival: at?.min_cover_days ?? null,
+          max_days_on_arrival: wholeDays(at?.max_cover_days ?? null), min_days_on_arrival: wholeDays(at?.min_cover_days ?? null),
           max_days_planned: b.max_cover_days ?? null, max_days_basis: b.max_days_basis ?? null,
           bridge: b.bridge === true, late: b.status === "ADVISORY_LATE", cheapest_vendor: b.cheapest_vendor_label ?? null,
           unit_total_cost: b.vendor_unit_total_cost ?? null, freight_term: b.vendor_freight_term ?? null, cost_missing: b.vendor_cost_missing ?? [],
@@ -377,6 +389,16 @@ export async function buildItemPlan(
       alternatives,
       user_lots: userLots,
       prediction,
+      // Owner 2026-10-21: why the engine places no lot for a member (stock may still run out).
+      plan_gaps: memberIds.map((id) => {
+        const row = rowById.get(id);
+        const issues: string[] = [];
+        if (row?.policy?.target_cov_days === null || row?.policy?.target_cov_days === undefined || row?.policy?.critical_cov_days === null || row?.policy?.critical_cov_days === undefined) issues.push("NO_TARGET_CRITICAL");
+        if ((vendorOptions.get(id) ?? []).length === 0) issues.push("NO_VENDOR");
+        else if (plan.buys.some((b) => b.material_id === id && b.status === "UNKNOWN_LEAD_TIME")) issues.push("NO_LEAD_TIME");
+        const shortage = plan.risks.find((r) => r.material_id === id)?.first_shortage_day ?? null;
+        return { material_id: id, material_code: codeOf(id), material_name: nameOf(id), issues, first_shortage_day: shortage };
+      }).filter((g) => g.issues.length > 0),
       vendor_choices: vendorChoices,
       metrics,
       unit_cost_for_metrics: unitCosts.length ? Math.min(...unitCosts) : null,
