@@ -1742,7 +1742,11 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
   }, [plan]);
   if (selQ.error) return <p className="text-xs text-slate-500">Member selection is not available for your access yet.</p>;
   if (members.size === 0) return null;
-  const groupMembers = (groupId) => new Map(((plan?.groups ?? []).find((g) => g.group_id === groupId)?.members ?? []).map((m) => [m.material_id, `${m.material_code ?? ""} ${m.material_name}`.trim()]));
+  // `groups` is intentionally sparse for the daily requirement grid.  The
+  // backend supplies `selection_groups` for the complete active candidate set.
+  // Keep the legacy fallback so a saved/older planning run remains readable.
+  const selectorGroups = plan?.selection_groups ?? plan?.groups ?? [];
+  const groupMembers = (groupId) => new Map((selectorGroups.find((g) => g.group_id === groupId)?.members ?? []).map((m) => [m.material_id, `${m.material_code ?? ""} ${m.material_name}`.trim()]));
   const value = (materialId, month) => drafts[`${materialId}|${month}`] ?? current.get(`${materialId}|${month}`) ?? false;
   async function save() {
     try {
@@ -1777,6 +1781,7 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
                 ))}
               </div>
             ))}
+            {groupMembers(groupId).size === 0 ? <span className="text-slate-500">No active mapped member is available for this group.</span> : null}
           </div>
         ))}
         {canEdit ? <button type="button" onClick={() => void save()} disabled={Object.keys(drafts).length === 0} className="h-7 w-40 border border-sky-600 bg-sky-600 px-2 font-semibold text-white disabled:opacity-50">Save selection</button> : null}
