@@ -132,6 +132,12 @@ Deno.test("P2 rescheduleAdvice: advance when needed earlier, postpone when not n
   assert(rescheduleAdvice(mk("2026-11-07"), "2026-11-07", 100) === null, "on time → no advice");
 });
 
+Deno.test("P ↔ P transfers (owner 2026-10-22): packing locations balance among themselves, never with R", () => {
+  assertEqual(locationTransfers([
+    { location: "P001", need: 0, stock: 300 }, { location: "P002", need: 200, stock: 0 }, { location: "R001", need: 0, stock: 1000 },
+  ]), [{ from: "P001", to: "P002", qty: 200 }], "P002 filled from P001, not from R001");
+});
+
 Deno.test("P2 locationTransfers: shop floor S00n counts with R00n; short store filled from spare store, both ways", () => {
   const t = locationTransfers([
     { location: "R001", need: 100, stock: 400 }, { location: "S001", need: 50, stock: 0 },

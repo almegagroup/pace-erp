@@ -413,7 +413,7 @@ export async function buildItemPlan(
       vendor_choices: vendorChoices,
       metrics,
       unit_cost_for_metrics: unitCosts.length ? Math.min(...unitCosts) : null,
-      transfer_note: "Shop floor S00n is fed from store R00n (assumption). Advice only — the Store posts the transfer.",
+      transfer_note: "Shop floor S00n is fed from store R00n (assumption); packing locations P00n balance among themselves (P ↔ P). Advice only — the Store posts the transfer.",
       // Engine proposals with the current lot rule (P2 replaces this with the Engine + AI plan).
       proposals: plan.buys.filter((b) => memberSet.has(b.material_id) && (b.status === "ADVISORY" || b.status === "ADVISORY_LATE")),
       risks: plan.risks.filter((r) => memberSet.has(r.material_id)),

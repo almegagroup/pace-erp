@@ -1829,7 +1829,9 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   const withAll = coverageDays(input.stock, calendar, demandByDay, inbound.byDay, nmDaily);
 
   const currentBalance = input.stock - cmProrata;
-  const nmOpening = currentBalance + inbound.cm;
+  // D5: an overdue or ETA-less arrival is assumed to arrive today (it is already in the cover
+  // days); leaving it out made Next Month Cov 0 while Current Cov counted it (owner 2026-10-22).
+  const nmOpening = currentBalance + inbound.cm + inbound.overdue + inbound.unknown;
   const nmClosing = nmOpening + inbound.nm - nmReq;
   const statusNm: MaterialMetrics["status_nm"] = nmReq <= EPSILON && cmProrata <= EPSILON
     ? "NO_DEMAND"

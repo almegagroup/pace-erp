@@ -664,6 +664,15 @@ Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata i
   assertEqual([partial.reorder_flag, partial.priority_score], [false, null], "stock above reorder level → no priority");
 });
 
+Deno.test("Owner 2026-10-22: an overdue arrival (assumed today) counts in Next Month Cov too", () => {
+  const calendar = buildCalendar("2026-10-01", "2026-10-22")!;
+  const demand = new Map<string, number>();
+  for (const day of calendar.horizon) demand.set(day, 100);
+  const inbound = bucketInbound([{ material_id: "X", qty: 15000, date: "2026-10-10", kind: "IN_TRANSIT", date_source: "CSN_ETA_TO_PLANT", reference: "late" }], calendar);
+  const m = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 0, stock: 500, inbound, policy: null, moqBaseQty: null, leadTimeDays: null });
+  assert((m.next_month_cov ?? 0) > 0, `next month cov ${m.next_month_cov} should count the overdue 15,000`);
+});
+
 Deno.test("Order UoM: vendor MM03 Supply UoM wins, else policy Order UoM; base or unknown unit = none", () => {
   const material = { material_id: "M", material_type: "PM", base_uom_code: "BTL", status: null, to_base_factors: { PKT: 4 } } as unknown as Parameters<typeof orderUnitOf>[0];
   assertEqual(orderUnitOf(material, null, "PKT"), { order_uom_code: "PKT", base_per_order_unit: 4, order_uom_source: "POLICY" }, "policy unit");

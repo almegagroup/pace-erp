@@ -312,7 +312,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "qty", label: "Qty", width: "110px", align: "right", render: (t) => `${fmtQty(t.qty)} ${t.uom ?? ""}`, copyValue: (t) => t.qty },
     { key: "by", label: "By", width: "100px" },
   ];
-  const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
+  const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R / P ↔ P transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
   const [otherOpen, setOtherOpen] = useState(false);
   const otherQ = useQuery({
     queryKey: ["procurement", "mts-requirement", "item-plan-other", companyId, effMonth, effAsOf, demandAt, materialId],
@@ -737,7 +737,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               <>
               <section className="grid gap-1">
                 <p className="text-xs text-slate-500">{plan.transfer_note}</p>
-                <ErpDenseGrid {...GRID_PROPS} columns={transferColumns} rows={view.transfers ?? []} rowKey={(t, i) => `${t.material_id}|${t.from}|${t.to}|${i}`} emptyMessage="No R ↔ R transfer needed." maxHeight="20vh" />
+                <ErpDenseGrid {...GRID_PROPS} columns={transferColumns} rows={view.transfers ?? []} rowKey={(t, i) => `${t.material_id}|${t.from}|${t.to}|${i}`} emptyMessage="No R ↔ R or P ↔ P transfer needed." maxHeight="20vh" />
               </section>
               </>
               ) : null}

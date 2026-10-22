@@ -388,8 +388,10 @@ export type LocationNeed = { location: string; need: number; stock: number };
 export type TransferInstruction = { from: string; to: string; qty: number };
 
 export function storeKey(locationCode: string): string | null {
-  const m = /^[RS](\d+)$/i.exec(locationCode.trim());
-  return m ? `R${m[1].padStart(3, "0")}` : null;
+  const m = /^([RSP])(\d+)$/i.exec(locationCode.trim());
+  if (!m) return null;
+  // Shop floor S00n is fed from store R00n; packing locations P00n stand on their own (owner 2026-10-22: P ↔ P too).
+  return `${m[1].toUpperCase() === "P" ? "P" : "R"}${m[2].padStart(3, "0")}`;
 }
 
 export function locationTransfers(needs: readonly LocationNeed[]): TransferInstruction[] {
@@ -403,10 +405,10 @@ export function locationTransfers(needs: readonly LocationNeed[]): TransferInstr
   const short = [...byStore].map(([store, v]) => ({ store, qty: v.need - v.stock })).filter((s) => s.qty > EPSILON).sort((a, b) => b.qty - a.qty || a.store.localeCompare(b.store));
   const spare = [...byStore].map(([store, v]) => ({ store, qty: v.stock - v.need })).filter((s) => s.qty > EPSILON).sort((a, b) => b.qty - a.qty || a.store.localeCompare(b.store));
   const out: TransferInstruction[] = [];
-  // DEPENDENT: each shortage consumes the spare the previous ones left.
+  // DEPENDENT: each shortage consumes the spare the previous ones left; R ↔ R and P ↔ P only.
   for (const s of short) {
     let remaining = s.qty;
-    for (const p of spare) {
+    for (const p of spare.filter((x) => x.store[0] === s.store[0])) {
       if (remaining <= EPSILON) break;
       const qty = Math.min(remaining, p.qty);
       if (qty <= EPSILON) continue;
