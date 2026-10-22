@@ -390,12 +390,15 @@ export async function buildItemPlan(
     const selectedCritical = rowById.get(materialId)?.policy?.critical_cov_days ?? null;
     const metrics = planMetrics(grid, selectedTarget, unitCosts.length ? Math.min(...unitCosts) : null, selectedCritical);
 
-    const forecastMonths = new Set(reqData.forecast.forecastMonths);
+    // A label must say whether the month actually has a PO21 line.  A missing
+    // month is zero demand by owner rule; it is never silently renamed PLAN or
+    // turned into a forecast.
+    const plannedMonths = new Set(reqData.planLines.filter((line) => !line.is_cancelled).map((line) => line.plan_month));
     return {
       company_id: companyId,
       material_id: materialId,
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
-      month_sources: calendar.months.map((month) => ({ month, source: forecastMonths.has(month) ? "FORECAST" : "PLAN" })),
+      month_sources: calendar.months.map((month) => ({ month, source: plannedMonths.has(month) ? "PLAN" : "NO_PO21_PLAN" })),
       forecast_count: reqData.forecast.forecasts.length,
       family: {
         is_family: family.is_family,

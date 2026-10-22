@@ -260,7 +260,9 @@ export async function computePlanning(p: PlanningParams) {
   const calendar = buildCalendar(p.planMonth, p.asOf, p.extraMonths ?? 0);
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
   const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, {
-    forecastBeyondPlan: (p.extraMonths ?? 0) > 0, rescheduleOverrides: p.rescheduleOverrides, policyOverrides: p.policyOverrides,
+    // Owner 2026-10-22: no PO21 plan means zero demand. History is not an
+    // authority to create an automatic buy recommendation.
+    forecastBeyondPlan: false, rescheduleOverrides: p.rescheduleOverrides, policyOverrides: p.policyOverrides,
     reuseLoads: p.reuseLoads,
   });
   const planningStarted = Date.now();

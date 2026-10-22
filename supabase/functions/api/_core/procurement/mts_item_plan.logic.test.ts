@@ -70,15 +70,14 @@ Deno.test("forecast: ½ seasonal × trend + ½ last-3 plan; trend capped; uncove
   near(notPlanned!.qty_kg, 0, "company planned the reference months without this SKU → 0");
 });
 
-Deno.test("buildForecastPlanLines: only months with no PO21 plan; KG → SKU base unit; FORECAST entries", () => {
+Deno.test("buildForecastPlanLines: a missing PO21 month is zero demand, never an implicit forecast or buy", () => {
   const inputs: ForecastInputs = {
     dispatchKg: new Map(), coveredMonths: new Set(),
     planKg: new Map([["S|2026-07-01", 300], ["S|2026-08-01", 300], ["S|2026-09-01", 300]]),
     plannedMonths: new Set(["2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01", "2026-11-01"]),
   };
   const result = buildForecastPlanLines(["S"], ["2026-10-01", "2026-11-01", "2026-12-01"], "2026-10-01", inputs, () => 20);
-  assertEqual(result.forecastMonths, ["2026-12-01"], "planned months are never forecast");
-  assertEqual(result.lines.map((l) => [l.entry_id, l.plan_type, l.base_qty]), [["FORECAST|S|2026-12-01", "ROLLING", 15]], "300 KG ÷ 20 KG per unit");
+  assertEqual([result.forecastMonths, result.forecasts, result.lines], [[], [], []], "a missing PO21 month contributes zero demand");
 });
 
 Deno.test("forwardCoverDays: walks the coming days' use (owner example 60,000 → 23 days)", () => {

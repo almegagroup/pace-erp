@@ -41,6 +41,11 @@ function fmtQty(value) {
 function fmtDays(value) {
   return value === null || value === undefined ? "—" : String(Math.floor(Number(value) + 1e-9));
 }
+function demandSourceLabel(source) {
+  if (source === "NO_PO21_PLAN") return "No PO21 plan";
+  if (source === "FORECAST") return "Forecast";
+  return source === "PLAN" ? "Plan" : "";
+}
 const GAP_LABEL = {
   NO_TARGET_CRITICAL: "no Target / Critical days (set in 2. Material Settings)",
   NO_VENDOR: "no vendor linked (MM03 vendor–material link)",
@@ -171,7 +176,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       <button type="button" onClick={() => setOpenDay((d) => (d === r.day ? "" : r.day))} className="text-left text-sky-800 hover:underline">{r.day}</button>
     ), copyValue: (r) => r.day },
     { key: "cc", label: "CC", width: "40px", render: (r) => (r.day === plan?.calendar?.as_of ? <span className="font-semibold text-emerald-700">CC</span> : ""), copyValue: (r) => (r.day === plan?.calendar?.as_of ? "CC" : "") },
-    { key: "source", label: "Demand", width: "80px", render: (r) => monthSource.get(r.day.slice(0, 7)) ?? "", copyValue: (r) => monthSource.get(r.day.slice(0, 7)) ?? "" },
+    { key: "source", label: "Demand", width: "100px", render: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))), copyValue: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))) },
     { key: "opening", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening), copyValue: (r) => r.opening },
     { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
     {
@@ -493,7 +498,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
             <span className="font-semibold text-slate-800">{plan.family.is_family ? `Family: ${plan.family.groups.map((g) => g.label).join(" · ")}` : "Not in any group — single item"}</span>
             <span>Horizon {plan.calendar.as_of} → {plan.calendar.horizon_end}</span>
-            <span>Demand: {plan.month_sources.map((m) => `${m.month.slice(0, 7)} ${m.source === "FORECAST" ? "forecast" : "plan"}`).join(" · ")}</span>
+            <span>Demand: {plan.month_sources.map((m) => `${m.month.slice(0, 7)} ${demandSourceLabel(m.source).toLowerCase()}`).join(" · ")}</span>
             <span>Unit: {uom || "—"}</span>
           </div>
 
