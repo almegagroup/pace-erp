@@ -10,6 +10,7 @@
  */
 
 import { useState } from "react";
+import { copyTableRowsWithHeaders } from "../../../../components/data/tableClipboard.js";
 import { getMtsRequirementPolicies, saveMtsRequirementPolicies, whatIfMtsItemPlanTarget } from "../procurementApi.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import { vendorLotQty } from "./mtsItemPlanLots.js";
@@ -30,6 +31,11 @@ function fmtMoney(value) {
 }
 function errorText(error) {
   return error instanceof Error ? error.message : String(error ?? "");
+}
+function copyTable(columns, rows) {
+  void copyTableRowsWithHeaders(columns, rows).then(() => {
+    pushToast({ message: "Table copied with headers — paste directly into Excel.", tone: "success" });
+  });
 }
 
 export function VendorDateCompare({ plan, materialId, defaultDate, onAddLot }) {
@@ -64,6 +70,23 @@ export function VendorDateCompare({ plan, materialId, defaultDate, onAddLot }) {
           <span>Qty ({choice?.uom ?? ""})</span>
           <input type="number" min="0" value={qty} onChange={(event) => setQty(event.target.value)} className={`${CELL_INPUT} w-28`} />
         </label>
+        <button
+          type="button"
+          disabled={rows.length === 0}
+          onClick={() => copyTable([
+            { label: "Vendor", key: "vendor_label", copyValue: (r) => `${r.vendor_label}${best && best.vendor_id === r.vendor_id ? " ★" : ""}` },
+            { label: "Lead days", key: "lead_time_days", copyValue: (r) => fmtDays(r.lead_time_days) },
+            { label: "Earliest at plant", key: "earliest_plant_eta" },
+            { label: "By your date?", key: "in_time", copyValue: (r) => r.inTime === null ? "—" : r.inTime ? "Yes" : "No — too early" },
+            { label: "MOQ / multiple", key: "moq", copyValue: (r) => `${fmtQty(r.moq_qty)} / ${fmtQty(r.order_multiple_qty)}` },
+            { label: "Lot qty", key: "lot", copyValue: (r) => r.lot === null ? "—" : fmtQty(r.lot) },
+            { label: "Full cost / unit", key: "unit_total_cost", copyValue: (r) => r.unit_total_cost === null ? "—" : `₹${r.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` },
+            { label: "Lot value", key: "value", copyValue: (r) => fmtMoney(r.value) },
+            { label: "Freight", key: "freight_term", copyValue: (r) => FREIGHT_LABEL[r.freight_term] ?? r.freight_term ?? "—" },
+            { label: "Cost gaps", key: "cost_missing", copyValue: (r) => r.cost_missing?.length ? r.cost_missing.join(", ") : "Complete" },
+          ], rows)}
+          className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >Copy table + headers</button>
       </div>
       {options.length === 0 ? <p className="text-xs text-slate-500">No vendor linked to this member for this company (MM03).</p> : (
         <div className="overflow-x-auto">
@@ -180,6 +203,21 @@ export function TargetWhatIf({ plan, companyId, planMonth, asOf, demandAt, mater
       </div>
       {result ? (
         <div className="grid gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => copyTable([
+              { label: "Target", key: "target_days", copyValue: (r) => `${r.target_days}${r.is_current ? " (now)" : ""}${r.target_days === pick ? " ★" : ""}` },
+              { label: "Critical", key: "critical_days", copyValue: (r) => fmtDays(r.critical_days) },
+              { label: "Shortage days", key: "shortage_days", copyValue: (r) => r.metrics.shortage_days },
+              { label: "Days ≤ today's Critical", key: "days_below_critical", copyValue: (r) => r.metrics.days_below_critical },
+              { label: "Lowest Max days", key: "lowest_max_days", copyValue: (r) => fmtDays(r.metrics.lowest_max_days) },
+              { label: "Avg stock", key: "average_closing", copyValue: (r) => fmtQty(r.metrics.average_closing) },
+              { label: "Avg money in stock", key: "average_stock_value", copyValue: (r) => fmtMoney(r.metrics.average_stock_value) },
+              { label: "New orders", key: "new_orders", copyValue: (r) => `${r.order_count} (${fmtQty(r.order_qty)})` },
+              { label: "Order value", key: "order_value", copyValue: (r) => `${fmtMoney(r.order_value)}${r.order_value_partial ? " (partial)" : ""}` },
+            ], result.results)}
+            className="h-7 w-max border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+          >Copy table + headers</button>
           <div className="overflow-x-auto">
             <table>
               <thead>

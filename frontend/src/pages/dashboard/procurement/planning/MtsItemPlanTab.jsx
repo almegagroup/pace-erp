@@ -16,6 +16,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { copyTableRowsWithHeaders } from "../../../../components/data/tableClipboard.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
 import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario, simulateMtsItemPlan } from "../procurementApi.js";
@@ -28,7 +29,7 @@ const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we p
 
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
-const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true };
+const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true, copyTableWithHeaders: true };
 const STATUS_LABEL = { AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
 const STATUS_TONE = { AT_GATE: "bg-emerald-100 text-emerald-800", IN_TRANSIT: "bg-sky-100 text-sky-800", ORDERED: "bg-amber-100 text-amber-800", BULK: "bg-slate-100 text-slate-700", STO: "bg-violet-100 text-violet-800", SUB_CSN: "bg-violet-100 text-violet-800" };
 
@@ -59,6 +60,12 @@ const ITEM_PLAN_PANELS = [
 ];
 function errorText(error) {
   return error instanceof Error ? error.message : String(error ?? "");
+}
+
+function copyTable(columns, rows) {
+  void copyTableRowsWithHeaders(columns, rows).then(() => {
+    pushToast({ message: "Table copied with headers — paste directly into Excel.", tone: "success" });
+  });
 }
 
 export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt }) {
@@ -635,6 +642,26 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                     </>
                   )}
                   <button type="button" onClick={() => setShowVersions((v) => !v)} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">{showVersions ? "Hide versions" : "Versions"}</button>
+                  <button
+                    type="button"
+                    disabled={(lotDraft ?? plan.user_lots ?? []).length === 0}
+                    onClick={() => copyTable([
+                      { label: "Member", key: "member", copyValue: (l) => memberName.get(l.material_id) ?? "—" },
+                      { label: "Plant date", key: "plant_eta" },
+                      { label: "Qty", key: "qty_base", copyValue: (l) => fmtQty(l.qty_base) },
+                      { label: "Vendor", key: "vendor", copyValue: (l) => lotVendorFlags(l, plan.vendor_choices).option?.vendor_label ?? "Any (engine)" },
+                      { label: "Value / check", key: "check", copyValue: (l) => {
+                        const flag = lotVendorFlags(l, plan.vendor_choices);
+                        if (!flag.option) return "—";
+                        return [
+                          flag.value === null ? "no cost" : `₹${Math.round(flag.value).toLocaleString("en-IN")}`,
+                          flag.tooEarly ? `too early (earliest ${flag.option.earliest_plant_eta})` : "",
+                          flag.belowMoq ? `below MOQ ${fmtQty(flag.option.moq_qty)}` : "",
+                        ].filter(Boolean).join("; ");
+                      } },
+                    ], lotDraft ?? plan.user_lots ?? [])}
+                    className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >Copy table + headers</button>
                 </div>
                 <p className="text-xs text-slate-500">Lots you fix stay as you set them; the engine plans the rest around them. Planning only — no PO is created.</p>
                 {(lotDraft ?? plan.user_lots ?? []).length === 0 ? <p className="text-xs text-slate-500">None — the plan is fully Engine + AI.</p> : (
@@ -740,6 +767,20 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 {aiResult ? (
                   <div className="grid gap-2 text-xs">
                     <p className="whitespace-pre-wrap text-slate-800">{aiResult.verdict}</p>
+                    <button
+                      type="button"
+                      onClick={() => copyTable([
+                        { label: "Plan", key: "label" },
+                        { label: "Shortage days", key: "shortage_days" },
+                        { label: "Days ≤ Target", key: "days_below_target" },
+                        { label: "Lowest Max days", key: "lowest_max_days", copyValue: (r) => fmtDays(r.lowest_max_days) },
+                        { label: "Avg stock", key: "average_closing", copyValue: (r) => fmtQty(r.average_closing) },
+                        { label: "Avg stock value", key: "average_stock_value", copyValue: (r) => r.average_stock_value === null ? "—" : `₹${fmtQty(r.average_stock_value)}` },
+                      ], [["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]]
+                        .filter(([, metrics]) => metrics)
+                        .map(([label, metrics]) => ({ label, ...metrics })))}
+                      className="h-7 w-max border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >Copy table + headers</button>
                     <table>
                       <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th>Avg stock value</th></tr></thead>
                       <tbody>
