@@ -73,3 +73,11 @@ Deno.test("family arrival optimizer: a piece is not pushed months away while the
   assert(optimum !== null, "optimum computed");
   assert(optimum.best_eta <= "2026-12-31", `best date ${optimum.best_eta} is too far`);
 });
+
+Deno.test("smart consumption ratio: every member with free stock serves the group, none piles up", () => {
+  const result = planFamily({ ...rdpFamily(), plan_buys: false });
+  const first = result.group_mix.find((g) => g.group_id === "RDP" && g.day === AS_OF);
+  assert(first, "RDP mix on day one");
+  const used = Object.keys(first.draws).filter((id) => first.draws[id] > 0);
+  assert(used.includes("EL") && used.includes("RP"), `both ELOTEX and RP-4099 rotate: ${JSON.stringify(first.draws)}`);
+});

@@ -78,6 +78,8 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
   advisory_buys: readonly FamilyBuy[];
   /** Per pool and day: group demand no member could meet (after protected stock). */
   group_unmet: ReadonlyArray<{ group_id: string; day: string; qty_base: number }>;
+  /** Consumption ratio: per group and day, how much each member serves (Store instruction basis). */
+  group_mix: ReadonlyArray<{ group_id: string; day: string; draws: Readonly<Record<string, number>> }>;
 };
 
 type Pool = { key: string; group_id: string; candidates: string[]; demand: number[] };
@@ -130,6 +132,7 @@ type Sim = {
   poolUnmet: number[][]; // pool index → day
   poolFreeShort: number[][];
   poolFree: number[][]; // free stock this pool could still use after the day (reserve-adjusted)
+  poolDraw: number[][][]; // pool → member → day: who served the group (the consumption ratio)
 };
 
 export function planFamily(input: FamilyPlannerInput): FamilyResult {
@@ -201,6 +204,15 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     return t === null ? 0 : useAhead(own[m], i, t);
   }));
 
+  // Holding-cost tilt for the consumption ratio: costlier stock (more money tied up) is used a bit
+  // more; unknown cost = neutral. Clamped so cost never overrides stock levels.
+  const unitCost = ids.map((id) => {
+    const costs = (policyOf.get(id)?.vendor_options ?? []).map((o) => o.unit_cost).filter((c): c is number => c !== null && c > 0);
+    return costs.length ? Math.min(...costs) : null;
+  });
+  const known = unitCost.filter((c): c is number => c !== null);
+  const avgCost = known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
+  const costTilt = unitCost.map((c) => (c === null || avgCost === null ? 1 : Math.min(2, Math.max(0.5, c / avgCost))));
   const candIdx = pools.map((pool) => pool.candidates.filter((c) => mIndex.has(c)).map((c) => mIndex.get(c)!));
   /**
    * Owner 2026-10-22: a broader group takes a member's stock only above what the narrower groups
@@ -226,6 +238,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       closing: ids.map(() => zeros()), use: ids.map(() => zeros()), draw: ids.map(() => zeros()), arrival: ids.map(() => zeros()),
       planned: ids.map(() => zeros()), ownBalance: ids.map(() => zeros()), freeAfter: ids.map(() => zeros()),
       poolUnmet: pools.map(() => zeros()), poolFreeShort: pools.map(() => zeros()), poolFree: pools.map(() => zeros()),
+      poolDraw: pools.map(() => ids.map(() => zeros())),
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
@@ -245,11 +258,30 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         const ordered = (fn: (m: number) => number) => (order
           ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => fn(mIndex.get(id)!), order).map((id) => mIndex.get(id)!)
           : [...cand].sort((a, b) => fn(b) - fn(a) || cand.indexOf(a) - cand.indexOf(b)));
-        for (const m of ordered(free)) {
-          if (need <= EPSILON) break;
-          const take = Math.min(free(m), need);
-          if (take <= EPSILON) continue;
-          bal[m] -= take; need -= take; s.draw[m][i] += take; s.use[m][i] += take;
+        const takeFrom = (m: number, qty: number) => {
+          bal[m] -= qty; need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
+        };
+        if (order) {
+          for (const m of ordered(free)) {
+            if (need <= EPSILON) break;
+            const take = Math.min(free(m), need);
+            if (take > EPSILON) takeFrom(m, take);
+          }
+        } else {
+          // Smart consumption ratio (owner 2026-10-22, default): the group's use is shared over the
+          // members in proportion to their free stock, tilted to the costlier stock (it ties up more
+          // working capital). Every member rotates, none piles up, own use stays protected, and the
+          // ratio changes by itself as arrivals change each member's free stock.
+          for (let pass = 0; pass < 4 && need > EPSILON; pass += 1) {
+            const weights = cand.map((m) => free(m) * costTilt[m]);
+            const total = weights.reduce((a, b) => a + b, 0);
+            if (total <= EPSILON) break;
+            const want = need;
+            cand.forEach((m, k) => {
+              const take = Math.min(free(m), want * (weights[k] / total), need);
+              if (take > EPSILON) takeFrom(m, take);
+            });
+          }
         }
         if (need > EPSILON) s.poolFreeShort[p][i] = need;
         // Protected stock last (it will be bought back by the member's own need).
@@ -257,7 +289,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           if (need <= EPSILON) break;
           const take = Math.min(Math.max(0, bal[m]), need);
           if (take <= EPSILON) continue;
-          bal[m] -= take; need -= take; borrowed[m] += take; s.draw[m][i] += take; s.use[m][i] += take;
+          borrowed[m] += take; takeFrom(m, take);
         }
         if (need > EPSILON) s.poolUnmet[p][i] = need;
       });
@@ -471,6 +503,23 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     arrival_flags: arrivalFlags.sort((a, b) => a.source_key.localeCompare(b.source_key)),
     advisory_buys: buys.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
     group_unmet: groupUnmet,
+    group_mix: (() => {
+      const mix = new Map<string, Record<string, number>>();
+      pools.forEach((pool, p) => {
+        for (let i = 0; i < N; i += 1) {
+          ids.forEach((id, m) => {
+            const q = sim.poolDraw[p][m][i];
+            if (q <= EPSILON) return;
+            const k = `${pool.group_id}|${allDays[i]}`;
+            const row = mix.get(k) ?? {};
+            row[id] = roundQty((row[id] ?? 0) + q);
+            mix.set(k, row);
+          });
+        }
+      });
+      return [...mix].map(([k, draws]) => ({ group_id: k.split("|")[0], day: k.split("|")[1], draws }))
+        .sort((a, b) => a.day.localeCompare(b.day) || a.group_id.localeCompare(b.group_id));
+    })(),
   };
 }
 
@@ -511,16 +560,24 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
   let bestEta = piece.eta_to_plant;
   let best = current;
   const cmp = (a: [number, number, number], b: [number, number, number]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-  for (const day of dayList(input.as_of, input.horizon_end)) {
-    if (day === piece.eta_to_plant) continue;
-    const score = familyScore(at(day));
+  const currentEta = piece.eta_to_plant;
+  const all = dayList(input.as_of, input.horizon_end);
+  const scored = new Map<string, [number, number, number]>([[currentEta, current]]);
+  const scoreOf = (day: string) => { let v = scored.get(day); if (!v) { v = familyScore(at(day)); scored.set(day, v); } return v; };
+  const consider = (day: string) => {
+    if (day === currentEta) return;
+    const score = scoreOf(day);
     const c = cmp(score, best);
     if (c < 0 || (c === 0 && day > bestEta)) {
       // A prepone is taken only when strictly safer than the current date.
-      if (day < piece.eta_to_plant && cmp(score, current) >= 0) continue;
+      if (day < currentEta && cmp(score, current) >= 0) return;
       best = score; bestEta = day;
     }
-  }
+  };
+  // Coarse pass every 7 days, then every day within ±7 of the best (speed: each try is a full family run).
+  for (let k = 0; k < all.length; k += 7) consider(all[k]);
+  const centre = all.indexOf(bestEta);
+  for (let k = Math.max(0, centre - 7); k <= Math.min(all.length - 1, centre + 7); k += 1) consider(all[k]);
   const shift = Math.round((Date.parse(`${bestEta}T00:00:00Z`) - Date.parse(`${piece.eta_to_plant}T00:00:00Z`)) / 86_400_000);
   if (Math.abs(shift) < 3) return { current_eta: piece.eta_to_plant, best_eta: piece.eta_to_plant, shift_days: 0, current, best: current, reason: "Current date is right for the whole family." };
   const reason = cmp(best, current) < 0
