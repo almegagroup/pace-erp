@@ -110,6 +110,7 @@ import {
   getMtsRequirementReportHandler,
   saveMtsRequirementPoliciesHandler,
 } from "../_core/procurement/mts_requirement.handlers.ts";
+import { getMtsGroupUsageOrderHandler, saveMtsGroupUsageOrderHandler } from "../_core/procurement/mts_group_usage_order.handlers.ts";
 import {
   getMtsFinanceSettingsHandler,
   getMtsFxRatesHandler,
@@ -841,6 +842,10 @@ export async function dispatchProcurementRoutes(
       return await getMtsRequirementPolicyHistoryHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/policies":
       return await saveMtsRequirementPoliciesHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/group-usage-order":
+      return await getMtsGroupUsageOrderHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/group-usage-order":
+      return await saveMtsGroupUsageOrderHandler(req, ctx);
     case "GET:/api/procurement/mts-requirement/fx-rates":
       return await getMtsFxRatesHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/fx-rates":

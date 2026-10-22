@@ -442,3 +442,27 @@ on the group row). Before this, those columns read the stock-allocated share, so
 (e.g. 40KG wovensack with alternate PM-00084) showed only the part its own stock covers
 (22–31 Oct = 68,967 bags) against full-month consumption (91,170) and wrongly flipped to the NM basis.
 Cover days, stock-out date, NM status and Net Req keep using the allocated demand.
+
+### 16. Group Settings — which member of a group is used first (owner 2026-10-22)
+
+PO22 → 2. Material Settings → "Group Settings". Per company × material group, effective-dated,
+append-only (`erp_planning.material_group_usage_order`, migration `20261022100000`):
+`MOST_STOCK_FIRST` (Method C), `LEAST_STOCK_FIRST`, or `FIXED_ORDER` (members in a set order; the next
+one only when the one above is empty). One shared ordering (`_shared/groupUsageOrder.logic.ts`) drives:
+- planning `allocateDemand` (replaces Method C rule 4 for that group; protection tiers still apply), and
+- MTS production auto-derive `computeMtsAutoDeriveRowsForGroup` (Process PO create, MTS creation
+  session, Packing combine — 4 call sites), so Store Report advice and the real issue pick match.
+
+No setting for a group = the old default: planning Method C; production §138.12 (own item first, then
+alternates smallest-stock-first). The phase-3 optimizer (`mts_optimizer_phase3d`) is not changed.
+
+### 17. Order UoM — buy quantities in the unit they are ordered in (owner 2026-10-22)
+
+Material Settings gets an **Order UoM** column (`material_requirement_policy.order_uom_code`, migration
+`20261022110000`; blank / base unit = no separate unit; must have a fixed master conversion, or MT for KG).
+`orderUnitOf()` resolves the unit per line: the lot vendor's MM03 **Supply UoM** wins, else the Material
+Settings Order UoM. Shown beside the base quantity in: Planning buys ("1,200 BTL = 300 PKT"), Action tab,
+Item Plan (Future Orders, Prediction, the user's own lot editor), and the Excel (BUY_PLAN "Order Qty / Order
+UoM", Prediction "In order unit"). Planning maths stays in the base unit; this is display only.
+
+MOQ UoM is now chosen only after an MOQ Qty (it was silently dropped when MOQ was blank).

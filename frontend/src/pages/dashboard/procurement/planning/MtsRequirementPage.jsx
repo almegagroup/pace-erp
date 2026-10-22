@@ -25,6 +25,8 @@ import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffol
 import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
+import MtsGroupSettings from "./MtsGroupSettings.jsx";
+import { qtyWithOrderUnit } from "./mtsOrderUnit.js";
 import MtsItemPlanTab from "./MtsItemPlanTab.jsx";
 import MtsPlanningReschedule from "./MtsPlanningReschedule.jsx";
 import MtsRollingPlanDownload from "./MtsRollingPlanDownload.jsx";
@@ -701,6 +703,7 @@ function policyDraftBase(row, today) {
     effective_from: today,
     remarks: policy?.remarks ?? "",
     carrying_rate_per_uom: policy?.carrying_rate_per_uom ?? "",
+    order_uom_code: policy?.order_uom_code ?? row.base_uom_code ?? "",
   };
 }
 function normalizeKey(value) {
@@ -728,6 +731,7 @@ function validateDraft(draft, row) {
   if (moq !== "" && !draft.moq_uom_code) return "MOQ needs a unit";
   if (moq !== "" && !(row.moq_uom_options ?? []).includes(draft.moq_uom_code)) return "MOQ unit has no verified conversion";
   if (draft.moq_active && moq === "") return "active MOQ needs a quantity";
+  if (draft.order_uom_code && !(row.moq_uom_options ?? []).includes(draft.order_uom_code)) return "Order UoM has no verified conversion";
   return "";
 }
 
@@ -960,9 +964,36 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
     },
     { key: "moq_qty", label: "MOQ Qty", width: "110px", filterable: false, render: (r) => numberInput(r, "moq_qty", "w-24"), copyValue: (r) => valueOf(r, "moq_qty") },
     {
+      // Owner 2026-10-22: unit buy quantities are shown in (Planning, Item Plan, Excel). A vendor's
+      // MM03 Supply UoM, when set, is used for that vendor's lines instead.
+      key: "order_uom_code", label: "Order UoM", width: "90px", filterable: false,
+      render: (r) => (
+        <select
+          data-field="order_uom_code"
+          disabled={!canEdit}
+          title="Unit you order in. Planning shows every buy quantity in base unit and in this unit."
+          className={`${CELL_INPUT} w-20`}
+          value={valueOf(r, "order_uom_code") ?? ""}
+          onChange={(event) => setField(r.material_id, "order_uom_code", event.target.value)}
+        >
+          {(r.moq_uom_options ?? []).map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+        </select>
+      ),
+      copyValue: (r) => valueOf(r, "order_uom_code"),
+    },
+    {
       key: "moq_uom_code", label: "MOQ UoM", width: "90px", filterable: false,
       render: (r) => (
-        <select data-field="moq_uom_code" disabled={!canEdit} className={`${CELL_INPUT} w-20`} value={valueOf(r, "moq_uom_code") ?? ""} onChange={(event) => setField(r.material_id, "moq_uom_code", event.target.value)}>
+        // The unit belongs to the MOQ quantity only (blank MOQ = no unit is saved), so it is
+        // chosen after the quantity. The ordering unit itself is MM03 "Supply UoM".
+        <select
+          data-field="moq_uom_code"
+          disabled={!canEdit || String(valueOf(r, "moq_qty") ?? "") === ""}
+          title={String(valueOf(r, "moq_qty") ?? "") === "" ? "Enter MOQ Qty first — this unit is only the unit of the MOQ quantity." : undefined}
+          className={`${CELL_INPUT} w-20 disabled:opacity-50`}
+          value={valueOf(r, "moq_uom_code") ?? ""}
+          onChange={(event) => setField(r.material_id, "moq_uom_code", event.target.value)}
+        >
           {(r.moq_uom_options ?? []).map((unit) => <option key={unit} value={unit}>{unit}</option>)}
         </select>
       ),
@@ -1131,6 +1162,8 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
         moq_active: Boolean(draft.moq_active),
         remarks: draft.remarks || null,
         carrying_rate_per_uom: draft.carrying_rate_per_uom === "" ? null : Number(draft.carrying_rate_per_uom),
+        // Base unit = no separate order unit (stored as blank).
+        order_uom_code: draft.order_uom_code && draft.order_uom_code !== rowById.get(id)?.base_uom_code ? draft.order_uom_code : null,
         source_ref: draft.__source_ref ?? null,
       };
     };
@@ -1159,6 +1192,7 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
 
   return (
     <div className="grid gap-2">
+      <MtsGroupSettings companyId={companyId} asOf={asOf} today={today} canEdit={canEdit} />
       <div className="flex flex-wrap items-end gap-3">
         <button
           type="button"
@@ -1447,7 +1481,7 @@ function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
     { key: "material", label: "Material / Group", width: "260px" },
     { key: "code", label: "Code", width: "100px", render: (r) => dash(r.code) },
     { key: "by_when", label: "By when", width: "100px", render: (r) => dash(r.by_when) },
-    { key: "qty", label: "Qty", width: "120px", align: "right", render: (r) => (r.qty === null || r.qty === undefined ? "—" : `${fmtQty(r.qty)} ${r.uom ?? ""}`), copyValue: (r) => r.qty ?? "" },
+    { key: "qty", label: "Qty", width: "180px", align: "right", render: (r) => qtyWithOrderUnit(r.qty, r.uom, r.order_unit), copyValue: (r) => r.qty ?? "" },
     { key: "vendor", label: "Vendor", width: "220px", render: (r) => dash(r.vendor) },
     { key: "shortage_day", label: "Runs out", width: "100px", render: (r) => (r.shortage_day ? <span className="font-semibold text-rose-700">{r.shortage_day}</span> : "—"), copyValue: (r) => r.shortage_day ?? "" },
     { key: "why", label: "Why", width: "420px" },
@@ -1510,7 +1544,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "status", label: "Status", width: "130px", render: (b) => buyBadge(b.status), copyValue: (b) => BUY_STATUS_LABEL[b.status] ?? b.status },
     { key: "sequence", label: "#", width: "40px", align: "right", render: (b) => (b.sequence || "") },
     { key: "required_qty_base", label: "Required", width: "110px", align: "right", render: (b) => fmtQty(b.required_qty_base), copyValue: (b) => b.required_qty_base },
-    { key: "recommended_po_qty_base", label: "PO Qty (MOQ / multiple)", width: "150px", align: "right", render: (b) => (b.recommended_po_qty_base === null ? "—" : `${fmtQty(b.recommended_po_qty_base)} ${b.uom ?? ""}`), copyValue: (b) => b.recommended_po_qty_base ?? "" },
+    { key: "recommended_po_qty_base", label: "PO Qty (MOQ / multiple)", width: "200px", align: "right", render: (b) => qtyWithOrderUnit(b.recommended_po_qty_base, b.uom, b.order_unit), copyValue: (b) => b.recommended_po_qty_base ?? "" },
     { key: "recommended_po_by", label: "PO By", width: "100px", render: (b) => dash(b.recommended_po_by) },
     { key: "estimated_plant_eta", label: "Plant ETA", width: "100px", render: (b) => dash(b.estimated_plant_eta) },
     { key: "lots", label: "Delivery Lots", width: "220px", render: (b) => ((b.lots ?? []).length ? b.lots.map((l) => `${l.plant_eta}: ${fmtQty(l.qty_base)}`).join(" · ") : "—"), copyValue: (b) => (b.lots ?? []).map((l) => `${l.plant_eta}:${l.qty_base}`).join(" ") },

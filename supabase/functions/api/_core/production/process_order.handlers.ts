@@ -13,6 +13,8 @@
 import { isProdshadeExcludedFromProcessPo } from "../../_shared/processPoExclusion.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { orderByGroupUsage, type GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
+import { loadGroupUsageOrders } from "../../_shared/groupUsageOrder.ts";
 import { isManualDocumentDateWithinPastWindow, MANUAL_PAST_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
@@ -647,7 +649,9 @@ type MtsAutoDeriveGroupResult = {
 // §138.12 algorithm: formulation item first (if its own bucket has stock),
 // then group alternates smallest-available-first, each fully exhausted
 // before moving to the next, until standardQty is met or the whole group is
-// exhausted (hard block). Never reads Unassigned or another machine's bucket
+// exhausted (hard block). A PO22 Group Setting for the group (owner
+// 2026-10-22: most / least stock first, or a fixed member order) replaces
+// that order, so production picks members the same way planning does. Never reads Unassigned or another machine's bucket
 // -- bucketBalances is expected to already be scoped that way by the caller.
 export function computeMtsAutoDeriveRowsForGroup(params: {
   strokeLineId?: string;
@@ -656,19 +660,21 @@ export function computeMtsAutoDeriveRowsForGroup(params: {
   standardQty: number;
   alternateMaterialIds: string[]; // group members excluding the formulation item itself
   bucketBalances: Map<string, number>;
+  usageOrder?: GroupUsageOrder | null;
 }): { rows: MtsAutoDeriveRow[]; short: boolean; shortfallQty: number } {
-  const { strokeLineId: requestedStrokeLineId, formulationMaterialId, dosagePct, standardQty, alternateMaterialIds, bucketBalances } = params;
+  const { strokeLineId: requestedStrokeLineId, formulationMaterialId, dosagePct, standardQty, alternateMaterialIds, bucketBalances, usageOrder } = params;
   const strokeLineId = requestedStrokeLineId || formulationMaterialId;
 
   // Order: formulation item's own bucket first (regardless of size -- it's
   // the "correct" material, group is only a fallback), then alternates
   // smallest-available-first.
-  const candidates = [
-    formulationMaterialId,
-    ...[...new Set(alternateMaterialIds)]
-      .filter((id) => id !== formulationMaterialId)
-      .sort((a, b) => (bucketBalances.get(a) ?? 0) - (bucketBalances.get(b) ?? 0)),
-  ];
+  const alternates = [...new Set(alternateMaterialIds)].filter((id) => id !== formulationMaterialId);
+  const candidates = usageOrder
+    ? orderByGroupUsage([formulationMaterialId, ...alternates], (id) => Math.max(0, bucketBalances.get(id) ?? 0), usageOrder)
+    : [
+      formulationMaterialId,
+      ...alternates.sort((a, b) => (bucketBalances.get(a) ?? 0) - (bucketBalances.get(b) ?? 0)),
+    ];
 
   const rows: MtsAutoDeriveRow[] = [];
   let remaining = standardQty;
@@ -3288,9 +3294,12 @@ export async function buildMtsMaterialPlanGroupsForOrder(
     machineCandidateIds.add(String(line.material_id));
     for (const altId of allowedAlternateMap.get(String(line.id)) ?? []) machineCandidateIds.add(altId);
   }
-  const bucketBalances = (machineStorageLocationId && machineId)
-    ? await fetchNetMachineBucketBalances(companyId, machineStorageLocationId, isForeignMachine ? null : machineId, [...machineCandidateIds])
-    : new Map<string, number>();
+  const [bucketBalances, usageOrders] = await Promise.all([
+    (machineStorageLocationId && machineId)
+      ? fetchNetMachineBucketBalances(companyId, machineStorageLocationId, isForeignMachine ? null : machineId, [...machineCandidateIds])
+      : Promise.resolve(new Map<string, number>()),
+    loadGroupUsageOrders(companyId, todayIso()),
+  ]);
 
   const groups: MtsPlanGroup[] = [];
   for (const line of machineTrackedLines) {
@@ -3307,6 +3316,7 @@ export async function buildMtsMaterialPlanGroupsForOrder(
       standardQty,
       alternateMaterialIds: alternateIds,
       bucketBalances,
+      usageOrder: usageOrders.get(toTrimmedString(line.material_group_id)) ?? null,
     });
     // A machine bucket is one physical pool.  Subsequent formulation groups
     // must only see what this group did not already allocate from it.

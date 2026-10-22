@@ -12,7 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
-import { buildCalendar, isIsoDate, moqInBase, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
+import { buildCalendar, isIsoDate, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   computeRequirement,
   fetchAllPages,
@@ -107,6 +107,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
       last_price: num(row.last_purchase_price), currency: text(row.last_purchase_currency) || null,
+      supply_uom_code: text(row.supply_uom_code) || null,
       ...(() => {
         const term = termByVmi.get(text(row.id));
         if (!term) return { credit_days: null, advance: false };
@@ -253,6 +254,13 @@ export async function computePlanning(p: PlanningParams) {
   const dailyUseOf = (id: string, demand: ReadonlyArray<{ material_id: string | null; qty_base: number }>) =>
     demand.filter((d) => d.material_id === id).reduce((s, d) => s + d.qty_base, 0) / horizonDays;
   const carryingOf = (id: string) => req.output.rows.find((r) => r.material_id === id)?.policy?.carrying_rate_per_uom ?? null;
+  // Order UoM (owner 2026-10-22): the lot vendor's MM03 Supply UoM, else Material Settings Order UoM.
+  const policyOrderUom = new Map(req.output.rows.map((r) => [r.material_id, r.policy?.order_uom_code ?? null]));
+  const orderUnitFor = (id: string, vendorId?: string | null) => orderUnitOf(
+    req.materials.get(id),
+    vendorId ? (vendorTerms.get(id) ?? []).find((t) => t.vendor_id === vendorId)?.supply_uom_code : null,
+    policyOrderUom.get(id),
+  );
   const costInputs = await loadCostInputs(p.companyId, calendar.asOf, p.today, universe, vendorTerms, req.materials);
   const rowDailyUse = (id: string) => {
     const row = req.output.rows.find((r) => r.material_id === id);
@@ -399,6 +407,7 @@ export async function computePlanning(p: PlanningParams) {
       const cheapestLabel = buy.cheapest_vendor_id ? (vendorTerms.get(buy.material_id) ?? []).find((t) => t.vendor_id === buy.cheapest_vendor_id)?.vendor_label ?? null : null;
       return {
         ...buy, material_name: nameOf(buy.material_id), material_code: codeOf(buy.material_id), uom: uom(buy.material_id),
+        order_unit: orderUnitFor(buy.material_id, vendor?.vendor_id),
         vendor_label: vendor?.vendor_label ?? null, vendor_moq_base: vendor?.moq_base ?? null, vendor_multiple_base: vendor?.multiple_base ?? null,
         vendor_lot_base: vendor?.lot_base ?? null, booking_time_days: vendor?.booking_days ?? null, route_lead_time_days: vendor?.route_days ?? null,
         vendor_basis: lotVendor ? (buy.bridge ? "BRIDGE" : "CHEAPEST_IN_TIME") : vendorOverride.has(buy.material_id) ? "LOWEST_TOTAL_COST" : vendor ? "FASTEST_FEASIBLE" : null,
@@ -473,7 +482,7 @@ export async function computePlanning(p: PlanningParams) {
     })),
   };
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms };
+  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms, orderUnitFor };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

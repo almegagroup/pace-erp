@@ -20,6 +20,7 @@ import { pushToast } from "../../../../store/uiToast.js";
 import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario, simulateMtsItemPlan } from "../procurementApi.js";
 import { TargetWhatIf, VendorDateCompare } from "./MtsItemPlanWhatIf.jsx";
 import { lotVendorFlags } from "./mtsItemPlanLots.js";
+import { orderQtyText } from "./mtsOrderUnit.js";
 
 // Owner 2026-10-21: FOR = freight inside the price; otherwise we pay it (AC01 landed cost).
 const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we pay)", EX_TRANSPORTER_GODOWN: "Ex godown (we pay)" };
@@ -138,6 +139,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "port_eta", label: "LCL-ETD / Port ETA", width: "120px", render: (p) => p.port_eta ?? "—" },
     { key: "date", label: "Date", width: "100px", render: (p) => <span className="font-semibold">{p.date ?? "—"}</span>, copyValue: (p) => p.date ?? "" },
     { key: "qty", label: "Quantity to Dispatch", width: "130px", align: "right", render: (p) => `${fmtQty(p.qty)} ${p.uom ?? ""}`, copyValue: (p) => p.qty },
+    { key: "order_qty", label: "In order unit", width: "120px", align: "right", render: (p) => orderQtyText(p.order_qty, p.order_uom) || "—", copyValue: (p) => p.order_qty ?? "" },
     { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (p) => fmtDays(p.max_days), copyValue: (p) => p.max_days ?? "" },
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (p) => fmtDays(p.min_days), copyValue: (p) => p.min_days ?? "" },
     { key: "material_name", label: "Member", width: "200px", render: (p) => `${p.material_code ?? ""} ${p.material_name}`.trim() },
@@ -274,6 +276,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "material_name", label: "Member", width: "200px", render: (o) => `${o.material_code ?? ""} ${o.material_name}`.trim() },
     { key: "vendor", label: "Vendor", width: "200px", render: (o) => o.vendor ?? "—" },
     { key: "qty", label: "Qty", width: "110px", align: "right", render: (o) => `${fmtQty(o.qty)} ${o.uom ?? ""}`, copyValue: (o) => o.qty },
+    { key: "order_qty", label: "In order unit", width: "120px", align: "right", render: (o) => orderQtyText(o.order_qty, o.order_uom) || "—", copyValue: (o) => o.order_qty ?? "" },
     { key: "po_by", label: "PO by", width: "100px", render: (o) => o.po_by ?? "—" },
     { key: "etd", label: "ETD", width: "100px", render: (o) => o.etd ?? "—" },
     { key: "eta_port", label: "ETA Port", width: "100px", render: (o) => o.eta_port ?? "—" },
@@ -582,7 +585,16 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                             ) : memberName.get(l.material_id) ?? "—"}
                           </td>
                           <td className="pr-2">{lotDraft ? <input type="date" value={l.plant_eta} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, plant_eta: event.target.value } : x)))} className={CELL_INPUT} /> : l.plant_eta}</td>
-                          <td className="pr-2">{lotDraft ? <input type="number" min="0" value={l.qty_base} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, qty_base: event.target.value } : x)))} className={`${CELL_INPUT} w-28`} /> : fmtQty(l.qty_base)}</td>
+                          <td className="pr-2">{lotDraft ? <input type="number" min="0" value={l.qty_base} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, qty_base: event.target.value } : x)))} className={`${CELL_INPUT} w-28`} /> : fmtQty(l.qty_base)}
+                            {(() => {
+                              // Order UoM: the vendor's MM03 Supply UoM, else the Material Settings Order UoM.
+                              const choice = (plan.vendor_choices ?? []).find((c) => c.material_id === l.material_id);
+                              const unit = (l.vendor_id ? choice?.options?.find((o) => o.vendor_id === l.vendor_id)?.order_unit : null) ?? choice?.order_unit ?? null;
+                              return unit && Number(l.qty_base) > 0
+                                ? <span className="ml-1 text-slate-500">= {orderQtyText(Number(l.qty_base) / unit.base_per_order_unit, unit.order_uom_code)}</span>
+                                : null;
+                            })()}
+                          </td>
                           <td className="pr-2">
                             {lotDraft ? (
                               <select value={l.vendor_id ?? ""} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, vendor_id: event.target.value || null } : x)))} className={CELL_INPUT}>

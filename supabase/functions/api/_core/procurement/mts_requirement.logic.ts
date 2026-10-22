@@ -28,6 +28,8 @@
  * Authority: Backend
  */
 
+import { orderByGroupUsage, type GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Small helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -549,6 +551,26 @@ export function toMaterialBase(material: MaterialInfo | undefined, qty: number, 
   return factor && factor > 0 ? qty * factor : null;
 }
 
+/** Order UoM (owner 2026-10-22): unit a buy quantity is shown in, beside the base unit. */
+export type OrderUnit = { order_uom_code: string; base_per_order_unit: number; order_uom_source: "VENDOR" | "POLICY" };
+
+/**
+ * The vendor's MM03 Supply UoM wins, else the Material Settings Order UoM. Only a unit with a
+ * fixed master conversion (or MT for KG) counts; the base unit itself or an unknown unit → null.
+ */
+export function orderUnitOf(material: MaterialInfo | undefined, vendorSupplyUom: string | null | undefined, policyOrderUom: string | null | undefined): OrderUnit | null {
+  if (!material) return null;
+  const base = String(material.base_uom_code ?? "").toUpperCase();
+  const tries: Array<[string | null | undefined, OrderUnit["order_uom_source"]]> = [[vendorSupplyUom, "VENDOR"], [policyOrderUom, "POLICY"]];
+  for (const [raw, source] of tries) {
+    const unit = String(raw ?? "").trim().toUpperCase();
+    if (!unit || unit === base) continue;
+    const factor = material.to_base_factors[unit];
+    if (factor && factor > 0) return { order_uom_code: unit, base_per_order_unit: factor, order_uom_source: source };
+  }
+  return null;
+}
+
 function activeMembers(input: ExplosionInput, groupId: string | null): string[] {
   if (!groupId) return [];
   return (input.groupMembers.get(groupId) ?? [])
@@ -1006,6 +1028,8 @@ export type AllocationOptions = {
   committedTransferOut?: Map<string, number>;
   /** material → Critical / Target days that protect its own exclusive use from group draws (Method C). */
   protectionDays?: Map<string, { critical_days: number | null; target_days: number | null }>;
+  /** PO22 Group Settings (owner 2026-10-22): group → which member first. Absent = Method C. */
+  groupOrders?: ReadonlyMap<string, GroupUsageOrder>;
 };
 
 /**
@@ -1245,11 +1269,16 @@ export function allocateDemand(
     const headroom = (material: string, tier: number) => Math.max(0, totalUsable(material) - floors(material)[tier]);
     // Method C rule 4: the member with the most free stock first; the primary (candidates[0])
     // goes first only on a tie.
+    // Group Settings override rule 4 for this group (most / least stock first, or a fixed
+    // member order); the protection tiers above still apply.
+    const groupOrder = record.group_id ? options.groupOrders?.get(record.group_id) : undefined;
     for (let tier = 0; tier < 3 && remaining > EPSILON; tier += 1) {
-      const ordered = record.candidates
-        .map((material, index) => ({ material, index, free: headroom(material, tier) }))
-        .sort((a, b) => b.free - a.free || a.index - b.index)
-        .map((entry) => entry.material);
+      const ordered = groupOrder
+        ? orderByGroupUsage(record.candidates, (material) => headroom(material, tier), groupOrder)
+        : record.candidates
+          .map((material, index) => ({ material, index, free: headroom(material, tier) }))
+          .sort((a, b) => b.free - a.free || a.index - b.index)
+          .map((entry) => entry.material);
       for (const material of ordered) {
         if (remaining <= EPSILON) break;
         const taken = draw(material, headroom(material, tier));
@@ -1612,6 +1641,8 @@ export type PolicyRow = {
   version_no: number;
   /** D10 item carrying Rate (INR per base unit); optional. */
   carrying_rate_per_uom?: number | null;
+  /** Order UoM (owner 2026-10-22): unit buy quantities are shown in; null = base unit. */
+  order_uom_code?: string | null;
 };
 
 /** Policy used on `asOf`: the row with the latest effective_from <= asOf. */
@@ -2024,6 +2055,8 @@ export type RequirementInput = Omit<ExplosionInput, "effective"> & {
   locationRoles?: Map<string, LocationRole>;
   /** material → posted stock promised to another company by an open Sub-CSN / STO (base qty). */
   committedTransferOut?: Map<string, number>;
+  /** PO22 Group Settings in force on the as-of date (group → member order). */
+  groupOrders?: Map<string, GroupUsageOrder>;
 };
 
 /**
@@ -2076,6 +2109,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
   }
   const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations, {
     locationRoles: input.locationRoles, committedTransferOut: input.committedTransferOut, protectionDays,
+    groupOrders: input.groupOrders,
   });
   const warnings = [...explosion.warnings];
   for (const [materialId, pos] of allocation.stock) {
