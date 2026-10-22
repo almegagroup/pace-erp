@@ -963,7 +963,16 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
     {
       key: "moq_uom_code", label: "MOQ UoM", width: "90px", filterable: false,
       render: (r) => (
-        <select data-field="moq_uom_code" disabled={!canEdit} className={`${CELL_INPUT} w-20`} value={valueOf(r, "moq_uom_code") ?? ""} onChange={(event) => setField(r.material_id, "moq_uom_code", event.target.value)}>
+        // The unit belongs to the MOQ quantity only (blank MOQ = no unit is saved), so it is
+        // chosen after the quantity. The ordering unit itself is MM03 "Supply UoM".
+        <select
+          data-field="moq_uom_code"
+          disabled={!canEdit || String(valueOf(r, "moq_qty") ?? "") === ""}
+          title={String(valueOf(r, "moq_qty") ?? "") === "" ? "Enter MOQ Qty first — this unit is only the unit of the MOQ quantity." : undefined}
+          className={`${CELL_INPUT} w-20 disabled:opacity-50`}
+          value={valueOf(r, "moq_uom_code") ?? ""}
+          onChange={(event) => setField(r.material_id, "moq_uom_code", event.target.value)}
+        >
           {(r.moq_uom_options ?? []).map((unit) => <option key={unit} value={unit}>{unit}</option>)}
         </select>
       ),
