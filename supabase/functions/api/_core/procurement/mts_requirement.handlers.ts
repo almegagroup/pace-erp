@@ -22,7 +22,8 @@
  *                 start of the as-of day; CONS bucket P261/P262 for the month)
  *   reservations  erp_production.reservation_document OPEN / PARTIAL
  *   inbound       erp_procurement purchase_order(_line), gate_entry(_line),
- *                 consignment_note, po_lot_balances()
+ *                 consignment_note, goods_receipt on the CC/as-of date,
+ *                 po_lot_balances()
  *   lead time     erp_master lead_time_master_domestic / _import,
  *                 port_plant_transit_master, vendor_material_info,
  *                 received CSNs (PO date → GRN date), public.history_lead_time_samples
@@ -624,7 +625,22 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
   return result;
 }
 
-/** Open PO lines of this company → GE / CSN / lot / remainder partition; plus STO CSNs into this company. */
+/**
+ * Every posted GR on the CC/as-of date.  The stock history snapshot intentionally
+ * ends on the preceding day, so these rows are the one-day bridge between that
+ * opening balance and today's physical closing stock.  Fetch in bounded material
+ * chunks and page every chunk: a busy day's receipts must not be silently capped.
+ */
+async function loadSameDayPostedGrns(companyId: string, asOf: string, materialIds: string[]): Promise<JsonRecord[]> {
+  const chunkSize = 100;
+  const chunks = Array.from({ length: Math.ceil(materialIds.length / chunkSize) }, (_, index) => materialIds.slice(index * chunkSize, (index + 1) * chunkSize));
+  const pages = await Promise.all(chunks.map((chunk) => fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+    .select("id, grn_number, po_id, material_id, received_qty, uom_code")
+    .eq("company_id", companyId).eq("status", "POSTED").eq("grn_date", asOf).in("material_id", chunk).order("id"), "MTS_REQ_SAME_DAY_GR_LOAD_FAILED")));
+  return pages.flat();
+}
+
+/** Open PO lines of this company → GE / CSN / lot / remainder partition; plus today's posted GRs and STO CSNs into this company. */
 async function loadInbound(companyId: string, asOf: string, materials: Map<string, MaterialInfo>, universe: Set<string>): Promise<InboundLoad> {
   const warnings: Warning[] = [];
   const pos = await fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("purchase_order")
@@ -639,7 +655,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
   const lineIds = lines.map((l) => text(l.id));
   const lotLineIds = lines.filter((l) => poById.get(text(l.po_id))?.order_in_lot === true).map((l) => text(l.id));
 
-  const [geLines, csns, lots, stoCsns, transfers] = await Promise.all([
+  const [geLines, csns, lots, stoCsns, transfers, postedGrns] = await Promise.all([
     lineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("gate_entry_line")
       .select("po_line_id, ge_qty, uom_code, gate_entry_id, grn_posted")
@@ -658,6 +674,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       .not("sto_line_id", "is", null).in("status", OPEN_CSN_STATUSES).order("id"), "MTS_REQ_STO_CSN_LOAD_FAILED")
       .then((rows) => rows.filter((c) => (text(c.consignee_company_id) || text(c.company_id)) === companyId)),
     loadSubCsnTransfers(companyId, materials, universe),
+    loadSameDayPostedGrns(companyId, asOf, [...universe]),
   ]);
   warnings.push(...transfers.warnings);
   const geIds = unique(geLines.map((g) => text(g.gate_entry_id)));
@@ -722,6 +739,22 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       committed_transfer_base: transfers.committedByPoLine.get(text(line.id)) ?? 0,
     };
     events.push(...partitionPoLineInbound(input, asOf, warnings));
+  }
+  // Stock opens at the start of asOf, so a GR posted on asOf is a real plant
+  // arrival on that date.  It must not be folded into opening stock or it would
+  // disappear from ETA-to-plant and make the day report irreconcilable.
+  for (const grn of postedGrns) {
+    const materialId = text(grn.material_id);
+    const base = toMaterialBase(materials.get(materialId), Number(grn.received_qty ?? 0), text(grn.uom_code));
+    if (base === null) {
+      warnings.push({ code: "GRN_UOM_CONVERSION_MISSING", message: `GRN ${text(grn.grn_number)}: unit ${text(grn.uom_code)} has no verified conversion; not counted.`, material_id: materialId });
+      continue;
+    }
+    if (base <= EPSILON_QTY) continue;
+    events.push({
+      material_id: materialId, qty: base, date: asOf, kind: "POSTED_GR", date_source: "GRN_POSTED_ON_CC_DATE",
+      reference: `GRN ${text(grn.grn_number)}`,
+    });
   }
   for (const csn of stoCsns) {
     const materialId = text(csn.material_id);

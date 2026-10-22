@@ -120,6 +120,7 @@ Deno.test("buildCalendar extra months: default unchanged, 6-month horizon when a
   const six = buildCalendar("2026-10-01", "2026-10-20", 4)!;
   assertEqual([six.months.length, six.horizonEnd, six.nmEnd], [6, "2027-03-31", "2026-11-30"], "CM + NM + 4");
   assertEqual(arrivalStatus("PO_REMAINDER", "BULK_CALL_OFF"), "BULK", "bulk label");
+  assertEqual(arrivalStatus("POSTED_GR", "GRN_POSTED_ON_CC_DATE"), "ACTUAL_GR", "same-day posted GR is clearly marked as an actual plant arrival");
 });
 
 Deno.test("P2 rescheduleAdvice: advance when needed earlier, postpone when not needed, quiet when on time", () => {

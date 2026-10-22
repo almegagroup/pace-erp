@@ -30,8 +30,8 @@ const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we p
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
 const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true, copyTableWithHeaders: true };
-const STATUS_LABEL = { AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
-const STATUS_TONE = { AT_GATE: "bg-emerald-100 text-emerald-800", IN_TRANSIT: "bg-sky-100 text-sky-800", ORDERED: "bg-amber-100 text-amber-800", BULK: "bg-slate-100 text-slate-700", STO: "bg-violet-100 text-violet-800", SUB_CSN: "bg-violet-100 text-violet-800" };
+const STATUS_LABEL = { ACTUAL_GR: "Actual GR", AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
+const STATUS_TONE = { ACTUAL_GR: "bg-emerald-200 text-emerald-900", AT_GATE: "bg-emerald-100 text-emerald-800", IN_TRANSIT: "bg-sky-100 text-sky-800", ORDERED: "bg-amber-100 text-amber-800", BULK: "bg-slate-100 text-slate-700", STO: "bg-violet-100 text-violet-800", SUB_CSN: "bg-violet-100 text-violet-800" };
 
 function fmtQty(value) {
   if (value === null || value === undefined || value === "") return "—";

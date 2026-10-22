@@ -224,9 +224,10 @@ export function monthRange(first: string, count: number): string[] {
   return out;
 }
 
-export type ArrivalStatus = "AT_GATE" | "IN_TRANSIT" | "ORDERED" | "BULK" | "STO" | "SUB_CSN";
+export type ArrivalStatus = "ACTUAL_GR" | "AT_GATE" | "IN_TRANSIT" | "ORDERED" | "BULK" | "STO" | "SUB_CSN";
 
 export function arrivalStatus(kind: string, dateSource: string): ArrivalStatus {
+  if (kind === "POSTED_GR") return "ACTUAL_GR";
   if (kind === "AT_GATE") return "AT_GATE";
   if (kind === "IN_TRANSIT") return "IN_TRANSIT";
   if (kind === "STO_IN_TRANSIT") return "STO";

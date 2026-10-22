@@ -41,6 +41,7 @@ import {
   skuDailyDemand,
   toMaterialBase,
   type Warning,
+  type InboundEvent,
 } from "./mts_requirement.logic.ts";
 import type { GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
 
@@ -62,6 +63,16 @@ function sum(map: Map<string, number> | undefined, from = "0000", to = "9999"): 
   for (const [day, qty] of map ?? []) if (day >= from && day <= to) total += qty;
   return total;
 }
+
+Deno.test("posted GR on CC date: stays out of opening stock and appears as that day's plant arrival", () => {
+  const calendar = buildCalendar("2026-10-01", "2026-10-22")!;
+  const events: InboundEvent[] = [{
+    material_id: "PM-00060", qty: 15_200, date: "2026-10-22", kind: "POSTED_GR",
+    date_source: "GRN_POSTED_ON_CC_DATE", reference: "GRN 2000000694",
+  }];
+  const buckets = bucketInbound(events, calendar);
+  assertEqual([buckets.cm, buckets.dispatched, buckets.byDay.get("2026-10-22")], [15_200, 15_200, 15_200], "posted GR is a dated same-day arrival, not an unlabelled opening-balance adjustment");
+});
 
 // ── fixture ───────────────────────────────────────────────────────────────
 let seq = 0;

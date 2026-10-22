@@ -1344,7 +1344,13 @@ export function allocateDemand(
  * SUB_CSN_PLANNED: this company's share of another company's PO, planned by a Sub-CSN (or its
  * not-yet-dispatched STO line) — Distribution mode, owner 2026-10-20. Not dispatched yet.
  */
-export type InboundKind = "AT_GATE" | "IN_TRANSIT" | "SCHEDULED_LOT" | "PO_REMAINDER" | "STO_IN_TRANSIT" | "SUB_CSN_PLANNED";
+/**
+ * POSTED_GR is deliberately an arrival, not opening stock: the stock snapshot is
+ * taken at the start of the CC/as-of date.  A GR posted on that date must be
+ * visible in the day's ETA-to-plant column, otherwise the day grid explains
+ * neither the movement nor its closing balance.
+ */
+export type InboundKind = "POSTED_GR" | "AT_GATE" | "IN_TRANSIT" | "SCHEDULED_LOT" | "PO_REMAINDER" | "STO_IN_TRANSIT" | "SUB_CSN_PLANNED";
 export type InboundEvent = {
   material_id: string;
   qty: number;               // material base unit
