@@ -88,6 +88,11 @@ Deno.test("forwardCoverDays: walks the coming days' use (owner example 60,000 â†
   near(forwardCoverDays(0, uses, 0), 0, "nothing â†’ 0");
 });
 
+Deno.test("forwardCoverDays: exact depletion does not count later zero-demand calendar days", () => {
+  near(forwardCoverDays(7, [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], 0), 7, "seven units cover exactly seven consuming days");
+  near(forwardCoverDays(2, [1, 1, 0, 0, 1], 0), 2, "depleted stock stops before an idle stretch");
+});
+
 Deno.test("familyDayGrid: sums members, adds unmet group demand to use and carries it", () => {
   const rows = [
     { material_id: "A", day: "D1", opening_qty_base: 100, confirmed_arrival_qty_base: 0, planned_lot_qty_base: 0, demand_qty_base: 10, group_draw_qty_base: 0, closing_qty_base: 90 },

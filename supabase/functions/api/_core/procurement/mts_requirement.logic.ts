@@ -573,9 +573,11 @@ export function orderUnitOf(material: MaterialInfo | undefined, vendorSupplyUom:
 
 function activeMembers(input: ExplosionInput, groupId: string | null): string[] {
   if (!groupId) return [];
-  return (input.groupMembers.get(groupId) ?? [])
+  // Defensive until the database uniqueness migration reaches every environment:
+  // a duplicate membership must never duplicate a group's demand/candidate.
+  return [...new Set((input.groupMembers.get(groupId) ?? [])
     .filter((member) => member.active && input.materials.get(member.material_id)?.status !== "INACTIVE")
-    .map((member) => member.material_id)
+    .map((member) => member.material_id))]
     .sort();
 }
 
@@ -922,7 +924,15 @@ export function applyCompanyMaterialMapping(input: {
   members: readonly GroupMember[];
   mapped: ReadonlySet<string>;
 }): { members: GroupMember[]; universe: string[]; unmappedDirect: string[]; unmappedMembers: string[] } {
-  const members = input.members.filter((m) => input.mapped.has(m.material_id));
+  // Data integrity is enforced in the database too, but one repeated row must not make
+  // planning count the same material twice while a historical environment is being repaired.
+  const membersByMaterial = new Map<string, GroupMember>();
+  for (const member of input.members) {
+    if (!input.mapped.has(member.material_id)) continue;
+    const prior = membersByMaterial.get(member.material_id);
+    membersByMaterial.set(member.material_id, prior ? { ...prior, active: prior.active || member.active } : member);
+  }
+  const members = [...membersByMaterial.values()];
   const unmappedMembers = [...new Set(input.members.filter((m) => !input.mapped.has(m.material_id)).map((m) => m.material_id))].sort();
   const direct = [...new Set(input.directMaterialIds.filter(Boolean))];
   const unmappedDirect = direct.filter((id) => !input.mapped.has(id)).sort();

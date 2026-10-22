@@ -36,6 +36,16 @@ function rdpFamily(): FamilyPlannerInput {
   };
 }
 
+Deno.test("family planner: a delivery lot is one PO, never a queued multi-lot purchase", () => {
+  const input = rdpFamily();
+  const policies = input.policies.map((p) => p.material_id === "EL"
+    ? { ...p, vendor_options: (p.vendor_options ?? []).map((o) => ({ ...o, moq_qty_base: 24000, order_multiple_qty_base: 24000, delivery_lot_qty_base: 24000 })) }
+    : p);
+  const elBuys = planFamily({ ...input, policies }).advisory_buys.filter((buy) => buy.material_id === "EL");
+  assert(elBuys.length > 0, "ELOTEX gets a recommendation");
+  assert(elBuys.every((buy) => buy.recommended_po_qty_base === 24000 && buy.lots.length === 1 && buy.lots[0].qty_base === 24000), `ELOTEX must be one 24 MT purchase per recommendation: ${JSON.stringify(elBuys)}`);
+});
+
 Deno.test("family planner: no stock-out and no member below Critical once lots can arrive", () => {
   const result = planFamily(rdpFamily());
   const shortDays = result.rows.filter((r) => r.closing_qty_base < -1e-6);
