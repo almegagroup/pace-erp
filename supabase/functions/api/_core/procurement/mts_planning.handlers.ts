@@ -14,7 +14,9 @@ import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
 import { buildCalendar, isIsoDate, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
+  cachedLoad,
   computeRequirement,
+  hashIds,
   fetchAllPages,
   fail,
   loadLocationLabels,
@@ -56,6 +58,8 @@ type PlanningParams = {
   policyOverrides?: ReadonlyMap<string, PolicyOverride>;
   /** Item plan: optimise arrival dates only for this material's family (speed); absent = every material. */
   arrivalFamilyOf?: string;
+  /** Preview: reuse the last full load's heavy reads (≤ 3 min). */
+  reuseLoads?: boolean;
 };
 
 export function readParams(url: URL | JsonRecord, today: string): { params?: Omit<PlanningParams, "companyId">; error?: [string, string] } {
@@ -244,11 +248,14 @@ export async function computePlanning(p: PlanningParams) {
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
   const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, {
     forecastBeyondPlan: (p.extraMonths ?? 0) > 0, rescheduleOverrides: p.rescheduleOverrides, policyOverrides: p.policyOverrides,
+    reuseLoads: p.reuseLoads,
   });
+  const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
+  const reuse = p.reuseLoads === true;
   const [vendorTerms, selections] = await Promise.all([
-    loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials),
+    cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials), reuse),
     loadSelections(p.companyId, [calendar.cmStart, calendar.nmStart]),
   ]);
   const policyMoqBase = new Map(req.output.rows.map((r) => [r.material_id, moqInBase(r.policy, req.materials.get(r.material_id))]));
@@ -264,7 +271,7 @@ export async function computePlanning(p: PlanningParams) {
     vendorId ? (vendorTerms.get(id) ?? []).find((t) => t.vendor_id === vendorId)?.supply_uom_code : null,
     policyOrderUom.get(id),
   );
-  const costInputs = await loadCostInputs(p.companyId, calendar.asOf, p.today, universe, vendorTerms, req.materials);
+  const costInputs = await cachedLoad(`${p.companyId}|costInputs|${calendar.asOf}|${p.today}|${hashIds(universe)}`, () => loadCostInputs(p.companyId, calendar.asOf, p.today, universe, vendorTerms, req.materials), reuse);
   const rowDailyUse = (id: string) => {
     const row = req.output.rows.find((r) => r.material_id === id);
     return row ? [...row.daily_demand.values()].reduce((s, q) => s + q, 0) / horizonDays : 0;
@@ -346,7 +353,9 @@ export async function computePlanning(p: PlanningParams) {
     group_orders: req.input.groupOrders,
     selections: selections.map,
   };
+  const plannerStarted = Date.now();
   const projection = planFamily(familyInput);
+  const plannerMs = Date.now() - plannerStarted;
   const groupAssignments = (() => {
     const byKey = new Map<string, { group_id: string; month: string; assigned_material_id: string | null; reason: "AUTO_SELECTED"; uncovered_qty: number }>();
     for (const b of projection.advisory_buys) {
@@ -379,6 +388,42 @@ export async function computePlanning(p: PlanningParams) {
     };
   };
 
+  // Owner 2026-10-22: the Store gets the planner's consumption ratio — a group line's period use is
+  // split over its members as the family planner consumes them (stock rotation, own use protected).
+  const storeRowsByRatio = (() => {
+    const range = (period: string) => (period === "CM" ? [calendar.asOf, calendar.cmEnd] : [calendar.nmStart, calendar.nmEnd]);
+    const shareCache = new Map<string, { shares: Map<string, number>; unmet: number } | null>();
+    const shareOf = (groupId: string, period: string) => {
+      const key = `${groupId}|${period}`;
+      if (shareCache.has(key)) return shareCache.get(key)!;
+      const [from, to] = range(period);
+      const draws = new Map<string, number>();
+      for (const m of projection.group_mix) {
+        if (m.group_id !== groupId || m.day < from || m.day > to) continue;
+        for (const [id, q] of Object.entries(m.draws)) draws.set(id, (draws.get(id) ?? 0) + q);
+      }
+      const unmet = projection.group_unmet.filter((u) => u.group_id === groupId && u.day >= from && u.day <= to).reduce((sum, u) => sum + u.qty_base, 0);
+      const total = [...draws.values()].reduce((a, b) => a + b, 0) + unmet;
+      const value = total > 0 ? { shares: new Map([...draws].map(([id, q]) => [id, q / total])), unmet: unmet / total } : null;
+      shareCache.set(key, value);
+      return value;
+    };
+    const out: typeof req.output.store_rows = [];
+    const done = new Set<string>();
+    for (const row of req.output.store_rows) {
+      const share = row.line_type === "GROUP" && row.group_id ? shareOf(row.group_id, row.period) : null;
+      if (!share) { out.push(row); continue; }
+      const lineKey = `${row.pool_key}|${row.period}`;
+      if (done.has(lineKey)) continue;
+      done.add(lineKey);
+      const r6 = (q: number) => Math.round(q * 1e6) / 1e6;
+      for (const [id, f] of [...share.shares].sort(([a], [b]) => a.localeCompare(b))) {
+        if (f * row.demand_qty > 1e-6) out.push({ ...row, material_id: id, executable_qty: r6(row.demand_qty * f), not_backed_qty: 0 });
+      }
+      if (share.unmet * row.demand_qty > 1e-6) out.push({ ...row, material_id: null, executable_qty: 0, not_backed_qty: r6(row.demand_qty * share.unmet) });
+    }
+    return out;
+  })();
   const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
@@ -509,7 +554,7 @@ export async function computePlanning(p: PlanningParams) {
       }));
     }).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
-    store_rows: req.output.store_rows.map((row) => ({
+    store_rows: storeRowsByRatio.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),
       mother_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.mother ?? "")).filter(Boolean).join("; ") || null,
@@ -525,6 +570,7 @@ export async function computePlanning(p: PlanningParams) {
       uom: uom(row.material_id),
     })),
   };
+  console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
   const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });

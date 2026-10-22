@@ -53,6 +53,8 @@ type ItemPlanParams = NonNullable<ReturnType<typeof readParams>["params"]>;
 export type ItemPlanSimulation = {
   rescheduleOverrides?: ReadonlyMap<string, string | null>;
   policyOverrides?: ReadonlyMap<string, PolicyOverride>;
+  /** Preview / what-if / AI re-check: reuse the item plan's heavy reads (≤ 3 min old). */
+  reuseLoads?: boolean;
 };
 
 /** P4: lots the user fixed for this item (current version); empty before the first save. */
@@ -103,6 +105,7 @@ export async function buildItemPlan(
     const plan = await computePlanning({
       companyId, ...params, extraMonths: ITEM_PLAN_EXTRA_MONTHS, manualLots,
       rescheduleOverrides: sim.rescheduleOverrides, policyOverrides: sim.policyOverrides, arrivalFamilyOf: materialId,
+      reuseLoads: sim.reuseLoads,
     });
     const { req: reqData, projection, assembly, calendar, vendorOptions, vendorTerms, orderUnitFor } = plan._internal;
     // Order UoM (owner 2026-10-22): the same quantity in the unit it is ordered in.
@@ -612,7 +615,7 @@ export async function reviewMtsItemPlanWithAiHandler(req: Request, ctx: ReqHandl
     const parsed = readParams(body, todayInIndia());
     if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
     const lots = Array.isArray(body.manual_lots) ? readManualLots(body.manual_lots) : (await loadCurrentScenario(companyId, materialId)).manual_lots;
-    const before = await buildItemPlan(companyId, parsed.params!, materialId, lots);
+    const before = await buildItemPlan(companyId, parsed.params!, materialId, lots, { reuseLoads: true });
 
     const codeOf = new Map(before.members.map((m) => [m.material_id, m.material_code]));
     const prompt = buildItemPlanAiPrompt({
@@ -638,7 +641,7 @@ export async function reviewMtsItemPlanWithAiHandler(req: Request, ctx: ReqHandl
     // The engine, not the AI, says what the proposal does.
     let after: JsonRecord | null = null;
     if (parsedAi.lots.length) {
-      const simulated = await buildItemPlan(companyId, parsed.params!, materialId, [...lots, ...parsedAi.lots.map((l) => ({ material_id: l.material_id, plant_eta: l.plant_eta, qty_base: l.qty, vendor_id: null }))]);
+      const simulated = await buildItemPlan(companyId, parsed.params!, materialId, [...lots, ...parsedAi.lots.map((l) => ({ material_id: l.material_id, plant_eta: l.plant_eta, qty_base: l.qty, vendor_id: null }))], { reuseLoads: true });
       after = { metrics: simulated.metrics, future_orders: simulated.future_orders };
     }
     return okResponse({
@@ -751,7 +754,7 @@ export async function simulateMtsItemPlanHandler(req: Request, ctx: ReqHandlerCo
     if (overrides.error) return fail(req, ctx, "MTS_SIM_INVALID_DAYS", 400, overrides.error);
     const lots = Array.isArray(body.manual_lots) ? readManualLots(body.manual_lots) : (await loadCurrentScenario(companyId, materialId)).manual_lots;
 
-    const plan = await buildItemPlan(companyId, parsed.params!, materialId, lots, { rescheduleOverrides: reschedules.map, policyOverrides: overrides.map });
+    const plan = await buildItemPlan(companyId, parsed.params!, materialId, lots, { rescheduleOverrides: reschedules.map, policyOverrides: overrides.map, reuseLoads: true });
     return okResponse({
       ...plan, simulated: true,
       note: "Preview only — nothing is saved, CSN Tracker is not changed and no PO is created.",
@@ -782,7 +785,7 @@ export async function whatIfMtsItemPlanTargetHandler(req: Request, ctx: ReqHandl
     if (candidates.length > MAX_TARGET_CANDIDATES) return fail(req, ctx, "MTS_WHATIF_TOO_MANY", 400, `At most ${MAX_TARGET_CANDIDATES} values at a time.`);
     const lots = (await loadCurrentScenario(companyId, materialId)).manual_lots;
 
-    const current = await buildItemPlan(companyId, parsed.params!, materialId, lots);
+    const current = await buildItemPlan(companyId, parsed.params!, materialId, lots, { reuseLoads: true });
     const selected = current.members.find((m) => m.is_selected);
     const currentTarget = selected?.target_days ?? null;
     const currentCritical = selected?.critical_days ?? null;
@@ -802,7 +805,7 @@ export async function whatIfMtsItemPlanTargetHandler(req: Request, ctx: ReqHandl
     const runs = await Promise.all(tries.map(async (target) => {
       const critical = currentCritical === null ? null : Math.min(currentCritical, target);
       const plan = await buildItemPlan(companyId, parsed.params!, materialId, lots, {
-        policyOverrides: new Map([[materialId, { target_cov_days: target, critical_cov_days: critical }]]),
+        policyOverrides: new Map([[materialId, { target_cov_days: target, critical_cov_days: critical }]]), reuseLoads: true,
       });
       return summarise(plan, target, critical, false);
     }));

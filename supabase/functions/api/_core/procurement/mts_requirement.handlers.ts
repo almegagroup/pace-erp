@@ -126,6 +126,32 @@ export function todayInIndia(nowMs = Date.now()): string {
   return new Date(nowMs + 330 * 60_000).toISOString().slice(0, 10);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Short-lived load cache for previews (owner 2026-10-22: speed). A full load always reads the DB
+// and refreshes the entry; a preview (reuse) takes an entry ≤ 3 min old, else reads too.
+// ─────────────────────────────────────────────────────────────────────────────
+const LOAD_CACHE_TTL_MS = 180_000;
+const LOAD_CACHE_MAX = 300;
+const loadCache = new Map<string, { at: number; value: Promise<unknown> }>();
+export function cachedLoad<T>(key: string, load: () => Promise<T>, reuse: boolean): Promise<T> {
+  const now = Date.now();
+  const hit = loadCache.get(key);
+  if (reuse && hit && now - hit.at < LOAD_CACHE_TTL_MS) return hit.value as Promise<T>;
+  const value = load();
+  value.catch(() => loadCache.delete(key));
+  loadCache.set(key, { at: now, value });
+  if (loadCache.size > LOAD_CACHE_MAX) {
+    for (const [k, v] of loadCache) if (now - v.at >= LOAD_CACHE_TTL_MS || loadCache.size > LOAD_CACHE_MAX) loadCache.delete(k);
+  }
+  return value;
+}
+/** Short, stable key for a long id list (order-independent). */
+export function hashIds(ids: readonly string[]): string {
+  let h = 5381;
+  for (const id of [...new Set(ids)].sort()) for (let i = 0; i < id.length; i += 1) h = ((h * 33) ^ id.charCodeAt(i)) >>> 0;
+  return `${ids.length}:${h.toString(36)}`;
+}
+
 // Named require*Access so company-scope-write-acl-guard.mjs recognises the
 // target-company check inside each handler body.
 export async function requireRequirementViewAccess(req: Request, ctx: ReqHandlerContext, companyId: string): Promise<Response | null> {
@@ -979,25 +1005,35 @@ export async function computeRequirement(
     rescheduleOverrides?: ReadonlyMap<string, string | null>;
     /** Simulation only (never saved): what-if Target / Critical days per material. */
     policyOverrides?: ReadonlyMap<string, PolicyOverride>;
+    /**
+     * Preview (simulate / what-if): reuse the heavy master / stock / inbound reads of the last full
+     * load of this company (≤ 3 min old) instead of reading them again (owner 2026-10-22: a typed
+     * Quantity to Dispatch took minutes). Policies, Group Settings and reschedules are always fresh.
+     */
+    reuseLoads?: boolean;
   } = {},
 ) {
   const months = calendar.months;
+  const started = Date.now();
+  const reuse = options.reuseLoads === true;
+  const ck = (...parts: unknown[]) => `${companyId}|${parts.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("|")}`;
 
-  const [planLines, settings, loadedPolicies] = await Promise.all([
-    loadPlanLines(companyId, months),
-    loadStrokeSettings(companyId, months),
+  const [planLinesLoaded, settings, loadedPolicies] = await Promise.all([
+    cachedLoad(ck("planLines", months), () => loadPlanLines(companyId, months), reuse),
+    cachedLoad(ck("settings", months), () => loadStrokeSettings(companyId, months), reuse),
     loadPolicies(companyId),
   ]);
+  const planLines = [...planLinesLoaded]; // the cached list is never mutated (forecast lines are added below)
   const policyLoad = options.policyOverrides?.size
     ? { ...loadedPolicies, policies: applyPolicyOverrides(loadedPolicies.policies, options.policyOverrides) }
     : loadedPolicies;
   const periodStrokeIds = [...settings.strokeSettings.values()].flat().map((p) => p.stroke_master_id);
-  const masters = await loadFormulationMasters(companyId, periodStrokeIds);
+  const masters = await cachedLoad(ck("masters", periodStrokeIds), () => loadFormulationMasters(companyId, periodStrokeIds), reuse);
   const universe = unique([...masters.materialUniverse, ...policyLoad.policies.map((p) => p.material_id).filter((id) => masters.mappedMaterialIds.has(id))]);
   const skuIds = [...masters.skus.keys()];
   const [materialRows, conversions] = await Promise.all([
-    loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]),
-    loadConversions([...universe, ...skuIds]),
+    cachedLoad(ck("materialRows", hashIds([...universe, ...skuIds, ...masters.prodshadeIds])), () => loadMaterialRows([...universe, ...skuIds, ...masters.prodshadeIds]), reuse),
+    cachedLoad(ck("conversions", hashIds([...universe, ...skuIds])), () => loadConversions([...universe, ...skuIds]), reuse),
   ]);
   const materials = materialInfoMap(materialRows, conversions);
   for (const [skuId, sku] of masters.skus) {
@@ -1009,17 +1045,18 @@ export async function computeRequirement(
   }
   // P1 (owner 2026-10-20): horizon months without any PO21 plan get a forecast.
   const forecast = options.forecastBeyondPlan && months.length > 2
-    ? await loadBeyondPlanForecast(companyId, asOf, months, planLines, masters.skus)
+    ? await cachedLoad(ck("forecast", asOf, months), () => loadBeyondPlanForecast(companyId, asOf, months, planLines, masters.skus), reuse)
     : { lines: [] as PlanLineVersion[], forecasts: [] as SkuForecast[], forecastMonths: [] as string[] };
   planLines.push(...forecast.lines);
   const universeSet = new Set(universe);
   const applyReservations = asOf >= today;
+  const universeKey = hashIds(universe);
   const [stockLoad, reservations, inboundRaw, leadTimes, locationRoles, reschedules, groupOrders] = await Promise.all([
-    loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
-    applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
-    loadInbound(companyId, asOf, materials, universeSet),
-    loadLeadTimes(companyId, asOf, universe),
-    loadLocationRoles(companyId),
+    cachedLoad(ck("stock", calendar.cmStart, asOf, universeKey), () => loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe), reuse),
+    applyReservations ? cachedLoad(ck("reservations", universeKey), () => loadReservations(companyId, universe), reuse) : Promise.resolve([] as ReservationRow[]),
+    cachedLoad(ck("inbound", asOf, universeKey), () => loadInbound(companyId, asOf, materials, universeSet), reuse),
+    cachedLoad(ck("leadTimes", asOf, universeKey), () => loadLeadTimes(companyId, asOf, universe), reuse),
+    cachedLoad(ck("locationRoles"), () => loadLocationRoles(companyId), reuse),
     loadInboundReschedules(companyId),
     loadGroupUsageOrders(companyId, asOf),
   ]);
@@ -1056,7 +1093,9 @@ export async function computeRequirement(
     committedTransferOut: inbound.committedTransferOut,
     groupOrders,
   };
+  const loadedMs = Date.now() - started;
   const output = buildRequirementRows(input);
+  console.log(JSON.stringify({ event: "MTS_TIMING", step: "requirement", reuse, load_ms: loadedMs, total_ms: Date.now() - started, materials: universe.length }));
   const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
   return {
     calendar, planLines, settings, policyLoad, masters, materialRows, materials, applyReservations,
