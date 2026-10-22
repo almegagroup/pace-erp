@@ -13,7 +13,7 @@
  *   D6  lead time = Booking Time (blank = 0) + route lead time of that vendor.
  */
 import { monthStart, rToRTransferRoute, type GroupRequirementRow, type PlanningCalendar, type PolicyRow, type RequirementRow } from "./mts_requirement.logic.ts";
-import type { OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
+import type { OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerDailyProjectionRow, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { rankConsumptionCandidates, type ConsumptionChoice } from "./mts_consumption.logic.ts";
 
 export type VendorTerm = {
@@ -53,6 +53,19 @@ export type PlanningAssembly = {
 };
 
 const EPSILON = 0.0000001;
+
+/** Actual same-run GROUP draw → ratio for display/export; OWN demand is not part of this ratio. */
+export function withExecutedConsumptionRatios(choices: readonly ConsumptionChoice[], projectionRows: readonly OptimizerDailyProjectionRow[]): ConsumptionChoice[] {
+  const drawByMaterial = new Map<string, number>();
+  for (const row of projectionRows) if (row.group_draw_qty_base > EPSILON) {
+    drawByMaterial.set(row.material_id, (drawByMaterial.get(row.material_id) ?? 0) + row.group_draw_qty_base);
+  }
+  const total = [...drawByMaterial.values()].reduce((sum, qty) => sum + qty, 0);
+  return choices.map((choice) => {
+    const allocationQty = Math.round((drawByMaterial.get(choice.material_id) ?? 0) * 1e6) / 1e6;
+    return { ...choice, allocation_qty: allocationQty, dynamic_ratio: total > EPSILON ? Math.round((allocationQty / total) * 1e6) / 1e6 : 0 };
+  });
+}
 
 /** Vendor with a known route and the shortest total lead time; ties → smaller MOQ → label. */
 export function chooseVendor(terms: readonly VendorTerm[]): VendorTerm | null {

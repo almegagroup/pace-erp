@@ -25,7 +25,7 @@ import {
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
 import { optimizeArrivalSet } from "./mts_item_plan.logic.ts";
-import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm, withExecutedConsumptionRatios } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
@@ -335,6 +335,10 @@ export async function computePlanning(p: PlanningParams) {
   // Pass 2: cheapest feasible vendor's MOQ / multiple / lead time.
   const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, memberCost, vendorOverride, vendorOptions, cycleDays }) : pass1;
   const projection = vendorOverride.size ? projectDailyCoverage({ ...assembly.input, ...manual }) : projection1;
+  // The preference is an input to the projection; the displayed ratio must be
+  // the resulting same-run group draw, never a pre-filled or user-maintained
+  // percentage. Fixed OWN demand is intentionally excluded from this ratio.
+  const consumptionChoices = withExecutedConsumptionRatios(assembly.consumption_choices, projection.rows);
 
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
@@ -450,7 +454,7 @@ export async function computePlanning(p: PlanningParams) {
     // Snapshot-bound evidence for the deterministic family rotation.  Physical
     // allocation remains in the daily projection; missing age/payment/reliability
     // evidence is deliberately exposed as UNKNOWN rather than guessed.
-    consumption_choices: assembly.consumption_choices.map((choice) => ({
+    consumption_choices: consumptionChoices.map((choice) => ({
       ...choice, material_name: nameOf(choice.material_id), material_code: codeOf(choice.material_id), uom: uom(choice.material_id),
       note: "Preference is used only among eligible stock above dated protection; it never makes projected arrivals executable.",
     })),

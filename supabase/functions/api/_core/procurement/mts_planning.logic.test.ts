@@ -1,4 +1,4 @@
-import { assemblePlanningInput, autoPickGroupMember, chooseVendor, selectGroupMember, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, autoPickGroupMember, chooseVendor, selectGroupMember, storePeriodLabel, storeTransferHints, withExecutedConsumptionRatios, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -72,4 +72,15 @@ Deno.test("store schedule: transfer hint only for what counted stock cannot back
   equal(storeTransferHints([onlyShopFloor], new Map([["A", 120]]), labels, () => "KG").get("A"), "Transfer 120 KG from R003 to an R store (destination UNKNOWN)", "no R destination → UNKNOWN, not fabricated");
   const fromFg = { ...r, stock: { ...r.stock, other_locations: ["F1"] } };
   equal(storeTransferHints([fromFg], new Map([["A", 120]]), labels, () => "KG").size, 0, "F/S stock is never an R→R transfer");
+});
+
+Deno.test("executed family ratio comes from same-run group draw, not a maintained percentage", () => {
+  const choices = [
+    { material_id: "A", executable_free_qty: 40, preference_score: 1, allocation_qty: 0, dynamic_ratio: 0, future_supply_state: "UNKNOWN" as const, cash_state: "UNKNOWN" as const, reasons: [], unknowns: [] },
+    { material_id: "B", executable_free_qty: 40, preference_score: 1, allocation_qty: 0, dynamic_ratio: 0, future_supply_state: "UNKNOWN" as const, cash_state: "UNKNOWN" as const, reasons: [], unknowns: [] },
+  ];
+  const projected = [
+    { material_id: "A", group_draw_qty_base: 30 }, { material_id: "A", group_draw_qty_base: 10 }, { material_id: "B", group_draw_qty_base: 10 },
+  ] as unknown as Parameters<typeof withExecutedConsumptionRatios>[1];
+  equal(withExecutedConsumptionRatios(choices, projected).map((entry) => [entry.material_id, entry.allocation_qty, entry.dynamic_ratio]), [["A", 40, 0.8], ["B", 10, 0.2]], "40:10 actual draw");
 });
