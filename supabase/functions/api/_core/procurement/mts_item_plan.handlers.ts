@@ -212,9 +212,24 @@ export async function buildItemPlan(
       };
     })).sort((a, b) => String(a.rescheduled_eta ?? a.eta_plant ?? "9999").localeCompare(String(b.rescheduled_eta ?? b.eta_plant ?? "9999")));
 
+    // The detail row must say which group consumed a member's stock.  Keep the
+    // internal group id only as a map key; return the resolved business label.
+    const groupDrawsByMemberDay = new Map<string, Array<{ group: string; qty: number }>>();
+    for (const mix of projection.group_mix) {
+      if (!groupSet.has(mix.group_id)) continue;
+      for (const [memberId, qty] of Object.entries(mix.draws)) {
+        if (!memberSet.has(memberId) || qty <= 0.000001) continue;
+        const key = `${memberId}|${mix.day}`;
+        groupDrawsByMemberDay.set(key, [...(groupDrawsByMemberDay.get(key) ?? []), {
+          group: groupLabel.get(mix.group_id) ?? "—",
+          qty: round(qty),
+        }]);
+      }
+    }
     const memberDaily = memberRows.map((r) => ({
       material_id: r.material_id, day: r.day, opening: round(r.opening_qty_base), arrivals: round(r.confirmed_arrival_qty_base),
       planned_lot: round(r.planned_lot_qty_base), use: round(r.demand_qty_base), group_draw: round(r.group_draw_qty_base),
+      group_draws: groupDrawsByMemberDay.get(`${r.material_id}|${r.day}`) ?? [],
       closing: round(r.closing_qty_base), max_days: wholeDays(r.max_cover_days), min_days: wholeDays(r.min_cover_days),
       target_days: r.target_days, critical_days: r.critical_days,
     }));

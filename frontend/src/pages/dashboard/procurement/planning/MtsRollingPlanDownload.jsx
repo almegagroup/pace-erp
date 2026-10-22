@@ -17,11 +17,21 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error ?? "");
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const readable = (value) => {
+  const label = String(value ?? "").trim();
+  return label && !UUID_RE.test(label) ? label : "";
+};
+
 export default function MtsRollingPlanDownload({ runtimeContext, planMonth, asOf, demandAt }) {
   const [busy, setBusy] = useState("");
 
   async function download() {
-    const list = buildTransactionCompanyList(runtimeContext).map((c) => ({ id: String(c.id ?? c.company_id ?? ""), label: c.company_name || c.company_code || "—" })).filter((c) => c.id);
+    const list = buildTransactionCompanyList(runtimeContext).map((c) => {
+      const companyName = readable(c.company_name);
+      const companyCode = readable(c.company_code);
+      return { id: String(c.id ?? c.company_id ?? ""), companyName, companyCode, label: companyName || companyCode || "—" };
+    }).filter((c) => c.id);
     if (list.length === 0) { pushToast({ message: "No company in your access.", tone: "error" }); return; }
     const companies = [];
     const skipped = [];
@@ -43,7 +53,17 @@ export default function MtsRollingPlanDownload({ runtimeContext, planMonth, asOf
         } catch (error) {
           notes.push(`${c.label}: PLAN tab without this company — ${errorText(error)}`);
         }
-        companies.push({ ...rolling, plan, notes });
+        // The handler is authoritative for display labels.  The runtime value
+        // is only a safe fallback when a legacy response lacks one; never let
+        // the UUID used for the request become a business-facing Excel value.
+        companies.push({
+          ...rolling,
+          company_id: c.id,
+          company_name: readable(rolling.company_name) || c.companyName || null,
+          company_code: readable(rolling.company_code) || c.companyCode || null,
+          plan,
+          notes,
+        });
       }
       if (companies.length === 0) { pushToast({ message: skipped.join(" · ") || "Nothing to download.", tone: "error" }); return; }
       setBusy("Building Excel…");

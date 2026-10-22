@@ -563,10 +563,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   <div className="grid gap-1 bg-slate-50 p-2 text-xs">
                     {(memberDaily.get(r.day) ?? []).map((m) => (
                       <div key={m.material_id} className="flex flex-wrap gap-3">
-                        <span className="w-56 font-semibold text-slate-800">{memberName.get(m.material_id) ?? m.material_id}</span>
+                        <span className="w-56 font-semibold text-slate-800">{memberName.get(m.material_id) ?? "—"}</span>
                         <span>Opening {fmtQty(m.opening)}</span>
                         <span>Arrival {fmtQty(m.arrivals)}</span>
-                        <span>Use {fmtQty(m.use)}{m.group_draw ? ` (for groups ${fmtQty(m.group_draw)})` : ""}</span>
+                        <span>Use {fmtQty(m.use)}</span>
+                        {m.group_draws?.length ? <span>For group: {m.group_draws.map((g) => `${g.group}: ${fmtQty(g.qty)}`).join(" · ")}</span> : null}
                         <span>Closing {fmtQty(m.closing)}</span>
                         <span>Max {fmtDays(m.max_days)} d · Min {fmtDays(m.min_days)} d</span>
                         <span className={m.critical_days !== null && m.max_days !== null && m.max_days < m.critical_days ? "font-semibold text-rose-700" : m.target_days !== null && m.max_days !== null && m.max_days < m.target_days ? "font-semibold text-amber-700" : ""}>
