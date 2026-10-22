@@ -325,7 +325,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "etd", label: "ETD", width: "100px", render: (o) => o.etd ?? "—" },
     { key: "eta_port", label: "ETA Port", width: "100px", render: (o) => o.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (o) => o.eta_plant ?? "—" },
-    { key: "days", label: "Max / Min days on arrival", width: "150px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
+    { key: "days", label: "After / before lot days", width: "160px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
     { key: "max_days_planned", label: "Planned Max days", width: "130px", render: (o) => (o.max_days_planned === null ? "—" : `${fmtDays(o.max_days_planned)}${o.max_days_basis === "DEFAULT" ? " (default — no cost data)" : ""}`), copyValue: (o) => o.max_days_planned ?? "" },
     { key: "unit_total_cost", label: "Full cost / unit (₹)", width: "150px", render: (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "—" : o.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })), copyValue: (o) => o.unit_total_cost ?? "" },
     { key: "freight_term", label: "Freight", width: "130px", render: (o) => FREIGHT_LABEL[o.freight_term] ?? o.freight_term ?? "—" },
@@ -621,7 +621,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               </section>
               <section className="grid gap-1">
                 <h3 className="text-sm font-semibold text-slate-800">Future Orders — Engine plan</h3>
-                <p className="text-xs text-slate-500">Each lot: cheapest vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. Advisory — no PO is created.</p>
+                <p className="text-xs text-slate-500">Each lot: cheapest authorised vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. “After / before lot days” is family cover after the lot lands / without that day&apos;s lot, so a before value of 0 means the lot is needed immediately. Advisory — no PO is created.</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={view.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}`} emptyMessage="No new order needed in the horizon." maxHeight="30vh" />
               </section>
               </>

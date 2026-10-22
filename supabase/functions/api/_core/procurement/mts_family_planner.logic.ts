@@ -12,8 +12,9 @@
  * Needs, earliest first, one lot at a time, re-simulating the whole family after each lot:
  *   OWN need   — a member's own cover (own use only) falls to its Target → that member is bought.
  *   GROUP need — the free stock of the group's members falls to the Target of the member that
- *                would be bought → the cheapest member that arrives in time is bought (a monthly
- *                selection wins); if none can, the fastest (late, flagged).
+ *                would be bought → only a member selected for that month's new buy may be bought;
+ *                when none is selected, the shortage remains visible rather than silently buying
+ *                another member.
  * A lot arrives on the need day, sized to Target + order cycle of the load it covers (own use, or
  * the group's use), MOQ / order multiple applied and capped to one vendor delivery lot. Surplus simply stays in
  * the member and feeds the groups through the free-stock rule, so later buys shrink by themselves.
@@ -62,8 +63,10 @@ export type FamilyPlannerInput = {
   manual_lots?: readonly FamilyLot[];
   /** Group Settings: group → which member first. Absent = most free stock first (Method C). */
   group_orders?: ReadonlyMap<string, GroupUsageOrder>;
-  /** D3: month (YYYY-MM-01) → members selected for new buy; they are preferred for a group need. */
+  /** D3: month (YYYY-MM-01) → members explicitly authorised for a new buy. */
   selections?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Materials displayed in the monthly selector. New engine lots for these are fail-closed unless selected. */
+  selection_controlled_members?: ReadonlySet<string>;
   /** Planning off: only simulate (arrival optimizer). */
   plan_buys?: boolean;
 };
@@ -318,6 +321,13 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const pendingGroup = new Map<string, number>(); // pool key → index
 
   type Need = { kind: "OWN" | "GROUP"; index: number; material: string; pool?: Pool; option: ReturnType<typeof pickVendorOption>; late: boolean };
+  const monthOf = (i: number) => `${allDays[i].slice(0, 7)}-01`;
+  // Selection only controls a *new* engine lot. Existing stock, confirmed
+  // arrivals, and a user-fixed lot are always simulated. A material outside
+  // the selector keeps legacy behavior because the user has no UI control for
+  // it; a displayed candidate is fail-closed when unchecked.
+  const isSelectedForNewBuy = (id: string, i: number) => !input.selection_controlled_members?.has(id)
+    || Boolean(input.selections?.get(monthOf(i))?.has(id));
 
   const ownNeed = (sim: Sim, m: number): Need | null => {
     const id = ids[m];
@@ -329,6 +339,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       if (t === null || targets[m][i].critical === null) continue;
       const cover = coverDays(sim.ownBalance[m][i], own[m], i);
       if (cover !== null && cover <= t) {
+        if (!isSelectedForNewBuy(id, i)) continue;
         const option = pickVendorOption(policy, allDays[i], input.as_of);
         if (!option && totalLeadTimeDays(policy) === null) return null;
         const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
@@ -343,7 +354,6 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const groupNeed = (sim: Sim, p: number): Need | null => {
     const pool = pools[p];
     const from = (pendingGroup.get(pool.key) ?? -1) + 1;
-    const monthOf = (i: number) => `${allDays[i].slice(0, 7)}-01`;
     // Free stock of the pool's members after day i, against the pool's own use ahead.
     const freeCover = (i: number) => coverDays(sim.poolFree[p][i], pool.demand, i);
     let best: Need | null = null;
@@ -360,17 +370,22 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= t)) { needIndex = i; break; }
       }
       if (needIndex < 0) return;
+      // This is a real authorization, not a cost preference: a member the
+      // buyer left unchecked must never be substituted just because it is
+      // cheaper or faster. With no selected candidate, no lot is created and
+      // the pool shortage remains visible for the user to resolve.
+      if (!isSelectedForNewBuy(id, needIndex)) return;
       const option = pickVendorOption(policy, allDays[needIndex], input.as_of);
       const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
       if (lead === null) return; // cannot be bought (no vendor / lead time)
       const late = lead !== null && needIndex < lead;
-      const selected = input.selections?.get(monthOf(needIndex));
       const rank: [number, number, number, number, number] = [
-        selected && selected.size > 0 ? (selected.has(id) ? 0 : 1) : 0,
         late ? 1 : 0,
         late ? (lead ?? Number.POSITIVE_INFINITY) : (option?.option.unit_cost ?? Number.POSITIVE_INFINITY),
         needIndex,
         order,
+        // Kept deterministic for equally priced/dated selected candidates.
+        0,
       ];
       if (!bestRank || lexLess(rank, bestRank)) {
         bestRank = rank;

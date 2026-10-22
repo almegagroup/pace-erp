@@ -28,7 +28,7 @@ import {
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { type FamilyGroupDemand, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
@@ -90,8 +90,12 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   const label = new Map(vendors.map((v) => [text(v.id), [text(v.vendor_code), text(v.vendor_name)].filter(Boolean).join(" — ")]));
   // Default payment term per vendor-material (D10: cash-out timing).
   const vmiIds = unique(rows.map((row) => text(row.id)));
-  const termRows = vmiIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
-    .from("vendor_material_payment_term").select("vmi_id, payment_term_id, is_default").in("vmi_id", chunk));
+  const [termRows, currencyRows] = vmiIds.length === 0 ? [[], []] : await Promise.all([
+    fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
+      .from("vendor_material_payment_term").select("vmi_id, payment_term_id, is_default").in("vmi_id", chunk)),
+    fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
+      .from("vendor_material_currency").select("vmi_id, currency_code, is_default").in("vmi_id", chunk)),
+  ]);
   const termIds = unique(termRows.map((t) => text(t.payment_term_id)));
   const terms = termIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(termIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("payment_terms_master").select("id, credit_days, advance_pct, payment_method, payment_type").in("id", chunk));
@@ -100,6 +104,15 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   for (const t of termRows) {
     const term = termById.get(text(t.payment_term_id));
     if (term && (t.is_default === true || !termByVmi.has(text(t.vmi_id)))) termByVmi.set(text(t.vmi_id), term);
+  }
+  // Legacy VMI rows often have a last price but leave last_purchase_currency
+  // blank. MM03's default vendor-material currency is the authoritative
+  // fallback; a blank must never be silently treated as INR.
+  const currencyByVmi = new Map<string, string>();
+  for (const row of currencyRows) {
+    const vmiId = text(row.vmi_id);
+    const currency = text(row.currency_code).toUpperCase();
+    if (currency && (row.is_default === true || !currencyByVmi.has(vmiId))) currencyByVmi.set(vmiId, currency);
   }
   for (const row of rows) {
     const materialId = text(row.material_id);
@@ -113,7 +126,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       vendor_id: vendorId, vendor_label: label.get(vendorId) ?? "—", material_id: materialId,
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
-      last_price: num(row.last_purchase_price), currency: text(row.last_purchase_currency) || null,
+      last_price: num(row.last_purchase_price), currency: text(row.last_purchase_currency).toUpperCase() || currencyByVmi.get(text(row.id)) || null,
       supply_uom_code: text(row.supply_uom_code) || null,
       ...(() => {
         const term = termByVmi.get(text(row.id));
@@ -152,7 +165,7 @@ type CostInputs = {
 
 async function loadCostInputs(companyId: string, asOf: string, today: string, universe: string[], vendorTerms: Map<string, VendorTerm[]>, materials: Awaited<ReturnType<typeof computeRequirement>>["materials"]): Promise<CostInputs> {
   const since = new Date(Date.parse(`${today}T00:00:00Z`) - 365 * 86_400_000).toISOString().slice(0, 10);
-  const currencies = unique([...vendorTerms.values()].flat().map((t) => (t.currency ?? "INR").toUpperCase()).filter((c) => c !== "INR"));
+  const currencies = unique([...vendorTerms.values()].flat().map((t) => t.currency?.toUpperCase() ?? null).filter((c) => c !== "INR"));
   const [financeRes, soRes, grns, fxPicks] = await Promise.all([
     serviceRoleClient.schema("erp_planning").from("company_planning_finance").select("effective_from, interest_pct_per_year").eq("company_id", companyId).limit(500),
     serviceRoleClient.schema("erp_procurement").from("sales_order").select("payment_term_id").eq("company_id", companyId).gte("so_date", since).not("payment_term_id", "is", null).limit(5000),
@@ -230,8 +243,8 @@ function costOptionsFor(
     try {
       orderQty = applyOrderConstraints(buy.required_qty_base, { material_id: term.material_id, target_days: null, critical_days: null, vendor_moq_qty_base: term.moq_base, order_multiple_qty_base: term.multiple_base, configured_lead_time_days: null });
     } catch { orderQty = null; }
-    const currency = (term.currency ?? "INR").toUpperCase();
-    const fx = inputs.fxByCurrency.get(currency) ?? { inr: null, source: null, stale: false };
+    const currency = term.currency?.toUpperCase() || null;
+    const fx = currency ? inputs.fxByCurrency.get(currency) ?? { inr: null, source: null, stale: false } : { inr: null, source: null, stale: false };
     const landed = inputs.landedByVendorMaterial.get(`${term.vendor_id}|${term.material_id}`) ?? { adder: null, basis: "NONE" as const };
     return costOption({
       vendor_label: term.vendor_label, price: term.last_price, currency, fx_inr: fx.inr, fx_source: fx.source ? `${fx.source}${fx.stale ? " (last available)" : ""}` : null,
@@ -287,8 +300,8 @@ export async function computePlanning(p: PlanningParams) {
     const id = row.material_id;
     const use = rowDailyUse(id);
     const options = (vendorTerms.get(id) ?? []).map((term) => {
-      const currency = (term.currency ?? "INR").toUpperCase();
-      const fx = costInputs.fxByCurrency.get(currency)?.inr ?? null;
+    const currency = term.currency?.toUpperCase() || null;
+    const fx = currency ? costInputs.fxByCurrency.get(currency)?.inr ?? null : null;
       const priceInr = term.last_price !== null && fx !== null ? term.last_price * fx : null;
       const landed = costInputs.landedByVendorMaterial.get(`${term.vendor_id}|${id}`) ?? { adder: null, basis: "NONE" as const };
       const lead = term.route_days === null ? null : (term.booking_days ?? 0) + term.route_days;
@@ -306,7 +319,8 @@ export async function computePlanning(p: PlanningParams) {
         order_qty: orderQty, lead_time_days: lead, feasible: true,
       }, { required_qty: typicalLot, daily_use: use, carrying_rate: carryingOf(id), interest_pct: costInputs.interestPct, customer_credit_days: costInputs.customerCreditDays }) : null;
       const freightTerm = costInputs.freightTermByVendorMaterial.get(`${term.vendor_id}|${id}`) ?? null;
-      const missing = [...(full?.missing ?? (priceInr === null ? ["price"] : []))];
+      const missing = [...(full?.missing ?? (priceInr === null ? [term.last_price === null ? "price" : "exchange rate"] : []))];
+      if (currency === null && term.last_price !== null) missing.push("currency");
       // We pay the freight but AC01 has no landed history for this vendor → freight is unknown, not 0.
       if (freightTerm && freightTerm !== "FOR" && landed.basis === "NONE") missing.push(`freight (${freightTerm === "FREIGHT_SEPARATE" ? "freight separate" : "ex godown"} — paid by us, no AC01 history)`);
       const unitCost = full?.total_cost !== null && full?.total_cost !== undefined && typicalLot > 0
@@ -324,17 +338,9 @@ export async function computePlanning(p: PlanningParams) {
     cycleDays.set(id, best.length ? Math.min(...best) : DEFAULT_CYCLE_DAYS);
     cycleBasis.set(id, best.length ? "ECONOMIC" : "DEFAULT");
   }
-  // Owner 2026-10-20: nothing selected for a group → engine picks the member with the lowest total cost.
-  const memberCost = (id: string, qty: number, needDay: string): MemberCost | null => {
-    const terms = vendorTerms.get(id) ?? [];
-    if (terms.length === 0) return null;
-    const probe = { material_id: id, required_qty_base: qty, need_date: needDay, estimated_plant_eta: needDay } as unknown as OptimizerAdvisoryBuy;
-    const best = costOptionsFor(probe, terms, costInputs, calendar.asOf, rowDailyUse(id), carryingOf(id))[0];
-    return best ? { feasible: best.feasible, total_cost: best.total_cost, lead_time_days: best.lead_time_days } : null;
-  };
   // Opening stock, arrivals, policies and vendor options; the lots themselves come from the
   // family planner (owner 2026-10-22: right item, right time, right lot — own use vs group use).
-  const assembly = assemblePlanningInput({ ...baseArgs, memberCost, vendorOptions, cycleDays });
+  const assembly = assemblePlanningInput({ ...baseArgs, vendorOptions, cycleDays });
   const vendorOverride = new Map<string, string>();
   const ownDemand: FamilyOwnDemand[] = [];
   const groupDemand: FamilyGroupDemand[] = [];
@@ -354,20 +360,47 @@ export async function computePlanning(p: PlanningParams) {
     manual_lots: p.manualLots ?? [],
     group_orders: req.input.groupOrders,
     selections: selections.map,
+    // The month selector is shown for every active group member. Selection is
+    // a hard authorization for a new engine lot, never a preference that the
+    // solver may override for a lower price or shorter lead time.
+    selection_controlled_members: new Set(
+      [...req.masters.groupMembers.values()].flat()
+        .filter((member) => member.active && req.materials.get(member.material_id)?.status !== "INACTIVE")
+        .map((member) => member.material_id),
+    ),
   };
   const plannerStarted = Date.now();
   const projection = planFamily(familyInput);
   const plannerMs = Date.now() - plannerStarted;
   const groupAssignments = (() => {
-    const byKey = new Map<string, { group_id: string; month: string; assigned_material_id: string | null; reason: "AUTO_SELECTED"; uncovered_qty: number }>();
+    type AssignmentReason = "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "NONE_SELECTED";
+    const byKey = new Map<string, { group_id: string; month: string; assigned_material_id: string | null; reason: AssignmentReason; uncovered_qty: number }>();
     for (const b of projection.advisory_buys) {
       if (b.need_kind !== "GROUP" || !b.need_date || (b.status !== "ADVISORY" && b.status !== "ADVISORY_LATE")) continue;
       for (const groupId of b.covers) {
         const key = `${groupId}|${b.need_date.slice(0, 7)}|${b.material_id}`;
-        const seen = byKey.get(key) ?? { group_id: groupId, month: `${b.need_date.slice(0, 7)}-01`, assigned_material_id: b.material_id, reason: "AUTO_SELECTED" as const, uncovered_qty: 0 };
+        const month = `${b.need_date.slice(0, 7)}-01`;
+        const selected = selections.map.get(month) ?? new Set<string>();
+        const seen = byKey.get(key) ?? {
+          group_id: groupId, month, assigned_material_id: b.material_id,
+          reason: selected.size > 1 ? "CHEAPEST_SELECTED" as const : "SINGLE_SELECTED" as const,
+          uncovered_qty: 0,
+        };
         seen.uncovered_qty += b.required_qty_base;
         byKey.set(key, seen);
       }
+    }
+    // No selected candidate means a group need stays visible as a shortfall;
+    // it must not disappear merely because the planner correctly refused to
+    // invent a purchase through an unchecked member.
+    for (const unmet of projection.group_unmet) {
+      const month = `${unmet.day.slice(0, 7)}-01`;
+      const key = `${unmet.group_id}|${month}|`;
+      const seen = byKey.get(key) ?? {
+        group_id: unmet.group_id, month, assigned_material_id: null, reason: "NONE_SELECTED" as const, uncovered_qty: 0,
+      };
+      seen.uncovered_qty += unmet.qty_base;
+      byKey.set(key, seen);
     }
     return [...byKey.values()].sort((a, b) => a.month.localeCompare(b.month) || a.group_id.localeCompare(b.group_id));
   })();
@@ -440,7 +473,7 @@ export async function computePlanning(p: PlanningParams) {
   const groupRows = groupIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("material_category_group").select("id, group_code, group_name").in("id", chunk));
   const groupLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ")]));
-  const selectionGroups = [...new Set(groupAssignments.map((a) => a.group_id))].map((groupId) => {
+  const selectionGroups = groupIds.map((groupId) => {
     // The requirement output is intentionally sparse.  The selector must use
     // the authoritative group map instead, otherwise a valid group shortage
     // appears as a heading with no selectable material rows.

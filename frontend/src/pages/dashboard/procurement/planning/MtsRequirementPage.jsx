@@ -1573,7 +1573,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "month", label: "Month", width: "90px", render: (a) => String(a.month).slice(0, 7) },
     { key: "uncovered_qty", label: "Group shortage", width: "120px", align: "right", render: (a) => fmtQty(a.uncovered_qty), copyValue: (a) => a.uncovered_qty },
     { key: "assigned_material_name", label: "Planned through member", width: "240px", render: (a) => (a.assigned_material_name ?? <span className="font-semibold text-rose-700">Select a member for new buy</span>), copyValue: (a) => a.assigned_material_name ?? "" },
-    { key: "reason", label: "Basis", width: "160px", render: (a) => ({ SINGLE_SELECTED: "Your selection", CHEAPEST_SELECTED: "Cheapest of selected", AUTO_SELECTED: "Engine chose (nothing selected) — lowest total cost", NONE_SELECTED: "No member has a vendor — set up a vendor" }[a.reason] ?? a.reason) },
+    { key: "reason", label: "Basis", width: "220px", render: (a) => ({ SINGLE_SELECTED: "Your selection", CHEAPEST_SELECTED: "Cheapest of selected", AUTO_SELECTED: "Engine chose (legacy result — recalculate)", NONE_SELECTED: "No member selected — new buy is blocked" }[a.reason] ?? a.reason) },
   ];
   const dailyColumns = [
     { key: "day", label: "Date", width: "100px" },
@@ -1737,7 +1737,8 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
   }, [selQ.data]);
   const members = useMemo(() => {
     const seen = new Map();
-    for (const a of plan?.group_assignments ?? []) seen.set(a.group_id, a.group_label);
+    for (const group of plan?.selection_groups ?? []) seen.set(group.group_id, group.group_label);
+    for (const a of plan?.group_assignments ?? []) if (!seen.has(a.group_id)) seen.set(a.group_id, a.group_label);
     return seen;
   }, [plan]);
   if (selQ.error) return <p className="text-xs text-slate-500">Member selection is not available for your access yet.</p>;
@@ -1765,7 +1766,8 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
   }
   return (
     <details className="border border-slate-200 bg-slate-50 p-2 text-xs">
-      <summary className="cursor-pointer font-semibold text-slate-700">Choose members for new buy (next six planning months)</summary>
+      <summary className="cursor-pointer font-semibold text-slate-700">Choose members authorised for new buy (next six planning months)</summary>
+      <p className="mt-1 text-slate-500">Unchecked members can still contribute existing stock or confirmed inbound, but the engine will not create a new purchase lot for them.</p>
       <div className="mt-2 grid gap-2">
         {[...members.entries()].map(([groupId, label]) => (
           <div key={groupId} className="grid gap-1">

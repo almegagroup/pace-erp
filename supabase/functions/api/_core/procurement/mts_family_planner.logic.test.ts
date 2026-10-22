@@ -77,6 +77,26 @@ Deno.test("family planner: DA is bought for its own use and for TLA (VINNAPAS ha
   assert(buys.every((b) => (b.recommended_po_qty_base ?? 0) % 20000 === 0), "container multiple respected");
 });
 
+Deno.test("family planner: an unchecked member is never bought for its own use or a group", () => {
+  const days = daysTo("2026-10-31");
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2026-10-31",
+    opening_qty_by_material: { WACKER: 0, CELE: 0 },
+    own_demand: days.map((d) => ({ material_id: "WACKER", required_by: d, qty_base: 10 })),
+    group_demand: days.map((d) => ({ group_id: "RDP", candidates: ["WACKER", "CELE"], required_by: d, qty_base: 20 })),
+    confirmed_arrivals: [],
+    policies: [
+      policy("WACKER", 1, 0, [{ vendor: "WACKER", lead: 0, cost: 10 }]),
+      policy("CELE", 1, 0, [{ vendor: "CELANESE", lead: 0, cost: 12 }]),
+    ],
+    selections: new Map([["2026-10-01", new Set(["CELE"])]]),
+    selection_controlled_members: new Set(["WACKER", "CELE"]),
+  };
+  const buys = planFamily(input).advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
+  assert(!buys.some((b) => b.material_id === "WACKER"), `unchecked Wacker must not be bought: ${JSON.stringify(buys)}`);
+  assert(buys.some((b) => b.material_id === "CELE" && b.covers.includes("RDP")), "selected Celanese covers the RDP need");
+});
+
 Deno.test("family arrival optimizer: a piece is not pushed months away while the family needs it", () => {
   const input = { ...rdpFamily(), confirmed_arrivals: [{ source_key: "RP-PO", material_id: "RP", eta_to_plant: "2026-11-01", qty_base: 25000 }] };
   const optimum = optimizeFamilyArrival(input, "RP-PO");
