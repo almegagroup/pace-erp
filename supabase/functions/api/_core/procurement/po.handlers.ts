@@ -19,7 +19,7 @@ import { loadApproverWorkContextIds, matchesApprover, pickScopedApproverRules } 
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 import { gstStateCodeFromGstNumber, gstStateCodeFromState } from "../../_shared/gstStateCodes.ts";
-import { recalculateAndBuildUpdates } from "./csn.handlers.ts";
+import { recalculateAndBuildUpdates, recalculateCsnsForPoDeliveryDate } from "./csn.handlers.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -2912,6 +2912,10 @@ export async function amendPOHandler(
         error: amendmentInsert.error,
       }));
       throw new Error("PROCUREMENT_PO_AMEND_LOG_FAILED");
+    }
+
+    if (Object.prototype.hasOwnProperty.call(headerUpdates, "expected_delivery_date")) {
+      await recalculateCsnsForPoDeliveryDate(poId, ctx.auth_user_id);
     }
 
     const orderGroupId = toTrimmedString((updatedPo as PurchaseOrderRow).order_group_id);
