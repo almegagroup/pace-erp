@@ -28,6 +28,8 @@
  * Authority: Backend
  */
 
+import { orderByGroupUsage, type GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Small helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1006,6 +1008,8 @@ export type AllocationOptions = {
   committedTransferOut?: Map<string, number>;
   /** material → Critical / Target days that protect its own exclusive use from group draws (Method C). */
   protectionDays?: Map<string, { critical_days: number | null; target_days: number | null }>;
+  /** PO22 Group Settings (owner 2026-10-22): group → which member first. Absent = Method C. */
+  groupOrders?: ReadonlyMap<string, GroupUsageOrder>;
 };
 
 /**
@@ -1245,11 +1249,16 @@ export function allocateDemand(
     const headroom = (material: string, tier: number) => Math.max(0, totalUsable(material) - floors(material)[tier]);
     // Method C rule 4: the member with the most free stock first; the primary (candidates[0])
     // goes first only on a tie.
+    // Group Settings override rule 4 for this group (most / least stock first, or a fixed
+    // member order); the protection tiers above still apply.
+    const groupOrder = record.group_id ? options.groupOrders?.get(record.group_id) : undefined;
     for (let tier = 0; tier < 3 && remaining > EPSILON; tier += 1) {
-      const ordered = record.candidates
-        .map((material, index) => ({ material, index, free: headroom(material, tier) }))
-        .sort((a, b) => b.free - a.free || a.index - b.index)
-        .map((entry) => entry.material);
+      const ordered = groupOrder
+        ? orderByGroupUsage(record.candidates, (material) => headroom(material, tier), groupOrder)
+        : record.candidates
+          .map((material, index) => ({ material, index, free: headroom(material, tier) }))
+          .sort((a, b) => b.free - a.free || a.index - b.index)
+          .map((entry) => entry.material);
       for (const material of ordered) {
         if (remaining <= EPSILON) break;
         const taken = draw(material, headroom(material, tier));
@@ -2024,6 +2033,8 @@ export type RequirementInput = Omit<ExplosionInput, "effective"> & {
   locationRoles?: Map<string, LocationRole>;
   /** material → posted stock promised to another company by an open Sub-CSN / STO (base qty). */
   committedTransferOut?: Map<string, number>;
+  /** PO22 Group Settings in force on the as-of date (group → member order). */
+  groupOrders?: Map<string, GroupUsageOrder>;
 };
 
 /**
@@ -2076,6 +2087,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
   }
   const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations, {
     locationRoles: input.locationRoles, committedTransferOut: input.committedTransferOut, protectionDays,
+    groupOrders: input.groupOrders,
   });
   const warnings = [...explosion.warnings];
   for (const [materialId, pos] of allocation.stock) {

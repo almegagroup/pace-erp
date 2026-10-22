@@ -25,6 +25,7 @@ import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffol
 import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
+import MtsGroupSettings from "./MtsGroupSettings.jsx";
 import MtsItemPlanTab from "./MtsItemPlanTab.jsx";
 import MtsPlanningReschedule from "./MtsPlanningReschedule.jsx";
 import MtsRollingPlanDownload from "./MtsRollingPlanDownload.jsx";
@@ -1159,6 +1160,7 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
 
   return (
     <div className="grid gap-2">
+      <MtsGroupSettings companyId={companyId} asOf={asOf} today={today} canEdit={canEdit} />
       <div className="flex flex-wrap items-end gap-3">
         <button
           type="button"

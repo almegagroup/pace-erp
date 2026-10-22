@@ -1841,6 +1841,14 @@ export function getMtsRequirementPolicyHistory(params) {
   return fetchProcurement("GET", "/api/procurement/mts-requirement/policy-history", undefined, params);
 }
 
+export function getMtsGroupUsageOrder(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/group-usage-order", undefined, params);
+}
+
+export function saveMtsGroupUsageOrder(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/group-usage-order", data);
+}
+
 export function saveMtsRequirementPolicies(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/policies", data);
 }

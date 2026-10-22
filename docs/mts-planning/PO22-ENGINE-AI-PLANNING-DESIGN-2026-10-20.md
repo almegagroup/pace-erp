@@ -442,3 +442,16 @@ on the group row). Before this, those columns read the stock-allocated share, so
 (e.g. 40KG wovensack with alternate PM-00084) showed only the part its own stock covers
 (22–31 Oct = 68,967 bags) against full-month consumption (91,170) and wrongly flipped to the NM basis.
 Cover days, stock-out date, NM status and Net Req keep using the allocated demand.
+
+### 16. Group Settings — which member of a group is used first (owner 2026-10-22)
+
+PO22 → 2. Material Settings → "Group Settings". Per company × material group, effective-dated,
+append-only (`erp_planning.material_group_usage_order`, migration `20261022100000`):
+`MOST_STOCK_FIRST` (Method C), `LEAST_STOCK_FIRST`, or `FIXED_ORDER` (members in a set order; the next
+one only when the one above is empty). One shared ordering (`_shared/groupUsageOrder.logic.ts`) drives:
+- planning `allocateDemand` (replaces Method C rule 4 for that group; protection tiers still apply), and
+- MTS production auto-derive `computeMtsAutoDeriveRowsForGroup` (Process PO create, MTS creation
+  session, Packing combine — 4 call sites), so Store Report advice and the real issue pick match.
+
+No setting for a group = the old default: planning Method C; production §138.12 (own item first, then
+alternates smallest-stock-first). The phase-3 optimizer (`mts_optimizer_phase3d`) is not changed.

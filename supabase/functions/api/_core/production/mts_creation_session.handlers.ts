@@ -9,6 +9,7 @@
 import { isProdshadeExcludedFromProcessPo } from "../../_shared/processPoExclusion.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { loadGroupUsageOrders } from "../../_shared/groupUsageOrder.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
@@ -498,10 +499,11 @@ type PackingPreview = { rows: ResolvedPackingRow[]; groups: JsonRecord[]; respon
 async function buildPackingPreview(session: SessionHeader, rawRows: unknown, storageOverrides: Record<string, string> = {}): Promise<PackingPreview> {
   const rows = await resolvePackingRows(session, rawRows);
   const groups = buildPmGroups(rows);
-  const [groupMembers, defaultLocation, locationOptions] = await Promise.all([
+  const [groupMembers, defaultLocation, locationOptions, usageOrders] = await Promise.all([
     getGroupMembers(groups.map((group) => group.material_group_id ?? "")),
     defaultPmLocation(session.companyId, session.segmentCode),
     fetchCompanyLocations(session.companyId),
+    loadGroupUsageOrders(session.companyId, todayIsoInKolkata()),
   ]);
   for (const group of groups) {
     if (group.has_alternate && group.material_group_id) {
@@ -524,6 +526,7 @@ async function buildPackingPreview(session: SessionHeader, rawRows: unknown, sto
     const derived = computeMtsAutoDeriveRowsForGroup({
       formulationMaterialId: group.material_id, dosagePct: null, standardQty: group.standard_qty,
       alternateMaterialIds: group.group_member_ids.filter((id) => id !== group.material_id), bucketBalances: balances,
+      usageOrder: group.has_alternate && group.material_group_id ? usageOrders.get(group.material_group_id) ?? null : null,
     });
     for (const row of derived.rows) if (row.actual_qty > EPSILON) balances.set(row.actual_material_id, Number(((balances.get(row.actual_material_id) ?? 0) - row.actual_qty).toFixed(6)));
     derivedGroups.push({ ...group, auto_derive_applicable: true, rows: derived.rows, short: derived.short, shortfall_qty: derived.shortfallQty });

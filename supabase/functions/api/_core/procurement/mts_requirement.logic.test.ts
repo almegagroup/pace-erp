@@ -41,6 +41,7 @@ import {
   toMaterialBase,
   type Warning,
 } from "./mts_requirement.logic.ts";
+import type { GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -780,6 +781,26 @@ Deno.test("Method C: Use Primary = No / group-owned pool draws the member with m
   ], [], true, { locationRoles: roles });
   const drawn = alloc.groups.get("RDP")!.drawnByMaterial;
   assertEqual([drawn.get("A") ?? 0, drawn.get("B"), drawn.get("C") ?? 0], [0, 150, 0], "B (most free) covers it");
+});
+
+Deno.test("Group Settings (owner 2026-10-22): least stock first / fixed order replace Method C rule 4 for that group only", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
+  const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);
+  const stock = [
+    { material_id: "A", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 100 },
+    { material_id: "B", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 300 },
+    { material_id: "C", storage_location_id: "R001", stock_type_code: "UNRESTRICTED", qty: 200 },
+  ];
+  const run = (groupOrders?: Map<string, GroupUsageOrder>) => {
+    const alloc = allocateDemand([rec({ pool_key: "G", group_id: "RDP", kind: "PM", candidates: ["A", "B", "C"], qty: 150 })],
+      calendar, stock, [], true, { locationRoles: roles, groupOrders });
+    const drawn = alloc.groups.get("RDP")!.drawnByMaterial;
+    return [drawn.get("A") ?? 0, drawn.get("B") ?? 0, drawn.get("C") ?? 0];
+  };
+  assertEqual(run(), [0, 150, 0], "no setting → Method C (most free)");
+  assertEqual(run(new Map([["RDP", { mode: "LEAST_STOCK_FIRST", member_order: [] }]])), [100, 0, 50], "least first: A empties, then C");
+  assertEqual(run(new Map([["RDP", { mode: "FIXED_ORDER", member_order: ["C", "A"] }]])), [0, 0, 150], "fixed: C first");
+  assertEqual(run(new Map([["OTHER", { mode: "LEAST_STOCK_FIRST", member_order: [] }]])), [0, 150, 0], "another group's setting does not apply");
 });
 
 Deno.test("Method C fallback: group uses protected stock (Target part, then Critical) only when free stock runs out, and warns", () => {

@@ -16,6 +16,8 @@ import { generateGlobalDocNumber } from "./production.utils.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, parseBody, toTrimmedString, toUpperTrimmedString, parseNonNegativeNumber } from "./production.shared.ts";
 import { computeMtsAutoDeriveRowsForGroup } from "./process_order.handlers.ts";
+import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { loadGroupUsageOrders } from "../../_shared/groupUsageOrder.ts";
 import {
   loadProcessOrderAndAuth,
   fetchOrderedBatchNumbers,
@@ -381,7 +383,10 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
     }
     const groups = buildCombinedPmGroups(rows);
 
-    const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(groups.map((g) => g.material_group_id ?? "").filter(Boolean) as string[]);
+    const [groupMemberMap, usageOrders] = await Promise.all([
+      getMaterialGroupMemberIdsByGroupIds(groups.map((g) => g.material_group_id ?? "").filter(Boolean) as string[]),
+      loadGroupUsageOrders(String(po.company_id), todayIsoInKolkata()),
+    ]);
     for (const group of groups) {
       const requestedLocationId = storageOverrides[group.material_id];
       if (requestedLocationId) {
@@ -414,6 +419,7 @@ export async function getMtsPackingCombineHandler(req: Request, ctx: ProdHandler
         standardQty: group.standard_qty,
         alternateMaterialIds: group.group_member_ids.filter((m) => m !== group.material_id),
         bucketBalances: balances,
+        usageOrder: group.has_alternate && group.material_group_id ? usageOrders.get(group.material_group_id) ?? null : null,
       });
       for (const row of derivedRows) {
         if (row.actual_qty > EPSILON) balances.set(row.actual_material_id, Number(((balances.get(row.actual_material_id) ?? 0) - row.actual_qty).toFixed(6)));
@@ -509,9 +515,10 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
 
     const defaultPmSlocId = await resolveDefaultPmStorageLocationId(companyId, String(po.segment_code ?? ""));
     const serverGroups = buildCombinedPmGroups(rows);
-    const groupMemberMap = await getMaterialGroupMemberIdsByGroupIds(
-      serverGroups.map((g) => g.material_group_id ?? "").filter(Boolean) as string[],
-    );
+    const [groupMemberMap, usageOrders] = await Promise.all([
+      getMaterialGroupMemberIdsByGroupIds(serverGroups.map((g) => g.material_group_id ?? "").filter(Boolean) as string[]),
+      loadGroupUsageOrders(companyId, todayIsoInKolkata()),
+    ]);
     for (const group of serverGroups) {
       if (group.has_alternate && group.material_group_id) {
         const members = (groupMemberMap.get(group.material_group_id) ?? []).filter((m) => m !== group.material_id);
@@ -579,6 +586,7 @@ export async function saveMtsPackingCombineHandler(req: Request, ctx: ProdHandle
           standardQty: group.standard_qty,
           alternateMaterialIds: group.group_member_ids.filter((m) => m !== group.material_id),
           bucketBalances: balances,
+          usageOrder: group.has_alternate && group.material_group_id ? usageOrders.get(group.material_group_id) ?? null : null,
         });
         finalRows = derivedRows.map((r) => ({ actual_material_id: r.actual_material_id, actual_qty: r.actual_qty }));
       }

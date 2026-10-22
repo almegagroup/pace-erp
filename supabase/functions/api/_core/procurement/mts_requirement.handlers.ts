@@ -43,6 +43,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { loadGroupUsageOrders } from "../../_shared/groupUsageOrder.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { errorResponse, okResponse } from "../response.ts";
@@ -1012,13 +1013,14 @@ export async function computeRequirement(
   planLines.push(...forecast.lines);
   const universeSet = new Set(universe);
   const applyReservations = asOf >= today;
-  const [stockLoad, reservations, inboundRaw, leadTimes, locationRoles, reschedules] = await Promise.all([
+  const [stockLoad, reservations, inboundRaw, leadTimes, locationRoles, reschedules, groupOrders] = await Promise.all([
     loadStockAndConsumption(companyId, calendar.cmStart, asOf, universe),
     applyReservations ? loadReservations(companyId, universe) : Promise.resolve([] as ReservationRow[]),
     loadInbound(companyId, asOf, materials, universeSet),
     loadLeadTimes(companyId, asOf, universe),
     loadLocationRoles(companyId),
     loadInboundReschedules(companyId),
+    loadGroupUsageOrders(companyId, asOf),
   ]);
   // Planning-side rescheduled ETAs (CSN Tracker itself is never changed).
   const effectiveReschedules = options.rescheduleOverrides?.size
@@ -1051,6 +1053,7 @@ export async function computeRequirement(
     mappedMaterialIds: [...masters.mappedMaterialIds].sort(),
     locationRoles: locationRoles ?? undefined,
     committedTransferOut: inbound.committedTransferOut,
+    groupOrders,
   };
   const output = buildRequirementRows(input);
   const fingerprint = await sha256Hex(canonicalJson({ ...input, prodshadeLabels: null }));
