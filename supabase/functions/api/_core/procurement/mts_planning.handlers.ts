@@ -429,10 +429,37 @@ export async function computePlanning(p: PlanningParams) {
   const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
-  const groupIds = unique([...req.output.groups.map((g) => g.group_id), ...req.output.store_rows.map((r) => r.group_id)]);
+  // `group_assignments` comes from the family planner and can include a group
+  // which has no requirement-row entry.  Include it here so the PO22 selector
+  // receives both its label and every active, mapped candidate member.
+  const groupIds = unique([
+    ...req.output.groups.map((g) => g.group_id),
+    ...req.output.store_rows.map((r) => r.group_id),
+    ...groupAssignments.map((a) => a.group_id),
+  ]);
   const groupRows = groupIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("material_category_group").select("id, group_code, group_name").in("id", chunk));
   const groupLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ")]));
+  const selectionGroups = [...new Set(groupAssignments.map((a) => a.group_id))].map((groupId) => {
+    // The requirement output is intentionally sparse.  The selector must use
+    // the authoritative group map instead, otherwise a valid group shortage
+    // appears as a heading with no selectable material rows.
+    const memberById = new Map<string, { material_id: string; material_name: string; material_code: string | null }>();
+    for (const member of req.masters.groupMembers.get(groupId) ?? []) {
+      if (!member.active || req.materials.get(member.material_id)?.status === "INACTIVE") continue;
+      memberById.set(member.material_id, {
+        material_id: member.material_id,
+        material_name: nameOf(member.material_id),
+        material_code: codeOf(member.material_id),
+      });
+    }
+    return {
+      group_id: groupId,
+      group_label: groupLabel.get(groupId) ?? "—",
+      members: [...memberById.values()].sort((a, b) =>
+        `${a.material_code ?? ""} ${a.material_name}`.localeCompare(`${b.material_code ?? ""} ${b.material_name}`)),
+    };
+  });
   const strokeLabel = (id: string) => {
     const stroke = req.masters.strokes.get(id);
     return stroke ? `${nameOf(stroke.prodshade_material_id)} · Stroke ${stroke.stroke_number}` : "—";
@@ -536,6 +563,9 @@ export async function computePlanning(p: PlanningParams) {
       group_id: g.group_id, group_label: groupLabel.get(g.group_id) ?? "—", kind: g.kind,
       members: g.member_ids.map((id) => ({ material_id: id, material_name: nameOf(id), material_code: codeOf(id) })),
     })),
+    // PO22's monthly purchasing choice must be able to show every candidate
+    // for every group that has a new-buy recommendation, not just sparse rows.
+    selection_groups: selectionGroups,
     group_risks: projection.group_pool_risks.map((g) => ({ ...g, group_label: g.group_id ? groupLabel.get(g.group_id) ?? "—" : "—" })),
     group_assignments: groupAssignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
