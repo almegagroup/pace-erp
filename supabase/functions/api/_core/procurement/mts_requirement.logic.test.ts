@@ -662,6 +662,19 @@ Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata i
   assertEqual([partial.reorder_flag, partial.priority_score], [false, null], "stock above reorder level → no priority");
 });
 
+Deno.test("Owner 2026-10-22: sheet prorata uses the gross plan, not the stock-covered share", () => {
+  const calendar = buildCalendar("2026-10-01", "2026-10-22")!; // 10 CM days left
+  const plan = new Map<string, number>();
+  for (const day of calendar.horizon) plan.set(day, day <= calendar.cmEnd ? 6900 : 6975);
+  // Group PM member: own stock covers only Oct 22–31 + a few NM days.
+  const covered = new Map<string, number>();
+  for (const day of calendar.horizon) if (day >= calendar.asOf && day <= calendar.cmEnd) covered.set(day, 6900);
+  covered.set(calendar.nmStart, 21549);
+  const m = computeMaterialMetrics({ calendar, demandByDay: covered, planDemandByDay: plan, consumption: 91170, stock: 90517, inbound: bucketInbound([], calendar), policy: null, moqBaseQty: null, leadTimeDays: null });
+  assertEqual([m.cm_req, m.sheet_current_req_basis, m.sheet_current_req, m.current_prorata_daily, m.nm_req, m.nm_prorata_daily],
+    [213900, "CM_REMAINING", 122730, 12273, 209250, 6975], "balance plan ÷ balance days");
+});
+
 // ── Owner D1/D3/D12: pooled counted stock, fixed first, group-owned shortage ───────
 function rec(partial: Partial<DemandRecord>): DemandRecord {
   return {
