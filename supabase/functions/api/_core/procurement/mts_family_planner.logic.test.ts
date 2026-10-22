@@ -68,6 +68,33 @@ Deno.test("family planner: reaching Target again after an engine lot creates the
   assert(JSON.stringify(lots.slice(0, 2)) === JSON.stringify(["2026-11-27", "2026-12-07"]), `the second Target trigger must be a second projection, got ${JSON.stringify(lots)}`);
 });
 
+Deno.test("family planner: a standalone Target remains physical safety stock across a zero-demand gap", () => {
+  // Tot White shape: December has approved PO21 use; January has none.  The
+  // lack of January use must not turn a 25-day Target into zero stock or a
+  // hidden epsilon lot.  This deliberately does not apply to group members.
+  const asOf = "2026-12-01";
+  const horizonEnd = "2027-01-31";
+  const days: string[] = [];
+  for (let day = asOf; day <= horizonEnd; day = addDays(day, 1)) days.push(day);
+  const daily = 100;
+  const totPolicy = policy("TOT", 25, 13, [{ vendor: "TOT_VENDOR", lead: 0, cost: 1 }]);
+  totPolicy.cycle_days = 10;
+  totPolicy.vendor_options = (totPolicy.vendor_options ?? []).map((option) => ({ ...option, cycle_days: 10 }));
+  const result = planFamily({
+    as_of: asOf, horizon_end: horizonEnd,
+    // Day one closes at exactly 25 days, so the first refill must be 10 days.
+    opening_qty_by_material: { TOT: 26 * daily },
+    own_demand: days.map((required_by) => ({ material_id: "TOT", required_by, qty_base: required_by < "2027-01-01" ? daily : 0 })),
+    group_demand: [], confirmed_arrivals: [], policies: [totPolicy],
+  });
+  const buys = result.advisory_buys.filter((buy) => buy.material_id === "TOT");
+  assert(buys[0]?.estimated_plant_eta === "2026-12-01", `Target trigger must project immediately: ${JSON.stringify(buys)}`);
+  assert(buys[0]?.recommended_po_qty_base === 10 * daily, `first safety refill must be 10 days, got ${JSON.stringify(buys[0])}`);
+  assert(buys.every((buy) => (buy.recommended_po_qty_base ?? 0) > 0.001), `no epsilon/zero safety lot is allowed: ${JSON.stringify(buys)}`);
+  const january = result.rows.find((row) => row.material_id === "TOT" && row.day === "2027-01-15");
+  assert(january?.closing_qty_base === 35 * daily, `zero-demand January must retain the physical safety reserve, got ${JSON.stringify(january)}`);
+});
+
 Deno.test("family planner: no stock-out and no member below Critical once lots can arrive", () => {
   const result = planFamily(rdpFamily());
   const shortDays = result.rows.filter((r) => r.closing_qty_base < -1e-6);

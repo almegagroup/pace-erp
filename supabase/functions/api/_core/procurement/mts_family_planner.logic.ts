@@ -179,6 +179,20 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   }
   // Narrower pools first (owner Method C), then by key — deterministic.
   const pools = [...poolByKey.values()].sort((a, b) => a.candidates.length - b.candidates.length || a.key.localeCompare(b.key));
+  const isSharedGroupMember = ids.map((id) => pools.some((pool) => pool.candidates.includes(id)));
+  // A standalone item's Target is a physical safety reserve, not a permission
+  // to run stock down to zero in a later no-demand month.  Carry its most
+  // recently approved non-zero daily own use forward as the sizing rate only;
+  // simulation still consumes the actual PO21 demand (zero means zero use).
+  // Shared-group safety is deliberately deferred: one combined group reserve
+  // must not be duplicated on every alternative member.
+  const latestOwnDailyUse = own.map((series) => {
+    let latest = 0;
+    return series.map((qty) => {
+      if (qty > EPSILON) latest = qty;
+      return latest;
+    });
+  });
 
   const arrivalFlags: OptimizerArrivalFlag[] = [];
   const confirmed = ids.map(() => zeros());
@@ -338,7 +352,10 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const t = targets[m][i].target;
       if (t === null || targets[m][i].critical === null) continue;
       const cover = coverDays(sim.ownBalance[m][i], own[m], i);
-      if (cover !== null && cover <= t) {
+      const safetyFloor = isSharedGroupMember[m] ? 0 : latestOwnDailyUse[m][i] * t;
+      const atCoverageTarget = cover !== null && cover <= t;
+      const atPhysicalSafetyFloor = safetyFloor > EPSILON && sim.ownBalance[m][i] <= safetyFloor + EPSILON;
+      if (atCoverageTarget || atPhysicalSafetyFloor) {
         if (!isSelectedForNewBuy(id, i)) continue;
         const option = pickVendorOption(policy, allDays[i], input.as_of);
         if (!option && totalLeadTimeDays(policy) === null) return null;
@@ -407,9 +424,19 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const cycle = need.option?.option.cycle_days ?? policy.cycle_days ?? DEFAULT_CYCLE_DAYS;
       const window = t + cycle;
       const before = arrivalIndex - 1;
-      const required = need.kind === "OWN"
+      const demandRequired = need.kind === "OWN"
         ? useAhead(own[m], before, window + 1) - Math.max(0, before >= 0 ? sim.ownBalance[m][before] : Number(input.opening_qty_by_material[id] ?? 0))
         : useAhead(need.pool!.demand, before, window + 1) - (before >= 0 ? sim.poolFree[pools.indexOf(need.pool!)][before] : 0);
+      const availableBeforeArrival = Math.max(0, before >= 0 ? sim.ownBalance[m][before] : Number(input.opening_qty_by_material[id] ?? 0));
+      // Scope deliberately limited to standalone own-use materials (Tot White).
+      // On a zero-demand gap, demandRequired would otherwise round to a
+      // meaningless epsilon lot even though the configured physical Target
+      // reserve is being exhausted.  Refill to Target + order cycle using the
+      // last approved non-zero daily own-use rate; do not simulate fake use.
+      const safetyRequired = need.kind === "OWN" && !isSharedGroupMember[m]
+        ? Math.max(0, own[m][arrivalIndex] + latestOwnDailyUse[m][need.index] * window - availableBeforeArrival)
+        : 0;
+      const required = Math.max(demandRequired, safetyRequired);
       const constraints = need.option
         ? { ...policy, vendor_moq_qty_base: need.option.option.moq_qty_base, order_multiple_qty_base: need.option.option.order_multiple_qty_base, delivery_lot_qty_base: need.option.option.delivery_lot_qty_base ?? null }
         : policy;
