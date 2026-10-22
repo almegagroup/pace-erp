@@ -1,7 +1,8 @@
-import { applyOrderConstraints, projectDailyCoverage, splitIntoLots, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import { applyOrderConstraints, applySinglePurchaseConstraints, projectDailyCoverage, splitIntoLots, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerMaterialPlanningPolicy, OptimizerProjectionInput } from "./mts_optimizer_phase3d.types.ts";
 
 function equal(actual: unknown, expected: unknown, message: string) { if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${message}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`); }
+function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 function policy(overrides: Partial<OptimizerMaterialPlanningPolicy> = {}): OptimizerMaterialPlanningPolicy {
   return { material_id: "M1", target_days: 5, critical_days: 2, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, route_lead_time_days: 3, booking_time_days: null, ...overrides };
 }
@@ -23,6 +24,11 @@ Deno.test("MOQ and order multiple are distinct: 28 at a 25 multiple recommends 5
   equal(applyOrderConstraints(1, policy({ vendor_moq_qty_base: 20, order_multiple_qty_base: 25 })), 25, "MOQ 20 is then rounded to 25 multiple");
   equal(splitIntoLots(50, 25), [25, 25], "50 = 25 + 25 lots");
   equal(splitIntoLots(60, 25), [25, 25, 10], "remainder lot");
+});
+
+Deno.test("delivery lot caps one purchase recommendation instead of scheduling a multi-lot commitment", () => {
+  equal(applySinglePurchaseConstraints(144000, policy({ vendor_moq_qty_base: 24000, order_multiple_qty_base: 24000, delivery_lot_qty_base: 24000 })), 24000, "144 MT demand is a 24 MT single recommendation");
+  equal(applySinglePurchaseConstraints(144000, policy({ vendor_moq_qty_base: 25000, order_multiple_qty_base: 25000, delivery_lot_qty_base: 24000 })), 25000, "MOQ/multiple win if master data makes the lot unorderable");
 });
 
 Deno.test("D6: total lead time = Booking Time (blank = 0) + route; else configured total", () => {
@@ -74,11 +80,11 @@ Deno.test("PO-by already passed is ADVISORY_LATE: earliest arrival = today + lea
   equal(row(result, "2026-10-11").planned_lot_qty_base, 10, "lot on earliest feasible day");
 });
 
-Deno.test("one 50 order arrives as dated 25 + 25 lots; the second lot is not a new PO", () => {
-  const result = projectDailyCoverage(input({ opening_qty_by_material: { M1: 40 }, daily_demand: daily(4), policies: [policy({ order_multiple_qty_base: 50, delivery_lot_qty_base: 25 })] }));
+Deno.test("a delivery lot is one PO and a later need becomes a separate recommendation", () => {
+  const result = projectDailyCoverage(input({ opening_qty_by_material: { M1: 40 }, daily_demand: daily(4), policies: [policy({ order_multiple_qty_base: 25, delivery_lot_qty_base: 25 })] }));
   const first = result.advisory_buys[0];
-  equal([first.sequence, first.recommended_po_qty_base, first.lots.map((l) => [l.plant_eta, l.qty_base])], [1, 50, [["2026-10-05", 25], ["2026-10-11", 25]]], "lots dated by need");
-  equal(row(result, "2026-10-11").planned_lot_qty_base, 25, "second lot on its own date");
+  equal([first.sequence, first.recommended_po_qty_base, first.lots.map((l) => [l.plant_eta, l.qty_base])], [1, 25, [["2026-10-05", 25]]], "first PO is capped to one delivery lot");
+  assert(result.advisory_buys.every((buy) => buy.recommended_po_qty_base === 25 && buy.lots.length === 1), `each later need must create its own 25-unit PO: ${JSON.stringify(result.advisory_buys)}`);
 });
 
 Deno.test("D3: Target/Critical are effective-dated per material", () => {

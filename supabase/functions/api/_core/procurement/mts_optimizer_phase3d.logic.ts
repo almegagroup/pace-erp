@@ -5,7 +5,8 @@
  *   D2  lot trigger = first day cover falls to/below Target (not the sheet's exact `= Target+1`);
  *       Below Target / Critical are inclusive (<=).
  *   D3  Target / Critical are per material and effective-dated.
- *   D4  MOQ and order multiple are separate vendor constraints; a PO may arrive as dated lots.
+ *   D4  MOQ and order multiple are separate vendor constraints. A configured delivery lot is
+ *       the largest single purchase recommendation, not a pre-committed multi-PO purchase.
  *   D5  a past or missing CSN ETA is assumed to arrive on as_of (never dropped) and flagged.
  *   D6  total lead time = Booking Time (blank = 0) + route lead time.
  * Unused stock of an earlier lot simply stays in the running balance (carry-forward).
@@ -45,7 +46,24 @@ export function applyOrderConstraints(requiredQtyBase: number, policy: Optimizer
   return roundQty(quantity);
 }
 
-/** Splits an order into dated delivery lots of `lotQty` (last lot takes the remainder). */
+/**
+ * Returns one executable PO quantity. A delivery lot limits one recommendation; a later need
+ * can create a separate recommendation after the plan is re-simulated. MOQ/multiple still win
+ * if the configured lot itself cannot satisfy those vendor constraints.
+ */
+export function applySinglePurchaseConstraints(requiredQtyBase: number, policy: OptimizerMaterialPlanningPolicy): number | null {
+  const constrained = applyOrderConstraints(requiredQtyBase, policy);
+  if (constrained === null) return null;
+  const deliveryLot = policy.delivery_lot_qty_base;
+  if (deliveryLot === null || deliveryLot === undefined) return constrained;
+  if (!validQty(deliveryLot) || deliveryLot <= EPSILON) throw new Error(`PHASE3D_INVALID_DELIVERY_LOT:${policy.material_id}`);
+  const minimum = applyOrderConstraints(EPSILON * 10, policy) ?? 0;
+  // Re-apply MOQ/multiple after capping, so a bad master-data combination can never create
+  // an unorderable recommendation.
+  return applyOrderConstraints(Math.max(minimum, Math.min(constrained, deliveryLot)), policy);
+}
+
+/** Legacy helper retained for callers that explicitly need a delivery schedule. */
 export function splitIntoLots(orderQty: number, lotQty: number | null | undefined): number[] {
   if (!lotQty || !(lotQty > EPSILON) || lotQty >= orderQty - EPSILON) return [roundQty(orderQty)];
   const lots: number[] = [];
@@ -97,8 +115,13 @@ function makeCoverFn(demand: readonly number[]) {
     let covered = 0;
     for (let index = fromIndex + 1; index < demand.length; index += 1) {
       const need = demand[index];
+      if (need <= EPSILON) {
+        if (remaining <= EPSILON) return covered;
+        covered += 1;
+        continue;
+      }
       if (need > remaining + EPSILON) return covered;
-      remaining -= need;
+      remaining = Math.max(0, remaining - need);
       covered += 1;
     }
     return average <= EPSILON ? covered : covered + Math.floor(remaining / average + EPSILON);
@@ -142,7 +165,6 @@ type MaterialState = {
   cover: (balance: number, fromIndex: number) => number | null;
   leadTime: number | null;
   plannedByIndex: Map<number, number>;
-  queuedLots: number[];
   pendingUntil: number;
   sequence: number;
   balance: number;
@@ -228,7 +250,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
     const demand = allDays.map((day) => demandByDay.get(key(materialId, day)) ?? 0);
     states.set(materialId, {
       id: materialId, policy, demand, groupDraw: allDays.map(() => 0), cover: makeCoverFn(demand),
-      leadTime: policy ? totalLeadTimeDays(policy) : null, plannedByIndex: new Map(), queuedLots: [], pendingUntil: -1, sequence: 0,
+      leadTime: policy ? totalLeadTimeDays(policy) : null, plannedByIndex: new Map(), pendingUntil: -1, sequence: 0,
       balance: opening0, firstShortage: null, firstCritical: null, firstTarget: null, buys: [], opening: 0, arrival: 0, planned: 0, closing: 0,
     });
   }
@@ -304,17 +326,8 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
         if (currentCover !== null && currentCover <= target!) {
           const required = qtyToRestore(demand, index, closing, target!);
           if (required > EPSILON) {
-            if (st.queuedLots.length > 0) {
-              // Next dated lot of an already recommended order (no new PO).
-              const lot = st.queuedLots.shift()!;
-              planned = roundQty(planned + lot);
-              st.plannedByIndex.set(index, planned);
-              closing = roundQty(closing + lot);
-              const last = st.buys[st.buys.length - 1];
-              const lots = [...last.lots, { lot_no: last.lots.length + 1, plant_eta: day, qty_base: lot }];
-              st.buys[st.buys.length - 1] = freeze({ ...last, lots });
-            } else {
-              // P2: pick the vendor for this lot, size it to Max days (Target + cycle).
+            {
+              // P2: pick the vendor for this purchase, size it to Max days (Target + cycle).
               const pick = pickVendorOption(policy!, day, input.as_of);
               const lotLead = pick ? pick.option.lead_time_days : leadTime;
               const cycle = pick?.option.cycle_days ?? policy!.cycle_days ?? null;
@@ -322,7 +335,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
               const constraints = pick
                 ? { ...policy!, vendor_moq_qty_base: pick.option.moq_qty_base, order_multiple_qty_base: pick.option.order_multiple_qty_base, delivery_lot_qty_base: pick.option.delivery_lot_qty_base ?? null }
                 : policy!;
-              const orderQty = applyOrderConstraints(sizedRequired, constraints);
+              const orderQty = applySinglePurchaseConstraints(sizedRequired, constraints);
               const p2 = pick || cycle !== null
                 ? { vendor_id: pick?.option.vendor_id ?? null, max_cover_days: cycle !== null ? roundQty(target! + cycle) : null, bridge: pick?.bridge ?? false, cheapest_vendor_id: pick?.cheapest ?? null }
                 : {};
@@ -336,13 +349,11 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
                 }));
                 st.pendingUntil = allDays.length; // one unknown-lead-time recommendation is enough
               } else if (orderQty !== null) {
-                const lots = splitIntoLots(orderQty, constraints.delivery_lot_qty_base);
                 const poBy = addDays(day, -lotLead);
                 const late = poBy < input.as_of;
                 const eta = late ? addDays(input.as_of, lotLead) : day;
                 const etaIndex = allDays.indexOf(eta);
-                const firstLot = lots.shift()!;
-                st.queuedLots.push(...lots);
+                const firstLot = orderQty;
                 const plannedLots: OptimizerPlannedLot[] = [];
                 if (etaIndex === index) {
                   planned = roundQty(planned + firstLot);

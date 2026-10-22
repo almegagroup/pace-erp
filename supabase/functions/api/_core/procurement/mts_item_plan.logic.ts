@@ -164,8 +164,15 @@ export function forwardCoverDays(balance: number, uses: readonly number[], fromI
   let left = balance; let days = 0;
   if (left <= EPSILON) return 0;
   for (const use of tail) {
-    if (use <= EPSILON) { days += 1; continue; }
-    if (left >= use) { left -= use; days += 1; continue; }
+    // A calendar day with no use only extends cover while stock remains.  Without
+    // this guard an exact depletion followed by zero-demand days was reported as
+    // dozens of extra days of stock (the TOT White 24-Dec jump).
+    if (use <= EPSILON) {
+      if (left <= EPSILON) return days;
+      days += 1;
+      continue;
+    }
+    if (left + EPSILON >= use) { left = Math.max(0, left - use); days += 1; continue; }
     return Math.round((days + left / use) * 100) / 100;
   }
   const avg = total / tail.length; // beyond the horizon: average daily use

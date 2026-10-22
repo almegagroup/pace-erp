@@ -256,7 +256,9 @@ export async function computePlanning(p: PlanningParams) {
   const reuse = p.reuseLoads === true;
   const [vendorTerms, selections] = await Promise.all([
     cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials), reuse),
-    loadSelections(p.companyId, [calendar.cmStart, calendar.nmStart]),
+    // Item Plan runs six months ahead; use a decision from every month in the
+    // active horizon, not only CM/NM, when choosing a group member for a new buy.
+    loadSelections(p.companyId, calendar.months),
   ]);
   const policyMoqBase = new Map(req.output.rows.map((r) => [r.material_id, moqInBase(r.policy, req.materials.get(r.material_id))]));
   const baseArgs = { calendar, rows: req.output.rows, groups: req.output.groups, policies: req.policyLoad.policies, vendorTerms, selections: selections.map, policyMoqBase };

@@ -1717,8 +1717,11 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
   const months = useMemo(() => {
     const cm = `${planMonth}-01`;
     const d = new Date(`${cm}T00:00:00Z`);
-    d.setUTCMonth(d.getUTCMonth() + 1);
-    return [cm, d.toISOString().slice(0, 10)];
+    return Array.from({ length: 6 }, () => {
+      const month = d.toISOString().slice(0, 10);
+      d.setUTCMonth(d.getUTCMonth() + 1);
+      return month;
+    });
   }, [planMonth]);
   const selQ = useQuery({
     queryKey: ["procurement", "mts-optimizer", "selections", companyId],
@@ -1758,7 +1761,7 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
   }
   return (
     <details className="border border-slate-200 bg-slate-50 p-2 text-xs">
-      <summary className="cursor-pointer font-semibold text-slate-700">Choose members for new buy (per month)</summary>
+      <summary className="cursor-pointer font-semibold text-slate-700">Choose members for new buy (next six planning months)</summary>
       <div className="mt-2 grid gap-2">
         {[...members.entries()].map(([groupId, label]) => (
           <div key={groupId} className="grid gap-1">

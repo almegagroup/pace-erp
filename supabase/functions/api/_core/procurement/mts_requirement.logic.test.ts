@@ -497,6 +497,7 @@ Deno.test("applyCompanyMaterialMapping: unmapped members leave the pool, unmappe
     directMaterialIds: ["RM-A", "RM-X", "RM-A"],
     members: [
       { material_id: "RM-A", active: true, group_id: "G1" },
+      { material_id: "RM-A", active: true, group_id: "G1" },
       { material_id: "RM-Y", active: true, group_id: "G1" },
       { material_id: "RM-B", active: false, group_id: "G1" },
     ],

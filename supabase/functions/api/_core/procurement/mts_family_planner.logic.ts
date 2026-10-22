@@ -15,11 +15,11 @@
  *                would be bought → the cheapest member that arrives in time is bought (a monthly
  *                selection wins); if none can, the fastest (late, flagged).
  * A lot arrives on the need day, sized to Target + order cycle of the load it covers (own use, or
- * the group's use), MOQ / order multiple applied, split into delivery lots. Surplus simply stays in
+ * the group's use), MOQ / order multiple applied and capped to one vendor delivery lot. Surplus simply stays in
  * the member and feeds the groups through the free-stock rule, so later buys shrink by themselves.
  */
 import { orderByGroupUsage, type GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
-import { applyOrderConstraints, pickVendorOption, splitIntoLots, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import { applySinglePurchaseConstraints, pickVendorOption, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import { roundQty } from "./mts_requirement.logic.ts";
 import type {
   OptimizerAdvisoryBuy,
@@ -105,8 +105,14 @@ function coverDays(balance: number, use: readonly number[], from: number): numbe
   let left = balance;
   let covered = 0;
   for (let i = from + 1; i < use.length; i += 1) {
-    if (use[i] > left + EPSILON) return covered;
-    left -= use[i];
+    const need = use[i];
+    if (need <= EPSILON) {
+      if (left <= EPSILON) return covered;
+      covered += 1;
+      continue;
+    }
+    if (need > left + EPSILON) return covered;
+    left = Math.max(0, left - need);
     covered += 1;
   }
   const avg = total / use.length;
@@ -310,7 +316,6 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const sequence = new Map<string, number>();
   const pendingOwn = new Map<string, number>(); // material → index up to which its own need is handled
   const pendingGroup = new Map<string, number>(); // pool key → index
-  const queued = new Map<string, { vendor_id: string | null; lots: number[]; buyIndex: number }>();
 
   type Need = { kind: "OWN" | "GROUP"; index: number; material: string; pool?: Pool; option: ReturnType<typeof pickVendorOption>; late: boolean };
 
@@ -325,7 +330,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const cover = coverDays(sim.ownBalance[m][i], own[m], i);
       if (cover !== null && cover <= t) {
         const option = pickVendorOption(policy, allDays[i], input.as_of);
-        if (!option && totalLeadTimeDays(policy) === null && !queued.get(id)?.lots.length) return null;
+        if (!option && totalLeadTimeDays(policy) === null) return null;
         const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
         const earliest = lead === null ? null : Math.max(0, lead);
         const late = earliest !== null && i < earliest;
@@ -357,7 +362,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       if (needIndex < 0) return;
       const option = pickVendorOption(policy, allDays[needIndex], input.as_of);
       const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
-      if (lead === null && !queued.get(id)?.lots.length) return; // cannot be bought (no vendor / lead time)
+      if (lead === null) return; // cannot be bought (no vendor / lead time)
       const late = lead !== null && needIndex < lead;
       const selected = input.selections?.get(monthOf(needIndex));
       const rank: [number, number, number, number, number] = [
@@ -382,17 +387,8 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     const t = targets[m][need.index].target ?? 0;
     const lead = need.option?.option.lead_time_days ?? totalLeadTimeDays(policy) ?? 0;
     const arrivalIndex = need.late ? Math.min(N - 1, lead) : need.index;
-    const queue = queued.get(id);
     let lotQty: number;
-    let buyIndex: number;
-    if (queue && queue.lots.length > 0) {
-      // Next dated lot of an order already recommended — no new PO.
-      lotQty = queue.lots.shift()!;
-      buyIndex = queue.buyIndex;
-      const buy = buys[buyIndex];
-      buys[buyIndex] = { ...buy, lots: [...buy.lots, { lot_no: buy.lots.length + 1, plant_eta: allDays[need.index], qty_base: roundQty(lotQty) }] };
-      engineLots.push({ material_id: id, index: need.index, qty: lotQty });
-    } else {
+    {
       const cycle = need.option?.option.cycle_days ?? policy.cycle_days ?? DEFAULT_CYCLE_DAYS;
       const window = t + cycle;
       const before = arrivalIndex - 1;
@@ -402,9 +398,8 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const constraints = need.option
         ? { ...policy, vendor_moq_qty_base: need.option.option.moq_qty_base, order_multiple_qty_base: need.option.option.order_multiple_qty_base, delivery_lot_qty_base: need.option.option.delivery_lot_qty_base ?? null }
         : policy;
-      const orderQty = applyOrderConstraints(Math.max(roundQty(required), EPSILON * 10), constraints) ?? 0;
-      const lots = splitIntoLots(orderQty, constraints.delivery_lot_qty_base ?? null);
-      lotQty = lots.shift()!;
+      const orderQty = applySinglePurchaseConstraints(Math.max(roundQty(required), EPSILON * 10), constraints) ?? 0;
+      lotQty = orderQty;
       const seq = (sequence.get(id) ?? 0) + 1;
       sequence.set(id, seq);
       const poBy = addDays(allDays[need.index], -lead);
@@ -423,8 +418,6 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         bridge: need.option?.bridge ?? false, cheapest_vendor_id: need.option?.cheapest ?? null,
         covers, need_kind: need.kind,
       });
-      buyIndex = buys.length - 1;
-      if (lots.length) queued.set(id, { vendor_id: need.option?.option.vendor_id ?? null, lots, buyIndex });
       engineLots.push({ material_id: id, index: arrivalIndex, qty: lotQty });
     }
     if (need.kind === "OWN") pendingOwn.set(id, need.late ? arrivalIndex : need.index);
