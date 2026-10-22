@@ -801,7 +801,7 @@ async function cloneBalanceCsnFromSource(
   return data as CsnRow;
 }
 
-function calculateETACascade(
+export function calculateETACascade(
   csn: CsnRow,
   importLeadTime: Record<string, unknown> | null,
   domesticLeadTime: Record<string, unknown> | null,
@@ -939,6 +939,58 @@ export async function recalculateAndBuildUpdates(
     expectedDeliveryDate,
   );
   return { ...inputUpdates, ...autoSnapshot, ...cascade };
+}
+
+// A PO delivery-date amendment changes the baseline schedule for every linked
+// CSN. The PO header is the canonical delivery-date source, so refresh the
+// linked CSNs immediately instead of waiting for a later, unrelated CSN edit
+// (for example, entering LR date) to make the tracker show an ETA.
+export async function recalculateCsnsForPoDeliveryDate(
+  poId: string,
+  updatedBy: string,
+): Promise<void> {
+  if (!poId) return;
+
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("*")
+    .eq("po_id", poId);
+
+  if (error) {
+    throw new Error("PROCUREMENT_CSN_PO_DATE_LOOKUP_FAILED");
+  }
+
+  await Promise.all(((data as CsnRow[] | null) ?? []).map(async (csn) => {
+    const csnId = toTrimmedString(csn.id);
+    if (!csnId) {
+      throw new Error("PROCUREMENT_CSN_PO_DATE_RECALCULATE_FAILED");
+    }
+    const cascadeUpdates = await recalculateAndBuildUpdates(csn, {});
+    if (Object.keys(cascadeUpdates).length === 0) return;
+
+    const updates: JsonRecord = {
+      ...cascadeUpdates,
+      last_updated_at: new Date().toISOString(),
+      last_updated_by: updatedBy,
+    };
+    const { data: updated, error: updateError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .update(updates)
+      .eq("id", csnId)
+      .select("*")
+      .single();
+
+    if (updateError || !updated) {
+      throw new Error("PROCUREMENT_CSN_PO_DATE_RECALCULATE_FAILED");
+    }
+
+    if (csn.is_mother_csn === true) {
+      await syncSubCsnsFromMother(csnId, updates);
+    }
+    await writeCsnFieldHistory(csnId, csn, updated as CsnRow, updatedBy, Object.keys(updates));
+  }));
 }
 
 async function syncSubCsnsFromMother(motherId: string, updates: JsonRecord): Promise<void> {
