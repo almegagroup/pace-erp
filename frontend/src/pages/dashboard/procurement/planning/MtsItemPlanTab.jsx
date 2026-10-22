@@ -16,6 +16,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { copyTableRowsWithHeaders } from "../../../../components/data/tableClipboard.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
 import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario, simulateMtsItemPlan } from "../procurementApi.js";
@@ -28,9 +29,9 @@ const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we p
 
 const INPUT_CLASS = "h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500";
 const CELL_INPUT = "h-7 border border-sky-300 bg-sky-50 px-1.5 text-xs text-sky-900 outline-none focus:border-sky-600";
-const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true };
-const STATUS_LABEL = { AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
-const STATUS_TONE = { AT_GATE: "bg-emerald-100 text-emerald-800", IN_TRANSIT: "bg-sky-100 text-sky-800", ORDERED: "bg-amber-100 text-amber-800", BULK: "bg-slate-100 text-slate-700", STO: "bg-violet-100 text-violet-800", SUB_CSN: "bg-violet-100 text-violet-800" };
+const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, stickyFirstColumn: true, fitColumnWidths: true, copyTableWithHeaders: true };
+const STATUS_LABEL = { ACTUAL_GR: "Actual GR", AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
+const STATUS_TONE = { ACTUAL_GR: "bg-emerald-200 text-emerald-900", AT_GATE: "bg-emerald-100 text-emerald-800", IN_TRANSIT: "bg-sky-100 text-sky-800", ORDERED: "bg-amber-100 text-amber-800", BULK: "bg-slate-100 text-slate-700", STO: "bg-violet-100 text-violet-800", SUB_CSN: "bg-violet-100 text-violet-800" };
 
 function fmtQty(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -39,6 +40,11 @@ function fmtQty(value) {
 /** Days are whole, rounded down like the sheet (49.7 days of stock = 49 full days). */
 function fmtDays(value) {
   return value === null || value === undefined ? "—" : String(Math.floor(Number(value) + 1e-9));
+}
+function demandSourceLabel(source) {
+  if (source === "NO_PO21_PLAN") return "No PO21 plan";
+  if (source === "FORECAST") return "Forecast";
+  return source === "PLAN" ? "Plan" : "";
 }
 const GAP_LABEL = {
   NO_TARGET_CRITICAL: "no Target / Critical days (set in 2. Material Settings)",
@@ -59,6 +65,12 @@ const ITEM_PLAN_PANELS = [
 ];
 function errorText(error) {
   return error instanceof Error ? error.message : String(error ?? "");
+}
+
+function copyTable(columns, rows) {
+  void copyTableRowsWithHeaders(columns, rows).then(() => {
+    pushToast({ message: "Table copied with headers — paste directly into Excel.", tone: "success" });
+  });
 }
 
 export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt }) {
@@ -164,7 +176,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       <button type="button" onClick={() => setOpenDay((d) => (d === r.day ? "" : r.day))} className="text-left text-sky-800 hover:underline">{r.day}</button>
     ), copyValue: (r) => r.day },
     { key: "cc", label: "CC", width: "40px", render: (r) => (r.day === plan?.calendar?.as_of ? <span className="font-semibold text-emerald-700">CC</span> : ""), copyValue: (r) => (r.day === plan?.calendar?.as_of ? "CC" : "") },
-    { key: "source", label: "Demand", width: "80px", render: (r) => monthSource.get(r.day.slice(0, 7)) ?? "", copyValue: (r) => monthSource.get(r.day.slice(0, 7)) ?? "" },
+    { key: "source", label: "Demand", width: "100px", render: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))), copyValue: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))) },
     { key: "opening", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening), copyValue: (r) => r.opening },
     { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
     {
@@ -318,7 +330,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "etd", label: "ETD", width: "100px", render: (o) => o.etd ?? "—" },
     { key: "eta_port", label: "ETA Port", width: "100px", render: (o) => o.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (o) => o.eta_plant ?? "—" },
-    { key: "days", label: "Max / Min days on arrival", width: "150px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
+    { key: "days", label: "After / before lot days", width: "160px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
     { key: "max_days_planned", label: "Planned Max days", width: "130px", render: (o) => (o.max_days_planned === null ? "—" : `${fmtDays(o.max_days_planned)}${o.max_days_basis === "DEFAULT" ? " (default — no cost data)" : ""}`), copyValue: (o) => o.max_days_planned ?? "" },
     { key: "unit_total_cost", label: "Full cost / unit (₹)", width: "150px", render: (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "—" : o.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })), copyValue: (o) => o.unit_total_cost ?? "" },
     { key: "freight_term", label: "Freight", width: "130px", render: (o) => FREIGHT_LABEL[o.freight_term] ?? o.freight_term ?? "—" },
@@ -486,7 +498,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
             <span className="font-semibold text-slate-800">{plan.family.is_family ? `Family: ${plan.family.groups.map((g) => g.label).join(" · ")}` : "Not in any group — single item"}</span>
             <span>Horizon {plan.calendar.as_of} → {plan.calendar.horizon_end}</span>
-            <span>Demand: {plan.month_sources.map((m) => `${m.month.slice(0, 7)} ${m.source === "FORECAST" ? "forecast" : "plan"}`).join(" · ")}</span>
+            <span>Demand: {plan.month_sources.map((m) => `${m.month.slice(0, 7)} ${demandSourceLabel(m.source).toLowerCase()}`).join(" · ")}</span>
             <span>Unit: {uom || "—"}</span>
           </div>
 
@@ -563,10 +575,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   <div className="grid gap-1 bg-slate-50 p-2 text-xs">
                     {(memberDaily.get(r.day) ?? []).map((m) => (
                       <div key={m.material_id} className="flex flex-wrap gap-3">
-                        <span className="w-56 font-semibold text-slate-800">{memberName.get(m.material_id) ?? m.material_id}</span>
+                        <span className="w-56 font-semibold text-slate-800">{memberName.get(m.material_id) ?? "—"}</span>
                         <span>Opening {fmtQty(m.opening)}</span>
                         <span>Arrival {fmtQty(m.arrivals)}</span>
-                        <span>Use {fmtQty(m.use)}{m.group_draw ? ` (for groups ${fmtQty(m.group_draw)})` : ""}</span>
+                        <span>Use {fmtQty(m.use)}</span>
+                        {m.group_draws?.length ? <span>For group: {m.group_draws.map((g) => `${g.group}: ${fmtQty(g.qty)}`).join(" · ")}</span> : null}
                         <span>Closing {fmtQty(m.closing)}</span>
                         <span>Max {fmtDays(m.max_days)} d · Min {fmtDays(m.min_days)} d</span>
                         <span className={m.critical_days !== null && m.max_days !== null && m.max_days < m.critical_days ? "font-semibold text-rose-700" : m.target_days !== null && m.max_days !== null && m.max_days < m.target_days ? "font-semibold text-amber-700" : ""}>
@@ -613,7 +626,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               </section>
               <section className="grid gap-1">
                 <h3 className="text-sm font-semibold text-slate-800">Future Orders — Engine plan</h3>
-                <p className="text-xs text-slate-500">Each lot: cheapest vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. Advisory — no PO is created.</p>
+                <p className="text-xs text-slate-500">Each lot: cheapest authorised vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. “After / before lot days” is family cover after the lot lands / without that day&apos;s lot, so a before value of 0 means the lot is needed immediately. Advisory — no PO is created.</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={view.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}`} emptyMessage="No new order needed in the horizon." maxHeight="30vh" />
               </section>
               </>
@@ -634,6 +647,26 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                     </>
                   )}
                   <button type="button" onClick={() => setShowVersions((v) => !v)} className="h-7 border border-slate-300 bg-white px-2 text-xs text-slate-700 hover:bg-slate-50">{showVersions ? "Hide versions" : "Versions"}</button>
+                  <button
+                    type="button"
+                    disabled={(lotDraft ?? plan.user_lots ?? []).length === 0}
+                    onClick={() => copyTable([
+                      { label: "Member", key: "member", copyValue: (l) => memberName.get(l.material_id) ?? "—" },
+                      { label: "Plant date", key: "plant_eta" },
+                      { label: "Qty", key: "qty_base", copyValue: (l) => fmtQty(l.qty_base) },
+                      { label: "Vendor", key: "vendor", copyValue: (l) => lotVendorFlags(l, plan.vendor_choices).option?.vendor_label ?? "Any (engine)" },
+                      { label: "Value / check", key: "check", copyValue: (l) => {
+                        const flag = lotVendorFlags(l, plan.vendor_choices);
+                        if (!flag.option) return "—";
+                        return [
+                          flag.value === null ? "no cost" : `₹${Math.round(flag.value).toLocaleString("en-IN")}`,
+                          flag.tooEarly ? `too early (earliest ${flag.option.earliest_plant_eta})` : "",
+                          flag.belowMoq ? `below MOQ ${fmtQty(flag.option.moq_qty)}` : "",
+                        ].filter(Boolean).join("; ");
+                      } },
+                    ], lotDraft ?? plan.user_lots ?? [])}
+                    className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >Copy table + headers</button>
                 </div>
                 <p className="text-xs text-slate-500">Lots you fix stay as you set them; the engine plans the rest around them. Planning only — no PO is created.</p>
                 {(lotDraft ?? plan.user_lots ?? []).length === 0 ? <p className="text-xs text-slate-500">None — the plan is fully Engine + AI.</p> : (
@@ -739,6 +772,20 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 {aiResult ? (
                   <div className="grid gap-2 text-xs">
                     <p className="whitespace-pre-wrap text-slate-800">{aiResult.verdict}</p>
+                    <button
+                      type="button"
+                      onClick={() => copyTable([
+                        { label: "Plan", key: "label" },
+                        { label: "Shortage days", key: "shortage_days" },
+                        { label: "Days ≤ Target", key: "days_below_target" },
+                        { label: "Lowest Max days", key: "lowest_max_days", copyValue: (r) => fmtDays(r.lowest_max_days) },
+                        { label: "Avg stock", key: "average_closing", copyValue: (r) => fmtQty(r.average_closing) },
+                        { label: "Avg stock value", key: "average_stock_value", copyValue: (r) => r.average_stock_value === null ? "—" : `₹${fmtQty(r.average_stock_value)}` },
+                      ], [["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]]
+                        .filter(([, metrics]) => metrics)
+                        .map(([label, metrics]) => ({ label, ...metrics })))}
+                      className="h-7 w-max border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >Copy table + headers</button>
                     <table>
                       <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th>Avg stock value</th></tr></thead>
                       <tbody>

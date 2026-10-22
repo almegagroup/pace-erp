@@ -1,4 +1,4 @@
-import { assemblePlanningInput, autoPickGroupMember, chooseVendor, selectGroupMember, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, chooseVendor, selectGroupMember, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -29,7 +29,7 @@ function row(id: string, stock: number, daily: Array<[string, number]>, target =
   };
 }
 
-Deno.test("group shortage is planned through the selected member; nothing selected → engine picks (owner 2026-10-20)", () => {
+Deno.test("group shortage is planned through the selected member; nothing selected stays a group risk", () => {
   const calendar = buildCalendar("2026-11-01", "2026-11-25")!;
   const group = (id: string): GroupRequirementRow => ({
     group_id: id, kind: "RM", member_ids: ["A", "B"], cm_demand: 0, nm_demand: 0, covered_from_stock: 0, uncovered_cm: 0, uncovered_nm: 0,
@@ -41,17 +41,10 @@ Deno.test("group shortage is planned through the selected member; nothing select
     vendorTerms: new Map([["B", [term({ material_id: "B", moq_base: 25, route_days: 3 })]]]),
     selections: new Map([["2026-11-01", new Set(["B"])]]), policyMoqBase: new Map(),
   });
-  equal(assembly.group_assignments.map((a) => [a.month, a.assigned_material_id, a.reason, a.uncovered_qty]), [["2026-11-01", "B", "SINGLE_SELECTED", 30], ["2026-12-01", "B", "AUTO_SELECTED", 40]], "per month: only B has a vendor, so the engine picks B");
+  equal(assembly.group_assignments.map((a) => [a.month, a.assigned_material_id, a.reason, a.uncovered_qty]), [["2026-11-01", "B", "SINGLE_SELECTED", 30], ["2026-12-01", null, "NONE_SELECTED", 40]], "an unchecked month must not silently select B");
   const result = projectDailyCoverage(assembly.input);
-  equal(result.group_pool_risks.map((g) => [g.group_id, g.unresolved_qty_base]), [], "no shortage is left without a buy");
+  equal(result.group_pool_risks.map((g) => [g.group_id, g.unresolved_qty_base]), [["G1", 40]], "December stays visible until a member is selected");
   equal(result.advisory_buys.find((b) => b.material_id === "B" && b.status !== "NO_BUY")?.recommended_po_qty_base, 30, "November shortage (30 ≥ MOQ 25) bought as B");
-});
-
-Deno.test("auto pick: in-time members by lowest total cost; none in time → fastest; no vendor → none", () => {
-  const cost = (map: Record<string, { feasible: boolean; total_cost: number | null; lead_time_days: number | null } | null>) => (id: string) => map[id] ?? null;
-  equal(autoPickGroupMember(["A", "B", "C"], cost({ A: { feasible: true, total_cost: 500, lead_time_days: 30 }, B: { feasible: true, total_cost: 400, lead_time_days: 40 }, C: { feasible: false, total_cost: 100, lead_time_days: 90 } })), "B", "cheapest that arrives in time (C is cheaper but late)");
-  equal(autoPickGroupMember(["A", "B"], cost({ A: { feasible: false, total_cost: 100, lead_time_days: 60 }, B: { feasible: false, total_cost: 900, lead_time_days: 20 } })), "B", "nobody in time → fastest");
-  equal(autoPickGroupMember(["A", "B"], cost({})), null, "no vendor → stays a group risk");
 });
 
 Deno.test("store schedule: month name for a whole month, start day for a partial CM", () => {

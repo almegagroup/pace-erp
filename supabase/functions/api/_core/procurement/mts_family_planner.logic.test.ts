@@ -46,6 +46,55 @@ Deno.test("family planner: a delivery lot is one PO, never a queued multi-lot pu
   assert(elBuys.every((buy) => buy.recommended_po_qty_base === 24000 && buy.lots.length === 1 && buy.lots[0].qty_base === 24000), `ELOTEX must be one 24 MT purchase per recommendation: ${JSON.stringify(elBuys)}`);
 });
 
+Deno.test("family planner: reaching Target again after an engine lot creates the next projection", () => {
+  // This mirrors the TOT White shape: the first 25-day trigger is not a one-time
+  // alert.  Its 10-day order cycle restores cover to 35 days, then a new lot is
+  // required each time cover returns to 25 days.
+  const asOf = "2026-11-20";
+  const horizonEnd = "2027-01-10";
+  const days: string[] = [];
+  for (let day = asOf; day <= horizonEnd; day = addDays(day, 1)) days.push(day);
+  const use = 256.452;
+  const totPolicy = policy("TOT", 25, 13, [{ vendor: "TOT_VENDOR", lead: 0, cost: 1 }]);
+  totPolicy.cycle_days = 10;
+  totPolicy.vendor_options = (totPolicy.vendor_options ?? []).map((option) => ({ ...option, cycle_days: 10 }));
+  const result = planFamily({
+    as_of: asOf, horizon_end: horizonEnd,
+    opening_qty_by_material: { TOT: 33 * use },
+    own_demand: days.map((required_by) => ({ material_id: "TOT", required_by, qty_base: use })),
+    group_demand: [], confirmed_arrivals: [], policies: [totPolicy],
+  });
+  const lots = result.advisory_buys.filter((buy) => buy.material_id === "TOT").map((buy) => buy.estimated_plant_eta);
+  assert(JSON.stringify(lots.slice(0, 2)) === JSON.stringify(["2026-11-27", "2026-12-07"]), `the second Target trigger must be a second projection, got ${JSON.stringify(lots)}`);
+});
+
+Deno.test("family planner: a standalone Target remains physical safety stock across a zero-demand gap", () => {
+  // Tot White shape: December has approved PO21 use; January has none.  The
+  // lack of January use must not turn a 25-day Target into zero stock or a
+  // hidden epsilon lot.  This deliberately does not apply to group members.
+  const asOf = "2026-12-01";
+  const horizonEnd = "2027-01-31";
+  const days: string[] = [];
+  for (let day = asOf; day <= horizonEnd; day = addDays(day, 1)) days.push(day);
+  const daily = 100;
+  const totPolicy = policy("TOT", 25, 13, [{ vendor: "TOT_VENDOR", lead: 0, cost: 1 }]);
+  totPolicy.cycle_days = 10;
+  totPolicy.vendor_options = (totPolicy.vendor_options ?? []).map((option) => ({ ...option, cycle_days: 10 }));
+  const result = planFamily({
+    as_of: asOf, horizon_end: horizonEnd,
+    // Day one closes at exactly 25 days, so the first refill must be 10 days.
+    opening_qty_by_material: { TOT: 26 * daily },
+    own_demand: days.map((required_by) => ({ material_id: "TOT", required_by, qty_base: required_by < "2027-01-01" ? daily : 0 })),
+    group_demand: [], confirmed_arrivals: [], policies: [totPolicy],
+  });
+  const buys = result.advisory_buys.filter((buy) => buy.material_id === "TOT");
+  assert(buys[0]?.estimated_plant_eta === "2026-12-01", `Target trigger must project immediately: ${JSON.stringify(buys)}`);
+  assert(buys[0]?.recommended_po_qty_base === 10 * daily, `first safety refill must be 10 days, got ${JSON.stringify(buys[0])}`);
+  assert(buys.every((buy) => (buy.recommended_po_qty_base ?? 0) > 0.001), `no epsilon/zero safety lot is allowed: ${JSON.stringify(buys)}`);
+  const january = result.rows.find((row) => row.material_id === "TOT" && row.day === "2027-01-15");
+  assert(january?.closing_qty_base === 35 * daily, `zero-demand January must retain the physical safety reserve, got ${JSON.stringify(january)}`);
+});
+
 Deno.test("family planner: no stock-out and no member below Critical once lots can arrive", () => {
   const result = planFamily(rdpFamily());
   const shortDays = result.rows.filter((r) => r.closing_qty_base < -1e-6);
@@ -75,6 +124,26 @@ Deno.test("family planner: DA is bought for its own use and for TLA (VINNAPAS ha
     assert(gap >= 7, `DA lots ${etas[i - 1]} and ${etas[i]} only ${gap} day(s) apart`);
   }
   assert(buys.every((b) => (b.recommended_po_qty_base ?? 0) % 20000 === 0), "container multiple respected");
+});
+
+Deno.test("family planner: an unchecked member is never bought for its own use or a group", () => {
+  const days = daysTo("2026-10-31");
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2026-10-31",
+    opening_qty_by_material: { WACKER: 0, CELE: 0 },
+    own_demand: days.map((d) => ({ material_id: "WACKER", required_by: d, qty_base: 10 })),
+    group_demand: days.map((d) => ({ group_id: "RDP", candidates: ["WACKER", "CELE"], required_by: d, qty_base: 20 })),
+    confirmed_arrivals: [],
+    policies: [
+      policy("WACKER", 1, 0, [{ vendor: "WACKER", lead: 0, cost: 10 }]),
+      policy("CELE", 1, 0, [{ vendor: "CELANESE", lead: 0, cost: 12 }]),
+    ],
+    selections: new Map([["2026-10-01", new Set(["CELE"])]]),
+    selection_controlled_members: new Set(["WACKER", "CELE"]),
+  };
+  const buys = planFamily(input).advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
+  assert(!buys.some((b) => b.material_id === "WACKER"), `unchecked Wacker must not be bought: ${JSON.stringify(buys)}`);
+  assert(buys.some((b) => b.material_id === "CELE" && b.covers.includes("RDP")), "selected Celanese covers the RDP need");
 });
 
 Deno.test("family arrival optimizer: a piece is not pushed months away while the family needs it", () => {

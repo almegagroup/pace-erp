@@ -114,30 +114,19 @@ export function forecastSkuMonth(sku: string, month: string, asOfMonth: string, 
 }
 
 /**
- * Forecast plan lines for every horizon month without any PO21 plan. They enter the normal
- * explosion as ROLLING lines (spread evenly over the month), tagged FORECAST|… so they are never
- * mistaken for a real plan. kgPerBase converts KG back to the SKU base unit.
+ * PO21 is the demand authority.  A month without a PO21 line means zero demand;
+ * history may be analysed separately, but it must never create an implicit plan
+ * line or a procurement recommendation (owner decision 2026-10-22).
  */
 export function buildForecastPlanLines(
   skuIds: readonly string[], horizonMonths: readonly string[], asOfMonth: string, inputs: ForecastInputs,
   kgPerBase: (sku: string) => number | null,
 ): { lines: PlanLineVersion[]; forecasts: SkuForecast[]; forecastMonths: string[] } {
-  const forecastMonths = horizonMonths.filter((m) => !inputs.plannedMonths.has(m));
-  const lines: PlanLineVersion[] = []; const forecasts: SkuForecast[] = [];
-  for (const month of forecastMonths) {
-    for (const sku of [...skuIds].sort()) {
-      const forecast = forecastSkuMonth(sku, month, asOfMonth, inputs);
-      const factor = kgPerBase(sku);
-      if (!forecast || !(forecast.qty_kg > EPSILON) || !factor || !(factor > 0)) continue;
-      forecasts.push(forecast);
-      lines.push({
-        entry_id: `FORECAST|${sku}|${month}`, version_no: 1, plan_month: month, plan_type: "ROLLING",
-        urgent_mode: null, urgent_from_date: null, urgent_to_date: null, sku_material_id: sku,
-        base_qty: round(forecast.qty_kg / factor), is_cancelled: false, created_at: "1970-01-01T00:00:00Z",
-      });
-    }
-  }
-  return { lines, forecasts, forecastMonths };
+  // Keep the signature while historical-analysis screens are separated from PO22;
+  // deliberately reference the inputs so a later explicit forecasting feature can
+  // be introduced as a new, opt-in contract rather than silently reusing this path.
+  void [skuIds, horizonMonths, asOfMonth, inputs, kgPerBase];
+  return { lines: [], forecasts: [], forecastMonths: [] };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -224,9 +213,10 @@ export function monthRange(first: string, count: number): string[] {
   return out;
 }
 
-export type ArrivalStatus = "AT_GATE" | "IN_TRANSIT" | "ORDERED" | "BULK" | "STO" | "SUB_CSN";
+export type ArrivalStatus = "ACTUAL_GR" | "AT_GATE" | "IN_TRANSIT" | "ORDERED" | "BULK" | "STO" | "SUB_CSN";
 
 export function arrivalStatus(kind: string, dateSource: string): ArrivalStatus {
+  if (kind === "POSTED_GR") return "ACTUAL_GR";
   if (kind === "AT_GATE") return "AT_GATE";
   if (kind === "IN_TRANSIT") return "IN_TRANSIT";
   if (kind === "STO_IN_TRANSIT") return "STO";

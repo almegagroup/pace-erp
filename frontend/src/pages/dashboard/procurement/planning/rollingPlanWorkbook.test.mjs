@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPlanMatrix, buildRollingPlanWorkbook, sheetName } from "./rollingPlanWorkbook.js";
+import { buildPlanMatrix, buildRollingPlanWorkbook, companyLabel, sheetName } from "./rollingPlanWorkbook.js";
 
 const company = (id, name, extra = {}) => ({
   company_id: id, company_name: name, calendar: { as_of: "2026-10-21", horizon_end: "2026-12-31", months: ["2026-10-01", "2026-11-01", "2026-12-01"] },
@@ -50,4 +50,9 @@ test("sheet names: 31 chars, no illegal characters, unique", () => {
   assert.equal(long.length, 31);
   const longAgain = sheetName("x".repeat(40), used);
   assert.ok(longAgain.length <= 31 && longAgain.endsWith("(2)"));
+});
+
+test("companyLabel: an internal UUID is never exported as a company name", () => {
+  assert.equal(companyLabel({ company_id: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_name: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_code: "CMP003" }), "CMP003");
+  assert.equal(companyLabel({ company_id: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_name: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_code: "" }), "—");
 });

@@ -11,6 +11,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { copyTableRowsWithHeaders } from "./tableClipboard.js";
 
 // Matches --erp-row-height in index.css. Only used as the virtualizer's size
 // estimate (rows still render at their real CSS height) — update this too if
@@ -52,10 +53,15 @@ function hasBackgroundUtility(className) {
   return /(^|\s)bg-\S/.test(className ?? "");
 }
 
-// Legacy fallback for non-secure contexts / older browsers where
-// navigator.clipboard is unavailable — mirrors the standard
-// hidden-textarea + execCommand("copy") pattern.
-function legacyCopyToClipboard(text) {
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // fall through to legacy path
+    }
+  }
   const textarea = document.createElement("textarea");
   textarea.value = text;
   textarea.style.position = "fixed";
@@ -68,18 +74,6 @@ function legacyCopyToClipboard(text) {
   } finally {
     document.body.removeChild(textarea);
   }
-}
-
-async function copyTextToClipboard(text) {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      // fall through to legacy path
-    }
-  }
-  legacyCopyToClipboard(text);
 }
 
 // A column's own value for Excel-style filtering — same fallback chain as
@@ -477,6 +471,11 @@ export default function ErpDenseGrid({
   // uses) contains the typed text, case-insensitive. Works together with
   // columnFilter and runs before decorateRows.
   searchBar = false,
+  // Opt-in only. Adds a button that copies every currently displayed row
+  // (after search/filter/decorate) as TSV with its column headers, ready to
+  // paste directly into Excel. A column may opt out with copyable: false.
+  copyTableWithHeaders = false,
+  copyTableLabel = "Copy table + headers",
   // Opt-in only — omitted by every existing caller. Called with the rows the
   // grid is currently showing after its own column filters, so a page can
   // export exactly what the user sees (the filter state lives in here).
@@ -541,6 +540,7 @@ export default function ErpDenseGrid({
   );
 
   const [searchText, setSearchText] = useState("");
+  const [copiedTable, setCopiedTable] = useState(false);
   const filteredRows = useMemo(() => {
     let result = rawRows;
     const needle = searchBar ? searchText.trim().toLowerCase() : "";
@@ -684,6 +684,13 @@ export default function ErpDenseGrid({
     },
     [selection, rows, columns],
   );
+
+  const copyVisibleTableWithHeaders = useCallback(() => {
+    void copyTableRowsWithHeaders(columns, rows).then(() => {
+      setCopiedTable(true);
+      window.setTimeout(() => setCopiedTable(false), 1800);
+    });
+  }, [columns, rows]);
 
   function isCellSelected(rowIndex, colIndex) {
     const normalized = normalizeSelection(selection);
@@ -859,18 +866,33 @@ export default function ErpDenseGrid({
 
   return (
     <div className="grid gap-0">
-      {searchBar ? (
+      {searchBar || copyTableWithHeaders ? (
         <div className="flex items-center gap-2 border border-b-0 border-slate-300 bg-slate-50 px-2 py-1">
-          <input
-            type="search"
-            value={searchText}
-            onChange={(event) => setSearchText(event.target.value)}
-            placeholder="Search all columns…"
-            aria-label="Search all columns"
-            className="h-7 w-72 max-w-full border border-slate-300 bg-white px-2 text-xs outline-none focus:border-sky-500"
-          />
-          {searchText ? (
-            <span className="text-[11px] text-slate-500">{filteredRows.length} of {rawRows.length} row(s)</span>
+          {searchBar ? (
+            <>
+              <input
+                type="search"
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+                placeholder="Search all columns…"
+                aria-label="Search all columns"
+                className="h-7 w-72 max-w-full border border-slate-300 bg-white px-2 text-xs outline-none focus:border-sky-500"
+              />
+              {searchText ? (
+                <span className="text-[11px] text-slate-500">{filteredRows.length} of {rawRows.length} row(s)</span>
+              ) : null}
+            </>
+          ) : null}
+          {copyTableWithHeaders ? (
+            <button
+              type="button"
+              onClick={copyVisibleTableWithHeaders}
+              disabled={rows.length === 0}
+              className="ml-auto h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Copies this table's visible rows and headers. Paste directly into Excel."
+            >
+              {copiedTable ? "Copied" : copyTableLabel}
+            </button>
           ) : null}
         </div>
       ) : null}

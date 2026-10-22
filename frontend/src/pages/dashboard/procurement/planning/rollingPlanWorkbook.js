@@ -33,8 +33,14 @@ function num(value) {
 function day(value) {
   return value ? String(value).slice(0, 10) : "";
 }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Business exports must never turn an internal company id into a visible name. */
 export function companyLabel(c) {
-  return c.company_name || c.company_code || "—";
+  const labels = [c.company_name, c.company_code]
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => value && !UUID_RE.test(value));
+  return labels[0] || "—";
 }
 /** Excel sheet name: ≤ 31 chars, no []:*?/\ . */
 export function sheetName(base, used) {

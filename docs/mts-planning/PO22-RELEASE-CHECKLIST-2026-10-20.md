@@ -15,7 +15,7 @@ Release of the PO22 Requirement + Planning engine (Method C, D13) and the PO21 a
 
 | Area | What |
 |---|---|
-| PO22 Requirement | Method C allocation (D13): own demand first, Target/Critical protection, narrow group first, most-free member first, member surplus before buying, engine auto-pick (AUTO_SELECTED), emergency use of protected stock with warning |
+| PO22 Requirement | Method C allocation (D13): own demand first, Target/Critical protection, narrow group first, most-free member first, member surplus before buying; a monthly unchecked member is never bought by the engine, while its existing stock/inbound may still serve the group |
 | PO22 Requirement | Sub-CSN (Distribution mode) inbound / sender commitment, STO CSN by effective destination, lead-time delay history + suggested Target/Critical (no Booking Time) |
 | PO22 Planning | Day-major projection with group draws, cost-to-cost member choice, Action tab (Critical + Replenishment), Store usage schedule (month label, product groups, document name, **R→R transfer note**), AI explanation (budget-capped) |
 | PO22 inputs | Vendor MOQ / multiple / lot / supply UoM / Booking Time, item carrying Rate, FX table, BOE rate, company interest %, counted-location policy (D12) |
@@ -34,7 +34,7 @@ Release of the PO22 Requirement + Planning engine (Method C, D13) and the PO21 a
 | Active ACL versions | CMP003 v133, CMP005 v29, CMP011 v29 (all captured) → new versions needed (v134 / v30 / v30) |
 | Location mapping (seed source for D12) | CMP003: F001-F003, L003, OT01, P001-P003, R001-R003, S001-S003, T003 · CMP005: F001, F002, OT01, P001, P002, R001, R002, S001, S002 · CMP011: F001, OT01, P001, R001, S001 — every location holding stock is mapped, so the seed covers all of them |
 | Target / Critical days | **0 policy rows in all three companies** → nothing is protected (Method C rule 2 is a no-op) and the Action tab has no Critical line until entered. **Release blocker for accuracy** — see §5 |
-| Group primary decisions | CMP003: 23 · CMP005: 0 · CMP011: 0 → CMP005/CMP011 groups rely on the engine's auto-pick (D13 rule 6). Acceptable, but review the "Engine chose" rows after the first run |
+| Group primary decisions | Each company must select at least one authorised member for every group/month that needs a new buy. With no selection, the shortage remains visible and no engine PO recommendation is created. |
 | Cross-company readiness | All **22** CMP005 MTS SKUs and all **4** CMP011 MTS SKUs are also resolved MTS SKUs of CMP003 → "Made at CMP003" can be saved for every one of them |
 | Plan lines (Oct onward) | CMP003 96 · CMP005 96 · CMP011 16 |
 | Transfer-source stock | CMP003 R003 ≈ 117,647 (UNRESTRICTED) → R→R notes will appear for CMP003 only |
@@ -93,7 +93,7 @@ What it does per company (CLAUDE.md §8 second correction — re-capturing an ex
 |---|---|---|---|
 | 1 | **Target / Critical days** per material (PO22 Settings) | Users (SCM) — owner 2026-10-20 | Currently 0 everywhere. Use "Suggested T / C (no booking)" + Use button as a start. Without it no stock is protected |
 | 2 | Location policy (D12) | SCM | Seeded by migration 3: COUNTED R001 R002 S001 S002 P001 P002; TRANSFER_SOURCE R003; EXCLUDED OT01/OT02, F-series, S003/P003/T003/L003. Review per company in Settings |
-| 3 | Group primary (D3) for CMP005 / CMP011 | SCM | Optional — engine auto-picks when empty and labels it "Engine chose" |
+| 3 | Group primary (D3) for CMP005 / CMP011 | SCM | Required before a new buy — choose at least one member in every required month; unchecked members are not substituted |
 | 4 | Vendor MOQ / multiple / lot / Booking Time | Procurement | Optional; missing = no rounding / no booking buffer |
 | 5 | Item carrying Rate, company interest %, FX rates | Accounts / Procurement | Needed only for cost-to-cost comparison; missing = comparison falls back to price + landed cost |
 | 6 | Cross-company assignments (PO21 Plan Entry → "Cross company") | Procurement | e.g. CMP005 SKU-months made at CMP003. One SKU-month goes wholly to one company |
