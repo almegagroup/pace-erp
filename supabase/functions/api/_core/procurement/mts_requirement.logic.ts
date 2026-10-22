@@ -2090,6 +2090,8 @@ export type RequirementOutput = {
   warnings: Warning[];
   exceptions: Warning[];
   effective: EffectiveSkuMonth[];
+  /** Exploded demand before any stock allocation (PO22 family planner input; never serialised). */
+  records: DemandRecord[];
 };
 
 export function moqInBase(policy: PolicyRow | null, material: MaterialInfo | undefined): number | null {
@@ -2298,7 +2300,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       }
     }
   }
-  return { rows, groups, store_rows: storeRows, warnings, exceptions: explosion.exceptions, effective };
+  return { rows, groups, store_rows: storeRows, warnings, exceptions: explosion.exceptions, effective, records: explosion.records };
 }
 
 export type UomConversion = { from_uom_code: string; to_uom_code: string; conversion_factor: number | null; variable_conversion: boolean | null; active: boolean | null };

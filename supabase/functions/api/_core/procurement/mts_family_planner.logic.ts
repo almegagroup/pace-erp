@@ -535,38 +535,61 @@ function familyScore(result: FamilyResult): [number, number, number] {
   return [short, critical, target];
 }
 
-export type FamilyArrivalOptimum = {
-  current_eta: string;
-  best_eta: string;
-  shift_days: number;
-  current: [number, number, number];
-  best: [number, number, number];
-  reason: string;
-} | null;
+/** Family Min / Max days on a day: whole family stock before / after that day's arrivals, against the family use ahead. */
+function familyDays(result: FamilyResult, day: string): { min_days: number | null; max_days: number | null } {
+  const byDay = new Map<string, { closing: number; minStock: number; use: number }>();
+  for (const r of result.rows) {
+    const seen = byDay.get(r.day) ?? { closing: 0, minStock: 0, use: 0 };
+    byDay.set(r.day, { closing: seen.closing + r.closing_qty_base, minStock: seen.minStock + r.min_stock_qty_base, use: seen.use + r.demand_qty_base });
+  }
+  const days = [...byDay.keys()].sort();
+  const use = days.map((d) => byDay.get(d)!.use);
+  const i = days.indexOf(day);
+  if (i < 0) return { min_days: null, max_days: null };
+  const whole = (v: number | null) => (v === null ? null : Math.floor(v + 1e-9));
+  return { min_days: whole(coverDays(byDay.get(day)!.minStock, use, i)), max_days: whole(coverDays(byDay.get(day)!.closing, use, i)) };
+}
+
+export type FamilyArrivalScore = {
+  eta: string;
+  min_days: number | null;
+  max_days: number | null;
+  shortage_days: number;
+  days_below_critical: number;
+  days_below_target: number;
+  first_below_target_day: string | null;
+};
+export type FamilyArrivalOptimum = { current: FamilyArrivalScore; best: FamilyArrivalScore; shift_days: number; reason: string } | null;
 
 /**
- * Owner 2026-10-22: when is a not-yet-shipped piece really needed? Every day of the horizon is
+ * Owner 2026-10-22: when is a not-yet-shipped piece really needed? Dates across the horizon are
  * tried with the WHOLE family simulated (no new engine buys), so moving one member's arrival
  * shows its effect on the groups and the other members. Fewest stock-out / below-Critical /
- * below-Target days wins; on a tie the latest date (least money held); a prepone only when it
- * is strictly safer; shifts under 3 days are ignored.
+ * below-Target member-days wins; on a tie the latest date (least money held); a prepone only when
+ * strictly safer; shifts under 3 days are ignored. Min / Max days shown are the family's.
  */
 export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: string): FamilyArrivalOptimum {
   const piece = input.confirmed_arrivals.find((a) => a.source_key === pieceKey);
   if (!piece || !piece.eta_to_plant || !ISO_DAY.test(piece.eta_to_plant)) return null;
-  const base = { ...input, plan_buys: false };
-  const at = (eta: string) => planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? { ...a, eta_to_plant: eta } : a)) });
-  const current = familyScore(at(piece.eta_to_plant));
-  let bestEta = piece.eta_to_plant;
-  let best = current;
-  const cmp = (a: [number, number, number], b: [number, number, number]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
   const currentEta = piece.eta_to_plant;
+  const base = { ...input, plan_buys: false };
+  const runs = new Map<string, FamilyResult>();
+  const at = (eta: string) => {
+    let r = runs.get(eta);
+    if (!r) {
+      r = planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? { ...a, eta_to_plant: eta } : a)) });
+      runs.set(eta, r);
+    }
+    return r;
+  };
+  const cmp = (a: [number, number, number], b: [number, number, number]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  const current = familyScore(at(currentEta));
+  let bestEta = currentEta;
+  let best = current;
   const all = dayList(input.as_of, input.horizon_end);
-  const scored = new Map<string, [number, number, number]>([[currentEta, current]]);
-  const scoreOf = (day: string) => { let v = scored.get(day); if (!v) { v = familyScore(at(day)); scored.set(day, v); } return v; };
   const consider = (day: string) => {
     if (day === currentEta) return;
-    const score = scoreOf(day);
+    const score = familyScore(at(day));
     const c = cmp(score, best);
     if (c < 0 || (c === 0 && day > bestEta)) {
       // A prepone is taken only when strictly safer than the current date.
@@ -574,14 +597,19 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
       best = score; bestEta = day;
     }
   };
-  // Coarse pass every 7 days, then every day within ±7 of the best (speed: each try is a full family run).
+  // Coarse pass every 7 days, then every day within ±7 of the best (each try is a full family run).
   for (let k = 0; k < all.length; k += 7) consider(all[k]);
   const centre = all.indexOf(bestEta);
   for (let k = Math.max(0, centre - 7); k <= Math.min(all.length - 1, centre + 7); k += 1) consider(all[k]);
-  const shift = Math.round((Date.parse(`${bestEta}T00:00:00Z`) - Date.parse(`${piece.eta_to_plant}T00:00:00Z`)) / 86_400_000);
-  if (Math.abs(shift) < 3) return { current_eta: piece.eta_to_plant, best_eta: piece.eta_to_plant, shift_days: 0, current, best: current, reason: "Current date is right for the whole family." };
-  const reason = cmp(best, current) < 0
-    ? `Fewer family risk days (stock-out ${best[0]} vs ${current[0]}, below Critical ${best[1]} vs ${current[1]}, below Target ${best[2]} vs ${current[2]}).`
-    : `Same family risk; ${shift > 0 ? "later" : "earlier"} date holds less money.`;
-  return { current_eta: piece.eta_to_plant, best_eta: bestEta, shift_days: shift, current, best, reason };
+  let shift = Math.round((Date.parse(`${bestEta}T00:00:00Z`) - Date.parse(`${currentEta}T00:00:00Z`)) / 86_400_000);
+  if (Math.abs(shift) < 3) { shift = 0; bestEta = currentEta; best = current; }
+  const view = (eta: string, score: [number, number, number]): FamilyArrivalScore => ({
+    eta, ...familyDays(at(eta), eta), shortage_days: score[0], days_below_critical: score[1], days_below_target: score[2], first_below_target_day: null,
+  });
+  const reason = shift === 0
+    ? "Current date is right for the whole family."
+    : cmp(best, current) < 0
+      ? `Fewer family risk days (stock-out ${best[0]} vs ${current[0]}, below Critical ${best[1]} vs ${current[1]}, below Target ${best[2]} vs ${current[2]}).`
+      : `Same family risk; the ${shift > 0 ? "later" : "earlier"} date holds less money.`;
+  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason };
 }

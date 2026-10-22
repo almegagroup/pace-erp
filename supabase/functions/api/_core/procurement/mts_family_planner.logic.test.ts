@@ -71,7 +71,7 @@ Deno.test("family arrival optimizer: a piece is not pushed months away while the
   const input = { ...rdpFamily(), confirmed_arrivals: [{ source_key: "RP-PO", material_id: "RP", eta_to_plant: "2026-11-01", qty_base: 25000 }] };
   const optimum = optimizeFamilyArrival(input, "RP-PO");
   assert(optimum !== null, "optimum computed");
-  assert(optimum.best_eta <= "2026-12-31", `best date ${optimum.best_eta} is too far`);
+  assert(optimum.best.eta <= "2026-12-31", `best date ${optimum.best.eta} is too far`);
 });
 
 Deno.test("smart consumption ratio: every member with free stock serves the group, none piles up", () => {

@@ -155,6 +155,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (p) => fmtDays(p.min_days), copyValue: (p) => p.min_days ?? "" },
     { key: "material_name", label: "Member", width: "200px", render: (p) => `${p.material_code ?? ""} ${p.material_name}`.trim() },
     { key: "vendor", label: "Supplier", width: "200px", render: (p) => p.vendor ?? "—" },
+    { key: "covers", label: "For", width: "160px", render: (p) => p.covers ?? "—" },
+    { key: "why", label: "Why this item, this date", width: "380px", render: (p) => <span className="whitespace-normal text-xs">{p.why ?? "—"}</span>, copyValue: (p) => p.why ?? "" },
   ];
 
   const gridColumns = [
@@ -201,6 +203,29 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
     { key: "min_stock", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock), copyValue: (r) => r.min_stock },
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_days), copyValue: (r) => r.min_days ?? "" },
+    {
+      // Owner 2026-10-22: what arrives this day, from where, in what state, for what and why.
+      key: "events", label: "What arrives — member · consignment · vendor · status · for · why", width: "560px", filterable: false,
+      render: (r) => ((r.events ?? []).length === 0 ? "" : (
+        <div className="grid gap-0.5 py-0.5 text-xs">
+          {r.events.map((e, i) => (
+            <div key={i} className="whitespace-normal">
+              <span className={`mr-1 px-1 font-semibold ${e.kind === "ARRIVAL" ? "bg-sky-100 text-sky-800" : e.kind === "ENGINE" ? "bg-amber-100 text-amber-800" : "bg-violet-100 text-violet-800"}`}>
+                {e.kind === "ARRIVAL" ? (STATUS_LABEL[e.status] ?? e.status) : e.kind === "ENGINE" ? (e.late ? "Engine (late)" : "Engine") : "You"}
+              </span>
+              <span className="font-semibold">{e.member}</span> {fmtQty(e.qty)} {e.uom ?? ""}
+              {e.reference ? <span> · {e.reference}</span> : null}
+              {e.vendor ? <span> · {e.vendor}</span> : null}
+              {e.po_by ? <span> · PO by {e.po_by}</span> : null}
+              {e.covers ? <span className="text-emerald-800"> · for {e.covers}</span> : null}
+              {e.why ? <span className="text-slate-500"> — {e.why}</span> : null}
+              {e.movable ? <button type="button" onClick={() => setPanel("arrivals")} className="ml-1 text-sky-700 underline">move date</button> : null}
+            </div>
+          ))}
+        </div>
+      )),
+      copyValue: (r) => (r.events ?? []).map((e) => [e.kind, e.member, e.qty, e.reference, e.vendor, e.status, e.covers, e.why].filter(Boolean).join(" | ")).join("\n"),
+    },
   ];
 
   const memberColumns = [
@@ -286,6 +311,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "flag", label: "", width: "90px", render: (o) => (o.bridge ? <span className="bg-rose-100 px-1.5 py-0.5 text-xs font-semibold text-rose-800">Bridge</span> : o.late ? <span className="bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800">Late</span> : ""), copyValue: (o) => (o.bridge ? "Bridge" : o.late ? "Late" : "") },
     { key: "material_name", label: "Member", width: "200px", render: (o) => `${o.material_code ?? ""} ${o.material_name}`.trim() },
     { key: "vendor", label: "Vendor", width: "200px", render: (o) => o.vendor ?? "—" },
+    { key: "covers", label: "For", width: "160px", render: (o) => o.covers ?? "—" },
     { key: "qty", label: "Qty", width: "110px", align: "right", render: (o) => `${fmtQty(o.qty)} ${o.uom ?? ""}`, copyValue: (o) => o.qty },
     { key: "order_qty", label: "In order unit", width: "120px", align: "right", render: (o) => orderQtyText(o.order_qty, o.order_uom) || "—", copyValue: (o) => o.order_qty ?? "" },
     { key: "po_by", label: "PO by", width: "100px", render: (o) => o.po_by ?? "—" },

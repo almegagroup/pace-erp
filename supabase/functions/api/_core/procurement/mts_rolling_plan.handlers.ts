@@ -12,7 +12,7 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
-import { arrivalStatus, type ArrivalOptimum, dayRange, familyClosure, familyDayGrid, poNumberOfReference } from "./mts_item_plan.logic.ts";
+import { arrivalStatus, dayRange, familyClosure, familyDayGrid, poNumberOfReference } from "./mts_item_plan.logic.ts";
 import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
@@ -106,7 +106,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const po = poNumberOfReference(reference);
       return (csnId ? vendorByCsn.get(csnId) : null) ?? (po ? vendorByPo.get(po) ?? null : null);
     };
-    const optimumByKey = new Map<string, ArrivalOptimum>(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
+    const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
@@ -121,15 +121,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const memberSet = new Set(memberIds);
       const groupSet = new Set(family.group_ids);
       const memberRows = projection.rows.filter((r) => memberSet.has(r.material_id));
-      const totalUse = new Map<string, number>();
-      for (const d of assembly.input.daily_demand) {
-        const inFamily = d.material_id ? memberSet.has(d.material_id) : Boolean(d.group_id && groupSet.has(d.group_id));
-        if (!inFamily || !d.required_by) continue;
-        totalUse.set(d.required_by, (totalUse.get(d.required_by) ?? 0) + d.qty_base);
-      }
-      const memberUse = new Map<string, number>();
-      for (const r of memberRows) memberUse.set(r.day, (memberUse.get(r.day) ?? 0) + r.demand_qty_base);
-      const grid = familyDayGrid(days, memberRows, new Map(days.map((day) => [day, Math.max(0, (totalUse.get(day) ?? 0) - (memberUse.get(day) ?? 0))])));
+      const unmet = new Map(days.map((day) => [day, 0]));
+      for (const u of projection.group_unmet) if (groupSet.has(u.group_id) && unmet.has(u.day)) unmet.set(u.day, (unmet.get(u.day) ?? 0) + u.qty_base);
+      const grid = familyDayGrid(days, memberRows, unmet);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
 
       // Left side: today + every day something arrives or you fixed a quantity.
