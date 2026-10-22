@@ -23,7 +23,7 @@ import {
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import {
-  type ArrivalOptimum, arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, optimizeArrivalSet, poNumberOfReference, storeKey, wholeDays,
+  arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, poNumberOfReference, storeKey, wholeDays,
 } from "./mts_item_plan.logic.ts";
 import type { OptimizerDailyProjectionRow, OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import type { PolicyOverride } from "./mts_requirement.logic.ts";
@@ -53,6 +53,8 @@ type ItemPlanParams = NonNullable<ReturnType<typeof readParams>["params"]>;
 export type ItemPlanSimulation = {
   rescheduleOverrides?: ReadonlyMap<string, string | null>;
   policyOverrides?: ReadonlyMap<string, PolicyOverride>;
+  /** Preview / what-if / AI re-check: reuse the item plan's heavy reads (≤ 3 min old). */
+  reuseLoads?: boolean;
 };
 
 /** P4: lots the user fixed for this item (current version); empty before the first save. */
@@ -102,7 +104,8 @@ export async function buildItemPlan(
 ) {
     const plan = await computePlanning({
       companyId, ...params, extraMonths: ITEM_PLAN_EXTRA_MONTHS, manualLots,
-      rescheduleOverrides: sim.rescheduleOverrides, policyOverrides: sim.policyOverrides,
+      rescheduleOverrides: sim.rescheduleOverrides, policyOverrides: sim.policyOverrides, arrivalFamilyOf: materialId,
+      reuseLoads: sim.reuseLoads,
     });
     const { req: reqData, projection, assembly, calendar, vendorOptions, vendorTerms, orderUnitFor } = plan._internal;
     // Order UoM (owner 2026-10-22): the same quantity in the unit it is ordered in.
@@ -121,17 +124,9 @@ export async function buildItemPlan(
     const days = dayRange(calendar.asOf, calendar.horizonEnd);
 
     const memberRows: OptimizerDailyProjectionRow[] = projection.rows.filter((r) => memberSet.has(r.material_id));
-    // Total family use per day (exclusive + every group pool, each once); what members did not
-    // carry is unmet group demand (shortage).
-    const totalUse = new Map<string, number>();
-    for (const d of assembly.input.daily_demand) {
-      const inFamily = d.material_id ? memberSet.has(d.material_id) : Boolean(d.group_id && groupSet.has(d.group_id));
-      if (!inFamily || !d.required_by) continue;
-      totalUse.set(d.required_by, (totalUse.get(d.required_by) ?? 0) + d.qty_base);
-    }
-    const memberUse = new Map<string, number>();
-    for (const r of memberRows) memberUse.set(r.day, (memberUse.get(r.day) ?? 0) + r.demand_qty_base);
-    const unmet = new Map(days.map((day) => [day, Math.max(0, (totalUse.get(day) ?? 0) - (memberUse.get(day) ?? 0))]));
+    // Group use no member could carry that day (family planner) is the family's shortage.
+    const unmet = new Map(days.map((day) => [day, 0]));
+    for (const u of projection.group_unmet) if (groupSet.has(u.group_id) && unmet.has(u.day)) unmet.set(u.day, (unmet.get(u.day) ?? 0) + u.qty_base);
     const grid = familyDayGrid(days, memberRows, unmet);
 
     const nameOf = (id: string) => text(reqData.materialRows.get(id)?.material_name) || "—";
@@ -236,6 +231,7 @@ export async function buildItemPlan(
     }
     const addDaysIso = (day: string | null, n: number | null) => (day && n !== null ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : null);
     const coverOn = (id: string, day: string | null) => rowsByMember.get(id)?.find((r) => r.day === day) ?? null;
+    const coversLabel = (covers: readonly string[]) => covers.map((c) => (c === "OWN" ? "Own use" : groupLabel.get(c) ?? "—")).join(", ") || null;
     const futureOrders = plan.buys
       .filter((b) => memberSet.has(b.material_id) && (b.status === "ADVISORY" || b.status === "ADVISORY_LATE"))
       .flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }]).map((lot) => {
@@ -252,16 +248,15 @@ export async function buildItemPlan(
           bridge: b.bridge === true, late: b.status === "ADVISORY_LATE", cheapest_vendor: b.cheapest_vendor_label ?? null,
           unit_total_cost: b.vendor_unit_total_cost ?? null, freight_term: b.vendor_freight_term ?? null, cost_missing: b.vendor_cost_missing ?? [],
           reason: b.reason,
+          // Owner 2026-10-22: what this lot is for (own use or which groups).
+          covers: coversLabel((b as { covers?: readonly string[] }).covers ?? []),
         };
       }));
 
     const memberDays = (id: string) => (rowsByMember.get(id) ?? []).map((r) => ({ day: r.day, closing: r.closing_qty_base, use: r.demand_qty_base, target_days: r.target_days, critical_days: r.critical_days }));
     // Owner 2026-10-21: best plant date per movable arrival, tried on every day of the horizon.
-    const optimumByKey = new Map<string, ArrivalOptimum>();
-    for (const id of memberIds) {
-      const pieces = (rowById.get(id)?.inbound_events ?? []).filter((e) => e.reschedule_key).map((e) => ({ key: e.reschedule_key as string, eta: e.date, qty: e.qty }));
-      if (pieces.length) for (const [key, value] of optimizeArrivalSet(memberDays(id), pieces)) optimumByKey.set(key, value);
-    }
+    // Owner 2026-10-22: judged on the whole family (computed once by the planning run).
+    const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const adviceFor = (_id: string, key: string | null) => {
       const optimum = key ? optimumByKey.get(key) ?? null : null;
       return {
@@ -366,8 +361,8 @@ export async function buildItemPlan(
       };
     };
     const prediction = [
-      ...futureOrders.map((f) => ({ source: "ENGINE" as const, material_id: f.material_id, vendor_id: f.vendor_id, vendor: f.vendor, date: f.eta_plant, qty: f.qty })),
-      ...userLots.map((l) => ({ source: "YOU" as const, material_id: l.material_id, vendor_id: l.vendor_id ?? null, vendor: l.vendor_label, date: l.plant_eta as string | null, qty: round(l.qty_base) })),
+      ...futureOrders.map((f) => ({ source: "ENGINE" as const, material_id: f.material_id, vendor_id: f.vendor_id, vendor: f.vendor, date: f.eta_plant, qty: f.qty, covers: f.covers as string | null, why: f.reason as string | null })),
+      ...userLots.map((l) => ({ source: "YOU" as const, material_id: l.material_id, vendor_id: l.vendor_id ?? null, vendor: l.vendor_label, date: l.plant_eta as string | null, qty: round(l.qty_base), covers: null as string | null, why: null as string | null })),
     ].map((r) => ({
       ...r, material_code: codeOf(r.material_id), material_name: nameOf(r.material_id), uom: uomOf(r.material_id),
       ...orderFields(r.material_id, r.vendor_id, r.qty),
@@ -392,7 +387,26 @@ export async function buildItemPlan(
         groups: family.group_ids.map((g) => ({ group_id: g, label: groupLabel.get(g) ?? "—" })),
       },
       members,
-      grid,
+      // Owner 2026-10-22: every row says what arrives that day — which member, consignment, vendor,
+      // status, what it covers and why — so the whole family is readable in one table.
+      grid: (() => {
+        const events = new Map<string, Array<Record<string, unknown>>>();
+        const push = (day: string | null, e: Record<string, unknown>) => { if (day) events.set(day, [...(events.get(day) ?? []), e]); };
+        for (const a of buildArrivals()) {
+          push(a.rescheduled_eta ?? a.eta_plant ?? calendar.asOf, {
+            kind: "ARRIVAL", member: `${a.material_code ?? ""} ${a.material_name}`.trim(), qty: a.qty, uom: a.uom, reference: a.reference,
+            vendor: a.vendor, status: a.status, movable: Boolean(a.reschedule_key),
+            why: a.advice ? `Engine: ${a.advice.shift_days < 0 ? "prepone" : "postpone"} to ${a.advice.suggested_eta} — ${a.advice.reason}` : null,
+          });
+        }
+        for (const f of futureOrders) {
+          push(f.eta_plant, { kind: "ENGINE", member: `${f.material_code ?? ""} ${f.material_name}`.trim(), qty: f.qty, uom: f.uom, vendor: f.vendor, po_by: f.po_by, covers: f.covers, why: f.reason, late: f.late });
+        }
+        for (const l of userLots) {
+          push(l.plant_eta, { kind: "YOU", member: `${l.material_code ?? ""} ${l.material_name}`.trim(), qty: round(l.qty_base), uom: l.uom, vendor: l.vendor_label, why: "Your quantity" });
+        }
+        return grid.map((g) => ({ ...g, events: events.get(g.day) ?? [] }));
+      })(),
       member_daily: memberDaily,
       arrivals: buildArrivals(),
       future_orders: futureOrders,
@@ -413,7 +427,7 @@ export async function buildItemPlan(
       vendor_choices: vendorChoices,
       metrics,
       unit_cost_for_metrics: unitCosts.length ? Math.min(...unitCosts) : null,
-      transfer_note: "Shop floor S00n is fed from store R00n (assumption). Advice only — the Store posts the transfer.",
+      transfer_note: "Shop floor S00n is fed from store R00n (assumption); packing locations P00n balance among themselves (P ↔ P). Advice only — the Store posts the transfer.",
       // Engine proposals with the current lot rule (P2 replaces this with the Engine + AI plan).
       proposals: plan.buys.filter((b) => memberSet.has(b.material_id) && (b.status === "ADVISORY" || b.status === "ADVISORY_LATE")),
       risks: plan.risks.filter((r) => memberSet.has(r.material_id)),
@@ -601,7 +615,7 @@ export async function reviewMtsItemPlanWithAiHandler(req: Request, ctx: ReqHandl
     const parsed = readParams(body, todayInIndia());
     if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
     const lots = Array.isArray(body.manual_lots) ? readManualLots(body.manual_lots) : (await loadCurrentScenario(companyId, materialId)).manual_lots;
-    const before = await buildItemPlan(companyId, parsed.params!, materialId, lots);
+    const before = await buildItemPlan(companyId, parsed.params!, materialId, lots, { reuseLoads: true });
 
     const codeOf = new Map(before.members.map((m) => [m.material_id, m.material_code]));
     const prompt = buildItemPlanAiPrompt({
@@ -627,7 +641,7 @@ export async function reviewMtsItemPlanWithAiHandler(req: Request, ctx: ReqHandl
     // The engine, not the AI, says what the proposal does.
     let after: JsonRecord | null = null;
     if (parsedAi.lots.length) {
-      const simulated = await buildItemPlan(companyId, parsed.params!, materialId, [...lots, ...parsedAi.lots.map((l) => ({ material_id: l.material_id, plant_eta: l.plant_eta, qty_base: l.qty, vendor_id: null }))]);
+      const simulated = await buildItemPlan(companyId, parsed.params!, materialId, [...lots, ...parsedAi.lots.map((l) => ({ material_id: l.material_id, plant_eta: l.plant_eta, qty_base: l.qty, vendor_id: null }))], { reuseLoads: true });
       after = { metrics: simulated.metrics, future_orders: simulated.future_orders };
     }
     return okResponse({
@@ -740,7 +754,7 @@ export async function simulateMtsItemPlanHandler(req: Request, ctx: ReqHandlerCo
     if (overrides.error) return fail(req, ctx, "MTS_SIM_INVALID_DAYS", 400, overrides.error);
     const lots = Array.isArray(body.manual_lots) ? readManualLots(body.manual_lots) : (await loadCurrentScenario(companyId, materialId)).manual_lots;
 
-    const plan = await buildItemPlan(companyId, parsed.params!, materialId, lots, { rescheduleOverrides: reschedules.map, policyOverrides: overrides.map });
+    const plan = await buildItemPlan(companyId, parsed.params!, materialId, lots, { rescheduleOverrides: reschedules.map, policyOverrides: overrides.map, reuseLoads: true });
     return okResponse({
       ...plan, simulated: true,
       note: "Preview only — nothing is saved, CSN Tracker is not changed and no PO is created.",
@@ -771,7 +785,7 @@ export async function whatIfMtsItemPlanTargetHandler(req: Request, ctx: ReqHandl
     if (candidates.length > MAX_TARGET_CANDIDATES) return fail(req, ctx, "MTS_WHATIF_TOO_MANY", 400, `At most ${MAX_TARGET_CANDIDATES} values at a time.`);
     const lots = (await loadCurrentScenario(companyId, materialId)).manual_lots;
 
-    const current = await buildItemPlan(companyId, parsed.params!, materialId, lots);
+    const current = await buildItemPlan(companyId, parsed.params!, materialId, lots, { reuseLoads: true });
     const selected = current.members.find((m) => m.is_selected);
     const currentTarget = selected?.target_days ?? null;
     const currentCritical = selected?.critical_days ?? null;
@@ -791,7 +805,7 @@ export async function whatIfMtsItemPlanTargetHandler(req: Request, ctx: ReqHandl
     const runs = await Promise.all(tries.map(async (target) => {
       const critical = currentCritical === null ? null : Math.min(currentCritical, target);
       const plan = await buildItemPlan(companyId, parsed.params!, materialId, lots, {
-        policyOverrides: new Map([[materialId, { target_cov_days: target, critical_cov_days: critical }]]),
+        policyOverrides: new Map([[materialId, { target_cov_days: target, critical_cov_days: critical }]]), reuseLoads: true,
       });
       return summarise(plan, target, critical, false);
     }));

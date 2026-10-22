@@ -14,7 +14,9 @@ import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
 import { buildCalendar, isIsoDate, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
+  cachedLoad,
   computeRequirement,
+  hashIds,
   fetchAllPages,
   fail,
   loadLocationLabels,
@@ -24,9 +26,10 @@ import {
   requireRequirementViewAccess,
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
-import { optimizeArrivalSet } from "./mts_item_plan.logic.ts";
+import { familyClosure } from "./mts_item_plan.logic.ts";
+import { type FamilyGroupDemand, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, type MemberCost, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
-import { applyOrderConstraints, projectDailyCoverage, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
@@ -53,6 +56,10 @@ type PlanningParams = {
   rescheduleOverrides?: ReadonlyMap<string, string | null>;
   /** Simulation only (never saved): what-if Target / Critical days per material. */
   policyOverrides?: ReadonlyMap<string, PolicyOverride>;
+  /** Item plan: optimise arrival dates only for this material's family (speed); absent = every material. */
+  arrivalFamilyOf?: string;
+  /** Preview: reuse the last full load's heavy reads (≤ 3 min). */
+  reuseLoads?: boolean;
 };
 
 export function readParams(url: URL | JsonRecord, today: string): { params?: Omit<PlanningParams, "companyId">; error?: [string, string] } {
@@ -241,11 +248,14 @@ export async function computePlanning(p: PlanningParams) {
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
   const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, {
     forecastBeyondPlan: (p.extraMonths ?? 0) > 0, rescheduleOverrides: p.rescheduleOverrides, policyOverrides: p.policyOverrides,
+    reuseLoads: p.reuseLoads,
   });
+  const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
+  const reuse = p.reuseLoads === true;
   const [vendorTerms, selections] = await Promise.all([
-    loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials),
+    cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials), reuse),
     loadSelections(p.companyId, [calendar.cmStart, calendar.nmStart]),
   ]);
   const policyMoqBase = new Map(req.output.rows.map((r) => [r.material_id, moqInBase(r.policy, req.materials.get(r.material_id))]));
@@ -261,7 +271,7 @@ export async function computePlanning(p: PlanningParams) {
     vendorId ? (vendorTerms.get(id) ?? []).find((t) => t.vendor_id === vendorId)?.supply_uom_code : null,
     policyOrderUom.get(id),
   );
-  const costInputs = await loadCostInputs(p.companyId, calendar.asOf, p.today, universe, vendorTerms, req.materials);
+  const costInputs = await cachedLoad(`${p.companyId}|costInputs|${calendar.asOf}|${p.today}|${hashIds(universe)}`, () => loadCostInputs(p.companyId, calendar.asOf, p.today, universe, vendorTerms, req.materials), reuse);
   const rowDailyUse = (id: string) => {
     const row = req.output.rows.find((r) => r.material_id === id);
     return row ? [...row.daily_demand.values()].reduce((s, q) => s + q, 0) / horizonDays : 0;
@@ -320,22 +330,101 @@ export async function computePlanning(p: PlanningParams) {
     const best = costOptionsFor(probe, terms, costInputs, calendar.asOf, rowDailyUse(id), carryingOf(id))[0];
     return best ? { feasible: best.feasible, total_cost: best.total_cost, lead_time_days: best.lead_time_days } : null;
   };
-  // Pass 1: fastest feasible vendor → when and how much is needed.
-  const pass1 = assemblePlanningInput({ ...baseArgs, memberCost, vendorOptions, cycleDays });
-  const manual = p.manualLots?.length ? { manual_lots: p.manualLots } : {};
-  const projection1 = projectDailyCoverage({ ...pass1.input, ...manual });
+  // Opening stock, arrivals, policies and vendor options; the lots themselves come from the
+  // family planner (owner 2026-10-22: right item, right time, right lot — own use vs group use).
+  const assembly = assemblePlanningInput({ ...baseArgs, memberCost, vendorOptions, cycleDays });
   const vendorOverride = new Map<string, string>();
-  for (const buy of projection1.advisory_buys) {
-    if ((buy.status !== "ADVISORY" && buy.status !== "ADVISORY_LATE") || buy.sequence !== 1) continue;
-    const terms = vendorTerms.get(buy.material_id) ?? [];
-    const best = costOptionsFor(buy, terms, costInputs, calendar.asOf, dailyUseOf(buy.material_id, pass1.input.daily_demand), carryingOf(buy.material_id))[0];
-    const term = best?.rank === 1 && best.feasible ? terms.find((t) => t.vendor_label === best.vendor_label) : undefined;
-    if (term) vendorOverride.set(buy.material_id, term.vendor_id);
+  const ownDemand: FamilyOwnDemand[] = [];
+  const groupDemand: FamilyGroupDemand[] = [];
+  for (const r of req.output.records) {
+    if (r.day < assembly.input.as_of || r.day > assembly.input.horizon_end || !(r.qty > 0)) continue;
+    if (r.group_id && r.candidates.length > 1) groupDemand.push({ group_id: r.group_id, candidates: r.candidates, required_by: r.day, qty_base: r.qty });
+    else if (r.candidates[0]) ownDemand.push({ material_id: r.candidates[0], required_by: r.day, qty_base: r.qty });
   }
-  // Pass 2: cheapest feasible vendor's MOQ / multiple / lead time.
-  const assembly = vendorOverride.size ? assemblePlanningInput({ ...baseArgs, memberCost, vendorOverride, vendorOptions, cycleDays }) : pass1;
-  const projection = vendorOverride.size ? projectDailyCoverage({ ...assembly.input, ...manual }) : projection1;
+  const familyInput: FamilyPlannerInput = {
+    as_of: assembly.input.as_of,
+    horizon_end: assembly.input.horizon_end,
+    opening_qty_by_material: assembly.input.opening_qty_by_material,
+    own_demand: ownDemand,
+    group_demand: groupDemand,
+    confirmed_arrivals: assembly.input.confirmed_arrivals,
+    policies: assembly.input.policies,
+    manual_lots: p.manualLots ?? [],
+    group_orders: req.input.groupOrders,
+    selections: selections.map,
+  };
+  const plannerStarted = Date.now();
+  const projection = planFamily(familyInput);
+  const plannerMs = Date.now() - plannerStarted;
+  const groupAssignments = (() => {
+    const byKey = new Map<string, { group_id: string; month: string; assigned_material_id: string | null; reason: "AUTO_SELECTED"; uncovered_qty: number }>();
+    for (const b of projection.advisory_buys) {
+      if (b.need_kind !== "GROUP" || !b.need_date || (b.status !== "ADVISORY" && b.status !== "ADVISORY_LATE")) continue;
+      for (const groupId of b.covers) {
+        const key = `${groupId}|${b.need_date.slice(0, 7)}|${b.material_id}`;
+        const seen = byKey.get(key) ?? { group_id: groupId, month: `${b.need_date.slice(0, 7)}-01`, assigned_material_id: b.material_id, reason: "AUTO_SELECTED" as const, uncovered_qty: 0 };
+        seen.uncovered_qty += b.required_qty_base;
+        byKey.set(key, seen);
+      }
+    }
+    return [...byKey.values()].sort((a, b) => a.month.localeCompare(b.month) || a.group_id.localeCompare(b.group_id));
+  })();
+  // Family-scoped planner input (item's whole family: members + their groups), for the arrival optimizer.
+  const familyInputFor = (materialId: string): FamilyPlannerInput => {
+    const family = familyClosure(materialId, req.masters.groupMembers);
+    const groups = new Set(family.group_ids);
+    const members = new Set([materialId, ...family.member_ids]);
+    const groupDemand = familyInput.group_demand.filter((g) => groups.has(g.group_id));
+    for (const g of groupDemand) for (const c of g.candidates) members.add(c);
+    const pick = <T>(rec: Readonly<Record<string, T>>) => Object.fromEntries(Object.entries(rec).filter(([id]) => members.has(id)));
+    return {
+      ...familyInput,
+      opening_qty_by_material: pick(familyInput.opening_qty_by_material),
+      own_demand: familyInput.own_demand.filter((d) => members.has(d.material_id)),
+      group_demand: groupDemand,
+      confirmed_arrivals: familyInput.confirmed_arrivals.filter((a) => members.has(a.material_id)),
+      policies: familyInput.policies.filter((pol) => members.has(pol.material_id)),
+      manual_lots: (familyInput.manual_lots ?? []).filter((l) => members.has(l.material_id)),
+    };
+  };
 
+  // Owner 2026-10-22: the Store gets the planner's consumption ratio — a group line's period use is
+  // split over its members as the family planner consumes them (stock rotation, own use protected).
+  const storeRowsByRatio = (() => {
+    const range = (period: string) => (period === "CM" ? [calendar.asOf, calendar.cmEnd] : [calendar.nmStart, calendar.nmEnd]);
+    const shareCache = new Map<string, { shares: Map<string, number>; unmet: number } | null>();
+    const shareOf = (groupId: string, period: string) => {
+      const key = `${groupId}|${period}`;
+      if (shareCache.has(key)) return shareCache.get(key)!;
+      const [from, to] = range(period);
+      const draws = new Map<string, number>();
+      for (const m of projection.group_mix) {
+        if (m.group_id !== groupId || m.day < from || m.day > to) continue;
+        for (const [id, q] of Object.entries(m.draws)) draws.set(id, (draws.get(id) ?? 0) + q);
+      }
+      const unmet = projection.group_unmet.filter((u) => u.group_id === groupId && u.day >= from && u.day <= to).reduce((sum, u) => sum + u.qty_base, 0);
+      const total = [...draws.values()].reduce((a, b) => a + b, 0) + unmet;
+      const value = total > 0 ? { shares: new Map([...draws].map(([id, q]) => [id, q / total])), unmet: unmet / total } : null;
+      shareCache.set(key, value);
+      return value;
+    };
+    const out: typeof req.output.store_rows = [];
+    const done = new Set<string>();
+    for (const row of req.output.store_rows) {
+      const share = row.line_type === "GROUP" && row.group_id ? shareOf(row.group_id, row.period) : null;
+      if (!share) { out.push(row); continue; }
+      const lineKey = `${row.pool_key}|${row.period}`;
+      if (done.has(lineKey)) continue;
+      done.add(lineKey);
+      const r6 = (q: number) => Math.round(q * 1e6) / 1e6;
+      for (const [id, f] of [...share.shares].sort(([a], [b]) => a.localeCompare(b))) {
+        if (f * row.demand_qty > 1e-6) out.push({ ...row, material_id: id, executable_qty: r6(row.demand_qty * f), not_backed_qty: 0 });
+      }
+      if (share.unmet * row.demand_qty > 1e-6) out.push({ ...row, material_id: null, executable_qty: 0, not_backed_qty: r6(row.demand_qty * share.unmet) });
+    }
+    return out;
+  })();
+  const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
   const groupIds = unique([...req.output.groups.map((g) => g.group_id), ...req.output.store_rows.map((r) => r.group_id)]);
@@ -419,7 +508,7 @@ export async function computePlanning(p: PlanningParams) {
         })(),
         max_days_basis: cycleBasis.get(buy.material_id) ?? null,
         cost_options: buy.status === "ADVISORY" || buy.status === "ADVISORY_LATE"
-          ? costOptionsFor(buy, vendorTerms.get(buy.material_id) ?? [], costInputs, calendar.asOf, dailyUseOf(buy.material_id, assembly.input.daily_demand), carryingOf(buy.material_id))
+          ? costOptionsFor(buy, vendorTerms.get(buy.material_id) ?? [], costInputs, calendar.asOf, dailyUseOf(buy.material_id, projection.rows.map((r) => ({ material_id: r.material_id, qty_base: r.demand_qty_base }))), carryingOf(buy.material_id))
           : [],
       };
     }),
@@ -446,16 +535,16 @@ export async function computePlanning(p: PlanningParams) {
       members: g.member_ids.map((id) => ({ material_id: id, material_name: nameOf(id), material_code: codeOf(id) })),
     })),
     group_risks: projection.group_pool_risks.map((g) => ({ ...g, group_label: g.group_id ? groupLabel.get(g.group_id) ?? "—" : "—" })),
-    group_assignments: assembly.group_assignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
+    group_assignments: groupAssignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
-    reschedulable_arrivals: req.output.rows.flatMap((row) => {
+    reschedulable_arrivals: req.output.rows.filter((row) => !arrivalScope || arrivalScope.has(row.material_id)).flatMap((row) => {
       const pieces = row.inbound_events.filter((event) => event.reschedule_key);
       if (pieces.length === 0) return [];
-      // Owner 2026-10-21: best plant date per piece, tried on every day of CM + NM.
-      const days = projection.rows.filter((r) => r.material_id === row.material_id)
-        .map((r) => ({ day: r.day, closing: r.closing_qty_base, use: r.demand_qty_base, target_days: r.target_days, critical_days: r.critical_days }));
-      const optimum = optimizeArrivalSet(days, pieces.map((e) => ({ key: e.reschedule_key as string, eta: e.date, qty: e.qty })));
+      // Owner 2026-10-22: best plant date per piece, judged on the whole family (not the item alone).
+      const input = familyInputFor(row.material_id);
+      const keyOf = new Map(row.inbound_events.map((event, index) => [event, `A|${row.material_id}|${index}|${event.reference}`]));
+      const optimum = new Map(pieces.map((event) => [event.reschedule_key as string, optimizeFamilyArrival(input, keyOf.get(event)!)]));
       return pieces.map((event) => ({
         material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
         reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
@@ -465,7 +554,7 @@ export async function computePlanning(p: PlanningParams) {
       }));
     }).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
-    store_rows: req.output.store_rows.map((row) => ({
+    store_rows: storeRowsByRatio.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),
       mother_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.mother ?? "")).filter(Boolean).join("; ") || null,
@@ -481,8 +570,9 @@ export async function computePlanning(p: PlanningParams) {
       uom: uom(row.material_id),
     })),
   };
+  console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms, orderUnitFor };
+  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

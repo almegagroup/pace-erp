@@ -466,3 +466,25 @@ Item Plan (Future Orders, Prediction, the user's own lot editor), and the Excel 
 UoM", Prediction "In order unit"). Planning maths stays in the base unit; this is display only.
 
 MOQ UoM is now chosen only after an MOQ Qty (it was silently dropped when MOQ was blank).
+
+### 18. Family planner — right item, right time, right lot (owner 2026-10-22)
+
+`mts_family_planner.logic.ts` replaces the per-item Phase 3D projection for Planning / Item Plan / Excel.
+- Demand stays in its two real kinds: **own** (exclusive line) and **group** pools (any listed member).
+- Each day a member meets its own use first; a group takes only **free stock** — above Target days of the
+  member's own use, and above what narrower groups of that member need for its Target days (RDP leaves
+  DA's TLA share alone). Protected stock is used last (borrowed).
+- **Smart consumption ratio** (default; Group Settings override it): a group's use is split over members in
+  proportion to their free stock, tilted to costlier stock (clamped 0.5–2×). Every member rotates, none
+  piles up; the ratio moves by itself as arrivals change free stock. Store Report group lines use this ratio.
+- **Needs**, earliest first, one lot at a time, the whole family re-simulated after each lot:
+  own need (member's own cover falls to its Target) → that member; group need (group free stock falls to
+  the Target of the member that would be bought) → monthly selection, else cheapest member arriving in
+  time, else fastest (late). Lots sized to Target + cycle of the load they cover, MOQ / multiple / delivery
+  lots applied. Fixes back-to-back lots and late lots caused by group load shifting onto one item.
+- **Arrival dates** of not-yet-shipped pieces are judged on the whole family (not the item alone): no more
+  "postpone 150 days" for an item whose group still needs it.
+- Day grid rows list what arrives that day (member, consignment, vendor, status, for, why).
+
+Also 2026-10-22: Next Month Cov counts overdue / ETA-less arrivals (assumed today); P ↔ P transfer advice;
+previews reuse the item plan's heavy reads for ≤ 3 min (MTS_TIMING logs show requirement / planning time).

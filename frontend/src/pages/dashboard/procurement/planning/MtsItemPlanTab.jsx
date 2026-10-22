@@ -16,6 +16,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import { pushToast } from "../../../../store/uiToast.js";
 import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario, simulateMtsItemPlan } from "../procurementApi.js";
 import { TargetWhatIf, VendorDateCompare } from "./MtsItemPlanWhatIf.jsx";
@@ -45,17 +46,17 @@ const GAP_LABEL = {
   NO_LEAD_TIME: "no lead time (vendor route / Booking Time)",
 };
 
-/** A closed-by-default tool on the right side: title + what it is for. */
-function Fold({ title, hint, open = false, children }) {
-  return (
-    <details open={open} className="border border-slate-200 bg-white">
-      <summary className="cursor-pointer select-none px-2 py-1.5 text-sm font-semibold text-slate-800 hover:bg-slate-50">
-        {title} <span className="ml-1 text-xs font-normal text-slate-500">— {hint}</span>
-      </summary>
-      <div className="grid gap-2 p-2">{children}</div>
-    </details>
-  );
-}
+/** Owner 2026-10-22: the day grid gets the full width; everything else opens from a button. */
+const ITEM_PLAN_PANELS = [
+  { id: "prediction", label: "Prediction" },
+  { id: "arrivals", label: "Arrivals / Future Orders" },
+  { id: "lots", label: "Your lots" },
+  { id: "vendors", label: "Compare vendors" },
+  { id: "whatif", label: "What-if Safety days" },
+  { id: "ai", label: "AI planner" },
+  { id: "transfers", label: "Transfers / Below Target" },
+  { id: "others", label: "Other companies' stock" },
+];
 function errorText(error) {
   return error instanceof Error ? error.message : String(error ?? "");
 }
@@ -65,6 +66,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   const [materialId, setMaterialId] = useState("");
   const [search, setSearch] = useState("");
   const [openDay, setOpenDay] = useState("");
+  const [panel, setPanel] = useState("");
   const [drafts, setDrafts] = useState({});
   const [saving, setSaving] = useState(false);
   // P4: calibration (CC) date the user may move; empty = the page's As-of date.
@@ -106,6 +108,15 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   const plan = itemQ.data ?? null;
   // What the grids show: the preview while one is open, else the saved plan.
   const view = preview?.plan ?? plan;
+  // Count shown on each panel button so the planner sees where something is waiting.
+  const panelCount = (id) => {
+    if (!view) return 0;
+    if (id === "prediction") return (view.prediction ?? []).length;
+    if (id === "arrivals") return (view.arrivals ?? []).length + (view.future_orders ?? []).length;
+    if (id === "lots") return (plan?.user_lots ?? []).length;
+    if (id === "transfers") return (view.transfers ?? []).length + (view.alternatives ?? []).length;
+    return 0;
+  };
   const uom = plan?.members?.find((m) => m.is_selected)?.uom ?? "";
   const memberName = useMemo(() => new Map((plan?.members ?? []).map((m) => [m.material_id, `${m.material_code ?? ""} ${m.material_name}`.trim()])), [plan]);
   const memberDaily = useMemo(() => {
@@ -144,6 +155,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (p) => fmtDays(p.min_days), copyValue: (p) => p.min_days ?? "" },
     { key: "material_name", label: "Member", width: "200px", render: (p) => `${p.material_code ?? ""} ${p.material_name}`.trim() },
     { key: "vendor", label: "Supplier", width: "200px", render: (p) => p.vendor ?? "—" },
+    { key: "covers", label: "For", width: "160px", render: (p) => p.covers ?? "—" },
+    { key: "why", label: "Why this item, this date", width: "380px", render: (p) => <span className="whitespace-normal text-xs">{p.why ?? "—"}</span>, copyValue: (p) => p.why ?? "" },
   ];
 
   const gridColumns = [
@@ -190,6 +203,29 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
     { key: "min_stock", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock), copyValue: (r) => r.min_stock },
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_days), copyValue: (r) => r.min_days ?? "" },
+    {
+      // Owner 2026-10-22: what arrives this day, from where, in what state, for what and why.
+      key: "events", label: "What arrives — member · consignment · vendor · status · for · why", width: "560px", filterable: false,
+      render: (r) => ((r.events ?? []).length === 0 ? "" : (
+        <div className="grid gap-0.5 py-0.5 text-xs">
+          {r.events.map((e, i) => (
+            <div key={i} className="whitespace-normal">
+              <span className={`mr-1 px-1 font-semibold ${e.kind === "ARRIVAL" ? "bg-sky-100 text-sky-800" : e.kind === "ENGINE" ? "bg-amber-100 text-amber-800" : "bg-violet-100 text-violet-800"}`}>
+                {e.kind === "ARRIVAL" ? (STATUS_LABEL[e.status] ?? e.status) : e.kind === "ENGINE" ? (e.late ? "Engine (late)" : "Engine") : "You"}
+              </span>
+              <span className="font-semibold">{e.member}</span> {fmtQty(e.qty)} {e.uom ?? ""}
+              {e.reference ? <span> · {e.reference}</span> : null}
+              {e.vendor ? <span> · {e.vendor}</span> : null}
+              {e.po_by ? <span> · PO by {e.po_by}</span> : null}
+              {e.covers ? <span className="text-emerald-800"> · for {e.covers}</span> : null}
+              {e.why ? <span className="text-slate-500"> — {e.why}</span> : null}
+              {e.movable ? <button type="button" onClick={() => setPanel("arrivals")} className="ml-1 text-sky-700 underline">move date</button> : null}
+            </div>
+          ))}
+        </div>
+      )),
+      copyValue: (r) => (r.events ?? []).map((e) => [e.kind, e.member, e.qty, e.reference, e.vendor, e.status, e.covers, e.why].filter(Boolean).join(" | ")).join("\n"),
+    },
   ];
 
   const memberColumns = [
@@ -275,6 +311,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "flag", label: "", width: "90px", render: (o) => (o.bridge ? <span className="bg-rose-100 px-1.5 py-0.5 text-xs font-semibold text-rose-800">Bridge</span> : o.late ? <span className="bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800">Late</span> : ""), copyValue: (o) => (o.bridge ? "Bridge" : o.late ? "Late" : "") },
     { key: "material_name", label: "Member", width: "200px", render: (o) => `${o.material_code ?? ""} ${o.material_name}`.trim() },
     { key: "vendor", label: "Vendor", width: "200px", render: (o) => o.vendor ?? "—" },
+    { key: "covers", label: "For", width: "160px", render: (o) => o.covers ?? "—" },
     { key: "qty", label: "Qty", width: "110px", align: "right", render: (o) => `${fmtQty(o.qty)} ${o.uom ?? ""}`, copyValue: (o) => o.qty },
     { key: "order_qty", label: "In order unit", width: "120px", align: "right", render: (o) => orderQtyText(o.order_qty, o.order_uom) || "—", copyValue: (o) => o.order_qty ?? "" },
     { key: "po_by", label: "PO by", width: "100px", render: (o) => o.po_by ?? "—" },
@@ -301,7 +338,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "qty", label: "Qty", width: "110px", align: "right", render: (t) => `${fmtQty(t.qty)} ${t.uom ?? ""}`, copyValue: (t) => t.qty },
     { key: "by", label: "By", width: "100px" },
   ];
-  const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
+  const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R / P ↔ P transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
   const [otherOpen, setOtherOpen] = useState(false);
   const otherQ = useQuery({
     queryKey: ["procurement", "mts-requirement", "item-plan-other", companyId, effMonth, effAsOf, demandAt, materialId],
@@ -502,7 +539,19 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             <ErpDenseGrid {...GRID_PROPS} columns={memberColumns} rows={plan.members} rowKey={(m) => m.material_id} maxHeight="25vh" />
           </section>
 
-          <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <div className="flex flex-wrap items-center gap-1">
+            {ITEM_PLAN_PANELS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPanel((cur) => (cur === p.id ? "" : p.id))}
+                className={`h-7 border px-2 text-xs font-semibold ${panel === p.id ? "border-sky-600 bg-sky-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"}`}
+              >
+                {p.label}{panelCount(p.id) ? ` (${panelCount(p.id)})` : ""}
+              </button>
+            ))}
+          </div>
+          <div className="grid gap-2">
             <section className="grid content-start gap-1">
               <h3 className="text-sm font-semibold text-slate-800">Day by day {plan.family.is_family ? "(whole family)" : ""} — click a date for each member{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
               <ErpDenseGrid
@@ -531,12 +580,24 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               />
             </section>
 
+            <DrawerBase
+              visible={panel !== ""}
+              title={ITEM_PLAN_PANELS.find((p) => p.id === panel)?.label ?? ""}
+              onClose={() => setPanel("")}
+              width="min(1100px, calc(100vw - 24px))"
+            >
             <div className="grid content-start gap-3">
+              {panel === "prediction" ? (
+              <>
               <section className="grid gap-1 border border-amber-300 bg-amber-50 p-2">
                 <h3 className="text-sm font-semibold text-slate-800">Prediction — every Quantity to Dispatch{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
                 <p className="text-xs text-slate-500">Engine lots and your own (type in the grid's Quantity to Dispatch). Max / Min days on that date; Port ETA and Import ETD worked back from the plant date (port → plant days from received CSNs, vendor transit time).</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={predictionColumns} rows={view.prediction ?? []} rowKey={(p, i) => `${p.source}|${p.material_id}|${p.date}|${i}`} emptyMessage="No dispatch needed in the horizon." maxHeight="30vh" />
               </section>
+              </>
+              ) : null}
+              {panel === "arrivals" ? (
+              <>
               <section className="grid gap-1">
                 <div className="flex items-center gap-2">
                   <h3 className="text-sm font-semibold text-slate-800">Arrivals / Future Orders</h3>
@@ -555,6 +616,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 <p className="text-xs text-slate-500">Each lot: cheapest vendor that can arrive in time, sized to Max days (Target + best order cycle); a fixed MOQ is never broken. Advisory — no PO is created.</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={view.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}`} emptyMessage="No new order needed in the horizon." maxHeight="30vh" />
               </section>
+              </>
+              ) : null}
+              {panel === "lots" ? (
+              <>
               <section className="grid gap-1 border border-sky-200 bg-sky-50 p-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-sm font-semibold text-slate-800">Your lots {plan.scenario?.version_no ? `(version ${plan.scenario.version_no}${plan.scenario.source === "AI_APPLIED" ? ", AI applied" : ""})` : ""}</h3>
@@ -631,8 +696,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   </ul>
                 ) : null}
               </section>
-              <p className="text-xs text-slate-500">Tools — open when needed:</p>
-              <Fold title="Compare vendors" hint="which vendor, which date, how much: arrives in time?, real lot after MOQ, full cost">
+              </>
+              ) : null}
+              {panel === "vendors" ? (
+              <>
               <VendorDateCompare
                 key={`vendor|${materialId}`}
                 plan={plan}
@@ -644,8 +711,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   if (andPreview) void runPreview({ lots: next });
                 }}
               />
-              </Fold>
-              <Fold title="What-if Safety days" hint="try other Target days: risk vs money, engine pick, AI view, Use">
+              </>
+              ) : null}
+              {panel === "whatif" ? (
+              <>
               <TargetWhatIf
                 key={`target|${materialId}|${effAsOf}`}
                 plan={plan}
@@ -657,8 +726,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 onPreviewTarget={(r) => void runPreview({ label: `Target ${r.target_days} / Critical ${r.critical_days ?? "—"} days`, targetOverrides: [{ material_id: materialId, target_days: r.target_days, critical_days: r.critical_days }] })}
                 onSaved={() => queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement"] })}
               />
-              </Fold>
-              <Fold title="AI planner" hint="AI reviews this plan and proposes lots; the engine re-checks every number">
+              </>
+              ) : null}
+              {panel === "ai" ? (
+              <>
               <section className="grid gap-1 border border-violet-200 bg-violet-50 p-2">
                 <textarea value={question} onChange={(event) => setQuestion(event.target.value)} rows={2} placeholder="Optional: tell the AI what you changed or want (e.g. 'import is delayed 3 weeks — what now?')" className="border border-slate-300 bg-white p-1 text-xs" />
                 <div className="flex items-center gap-2">
@@ -686,13 +757,18 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   </div>
                 ) : null}
               </section>
-              </Fold>
-              <Fold title="Location transfer instructions" hint="R001 ↔ R002 stock moves the Store should make" open={(view.transfers ?? []).length > 0}>
+              </>
+              ) : null}
+              {panel === "transfers" ? (
+              <>
               <section className="grid gap-1">
                 <p className="text-xs text-slate-500">{plan.transfer_note}</p>
-                <ErpDenseGrid {...GRID_PROPS} columns={transferColumns} rows={view.transfers ?? []} rowKey={(t, i) => `${t.material_id}|${t.from}|${t.to}|${i}`} emptyMessage="No R ↔ R transfer needed." maxHeight="20vh" />
+                <ErpDenseGrid {...GRID_PROPS} columns={transferColumns} rows={view.transfers ?? []} rowKey={(t, i) => `${t.material_id}|${t.from}|${t.to}|${i}`} emptyMessage="No R ↔ R or P ↔ P transfer needed." maxHeight="20vh" />
               </section>
-              </Fold>
+              </>
+              ) : null}
+              {panel === "transfers" ? (
+              <>
               {(view.alternatives ?? []).length > 0 ? (
                 <section className="grid gap-1">
                   <h3 className="text-sm font-semibold text-rose-800">Below Target — options in order</h3>
@@ -706,7 +782,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   ))}
                 </section>
               ) : null}
-              <Fold title="Other companies' spare stock" hint="same material above Target in your other companies (STO / Sub-CSN idea)">
+              </>
+              ) : null}
+              {panel === "others" ? (
+              <>
               <section className="grid gap-1">
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={() => setOtherOpen(true)} disabled={otherQ.isFetching} className="h-7 border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
@@ -723,8 +802,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                   </div>
                 ) : null}
               </section>
-              </Fold>
+              </>
+              ) : null}
             </div>
+            </DrawerBase>
           </div>
         </>
       ) : null}
