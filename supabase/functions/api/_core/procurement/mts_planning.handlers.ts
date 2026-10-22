@@ -447,6 +447,13 @@ export async function computePlanning(p: PlanningParams) {
     })),
     group_risks: projection.group_pool_risks.map((g) => ({ ...g, group_label: g.group_id ? groupLabel.get(g.group_id) ?? "—" : "—" })),
     group_assignments: assembly.group_assignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
+    // Snapshot-bound evidence for the deterministic family rotation.  Physical
+    // allocation remains in the daily projection; missing age/payment/reliability
+    // evidence is deliberately exposed as UNKNOWN rather than guessed.
+    consumption_choices: assembly.consumption_choices.map((choice) => ({
+      ...choice, material_name: nameOf(choice.material_id), material_code: codeOf(choice.material_id), uom: uom(choice.material_id),
+      note: "Preference is used only among eligible stock above dated protection; it never makes projected arrivals executable.",
+    })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
     reschedulable_arrivals: req.output.rows.flatMap((row) => {

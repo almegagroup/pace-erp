@@ -14,6 +14,7 @@
  */
 import { monthStart, rToRTransferRoute, type GroupRequirementRow, type PlanningCalendar, type PolicyRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import type { OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
+import { rankConsumptionCandidates, type ConsumptionChoice } from "./mts_consumption.logic.ts";
 
 export type VendorTerm = {
   vendor_id: string;
@@ -47,6 +48,8 @@ export type PlanningAssembly = {
   input: OptimizerProjectionInput;
   chosen_vendor: Map<string, VendorTerm | null>;
   group_assignments: GroupAssignment[];
+  /** Explainable, snapshot-bound rotation evidence; no quantities are posted. */
+  consumption_choices: ConsumptionChoice[];
 };
 
 const EPSILON = 0.0000001;
@@ -204,14 +207,41 @@ export function assemblePlanningInput(args: {
       });
     }
   }
+  // Dynamic rotation only ranks stock that Phase 3D has already made free
+  // above its dated Target.  Source facts missing from this snapshot (age,
+  // payable state, supplier reliability) stay UNKNOWN instead of becoming a
+  // fabricated input.  Re-running this assembly after each changed receipt or
+  // proposed lot refreshes the preference — no user-maintained ratio exists.
+  const consumptionChoices = rankConsumptionCandidates(args.rows.map((row) => {
+    const terms = args.vendorTerms.get(row.material_id) ?? [];
+    const confirmed = row.inbound_events.filter((event) => event.kind === "AT_GATE" || event.kind === "IN_TRANSIT")
+      .reduce((sum, event) => sum + event.qty, 0);
+    const tentative = row.inbound_events.filter((event) => event.kind !== "AT_GATE" && event.kind !== "IN_TRANSIT")
+      .reduce((sum, event) => sum + event.qty, 0);
+    const unknownEta = row.inbound_events.filter((event) => !event.date).reduce((sum, event) => sum + event.qty, 0);
+    return {
+      material_id: row.material_id, free_physical_qty: row.stock.usable_at_required, protected_qty: 0, eligible: true,
+      confirmed_future_qty: confirmed, tentative_future_qty: tentative, unknown_eta_qty: unknownEta,
+      replenishment_state: confirmed > EPSILON ? "CONFIRMED" as const : tentative > EPSILON || terms.length > 0 ? "TENTATIVE" as const : "UNKNOWN" as const,
+      inventory_age_days: null, cash_state: "UNKNOWN" as const,
+      unit_value_inr: row.policy?.carrying_rate_per_uom ?? null,
+      future_unit_cost_inr: chooseVendor(terms)?.last_price ?? null,
+      vendor_credit_days: chooseVendor(terms)?.credit_days ?? null,
+    };
+  }));
+  const preferenceByMaterial = new Map(consumptionChoices.map((choice) => [choice.material_id, choice.preference_score]));
   return {
     input: {
       as_of: calendar.asOf, horizon_end: calendar.horizonEnd ?? calendar.nmEnd, opening_qty_by_material: opening, daily_demand: demand, confirmed_arrivals: arrivals, policies,
       // Method C rule 6: members' free stock (incl. MOQ excess and arrivals) covers the group first.
-      groups: args.groups.map((group) => ({ group_id: group.group_id, member_ids: group.member_ids })),
+      groups: args.groups.map((group) => ({
+        group_id: group.group_id, member_ids: group.member_ids,
+        consumption_preference_by_material: Object.fromEntries(group.member_ids.map((id) => [id, preferenceByMaterial.get(id) ?? 1])),
+      })),
     },
     chosen_vendor: chosen,
     group_assignments: assignments.map((a) => ({ ...a, uncovered_qty: Math.round(a.uncovered_qty * 1e6) / 1e6 })),
+    consumption_choices: consumptionChoices,
   };
 }
 

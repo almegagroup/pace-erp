@@ -134,6 +134,16 @@ Deno.test("Rule 6: a confirmed arrival of a member can serve the group", () => {
   equal(result.advisory_buys.filter((b) => b.material_id === "B").map((b) => b.status), ["NO_BUY"], "no buy through B");
 });
 
+Deno.test("Rule 6: an evidence preference rotates only already-free stock", () => {
+  const result = projectDailyCoverage(input({
+    horizon_end: "2026-10-01", opening_qty_by_material: { A: 100, B: 100 },
+    daily_demand: [{ source_key: "group", material_id: "B", group_id: "G", required_by: "2026-10-01", qty_base: 20 }],
+    policies: [policy({ material_id: "A", target_days: 0, critical_days: 0 }), policy({ material_id: "B", target_days: 0, critical_days: 0 })],
+    groups: [{ group_id: "G", member_ids: ["A", "B"], consumption_preference_by_material: { A: 1.2, B: 1 } }],
+  }));
+  equal([row(result, "2026-10-01", "A").group_draw_qty_base, row(result, "2026-10-01", "B").group_draw_qty_base], [20, 0], "economic preference selects A only after both balances are free");
+});
+
 Deno.test("P2: lot sized to Max days = Target + cycle, not just back to Target (no tiny daily lots)", () => {
   const result = projectDailyCoverage(input({ horizon_end: "2026-12-31", daily_demand: daily(1, "2026-10-01", "2026-12-31"), policies: [policy({ cycle_days: 20 })] }));
   const buys = result.advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");

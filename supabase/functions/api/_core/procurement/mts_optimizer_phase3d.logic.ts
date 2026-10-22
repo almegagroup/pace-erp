@@ -170,6 +170,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
   if (policyByMaterial.size !== input.policies.length) throw new Error("PHASE3D_DUPLICATE_POLICY");
   const allDays = days(input.as_of, input.horizon_end);
   const dayIndex = new Map(allDays.map((day, index) => [day, index]));
+  const groupDefinitions = new Map((input.groups ?? []).map((g) => [g.group_id, g]));
   const groupMembers = new Map((input.groups ?? []).map((g) => [g.group_id, [...g.member_ids]]));
 
   const demandByDay = new Map<string, number>();
@@ -266,9 +267,12 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
       for (const groupId of groupOrder) {
         for (const [assigned, qty] of [...byGroup.get(groupId)!].sort(([a], [b]) => a.localeCompare(b))) {
           let remaining = qty;
+          const preferences = groupDefinitions.get(groupId)?.consumption_preference_by_material ?? {};
           const members = groupMembers.get(groupId)!.map((id) => states.get(id)).filter((st): st is MaterialState => !!st)
-            .map((st) => ({ st, free: freeAfter(st, index, day) }))
-            .sort((a, b) => b.free - a.free || Number(b.st.id === assigned) - Number(a.st.id === assigned) || a.st.id.localeCompare(b.st.id));
+            .map((st) => ({ st, free: freeAfter(st, index, day), preference: Math.max(0.05, Number(preferences[st.id] ?? 1) || 1) }))
+            // Economic rotation is only a bounded tie-break among already-free
+            // stock. It cannot consume a protected balance or invent supply.
+            .sort((a, b) => (b.free * b.preference) - (a.free * a.preference) || b.free - a.free || Number(b.st.id === assigned) - Number(a.st.id === assigned) || a.st.id.localeCompare(b.st.id));
           for (const { st, free } of members) {
             if (remaining <= EPSILON) break;
             const draw = roundQty(Math.min(free, remaining));

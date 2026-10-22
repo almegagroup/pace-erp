@@ -1575,6 +1575,15 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "assigned_material_name", label: "Planned through member", width: "240px", render: (a) => (a.assigned_material_name ?? <span className="font-semibold text-rose-700">Select a member for new buy</span>), copyValue: (a) => a.assigned_material_name ?? "" },
     { key: "reason", label: "Basis", width: "160px", render: (a) => ({ SINGLE_SELECTED: "Your selection", CHEAPEST_SELECTED: "Cheapest of selected", AUTO_SELECTED: "Engine chose (nothing selected) — lowest total cost", NONE_SELECTED: "No member has a vendor — set up a vendor" }[a.reason] ?? a.reason) },
   ];
+  const consumptionColumns = [
+    { key: "material_name", label: "Material", width: "240px" },
+    { key: "executable_free_qty", label: "Eligible free stock", width: "130px", align: "right", render: (r) => fmtQty(r.executable_free_qty), copyValue: (r) => r.executable_free_qty },
+    { key: "dynamic_ratio", label: "Current ratio", width: "105px", align: "right", render: (r) => `${((Number(r.dynamic_ratio) || 0) * 100).toFixed(1)}%`, copyValue: (r) => r.dynamic_ratio },
+    { key: "future_supply_state", label: "Future supply", width: "120px", render: (r) => r.future_supply_state },
+    { key: "cash_state", label: "Cash evidence", width: "110px", render: (r) => r.cash_state },
+    { key: "reasons", label: "Why", width: "360px", render: (r) => (r.reasons ?? []).join(" ") || "Eligible stock above protection; neutral preference." },
+    { key: "unknowns", label: "Missing evidence", width: "220px", render: (r) => (r.unknowns ?? []).join(", ") || "—" },
+  ];
   const dailyColumns = [
     { key: "day", label: "Date", width: "100px" },
     { key: "opening_qty_base", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening_qty_base), copyValue: (r) => r.opening_qty_base },
@@ -1628,6 +1637,12 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
         <h3 className="text-sm font-semibold text-slate-800">Group shortages</h3>
         <ErpDenseGrid {...GRID_PROPS} columns={groupColumns} rows={plan?.group_assignments ?? []} rowKey={(a) => `${a.group_id}|${a.month}`} emptyMessage="No group shortage in CM + NM." maxHeight="30vh" />
         <MemberSelection companyId={companyId} planMonth={planMonth} plan={plan} canEdit={canEdit} />
+      </section>
+
+      <section className="grid gap-1">
+        <h3 className="text-sm font-semibold text-slate-800">Family consumption evidence</h3>
+        <p className="text-xs text-slate-500">The engine recalculates this preference from the same planning snapshot. It applies only to eligible stock already above dated OWN/Target protection; future arrivals remain projected. Missing age, supplier or payment evidence is shown as unknown, never guessed.</p>
+        <ErpDenseGrid {...GRID_PROPS} columns={consumptionColumns} rows={plan?.consumption_choices ?? []} rowKey={(r) => r.material_id} emptyMessage="No eligible family material in this horizon." maxHeight="30vh" />
       </section>
 
       <AiExplain companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandAt} buys={plan?.buys ?? []} />

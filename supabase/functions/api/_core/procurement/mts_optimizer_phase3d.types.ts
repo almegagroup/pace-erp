@@ -77,7 +77,16 @@ export type OptimizerVendorOption = Readonly<{
 }>;
 
 /** Members of a group whose demand rows carry this group_id (Method C rule 6). */
-export type OptimizerGroupMembers = Readonly<{ group_id: string; member_ids: readonly string[] }>;
+export type OptimizerGroupMembers = Readonly<{
+  group_id: string;
+  member_ids: readonly string[];
+  /**
+   * Optional evidence-based rotation preference (1 = neutral). It is used
+   * only after eligibility and Target protection have made stock free; absent
+   * preserves the historic "most free stock first" result.
+   */
+  consumption_preference_by_material?: Readonly<Record<string, number>>;
+}>;
 
 export type OptimizerProjectionInput = Readonly<{
   as_of: string;
