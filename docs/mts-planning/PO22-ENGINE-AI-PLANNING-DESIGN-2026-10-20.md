@@ -455,3 +455,14 @@ one only when the one above is empty). One shared ordering (`_shared/groupUsageO
 
 No setting for a group = the old default: planning Method C; production §138.12 (own item first, then
 alternates smallest-stock-first). The phase-3 optimizer (`mts_optimizer_phase3d`) is not changed.
+
+### 17. Order UoM — buy quantities in the unit they are ordered in (owner 2026-10-22)
+
+Material Settings gets an **Order UoM** column (`material_requirement_policy.order_uom_code`, migration
+`20261022110000`; blank / base unit = no separate unit; must have a fixed master conversion, or MT for KG).
+`orderUnitOf()` resolves the unit per line: the lot vendor's MM03 **Supply UoM** wins, else the Material
+Settings Order UoM. Shown beside the base quantity in: Planning buys ("1,200 BTL = 300 PKT"), Action tab,
+Item Plan (Future Orders, Prediction, the user's own lot editor), and the Excel (BUY_PLAN "Order Qty / Order
+UoM", Prediction "In order unit"). Planning maths stays in the base unit; this is display only.
+
+MOQ UoM is now chosen only after an MOQ Qty (it was silently dropped when MOQ was blank).

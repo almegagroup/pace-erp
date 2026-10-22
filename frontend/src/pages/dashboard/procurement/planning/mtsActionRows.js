@@ -24,7 +24,7 @@ export function buildActionRows(plan) {
     const risk = riskOf.get(buy.material_id);
     const shortage = risk?.first_shortage_day ?? null;
     const critical = risk?.first_below_critical_day ?? null;
-    const base = { material_id: buy.material_id, material: buy.material_name, code: buy.material_code, uom: buy.uom, shortage_day: shortage, critical_day: critical };
+    const base = { material_id: buy.material_id, material: buy.material_name, code: buy.material_code, uom: buy.uom, order_unit: buy.order_unit ?? null, shortage_day: shortage, critical_day: critical };
     if (buy.status === "ADVISORY_LATE" && buy.sequence === 1) {
       push({ ...base, kind: "BUY", level: "URGENT", action: "Order today", by_when: asOf, qty: buy.recommended_po_qty_base, vendor: buy.vendor_label,
         why: `Should have been ordered by ${buy.need_date ? addDays(buy.need_date, -(buy.total_lead_time_days ?? 0)) : "earlier"}; ordering today arrives ${buy.estimated_plant_eta}.${shortage ? ` Stock runs out ${shortage}.` : ""}` });

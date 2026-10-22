@@ -142,7 +142,7 @@ function writePlan(sheet, companies) {
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
 const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Engine best date"];
-const PRED_HEAD = ["", "Import ETD", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Max Days", "Min Days", "Material", "Supplier", "PO by"];
+const PRED_HEAD = ["", "Import ETD", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Max Days", "Min Days", "Material", "Supplier", "PO by", "In order unit"];
 
 function writeBlocks(sheet, companies, kind) {
   const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind).map((b) => ({ ...b, company: c })))
@@ -173,7 +173,10 @@ function writeBlocks(sheet, companies, kind) {
       p.getCell(1).font = { bold: true, italic: true };
       styleHeader(sheet.addRow(PRED_HEAD));
       for (const x of b.prediction) {
-        const row = sheet.addRow([x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), days(x.max_days), days(x.min_days), x.material, x.supplier ?? "", day(x.po_by)]);
+        const row = sheet.addRow([
+          x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), days(x.max_days), days(x.min_days), x.material, x.supplier ?? "", day(x.po_by),
+          x.order_uom && x.order_qty !== null && x.order_qty !== undefined ? `${x.order_qty} ${x.order_uom}` : "",
+        ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
       }
     }
@@ -255,11 +258,12 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   addTable(buy, [
     { label: "Company", value: (r) => r.company }, { label: "Material", key: "material" }, { label: "Type", key: "type" },
     { label: "PO by", value: (r) => day(r.po_by) }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+    { label: "Order Qty", value: (r) => num(r.order_qty), num: true }, { label: "Order UoM", value: (r) => r.order_uom ?? "" },
     { label: "Plant ETA", value: (r) => day(r.plant_eta) }, { label: "Delivery lots", key: "lots" }, { label: "Supplier", key: "supplier" },
     { label: "Full cost / unit (₹)", value: (r) => num(r.full_cost_per_unit), num: true }, { label: "Value (₹)", value: (r) => num(r.value), num: true },
     { label: "Cost gaps", key: "cost_missing" }, { label: "Late", value: (r) => (r.late ? "LATE" : "") }, { label: "Why", key: "reason" },
   ], companies.flatMap((c) => c.buys.map((b) => ({ ...b, company: companyLabel(c) }))), { color: (r) => (r.late ? RED : null) });
-  widths(buy, [26, 36, 6, 12, 12, 7, 12, 30, 30, 14, 14, 30, 7, 60]);
+  widths(buy, [26, 36, 6, 12, 12, 7, 12, 9, 12, 30, 30, 14, 14, 30, 7, 60]);
 
   // STORE_INSTRUCTIONS
   const store = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));

@@ -20,6 +20,7 @@ import {
   safetySuggestionReason,
   suggestSafetyDays,
   computeMaterialMetrics,
+  orderUnitOf,
   consumptionFromConsBucket,
   coverageDays,
   effectivePlanAt,
@@ -661,6 +662,15 @@ Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata i
   const partial = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 150, stock: 1000, inbound: bucketInbound([], calendar), policy, moqBaseQty: null, leadTimeDays: 5 });
   assertEqual([partial.sheet_current_req_basis, partial.sheet_current_req, partial.current_prorata_daily], ["CM_REMAINING", 150, 15], "remaining 150 over 10 days");
   assertEqual([partial.reorder_flag, partial.priority_score], [false, null], "stock above reorder level → no priority");
+});
+
+Deno.test("Order UoM: vendor MM03 Supply UoM wins, else policy Order UoM; base or unknown unit = none", () => {
+  const material = { material_id: "M", material_type: "PM", base_uom_code: "BTL", status: null, to_base_factors: { PKT: 4 } } as unknown as Parameters<typeof orderUnitOf>[0];
+  assertEqual(orderUnitOf(material, null, "PKT"), { order_uom_code: "PKT", base_per_order_unit: 4, order_uom_source: "POLICY" }, "policy unit");
+  assertEqual(orderUnitOf(material, "pkt", "BTL"), { order_uom_code: "PKT", base_per_order_unit: 4, order_uom_source: "VENDOR" }, "vendor unit wins");
+  assertEqual(orderUnitOf(material, "BOX", "PKT")?.order_uom_source, "POLICY", "vendor unit without conversion falls back to policy");
+  assertEqual(orderUnitOf(material, null, "BTL"), null, "base unit = no separate order unit");
+  assertEqual(orderUnitOf(material, null, null), null, "nothing set");
 });
 
 Deno.test("Owner 2026-10-22: sheet prorata uses the gross plan, not the stock-covered share", () => {

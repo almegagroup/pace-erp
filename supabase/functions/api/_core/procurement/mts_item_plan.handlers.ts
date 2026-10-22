@@ -104,7 +104,12 @@ export async function buildItemPlan(
       companyId, ...params, extraMonths: ITEM_PLAN_EXTRA_MONTHS, manualLots,
       rescheduleOverrides: sim.rescheduleOverrides, policyOverrides: sim.policyOverrides,
     });
-    const { req: reqData, projection, assembly, calendar, vendorOptions, vendorTerms } = plan._internal;
+    const { req: reqData, projection, assembly, calendar, vendorOptions, vendorTerms, orderUnitFor } = plan._internal;
+    // Order UoM (owner 2026-10-22): the same quantity in the unit it is ordered in.
+    const orderFields = (id: string, vendorId: string | null | undefined, qtyBase: number) => {
+      const unit = orderUnitFor(id, vendorId);
+      return { order_uom: unit?.order_uom_code ?? null, order_qty: unit ? round(qtyBase / unit.base_per_order_unit) : null };
+    };
     const rowById = new Map(reqData.output.rows.map((r) => [r.material_id, r]));
     if (!rowById.has(materialId)) throw new Error("MTS_ITEM_PLAN_MATERIAL_NOT_PLANNED");
 
@@ -239,6 +244,7 @@ export async function buildItemPlan(
         return {
           material_id: b.material_id, material_code: codeOf(b.material_id), material_name: nameOf(b.material_id), uom: uomOf(b.material_id),
           sequence: b.sequence, lot_no: lot.lot_no, vendor: b.vendor_label ?? null, vendor_id: b.vendor_id ?? null, qty: round(lot.qty_base),
+          ...orderFields(b.material_id, b.vendor_id, lot.qty_base),
           po_by: b.recommended_po_by, etd: addDaysIso(b.recommended_po_by, b.booking_time_days ?? null),
           eta_port: p2p !== null ? addDaysIso(lot.plant_eta, -p2p) : null, eta_plant: lot.plant_eta,
           max_days_on_arrival: wholeDays(at?.max_cover_days ?? null), min_days_on_arrival: wholeDays(at?.min_cover_days ?? null),
@@ -315,6 +321,8 @@ export async function buildItemPlan(
     // cost, so the user can compare vendor × date before fixing a lot.
     const vendorChoices = memberIds.map((id) => ({
       material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id),
+      // Material Settings Order UoM (no vendor); each option below may carry the vendor's own.
+      order_unit: orderUnitFor(id, null),
       // Median port → plant days from received import CSNs (null = no history).
       port_to_plant_days: portToPlant.get(id) ?? null,
       options: (vendorOptions.get(id) ?? []).map((o) => ({
@@ -324,6 +332,7 @@ export async function buildItemPlan(
         earliest_plant_eta: addDaysIso(calendar.asOf, o.lead_time_days),
         moq_qty: o.moq_qty_base, order_multiple_qty: o.order_multiple_qty_base,
         unit_total_cost: o.unit_cost, freight_term: o.freight_term ?? null, cost_missing: o.cost_missing ?? [],
+        order_unit: orderUnitFor(id, o.vendor_id),
       })).sort((a, b) => (a.unit_total_cost ?? Infinity) - (b.unit_total_cost ?? Infinity) || a.vendor_label.localeCompare(b.vendor_label)),
     }));
     const choiceOf = (id: string, vendorId: string | null | undefined) =>
@@ -334,6 +343,7 @@ export async function buildItemPlan(
       const choice = choiceOf(l.material_id, l.vendor_id);
       return {
         ...l, material_code: codeOf(l.material_id), material_name: nameOf(l.material_id), uom: uomOf(l.material_id),
+        ...orderFields(l.material_id, l.vendor_id, l.qty_base),
         vendor_label: choice?.vendor_label ?? null,
         // This vendor cannot deliver by this date if ordered today.
         too_early: Boolean(choice?.earliest_plant_eta && l.plant_eta < choice.earliest_plant_eta),
@@ -360,6 +370,7 @@ export async function buildItemPlan(
       ...userLots.map((l) => ({ source: "YOU" as const, material_id: l.material_id, vendor_id: l.vendor_id ?? null, vendor: l.vendor_label, date: l.plant_eta as string | null, qty: round(l.qty_base) })),
     ].map((r) => ({
       ...r, material_code: codeOf(r.material_id), material_name: nameOf(r.material_id), uom: uomOf(r.material_id),
+      ...orderFields(r.material_id, r.vendor_id, r.qty),
       ...legsFor(r.material_id, r.vendor_id, r.date),
       max_days: r.date ? gridByDay.get(r.date)?.max_days ?? null : null,
       min_days: r.date ? gridByDay.get(r.date)?.min_days ?? null : null,

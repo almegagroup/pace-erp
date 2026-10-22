@@ -27,6 +27,8 @@ export type VendorTerm = {
   route_days: number | null;
   last_price: number | null;
   currency: string | null;
+  /** MM03 Supply UoM of this vendor-material (Order UoM for this vendor's lines). */
+  supply_uom_code?: string | null;
   /** Default payment term of this vendor-material: credit days; advance = paid before receipt. */
   credit_days?: number | null;
   advance?: boolean;

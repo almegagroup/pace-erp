@@ -551,6 +551,26 @@ export function toMaterialBase(material: MaterialInfo | undefined, qty: number, 
   return factor && factor > 0 ? qty * factor : null;
 }
 
+/** Order UoM (owner 2026-10-22): unit a buy quantity is shown in, beside the base unit. */
+export type OrderUnit = { order_uom_code: string; base_per_order_unit: number; order_uom_source: "VENDOR" | "POLICY" };
+
+/**
+ * The vendor's MM03 Supply UoM wins, else the Material Settings Order UoM. Only a unit with a
+ * fixed master conversion (or MT for KG) counts; the base unit itself or an unknown unit → null.
+ */
+export function orderUnitOf(material: MaterialInfo | undefined, vendorSupplyUom: string | null | undefined, policyOrderUom: string | null | undefined): OrderUnit | null {
+  if (!material) return null;
+  const base = String(material.base_uom_code ?? "").toUpperCase();
+  const tries: Array<[string | null | undefined, OrderUnit["order_uom_source"]]> = [[vendorSupplyUom, "VENDOR"], [policyOrderUom, "POLICY"]];
+  for (const [raw, source] of tries) {
+    const unit = String(raw ?? "").trim().toUpperCase();
+    if (!unit || unit === base) continue;
+    const factor = material.to_base_factors[unit];
+    if (factor && factor > 0) return { order_uom_code: unit, base_per_order_unit: factor, order_uom_source: source };
+  }
+  return null;
+}
+
 function activeMembers(input: ExplosionInput, groupId: string | null): string[] {
   if (!groupId) return [];
   return (input.groupMembers.get(groupId) ?? [])
@@ -1621,6 +1641,8 @@ export type PolicyRow = {
   version_no: number;
   /** D10 item carrying Rate (INR per base unit); optional. */
   carrying_rate_per_uom?: number | null;
+  /** Order UoM (owner 2026-10-22): unit buy quantities are shown in; null = base unit. */
+  order_uom_code?: string | null;
 };
 
 /** Policy used on `asOf`: the row with the latest effective_from <= asOf. */

@@ -831,7 +831,7 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
 
 async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[]; raw: JsonRecord[] }> {
   const raw = await fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, source_system, created_by, created_at")
+    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, order_uom_code, source_system, created_by, created_at")
     .eq("company_id", companyId).eq("is_current", true).order("id"), "MTS_REQ_POLICY_LOAD_FAILED");
   return {
     raw,
@@ -845,6 +845,7 @@ async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[];
       moq_source: (text(row.moq_source) || "NONE") as PolicyRow["moq_source"],
       moq_active: row.moq_active === true,
       carrying_rate_per_uom: num(row.carrying_rate_per_uom),
+      order_uom_code: text(row.order_uom_code) || null,
       version_no: Number(row.version_no ?? 1),
     })),
   };
@@ -1308,6 +1309,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
             moq_active: current.moq_active === true,
             remarks: text(current.remarks) || null,
             carrying_rate_per_uom: num(current.carrying_rate_per_uom),
+            order_uom_code: text(current.order_uom_code) || null,
             source_system: text(current.source_system),
             updated_by: users.get(text(current.created_by)) ?? "—",
             updated_at: current.created_at,
@@ -1344,7 +1346,7 @@ export async function getMtsRequirementPolicyHistoryHandler(req: Request, ctx: R
     const materialId = text(url.searchParams.get("material_id"));
     if (!materialId) return fail(req, ctx, "MTS_REQ_INVALID_INPUT", 400, "material_id is required.");
     const { data, error } = await serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, source_system, created_by, created_at")
+      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, order_uom_code, source_system, created_by, created_at")
       .eq("company_id", companyId).eq("material_id", materialId)
       .order("created_at", { ascending: false }).range(0, 999);
     if (error) throw new Error("MTS_REQ_POLICY_HISTORY_FAILED");
@@ -1419,6 +1421,7 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
         moq_active: row.moq_active === true,
         remarks: text(row.remarks) || null,
         carrying_rate_per_uom: num(row.carrying_rate_per_uom),
+        order_uom_code: text(row.order_uom_code) || null,
         source_ref: row.source_ref && typeof row.source_ref === "object" ? row.source_ref : null,
       });
     }

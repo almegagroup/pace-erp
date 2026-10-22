@@ -21,6 +21,9 @@ type JsonRecord = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "").trim();
 const unique = (values: Array<string | null | undefined>) => [...new Set(values.filter((v): v is string => Boolean(v)))];
 const round = (value: number) => Math.round(value * 1000) / 1000;
+/** Order UoM (owner 2026-10-22): the same quantity in the unit it is ordered in. */
+const inOrderUnit = (qty: number | null, unit: { base_per_order_unit: number } | null | undefined) =>
+  qty === null || !unit ? null : round(qty / unit.base_per_order_unit);
 const addDaysIso = (day: string | null, n: number | null) => (day && n !== null ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : null);
 
 /** Rolling plan horizon = CM + NM + 1 month (the old file's three months). */
@@ -158,11 +161,20 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       };
       const prediction = [
         ...advisory.filter((b) => memberSet.has(b.material_id)).flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }])
-          .map((lot) => ({ source: "ENGINE", material: nameOf(b.material_id), supplier: b.vendor_label ?? null, date: lot.plant_eta, qty: round(lot.qty_base), po_by: b.recommended_po_by, ...legs(b.material_id, b.vendor_id, lot.plant_eta) }))),
+          .map((lot) => ({
+            source: "ENGINE", material: nameOf(b.material_id), supplier: b.vendor_label ?? null, date: lot.plant_eta, qty: round(lot.qty_base),
+            order_qty: inOrderUnit(lot.qty_base, b.order_unit), order_uom: b.order_unit?.order_uom_code ?? null,
+            po_by: b.recommended_po_by, ...legs(b.material_id, b.vendor_id, lot.plant_eta),
+          }))),
         ...userLots.filter((l) => memberSet.has(l.material_id)).map((l) => ({
           source: "YOU", material: nameOf(l.material_id),
           supplier: l.vendor_id ? (plan._internal.vendorTerms.get(l.material_id) ?? []).find((t) => t.vendor_id === l.vendor_id)?.vendor_label ?? null : null,
-          date: l.plant_eta as string | null, qty: round(l.qty_base), po_by: null as string | null, ...legs(l.material_id, l.vendor_id, l.plant_eta),
+          date: l.plant_eta as string | null, qty: round(l.qty_base),
+          ...(() => {
+            const unit = plan._internal.orderUnitFor(l.material_id, l.vendor_id);
+            return { order_qty: inOrderUnit(l.qty_base, unit), order_uom: unit?.order_uom_code ?? null };
+          })(),
+          po_by: null as string | null, ...legs(l.material_id, l.vendor_id, l.plant_eta),
         })),
       ].map((p) => ({ ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null }))
         .sort((a, b) => String(a.date ?? "9999").localeCompare(String(b.date ?? "9999")));
@@ -207,7 +219,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const buys = advisory.map((b) => ({
       material: nameOf(b.material_id), type: rowById.get(b.material_id)?.kind ?? null, uom: uomOf(b.material_id),
       late: b.status === "ADVISORY_LATE", po_by: b.recommended_po_by, qty: b.recommended_po_qty_base,
-      plant_eta: b.estimated_plant_eta, lots: (b.lots ?? []).map((l) => `${l.plant_eta}: ${round(l.qty_base)}`).join(" · "),
+      order_uom: b.order_unit?.order_uom_code ?? null, order_qty: inOrderUnit(b.recommended_po_qty_base, b.order_unit),
+      plant_eta: b.estimated_plant_eta,
+      lots: (b.lots ?? []).map((l) => `${l.plant_eta}: ${round(l.qty_base)}${b.order_unit ? ` (${inOrderUnit(l.qty_base, b.order_unit)} ${b.order_unit.order_uom_code})` : ""}`).join(" · "),
       supplier: b.vendor_label ?? null, full_cost_per_unit: b.vendor_unit_total_cost ?? null,
       value: b.vendor_unit_total_cost !== null && b.vendor_unit_total_cost !== undefined && b.recommended_po_qty_base !== null ? Math.round(b.vendor_unit_total_cost * b.recommended_po_qty_base) : null,
       cost_missing: (b.vendor_cost_missing ?? []).join(", "), reason: b.reason,
