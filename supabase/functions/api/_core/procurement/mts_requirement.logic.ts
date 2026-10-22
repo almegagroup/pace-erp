@@ -1749,6 +1749,13 @@ export type MaterialMetrics = {
 export type MetricsInput = {
   calendar: PlanningCalendar;
   demandByDay: Map<string, number>;
+  /**
+   * Sheet columns (CM Req, Req NM, Current Req / Prorata, Safety, Reorder): the gross plan
+   * demand of this material as the BOM / stroke line's own item (owner 2026-10-22: Current
+   * Prorata = (CM plan − consumed) ÷ CM days left). Defaults to demandByDay. demandByDay stays
+   * the stock-allocated demand used for cover days / stock-out.
+   */
+  planDemandByDay?: Map<string, number>;
   consumption: number;
   stock: number;
   inbound: InboundBuckets;
@@ -1778,6 +1785,9 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   const cmProrata = sumRange(demandByDay, calendar.asOf, calendar.cmEnd);
   const nmReq = sumRange(demandByDay, calendar.nmStart, calendar.nmEnd);
   const nmDaily = calendar.nmDaysInMonth > 0 ? nmReq / calendar.nmDaysInMonth : 0;
+  const planDemand = input.planDemandByDay ?? demandByDay;
+  const planCmReq = sumRange(planDemand, calendar.cmStart, calendar.cmEnd);
+  const planNmReq = sumRange(planDemand, calendar.nmStart, calendar.nmEnd);
   const forwardDays = calendar.cmDaysLeft + calendar.nmDaysInMonth;
   const avgDaily = forwardDays > 0 ? (cmProrata + nmReq) / forwardDays : 0;
   const hasDemand = cmProrata + nmReq > EPSILON;
@@ -1817,10 +1827,10 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   }
 
   // Sheet REQUIREMENT meanings (D2): H, I, K, AB, AC, AD, N, AG–AJ, X.
-  const remainingCm = cmReq - input.consumption;
+  const remainingCm = planCmReq - input.consumption;
   const cmBasis = remainingCm > EPSILON;
-  const sheetCurrentReq = cmBasis ? remainingCm : nmReq;
-  const nmProrataDaily = nmDaily;
+  const sheetCurrentReq = cmBasis ? remainingCm : planNmReq;
+  const nmProrataDaily = calendar.nmDaysInMonth > 0 ? planNmReq / calendar.nmDaysInMonth : 0;
   const currentProrataDaily = cmBasis ? (calendar.cmDaysLeft > 0 ? remainingCm / calendar.cmDaysLeft : 0) : nmProrataDaily;
   const sheetNextMonthReq = nmReqDays === null ? null : nmReqDays * nmProrataDaily;
   const sheetTotalReq = sheetNextMonthReq === null ? null : sheetCurrentReq + sheetNextMonthReq;
@@ -1846,12 +1856,12 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
     cm_days_in_month: calendar.cmDaysInMonth,
     cm_days_left: calendar.cmDaysLeft,
     nm_days_in_month: calendar.nmDaysInMonth,
-    cm_req: r(cmReq),
+    cm_req: r(planCmReq),
     cm_prorata: r(cmProrata),
     cm_cons: r(input.consumption),
-    cm_balance_req: r(Math.max(0, cmReq - input.consumption)),
-    nm_req: r(nmReq),
-    nm_prorata: r(nmReq),
+    cm_balance_req: r(Math.max(0, planCmReq - input.consumption)),
+    nm_req: r(planNmReq),
+    nm_prorata: r(planNmReq),
     current_stock: r(input.stock),
     current_balance: r(currentBalance),
     intransit_cm: r(inbound.cm),
@@ -2073,6 +2083,18 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       warnings.push({ code: "EXCLUSIVE_PROTECTION_USED", message: `A group had no free stock left and used ${roundQty(pos.protection_used)} of this material's protected stock (kept for its own exclusive use). Buy this material soon.`, material_id: materialId });
     }
   }
+  // Sheet plan demand: every record's full qty to the BOM / stroke line's own item
+  // (candidates[0]), whatever stock later serves it. Use Primary = No lists members only, so
+  // that demand belongs to the group row, not to a member.
+  const planDemandByMaterial = new Map<string, Map<string, number>>();
+  for (const record of explosion.records) {
+    if (record.use_primary === false) continue;
+    const owner = record.candidates[0];
+    if (!owner) continue;
+    const byDay = planDemandByMaterial.get(owner) ?? new Map<string, number>();
+    byDay.set(record.day, (byDay.get(record.day) ?? 0) + record.qty);
+    planDemandByMaterial.set(owner, byDay);
+  }
   const eventsByMaterial = new Map<string, InboundEvent[]>();
   for (const event of input.inboundEvents) eventsByMaterial.set(event.material_id, [...(eventsByMaterial.get(event.material_id) ?? []), event]);
 
@@ -2132,6 +2154,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
     const metrics = computeMaterialMetrics({
       calendar: input.calendar,
       demandByDay: demand,
+      planDemandByDay: planDemandByMaterial.get(materialId) ?? new Map<string, number>(),
       consumption: input.consumptionByMaterial.get(materialId) ?? 0,
       stock: stock.usable_at_required,
       inbound: buckets,

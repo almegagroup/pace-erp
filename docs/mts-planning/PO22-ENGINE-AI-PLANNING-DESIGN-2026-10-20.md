@@ -432,3 +432,13 @@ and writes one workbook (exceljs, dynamic import):
 
 Names only (no PACE codes). A block is shown when any member has use, an arrival or a lot in
 the horizon. Supplier of an arrival = the CSN's vendor, else the PO's vendor.
+
+### 15. Requirement sheet columns use the gross plan (owner 2026-10-22)
+
+Current Prorata / day = (CM plan − CM consumed) ÷ CM days left. "CM Req (whole month)", "Req NM",
+Current Req / Prorata, Safety / Lead-time stock and Reorder now read the **gross plan demand** of the
+BOM / stroke line's own item (every record's full qty to `candidates[0]`; Use Primary = No demand stays
+on the group row). Before this, those columns read the stock-allocated share, so a group PM member
+(e.g. 40KG wovensack with alternate PM-00084) showed only the part its own stock covers
+(22–31 Oct = 68,967 bags) against full-month consumption (91,170) and wrongly flipped to the NM basis.
+Cover days, stock-out date, NM status and Net Req keep using the allocated demand.
