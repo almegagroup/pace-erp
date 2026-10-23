@@ -127,7 +127,10 @@ export async function buildItemPlan(
     // Group use no member could carry that day (family planner) is the family's shortage.
     const unmet = new Map(days.map((day) => [day, 0]));
     for (const u of projection.group_unmet) if (groupSet.has(u.group_id) && unmet.has(u.day)) unmet.set(u.day, (unmet.get(u.day) ?? 0) + u.qty_base);
-    const grid = familyDayGrid(days, memberRows, unmet);
+    // The standalone table and its Excel export must use the same active-demand
+    // coverage as the engine.  A grouped family keeps its distinct allocator
+    // semantics until that design is finalised.
+    const grid = familyDayGrid(days, memberRows, unmet, { activeDemandCoverage: !family.is_family });
 
     const nameOf = (id: string) => text(reqData.materialRows.get(id)?.material_name) || "—";
     const codeOf = (id: string) => text(reqData.materialRows.get(id)?.pace_code) || null;

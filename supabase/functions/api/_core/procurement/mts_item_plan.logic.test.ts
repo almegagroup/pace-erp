@@ -11,6 +11,7 @@ import {
   familyDayGrid,
   forecastSkuMonth,
   forwardCoverDays,
+  activeDemandCoverDays,
   referenceMonths,
   type ForecastInputs,
 } from "./mts_item_plan.logic.ts";
@@ -90,6 +91,17 @@ Deno.test("forwardCoverDays: walks the coming days' use (owner example 60,000 â†
 Deno.test("forwardCoverDays: exact depletion does not count later zero-demand calendar days", () => {
   near(forwardCoverDays(7, [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], 0), 7, "seven units cover exactly seven consuming days");
   near(forwardCoverDays(2, [1, 1, 0, 0, 1], 0), 2, "depleted stock stops before an idle stretch");
+});
+
+Deno.test("activeDemandCoverDays: a standalone grid does not turn a no-PO21 month into free coverage", () => {
+  const uses = [10, 10, 10, 0, 0, 0, 0];
+  near(activeDemandCoverDays(90, uses, 1), 9, "two remaining planned days plus seven days at the latest approved rate");
+  const rows = uses.map((demand_qty_base, index) => ({
+    material_id: "TOT", day: `D${index + 1}`, opening_qty_base: index === 0 ? 100 : 0,
+    confirmed_arrival_qty_base: 0, planned_lot_qty_base: 0, demand_qty_base, group_draw_qty_base: 0, closing_qty_base: 0,
+  }));
+  const grid = familyDayGrid(uses.map((_, index) => `D${index + 1}`), rows, new Map(), { activeDemandCoverage: true });
+  assertEqual([grid[0].max_days, grid[0].min_days], [9, 9], "PO22 table and Excel use active demand, not zero-demand calendar days");
 });
 
 Deno.test("familyDayGrid: sums members, adds unmet group demand to use and carries it", () => {

@@ -168,8 +168,33 @@ export function forwardCoverDays(balance: number, uses: readonly number[], fromI
   return Math.round((days + left / avg) * 100) / 100;
 }
 
+/**
+ * Coverage for a standalone item's display grid.  Months without a PO21 plan
+ * have zero consumption: they must not turn into free calendar coverage.
+ * Walk real positive-demand days, then express any balance left over at the
+ * latest approved daily use.  This mirrors the standalone PO22 engine rule.
+ */
+export function activeDemandCoverDays(balance: number, uses: readonly number[], fromIndex: number): number | null {
+  const prior = uses.slice(0, Math.max(0, fromIndex)).reverse().find((use) => use > EPSILON);
+  const next = uses.slice(Math.max(0, fromIndex)).find((use) => use > EPSILON);
+  const dailyUse = prior ?? next ?? 0;
+  if (dailyUse <= EPSILON) return null;
+  if (balance <= EPSILON) return 0;
+  let left = balance;
+  let days = 0;
+  for (let i = Math.max(0, fromIndex); i < uses.length; i += 1) {
+    const use = uses[i];
+    if (use <= EPSILON) continue;
+    if (use > left + EPSILON) return Math.round((days + left / use) * 100) / 100;
+    left = Math.max(0, left - use);
+    days += 1;
+  }
+  return Math.round((days + left / dailyUse) * 100) / 100;
+}
+
 export function familyDayGrid(
   days: readonly string[], memberRows: readonly MemberDayRow[], unmetGroupByDay: ReadonlyMap<string, number>,
+  options: { activeDemandCoverage?: boolean } = {},
 ): FamilyDayRow[] {
   const byDay = new Map<string, MemberDayRow[]>();
   for (const row of memberRows) byDay.set(row.day, [...(byDay.get(row.day) ?? []), row]);
@@ -183,6 +208,7 @@ export function familyDayGrid(
     };
   });
   const uses = sums.map((s) => s.memberUse + s.unmet);
+  const coverage = options.activeDemandCoverage ? activeDemandCoverDays : forwardCoverDays;
   let carriedShort = 0;
   return sums.map((s, index) => {
     const opening = s.opening - carriedShort;
@@ -193,8 +219,8 @@ export function familyDayGrid(
       day: s.day, opening: round(opening), arrivals: round(s.arrivals), planned_lot: round(s.planned_lot),
       use: round(uses[index]), unmet_group: round(s.unmet), closing: round(closing),
       // Whole days, rounded down (sheet ROUNDDOWN): 49.7 days of stock is 49 full days.
-      max_days: wholeDays(forwardCoverDays(closing, uses, index + 1)), min_stock: round(minStock),
-      min_days: wholeDays(forwardCoverDays(minStock, uses, index + 1)),
+      max_days: wholeDays(coverage(closing, uses, index + 1)), min_stock: round(minStock),
+      min_days: wholeDays(coverage(minStock, uses, index + 1)),
     };
   });
 }
