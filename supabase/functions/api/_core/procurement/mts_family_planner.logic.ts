@@ -122,6 +122,28 @@ function coverDays(balance: number, use: readonly number[], from: number): numbe
   return avg <= EPSILON ? covered : covered + Math.floor(left / avg + EPSILON);
 }
 
+/**
+ * Coverage for a standalone own-use item.  A month without an approved PO21
+ * plan has zero consumption, so its calendar days must not make coverage look
+ * longer.  We walk the real positive demand days, then express any retained
+ * balance at the last approved daily rate.  This is a coverage/reporting rate
+ * only; the simulation continues to consume the real (possibly zero) demand.
+ */
+function standaloneCoverageDays(balance: number, use: readonly number[], from: number, lastApprovedDailyUse: number): number | null {
+  if (lastApprovedDailyUse <= EPSILON) return null;
+  if (balance <= EPSILON) return 0;
+  let left = balance;
+  let covered = 0;
+  for (let i = from + 1; i < use.length; i += 1) {
+    const need = use[i];
+    if (need <= EPSILON) continue;
+    if (need > left + EPSILON) return covered;
+    left = Math.max(0, left - need);
+    covered += 1;
+  }
+  return covered + Math.floor(left / lastApprovedDailyUse + EPSILON);
+}
+
 /** Use over the `n` days after index `from` (beyond the horizon: average). */
 function useAhead(use: readonly number[], from: number, n: number): number {
   const avg = use.length ? use.reduce((s, q) => s + q, 0) / use.length : 0;
@@ -351,7 +373,9 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     for (let i = from; i < N; i += 1) {
       const t = targets[m][i].target;
       if (t === null || targets[m][i].critical === null) continue;
-      const cover = coverDays(sim.ownBalance[m][i], own[m], i);
+      const cover = isSharedGroupMember[m]
+        ? coverDays(sim.ownBalance[m][i], own[m], i)
+        : standaloneCoverageDays(sim.ownBalance[m][i], own[m], i, latestOwnDailyUse[m][i]);
       const safetyFloor = isSharedGroupMember[m] ? 0 : latestOwnDailyUse[m][i] * t;
       const atCoverageTarget = cover !== null && cover <= t;
       const atPhysicalSafetyFloor = safetyFloor > EPSILON && sim.ownBalance[m][i] <= safetyFloor + EPSILON;
@@ -491,7 +515,12 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const { target, critical } = targets[m][i];
       const closing = roundQty(sim.closing[m][i]);
       const opening = i === 0 ? Number(input.opening_qty_by_material[id] ?? 0) : sim.closing[m][i - 1];
-      const maxCover = coverDays(closing, sim.use[m], i);
+      // Do not count a later zero-demand calendar month as hundreds of days
+      // of cover for a standalone item.  Shared-group coverage retains the
+      // existing family allocator semantics until that design is finalised.
+      const maxCover = isSharedGroupMember[m]
+        ? coverDays(closing, sim.use[m], i)
+        : standaloneCoverageDays(closing, sim.use[m], i, latestOwnDailyUse[m][i]);
       const minStock = roundQty(closing - sim.arrival[m][i] - sim.planned[m][i]);
       if (firstShortage === null && closing < -EPSILON) firstShortage = allDays[i];
       if (firstCritical === null && critical !== null && maxCover !== null && maxCover <= critical) firstCritical = allDays[i];
@@ -499,7 +528,10 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       rows.push({
         material_id: id, day: allDays[i], opening_qty_base: roundQty(opening), confirmed_arrival_qty_base: roundQty(sim.arrival[m][i]),
         planned_lot_qty_base: roundQty(sim.planned[m][i]), demand_qty_base: roundQty(sim.use[m][i]), group_draw_qty_base: roundQty(sim.draw[m][i]),
-        closing_qty_base: closing, max_cover_days: maxCover, min_stock_qty_base: minStock, min_cover_days: coverDays(minStock, sim.use[m], i),
+        closing_qty_base: closing, max_cover_days: maxCover, min_stock_qty_base: minStock,
+        min_cover_days: isSharedGroupMember[m]
+          ? coverDays(minStock, sim.use[m], i)
+          : standaloneCoverageDays(minStock, sim.use[m], i, latestOwnDailyUse[m][i]),
         target_days: target, critical_days: critical, executable_arrival: false,
       });
     }
