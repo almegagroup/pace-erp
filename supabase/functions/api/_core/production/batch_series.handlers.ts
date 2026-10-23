@@ -303,11 +303,12 @@ export async function releaseUnpostedMtsBatchNumberInstancesForProcessOrder(para
 // collided, that range would end up PARTIALLY inserted (some ACTIVE, one
 // missing) while its process_order row still claims the full range. A
 // single multi-row INSERT is one statement: erp_production.batch_number_
-// instance's own UNIQUE(company_id, batch_number) constraint makes Postgres
-// reject the WHOLE statement if any one row collides, so it is impossible to
-// end up with a half-inserted range. The caller must still compensate by
-// deleting the just-created process_order row when this returns ok:false --
-// see createProcessOrderHandler.
+// instance's MTS UNIQUE(company_id, prodshade_material_id, batch_number)
+// constraint makes Postgres reject the WHOLE statement if any one row collides,
+// so it is impossible to end up with a half-inserted range. The same batch
+// number is intentionally valid for a different MTS Prodshade in the same
+// company. The caller must still compensate by deleting the just-created
+// process_order row when this returns ok:false -- see createProcessOrderHandler.
 export async function bulkInsertBatchNumberInstances(params: {
   companyId: string;
   poType: string;
@@ -365,13 +366,23 @@ export async function upsertBatchNumberInstanceForProcessOrder(params: {
     last_updated_by: params.authUserId,
   };
 
-  const { data: existing, error: existingErr } = await serviceRoleClient
+  let existingQuery = serviceRoleClient
     .schema("erp_production")
     .from("batch_number_instance")
     .select("id")
     .eq("company_id", params.companyId)
-    .eq("batch_number", params.batchNumber)
-    .maybeSingle();
+    .eq("batch_number", params.batchNumber);
+  if (params.poType === "MTS") {
+    if (!params.prodshadeMaterialId) {
+      throw new Error("PROD_BATCH_NUMBER_PRODSHADE_REQUIRED");
+    }
+    existingQuery = existingQuery
+      .eq("po_type", "MTS")
+      .eq("prodshade_material_id", params.prodshadeMaterialId);
+  } else {
+    existingQuery = existingQuery.neq("po_type", "MTS");
+  }
+  const { data: existing, error: existingErr } = await existingQuery.maybeSingle();
   if (existingErr) {
     console.error("[batch_series.upsertBatchNumberInstanceForProcessOrder] lookup failed:", JSON.stringify(existingErr));
     throw new Error("PROD_BATCH_NUMBER_UPSERT_FAILED");
@@ -720,7 +731,7 @@ export async function checkMtsBatchRangeHandler(req: Request, ctx: ProdHandlerCo
       return batchError(req, ctx, batchNumbers.errorCode, batchNumbers.status, batchNumbers.message);
     }
 
-    const duplicates = await findDuplicateBatchNumbers(companyId, batchNumbers.numbers);
+    const duplicates = await findDuplicateBatchNumbers(companyId, prodshadeMaterialId, batchNumbers.numbers);
 
     return okResponse({
       prefix: batchNumbers.prefix,
@@ -785,13 +796,18 @@ export async function resolveMtsBatchRangeNumbers(
   return { prefix: toTrimmedString((seriesRow as JsonRecord).prefix), numbers };
 }
 
-// Company-wide live-claim collision check (matches batch_number_instance's
-// own UNIQUE(company_id, batch_number) shape) -- a newly committed MTS Page-6
-// document is CLAIMED until Verify makes it USED, and both must be unavailable
-// to a new Page-3 preview. Chunked per §8E since a large
+// MTS Prodshade-scoped live-claim collision check (matches batch_number_instance's
+// own UNIQUE(company_id, prodshade_material_id, batch_number) shape). A newly
+// committed MTS Page-6 document is CLAIMED until Verify makes it USED, and both
+// must be unavailable to a new Page-3 preview for THAT SAME Prodshade. The same
+// number on another MTS Prodshade is valid. Chunked per §8E since a large
 // Number-of-Batches entry could in theory push the .in() list past a safe URL
 // length, even though today's 500-count cap keeps it well under that.
-export async function findDuplicateBatchNumbers(companyId: string, batchNumbers: string[]): Promise<string[]> {
+export async function findDuplicateBatchNumbers(
+  companyId: string,
+  prodshadeMaterialId: string,
+  batchNumbers: string[],
+): Promise<string[]> {
   if (batchNumbers.length === 0) return [];
   const rows = await fetchInChunks<JsonRecord>(batchNumbers, (chunk) =>
     serviceRoleClient
@@ -799,6 +815,8 @@ export async function findDuplicateBatchNumbers(companyId: string, batchNumbers:
       .from("batch_number_instance")
       .select("batch_number")
       .eq("company_id", companyId)
+      .eq("po_type", "MTS")
+      .eq("prodshade_material_id", prodshadeMaterialId)
       .in("status", ["ACTIVE", "CLAIMED", "USED"])
       .in("batch_number", chunk));
   return rows.map((row) => String(row.batch_number));

@@ -2793,7 +2793,7 @@ export async function createProcessOrderHandler(req: Request, ctx: ProdHandlerCo
       if ("errorCode" in rangeResult) {
         return poErr(req, ctx, rangeResult.errorCode, rangeResult.status, rangeResult.message);
       }
-      const duplicates = await findDuplicateBatchNumbers(companyId, rangeResult.numbers);
+      const duplicates = await findDuplicateBatchNumbers(companyId, materialId, rangeResult.numbers);
       if (duplicates.length > 0) {
         return poErr(req, ctx, "PROD_PO_BATCH_RANGE_DUPLICATE", 409, `Batch number(s) already active: ${duplicates.join(", ")}`);
       }
