@@ -1782,7 +1782,7 @@ export type MaterialMetrics = {
   /** H: remaining CM = CM req − consumption so far; when ≤ 0 the sheet shows Req NM instead. */
   sheet_current_req: number;
   sheet_current_req_basis: "CM_REMAINING" | "NM";
-  /** Approved daily plan rate for the current forward month; the same rate used by 4A. */
+  /** I: daily rate of H (over CM days left, or NM days when H is the NM basis). */
   current_prorata_daily: number;
   /** K: NM daily rate. */
   nm_prorata_daily: number;
@@ -1808,7 +1808,8 @@ export type MetricsInput = {
   demandByDay: Map<string, number>;
   /**
    * Sheet columns (CM Req, Req NM, Current Req / Prorata, Safety, Reorder): the gross plan
-   * demand of this material as the BOM / stroke line's own item. Defaults to demandByDay. demandByDay stays
+   * demand of this material as the BOM / stroke line's own item (owner 2026-10-23: Current
+   * Prorata = (CM plan − consumed) ÷ CM days left). Defaults to demandByDay. demandByDay stays
    * the stock-allocated demand used for cover days / stock-out.
    */
   planDemandByDay?: Map<string, number>;
@@ -1894,11 +1895,7 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   const cmBasis = remainingCm > EPSILON;
   const sheetCurrentReq = cmBasis ? remainingCm : planNmReq;
   const nmProrataDaily = calendar.nmDaysInMonth > 0 ? planNmReq / calendar.nmDaysInMonth : 0;
-  // The Requirement grid and 4A must use one approved forward daily plan rate.
-  // `sheetCurrentReq` remains the separate remaining-after-consumption reconciliation field.
-  const currentProrataDaily = cmProrata > EPSILON && calendar.cmDaysLeft > 0
-    ? cmProrata / calendar.cmDaysLeft
-    : nmProrataDaily;
+  const currentProrataDaily = cmBasis ? (calendar.cmDaysLeft > 0 ? remainingCm / calendar.cmDaysLeft : 0) : nmProrataDaily;
   const sheetNextMonthReq = nmReqDays === null ? null : nmReqDays * nmProrataDaily;
   const sheetTotalReq = sheetNextMonthReq === null ? null : sheetCurrentReq + sheetNextMonthReq;
   const coverWindow = calendar.cmDaysLeft + (nmReqDays ?? 0);
@@ -2138,6 +2135,49 @@ export function moqInBase(policy: PolicyRow | null, material: MaterialInfo | und
   return toMaterialBase(material, policy.moq_qty, unit);
 }
 
+/**
+ * PO22 works from the CC date forward.  For a material's own fixed demand, the
+ * part already posted as consumption must be removed from the unconsumed CM
+ * plan and the balance spread across the remaining approved CM dates.  This
+ * keeps Requirement's remaining pro-rata and Planning/4A's day rows on one
+ * basis.  Group pools are intentionally not changed here: their consumption
+ * has no member-level physical attribution to re-phase safely.
+ */
+export function rephaseCurrentMonthFixedDemand(
+  records: readonly DemandRecord[],
+  calendar: PlanningCalendar,
+  consumptionByMaterial: ReadonlyMap<string, number>,
+): DemandRecord[] {
+  const planCmByMaterial = new Map<string, number>();
+  const forwardCmByMaterial = new Map<string, number>();
+  for (const record of records) {
+    const isFixed = !record.group_id || record.candidates.length <= 1;
+    const materialId = record.candidates[0];
+    if (!isFixed || !materialId || record.day < calendar.cmStart || record.day > calendar.cmEnd) continue;
+    planCmByMaterial.set(materialId, (planCmByMaterial.get(materialId) ?? 0) + record.qty);
+    if (record.day >= calendar.asOf) forwardCmByMaterial.set(materialId, (forwardCmByMaterial.get(materialId) ?? 0) + record.qty);
+  }
+  const factorByMaterial = new Map<string, number>();
+  for (const [materialId, planCm] of planCmByMaterial) {
+    const forwardCm = forwardCmByMaterial.get(materialId) ?? 0;
+    if (forwardCm <= EPSILON) continue;
+    const remainingCm = Math.max(0, planCm - (consumptionByMaterial.get(materialId) ?? 0));
+    factorByMaterial.set(materialId, remainingCm / forwardCm);
+  }
+  return records.map((record) => {
+    const factor = record.day >= calendar.asOf && record.day <= calendar.cmEnd && (!record.group_id || record.candidates.length <= 1)
+      ? factorByMaterial.get(record.candidates[0])
+      : undefined;
+    if (factor === undefined) return record;
+    return {
+      ...record,
+      qty: record.qty * factor,
+      outer_qty: record.outer_qty === null ? null : record.outer_qty * factor,
+      plan_line_contributions: record.plan_line_contributions.map((contribution) => ({ ...contribution, qty: contribution.qty * factor })),
+    };
+  });
+}
+
 export function buildRequirementRows(input: RequirementInput): RequirementOutput {
   const effective = effectivePlanAt(input.planLines, input.demandAt);
   const explosion = explodeDemand({ ...input, effective });
@@ -2146,7 +2186,8 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
     const policy = effectivePolicy(input.policies, materialId, input.calendar.asOf);
     if (policy) protectionDays.set(materialId, { critical_days: policy.critical_cov_days, target_days: policy.target_cov_days });
   }
-  const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations, {
+  const planningRecords = rephaseCurrentMonthFixedDemand(explosion.records, input.calendar, input.consumptionByMaterial);
+  const allocation = allocateDemand(planningRecords, input.calendar, input.stockRows, input.reservations, input.applyReservations, {
     locationRoles: input.locationRoles, committedTransferOut: input.committedTransferOut, protectionDays,
     groupOrders: input.groupOrders,
   });

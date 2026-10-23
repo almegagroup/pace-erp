@@ -343,7 +343,7 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
 
     qtyColumn("sheet_current_req", "Current Req (remaining CM)", "demand", { width: "150px" }),
     textColumn("sheet_current_req_basis", "Current Req Basis", "demand", { width: "120px", read: (r) => (r.sheet_current_req_basis === "NM" ? "CM consumed → Req NM" : "CM remaining") }),
-    qtyColumn("current_prorata_daily", "Current Plan Pro-rata / day", "demand", { width: "150px" }),
+    qtyColumn("current_prorata_daily", "Current Prorata / day", "demand", { width: "130px" }),
     qtyColumn("cm_req", "CM Req (whole month)", "demand", { width: "130px" }),
     qtyColumn("cm_cons", "CURRENT CONS.", "demand"),
     qtyColumn("nm_req", "Req NM", "demand"),

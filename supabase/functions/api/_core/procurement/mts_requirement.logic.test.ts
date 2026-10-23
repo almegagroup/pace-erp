@@ -36,6 +36,7 @@ import {
   type PolicyRow,
   type RequirementInput,
   resolveUsePrimary,
+  rephaseCurrentMonthFixedDemand,
   type DemandRecord,
   skuDailyContributions,
   skuDailyDemand,
@@ -670,7 +671,7 @@ Deno.test("D5/D2: overdue and no-ETA inbound are assumed today; dispatched vs op
   assertEqual([buckets.overdue, buckets.unknown, buckets.byDay.get("2026-11-10"), buckets.dispatched, buckets.open_po], [5, 17, 22, 5, 20], "assumed on as-of, still flagged");
 });
 
-Deno.test("D2: remaining current req is separate from the approved daily plan rate", () => {
+Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata is a daily rate", () => {
   const calendar = buildCalendar("2026-11-01", "2026-11-21")!; // 10 CM days left
   const demand = new Map<string, number>();
   for (const day of calendar.horizon) demand.set(day, 10);
@@ -678,7 +679,7 @@ Deno.test("D2: remaining current req is separate from the approved daily plan ra
   const consumed = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 300, stock: 1000, inbound: bucketInbound([], calendar), policy, moqBaseQty: null, leadTimeDays: 5 });
   assertEqual([consumed.sheet_current_req_basis, consumed.sheet_current_req, consumed.current_prorata_daily, consumed.nm_prorata_daily], ["NM", 310, 10, 10], "CM consumed → NM basis");
   const partial = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 150, stock: 1000, inbound: bucketInbound([], calendar), policy, moqBaseQty: null, leadTimeDays: 5 });
-  assertEqual([partial.sheet_current_req_basis, partial.sheet_current_req, partial.current_prorata_daily], ["CM_REMAINING", 150, 10], "remaining quantity does not change the approved 10/day plan rate");
+  assertEqual([partial.sheet_current_req_basis, partial.sheet_current_req, partial.current_prorata_daily], ["CM_REMAINING", 150, 15], "remaining 150 over 10 days");
   assertEqual([partial.reorder_flag, partial.priority_score], [false, null], "stock above reorder level → no priority");
 });
 
@@ -700,7 +701,7 @@ Deno.test("Order UoM: vendor MM03 Supply UoM wins, else policy Order UoM; base o
   assertEqual(orderUnitOf(material, null, null), null, "nothing set");
 });
 
-Deno.test("Owner 2026-10-23: Requirement pro-rata uses the same gross approved daily plan as 4A", () => {
+Deno.test("Owner 2026-10-23: remaining requirement daily rate re-phases 4A fixed demand", () => {
   const calendar = buildCalendar("2026-10-01", "2026-10-22")!; // 10 CM days left
   const plan = new Map<string, number>();
   for (const day of calendar.horizon) plan.set(day, day <= calendar.cmEnd ? 6900 : 6975);
@@ -710,7 +711,7 @@ Deno.test("Owner 2026-10-23: Requirement pro-rata uses the same gross approved d
   covered.set(calendar.nmStart, 21549);
   const m = computeMaterialMetrics({ calendar, demandByDay: covered, planDemandByDay: plan, consumption: 91170, stock: 90517, inbound: bucketInbound([], calendar), policy: null, moqBaseQty: null, leadTimeDays: null });
   assertEqual([m.cm_req, m.sheet_current_req_basis, m.sheet_current_req, m.current_prorata_daily, m.nm_req, m.nm_prorata_daily],
-    [213900, "CM_REMAINING", 122730, 6900, 209250, 6975], "approved gross plan rate, not the remaining balance rate");
+    [213900, "CM_REMAINING", 122730, 12273, 209250, 6975], "remaining plan balance ÷ remaining days");
 });
 
 // ── Owner D1/D3/D12: pooled counted stock, fixed first, group-owned shortage ───────
@@ -722,6 +723,20 @@ function rec(partial: Partial<DemandRecord>): DemandRecord {
     use_primary: null, sort_key: "x", plan_line_contributions: [], ...partial,
   };
 }
+
+Deno.test("CC-date remaining requirement re-phases fixed Item Plan demand; group pools stay untouched", () => {
+  const calendar = buildCalendar("2026-10-01", "2026-10-23")!;
+  const records: DemandRecord[] = [];
+  for (let day = calendar.cmStart; day <= calendar.cmEnd; day = addDays(day, 1)) {
+    records.push(rec({ day, pool_key: `CF|${day}`, candidates: ["CALCIUM"], qty: 6.871 }));
+  }
+  records.push(rec({ day: "2026-10-23", pool_key: "G", group_id: "G1", use_primary: false, candidates: ["A", "B"], qty: 4 }));
+  const rephased = rephaseCurrentMonthFixedDemand(records, calendar, new Map([["CALCIUM", 177.78]]));
+  const fixedForward = rephased.filter((record) => record.candidates[0] === "CALCIUM" && record.day >= calendar.asOf);
+  near(sum(new Map(fixedForward.map((record) => [record.day, record.qty]))), 35.221, "remaining CM demand is the plan total less posted consumption");
+  near(fixedForward[0].qty, 35.221 / 9, "4A gets the Requirement remaining daily rate");
+  assertEqual(rephased.at(-1)?.qty, 4, "member-ambiguous group pool is never re-phased from a material consumption total");
+});
 
 Deno.test("D3/D12: fixed demand is met first; group shortage stays on the group; R003 shown not counted", () => {
   const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
