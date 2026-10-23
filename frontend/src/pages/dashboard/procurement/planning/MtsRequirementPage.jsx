@@ -343,13 +343,14 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
 
     qtyColumn("sheet_current_req", "Current Req (remaining CM)", "demand", { width: "150px" }),
     textColumn("sheet_current_req_basis", "Current Req Basis", "demand", { width: "120px", read: (r) => (r.sheet_current_req_basis === "NM" ? "CM consumed → Req NM" : "CM remaining") }),
-    qtyColumn("current_prorata_daily", "Current Prorata / day", "demand", { width: "130px" }),
+    qtyColumn("current_prorata_daily", "Current Plan Pro-rata / day", "demand", { width: "150px" }),
     qtyColumn("cm_req", "CM Req (whole month)", "demand", { width: "130px" }),
     qtyColumn("cm_cons", "CURRENT CONS.", "demand"),
     qtyColumn("nm_req", "Req NM", "demand"),
     qtyColumn("nm_prorata_daily", "Prorata NM / day", "demand", { width: "120px" }),
 
-    qtyColumn("current_stock", "CURRENT_STOCK (counted)", "stock", { width: "130px" }),
+    qtyColumn("current_stock", "CURRENT_STOCK (live)", "stock", { width: "130px" }),
+    qtyColumn("actual_gr_today", "Actual GR (CC date)", "stock", { width: "130px" }),
     qtyColumn("stock_unrestricted_at_required", "Unrestricted (counted locations)", "stock", { width: "150px" }),
     qtyColumn("stock_reserved_at_required", "Reserved", "stock", { width: "100px" }),
     qtyColumn("stock_other_sloc", "Not counted — transfer (R003 / F…)", "stock", { width: "170px" }),

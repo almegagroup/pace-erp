@@ -64,14 +64,20 @@ function sum(map: Map<string, number> | undefined, from = "0000", to = "9999"): 
   return total;
 }
 
-Deno.test("posted GR on CC date: stays out of opening stock and appears as that day's plant arrival", () => {
+Deno.test("posted GR on CC date: is live stock and remains a dated plant arrival", () => {
   const calendar = buildCalendar("2026-10-01", "2026-10-22")!;
   const events: InboundEvent[] = [{
     material_id: "PM-00060", qty: 15_200, date: "2026-10-22", kind: "POSTED_GR",
     date_source: "GRN_POSTED_ON_CC_DATE", reference: "GRN 2000000694",
   }];
   const buckets = bucketInbound(events, calendar);
-  assertEqual([buckets.cm, buckets.dispatched, buckets.byDay.get("2026-10-22")], [15_200, 15_200, 15_200], "posted GR is a dated same-day arrival, not an unlabelled opening-balance adjustment");
+  assertEqual([buckets.actual_gr_today, buckets.cm, buckets.dispatched, buckets.byDay.get("2026-10-22")], [15_200, 0, 0, 15_200], "posted GR is live stock, never in-transit, and remains a dated same-day arrival");
+
+  const demand = new Map<string, number>();
+  for (const day of calendar.horizon) demand.set(day, 10);
+  const policy: PolicyRow = { material_id: "PM-00060", effective_from: "2026-01-01", target_cov_days: 30, critical_cov_days: 15, moq_qty: null, moq_uom_code: null, moq_source: "NONE", moq_active: false, version_no: 1 };
+  const metrics = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 0, stock: 58.82, inbound: buckets, policy, moqBaseQty: null, leadTimeDays: null });
+  assertEqual([metrics.current_stock, metrics.actual_gr_today, metrics.intransit_cm, metrics.intransit_dispatched, metrics.identifier], [15258.82, 15200, 0, 0, "OK"], "Requirement status uses the live posted GR while the day grid keeps the ETA trace");
 });
 
 // ── fixture ───────────────────────────────────────────────────────────────
@@ -664,7 +670,7 @@ Deno.test("D5/D2: overdue and no-ETA inbound are assumed today; dispatched vs op
   assertEqual([buckets.overdue, buckets.unknown, buckets.byDay.get("2026-11-10"), buckets.dispatched, buckets.open_po], [5, 17, 22, 5, 20], "assumed on as-of, still flagged");
 });
 
-Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata is a daily rate", () => {
+Deno.test("D2: remaining current req is separate from the approved daily plan rate", () => {
   const calendar = buildCalendar("2026-11-01", "2026-11-21")!; // 10 CM days left
   const demand = new Map<string, number>();
   for (const day of calendar.horizon) demand.set(day, 10);
@@ -672,7 +678,7 @@ Deno.test("D2: current req falls back to NM when CM is fully consumed; prorata i
   const consumed = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 300, stock: 1000, inbound: bucketInbound([], calendar), policy, moqBaseQty: null, leadTimeDays: 5 });
   assertEqual([consumed.sheet_current_req_basis, consumed.sheet_current_req, consumed.current_prorata_daily, consumed.nm_prorata_daily], ["NM", 310, 10, 10], "CM consumed → NM basis");
   const partial = computeMaterialMetrics({ calendar, demandByDay: demand, consumption: 150, stock: 1000, inbound: bucketInbound([], calendar), policy, moqBaseQty: null, leadTimeDays: 5 });
-  assertEqual([partial.sheet_current_req_basis, partial.sheet_current_req, partial.current_prorata_daily], ["CM_REMAINING", 150, 15], "remaining 150 over 10 days");
+  assertEqual([partial.sheet_current_req_basis, partial.sheet_current_req, partial.current_prorata_daily], ["CM_REMAINING", 150, 10], "remaining quantity does not change the approved 10/day plan rate");
   assertEqual([partial.reorder_flag, partial.priority_score], [false, null], "stock above reorder level → no priority");
 });
 
@@ -694,7 +700,7 @@ Deno.test("Order UoM: vendor MM03 Supply UoM wins, else policy Order UoM; base o
   assertEqual(orderUnitOf(material, null, null), null, "nothing set");
 });
 
-Deno.test("Owner 2026-10-22: sheet prorata uses the gross plan, not the stock-covered share", () => {
+Deno.test("Owner 2026-10-23: Requirement pro-rata uses the same gross approved daily plan as 4A", () => {
   const calendar = buildCalendar("2026-10-01", "2026-10-22")!; // 10 CM days left
   const plan = new Map<string, number>();
   for (const day of calendar.horizon) plan.set(day, day <= calendar.cmEnd ? 6900 : 6975);
@@ -704,7 +710,7 @@ Deno.test("Owner 2026-10-22: sheet prorata uses the gross plan, not the stock-co
   covered.set(calendar.nmStart, 21549);
   const m = computeMaterialMetrics({ calendar, demandByDay: covered, planDemandByDay: plan, consumption: 91170, stock: 90517, inbound: bucketInbound([], calendar), policy: null, moqBaseQty: null, leadTimeDays: null });
   assertEqual([m.cm_req, m.sheet_current_req_basis, m.sheet_current_req, m.current_prorata_daily, m.nm_req, m.nm_prorata_daily],
-    [213900, "CM_REMAINING", 122730, 12273, 209250, 6975], "balance plan ÷ balance days");
+    [213900, "CM_REMAINING", 122730, 6900, 209250, 6975], "approved gross plan rate, not the remaining balance rate");
 });
 
 // ── Owner D1/D3/D12: pooled counted stock, fixed first, group-owned shortage ───────
