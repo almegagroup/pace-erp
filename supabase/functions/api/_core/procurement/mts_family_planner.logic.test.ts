@@ -162,3 +162,37 @@ Deno.test("smart consumption ratio: every member with free stock serves the grou
   const used = Object.keys(first.draws).filter((id) => first.draws[id] > 0);
   assert(used.includes("EL") && used.includes("RP"), `both ELOTEX and RP-4099 rotate: ${JSON.stringify(first.draws)}`);
 });
+
+Deno.test("short-life receipt overrides saved group order only until Store should consume it", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-02",
+    opening_qty_by_material: { FIRST: 100, EXPIRING: 100 },
+    opening_receipts: [
+      { material_id: "FIRST", qty_base: 100, valid_until: "2027-01-29", reference: "Opening stock OS-1", expiry_priority: false },
+      { material_id: "EXPIRING", qty_base: 100, valid_until: "2026-10-03", reference: "GRN 101", expiry_priority: true },
+    ],
+    own_demand: [],
+    group_demand: [{ group_id: "G", candidates: ["FIRST", "EXPIRING"], required_by: "2026-10-01", qty_base: 25 }],
+    confirmed_arrivals: [],
+    policies: [
+      { material_id: "FIRST", target_days: 0, critical_days: 0, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null },
+      { material_id: "EXPIRING", target_days: 0, critical_days: 0, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null },
+    ],
+    group_orders: new Map([["G", { mode: "FIXED_ORDER", member_order: ["FIRST", "EXPIRING"] }]]),
+    plan_buys: false,
+  });
+  const first = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-01");
+  assert(first?.draws.EXPIRING === 25 && !first.draws.FIRST, `expiring GRN must win locally: ${JSON.stringify(first)}`);
+});
+
+Deno.test("expired virtual receipt is not counted as cover", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-01",
+    opening_qty_by_material: { M: 20 },
+    opening_receipts: [{ material_id: "M", qty_base: 20, valid_until: "2026-09-30", reference: "GRN expired", expiry_priority: true }],
+    own_demand: [], group_demand: [], confirmed_arrivals: [],
+    policies: [{ material_id: "M", target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null }],
+    plan_buys: false,
+  });
+  assert(result.rows.find((row) => row.material_id === "M" && row.day === "2026-10-01")?.closing_qty_base === 0, "expired stock must not cover planning");
+});
