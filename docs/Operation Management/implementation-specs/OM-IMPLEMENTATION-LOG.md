@@ -110,6 +110,55 @@
 
 ---
 
+### R-06 — এক calculation-এর একটাই canonical hand-off থাকবে
+
+**Rule:** কোনো business calculation এক screen-এ correct দেখালেই কাজ শেষ নয়। একই value যদি
+Requirement, Planning/4A, Store Report, Excel, API বা AI explanation-এ যায়, তবে একটিই
+canonical calculated representation downstream-এ পাঠাতে হবে। Raw/source value এবং
+rephased/adjusted value একই নামে বা silently interchange করা যাবে না।
+
+**Mandatory implementation checklist:**
+1. Calculation change করার আগে producer, canonical output এবং প্রতিটি downstream consumer
+   লিখে নাও। কোন object/field screen-to-screen hand-off হচ্ছে তা code review-তে দেখাতে হবে।
+2. Current-month / CC-date / as-of-date calculation হলে `remaining demand ÷ remaining inclusive
+   days`-এর value-ই Planning/4A, exports এবং any future simulation-এর input হবে; full-month
+   gross demand শুধু audit/source display-এর জন্য আলাদা labelled field হতে পারে।
+3. Regression test producer-only হবে না। একই fixture-এ Requirement metric **এবং** Planning/4A
+   input/output-এ exact same expected daily value assert করতে হবে। Boundary cases: mid-month
+   consumption, GR/ETA on CC date, zero-demand days, month rollover।
+4. Business owner যে real company/material/date-এ issue report করেছেন, সেই reproduction দিয়ে
+   deployed environment-এ recalculate করে cross-screen comparison করতে হবে। শুধু local unit
+   test, code inspection, cache assumption, বা one tab দেখে "fixed" বলা যাবে না।
+5. Live verification না হলে status লিখতে হবে **"dev verified; production unverified"**। Branch
+   divergence, missing deployment বা unavailable data কখনো production-fix claim করার কারণ নয়।
+6. Closeout log-এ raw input, formula, expected displayed number, canonical hand-off field,
+   consumers checked, test name, deployed commit এবং verification environment লিখতে হবে।
+
+**Forbidden bug pattern:** Requirement tab-এ corrected prorata দেখিয়ে `RequirementOutput.records`
+বা equivalent downstream payload-এ পুরনো gross records ফেরত দেওয়া। এতে one report correct হলেও
+4A/Excel/future planning silently wrong হয়।
+
+---
+
+### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
+
+- **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from
+  the calibration date, but 4A Item Plan still displayed raw full-month `6.871` KG/day.
+- **Root cause:** `buildRequirementRows()` allocated with `planningRecords` (the rephased records)
+  but returned `explosion.records` (raw gross records). `mts_planning.handlers.ts` uses the returned
+  `records` as the Planning/4A demand input, so the correction stopped at the Requirement tab.
+- **DEV correction:** `RequirementOutput.records` now returns `planningRecords` only; the contract
+  comment explicitly names it as the Planning/4A input. Regression
+  `CC-date remaining requirement reaches Planning / 4A, not only the Requirement metrics` proves
+  the returned forward current-month daily demand is the remaining-rate value, not gross demand.
+- **Verification:** focused PO22 Requirement, Family Planner and Item Plan tests: 81 passed;
+  `deno check` passed. Commit `d1162239` is on `dev`.
+- **Release truth:** `main` was divergent and cannot be fast-forwarded under the branch policy.
+  Therefore production verification is pending; no one may state that the live CMP005 4A value is
+  fixed until the exact same company/material/CC-date is recalculated after a main deployment.
+
+---
+
 ---
 
 ### 2026-10-21 — PO22 P2–P4 Engine + AI Item Plan (DONE; PROD rolled out, owner-approved)
