@@ -107,6 +107,12 @@ Deno.test("activeDemandCoverDays: a standalone grid does not turn a no-PO21 mont
   assertEqual([grid[3].carry_forward_days, grid[3].next_demand_day], [4, null], "the no-demand carry-forward is shown separately, through the horizon");
 });
 
+Deno.test("activeDemandCoverDays: surplus after known NM demand uses the final approved rate", () => {
+  // CMP005 shape: CM is 4/day and already-approved NM is 16/day.  After the
+  // two NM rows, surplus must remain 16/day coverage, never return to 4/day.
+  near(activeDemandCoverDays(40, [4, 4, 16, 16], 2), 2.5, "future approved rate controls surplus coverage");
+});
+
 Deno.test("Prorata Max Days is deliberately separate from forward Max Days", () => {
   // 600 KG after today's 6.871 KG pro-rata looks like 87 days locally.  A
   // higher approved rate in the following month makes the engine's forward

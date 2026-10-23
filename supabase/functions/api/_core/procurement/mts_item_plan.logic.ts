@@ -192,9 +192,11 @@ export function forwardCoverDays(balance: number, uses: readonly number[], fromI
  * latest approved daily use.  This mirrors the standalone PO22 engine rule.
  */
 export function activeDemandCoverDays(balance: number, uses: readonly number[], fromIndex: number): number | null {
-  const prior = uses.slice(0, Math.max(0, fromIndex)).reverse().find((use) => use > EPSILON);
-  const next = uses.slice(Math.max(0, fromIndex)).find((use) => use > EPSILON);
-  const dailyUse = prior ?? next ?? 0;
+  // Once every approved positive-demand day has been walked, retained stock is
+  // expressed at the last approved rate in the horizon, not at the rate on
+  // this row.  A lower CM rate must not be reused after a known higher NM rate
+  // (CMP005 Calcium Formate: 3.913 -> 15.543 KG/day).
+  const dailyUse = [...uses].reverse().find((use) => use > EPSILON) ?? 0;
   if (dailyUse <= EPSILON) return null;
   if (balance <= EPSILON) return 0;
   let left = balance;
