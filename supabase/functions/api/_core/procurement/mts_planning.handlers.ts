@@ -27,11 +27,11 @@ import {
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
-import { type FamilyGroupDemand, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
+import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
-import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
+import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
@@ -73,7 +73,7 @@ export function readParams(url: URL | JsonRecord, today: string): { params?: Omi
   return { params: { planMonth, asOf, demandAt, today } };
 }
 
-async function loadVendorTerms(companyId: string, universe: string[], routesByMaterial: Map<string, Array<{ vendor_id?: string; days: number }>>, materials: Awaited<ReturnType<typeof computeRequirement>>["materials"]) {
+async function loadVendorTerms(companyId: string, universe: string[], routesByMaterial: Map<string, Array<{ vendor_id?: string; days: number }>>, materials: Awaited<ReturnType<typeof computeRequirement>>["materials"], today: string) {
   const result = new Map<string, VendorTerm[]>();
   if (universe.length === 0) return result;
   const [vmiRows, mapRes] = await Promise.all([
@@ -90,12 +90,20 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   const label = new Map(vendors.map((v) => [text(v.id), [text(v.vendor_code), text(v.vendor_name)].filter(Boolean).join(" — ")]));
   // Default payment term per vendor-material (D10: cash-out timing).
   const vmiIds = unique(rows.map((row) => text(row.id)));
-  const [termRows, currencyRows] = vmiIds.length === 0 ? [[], []] : await Promise.all([
+  const [termRows, currencyRows, recentPos] = vmiIds.length === 0 ? [[], [], []] : await Promise.all([
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_payment_term").select("vmi_id, payment_term_id, is_default").in("vmi_id", chunk)),
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_currency").select("vmi_id, currency_code, is_default").in("vmi_id", chunk)),
+    fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("purchase_order")
+      .select("id, po_date, status").eq("company_id", companyId)
+      .gte("po_date", new Date(Date.parse(`${today}T00:00:00Z`) - 730 * 86_400_000).toISOString().slice(0, 10)).order("po_date"), "MTS_PLANNING_PO_CURRENCY_READ_FAILED"),
   ]);
+  const poById = new Map(recentPos
+    .filter((po) => !["CANCELLED", "REJECTED"].includes(text(po.status).toUpperCase()))
+    .map((po) => [text(po.id), po]));
+  const recentPoLines = poById.size === 0 ? [] : await fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("purchase_order_line").select("po_id, vendor_material_info_id, currency_code").in("vendor_material_info_id", chunk));
   const termIds = unique(termRows.map((t) => text(t.payment_term_id)));
   const terms = termIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(termIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("payment_terms_master").select("id, credit_days, advance_pct, payment_method, payment_type").in("id", chunk));
@@ -114,6 +122,19 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     const currency = text(row.currency_code).toUpperCase();
     if (currency && (row.is_default === true || !currencyByVmi.has(vmiId))) currencyByVmi.set(vmiId, currency);
   }
+  // The PO line records the currency of the price actually paid.  A legacy
+  // VMI may carry the price but have no currency, so retain the latest linked
+  // non-cancelled PO currency as the strongest source.
+  const poCurrencyByVmi = new Map<string, { currency: string; po_date: string }>();
+  for (const line of recentPoLines) {
+    const po = poById.get(text(line.po_id));
+    const vmiId = text(line.vendor_material_info_id);
+    const currency = text(line.currency_code).toUpperCase();
+    if (!po || !vmiId || !currency) continue;
+    const date = text(po.po_date);
+    const seen = poCurrencyByVmi.get(vmiId);
+    if (!seen || date >= seen.po_date) poCurrencyByVmi.set(vmiId, { currency, po_date: date });
+  }
   for (const row of rows) {
     const materialId = text(row.material_id);
     const vendorId = text(row.vendor_id);
@@ -126,7 +147,12 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       vendor_id: vendorId, vendor_label: label.get(vendorId) ?? "—", material_id: materialId,
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
-      last_price: num(row.last_purchase_price), currency: text(row.last_purchase_currency).toUpperCase() || currencyByVmi.get(text(row.id)) || null,
+      last_price: num(row.last_purchase_price),
+      currency: resolvePurchaseCurrency({
+        po_line_currency: poCurrencyByVmi.get(text(row.id))?.currency ?? null,
+        vmi_last_purchase_currency: text(row.last_purchase_currency) || null,
+        vmi_default_currency: currencyByVmi.get(text(row.id)) ?? null,
+      }),
       supply_uom_code: text(row.supply_uom_code) || null,
       ...(() => {
         const term = termByVmi.get(text(row.id));
@@ -152,11 +178,109 @@ async function loadSelections(companyId: string, months: string[]): Promise<{ ma
   return { map, available: true };
 }
 
+const addCalendarMonths = (day: string, months: number): string => {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCMonth(date.getUTCMonth() + months);
+  return date.toISOString().slice(0, 10);
+};
+const addCalendarDays = (day: string, days: number): string => new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * PO22 shelf-life convention (owner 2026-10-23): planning is not a physical
+ * lot ledger.  We attribute today's counted opening stock to the known Opening
+ * Stock / GRN receipts in earliest-valid-until order, then tell Store what to
+ * use first.  No stock posting or issue confirmation is made here.
+ */
+async function loadOpeningReceiptAdvice(
+  companyId: string,
+  asOf: string,
+  openingQty: Readonly<Record<string, number>>,
+  materials: Awaited<ReturnType<typeof computeRequirement>>["materials"],
+): Promise<FamilyOpeningReceipt[]> {
+  const materialIds = Object.keys(openingQty).filter((id) => (openingQty[id] ?? 0) > 0);
+  if (materialIds.length === 0) return [];
+  const cutoff = addCalendarDays(asOf, -120);
+  const [openingDocs, grnPages] = await Promise.all([
+    serviceRoleClient.schema("erp_procurement").from("opening_stock_document")
+      .select("id, document_number, cut_off_date").eq("company_id", companyId).eq("status", "POSTED").lte("cut_off_date", asOf).limit(1000),
+    Promise.all(Array.from({ length: Math.ceil(materialIds.length / 100) }, (_, index) => {
+      const chunk = materialIds.slice(index * 100, index * 100 + 100);
+      return fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+        .select("id, grn_number, material_id, received_qty, uom_code, grn_date, expiry_type, expiry_date, shelf_life_months")
+        .eq("company_id", companyId).eq("status", "POSTED").lt("grn_date", asOf).in("material_id", chunk)
+        // Normal fallback life is 120d; an older GRN matters only when it carries an explicit expiry.
+        .or(`grn_date.gte.${cutoff},expiry_date.gte.${asOf}`).order("grn_date").order("id"), "MTS_SHELF_LIFE_GRN_LOAD_FAILED");
+    })),
+  ]);
+  if (openingDocs.error) throw new Error("MTS_SHELF_LIFE_OPENING_DOCUMENT_LOAD_FAILED");
+  const docRows = (openingDocs.data ?? []) as JsonRecord[];
+  const docById = new Map(docRows.map((row) => [text(row.id), row]));
+  const docIds = [...docById.keys()];
+  const materialChunks = Array.from({ length: Math.ceil(materialIds.length / 100) }, (_, index) => materialIds.slice(index * 100, index * 100 + 100));
+  const openingLines = docIds.length === 0 ? [] : (await Promise.all(materialChunks.map((materialChunk) => fetchInChunks<JsonRecord>(docIds, (docChunk) => serviceRoleClient.schema("erp_procurement")
+    .from("opening_stock_line").select("document_id, material_id, quantity").in("document_id", docChunk).in("material_id", materialChunk)))).then((chunks) => chunks.flat()));
+
+  const byMaterial = new Map<string, FamilyOpeningReceipt[]>();
+  const put = (receipt: FamilyOpeningReceipt) => byMaterial.set(receipt.material_id, [...(byMaterial.get(receipt.material_id) ?? []), receipt]);
+  for (const line of openingLines) {
+    const doc = docById.get(text(line.document_id));
+    const qty = num(line.quantity) ?? 0;
+    const date = text(doc?.cut_off_date);
+    const materialId = text(line.material_id);
+    if (!doc || qty <= 0 || !materialId || !isIsoDate(date)) continue;
+    const validUntil = addCalendarDays(date, 120);
+    // Without a physical issue ledger an already-expired historical receipt
+    // cannot be asserted to be today's counted stock.  Do not allocate it to
+    // the opening balance; only currently valid sources may back Store advice.
+    if (validUntil < asOf) continue;
+    put({ material_id: materialId, qty_base: qty, valid_until: validUntil, reference: `Opening stock ${text(doc.document_number)}`, expiry_priority: validUntil < addCalendarDays(asOf, 120) });
+  }
+  for (const grn of grnPages.flat()) {
+    const materialId = text(grn.material_id);
+    const grnDate = text(grn.grn_date);
+    const receivedQty = num(grn.received_qty);
+    const qty = receivedQty === null ? null : toMaterialBase(materials.get(materialId), receivedQty, text(grn.uom_code));
+    if (!materialId || !isIsoDate(grnDate) || qty === null || qty <= 0) continue;
+    const explicitDate = text(grn.expiry_date);
+    const span = num(grn.shelf_life_months);
+    const validUntil = isIsoDate(explicitDate)
+      ? explicitDate
+      : text(grn.expiry_type).toUpperCase() === "SPAN" && span !== null && span > 0
+        ? addCalendarMonths(grnDate, Math.floor(span))
+        : addCalendarDays(grnDate, 120);
+    if (validUntil < asOf) continue;
+    put({
+      material_id: materialId,
+      qty_base: qty,
+      valid_until: validUntil,
+      reference: `GRN ${text(grn.grn_number) || text(grn.id)}`,
+      expiry_priority: validUntil < addCalendarDays(asOf, 120),
+    });
+  }
+  const out: FamilyOpeningReceipt[] = [];
+  for (const materialId of materialIds) {
+    let left = Math.max(0, Number(openingQty[materialId] ?? 0));
+    const receipts = [...(byMaterial.get(materialId) ?? [])]
+      .sort((a, b) => a.valid_until.localeCompare(b.valid_until) || a.reference.localeCompare(b.reference));
+    for (const receipt of receipts) {
+      if (left <= 0.000001) break;
+      const qty = Math.min(left, receipt.qty_base);
+      if (qty <= 0.000001) continue;
+      out.push({ ...receipt, qty_base: qty });
+      left -= qty;
+    }
+    // A source gap must remain visible, never be dressed up as a GRN.  This
+    // fallback only keeps existing planning behaviour while Store fixes source data.
+    if (left > 0.000001) out.push({ material_id: materialId, qty_base: left, valid_until: addCalendarDays(asOf, 120), reference: "Unattributed counted stock", expiry_priority: false });
+  }
+  return out;
+}
+
 type CostInputs = {
   interestPct: number | null;
   customerCreditDays: number | null;
   fxByCurrency: Map<string, { inr: number | null; source: string | null; stale: boolean }>;
-  landedByVendorMaterial: Map<string, { adder: number | null; basis: "FINAL" | "PROVISIONAL" | "NONE" }>;
+  landedByVendorMaterial: Map<string, { adder: number | null; basis: LandedCostBasis }>;
   /** P2: average landed cost of one order (per GRN) per vendor + material. */
   orderCostByVendorMaterial: Map<string, number | null>;
   /** Owner 2026-10-21: freight term of the latest PO per vendor + material (FOR / FREIGHT_SEPARATE / …). */
@@ -170,7 +294,7 @@ async function loadCostInputs(companyId: string, asOf: string, today: string, un
     serviceRoleClient.schema("erp_planning").from("company_planning_finance").select("effective_from, interest_pct_per_year").eq("company_id", companyId).limit(500),
     serviceRoleClient.schema("erp_procurement").from("sales_order").select("payment_term_id").eq("company_id", companyId).gte("so_date", since).not("payment_term_id", "is", null).limit(5000),
     universe.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
-      .select("id, vendor_id, material_id, received_qty, uom_code, status, grn_date").eq("company_id", companyId).gte("grn_date", since).in("material_id", chunk)),
+      .select("id, vendor_id, material_id, po_id, received_qty, uom_code, status, grn_date").eq("company_id", companyId).gte("grn_date", since).in("material_id", chunk)),
     Promise.all(currencies.map(async (code) => [code, await resolveFxRate(code, today).catch(() => null)] as const)),
   ]);
   const interestPct = financeRes.error ? null : interestPctAt(((financeRes.data ?? []) as JsonRecord[]).map((r) => ({ effective_from: text(r.effective_from), interest_pct_per_year: Number(r.interest_pct_per_year) })), asOf);
@@ -188,6 +312,10 @@ async function loadCostInputs(companyId: string, asOf: string, today: string, un
   // Landed cost history per vendor + material (AC01 landed_cost by GRN).
   const postedGrns = grns.filter((g) => !["CANCELLED", "REVERSED", "DRAFT"].includes(text(g.status).toUpperCase()));
   const grnIds = unique(postedGrns.map((g) => text(g.id)));
+  const grnPoIds = unique(postedGrns.map((g) => text(g.po_id)));
+  const grnPos = grnPoIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(grnPoIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("purchase_order").select("id, vendor_type, freight_term").in("id", chunk));
+  const grnPoById = new Map(grnPos.map((po) => [text(po.id), po]));
   const landed = grnIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(grnIds, (chunk) => serviceRoleClient.schema("erp_procurement")
     .from("landed_cost").select("grn_id, total_cost, status").in("grn_id", chunk));
   const landedByGrn = new Map<string, { total: number; status: string }>();
@@ -199,15 +327,23 @@ async function loadCostInputs(companyId: string, asOf: string, today: string, un
     landedByGrn.set(text(row.grn_id), seen);
   }
   const history = new Map<string, Array<{ total_cost: number; received_base_qty: number; status: string }>>();
+  const includedInPoRate = new Set<string>();
   for (const grn of postedGrns) {
     const lc = landedByGrn.get(text(grn.id));
-    if (!lc) continue;
     const base = toMaterialBase(materials.get(text(grn.material_id)), Number(grn.received_qty ?? 0), text(grn.uom_code));
     if (base === null) continue;
     const key = `${text(grn.vendor_id)}|${text(grn.material_id)}`;
-    history.set(key, [...(history.get(key) ?? []), { total_cost: lc.total, received_base_qty: base, status: lc.status }]);
+    if (lc) {
+      history.set(key, [...(history.get(key) ?? []), { total_cost: lc.total, received_base_qty: base, status: lc.status }]);
+      continue;
+    }
+    const po = grnPoById.get(text(grn.po_id));
+    if (text(po?.vendor_type).toUpperCase() === "DOMESTIC" && text(po?.freight_term).toUpperCase() === "FOR") includedInPoRate.add(key);
   }
   const landedByVendorMaterial = new Map([...history].map(([key, rows]) => [key, landedAdder(rows)]));
+  for (const key of includedInPoRate) {
+    if (!landedByVendorMaterial.has(key)) landedByVendorMaterial.set(key, { adder: 0, basis: "INCLUDED_IN_PO_RATE" });
+  }
   const orderCostByVendorMaterial = new Map([...history].map(([key, rows]) => [key, averageOrderCost(rows)]));
   // Freight term of the latest PO per vendor + material (2 years).
   const poSince = new Date(Date.parse(`${today}T00:00:00Z`) - 730 * 86_400_000).toISOString().slice(0, 10);
@@ -270,7 +406,7 @@ export async function computePlanning(p: PlanningParams) {
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
   const reuse = p.reuseLoads === true;
   const [vendorTerms, selections] = await Promise.all([
-    cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials), reuse),
+    cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials, p.today), reuse),
     // Item Plan runs six months ahead; use a decision from every month in the
     // active horizon, not only CM/NM, when choosing a group member for a new buy.
     loadSelections(p.companyId, calendar.months),
@@ -343,6 +479,11 @@ export async function computePlanning(p: PlanningParams) {
   // Opening stock, arrivals, policies and vendor options; the lots themselves come from the
   // family planner (owner 2026-10-22: right item, right time, right lot — own use vs group use).
   const assembly = assemblePlanningInput({ ...baseArgs, vendorOptions, cycleDays });
+  const openingReceipts = await cachedLoad(
+    `${p.companyId}|shelfLifeReceipts|${calendar.asOf}|${hashIds(Object.keys(assembly.input.opening_qty_by_material))}`,
+    () => loadOpeningReceiptAdvice(p.companyId, calendar.asOf, assembly.input.opening_qty_by_material, req.materials),
+    reuse,
+  );
   const vendorOverride = new Map<string, string>();
   const ownDemand: FamilyOwnDemand[] = [];
   const groupDemand: FamilyGroupDemand[] = [];
@@ -355,6 +496,7 @@ export async function computePlanning(p: PlanningParams) {
     as_of: assembly.input.as_of,
     horizon_end: assembly.input.horizon_end,
     opening_qty_by_material: assembly.input.opening_qty_by_material,
+    opening_receipts: openingReceipts,
     own_demand: ownDemand,
     group_demand: groupDemand,
     confirmed_arrivals: assembly.input.confirmed_arrivals,
@@ -417,6 +559,7 @@ export async function computePlanning(p: PlanningParams) {
     return {
       ...familyInput,
       opening_qty_by_material: pick(familyInput.opening_qty_by_material),
+      opening_receipts: (familyInput.opening_receipts ?? []).filter((r) => members.has(r.material_id)),
       own_demand: familyInput.own_demand.filter((d) => members.has(d.material_id)),
       group_demand: groupDemand,
       confirmed_arrivals: familyInput.confirmed_arrivals.filter((a) => members.has(a.material_id)),
@@ -458,6 +601,51 @@ export async function computePlanning(p: PlanningParams) {
         if (f * row.demand_qty > 1e-6) out.push({ ...row, material_id: id, executable_qty: r6(row.demand_qty * f), not_backed_qty: 0 });
       }
       if (share.unmet * row.demand_qty > 1e-6) out.push({ ...row, material_id: null, executable_qty: 0, not_backed_qty: r6(row.demand_qty * share.unmet) });
+    }
+    return out;
+  })();
+  // Store does not need a physical issue ledger to receive a useful instruction.
+  // Split only the already-backed quantity over the virtual receipt sources in
+  // FEFO order.  This never changes stock, a GRN balance, or the user's saved
+  // group sequence; it merely makes the planner's recommendation auditable.
+  const storeRowsByShelfLife = (() => {
+    const remaining = new Map<string, FamilyOpeningReceipt[]>();
+    for (const receipt of openingReceipts) {
+      // The family projection has already removed it.  Store must never be
+      // instructed to issue an expired planning receipt merely because the
+      // aggregate counted-stock reader still contains the quantity.
+      if (receipt.valid_until < calendar.asOf) continue;
+      remaining.set(receipt.material_id, [...(remaining.get(receipt.material_id) ?? []), { ...receipt }]);
+    }
+    for (const rows of remaining.values()) rows.sort((a, b) => a.valid_until.localeCompare(b.valid_until) || a.reference.localeCompare(b.reference));
+    const periodRank = (period: string) => period === "CM" ? 0 : 1;
+    const ordered = [...storeRowsByRatio].sort((a, b) => periodRank(a.period) - periodRank(b.period) || a.pool_key.localeCompare(b.pool_key) || String(a.material_id ?? "").localeCompare(String(b.material_id ?? "")));
+    const out: Array<(typeof storeRowsByRatio)[number] & { receipt_reference: string | null; receipt_valid_until: string | null; receipt_expiry_priority: boolean; receipt_basis: "OPENING_STOCK" | "GRN" | "UNATTRIBUTED" | "UNAVAILABLE" | null }> = [];
+    for (const row of ordered) {
+      if (!row.material_id || row.executable_qty <= 0.000001) {
+        out.push({ ...row, receipt_reference: null, receipt_valid_until: null, receipt_expiry_priority: false, receipt_basis: null });
+        continue;
+      }
+      let qtyLeft = row.executable_qty;
+      for (const receipt of remaining.get(row.material_id) ?? []) {
+        if (qtyLeft <= 0.000001) break;
+        const qty = Math.min(qtyLeft, receipt.qty_base);
+        if (qty <= 0.000001) continue;
+        receipt.qty_base -= qty;
+        qtyLeft -= qty;
+        out.push({
+          ...row,
+          executable_qty: Math.round(qty * 1e6) / 1e6,
+          receipt_reference: receipt.reference,
+          receipt_valid_until: receipt.valid_until,
+          receipt_expiry_priority: receipt.expiry_priority,
+          receipt_basis: receipt.reference.startsWith("Opening stock") ? "OPENING_STOCK" : receipt.reference.startsWith("GRN ") ? "GRN" : "UNATTRIBUTED",
+        });
+      }
+      // Never issue a source that is expired or missing.  Keep the shortfall
+      // explicit instead of inventing a GRN identity or pretending this is
+      // executable physical stock.
+      if (qtyLeft > 0.000001) out.push({ ...row, executable_qty: 0, not_backed_qty: Math.round((row.not_backed_qty + qtyLeft) * 1e6) / 1e6, receipt_reference: "Unavailable — expired or source not attributable", receipt_valid_until: null, receipt_expiry_priority: false, receipt_basis: "UNAVAILABLE" });
     }
     return out;
   })();
@@ -621,7 +809,7 @@ export async function computePlanning(p: PlanningParams) {
       }));
     }).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
-    store_rows: storeRowsByRatio.map((row) => ({
+    store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),
       mother_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.mother ?? "")).filter(Boolean).join("; ") || null,

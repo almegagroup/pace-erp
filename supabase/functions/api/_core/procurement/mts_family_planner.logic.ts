@@ -51,11 +51,26 @@ export type FamilyOwnDemand = { material_id: string; required_by: string; qty_ba
 export type FamilyGroupDemand = { group_id: string; candidates: readonly string[]; required_by: string; qty_base: number };
 export type FamilyArrival = { source_key: string; material_id: string; eta_to_plant: string | null; qty_base: number };
 export type FamilyLot = { material_id: string; plant_eta: string; qty_base: number; vendor_id?: string | null };
+/**
+ * Planning-only receipt identity.  This is deliberately not a batch/issue ledger:
+ * it tells the allocator which part of today's counted stock Store should consume
+ * first.  Actual Store issue remains outside PO22.
+ */
+export type FamilyOpeningReceipt = {
+  material_id: string;
+  qty_base: number;
+  valid_until: string;
+  reference: string;
+  /** A dated GRN/Opening-stock receipt with an earlier expiry may override Group Settings locally. */
+  expiry_priority: boolean;
+};
 
 export type FamilyPlannerInput = {
   as_of: string;
   horizon_end: string;
   opening_qty_by_material: Readonly<Record<string, number>>;
+  /** Virtual allocation of the counted opening stock to its receipt source; advisory only. */
+  opening_receipts?: readonly FamilyOpeningReceipt[];
   own_demand: readonly FamilyOwnDemand[];
   group_demand: readonly FamilyGroupDemand[];
   confirmed_arrivals: readonly FamilyArrival[];
@@ -175,6 +190,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
 
   const ids = [...new Set<string>([
     ...Object.keys(input.opening_qty_by_material),
+    ...(input.opening_receipts ?? []).map((r) => r.material_id),
     ...input.own_demand.map((r) => r.material_id),
     ...input.group_demand.flatMap((r) => r.candidates),
     ...input.confirmed_arrivals.map((r) => r.material_id),
@@ -278,6 +294,24 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     return reserve;
   };
 
+  const simulatedOpeningReceipts = ids.map((id) => {
+    const opening = Math.max(0, Number(input.opening_qty_by_material[id] ?? 0));
+    let left = opening;
+    const supplied = (input.opening_receipts ?? [])
+      .filter((r) => r.material_id === id && valid(r.qty_base) && r.qty_base > EPSILON && ISO_DAY.test(r.valid_until))
+      .sort((a, b) => a.valid_until.localeCompare(b.valid_until) || a.reference.localeCompare(b.reference));
+    const receipts = supplied.flatMap((r) => {
+      const qty = Math.min(left, r.qty_base);
+      left = Math.max(0, left - qty);
+      return qty > EPSILON ? [{ ...r, qty_base: qty }] : [];
+    });
+    // Backward-compatible pure callers that do not provide receipt sources still
+    // receive one virtual opening receipt.  The handler provides the real opening
+    // import/GRN basis in production.
+    if (left > EPSILON) receipts.push({ material_id: id, qty_base: left, valid_until: addDays(input.as_of, 120), reference: "Opening stock (planning assumption)", expiry_priority: false });
+    return receipts;
+  });
+
   const simulate = (lots: readonly Planned[]): Sim => {
     const s: Sim = {
       closing: ids.map(() => zeros()), use: ids.map(() => zeros()), draw: ids.map(() => zeros()), arrival: ids.map(() => zeros()),
@@ -287,12 +321,31 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
+    const receiptLeft = simulatedOpeningReceipts.map((rows) => rows.map((row) => ({ ...row })));
     const borrowed = ids.map(() => 0);
     for (let i = 0; i < N; i += 1) {
+      // A receipt is usable through valid_until.  Expired virtual stock is not
+      // silently counted as cover; this is a planning warning, never a stock post.
+      for (let m = 0; m < M; m += 1) {
+        for (const receipt of receiptLeft[m]) {
+          if (receipt.qty_base <= EPSILON || receipt.valid_until >= allDays[i]) continue;
+          bal[m] = Math.max(0, bal[m] - receipt.qty_base);
+          receipt.qty_base = 0;
+        }
+      }
       for (let m = 0; m < M; m += 1) {
         s.arrival[m][i] = confirmed[m][i];
         bal[m] += confirmed[m][i] + s.planned[m][i] - own[m][i];
         s.use[m][i] = own[m][i];
+        // Existing receipts are consumed FEFO.  Future arrivals/engine lots
+        // remain aggregate because Store cannot physically issue them yet.
+        let ownLeft = own[m][i];
+        for (const receipt of receiptLeft[m]) {
+          if (ownLeft <= EPSILON) break;
+          const used = Math.min(ownLeft, receipt.qty_base);
+          receipt.qty_base -= used;
+          ownLeft -= used;
+        }
       }
       pools.forEach((pool, p) => {
         let need = pool.demand[i];
@@ -305,7 +358,29 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           : [...cand].sort((a, b) => fn(b) - fn(a) || cand.indexOf(a) - cand.indexOf(b)));
         const takeFrom = (m: number, qty: number) => {
           bal[m] -= qty; need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
+          let left = qty;
+          for (const receipt of receiptLeft[m]) {
+            if (left <= EPSILON) break;
+            const used = Math.min(left, receipt.qty_base);
+            receipt.qty_base -= used;
+            left -= used;
+          }
         };
+        // A short-life GRN/Opening receipt gets first call on this group's
+        // available stock.  This intentionally overrides a saved group order
+        // only for that expiring quantity; normal order/Method C resumes after.
+        const expiryFirst = [...cand].filter((m) => receiptLeft[m].some((r) => r.expiry_priority && r.qty_base > EPSILON))
+          .sort((a, b) => {
+            const earliest = (m: number) => receiptLeft[m].filter((r) => r.expiry_priority && r.qty_base > EPSILON)
+              .map((r) => r.valid_until).sort()[0] ?? "9999-12-31";
+            return earliest(a).localeCompare(earliest(b)) || ids[a].localeCompare(ids[b]);
+          });
+        for (const m of expiryFirst) {
+          if (need <= EPSILON) break;
+          const priorityQty = receiptLeft[m].filter((r) => r.expiry_priority).reduce((sum, r) => sum + r.qty_base, 0);
+          const take = Math.min(free(m), priorityQty, need);
+          if (take > EPSILON) takeFrom(m, take);
+        }
         if (order) {
           for (const m of ordered(free)) {
             if (need <= EPSILON) break;

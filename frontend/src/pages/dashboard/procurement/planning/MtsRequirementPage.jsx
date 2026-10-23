@@ -1692,7 +1692,7 @@ function CostCompare({ options, basis, uom }) {
     { key: "feasible", label: "On time", width: "70px", render: (o) => (o.feasible ? "Yes" : <span className="text-rose-700">No</span>) },
     { key: "lead_time_days", label: "Lead (d)", width: "70px", align: "right", render: (o) => (o.lead_time_days ?? "—") },
     { key: "unit_price_inr", label: `Price ₹/${uom ?? "unit"}`, width: "110px", align: "right", render: (o) => (o.unit_price_inr === null ? "—" : `${fmtQty(o.unit_price_inr)}${o.currency && o.currency !== "INR" ? ` (${o.currency} @ ${o.fx_inr ?? "?"})` : ""}`) },
-    { key: "landed_adder", label: "Landed ₹/unit", width: "120px", align: "right", render: (o) => (o.landed_adder === null ? "—" : `${fmtQty(o.landed_adder)}${o.landed_basis === "PROVISIONAL" ? " (draft)" : ""}`) },
+    { key: "landed_adder", label: "Landed ₹/unit", width: "120px", align: "right", render: (o) => (o.landed_adder === null ? "—" : `${fmtQty(o.landed_adder)}${o.landed_basis === "PROVISIONAL" ? " (draft)" : o.landed_basis === "INCLUDED_IN_PO_RATE" ? " (FOR included)" : ""}`) },
     { key: "days_money_tied", label: "Days money tied", width: "120px", align: "right", render: (o) => (o.days_money_tied ?? "—") },
     { key: "financing_per_unit", label: "Interest ₹/unit", width: "110px", align: "right", render: (o) => (o.financing_per_unit === null ? "—" : fmtQty(o.financing_per_unit)) },
     { key: "total_per_unit", label: "Total ₹/unit", width: "110px", align: "right", render: (o) => (o.total_per_unit === null ? "—" : <strong>{fmtQty(o.total_per_unit)}</strong>) },
@@ -1839,6 +1839,9 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
     { key: "group_label", label: "Material group", width: "180px", render: (r) => dash(r.group_label) },
     { key: "material_document_name", label: "Document name", width: "220px", render: (r) => dash(r.material_document_name) },
     { key: "material_name", label: "Material to use", width: "240px", render: (r) => (r.material_id ? r.material_name : <span className="text-rose-700">{r.material_name}</span>) },
+    { key: "receipt_reference", label: "Use first from", width: "220px", render: (r) => r.receipt_reference ? <span className={r.receipt_expiry_priority ? "font-semibold text-amber-800" : ""}>{r.receipt_reference}</span> : "—", copyValue: (r) => r.receipt_reference ?? "" },
+    { key: "receipt_valid_until", label: "Planning valid through", width: "150px", render: (r) => dash(r.receipt_valid_until), copyValue: (r) => r.receipt_valid_until ?? "" },
+    { key: "receipt_basis", label: "Source basis", width: "135px", render: (r) => dash(r.receipt_basis), copyValue: (r) => r.receipt_basis ?? "" },
     { key: "demand_qty", label: "Line demand", width: "110px", align: "right", render: (r) => fmtQty(r.demand_qty), copyValue: (r) => r.demand_qty },
     { key: "executable_qty", label: "From physical stock", width: "130px", align: "right", render: (r) => (r.executable_qty ? <span className="font-semibold text-emerald-800">{fmtQty(r.executable_qty)}</span> : ""), copyValue: (r) => r.executable_qty },
     { key: "not_backed_qty", label: "Not yet backed (future / short)", width: "180px", align: "right", render: (r) => (r.not_backed_qty ? <span className="text-rose-700">{fmtQty(r.not_backed_qty)}</span> : ""), copyValue: (r) => r.not_backed_qty },
@@ -1878,6 +1881,7 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
           ["Store Material Usage Instruction — advisory, from current physical stock only"],
           ["As-of", source?.calendar?.as_of ?? ""],
           ["CM + NM", `${source?.calendar?.as_of ?? ""} → ${source?.calendar?.nm_end ?? ""}`],
+          ["Shelf-life advice", "Opening Stock: opening-stock date + 120 days. GRN: recorded expiry / recorded life, otherwise GRN date + 120 days. Advisory only — no physical GRN issue is posted or verified."],
           ["Run", runId ? `Saved run ${runId}` : "Live calculation"],
           ["Source fingerprint", source?.source_fingerprint ?? ""],
         ],
@@ -1905,10 +1909,9 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
         <button type="button" onClick={() => void exportExcel()} disabled={!source} className="h-8 border border-emerald-600 bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Excel</button>
       </div>
       <p className="text-xs text-slate-500">
-        &quot;From physical stock&quot; is backed by posted counted stock at the run time — Store may use it. &quot;Not yet backed&quot; depends on future arrivals or is short:
-        never issue against it. If the production mix changes, follow the row of the product actually produced; shared stock cannot serve every product in full.
+        &quot;Use first from&quot; is a planning-only FEFO instruction: Opening Stock is valid for 120 days from its opening-stock date; GRN uses its recorded expiry/life or GRN date + 120 days. It does not post or verify a physical issue. &quot;Not yet backed&quot; depends on future arrivals or is short: never issue against it. If the production mix changes, follow the row of the product actually produced; shared stock cannot serve every product in full.
       </p>
-      <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={gridRows} rowKey={(r) => (view === "PRODUCT" ? `${r.pool_key}|${r.period}|${r.material_id ?? "rest"}` : view === "MATERIAL" ? r.key : r.group_id)} emptyMessage={(runId ? runQ.isLoading : liveQ.isLoading) ? "Loading…" : "No demand in CM + NM."} maxHeight="calc(100vh - 340px)" />
+      <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={gridRows} rowKey={(r) => (view === "PRODUCT" ? `${r.pool_key}|${r.period}|${r.material_id ?? "rest"}|${r.receipt_reference ?? "none"}|${r.receipt_valid_until ?? ""}` : view === "MATERIAL" ? r.key : r.group_id)} emptyMessage={(runId ? runQ.isLoading : liveQ.isLoading) ? "Loading…" : "No demand in CM + NM."} maxHeight="calc(100vh - 340px)" />
     </div>
   );
 }
