@@ -93,6 +93,8 @@ Deno.test("family planner: a standalone Target remains physical safety stock acr
   assert(buys.every((buy) => (buy.recommended_po_qty_base ?? 0) > 0.001), `no epsilon/zero safety lot is allowed: ${JSON.stringify(buys)}`);
   const january = result.rows.find((row) => row.material_id === "TOT" && row.day === "2027-01-15");
   assert(january?.closing_qty_base === 35 * daily, `zero-demand January must retain the physical safety reserve, got ${JSON.stringify(january)}`);
+  assert(january?.max_cover_days === 35 && january.min_cover_days === 35, `zero-demand January must retain 35 active-use days, not count calendar days: ${JSON.stringify(january)}`);
+  assert(result.rows.filter((row) => row.material_id === "TOT").every((row) => (row.max_cover_days ?? 0) <= 35), "a zero-demand month must not inflate standalone coverage days");
 });
 
 Deno.test("family planner: no stock-out and no member below Critical once lots can arrive", () => {
