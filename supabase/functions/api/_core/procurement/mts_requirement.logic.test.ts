@@ -738,6 +738,25 @@ Deno.test("CC-date remaining requirement re-phases fixed Item Plan demand; group
   assertEqual(rephased.at(-1)?.qty, 4, "member-ambiguous group pool is never re-phased from a material consumption total");
 });
 
+Deno.test("CC-date remaining requirement reaches Planning / 4A, not only the Requirement metrics", () => {
+  const calendar = buildCalendar("2026-10-01", "2026-10-23")!;
+  const output = buildRequirementRows({
+    ...baseInput({ calendar }),
+    planLines: [line({ plan_month: "2026-10-01", plan_type: "FINAL", base_qty: 3100 })],
+    demandAt: null,
+    stockRows: [], reservations: [], applyReservations: true,
+    // RM-A is 60% of the 3,100 KG October plan: 1,860 KG total.  With 1,200 KG
+    // already posted, the remaining 660 KG must be spread over Oct 23–31.
+    consumptionByMaterial: new Map([["RM-A", 1200]]),
+    inboundEvents: [], policies: [], leadTimes: new Map(),
+    materialUniverse: ["RM-A", "RM-B", "RM-C", "PM-BAG"],
+    locationRoles: new Map([["R1", "COUNTED"], ["P1LOC", "COUNTED"]]),
+  });
+  const cmFixed = output.records.filter((record) => record.candidates[0] === "RM-A" && record.day >= calendar.asOf && record.day <= calendar.cmEnd);
+  near(sum(new Map(cmFixed.map((record) => [record.day, record.qty]))), 660, "Planning receives only the remaining CM demand");
+  near(cmFixed[0]?.qty, 660 / 9, "4A daily Pro-rata Use equals Requirement remaining rate");
+});
+
 Deno.test("D3/D12: fixed demand is met first; group shortage stays on the group; R003 shown not counted", () => {
   const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
   const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"], ["S001", "COUNTED"], ["R003", "TRANSFER_SOURCE"], ["OT01", "EXCLUDED"]]);

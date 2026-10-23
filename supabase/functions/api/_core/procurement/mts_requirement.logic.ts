@@ -2122,7 +2122,11 @@ export type RequirementOutput = {
   warnings: Warning[];
   exceptions: Warning[];
   effective: EffectiveSkuMonth[];
-  /** Exploded demand before any stock allocation (PO22 family planner input; never serialised). */
+  /**
+   * Demand used by PO22 Planning / 4A before stock allocation.  Fixed current-month
+   * demand is re-phased from the CC date so this is the same remaining-demand
+   * basis shown by Requirement's Current Prorata.
+   */
   records: DemandRecord[];
 };
 
@@ -2377,7 +2381,10 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       }
     }
   }
-  return { rows, groups, store_rows: storeRows, warnings, exceptions: explosion.exceptions, effective, records: explosion.records };
+  // Planning / 4A consumes this field to build its daily family input.  Returning
+  // `explosion.records` here would silently restore the gross CM rate after the
+  // Requirement grid correctly calculated the remaining CM rate.
+  return { rows, groups, store_rows: storeRows, warnings, exceptions: explosion.exceptions, effective, records: planningRecords };
 }
 
 export type UomConversion = { from_uom_code: string; to_uom_code: string; conversion_factor: number | null; variable_conversion: boolean | null; active: boolean | null };
