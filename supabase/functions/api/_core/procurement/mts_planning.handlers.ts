@@ -31,7 +31,7 @@ import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand
 import { assemblePlanningInput, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
-import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, rankCostOptions } from "./mts_cost.logic.ts";
+import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
@@ -73,7 +73,7 @@ export function readParams(url: URL | JsonRecord, today: string): { params?: Omi
   return { params: { planMonth, asOf, demandAt, today } };
 }
 
-async function loadVendorTerms(companyId: string, universe: string[], routesByMaterial: Map<string, Array<{ vendor_id?: string; days: number }>>, materials: Awaited<ReturnType<typeof computeRequirement>>["materials"]) {
+async function loadVendorTerms(companyId: string, universe: string[], routesByMaterial: Map<string, Array<{ vendor_id?: string; days: number }>>, materials: Awaited<ReturnType<typeof computeRequirement>>["materials"], today: string) {
   const result = new Map<string, VendorTerm[]>();
   if (universe.length === 0) return result;
   const [vmiRows, mapRes] = await Promise.all([
@@ -90,12 +90,20 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   const label = new Map(vendors.map((v) => [text(v.id), [text(v.vendor_code), text(v.vendor_name)].filter(Boolean).join(" — ")]));
   // Default payment term per vendor-material (D10: cash-out timing).
   const vmiIds = unique(rows.map((row) => text(row.id)));
-  const [termRows, currencyRows] = vmiIds.length === 0 ? [[], []] : await Promise.all([
+  const [termRows, currencyRows, recentPos] = vmiIds.length === 0 ? [[], [], []] : await Promise.all([
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_payment_term").select("vmi_id, payment_term_id, is_default").in("vmi_id", chunk)),
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_currency").select("vmi_id, currency_code, is_default").in("vmi_id", chunk)),
+    fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("purchase_order")
+      .select("id, po_date, status").eq("company_id", companyId)
+      .gte("po_date", new Date(Date.parse(`${today}T00:00:00Z`) - 730 * 86_400_000).toISOString().slice(0, 10)).order("po_date"), "MTS_PLANNING_PO_CURRENCY_READ_FAILED"),
   ]);
+  const poById = new Map(recentPos
+    .filter((po) => !["CANCELLED", "REJECTED"].includes(text(po.status).toUpperCase()))
+    .map((po) => [text(po.id), po]));
+  const recentPoLines = poById.size === 0 ? [] : await fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("purchase_order_line").select("po_id, vendor_material_info_id, currency_code").in("vendor_material_info_id", chunk));
   const termIds = unique(termRows.map((t) => text(t.payment_term_id)));
   const terms = termIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(termIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("payment_terms_master").select("id, credit_days, advance_pct, payment_method, payment_type").in("id", chunk));
@@ -114,6 +122,19 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     const currency = text(row.currency_code).toUpperCase();
     if (currency && (row.is_default === true || !currencyByVmi.has(vmiId))) currencyByVmi.set(vmiId, currency);
   }
+  // The PO line records the currency of the price actually paid.  A legacy
+  // VMI may carry the price but have no currency, so retain the latest linked
+  // non-cancelled PO currency as the strongest source.
+  const poCurrencyByVmi = new Map<string, { currency: string; po_date: string }>();
+  for (const line of recentPoLines) {
+    const po = poById.get(text(line.po_id));
+    const vmiId = text(line.vendor_material_info_id);
+    const currency = text(line.currency_code).toUpperCase();
+    if (!po || !vmiId || !currency) continue;
+    const date = text(po.po_date);
+    const seen = poCurrencyByVmi.get(vmiId);
+    if (!seen || date >= seen.po_date) poCurrencyByVmi.set(vmiId, { currency, po_date: date });
+  }
   for (const row of rows) {
     const materialId = text(row.material_id);
     const vendorId = text(row.vendor_id);
@@ -126,7 +147,12 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       vendor_id: vendorId, vendor_label: label.get(vendorId) ?? "—", material_id: materialId,
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
-      last_price: num(row.last_purchase_price), currency: text(row.last_purchase_currency).toUpperCase() || currencyByVmi.get(text(row.id)) || null,
+      last_price: num(row.last_purchase_price),
+      currency: resolvePurchaseCurrency({
+        po_line_currency: poCurrencyByVmi.get(text(row.id))?.currency ?? null,
+        vmi_last_purchase_currency: text(row.last_purchase_currency) || null,
+        vmi_default_currency: currencyByVmi.get(text(row.id)) ?? null,
+      }),
       supply_uom_code: text(row.supply_uom_code) || null,
       ...(() => {
         const term = termByVmi.get(text(row.id));
@@ -254,7 +280,7 @@ type CostInputs = {
   interestPct: number | null;
   customerCreditDays: number | null;
   fxByCurrency: Map<string, { inr: number | null; source: string | null; stale: boolean }>;
-  landedByVendorMaterial: Map<string, { adder: number | null; basis: "FINAL" | "PROVISIONAL" | "NONE" }>;
+  landedByVendorMaterial: Map<string, { adder: number | null; basis: LandedCostBasis }>;
   /** P2: average landed cost of one order (per GRN) per vendor + material. */
   orderCostByVendorMaterial: Map<string, number | null>;
   /** Owner 2026-10-21: freight term of the latest PO per vendor + material (FOR / FREIGHT_SEPARATE / …). */
@@ -268,7 +294,7 @@ async function loadCostInputs(companyId: string, asOf: string, today: string, un
     serviceRoleClient.schema("erp_planning").from("company_planning_finance").select("effective_from, interest_pct_per_year").eq("company_id", companyId).limit(500),
     serviceRoleClient.schema("erp_procurement").from("sales_order").select("payment_term_id").eq("company_id", companyId).gte("so_date", since).not("payment_term_id", "is", null).limit(5000),
     universe.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
-      .select("id, vendor_id, material_id, received_qty, uom_code, status, grn_date").eq("company_id", companyId).gte("grn_date", since).in("material_id", chunk)),
+      .select("id, vendor_id, material_id, po_id, received_qty, uom_code, status, grn_date").eq("company_id", companyId).gte("grn_date", since).in("material_id", chunk)),
     Promise.all(currencies.map(async (code) => [code, await resolveFxRate(code, today).catch(() => null)] as const)),
   ]);
   const interestPct = financeRes.error ? null : interestPctAt(((financeRes.data ?? []) as JsonRecord[]).map((r) => ({ effective_from: text(r.effective_from), interest_pct_per_year: Number(r.interest_pct_per_year) })), asOf);
@@ -286,6 +312,10 @@ async function loadCostInputs(companyId: string, asOf: string, today: string, un
   // Landed cost history per vendor + material (AC01 landed_cost by GRN).
   const postedGrns = grns.filter((g) => !["CANCELLED", "REVERSED", "DRAFT"].includes(text(g.status).toUpperCase()));
   const grnIds = unique(postedGrns.map((g) => text(g.id)));
+  const grnPoIds = unique(postedGrns.map((g) => text(g.po_id)));
+  const grnPos = grnPoIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(grnPoIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("purchase_order").select("id, vendor_type, freight_term").in("id", chunk));
+  const grnPoById = new Map(grnPos.map((po) => [text(po.id), po]));
   const landed = grnIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(grnIds, (chunk) => serviceRoleClient.schema("erp_procurement")
     .from("landed_cost").select("grn_id, total_cost, status").in("grn_id", chunk));
   const landedByGrn = new Map<string, { total: number; status: string }>();
@@ -297,15 +327,23 @@ async function loadCostInputs(companyId: string, asOf: string, today: string, un
     landedByGrn.set(text(row.grn_id), seen);
   }
   const history = new Map<string, Array<{ total_cost: number; received_base_qty: number; status: string }>>();
+  const includedInPoRate = new Set<string>();
   for (const grn of postedGrns) {
     const lc = landedByGrn.get(text(grn.id));
-    if (!lc) continue;
     const base = toMaterialBase(materials.get(text(grn.material_id)), Number(grn.received_qty ?? 0), text(grn.uom_code));
     if (base === null) continue;
     const key = `${text(grn.vendor_id)}|${text(grn.material_id)}`;
-    history.set(key, [...(history.get(key) ?? []), { total_cost: lc.total, received_base_qty: base, status: lc.status }]);
+    if (lc) {
+      history.set(key, [...(history.get(key) ?? []), { total_cost: lc.total, received_base_qty: base, status: lc.status }]);
+      continue;
+    }
+    const po = grnPoById.get(text(grn.po_id));
+    if (text(po?.vendor_type).toUpperCase() === "DOMESTIC" && text(po?.freight_term).toUpperCase() === "FOR") includedInPoRate.add(key);
   }
   const landedByVendorMaterial = new Map([...history].map(([key, rows]) => [key, landedAdder(rows)]));
+  for (const key of includedInPoRate) {
+    if (!landedByVendorMaterial.has(key)) landedByVendorMaterial.set(key, { adder: 0, basis: "INCLUDED_IN_PO_RATE" });
+  }
   const orderCostByVendorMaterial = new Map([...history].map(([key, rows]) => [key, averageOrderCost(rows)]));
   // Freight term of the latest PO per vendor + material (2 years).
   const poSince = new Date(Date.parse(`${today}T00:00:00Z`) - 730 * 86_400_000).toISOString().slice(0, 10);
@@ -368,7 +406,7 @@ export async function computePlanning(p: PlanningParams) {
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
   const reuse = p.reuseLoads === true;
   const [vendorTerms, selections] = await Promise.all([
-    cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials), reuse),
+    cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials, p.today), reuse),
     // Item Plan runs six months ahead; use a decision from every month in the
     // active horizon, not only CM/NM, when choosing a group member for a new buy.
     loadSelections(p.companyId, calendar.months),

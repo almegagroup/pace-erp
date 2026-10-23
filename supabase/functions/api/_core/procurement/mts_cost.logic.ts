@@ -13,6 +13,8 @@
  * Unknown components are reported, never assumed zero, and an option with an unknown price is not ranked.
  */
 
+export type LandedCostBasis = "FINAL" | "PROVISIONAL" | "INCLUDED_IN_PO_RATE" | "NONE";
+
 export type CostVendorInput = {
   vendor_label: string;
   price: number | null;            // per base unit, in `currency`
@@ -20,7 +22,7 @@ export type CostVendorInput = {
   fx_inr: number | null;           // INR per 1 currency unit (1 for INR)
   fx_source: string | null;
   landed_adder: number | null;     // INR per base unit
-  landed_basis: "FINAL" | "PROVISIONAL" | "NONE";
+  landed_basis: LandedCostBasis;
   vendor_credit_days: number | null;
   advance: boolean;
   order_qty: number | null;        // after this vendor's MOQ / multiple
@@ -48,6 +50,20 @@ export type CostOption = CostVendorInput & {
   missing: string[];
   rank: number | null;
 };
+
+/**
+ * Currency must describe the price actually being compared.  A linked PO line
+ * is therefore stronger evidence than a legacy VMI field; a configured VMI
+ * currency remains a fallback when no linked PO line exists.
+ */
+export function resolvePurchaseCurrency(input: {
+  po_line_currency?: string | null;
+  vmi_last_purchase_currency?: string | null;
+  vmi_default_currency?: string | null;
+}): string | null {
+  const pick = (value: string | null | undefined) => String(value ?? "").trim().toUpperCase();
+  return pick(input.po_line_currency) || pick(input.vmi_last_purchase_currency) || pick(input.vmi_default_currency) || null;
+}
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
@@ -93,7 +109,7 @@ export function rankCostOptions(options: CostOption[]): CostOption[] {
 }
 
 /** Landed adder per base unit from AC01 history: Σ landed cost / Σ received base qty. */
-export function landedAdder(rows: ReadonlyArray<{ total_cost: number; received_base_qty: number; status: string }>): { adder: number | null; basis: "FINAL" | "PROVISIONAL" | "NONE" } {
+export function landedAdder(rows: ReadonlyArray<{ total_cost: number; received_base_qty: number; status: string }>): { adder: number | null; basis: LandedCostBasis } {
   const valid = rows.filter((r) => r.received_base_qty > 0 && Number.isFinite(r.total_cost));
   if (valid.length === 0) return { adder: null, basis: "NONE" };
   const qty = valid.reduce((s, r) => s + r.received_base_qty, 0);

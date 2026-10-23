@@ -1,4 +1,4 @@
-import { averageOrderCost, costOption, economicCycleDays, landedAdder, rankCostOptions, type CostVendorInput } from "./mts_cost.logic.ts";
+import { averageOrderCost, costOption, economicCycleDays, landedAdder, rankCostOptions, resolvePurchaseCurrency, type CostVendorInput } from "./mts_cost.logic.ts";
 
 function equal(actual: unknown, expected: unknown, message: string) { if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${message}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`); }
 const vendor = (over: Partial<CostVendorInput>): CostVendorInput => ({
@@ -35,6 +35,18 @@ Deno.test("cost: unknown components are reported; unpriced or infeasible options
 Deno.test("landed adder from AC01 history", () => {
   equal(landedAdder([{ total_cost: 5000, received_base_qty: 1000, status: "POSTED" }, { total_cost: 2500, received_base_qty: 500, status: "DRAFT" }]), { adder: 5, basis: "PROVISIONAL" }, "draft makes it provisional");
   equal(landedAdder([]), { adder: null, basis: "NONE" }, "no history");
+});
+
+Deno.test("cost: linked PO currency wins over blank or stale vendor-material currency", () => {
+  equal(resolvePurchaseCurrency({ po_line_currency: "inr", vmi_last_purchase_currency: null, vmi_default_currency: null }), "INR", "PO INR fallback");
+  equal(resolvePurchaseCurrency({ po_line_currency: "USD", vmi_last_purchase_currency: "INR", vmi_default_currency: "EUR" }), "USD", "PO is the priced-source authority");
+  equal(resolvePurchaseCurrency({ po_line_currency: null, vmi_last_purchase_currency: null, vmi_default_currency: "usd" }), "USD", "default VMI fallback");
+  equal(resolvePurchaseCurrency({}), null, "unknown remains unknown");
+});
+
+Deno.test("cost: domestic FOR price may include landed cost without an AC01 add-on", () => {
+  const included = costOption(vendor({ landed_adder: 0, landed_basis: "INCLUDED_IN_PO_RATE" }), context);
+  if (included.missing.includes("landed cost history")) throw new Error("FOR included rate must not be flagged as missing landed cost");
 });
 
 Deno.test("P2 economicCycleDays: √(2S/(D·H)), clamped 7–90, null when data is missing", () => {

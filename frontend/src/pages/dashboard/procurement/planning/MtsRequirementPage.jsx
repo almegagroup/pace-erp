@@ -1692,7 +1692,7 @@ function CostCompare({ options, basis, uom }) {
     { key: "feasible", label: "On time", width: "70px", render: (o) => (o.feasible ? "Yes" : <span className="text-rose-700">No</span>) },
     { key: "lead_time_days", label: "Lead (d)", width: "70px", align: "right", render: (o) => (o.lead_time_days ?? "—") },
     { key: "unit_price_inr", label: `Price ₹/${uom ?? "unit"}`, width: "110px", align: "right", render: (o) => (o.unit_price_inr === null ? "—" : `${fmtQty(o.unit_price_inr)}${o.currency && o.currency !== "INR" ? ` (${o.currency} @ ${o.fx_inr ?? "?"})` : ""}`) },
-    { key: "landed_adder", label: "Landed ₹/unit", width: "120px", align: "right", render: (o) => (o.landed_adder === null ? "—" : `${fmtQty(o.landed_adder)}${o.landed_basis === "PROVISIONAL" ? " (draft)" : ""}`) },
+    { key: "landed_adder", label: "Landed ₹/unit", width: "120px", align: "right", render: (o) => (o.landed_adder === null ? "—" : `${fmtQty(o.landed_adder)}${o.landed_basis === "PROVISIONAL" ? " (draft)" : o.landed_basis === "INCLUDED_IN_PO_RATE" ? " (FOR included)" : ""}`) },
     { key: "days_money_tied", label: "Days money tied", width: "120px", align: "right", render: (o) => (o.days_money_tied ?? "—") },
     { key: "financing_per_unit", label: "Interest ₹/unit", width: "110px", align: "right", render: (o) => (o.financing_per_unit === null ? "—" : fmtQty(o.financing_per_unit)) },
     { key: "total_per_unit", label: "Total ₹/unit", width: "110px", align: "right", render: (o) => (o.total_per_unit === null ? "—" : <strong>{fmtQty(o.total_per_unit)}</strong>) },
