@@ -97,6 +97,27 @@ Deno.test("family planner: a standalone Target remains physical safety stock acr
   assert(result.rows.filter((row) => row.material_id === "TOT").every((row) => (row.max_cover_days ?? 0) <= 35), "a zero-demand month must not inflate standalone coverage days");
 });
 
+Deno.test("family planner: known higher NM demand controls CM forward cover and MOQ projection", () => {
+  // Production CMP005 Calcium Formate shape on 23-Oct: 58.88 opening, a
+  // same-day 600 KG GR, 35.22 KG left in CM, then 466.30 KG in November.
+  const asOf = "2026-10-23";
+  const horizonEnd = "2026-11-30";
+  const dates: string[] = [];
+  for (let day = asOf; day <= horizonEnd; day = addDays(day, 1)) dates.push(day);
+  const result = planFamily({
+    as_of: asOf, horizon_end: horizonEnd,
+    opening_qty_by_material: { CALCIUM: 58.88 },
+    own_demand: dates.map((required_by) => ({ material_id: "CALCIUM", required_by, qty_base: required_by < "2026-11-01" ? 35.22 / 9 : 466.3 / 30 })),
+    group_demand: [],
+    confirmed_arrivals: [{ source_key: "GRN 2000000697", material_id: "CALCIUM", eta_to_plant: asOf, qty_base: 600 }],
+    policies: [{ material_id: "CALCIUM", target_days: 30, critical_days: 15, vendor_moq_qty_base: 500, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: 7, cycle_days: 30 }],
+  });
+  const first = result.rows.find((row) => row.material_id === "CALCIUM" && row.day === asOf);
+  assert(first?.max_cover_days === 48 && first.min_cover_days === 9, `23-Oct must be 48/9 days, got ${JSON.stringify(first)}`);
+  const buy = result.advisory_buys.find((row) => row.material_id === "CALCIUM");
+  assert(buy?.need_date === "2026-11-10" && buy.recommended_po_qty_base === 500 && buy.recommended_po_by === "2026-11-03", `Target/lead/MOQ projection incorrect: ${JSON.stringify(buy)}`);
+});
+
 Deno.test("family planner: no stock-out and no member below Critical once lots can arrive", () => {
   const result = planFamily(rdpFamily());
   const shortDays = result.rows.filter((r) => r.closing_qty_base < -1e-6);

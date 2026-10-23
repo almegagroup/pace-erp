@@ -141,11 +141,11 @@ function coverDays(balance: number, use: readonly number[], from: number): numbe
  * Coverage for a standalone own-use item.  A month without an approved PO21
  * plan has zero consumption, so its calendar days must not make coverage look
  * longer.  We walk the real positive demand days, then express any retained
- * balance at the last approved daily rate.  This is a coverage/reporting rate
+ * balance at the final approved daily rate in the horizon.  This is a coverage/reporting rate
  * only; the simulation continues to consume the real (possibly zero) demand.
  */
-function standaloneCoverageDays(balance: number, use: readonly number[], from: number, lastApprovedDailyUse: number): number | null {
-  if (lastApprovedDailyUse <= EPSILON) return null;
+function standaloneCoverageDays(balance: number, use: readonly number[], from: number, finalApprovedDailyUse: number): number | null {
+  if (finalApprovedDailyUse <= EPSILON) return null;
   if (balance <= EPSILON) return 0;
   let left = balance;
   let covered = 0;
@@ -156,7 +156,7 @@ function standaloneCoverageDays(balance: number, use: readonly number[], from: n
     left = Math.max(0, left - need);
     covered += 1;
   }
-  return covered + Math.floor(left / lastApprovedDailyUse + EPSILON);
+  return covered + Math.floor(left / finalApprovedDailyUse + EPSILON);
 }
 
 /** Use over the `n` days after index `from` (beyond the horizon: average). */
@@ -219,17 +219,15 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const pools = [...poolByKey.values()].sort((a, b) => a.candidates.length - b.candidates.length || a.key.localeCompare(b.key));
   const isSharedGroupMember = ids.map((id) => pools.some((pool) => pool.candidates.includes(id)));
   // A standalone item's Target is a physical safety reserve, not a permission
-  // to run stock down to zero in a later no-demand month.  Carry its most
-  // recently approved non-zero daily own use forward as the sizing rate only;
+  // to run stock down to zero in a later no-demand month.  Carry its final
+  // approved non-zero daily own-use rate forward as the sizing rate only;
+  // a current-month rate must not inflate coverage after known next-month use.
   // simulation still consumes the actual PO21 demand (zero means zero use).
   // Shared-group safety is deliberately deferred: one combined group reserve
   // must not be duplicated on every alternative member.
-  const latestOwnDailyUse = own.map((series) => {
-    let latest = 0;
-    return series.map((qty) => {
-      if (qty > EPSILON) latest = qty;
-      return latest;
-    });
+  const finalOwnDailyUse = own.map((series) => {
+    const finalRate = [...series].reverse().find((qty) => qty > EPSILON) ?? 0;
+    return series.map(() => finalRate);
   });
 
   const arrivalFlags: OptimizerArrivalFlag[] = [];
@@ -450,8 +448,8 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       if (t === null || targets[m][i].critical === null) continue;
       const cover = isSharedGroupMember[m]
         ? coverDays(sim.ownBalance[m][i], own[m], i)
-        : standaloneCoverageDays(sim.ownBalance[m][i], own[m], i, latestOwnDailyUse[m][i]);
-      const safetyFloor = isSharedGroupMember[m] ? 0 : latestOwnDailyUse[m][i] * t;
+        : standaloneCoverageDays(sim.ownBalance[m][i], own[m], i, finalOwnDailyUse[m][i]);
+      const safetyFloor = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][i] * t;
       const atCoverageTarget = cover !== null && cover <= t;
       const atPhysicalSafetyFloor = safetyFloor > EPSILON && sim.ownBalance[m][i] <= safetyFloor + EPSILON;
       if (atCoverageTarget || atPhysicalSafetyFloor) {
@@ -533,7 +531,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       // reserve is being exhausted.  Refill to Target + order cycle using the
       // last approved non-zero daily own-use rate; do not simulate fake use.
       const safetyRequired = need.kind === "OWN" && !isSharedGroupMember[m]
-        ? Math.max(0, own[m][arrivalIndex] + latestOwnDailyUse[m][need.index] * window - availableBeforeArrival)
+        ? Math.max(0, own[m][arrivalIndex] + finalOwnDailyUse[m][need.index] * window - availableBeforeArrival)
         : 0;
       const required = Math.max(demandRequired, safetyRequired);
       const constraints = need.option
@@ -595,7 +593,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       // existing family allocator semantics until that design is finalised.
       const maxCover = isSharedGroupMember[m]
         ? coverDays(closing, sim.use[m], i)
-        : standaloneCoverageDays(closing, sim.use[m], i, latestOwnDailyUse[m][i]);
+        : standaloneCoverageDays(closing, sim.use[m], i, finalOwnDailyUse[m][i]);
       const minStock = roundQty(closing - sim.arrival[m][i] - sim.planned[m][i]);
       if (firstShortage === null && closing < -EPSILON) firstShortage = allDays[i];
       if (firstCritical === null && critical !== null && maxCover !== null && maxCover <= critical) firstCritical = allDays[i];
@@ -606,7 +604,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         closing_qty_base: closing, max_cover_days: maxCover, min_stock_qty_base: minStock,
         min_cover_days: isSharedGroupMember[m]
           ? coverDays(minStock, sim.use[m], i)
-          : standaloneCoverageDays(minStock, sim.use[m], i, latestOwnDailyUse[m][i]),
+          : standaloneCoverageDays(minStock, sim.use[m], i, finalOwnDailyUse[m][i]),
         target_days: target, critical_days: critical, executable_arrival: false,
       });
     }
