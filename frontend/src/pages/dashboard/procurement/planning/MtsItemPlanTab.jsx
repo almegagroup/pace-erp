@@ -46,6 +46,13 @@ function demandSourceLabel(source) {
   if (source === "FORECAST") return "Forecast";
   return source === "PLAN" ? "Plan" : "";
 }
+function carryForwardLabel(row) {
+  const days = Number(row?.carry_forward_days ?? 0);
+  if (!(days > 0)) return "";
+  return row?.next_demand_day
+    ? `No demand ${days} d → ${row.next_demand_day}`
+    : `No demand ${days} d → horizon end`;
+}
 const GAP_LABEL = {
   NO_TARGET_CRITICAL: "no Target / Critical days (set in 2. Material Settings)",
   NO_VENDOR: "no vendor linked (MM03 vendor–material link)",
@@ -177,6 +184,14 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     ), copyValue: (r) => r.day },
     { key: "cc", label: "CC", width: "40px", render: (r) => (r.day === plan?.calendar?.as_of ? <span className="font-semibold text-emerald-700">CC</span> : ""), copyValue: (r) => (r.day === plan?.calendar?.as_of ? "CC" : "") },
     { key: "source", label: "Demand", width: "100px", render: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))), copyValue: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))) },
+    {
+      key: "carry_forward", label: "Stock carry-forward", width: "190px",
+      render: (r) => {
+        const label = carryForwardLabel(r);
+        return label ? <span className="text-xs text-violet-800" title="No approved demand: stock stays physically available, but these days are not counted as active-demand coverage.">{label}</span> : "";
+      },
+      copyValue: (r) => carryForwardLabel(r),
+    },
     { key: "opening", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening), copyValue: (r) => r.opening },
     { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
     {
@@ -459,6 +474,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
           ["Family members", (plan?.members ?? []).map((m) => `${m.material_code ?? ""} ${m.material_name}`.trim()).join("; ")],
           ["As-of", plan?.calendar?.as_of ?? asOf],
           ["Horizon end", plan?.calendar?.horizon_end ?? ""],
+          ["Coverage rule", plan?.family?.is_family ? "Family allocator coverage" : "Max/Min Days = active approved-demand coverage; zero-demand dates carry physical stock forward separately."],
         ],
       });
     } catch (error) {

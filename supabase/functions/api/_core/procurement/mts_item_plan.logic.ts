@@ -141,6 +141,8 @@ export type FamilyDayRow = {
   day: string; opening: number; arrivals: number; planned_lot: number; use: number;
   /** Group demand no member could meet that day (a shortage). */
   unmet_group: number; closing: number; max_days: number | null; min_stock: number; min_days: number | null;
+  /** A real no-demand calendar gap: stock stays physically available, but it is not active-demand coverage. */
+  carry_forward_days: number | null; next_demand_day: string | null;
 };
 
 /** Whole + fractional days `balance` covers from `fromIndex`, walking the coming days' use (owner: forward). */
@@ -209,6 +211,14 @@ export function familyDayGrid(
   });
   const uses = sums.map((s) => s.memberUse + s.unmet);
   const coverage = options.activeDemandCoverage ? activeDemandCoverDays : forwardCoverDays;
+  // Keep the valuable planning fact visible: demand-free days do carry stock
+  // forward.  Report it separately from Max/Min active-demand coverage.
+  const nextUseIndex = Array.from({ length: uses.length }, () => -1);
+  let next = -1;
+  for (let i = uses.length - 1; i >= 0; i -= 1) {
+    if (uses[i] > EPSILON) next = i;
+    nextUseIndex[i] = next;
+  }
   let carriedShort = 0;
   return sums.map((s, index) => {
     const opening = s.opening - carriedShort;
@@ -221,6 +231,8 @@ export function familyDayGrid(
       // Whole days, rounded down (sheet ROUNDDOWN): 49.7 days of stock is 49 full days.
       max_days: wholeDays(coverage(closing, uses, index + 1)), min_stock: round(minStock),
       min_days: wholeDays(coverage(minStock, uses, index + 1)),
+      carry_forward_days: uses[index] > EPSILON ? null : (nextUseIndex[index] < 0 ? uses.length - index : nextUseIndex[index] - index),
+      next_demand_day: nextUseIndex[index] < 0 ? null : days[nextUseIndex[index]],
     };
   });
 }
