@@ -141,12 +141,27 @@ export type FamilyDayRow = {
   day: string; opening: number; arrivals: number; planned_lot: number; use: number;
   /** Group demand no member could meet that day (a shortage). */
   unmet_group: number; closing: number; max_days: number | null; min_stock: number; min_days: number | null;
+  /**
+   * Local-rate coverage: closing stock ÷ this date's pro-rata use.  It is an
+   * audit aid only, not the forward-looking Max Days used by the engine.
+   */
+  prorata_max_days: number | null;
   /** A real no-demand calendar gap: stock stays physically available, but it is not active-demand coverage. */
   carry_forward_days: number | null; next_demand_day: string | null;
 };
 
 /** Whole + fractional days `balance` covers from `fromIndex`, walking the coming days' use (owner: forward). */
 export const wholeDays = (days: number | null) => (days === null ? null : Math.floor(days + 1e-9));
+
+/**
+ * The simple, on-row coverage number a planner can verify by hand.  Unlike
+ * forwardCoverDays(), this intentionally does not walk future months: it uses
+ * only the pro-rata shown on the same row.
+ */
+export function prorataMaxDays(closing: number, dailyUse: number): number | null {
+  if (dailyUse <= EPSILON) return null;
+  return wholeDays(Math.max(0, closing) / dailyUse);
+}
 
 export function forwardCoverDays(balance: number, uses: readonly number[], fromIndex: number): number | null {
   const tail = uses.slice(fromIndex);
@@ -231,6 +246,7 @@ export function familyDayGrid(
       // Whole days, rounded down (sheet ROUNDDOWN): 49.7 days of stock is 49 full days.
       max_days: wholeDays(coverage(closing, uses, index + 1)), min_stock: round(minStock),
       min_days: wholeDays(coverage(minStock, uses, index + 1)),
+      prorata_max_days: prorataMaxDays(closing, uses[index]),
       carry_forward_days: uses[index] > EPSILON ? null : (nextUseIndex[index] < 0 ? uses.length - index : nextUseIndex[index] - index),
       next_demand_day: nextUseIndex[index] < 0 ? null : days[nextUseIndex[index]],
     };

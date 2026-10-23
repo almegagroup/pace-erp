@@ -349,7 +349,8 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
     qtyColumn("nm_req", "Req NM", "demand"),
     qtyColumn("nm_prorata_daily", "Prorata NM / day", "demand", { width: "120px" }),
 
-    qtyColumn("current_stock", "CURRENT_STOCK (counted)", "stock", { width: "130px" }),
+    qtyColumn("current_stock", "CURRENT_STOCK (live)", "stock", { width: "130px" }),
+    qtyColumn("actual_gr_today", "Actual GR (CC date)", "stock", { width: "130px" }),
     qtyColumn("stock_unrestricted_at_required", "Unrestricted (counted locations)", "stock", { width: "150px" }),
     qtyColumn("stock_reserved_at_required", "Reserved", "stock", { width: "100px" }),
     qtyColumn("stock_other_sloc", "Not counted — transfer (R003 / F…)", "stock", { width: "170px" }),

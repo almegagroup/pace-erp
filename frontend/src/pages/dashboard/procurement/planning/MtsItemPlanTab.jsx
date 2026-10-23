@@ -228,6 +228,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "unmet_group", label: "Group shortfall", width: "110px", align: "right", render: (r) => (r.unmet_group >= 0.001 ? <span className="font-semibold text-rose-700" title="Group demand no member had stock for">{fmtQty(r.unmet_group)}</span> : ""), copyValue: (r) => (r.unmet_group >= 0.001 ? r.unmet_group : "") },
     { key: "closing", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing)}</span>, copyValue: (r) => r.closing },
     { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
+    {
+      key: "prorata_max_days", label: "Prorata Max Days", width: "130px", align: "right",
+      render: (r) => <span title="Closing stock ÷ this row's Pro-rata Use. This is an audit value; engine Max Days still follows future approved demand.">{fmtDays(r.prorata_max_days)}</span>,
+      copyValue: (r) => r.prorata_max_days ?? "",
+    },
     { key: "min_stock", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock), copyValue: (r) => r.min_stock },
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_days), copyValue: (r) => r.min_days ?? "" },
     {

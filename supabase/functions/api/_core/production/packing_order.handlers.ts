@@ -425,6 +425,7 @@ async function resolvePackingSfgBatchOptions(
     .from("batch_number_instance")
     .select("batch_number, source_process_order_id")
     .eq("company_id", companyId)
+    .eq("prodshade_material_id", materialId)
     .in("batch_number", batchNumbers);
   if (batchErr) {
     console.error("[packing_order.resolvePackingSfgBatchOptions] batch instance query failed:", JSON.stringify(batchErr));

@@ -1488,6 +1488,8 @@ export type InboundBuckets = {
   later: number;      // after NM
   unknown: number;    // no ETA
   total: number;
+  /** A GR posted on the CC date: physically received now, but retained as a dated day-grid event. */
+  actual_gr_today: number;
   /** Physically dispatched / at gate (CSN, gate entry, STO in transit) vs open PO (lot / remainder). */
   dispatched: number;
   open_po: number;
@@ -1500,9 +1502,16 @@ export type InboundBuckets = {
 };
 
 export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar): InboundBuckets {
-  const buckets: InboundBuckets = { overdue: 0, cm: 0, nm: 0, later: 0, unknown: 0, total: 0, dispatched: 0, open_po: 0, byDay: new Map() };
+  const buckets: InboundBuckets = { overdue: 0, cm: 0, nm: 0, later: 0, unknown: 0, total: 0, actual_gr_today: 0, dispatched: 0, open_po: 0, byDay: new Map() };
   const assumeToday = (qty: number) => buckets.byDay.set(calendar.asOf, (buckets.byDay.get(calendar.asOf) ?? 0) + qty);
   for (const event of events) {
+    // A posted GR is no longer in transit.  It is live stock for Requirement
+    // status, while keeping its real CC-date arrival in the daily grid.
+    if (event.kind === "POSTED_GR") {
+      buckets.actual_gr_today += event.qty;
+      assumeToday(event.qty);
+      continue;
+    }
     buckets.total += event.qty;
     if (event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || event.kind === "SUB_CSN_PLANNED") buckets.open_po += event.qty;
     else buckets.dispatched += event.qty;
@@ -1731,7 +1740,8 @@ export type MaterialMetrics = {
   cm_balance_req: number;    // max(0, CM req − CM consumption) — alternative "remaining" view
   nm_req: number;            // Req NM — whole NM
   nm_prorata: number;        // Prorata NM — NM has no elapsed days, equals Req NM
-  current_stock: number;     // CURRENT_STOCK — usable at required locations, start of as-of day
+  current_stock: number;     // CURRENT_STOCK — live usable stock, including a CC-date posted GR
+  actual_gr_today: number;   // posted GR on the CC date; physical stock, not in-transit
   current_balance: number;   // Current Balance — stock − CM prorata (CM end, no inbound)
   intransit_cm: number;
   intransit_nm: number;
@@ -1798,7 +1808,7 @@ export type MetricsInput = {
   demandByDay: Map<string, number>;
   /**
    * Sheet columns (CM Req, Req NM, Current Req / Prorata, Safety, Reorder): the gross plan
-   * demand of this material as the BOM / stroke line's own item (owner 2026-10-22: Current
+   * demand of this material as the BOM / stroke line's own item (owner 2026-10-23: Current
    * Prorata = (CM plan − consumed) ÷ CM days left). Defaults to demandByDay. demandByDay stays
    * the stock-allocated demand used for cover days / stock-out.
    */
@@ -1839,12 +1849,16 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   const avgDaily = forwardDays > 0 ? (cmProrata + nmReq) / forwardDays : 0;
   const hasDemand = cmProrata + nmReq > EPSILON;
 
+  const liveStock = input.stock + inbound.actual_gr_today;
+  const actualGrToday = inbound.actual_gr_today > EPSILON
+    ? new Map([[calendar.asOf, inbound.actual_gr_today]])
+    : new Map<string, number>();
   const cmInbound = new Map([...inbound.byDay].filter(([day]) => day <= calendar.cmEnd));
-  const stockOnly = coverageDays(input.stock, calendar, demandByDay, null, nmDaily);
+  const stockOnly = coverageDays(input.stock, calendar, demandByDay, actualGrToday, nmDaily);
   const withCm = coverageDays(input.stock, calendar, demandByDay, cmInbound, nmDaily);
   const withAll = coverageDays(input.stock, calendar, demandByDay, inbound.byDay, nmDaily);
 
-  const currentBalance = input.stock - cmProrata;
+  const currentBalance = liveStock - cmProrata;
   // D5: an overdue or ETA-less arrival is assumed to arrive today (it is already in the cover
   // days); leaving it out made Next Month Cov 0 while Current Cov counted it (owner 2026-10-22).
   const nmOpening = currentBalance + inbound.cm + inbound.overdue + inbound.unknown;
@@ -1867,8 +1881,9 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   let netReq: number | null = null;
   if (totalProrata !== null && nmReqDays !== null) {
     const windowEnd = addDays(calendar.cmEnd, Math.ceil(nmReqDays));
-    const inboundByWindow = sumRange(inbound.byDay, calendar.asOf, minDate(windowEnd, calendar.nmEnd));
-    netReq = Math.max(0, totalProrata - input.stock - inboundByWindow);
+    // CC-date posted GR is already in liveStock; do not count it again as future inbound.
+    const inboundByWindow = Math.max(0, sumRange(inbound.byDay, calendar.asOf, minDate(windowEnd, calendar.nmEnd)) - inbound.actual_gr_today);
+    netReq = Math.max(0, totalProrata - liveStock - inboundByWindow);
   }
   let netReqMoq: number | null = netReq;
   if (netReq !== null && policy?.moq_active && input.moqBaseQty !== null && netReq > EPSILON) {
@@ -1890,7 +1905,7 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
   const safetyStock = target === null ? null : target * totalProrataDaily;
   const leadStock = input.leadTimeDays === null ? null : input.leadTimeDays * totalProrataDaily;
   const totalStockLevel = safetyStock === null || leadStock === null ? null : safetyStock + leadStock;
-  const reorderFlag = !hasDemand || totalStockLevel === null ? null : totalStockLevel >= input.stock - EPSILON;
+  const reorderFlag = !hasDemand || totalStockLevel === null ? null : totalStockLevel >= liveStock - EPSILON;
   const belowTarget = below(stockOnly.days, target);
   const belowCritical = below(stockOnly.days, critical);
   const priorityScore = reorderFlag !== true ? null
@@ -1911,7 +1926,8 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
     cm_balance_req: r(Math.max(0, planCmReq - input.consumption)),
     nm_req: r(planNmReq),
     nm_prorata: r(planNmReq),
-    current_stock: r(input.stock),
+    current_stock: r(liveStock),
+    actual_gr_today: r(inbound.actual_gr_today),
     current_balance: r(currentBalance),
     intransit_cm: r(inbound.cm),
     intransit_nm: r(inbound.nm),
@@ -1956,7 +1972,7 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
     sheet_next_month_req: sheetNextMonthReq === null ? null : r(sheetNextMonthReq),
     sheet_total_req: sheetTotalReq === null ? null : r(sheetTotalReq),
     total_prorata_daily: r(totalProrataDaily),
-    current_balance_shortage: r(sheetCurrentReq - input.stock),
+    current_balance_shortage: r(sheetCurrentReq - liveStock),
     intransit_dispatched: r(inbound.dispatched),
     intransit_open_po: r(inbound.open_po),
     reorder_flag: reorderFlag,
@@ -2119,6 +2135,49 @@ export function moqInBase(policy: PolicyRow | null, material: MaterialInfo | und
   return toMaterialBase(material, policy.moq_qty, unit);
 }
 
+/**
+ * PO22 works from the CC date forward.  For a material's own fixed demand, the
+ * part already posted as consumption must be removed from the unconsumed CM
+ * plan and the balance spread across the remaining approved CM dates.  This
+ * keeps Requirement's remaining pro-rata and Planning/4A's day rows on one
+ * basis.  Group pools are intentionally not changed here: their consumption
+ * has no member-level physical attribution to re-phase safely.
+ */
+export function rephaseCurrentMonthFixedDemand(
+  records: readonly DemandRecord[],
+  calendar: PlanningCalendar,
+  consumptionByMaterial: ReadonlyMap<string, number>,
+): DemandRecord[] {
+  const planCmByMaterial = new Map<string, number>();
+  const forwardCmByMaterial = new Map<string, number>();
+  for (const record of records) {
+    const isFixed = !record.group_id || record.candidates.length <= 1;
+    const materialId = record.candidates[0];
+    if (!isFixed || !materialId || record.day < calendar.cmStart || record.day > calendar.cmEnd) continue;
+    planCmByMaterial.set(materialId, (planCmByMaterial.get(materialId) ?? 0) + record.qty);
+    if (record.day >= calendar.asOf) forwardCmByMaterial.set(materialId, (forwardCmByMaterial.get(materialId) ?? 0) + record.qty);
+  }
+  const factorByMaterial = new Map<string, number>();
+  for (const [materialId, planCm] of planCmByMaterial) {
+    const forwardCm = forwardCmByMaterial.get(materialId) ?? 0;
+    if (forwardCm <= EPSILON) continue;
+    const remainingCm = Math.max(0, planCm - (consumptionByMaterial.get(materialId) ?? 0));
+    factorByMaterial.set(materialId, remainingCm / forwardCm);
+  }
+  return records.map((record) => {
+    const factor = record.day >= calendar.asOf && record.day <= calendar.cmEnd && (!record.group_id || record.candidates.length <= 1)
+      ? factorByMaterial.get(record.candidates[0])
+      : undefined;
+    if (factor === undefined) return record;
+    return {
+      ...record,
+      qty: record.qty * factor,
+      outer_qty: record.outer_qty === null ? null : record.outer_qty * factor,
+      plan_line_contributions: record.plan_line_contributions.map((contribution) => ({ ...contribution, qty: contribution.qty * factor })),
+    };
+  });
+}
+
 export function buildRequirementRows(input: RequirementInput): RequirementOutput {
   const effective = effectivePlanAt(input.planLines, input.demandAt);
   const explosion = explodeDemand({ ...input, effective });
@@ -2127,7 +2186,8 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
     const policy = effectivePolicy(input.policies, materialId, input.calendar.asOf);
     if (policy) protectionDays.set(materialId, { critical_days: policy.critical_cov_days, target_days: policy.target_cov_days });
   }
-  const allocation = allocateDemand(explosion.records, input.calendar, input.stockRows, input.reservations, input.applyReservations, {
+  const planningRecords = rephaseCurrentMonthFixedDemand(explosion.records, input.calendar, input.consumptionByMaterial);
+  const allocation = allocateDemand(planningRecords, input.calendar, input.stockRows, input.reservations, input.applyReservations, {
     locationRoles: input.locationRoles, committedTransferOut: input.committedTransferOut, protectionDays,
     groupOrders: input.groupOrders,
   });
@@ -2240,6 +2300,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
       inbound: {
         overdue: roundQty(bucketTotals.overdue), cm: roundQty(bucketTotals.cm), nm: roundQty(bucketTotals.nm),
         later: roundQty(bucketTotals.later), unknown: roundQty(bucketTotals.unknown), total: roundQty(bucketTotals.total),
+        actual_gr_today: roundQty(bucketTotals.actual_gr_today),
         dispatched: roundQty(bucketTotals.dispatched), open_po: roundQty(bucketTotals.open_po),
       },
       inbound_events: events.map((event) => ({ ...event, qty: roundQty(event.qty) })),
