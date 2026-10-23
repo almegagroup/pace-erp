@@ -12,6 +12,7 @@ import {
   forecastSkuMonth,
   forwardCoverDays,
   activeDemandCoverDays,
+  prorataMaxDays,
   referenceMonths,
   type ForecastInputs,
 } from "./mts_item_plan.logic.ts";
@@ -102,7 +103,17 @@ Deno.test("activeDemandCoverDays: a standalone grid does not turn a no-PO21 mont
   }));
   const grid = familyDayGrid(uses.map((_, index) => `D${index + 1}`), rows, new Map(), { activeDemandCoverage: true });
   assertEqual([grid[0].max_days, grid[0].min_days], [9, 9], "PO22 table and Excel use active demand, not zero-demand calendar days");
+  assertEqual(grid[0].prorata_max_days, 9, "the side audit column is closing divided by this row's pro-rata");
   assertEqual([grid[3].carry_forward_days, grid[3].next_demand_day], [4, null], "the no-demand carry-forward is shown separately, through the horizon");
+});
+
+Deno.test("Prorata Max Days is deliberately separate from forward Max Days", () => {
+  // 600 KG after today's 6.871 KG pro-rata looks like 87 days locally.  A
+  // higher approved rate in the following month makes the engine's forward
+  // coverage shorter; both values should remain visible rather than conflated.
+  assertEqual(prorataMaxDays(600, 6.871), 87, "local pro-rata audit value");
+  near(forwardCoverDays(600, [...Array(8).fill(6.871), ...Array(40).fill(15.543)], 0), 43.07, "forward value follows the next month's approved pro-rata");
+  assertEqual(prorataMaxDays(600, 0), null, "no pro-rata means no local-day denominator");
 });
 
 Deno.test("familyDayGrid: sums members, adds unmet group demand to use and carries it", () => {
