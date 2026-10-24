@@ -235,6 +235,31 @@ Deno.test("family waterfall: exclusive Desired-Max reserve is never double-alloc
   assert(!allocation.some((row) => row.material_id === "EXCLUSIVE" && row.destination_kind === "GROUP"), `server allocation evidence must not pretend reserved exclusive stock served a group: ${JSON.stringify(allocation)}`);
 });
 
+Deno.test("W3c: each event day creates narrow-to-broad Desired-Max buckets before group consumption", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-01",
+    opening_qty_by_material: { VN: 30, RP: 100 }, own_demand: [],
+    group_demand: [
+      { group_id: "A", candidates: ["VN"], required_by: "2026-10-01", qty_base: 10 },
+      { group_id: "C", candidates: ["VN", "RP"], required_by: "2026-10-01", qty_base: 10 },
+    ],
+    group_coverage_policies: [
+      { material_group_id: "A", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { material_group_id: "C", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+    ],
+    confirmed_arrivals: [], policies: [policy("VN", 0, 0, []), policy("RP", 0, 0, [])], plan_buys: false,
+  });
+  const bucket = (group: string, material: string) => result.group_bucket_reservations
+    .find((row) => row.group_id === group && row.material_id === material && row.day === "2026-10-01")?.reserved_qty_base ?? 0;
+  // A needs its 10 today plus two Desired-Max forward days, leaving no VN
+  // available for C. C is still fully served, but from RP; it cannot silently
+  // borrow A's protected family bucket.
+  assert(bucket("A", "VN") === 30, `A must own the first 30 KG VN bucket: ${JSON.stringify(result.group_bucket_reservations)}`);
+  assert(bucket("C", "VN") === 0 && bucket("C", "RP") === 30, `C must receive the next eligible stock, not A's VN bucket: ${JSON.stringify(result.group_bucket_reservations)}`);
+  const cMix = result.group_mix.find((row) => row.group_id === "C" && row.day === "2026-10-01");
+  assert(cMix?.draws.RP === 10 && cMix.draws.VN === undefined, `group draw must consume its own bucket: ${JSON.stringify(cMix)}`);
+});
+
 Deno.test("family waterfall: group buy sizes to derived Desired Max but individual RP guard still triggers at 20", () => {
   const base = {
     as_of: "2026-10-01", horizon_end: "2026-11-15", opening_qty_by_material: { RP: 21, ALT: 1_000 },

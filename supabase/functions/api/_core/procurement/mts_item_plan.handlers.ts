@@ -445,9 +445,16 @@ export async function buildItemPlan(
             flow, destination, qty: round(row.qty_base), closing: round(row.closing_qty_base),
             rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
               ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
-              : "Waterfall use: smallest eligible group first; direct Desired-Max and narrower-group reserve stay protected. Then FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
+              : "Waterfall use: direct Desired-Max protection first; then each group receives an event-day Desired-Max bucket from smallest eligible group to broadest. Group use consumes only its bucket; within it FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
           };
         }),
+      group_bucket_reservations: projection.group_bucket_reservations
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row) => ({
+          day: row.day, group_label: groupLabel.get(row.group_id) ?? "—",
+          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          reserved_qty: round(row.reserved_qty_base), rule: row.rule,
+        })),
       allocation_reconciliation: projection.allocation_reconciliation
         .filter((row) => memberSet.has(row.material_id))
         .map((row) => ({

@@ -585,8 +585,10 @@ export async function computePlanning(p: PlanningParams) {
     };
   };
 
-  // Owner 2026-10-22: the Store gets the planner's consumption ratio — a group line's period use is
-  // split over its members as the family planner consumes them (stock rotation, own use protected).
+  // Store receives a period total, never a day-by-day issue list. Its material
+  // ratio is nevertheless calculated from the canonical event-day group bucket
+  // draws, so an ETA, policy date or expired lot changes the next applicable
+  // period automatically without a second allocation formula here.
   const storeRowsByRatio = (() => {
     const range = (period: string) => (period === "CM" ? [calendar.asOf, calendar.cmEnd] : [calendar.nmStart, calendar.nmEnd]);
     const shareCache = new Map<string, { shares: Map<string, number>; unmet: number } | null>();
@@ -829,7 +831,12 @@ export async function computePlanning(p: PlanningParams) {
       closing: row.closing_qty_base,
       rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
         ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
-        : "Waterfall use: smallest eligible group first; direct Desired-Max and narrower-group reserve stay protected. Then FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
+        : "Waterfall use: direct Desired-Max protection first; then each group receives an event-day Desired-Max bucket from smallest eligible group to broadest. Group use consumes only its bucket; within it FEFO, saved sequence, no-future-buy run-down, then normal rotation apply.",
+    })),
+    group_bucket_reservations: projection.group_bucket_reservations.map((row) => ({
+      day: row.day, group_label: groupLabel.get(row.group_id) ?? "—",
+      material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+      reserved_qty: row.reserved_qty_base, rule: row.rule,
     })),
     allocation_reconciliation: projection.allocation_reconciliation.map((row) => ({
       material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),

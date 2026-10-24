@@ -104,6 +104,19 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
   /** Consumption ratio: per group and day, how much each member serves (Store instruction basis). */
   group_mix: ReadonlyArray<{ group_id: string; day: string; draws: Readonly<Record<string, number>> }>;
   /**
+   * Canonical event-day virtual buckets.  A bucket is a reservation for one
+   * group's current requirement plus its Desired-Max forward cover; it does
+   * not post or remove physical stock.  Group draw and Store ratio must only
+   * consume from the bucket assigned to that group.
+   */
+  group_bucket_reservations: ReadonlyArray<{
+    group_id: string;
+    day: string;
+    material_id: string;
+    reserved_qty_base: number;
+    rule: "GROUP_DESIRED_MAX_WATERFALL";
+  }>;
+  /**
    * One actual simulated draw.  IDs stay internal here; the API boundary resolves
    * them to business labels before returning an explainability report.
    */
@@ -237,6 +250,7 @@ type Sim = {
   poolFreeShort: number[][];
   poolFree: number[][]; // free stock this pool could still use after the day (reserve-adjusted)
   poolDraw: number[][][]; // pool → member → day: who served the group (the consumption ratio)
+  poolBucket: number[][][]; // pool → member → day: event-day Desired-Max virtual reservation
   expired: number[]; // planning-only receipt life loss; must reconcile stock conservation
 };
 
@@ -359,24 +373,6 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const avgCost = known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
   const costTilt = unitCost.map((c) => (c === null || avgCost === null ? 1 : Math.min(2, Math.max(0.5, c / avgCost))));
   const candIdx = pools.map((pool) => pool.candidates.filter((c) => mIndex.has(c)).map((c) => mIndex.get(c)!));
-  /**
-   * Owner 2026-10-22: a broader group takes a member's stock only above what the narrower groups
-   * of that member need for its Target days (e.g. RDP leaves DA's TLA share alone, so RDP's own
-   * best member is bought for RDP). A narrower group's need is shared over its members by stock.
-   */
-  const narrowerReserve = (m: number, p: number, i: number, bal: readonly number[]) => {
-    if (memberDesiredMax[m][i] === null) return 0;
-    let reserve = 0;
-    pools.forEach((q, qi) => {
-      if (qi === p || q.candidates.length >= pools[p].candidates.length || !candIdx[qi].includes(m)) return;
-      const total = candIdx[qi].reduce((sum, k) => sum + Math.max(0, bal[k] - protection[k][i]), 0);
-      const mine = Math.max(0, bal[m] - protection[m][i]);
-      if (total <= EPSILON || mine <= EPSILON) return;
-      reserve += useAhead(q.demand, i, groupCoverageAt(q, i).desired) * (mine / total);
-    });
-    return reserve;
-  };
-
   const simulatedOpeningReceipts = ids.map((id) => {
     const opening = Math.max(0, Number(input.opening_qty_by_material[id] ?? 0));
     let left = opening;
@@ -401,6 +397,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       planned: ids.map(() => zeros()), ownBalance: ids.map(() => zeros()), freeAfter: ids.map(() => zeros()),
       poolUnmet: pools.map(() => zeros()), poolFreeShort: pools.map(() => zeros()), poolFree: pools.map(() => zeros()),
       poolDraw: pools.map(() => ids.map(() => zeros())),
+      poolBucket: pools.map(() => ids.map(() => zeros())),
       expired: ids.map(() => 0),
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
@@ -432,17 +429,76 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           ownLeft -= used;
         }
       }
+      // Allocate a virtual event-day bucket before any group consumes.  This
+      // is the operational version of the family waterfall: direct/exclusive
+      // protection has already been removed, then groups receive their
+      // current need plus Desired-Max forward cover from narrow to broad. A
+      // later group cannot borrow a narrower group's bucket just because that
+      // group happens to consume first today.
+      const bucket = pools.map(() => Array.from({ length: M }, () => 0));
+      const unreserved = ids.map((_id, m) => Math.max(0, bal[m] - protection[m][i]));
+      const takeBucket = (p: number, m: number, qty: number) => {
+        const take = Math.min(Math.max(0, qty), unreserved[m]);
+        if (take <= EPSILON) return 0;
+        bucket[p][m] = roundQty(bucket[p][m] + take);
+        unreserved[m] = roundQty(unreserved[m] - take);
+        return take;
+      };
+      pools.forEach((pool, p) => {
+        let wanted = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).desired);
+        if (wanted <= EPSILON) return;
+        const cand = candIdx[p];
+        const order = input.group_orders?.get(pool.group_id);
+        const normalOrder = order
+          ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => unreserved[mIndex.get(id)!], order).map((id) => mIndex.get(id)!)
+          : [];
+        const expiryFirst = [...cand].filter((m) => receiptLeft[m].some((r) => r.expiry_priority && r.qty_base > EPSILON))
+          .sort((a, b) => {
+            const earliest = (m: number) => receiptLeft[m].filter((r) => r.expiry_priority && r.qty_base > EPSILON)
+              .map((r) => r.valid_until).sort()[0] ?? "9999-12-31";
+            return earliest(a).localeCompare(earliest(b)) || ids[a].localeCompare(ids[b]);
+          });
+        const runDown = order ? [] : [...cand].filter((m) => hasNoFutureReplenishment(ids[m], i)).sort((a, b) => ids[a].localeCompare(ids[b]));
+        for (const m of expiryFirst) {
+          if (wanted <= EPSILON) break;
+          wanted = roundQty(wanted - takeBucket(p, m, wanted));
+        }
+        if (order) {
+          for (const m of normalOrder) {
+            if (wanted <= EPSILON) break;
+            wanted = roundQty(wanted - takeBucket(p, m, wanted));
+          }
+        } else {
+          for (const m of runDown) {
+            if (wanted <= EPSILON) break;
+            wanted = roundQty(wanted - takeBucket(p, m, wanted));
+          }
+          // The no-fixed-order bucket preserves Method C's stock-weighted
+          // rotation.  FEFO and run-down have already received their explicit
+          // priority share above; the remainder is shared over normal members.
+          for (let pass = 0; pass < 4 && wanted > EPSILON; pass += 1) {
+            const weights = cand.map((m) => unreserved[m] * costTilt[m]);
+            const total = weights.reduce((sum, qty) => sum + qty, 0);
+            if (total <= EPSILON) break;
+            const thisPass = wanted;
+            cand.forEach((m, k) => {
+              if (wanted <= EPSILON) return;
+              wanted = roundQty(wanted - takeBucket(p, m, thisPass * (weights[k] / total)));
+            });
+          }
+        }
+      });
       pools.forEach((pool, p) => {
         let need = pool.demand[i];
         if (need <= EPSILON) return;
         const cand = candIdx[p];
-        const free = (m: number) => Math.max(0, bal[m] - protection[m][i] - narrowerReserve(m, p, i, bal));
+        const free = (m: number) => Math.max(0, bucket[p][m]);
         const order = input.group_orders?.get(pool.group_id);
         const ordered = (fn: (m: number) => number) => (order
           ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => fn(mIndex.get(id)!), order).map((id) => mIndex.get(id)!)
           : [...cand].sort((a, b) => fn(b) - fn(a) || cand.indexOf(a) - cand.indexOf(b)));
         const takeFrom = (m: number, qty: number) => {
-          bal[m] -= qty; need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
+          bal[m] -= qty; bucket[p][m] -= qty; need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
           let left = qty;
           for (const receipt of receiptLeft[m]) {
             if (left <= EPSILON) break;
@@ -500,7 +556,8 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         if (need > EPSILON) s.poolUnmet[p][i] = need;
       });
       pools.forEach((_pool, p) => {
-        s.poolFree[p][i] = candIdx[p].reduce((sum, m) => sum + Math.max(0, bal[m] - protection[m][i] - narrowerReserve(m, p, i, bal)), 0);
+        s.poolFree[p][i] = bucket[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
+        ids.forEach((_id, m) => { s.poolBucket[p][m][i] = roundQty(Math.max(0, bucket[p][m]) + s.poolDraw[p][m][i]); });
       });
       for (let m = 0; m < M; m += 1) {
         s.closing[m][i] = bal[m];
@@ -921,6 +978,19 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     allocation_reconciliation: allocationReconciliation,
     group_actions: groupActions.sort((a, b) => a.group_id.localeCompare(b.group_id)),
     waterfall_reservations: waterfallReservations,
+    group_bucket_reservations: (() => {
+      const rows: Array<FamilyResult["group_bucket_reservations"][number]> = [];
+      pools.forEach((pool, p) => {
+        for (let i = 0; i < N; i += 1) {
+          ids.forEach((material_id, m) => {
+            const reserved_qty_base = sim.poolBucket[p][m][i];
+            if (reserved_qty_base <= EPSILON) return;
+            rows.push({ group_id: pool.group_id, day: allDays[i], material_id, reserved_qty_base, rule: "GROUP_DESIRED_MAX_WATERFALL" });
+          });
+        }
+      });
+      return rows.sort((a, b) => a.day.localeCompare(b.day) || a.group_id.localeCompare(b.group_id) || a.material_id.localeCompare(b.material_id));
+    })(),
     group_mix: (() => {
       const mix = new Map<string, Record<string, number>>();
       pools.forEach((pool, p) => {

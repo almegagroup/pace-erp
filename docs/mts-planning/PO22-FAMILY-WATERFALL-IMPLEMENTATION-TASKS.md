@@ -120,6 +120,12 @@ matrix were committed before code changes.
 - Regression tests prove exclusive reserve conservation and the 20-day item /
   30-day group coexistence.  The later F6 trace will expose each resulting
   allocation path and residual quantity to the UI.
+- **W3c design lock:** on every planning event date, the simulator now creates
+  a virtual material bucket for each group before group consumption: today's
+  requirement plus that group's Desired-Max forward cover, narrow group to
+  broad group. A group may consume only its own bucket. This is the canonical
+  allocation source for projection risk, the group mix and Store's period
+  ratio; React and Store must not reconstruct a separate ratio from balances.
 
 ### F4 — code complete on `agent/codex`, pending release
 

@@ -272,6 +272,30 @@ rephased/adjusted value একই নামে বা silently interchange ক�
   No migration was applied and no deployment, live recalculation or data
   mutation occurred.
 
+### 2026-10-25 — PO22 Family W3c event-day bucket / Store-period source lock (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- **Root rule:** direct/exclusive Desired-Max is protected first. On every
+  event day, before a group consumes, the engine reserves a virtual bucket for
+  the group's current requirement plus its Desired-Max forward cover. Buckets
+  are allocated smallest eligible group to broadest; a broad group cannot use
+  a narrow group's bucket.
+- **Within a bucket:** expiry/FEFO wins only for the expiring quantity, then
+  the user-saved sequence, then an eligible member with no authorised future
+  buy is run down, then Method-C stock/cost-weighted rotation. This is a
+  planning reservation only: it posts no Store issue and it does not invent
+  demand.
+- **One source of truth:** `group_mix`, group risk/projection and PO22 Store
+  period quantities are all derived from that same simulated bucket draw.
+  Store remains a period-level instruction (not a daily issue list); dated ETA
+  / expiry / policy events naturally affect the applicable engine period.
+- **Audit boundary:** Planning and 4A expose labelled bucket rows for a future
+  Family-only presentation, while UUIDs remain internal. The existing
+  CC-calibrated daily table layout is unchanged by this engine correction.
+- **Verification:** Family planner **24/24** including the new narrow-group
+  bucket regression; Family, Planning and Item Plan `deno check` pass. No
+  migration was applied and no deployment, live recalculation or data mutation
+  occurred.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from
