@@ -300,6 +300,20 @@ Deno.test("family waterfall: a group below Critical returns the ordered action c
   assert(action?.ordered_actions[0].startsWith("Bridge") && action.ordered_actions.at(-1)?.startsWith("Escalate"), `action chain order is incorrect: ${JSON.stringify(action)}`);
 });
 
+Deno.test("W4: a confirmed future arrival joins group allocation only from its ETA", () => {
+  const days = Array.from({ length: 5 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-05", opening_qty_by_material: { BRIDGE: 100, INBOUND: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["BRIDGE", "INBOUND"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "INBOUND-ETA", material_id: "INBOUND", eta_to_plant: "2026-10-03", qty_base: 100 }],
+    policies: [policy("BRIDGE", 0, 0, []), policy("INBOUND", 0, 0, [])], plan_buys: false,
+  });
+  const before = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-02");
+  const onEta = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-03");
+  assert(before?.draws.INBOUND === undefined, `future receipt was used before ETA: ${JSON.stringify(before)}`);
+  assert((onEta?.draws.INBOUND ?? 0) > 0, `future receipt must re-enter the same group waterfall on ETA: ${JSON.stringify(onEta)}`);
+});
+
 Deno.test("family consumption: an eligible unselected member runs down before a replenishable alternative", () => {
   const result = planFamily({
     as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { RUN_DOWN: 100, BUYABLE: 100 },

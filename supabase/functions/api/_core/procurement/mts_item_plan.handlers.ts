@@ -249,7 +249,9 @@ export async function buildItemPlan(
     }
     const addDaysIso = (day: string | null, n: number | null) => (day && n !== null ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : null);
     const coverOn = (id: string, day: string | null) => rowsByMember.get(id)?.find((r) => r.day === day) ?? null;
-    const coversLabel = (covers: readonly string[]) => covers.map((c) => (c === "OWN" ? "Own use" : groupLabel.get(c) ?? "—")).join(", ") || null;
+    const coversLabel = (covers: readonly string[]) => covers.map((c) => (
+      c === "OWN" ? "Own use" : c === "MEMBER_GUARD" ? "Individual member guard" : groupLabel.get(c) ?? "—"
+    )).join(", ") || null;
     const futureOrders = plan.buys
       .filter((b) => memberSet.has(b.material_id) && (b.status === "ADVISORY" || b.status === "ADVISORY_LATE"))
       .flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }]).map((lot) => {

@@ -240,6 +240,20 @@ rephased/adjusted value একই নামে বা silently interchange ক�
 - Verification: Family planner 21/21; Planning handler type check; Action-row
   tests 2/2; diff guard. No migration application, deploy or live data action.
 
+### 2026-10-24 — PO22 Family W4 dated-inbound / Store hand-off (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- Confirmed inbound is now regression-locked as an event-time Family source:
+  it is never available before its valid plant ETA, and it joins the same group
+  waterfall from that date. Because Store's CM/NM member shares are calculated
+  from that engine group mix, a bridge material is automatically reduced when
+  the dated inbound begins serving the group.
+- A lot raised for a group-only member's individual Target is labelled
+  **Individual member guard** in the 4A/arrival report, rather than the
+  misleading `Own use` label. Direct/exclusive lots retain `Own use`.
+- Verification: Family planner 22/22 including ETA bridge; Item Plan logic
+  18/18; Family/Item Plan checks and diff guard pass. No migration was applied,
+  and no deploy, live recalculation or data mutation occurred.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from

@@ -634,7 +634,9 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const seq = (sequence.get(id) ?? 0) + 1;
       sequence.set(id, seq);
       const poBy = addDays(allDays[need.index], -lead);
-      const covers = need.kind === "OWN" ? ["OWN"] : [need.pool!.group_id];
+      const covers = need.kind === "OWN"
+        ? [usesGroupAsIndividualDemand ? "MEMBER_GUARD" : "OWN"]
+        : [need.pool!.group_id];
       const why = need.kind === "OWN"
         ? (usesGroupAsIndividualDemand
           ? `Member guard: its allocated eligible-group use falls to its individual Target ${t} days on ${allDays[need.index]}.`
@@ -645,7 +647,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         recommended_po_by: need.late ? input.as_of : poBy, estimated_plant_eta: allDays[arrivalIndex], need_date: allDays[need.index],
         lots: [{ lot_no: 1, plant_eta: allDays[arrivalIndex], qty_base: roundQty(lotQty) }], total_lead_time_days: lead,
         status: need.late ? "ADVISORY_LATE" : "ADVISORY",
-        reason: need.late ? `${why} PO-by ${poBy} has passed; ordering today arrives ${allDays[arrivalIndex]}.` : `${why} Sized to Max days (Target + order cycle); MOQ / multiple respected.`,
+        reason: need.late ? `${why} PO-by ${poBy} has passed; ordering today arrives ${allDays[arrivalIndex]}.` : `${why} Sized to Desired Max ${window} days; MOQ / multiple respected.`,
         advisory_only: true,
         vendor_id: need.option?.option.vendor_id ?? null, max_cover_days: roundQty(window),
         bridge: need.option?.bridge ?? false, cheapest_vendor_id: need.option?.cheapest ?? null,
