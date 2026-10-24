@@ -27,7 +27,8 @@ const asNumber = (value: unknown): number | null => {
 };
 const MAX_ROWS_PER_SAVE = 500;
 
-async function loadRows(companyId: string): Promise<GroupCoveragePolicyVersion[]> {
+/** Shared planning reader: current append-only rows, evaluated by the pure engine per date. */
+export async function loadGroupCoveragePolicyVersions(companyId: string): Promise<GroupCoveragePolicyVersion[]> {
   const { data, error } = await serviceRoleClient.schema("erp_planning").from("material_group_coverage_policy")
     .select("material_group_id, effective_from, target_cov_days, critical_cov_days, desired_max_days_override")
     .eq("company_id", companyId).eq("is_current", true).order("effective_from");
@@ -49,7 +50,7 @@ export async function getMtsGroupPolicyHandler(req: Request, ctx: ReqHandlerCont
     if (denied) return denied;
     const asOf = text(url.searchParams.get("as_of")) || todayInIndia();
     if (!isIsoDate(asOf)) return fail(req, ctx, "MTS_REQ_INVALID_AS_OF", 400, "as_of must be YYYY-MM-DD.");
-    const [groups, rows] = await Promise.all([loadCompanyGroups(companyId), loadRows(companyId)]);
+    const [groups, rows] = await Promise.all([loadCompanyGroups(companyId), loadGroupCoveragePolicyVersions(companyId)]);
     const effective = effectiveGroupCoveragePolicies(rows, asOf);
     return okResponse({
       company_id: companyId, as_of: asOf, default_target_days: 30,

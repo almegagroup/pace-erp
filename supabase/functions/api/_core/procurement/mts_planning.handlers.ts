@@ -27,6 +27,7 @@ import {
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
+import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
@@ -401,6 +402,7 @@ export async function computePlanning(p: PlanningParams) {
     forecastBeyondPlan: false, rescheduleOverrides: p.rescheduleOverrides, policyOverrides: p.policyOverrides,
     reuseLoads: p.reuseLoads,
   });
+  const groupCoveragePolicies = await loadGroupCoveragePolicyVersions(p.companyId);
   const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
@@ -500,6 +502,7 @@ export async function computePlanning(p: PlanningParams) {
     opening_receipts: openingReceipts,
     own_demand: ownDemand,
     group_demand: groupDemand,
+    group_coverage_policies: groupCoveragePolicies,
     // A CC-date GR and every future inbound with a valid plant ETA participate
     // on that date. An ordered PO is usable only when its delivery/CSN ETA exists.
     confirmed_arrivals: familyArrivalCandidates

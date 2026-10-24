@@ -102,3 +102,19 @@ matrix were committed before code changes.
 - Regression tests cover CC-date GR, dated ordered PO, stale/missing ETA and
   the guarantee that a missing ETA cannot inflate the CC-date balance.
 
+### F3 — code complete on `agent/codex`, pending release
+
+- The live planner now reads the effective-dated Group Coverage Policy into the
+  family engine for every planning day.  Missing group policy evaluates to the
+  approved 30-day Target default.
+- Direct/exclusive use is reserved through the member's Desired Max before any
+  shared group draw.  A shared group cannot borrow that reserve and therefore
+  cannot double-count an exclusive member's safety stock.
+- Pools stay deterministic smallest-member-set first.  Group projection is
+  triggered at the group Target, sized to the derived/overridden Group Desired
+  Max.  An individual guard remains independent: an RP-4099-like member still
+  triggers at its own 20-day target even when its group Target is 30.
+- Regression tests prove exclusive reserve conservation and the 20-day item /
+  30-day group coexistence.  The later F6 trace will expose each resulting
+  allocation path and residual quantity to the UI.
+

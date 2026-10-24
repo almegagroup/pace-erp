@@ -20,6 +20,7 @@
  * the member and feeds the groups through the free-stock rule, so later buys shrink by themselves.
  */
 import { orderByGroupUsage, type GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
+import { DEFAULT_GROUP_TARGET_DAYS, defaultCriticalDays, effectiveGroupCoveragePolicies, groupDesiredMaxDays, type GroupCoveragePolicyVersion } from "./mts_group_policy.logic.ts";
 import { applySinglePurchaseConstraints, pickVendorOption, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import { roundQty } from "./mts_requirement.logic.ts";
 import type {
@@ -73,6 +74,8 @@ export type FamilyPlannerInput = {
   opening_receipts?: readonly FamilyOpeningReceipt[];
   own_demand: readonly FamilyOwnDemand[];
   group_demand: readonly FamilyGroupDemand[];
+  /** Effective-dated family group guardrails; missing group Target defaults to 30 days. */
+  group_coverage_policies?: readonly GroupCoveragePolicyVersion[];
   confirmed_arrivals: readonly FamilyArrival[];
   /** Dated-inbound risks retained for explanation; they never become simulated stock. */
   arrival_risks?: readonly OptimizerArrivalFlag[];
@@ -259,11 +262,29 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   }
 
   const targets = ids.map((id) => allDays.map((d) => targetAt(policyOf.get(id), d)));
-  // Protection after day i: own use of the member over its Target days ahead.
-  const protection = ids.map((_, m) => allDays.map((_d, i) => {
-    const t = targets[m][i].target;
-    return t === null ? 0 : useAhead(own[m], i, t);
+  // Protection after day i: direct/exclusive use of the member through its
+  // Desired Max. Group use may never consume this protected quantity.
+  const memberDesiredMax = ids.map((id, m) => allDays.map((d, i) => {
+    const target = targets[m][i].target;
+    if (target === null) return null;
+    return target + (policyOf.get(id)?.cycle_days ?? DEFAULT_CYCLE_DAYS);
   }));
+  const protection = ids.map((_, m) => allDays.map((_d, i) => {
+    const desired = memberDesiredMax[m][i];
+    return desired === null ? 0 : useAhead(own[m], i, desired);
+  }));
+
+  const groupCoverageAt = (pool: Pool, i: number) => {
+    const saved = effectiveGroupCoveragePolicies(input.group_coverage_policies ?? [], allDays[i]).get(pool.group_id);
+    const target = saved?.target_days ?? DEFAULT_GROUP_TARGET_DAYS;
+    const critical = saved?.critical_days ?? defaultCriticalDays(target);
+    const memberMax = pool.candidates.map((id) => {
+      const m = mIndex.get(id);
+      return m === undefined ? null : memberDesiredMax[m][i];
+    });
+    const desired = groupDesiredMaxDays(saved, memberMax) ?? target;
+    return { target, critical, desired };
+  };
 
   // Holding-cost tilt for the consumption ratio: costlier stock (more money tied up) is used a bit
   // more; unknown cost = neutral. Clamped so cost never overrides stock levels.
@@ -281,15 +302,14 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
    * best member is bought for RDP). A narrower group's need is shared over its members by stock.
    */
   const narrowerReserve = (m: number, p: number, i: number, bal: readonly number[]) => {
-    const t = targets[m][i].target;
-    if (t === null) return 0;
+    if (memberDesiredMax[m][i] === null) return 0;
     let reserve = 0;
     pools.forEach((q, qi) => {
       if (qi === p || q.candidates.length >= pools[p].candidates.length || !candIdx[qi].includes(m)) return;
       const total = candIdx[qi].reduce((sum, k) => sum + Math.max(0, bal[k] - protection[k][i]), 0);
       const mine = Math.max(0, bal[m] - protection[m][i]);
       if (total <= EPSILON || mine <= EPSILON) return;
-      reserve += useAhead(q.demand, i, t) * (mine / total);
+      reserve += useAhead(q.demand, i, groupCoverageAt(q, i).desired) * (mine / total);
     });
     return reserve;
   };
@@ -322,7 +342,6 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
     const receiptLeft = simulatedOpeningReceipts.map((rows) => rows.map((row) => ({ ...row })));
-    const borrowed = ids.map(() => 0);
     for (let i = 0; i < N; i += 1) {
       // A receipt is usable through valid_until.  Expired virtual stock is not
       // silently counted as cover; this is a planning warning, never a stock post.
@@ -404,13 +423,6 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           }
         }
         if (need > EPSILON) s.poolFreeShort[p][i] = need;
-        // Protected stock last (it will be bought back by the member's own need).
-        for (const m of ordered((m) => Math.max(0, bal[m]))) {
-          if (need <= EPSILON) break;
-          const take = Math.min(Math.max(0, bal[m]), need);
-          if (take <= EPSILON) continue;
-          borrowed[m] += take; takeFrom(m, take);
-        }
         if (need > EPSILON) s.poolUnmet[p][i] = need;
       });
       pools.forEach((_pool, p) => {
@@ -418,7 +430,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       });
       for (let m = 0; m < M; m += 1) {
         s.closing[m][i] = bal[m];
-        s.ownBalance[m][i] = bal[m] + borrowed[m];
+        s.ownBalance[m][i] = bal[m];
         s.freeAfter[m][i] = Math.max(0, bal[m] - protection[m][i]);
       }
     }
@@ -480,10 +492,10 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       if (m === undefined || !policy) return;
       let needIndex = -1;
       for (let i = from; i < N; i += 1) {
-        const t = targets[m][i].target;
-        if (t === null || targets[m][i].critical === null) continue;
+      const groupCoverage = groupCoverageAt(pool, i);
+      if (groupCoverage.target === null || groupCoverage.critical === null) continue;
         const cover = freeCover(i);
-        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= t)) { needIndex = i; break; }
+        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= groupCoverage.target)) { needIndex = i; break; }
       }
       if (needIndex < 0) return;
       // This is a real authorization, not a cost preference: a member the
@@ -515,13 +527,13 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     const id = need.material;
     const m = mIndex.get(id)!;
     const policy = policyOf.get(id)!;
-    const t = targets[m][need.index].target ?? 0;
+    const t = need.kind === "GROUP" ? groupCoverageAt(need.pool!, need.index).target : targets[m][need.index].target ?? 0;
     const lead = need.option?.option.lead_time_days ?? totalLeadTimeDays(policy) ?? 0;
     const arrivalIndex = need.late ? Math.min(N - 1, lead) : need.index;
     let lotQty: number;
     {
       const cycle = need.option?.option.cycle_days ?? policy.cycle_days ?? DEFAULT_CYCLE_DAYS;
-      const window = t + cycle;
+      const window = need.kind === "GROUP" ? groupCoverageAt(need.pool!, need.index).desired : t + cycle;
       const before = arrivalIndex - 1;
       const demandRequired = need.kind === "OWN"
         ? useAhead(own[m], before, window + 1) - Math.max(0, before >= 0 ? sim.ownBalance[m][before] : Number(input.opening_qty_by_material[id] ?? 0))
@@ -547,7 +559,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const covers = need.kind === "OWN" ? ["OWN"] : [need.pool!.group_id];
       const why = need.kind === "OWN"
         ? `Own use: cover of its own (exclusive) use falls to Target ${t} days on ${allDays[need.index]}.`
-        : `Group ${need.pool!.group_id}: free stock of its members falls to Target ${t} days on ${allDays[need.index]}; ${need.late ? "fastest member to arrive" : "cheapest member that arrives in time"}.`;
+        : `Group ${need.pool!.group_id}: free stock of its members falls to Target ${t} days on ${allDays[need.index]}; refill is sized to Group Desired Max ${window} days; ${need.late ? "fastest member to arrive" : "cheapest member that arrives in time"}.`;
       buys.push({
         material_id: id, sequence: seq, required_qty_base: roundQty(Math.max(0, required)), recommended_po_qty_base: orderQty,
         recommended_po_by: need.late ? input.as_of : poBy, estimated_plant_eta: allDays[arrivalIndex], need_date: allDays[need.index],

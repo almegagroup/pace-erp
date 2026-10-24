@@ -196,6 +196,41 @@ Deno.test("smart consumption ratio: every member with free stock serves the grou
   assert(used.includes("EL") && used.includes("RP"), `both ELOTEX and RP-4099 rotate: ${JSON.stringify(first.draws)}`);
 });
 
+Deno.test("family waterfall: exclusive Desired-Max reserve is never double-allocated to a shared group", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-11-30", opening_qty_by_material: { EXCLUSIVE: 50, ALT: 100 },
+    own_demand: Array.from({ length: 61 }, (_, i) => ({ material_id: "EXCLUSIVE", required_by: addDays("2026-10-01", i), qty_base: 1 })),
+    group_demand: [{ group_id: "G", candidates: ["EXCLUSIVE", "ALT"], required_by: "2026-10-01", qty_base: 10 }],
+    confirmed_arrivals: [],
+    policies: [
+      { material_id: "EXCLUSIVE", target_days: 20, critical_days: 10, cycle_days: 30, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+      { material_id: "ALT", target_days: 30, critical_days: 15, cycle_days: 30, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+    ], plan_buys: false,
+  });
+  const mix = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-01");
+  assert(mix?.draws.EXCLUSIVE === undefined, `exclusive reserve was incorrectly used by group: ${JSON.stringify(mix)}`);
+  assert(mix?.draws.ALT === 10, `eligible alternate should serve group: ${JSON.stringify(mix)}`);
+});
+
+Deno.test("family waterfall: group buy sizes to derived Desired Max but individual RP guard still triggers at 20", () => {
+  const base = {
+    as_of: "2026-10-01", horizon_end: "2026-11-15", opening_qty_by_material: { RP: 21, ALT: 1_000 },
+    own_demand: Array.from({ length: 46 }, (_, i) => ({ material_id: "RP", required_by: addDays("2026-10-01", i), qty_base: 1 })),
+    group_demand: Array.from({ length: 46 }, (_, i) => ({ group_id: "RDP", candidates: ["RP", "ALT"], required_by: addDays("2026-10-01", i), qty_base: 1 })),
+    confirmed_arrivals: [], selections: new Map([["2026-10-01", new Set(["RP"])], ["2026-11-01", new Set(["RP"])]]), selection_controlled_members: new Set(["RP", "ALT"]),
+    policies: [
+      policy("RP", 20, 10, [{ vendor: "LOCAL", lead: 0, cost: 100 }]),
+      policy("ALT", 30, 15, [{ vendor: "ALT", lead: 0, cost: 100 }]),
+    ],
+  } satisfies FamilyPlannerInput;
+  const result = planFamily(base);
+  const ownRp = result.advisory_buys.find((buy) => buy.material_id === "RP" && buy.need_kind === "OWN" && buy.status !== "NO_BUY");
+  assert(ownRp?.need_date === "2026-10-01", `RP should connect at its individual 20-day guard: ${JSON.stringify(ownRp)}`);
+  const group = planFamily({ ...base, opening_qty_by_material: { RP: 0, ALT: 0 }, own_demand: [], group_demand: [{ group_id: "RDP", candidates: ["RP", "ALT"], required_by: "2026-10-01", qty_base: 10 }] })
+    .advisory_buys.find((buy) => buy.need_kind === "GROUP" && buy.status !== "NO_BUY");
+  assert(group?.max_cover_days === 60, `group Desired Max should be rounded-up member max 60: ${JSON.stringify(group)}`);
+});
+
 Deno.test("short-life receipt overrides saved group order only until Store should consume it", () => {
   const result = planFamily({
     as_of: "2026-10-01", horizon_end: "2026-10-02",
