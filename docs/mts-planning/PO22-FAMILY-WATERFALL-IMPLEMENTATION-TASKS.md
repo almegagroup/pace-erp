@@ -144,3 +144,17 @@ matrix were committed before code changes.
   now correctly states that an invalid ETA is risk-only, rather than claiming
   it was assumed into today's stock.
 
+### F6 — code complete on `agent/codex`, pending release
+
+- The prior experimental “Allocation trace” has been renamed **Family
+  allocation report** and its wording now matches the approved waterfall:
+  direct Desired-Max reserve, small-group protection, FEFO, saved sequence and
+  run-down priority.
+- Its source report distinguishes dated inbound (including ordered PO with a
+  valid ETA) from a no-ETA risk.  Group destinations and future-order covers
+  are server-resolved business labels; the browser never receives an internal
+  group UUID as a display label.
+- All grids retain the shared copy-with-headers behavior, so the same labelled
+  report can be pasted into Excel.  The daily Prediction-table visual redesign
+  remains F8, deliberately separate from calculation.
+
