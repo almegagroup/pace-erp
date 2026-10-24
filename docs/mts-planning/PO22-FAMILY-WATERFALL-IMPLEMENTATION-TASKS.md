@@ -89,3 +89,16 @@ matrix were committed before code changes.
 - Deterministic policy tests pass (3/3), existing family planner tests pass
   (12/12), backend checks pass, focused frontend lint and production build pass.
 
+### F2 — code complete on `agent/codex`, pending release
+
+- Family input now admits every physical/order receipt only on a valid plant ETA
+  on or after the CC date.  This includes an ordered PO remainder when the PO
+  delivery date or CSN ETA is available; a missing/stale ETA is carried as a
+  visible risk, never fictional same-day stock.
+- Posted GR on the CC date remains a same-day arrival.  Existing Requirement
+  assembly remains the single source of eligible MTS-location opening stock,
+  dated GRN/opening receipt advice, PO21 Mother/Child-derived demand and
+  monthly new-buy selection.
+- Regression tests cover CC-date GR, dated ordered PO, stale/missing ETA and
+  the guarantee that a missing ETA cannot inflate the CC-date balance.
+

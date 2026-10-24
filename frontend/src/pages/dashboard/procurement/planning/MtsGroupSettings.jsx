@@ -200,7 +200,10 @@ export default function MtsGroupSettings({ companyId, planMonth, asOf, today, ca
                   const dirty = Boolean(drafts[row.material_group_id]?.order_mode);
                   const policyDirty = Boolean(policyDrafts[row.material_group_id]);
                   const memberById = new Map(row.members.map((m) => [m.material_id, m]));
-                  const memberMaxDays = row.members.map((m) => Number(memberMax.get(m.material_id))).filter((value) => Number.isFinite(value) && value >= 0);
+                  const memberMaxDays = row.members
+                    .map((m) => memberMax.get(m.material_id))
+                    .filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)) && Number(value) >= 0)
+                    .map(Number);
                   const average = memberMaxDays.length === row.members.length && memberMaxDays.length
                     ? memberMaxDays.reduce((sum, value) => sum + value, 0) / memberMaxDays.length : null;
                   const derivedMax = average === null ? null : [...memberMaxDays].sort((a, b) => a - b).find((value) => value + 1e-9 >= average) ?? null;

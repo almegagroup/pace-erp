@@ -12,7 +12,7 @@
  *   D6  lead time = Booking Time (blank = 0) + route lead time of that vendor.
  */
 import { monthStart, rToRTransferRoute, type GroupRequirementRow, type PlanningCalendar, type PolicyRow, type RequirementRow } from "./mts_requirement.logic.ts";
-import type { OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
+import type { OptimizerArrivalFlag, OptimizerConfirmedArrival, OptimizerDailyDemand, OptimizerMaterialPlanningPolicy, OptimizerProjectionInput, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 
 export type VendorTerm = {
   vendor_id: string;
@@ -50,12 +50,27 @@ export type PlanningAssembly = {
 
 const EPSILON = 0.0000001;
 
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
- * A PO remainder means the order exists but no shipment is on the way.  It is
- * useful risk evidence, never stock that Family Planning may allocate.
+ * Family Planning may use any inbound piece only when it has a real plant ETA
+ * on/after the CC date. This includes an ordered PO with a delivery/CSN ETA.
+ * Missing or stale ETA is risk evidence only, never invented stock.
  */
-export function isFamilyAllocatableArrival(lifecycleKind: string): boolean {
-  return lifecycleKind !== "PO_REMAINDER";
+export function isFamilyAllocatableArrival(_lifecycleKind: string, etaToPlant: string | null, asOf: string): boolean {
+  return etaToPlant !== null && ISO_DAY.test(etaToPlant) && etaToPlant >= asOf;
+}
+
+/** Human-readable risk kept beside, but outside, the Family stock simulation. */
+export function familyArrivalRisk(arrival: OptimizerConfirmedArrival): OptimizerArrivalFlag {
+  const missing = arrival.eta_to_plant === null || !ISO_DAY.test(arrival.eta_to_plant);
+  return {
+    source_key: arrival.source_key, material_id: arrival.material_id, eta_to_plant: arrival.eta_to_plant,
+    assumed_eta: null, reason: missing ? "ETA_MISSING" : "ETA_PASSED",
+    message: missing
+      ? "No valid plant ETA — this receipt is risk-only and is not counted as Family stock. Set ETA to plant in CSN Tracker or the PO."
+      : "Plant ETA has passed without receipt — this receipt is risk-only and is not counted as Family stock. Update the CSN Tracker or PO ETA.",
+  };
 }
 
 /** Vendor with a known route and the shortest total lead time; ties → smaller MOQ → label. */

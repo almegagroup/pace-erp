@@ -74,6 +74,8 @@ export type FamilyPlannerInput = {
   own_demand: readonly FamilyOwnDemand[];
   group_demand: readonly FamilyGroupDemand[];
   confirmed_arrivals: readonly FamilyArrival[];
+  /** Dated-inbound risks retained for explanation; they never become simulated stock. */
+  arrival_risks?: readonly OptimizerArrivalFlag[];
   policies: readonly OptimizerMaterialPlanningPolicy[];
   manual_lots?: readonly FamilyLot[];
   /** Group Settings: group → which member first. Absent = most free stock first (Method C). */
@@ -230,7 +232,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     return series.map(() => finalRate);
   });
 
-  const arrivalFlags: OptimizerArrivalFlag[] = [];
+  const arrivalFlags: OptimizerArrivalFlag[] = [...(input.arrival_risks ?? [])];
   const confirmed = ids.map(() => zeros());
   for (const a of input.confirmed_arrivals) {
     if (!valid(a.qty_base) || a.qty_base <= EPSILON) continue;
@@ -238,12 +240,12 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     if (eta === null || !ISO_DAY.test(eta) || eta < input.as_of) {
       const reason = eta === null || !ISO_DAY.test(eta) ? "ETA_MISSING" : "ETA_PASSED";
       arrivalFlags.push({
-        source_key: a.source_key, material_id: a.material_id, eta_to_plant: a.eta_to_plant, assumed_eta: input.as_of, reason,
+        source_key: a.source_key, material_id: a.material_id, eta_to_plant: a.eta_to_plant, assumed_eta: null, reason,
         message: reason === "ETA_PASSED"
-          ? "ETA has passed and the material has not arrived — update this CSN in CSN Tracker. Assumed to arrive today until then."
-          : "No plant ETA — set it in CSN Tracker. Assumed to arrive today until then.",
+          ? "ETA has passed and the material has not arrived — update this CSN in CSN Tracker. This receipt is risk-only, not assumed as stock."
+          : "No plant ETA — set it in CSN Tracker. This receipt is risk-only, not assumed as stock.",
       });
-      eta = input.as_of;
+      continue;
     }
     const i = dayIndex.get(eta);
     if (i === undefined) continue;

@@ -130,7 +130,8 @@ export type OptimizerArrivalFlag = Readonly<{
   source_key: string;
   material_id: string;
   eta_to_plant: string | null;
-  assumed_eta: string;
+  /** Legacy non-family projections can assume today; Family Planning never invents an arrival. */
+  assumed_eta: string | null;
   reason: "ETA_PASSED" | "ETA_MISSING";
   message: string;
 }>;

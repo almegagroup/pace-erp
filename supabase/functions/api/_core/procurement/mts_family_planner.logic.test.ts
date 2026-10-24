@@ -176,6 +176,18 @@ Deno.test("family arrival optimizer: a piece is not pushed months away while the
   assert(optimum.best.eta <= "2026-12-31", `best date ${optimum.best.eta} is too far`);
 });
 
+Deno.test("family planner: a missing ETA is visible as risk but never credited as CC-date stock", () => {
+  const result = planFamily({
+    as_of: "2026-10-24", horizon_end: "2026-10-25", opening_qty_by_material: { M: 0 },
+    own_demand: [{ material_id: "M", required_by: "2026-10-24", qty_base: 10 }], group_demand: [],
+    confirmed_arrivals: [{ source_key: "PO-without-ETA", material_id: "M", eta_to_plant: null, qty_base: 100 }],
+    policies: [{ material_id: "M", target_days: 5, critical_days: 2, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null }],
+    plan_buys: false,
+  });
+  assert(result.rows.find((row) => row.material_id === "M" && row.day === "2026-10-24")?.confirmed_arrival_qty_base === 0, "no ETA must not inflate CC-date balance");
+  assert(JSON.stringify(result.arrival_flags.map((flag) => [flag.source_key, flag.assumed_eta])) === JSON.stringify([["PO-without-ETA", null]]), "ETA risk remains explainable");
+});
+
 Deno.test("smart consumption ratio: every member with free stock serves the group, none piles up", () => {
   const result = planFamily({ ...rdpFamily(), plan_buys: false });
   const first = result.group_mix.find((g) => g.group_id === "RDP" && g.day === AS_OF);

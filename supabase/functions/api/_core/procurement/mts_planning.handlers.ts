@@ -28,7 +28,7 @@ import {
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -492,6 +492,7 @@ export async function computePlanning(p: PlanningParams) {
     if (r.group_id && r.candidates.length > 1) groupDemand.push({ group_id: r.group_id, candidates: r.candidates, required_by: r.day, qty_base: r.qty });
     else if (r.candidates[0]) ownDemand.push({ material_id: r.candidates[0], required_by: r.day, qty_base: r.qty });
   }
+  const familyArrivalCandidates = assembly.input.confirmed_arrivals;
   const familyInput: FamilyPlannerInput = {
     as_of: assembly.input.as_of,
     horizon_end: assembly.input.horizon_end,
@@ -499,18 +500,19 @@ export async function computePlanning(p: PlanningParams) {
     opening_receipts: openingReceipts,
     own_demand: ownDemand,
     group_demand: groupDemand,
-    // Owner rule (2026-10-24): an open PO that has not shipped is risk evidence,
-    // not family stock.  It remains visible in the Item Plan arrival/trace
-    // report, but may join allocation only after it becomes an actual movement
-    // (AT_GATE / IN_TRANSIT / STO / Sub-CSN / posted GR) with a plant date.
-    confirmed_arrivals: assembly.input.confirmed_arrivals
-      .filter((arrival) => isFamilyAllocatableArrival(arrival.lifecycle_kind))
+    // A CC-date GR and every future inbound with a valid plant ETA participate
+    // on that date. An ordered PO is usable only when its delivery/CSN ETA exists.
+    confirmed_arrivals: familyArrivalCandidates
+      .filter((arrival) => isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
       .map((arrival) => ({
         source_key: arrival.source_key,
         material_id: arrival.material_id,
         eta_to_plant: arrival.eta_to_plant,
         qty_base: arrival.qty_base,
       })),
+    arrival_risks: familyArrivalCandidates
+      .filter((arrival) => !isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
+      .map(familyArrivalRisk),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     group_orders: req.input.groupOrders,
