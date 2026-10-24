@@ -579,6 +579,7 @@ export async function computePlanning(p: PlanningParams) {
       own_demand: familyInput.own_demand.filter((d) => members.has(d.material_id)),
       group_demand: groupDemand,
       confirmed_arrivals: familyInput.confirmed_arrivals.filter((a) => members.has(a.material_id)),
+      arrival_risks: (familyInput.arrival_risks ?? []).filter((a) => members.has(a.material_id)),
       policies: familyInput.policies.filter((pol) => members.has(pol.material_id)),
       manual_lots: (familyInput.manual_lots ?? []).filter((l) => members.has(l.material_id)),
     };
@@ -807,6 +808,21 @@ export async function computePlanning(p: PlanningParams) {
     selection_groups: selectionGroups,
     group_risks: projection.group_pool_risks.map((g) => ({ ...g, group_label: g.group_id ? groupLabel.get(g.group_id) ?? "—" : "—" })),
     group_assignments: groupAssignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
+    // Server-owned waterfall evidence.  Keep UUIDs inside the engine only: this
+    // endpoint returns business labels so grids and Excel never need a lookup.
+    allocation_rows: projection.allocation_rows.map((row) => ({
+      day: row.day,
+      material_name: nameOf(row.material_id),
+      material_code: codeOf(row.material_id),
+      uom: uom(row.material_id),
+      destination: row.destination_kind === "OWN" ? "Own required use" : groupLabel.get(row.group_id ?? "") ?? "—",
+      flow: row.destination_kind === "OWN" ? "Exclusive / direct use" : "Group allocation",
+      qty: row.qty_base,
+      closing: row.closing_qty_base,
+      rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
+        ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
+        : "Waterfall use: smallest eligible group first; direct Desired-Max and narrower-group reserve stay protected. Then FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
+    })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
     reschedulable_arrivals: req.output.rows.filter((row) => !arrivalScope || arrivalScope.has(row.material_id)).flatMap((row) => {
@@ -839,6 +855,11 @@ export async function computePlanning(p: PlanningParams) {
       material_name: row.material_id ? nameOf(row.material_id) : "Group — not assigned",
       material_code: codeOf(row.material_id),
       uom: uom(row.material_id),
+      planned_consumption_reason: row.line_type === "FIXED"
+        ? "Direct/exclusive product requirement; protected before shared family allocation."
+        : row.material_id
+          ? `Family waterfall allocation for ${groupLabel.get(row.group_id ?? "") ?? "eligible group"}.`
+          : `Family group shortage: no eligible member stock could be allocated for ${groupLabel.get(row.group_id ?? "") ?? "this group"}.`,
     })),
   };
   console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));

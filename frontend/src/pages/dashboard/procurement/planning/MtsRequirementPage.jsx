@@ -1840,6 +1840,7 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
     { key: "group_label", label: "Material group", width: "180px", render: (r) => dash(r.group_label) },
     { key: "material_document_name", label: "Document name", width: "220px", render: (r) => dash(r.material_document_name) },
     { key: "material_name", label: "Material to use", width: "240px", render: (r) => (r.material_id ? r.material_name : <span className="text-rose-700">{r.material_name}</span>) },
+    { key: "planned_consumption_reason", label: "Planned consumption reason", width: "330px", render: (r) => r.planned_consumption_reason ?? "—", copyValue: (r) => r.planned_consumption_reason ?? "" },
     { key: "receipt_reference", label: "Use first from", width: "220px", render: (r) => r.receipt_reference ? <span className={r.receipt_expiry_priority ? "font-semibold text-amber-800" : ""}>{r.receipt_reference}</span> : "—", copyValue: (r) => r.receipt_reference ?? "" },
     { key: "receipt_valid_until", label: "Planning valid through", width: "150px", render: (r) => dash(r.receipt_valid_until), copyValue: (r) => r.receipt_valid_until ?? "" },
     { key: "receipt_basis", label: "Source basis", width: "135px", render: (r) => dash(r.receipt_basis), copyValue: (r) => r.receipt_basis ?? "" },

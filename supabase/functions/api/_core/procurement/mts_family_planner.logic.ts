@@ -103,6 +103,19 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
   group_unmet: ReadonlyArray<{ group_id: string; day: string; qty_base: number }>;
   /** Consumption ratio: per group and day, how much each member serves (Store instruction basis). */
   group_mix: ReadonlyArray<{ group_id: string; day: string; draws: Readonly<Record<string, number>> }>;
+  /**
+   * One actual simulated draw.  IDs stay internal here; the API boundary resolves
+   * them to business labels before returning an explainability report.
+   */
+  allocation_rows: ReadonlyArray<{
+    day: string;
+    material_id: string;
+    destination_kind: "OWN" | "GROUP";
+    group_id: string | null;
+    qty_base: number;
+    closing_qty_base: number;
+    rule: "DIRECT_EXCLUSIVE_RESERVE" | "GROUP_WATERFALL";
+  }>;
 };
 
 type Pool = { key: string; group_id: string; candidates: string[]; demand: number[] };
@@ -661,6 +674,30 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const groupPoolRisks: OptimizerGroupPoolRisk[] = [...unmetByGroup].sort(([a], [b]) => a.localeCompare(b))
     .map(([group_id, v]) => ({ group_id, unresolved_qty_base: v.qty, first_day: v.first }));
 
+  // Explainability is emitted by the simulator itself, never re-derived by the
+  // browser from closing balances.  `sim.use` includes the member's own demand
+  // plus pool draws, so the difference is the exact direct/exclusive draw.
+  const allocationRows: FamilyResult["allocation_rows"][number][] = [];
+  for (let i = 0; i < N; i += 1) {
+    for (let m = 0; m < ids.length; m += 1) {
+      const ownQty = sim.use[m][i] - sim.draw[m][i];
+      if (ownQty > EPSILON) allocationRows.push({
+        day: allDays[i], material_id: ids[m], destination_kind: "OWN", group_id: null,
+        qty_base: roundQty(ownQty), closing_qty_base: roundQty(sim.closing[m][i]), rule: "DIRECT_EXCLUSIVE_RESERVE",
+      });
+    }
+    pools.forEach((pool, p) => {
+      for (let m = 0; m < ids.length; m += 1) {
+        const qty = sim.poolDraw[p][m][i];
+        if (qty <= EPSILON) continue;
+        allocationRows.push({
+          day: allDays[i], material_id: ids[m], destination_kind: "GROUP", group_id: pool.group_id,
+          qty_base: roundQty(qty), closing_qty_base: roundQty(sim.closing[m][i]), rule: "GROUP_WATERFALL",
+        });
+      }
+    });
+  }
+
   return {
     rows: rows.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.day.localeCompare(b.day)),
     risks: risks.sort((a, b) => a.material_id.localeCompare(b.material_id)),
@@ -668,6 +705,9 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     arrival_flags: arrivalFlags.sort((a, b) => a.source_key.localeCompare(b.source_key)),
     advisory_buys: buys.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
     group_unmet: groupUnmet,
+    allocation_rows: allocationRows.sort((a, b) => a.day.localeCompare(b.day)
+      || a.destination_kind.localeCompare(b.destination_kind) || String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))
+      || a.material_id.localeCompare(b.material_id)),
     group_mix: (() => {
       const mix = new Map<string, Record<string, number>>();
       pools.forEach((pool, p) => {

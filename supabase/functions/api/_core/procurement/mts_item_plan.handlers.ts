@@ -429,6 +429,23 @@ export async function buildItemPlan(
         return grid.map((g) => ({ ...g, events: events.get(g.day) ?? [] }));
       })(),
       member_daily: memberDaily,
+      // Keep the allocation report server-owned.  The frontend may sort/filter
+      // these already-labelled rows but must never infer an allocation from a
+      // closing balance or a UUID lookup.
+      allocation_rows: projection.allocation_rows
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row, index) => {
+          const flow = row.destination_kind === "OWN" ? "Exclusive / direct use" : "Group allocation";
+          const destination = row.destination_kind === "OWN" ? "Own required use" : groupLabel.get(row.group_id ?? "") ?? "—";
+          return {
+            key: `${row.day}|${codeOf(row.material_id) ?? ""}|${flow}|${destination}|${index}`,
+            day: row.day, material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+            flow, destination, qty: round(row.qty_base), closing: round(row.closing_qty_base),
+            rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
+              ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
+              : "Waterfall use: smallest eligible group first; direct Desired-Max and narrower-group reserve stay protected. Then FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
+          };
+        }),
       arrivals: buildArrivals(),
       future_orders: futureOrders,
       transfers,

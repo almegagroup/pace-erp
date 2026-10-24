@@ -150,6 +150,11 @@ matrix were committed before code changes.
   allocation report** and its wording now matches the approved waterfall:
   direct Desired-Max reserve, small-group protection, FEFO, saved sequence and
   run-down priority.
+- The simulator now publishes each direct and group draw as a server-owned
+  allocation row.  The Item Plan only sorts/displays those resolved rows; it
+  no longer reconstructs an allocation in React from closing balances.  The
+  Store period plan now includes the explicit **Planned consumption reason**
+  required by the agreed report fields.
 - Its source report distinguishes dated inbound (including ordered PO with a
   valid ETA) from a no-ETA risk.  Group destinations and future-order covers
   are server-resolved business labels; the browser never receives an internal
@@ -157,4 +162,21 @@ matrix were committed before code changes.
 - All grids retain the shared copy-with-headers behavior, so the same labelled
   report can be pasted into Excel.  The daily Prediction-table visual redesign
   remains F8, deliberately separate from calculation.
+
+### F7 — code complete on `agent/codex`, pending release
+
+- The final Family input is scoped again when a user opens a member Item Plan:
+  the closure includes only that member, connected family groups, their members
+  and their matching valid arrivals/risks.  An unrelated family's ETA risk can
+  no longer leak into this view.
+- Standalone materials continue through the same deterministic planner with no
+  group pool; grouped policy logic has no effect on their existing CC-calibrated
+  Prediction behavior.  The Tot White standalone regressions remain green.
+
+### F8 — intentionally deferred after UAT
+
+The owner explicitly confirmed that the family CC-calibrated daily Prediction
+table is presentation work after the engine is proven.  It is not included in
+this implementation release and must read the F7 server output rather than
+recalculate in React.
 

@@ -146,39 +146,13 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   }, [view]);
   const monthSource = useMemo(() => new Map((plan?.month_sources ?? []).map((m) => [m.month.slice(0, 7), m.source])), [plan]);
 
-  // Owner 2026-10-24: a family plan must be auditable.  Do not make the user
-  // infer a material's route from only the closing balance: show every direct
-  // (exclusive) draw, every group draw, and the balance carried to the next
-  // date.  This is deliberately a report of the engine result, not a second
-  // allocator in the browser.
+  // Owner 2026-10-24: this report comes already allocated and labelled by the
+  // server engine.  React must not infer a route from closing balances.
   const allocationTraceRows = useMemo(() => {
-    const rows = [];
-    for (const daily of view?.member_daily ?? []) {
-      const groupDraws = daily.group_draws ?? [];
-      const groupTotal = groupDraws.reduce((sum, draw) => sum + Number(draw.qty ?? 0), 0);
-      const ownUse = Math.max(0, Number(daily.use ?? 0) - groupTotal);
-      const member = memberName.get(daily.material_id) ?? "—";
-      if (ownUse > 0.000001) {
-        rows.push({
-          key: `${daily.day}|${daily.material_id}|OWN`, day: daily.day, member,
-          flow: "Exclusive / direct use", destination: "Own required use", qty: ownUse,
-          rule: "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group.",
-          closing: daily.closing,
-        });
-      }
-      for (const [index, draw] of groupDraws.entries()) {
-        const qty = Number(draw.qty ?? 0);
-        if (qty <= 0.000001) continue;
-        rows.push({
-          key: `${daily.day}|${daily.material_id}|GROUP|${draw.group}|${index}`, day: daily.day, member,
-          flow: "Group allocation", destination: draw.group ?? "—", qty,
-          rule: "Waterfall use: smallest eligible group first; direct Desired-Max and narrower-group reserve stay protected. Then FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
-          closing: daily.closing,
-        });
-      }
-    }
-    return rows.sort((a, b) => a.day.localeCompare(b.day) || a.destination.localeCompare(b.destination) || a.member.localeCompare(b.member));
-  }, [view, memberName]);
+    return [...(view?.allocation_rows ?? [])]
+      .map((row, index) => ({ ...row, key: row.key ?? `${row.day}|${row.material_code ?? ""}|${row.flow}|${row.destination}|${index}`, member: `${row.material_code ?? ""} ${row.material_name ?? ""}`.trim() || "—" }))
+      .sort((a, b) => a.day.localeCompare(b.day) || a.destination.localeCompare(b.destination) || a.member.localeCompare(b.member));
+  }, [view]);
 
   const sourceTraceRows = useMemo(() => {
     const rows = [];

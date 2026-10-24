@@ -210,6 +210,9 @@ Deno.test("family waterfall: exclusive Desired-Max reserve is never double-alloc
   const mix = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-01");
   assert(mix?.draws.EXCLUSIVE === undefined, `exclusive reserve was incorrectly used by group: ${JSON.stringify(mix)}`);
   assert(mix?.draws.ALT === 10, `eligible alternate should serve group: ${JSON.stringify(mix)}`);
+  const allocation = result.allocation_rows.filter((row) => row.day === "2026-10-01");
+  assert(allocation.some((row) => row.material_id === "ALT" && row.destination_kind === "GROUP" && row.group_id === "G" && row.qty_base === 10 && row.rule === "GROUP_WATERFALL"), `server allocation evidence must contain the actual group draw: ${JSON.stringify(allocation)}`);
+  assert(!allocation.some((row) => row.material_id === "EXCLUSIVE" && row.destination_kind === "GROUP"), `server allocation evidence must not pretend reserved exclusive stock served a group: ${JSON.stringify(allocation)}`);
 });
 
 Deno.test("family waterfall: group buy sizes to derived Desired Max but individual RP guard still triggers at 20", () => {
