@@ -5011,10 +5011,16 @@ export function resolveMtsPackingPmActualQty(params: {
   totalQty: unknown;
   qtyPerPack: unknown;
   plannedPacks: unknown;
+  plannedOutputQty: unknown;
+  fillQtyPerPack: unknown;
   actualPacks: unknown;
 }): number {
   const totalQty = mtsQty(params.totalQty);
-  const plannedPacks = mtsQty(params.plannedPacks);
+  const configuredPacks = mtsQty(params.plannedPacks);
+  const fillQtyPerPack = mtsQty(params.fillQtyPerPack);
+  const plannedPacks = configuredPacks > EPSILON
+    ? configuredPacks
+    : (fillQtyPerPack > EPSILON ? mtsQty(params.plannedOutputQty) / fillQtyPerPack : 0);
   const actualPacks = mtsQty(params.actualPacks);
   if (totalQty > EPSILON && plannedPacks > EPSILON) {
     return mtsQty(totalQty * actualPacks / plannedPacks);
@@ -5217,7 +5223,7 @@ async function runMtsProcessOrderVerify(
   const [processLines, packingResult, yieldResult] = await Promise.all([
     fetchOrderLines(id, strokeMasterId),
     serviceRoleClient.schema("erp_production").from("packing_order")
-      .select("id, po_number, status, material_id, fill_qty_per_pack, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to")
+      .select("id, po_number, status, material_id, fill_qty_per_pack, num_packs, planned_qty_kg, actual_qty_kg, batch_number_from, batch_number_to")
       .eq("process_order_id", id).neq("status", "CANCELLED").neq("status", "REVERSED"),
     serviceRoleClient.schema("erp_production").from("mts_batch_yield_variance")
       .select("id, packing_order_id, packing_plan_row_id, batch_number, sku_material_id, expected_qty, declared_actual_qty, variance_qty, variance_type, uom_code, status")
@@ -5307,6 +5313,8 @@ async function runMtsProcessOrderVerify(
           totalQty: line.total_qty,
           qtyPerPack: line.qty_per_pack,
           plannedPacks: order.num_packs,
+          plannedOutputQty: order.planned_qty_kg,
+          fillQtyPerPack: fillQty,
           actualPacks,
         }));
       }

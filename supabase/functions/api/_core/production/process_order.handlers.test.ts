@@ -16,6 +16,8 @@ Deno.test("MTS Verify consumes the exact saved total for a full mixed-alternate 
       totalQty: 773,
       qtyPerPack: 0.277061,
       plannedPacks: 2790,
+      plannedOutputQty: 111600,
+      fillQtyPerPack: 40,
       actualPacks: 2790,
     }),
     773,
@@ -29,6 +31,8 @@ Deno.test("MTS Verify proportionally scales a saved PM total for a partial outpu
       totalQty: 773,
       qtyPerPack: 0.277061,
       plannedPacks: 2790,
+      plannedOutputQty: 111600,
+      fillQtyPerPack: 40,
       actualPacks: 1395,
     }),
     386.5,
@@ -42,9 +46,26 @@ Deno.test("MTS Verify retains legacy per-pack calculation when no total was save
       totalQty: null,
       qtyPerPack: 0.5,
       plannedPacks: 10,
+      plannedOutputQty: 100,
+      fillQtyPerPack: 10,
       actualPacks: 4,
     }),
     2,
     "legacy PM line fallback",
+  );
+});
+
+Deno.test("MTS Verify derives planned packs from selected output data if the header count is absent", () => {
+  assertEqual(
+    resolveMtsPackingPmActualQty({
+      totalQty: 773,
+      qtyPerPack: 0.277061,
+      plannedPacks: null,
+      plannedOutputQty: 111600,
+      fillQtyPerPack: 40,
+      actualPacks: 2790,
+    }),
+    773,
+    "a missing projection field must never recreate the rounded fractional total",
   );
 });
