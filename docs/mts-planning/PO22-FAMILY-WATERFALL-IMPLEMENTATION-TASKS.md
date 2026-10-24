@@ -86,6 +86,9 @@ matrix were committed before code changes.
 - Extended PO22 Group Settings with Target/Critical, effective date, derived
   Desired Max preview and explicit Desired Max override.  The preview consumes
   Planning's individual calculated Max values; it does not invent a UI cycle.
+  Each group now also displays the policy in force and every separately
+  scheduled future effective-date policy, so a user can verify carry-forward
+  before the month begins.
 - Deterministic policy tests pass (3/3), existing family planner tests pass
   (12/12), backend checks pass, focused frontend lint and production build pass.
 

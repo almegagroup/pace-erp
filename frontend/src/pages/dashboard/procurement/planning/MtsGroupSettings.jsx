@@ -28,6 +28,10 @@ function errorText(error) {
 function memberLabel(member) {
   return member ? `${member.material_code ? `${member.material_code} — ` : ""}${member.material_name}` : "—";
 }
+function coverageLabel(policy) {
+  const desired = policy?.desired_max_days_override;
+  return `Target ${policy?.target_days ?? 30} d / Critical ${policy?.critical_days ?? 15} d · Desired Max ${desired === null || desired === undefined ? "Auto (derived)" : `${desired} d (override)`}`;
+}
 
 export default function MtsGroupSettings({ companyId, planMonth, asOf, today, canEdit }) {
   const queryClient = useQueryClient();
@@ -186,6 +190,7 @@ export default function MtsGroupSettings({ companyId, planMonth, asOf, today, ca
                   <th className="border border-slate-200 px-2 py-1">RM / PM</th>
                   <th className="border border-slate-200 px-2 py-1">Target / Critical</th>
                   <th className="border border-slate-200 px-2 py-1">Desired Max days</th>
+                  <th className="border border-slate-200 px-2 py-1">Coverage policy schedule</th>
                   <th className="border border-slate-200 px-2 py-1">Members (unrestricted stock)</th>
                   <th className="border border-slate-200 px-2 py-1">In force now</th>
                   <th className="border border-slate-200 px-2 py-1">Use first</th>
@@ -199,6 +204,9 @@ export default function MtsGroupSettings({ companyId, planMonth, asOf, today, ca
                   const coverage = policyDraftOf(row);
                   const dirty = Boolean(drafts[row.material_group_id]?.order_mode);
                   const policyDirty = Boolean(policyDrafts[row.material_group_id]);
+                  const policy = policyByGroup.get(row.material_group_id) ?? null;
+                  const futurePolicies = [...(policyQ.data?.rows ?? [])]
+                    .find((item) => item.material_group_id === row.material_group_id)?.future_policies ?? [];
                   const memberById = new Map(row.members.map((m) => [m.material_id, m]));
                   const memberMaxDays = row.members
                     .map((m) => memberMax.get(m.material_id))
@@ -222,6 +230,18 @@ export default function MtsGroupSettings({ companyId, planMonth, asOf, today, ca
                       <td className="border border-slate-200 px-2 py-1">
                         <span>{derivedMax === null ? "Missing member Max" : `Derived ${derivedMax} d`}</span>
                         <input type="number" min="0" placeholder="Override" className={`${INPUT} mt-1 w-24`} value={coverage.desired_max_days_override} disabled={!editable} onChange={(event) => setPolicyDraft(row, { desired_max_days_override: event.target.value })} />
+                      </td>
+                      <td className="border border-slate-200 px-2 py-1">
+                        <span className="block text-slate-800">
+                          Now{policy?.effective_from ? ` · from ${policy.effective_from}` : " · default"}: {coverageLabel(policy)}
+                        </span>
+                        {futurePolicies.length ? (
+                          <ul className="mt-1 grid gap-0.5 border-t border-slate-100 pt-1 text-amber-800">
+                            {futurePolicies.map((future) => (
+                              <li key={future.effective_from}>From {future.effective_from}: {coverageLabel(future)}</li>
+                            ))}
+                          </ul>
+                        ) : <span className="mt-1 block text-slate-500">No future coverage change scheduled.</span>}
                       </td>
                       <td className="border border-slate-200 px-2 py-1">
                         {draft.order_mode === "FIXED_ORDER" ? (
