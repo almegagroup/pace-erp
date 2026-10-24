@@ -4999,6 +4999,29 @@ function mtsQty(value: unknown): number {
   return Number.isFinite(quantity) ? Number(quantity.toFixed(6)) : 0;
 }
 
+// A mixed PM-alternate allocation is stored as an exact PO-level `total_qty`.
+// `qty_per_pack` is only its display/ratio value (for example 773 / 2790 =
+// 0.277061).  Rebuilding the total by multiplying that rounded ratio back by
+// the actual number of packs can manufacture a quantity that was never
+// reserved (773.000190 in that example).  Scale the saved total instead, so
+// a full declared output consumes precisely the reserved quantity and a
+// partial output remains proportional.  Legacy lines without a saved total
+// retain the old per-pack calculation.
+export function resolveMtsPackingPmActualQty(params: {
+  totalQty: unknown;
+  qtyPerPack: unknown;
+  plannedPacks: unknown;
+  actualPacks: unknown;
+}): number {
+  const totalQty = mtsQty(params.totalQty);
+  const plannedPacks = mtsQty(params.plannedPacks);
+  const actualPacks = mtsQty(params.actualPacks);
+  if (totalQty > EPSILON && plannedPacks > EPSILON) {
+    return mtsQty(totalQty * actualPacks / plannedPacks);
+  }
+  return mtsQty(mtsQty(params.qtyPerPack) * actualPacks);
+}
+
 // §138 (2026-09-22, business owner): MTS Verify's RM/PM consumption must post one
 // stock_ledger movement PER BATCH (its own batch_number), not one blended lump sum --
 // stock_snapshot stays blended either way (matches MTO/HPS never splitting the snapshot
@@ -5279,7 +5302,14 @@ async function runMtsProcessOrderVerify(
     packingActualQtyById.set(orderId, orderActualQty);
     const actualPacks = orderActualQty / fillQty;
     for (const line of linesByPackingOrder.get(orderId) ?? []) {
-      if (String(line.line_type) === "PM") pmActualQtyByLine.set(String(line.id), mtsQty(mtsQty(line.qty_per_pack) * actualPacks));
+      if (String(line.line_type) === "PM") {
+        pmActualQtyByLine.set(String(line.id), resolveMtsPackingPmActualQty({
+          totalQty: line.total_qty,
+          qtyPerPack: line.qty_per_pack,
+          plannedPacks: order.num_packs,
+          actualPacks,
+        }));
+      }
     }
   }
 
