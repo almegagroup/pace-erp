@@ -62,6 +62,7 @@ const GAP_LABEL = {
 /** Owner 2026-10-22: the day grid gets the full width; everything else opens from a button. */
 const ITEM_PLAN_PANELS = [
   { id: "prediction", label: "Prediction" },
+  { id: "allocation", label: "Allocation trace" },
   { id: "arrivals", label: "Arrivals / Future Orders" },
   { id: "lots", label: "Your lots" },
   { id: "vendors", label: "Compare vendors" },
@@ -144,6 +145,86 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     return byDay;
   }, [view]);
   const monthSource = useMemo(() => new Map((plan?.month_sources ?? []).map((m) => [m.month.slice(0, 7), m.source])), [plan]);
+
+  // Owner 2026-10-24: a family plan must be auditable.  Do not make the user
+  // infer a material's route from only the closing balance: show every direct
+  // (exclusive) draw, every group draw, and the balance carried to the next
+  // date.  This is deliberately a report of the engine result, not a second
+  // allocator in the browser.
+  const allocationTraceRows = useMemo(() => {
+    const rows = [];
+    for (const daily of view?.member_daily ?? []) {
+      const groupDraws = daily.group_draws ?? [];
+      const groupTotal = groupDraws.reduce((sum, draw) => sum + Number(draw.qty ?? 0), 0);
+      const ownUse = Math.max(0, Number(daily.use ?? 0) - groupTotal);
+      const member = memberName.get(daily.material_id) ?? "—";
+      if (ownUse > 0.000001) {
+        rows.push({
+          key: `${daily.day}|${daily.material_id}|OWN`, day: daily.day, member,
+          flow: "Exclusive / direct use", destination: "Own required use", qty: ownUse,
+          rule: "Own (exclusive/direct) demand is consumed before this member's free stock is offered to groups.",
+          closing: daily.closing,
+        });
+      }
+      for (const [index, draw] of groupDraws.entries()) {
+        const qty = Number(draw.qty ?? 0);
+        if (qty <= 0.000001) continue;
+        rows.push({
+          key: `${daily.day}|${daily.material_id}|GROUP|${draw.group}|${index}`, day: daily.day, member,
+          flow: "Group allocation", destination: draw.group ?? "—", qty,
+          rule: "Only free stock is used first: own Target protection and narrower-group reserve remain protected. Expiry-risk stock overrides normal sequence; otherwise saved sequence or Method C applies.",
+          closing: daily.closing,
+        });
+      }
+    }
+    return rows.sort((a, b) => a.day.localeCompare(b.day) || a.destination.localeCompare(b.destination) || a.member.localeCompare(b.member));
+  }, [view, memberName]);
+
+  const sourceTraceRows = useMemo(() => {
+    const rows = [];
+    for (const member of plan?.members ?? []) {
+      for (const [index, location] of (member.locations ?? []).entries()) {
+        if (!(Number(location.qty) > 0.000001)) continue;
+        rows.push({
+          key: `STOCK|${member.material_id}|${location.location}|${index}`,
+          source: "Counted stock", member: `${member.material_code ?? ""} ${member.material_name ?? ""}`.trim(),
+          date: plan?.calendar?.as_of ?? asOf, qty: Number(location.qty),
+          availability: "Available from the CC date", detail: location.location,
+          rule: member.exclusive
+            ? "This material has direct/exclusive use; its own Target protection is retained before group use."
+            : "This member is available only through its eligible family group(s), subject to protection and location policy.",
+        });
+      }
+    }
+    for (const [index, arrival] of (view?.arrivals ?? []).entries()) {
+      rows.push({
+        key: `INBOUND|${arrival.material_id}|${arrival.reference}|${index}`,
+        source: arrival.status ?? "Inbound", member: `${arrival.material_code ?? ""} ${arrival.material_name ?? ""}`.trim(),
+        date: arrival.rescheduled_eta ?? arrival.eta_plant ?? "—", qty: Number(arrival.qty ?? 0),
+        availability: arrival.status === "ORDERED" ? "Risk only — not usable until dispatch / plant arrival" : "Joins the family only on ETA to Plant",
+        detail: [arrival.reference, arrival.vendor].filter(Boolean).join(" · ") || "—",
+        rule: arrival.status === "ORDERED"
+          ? "Ordered stock must not be consumed by the allocation trace before its dispatch/arrival status is confirmed."
+          : "The lot becomes available on its ETA-to-Plant date; it is not used before that date.",
+      });
+    }
+    return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.member.localeCompare(b.member));
+  }, [plan, view, asOf]);
+
+  const excessTraceRows = useMemo(() => {
+    const finalByMember = new Map();
+    for (const row of view?.member_daily ?? []) {
+      const seen = finalByMember.get(row.material_id);
+      if (!seen || row.day > seen.day) finalByMember.set(row.material_id, row);
+    }
+    return [...finalByMember.values()].map((row) => ({
+      material_id: row.material_id, member: memberName.get(row.material_id) ?? "—", day: row.day,
+      qty: Math.max(0, Number(row.closing ?? 0)), max_days: row.max_days,
+      result: Number(row.closing ?? 0) > 0.000001
+        ? "Residual: carries into the next eligible demand date; if no eligible demand remains, it is visible as excess / expiry-risk stock."
+        : "No residual stock at the end of this planning horizon.",
+    })).sort((a, b) => a.member.localeCompare(b.member));
+  }, [view, memberName]);
 
   // Your own Quantity to Dispatch per day for the selected item (draft first, else saved).
   const ownDispatch = useMemo(() => {
@@ -266,6 +347,34 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "usable_stock", label: "Counted stock", width: "120px", align: "right", render: (m) => `${fmtQty(m.usable_stock)} ${m.uom ?? ""}`, copyValue: (m) => m.usable_stock },
     { key: "target", label: "Target / Critical", width: "110px", render: (m) => `${fmtDays(m.target_days)} / ${fmtDays(m.critical_days)}` },
     { key: "locations", label: "Stock by location (now)", width: "320px", render: (m) => (m.locations.length ? m.locations.map((l) => `${l.location}: ${fmtQty(l.qty)}`).join(" · ") : "—"), copyValue: (m) => m.locations.map((l) => `${l.location}:${l.qty}`).join(" ") },
+  ];
+
+  const traceSourceColumns = [
+    { key: "source", label: "Source", width: "150px" },
+    { key: "member", label: "Material", width: "240px" },
+    { key: "date", label: "Available / ETA date", width: "130px" },
+    { key: "qty", label: "Qty", width: "110px", align: "right", render: (r) => fmtQty(r.qty), copyValue: (r) => r.qty },
+    { key: "availability", label: "When it may be used", width: "280px", render: (r) => <span className={String(r.availability).startsWith("Risk") ? "font-semibold text-amber-800" : ""}>{r.availability}</span> },
+    { key: "detail", label: "Location / document", width: "330px" },
+    { key: "rule", label: "Rule followed", width: "460px", render: (r) => <span className="whitespace-normal text-xs">{r.rule}</span> },
+  ];
+
+  const traceFlowColumns = [
+    { key: "day", label: "Date", width: "110px" },
+    { key: "member", label: "Material used", width: "240px" },
+    { key: "flow", label: "Step", width: "150px" },
+    { key: "destination", label: "Covered for", width: "260px" },
+    { key: "qty", label: "Allocated qty", width: "120px", align: "right", render: (r) => fmtQty(r.qty), copyValue: (r) => r.qty },
+    { key: "closing", label: "Carry after date", width: "130px", align: "right", render: (r) => fmtQty(r.closing), copyValue: (r) => r.closing },
+    { key: "rule", label: "Rule followed", width: "510px", render: (r) => <span className="whitespace-normal text-xs">{r.rule}</span> },
+  ];
+
+  const traceExcessColumns = [
+    { key: "member", label: "Material", width: "260px" },
+    { key: "day", label: "Horizon date", width: "130px" },
+    { key: "qty", label: "Residual qty", width: "130px", align: "right", render: (r) => fmtQty(r.qty), copyValue: (r) => r.qty },
+    { key: "max_days", label: "Max days", width: "100px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
+    { key: "result", label: "Where the balance goes", width: "620px", render: (r) => <span className="whitespace-normal text-xs">{r.result}</span> },
   ];
 
   const arrivalColumns = [
@@ -627,6 +736,31 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 <h3 className="text-sm font-semibold text-slate-800">Prediction — every Quantity to Dispatch{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
                 <p className="text-xs text-slate-500">Engine lots and your own (type in the grid's Quantity to Dispatch). Max / Min days on that date; Port ETA and Import ETD worked back from the plant date (port → plant days from received CSNs, vendor transit time).</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={predictionColumns} rows={view.prediction ?? []} rowKey={(p, i) => `${p.source}|${p.material_id}|${p.date}|${i}`} emptyMessage="No dispatch needed in the horizon." maxHeight="30vh" />
+              </section>
+              </>
+              ) : null}
+              {panel === "allocation" ? (
+              <>
+              <section className="grid gap-1 border border-sky-200 bg-sky-50 p-2">
+                <h3 className="text-sm font-semibold text-slate-800">Family allocation trace</h3>
+                <p className="text-xs text-slate-600">This is the engine&apos;s auditable flow: each counted source, the date it becomes usable, every direct/exclusive consumption, every member-to-group draw, the resulting carry, then the future-lot reason. It never substitutes a browser calculation for the engine.</p>
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">1. Material sources — what can enter the family</h3>
+                <ErpDenseGrid {...GRID_PROPS} columns={traceSourceColumns} rows={sourceTraceRows} rowKey={(r) => r.key} emptyMessage="No counted stock or future source in this family." maxHeight="26vh" />
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">2. Allocation flow — material → own use / group → carry</h3>
+                <p className="text-xs text-slate-500">Each row is one actual engine draw. “Carry after date” is the member balance after all draws on that date; it is the balance available to later eligible dates, not a new purchase recommendation.</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={traceFlowColumns} rows={allocationTraceRows} rowKey={(r) => r.key} emptyMessage="No direct or group consumption in this horizon." maxHeight="36vh" />
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">3. Projection — why a new lot is proposed</h3>
+                <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={view.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}|trace`} emptyMessage="No engine lot is needed in this horizon." maxHeight="24vh" />
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">4. End-of-horizon excess / carry</h3>
+                <ErpDenseGrid {...GRID_PROPS} columns={traceExcessColumns} rows={excessTraceRows} rowKey={(r) => r.material_id} emptyMessage="No family member in this horizon." maxHeight="22vh" />
               </section>
               </>
               ) : null}

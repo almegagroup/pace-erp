@@ -109,3 +109,27 @@ For a month M with **no PO21 plan**, per SKU:
    reschedule in the report; the user changes the CSN. The planning-side rescheduled ETA (§5) is
    kept as a planning value; who may enter it = PO22 full authority (SCM / Director / ACL-MASTER)
    unless the owner says otherwise.
+
+## 9. Allocation trace (owner direction 2026-10-24)
+
+The Item Plan must provide an **Allocation trace** panel for a selected family.  This is an
+engine-result report, never a second calculation in the browser.  Every table is searchable and
+copyable with headers for Excel.
+
+1. **Material sources:** counted stock by eligible location and every inbound piece, with material,
+   source/location or document, quantity, availability date and rule.  An `ORDERED` / not-shipped
+   PO is visible as **risk only** and cannot be allocated; it becomes usable only after a real
+   movement/ETA exists.
+2. **Allocation flow:** one row for each engine draw: date, material, direct/exclusive use or
+   receiving group, quantity, rule and member balance carried after that date.  The rule explains
+   that own use is protected first; group draws take free stock after own-Target protection and
+   narrower-group reserve; short-life FEFO can override normal saved sequence / Method C.
+3. **Projection:** every engine lot shows material, group or own use covered, quantity, PO-by/ETA,
+   Target + order-cycle/constraint reason and late/bridge flag.
+4. **Residual:** each member's horizon-end balance explicitly states whether it carries into a
+   later eligible demand or remains visible as excess/expiry-risk.  It must never silently vanish.
+
+All labels are business labels (material code/name and group name); UUIDs are never rendered or
+exported.  This trace describes the deterministic engine actually used by the displayed plan.  A
+future change to the family allocation algorithm must change the engine trace at the same time and
+add a regression test; changing only the UI explanation is forbidden.

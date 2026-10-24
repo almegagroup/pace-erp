@@ -28,7 +28,7 @@ import {
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -499,7 +499,18 @@ export async function computePlanning(p: PlanningParams) {
     opening_receipts: openingReceipts,
     own_demand: ownDemand,
     group_demand: groupDemand,
-    confirmed_arrivals: assembly.input.confirmed_arrivals,
+    // Owner rule (2026-10-24): an open PO that has not shipped is risk evidence,
+    // not family stock.  It remains visible in the Item Plan arrival/trace
+    // report, but may join allocation only after it becomes an actual movement
+    // (AT_GATE / IN_TRANSIT / STO / Sub-CSN / posted GR) with a plant date.
+    confirmed_arrivals: assembly.input.confirmed_arrivals
+      .filter((arrival) => isFamilyAllocatableArrival(arrival.lifecycle_kind))
+      .map((arrival) => ({
+        source_key: arrival.source_key,
+        material_id: arrival.material_id,
+        eta_to_plant: arrival.eta_to_plant,
+        qty_base: arrival.qty_base,
+      })),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     group_orders: req.input.groupOrders,

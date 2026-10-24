@@ -50,6 +50,14 @@ export type PlanningAssembly = {
 
 const EPSILON = 0.0000001;
 
+/**
+ * A PO remainder means the order exists but no shipment is on the way.  It is
+ * useful risk evidence, never stock that Family Planning may allocate.
+ */
+export function isFamilyAllocatableArrival(lifecycleKind: string): boolean {
+  return lifecycleKind !== "PO_REMAINDER";
+}
+
 /** Vendor with a known route and the shortest total lead time; ties → smaller MOQ → label. */
 export function chooseVendor(terms: readonly VendorTerm[]): VendorTerm | null {
   const total = (t: VendorTerm) => (t.route_days === null ? Number.POSITIVE_INFINITY : (t.booking_days ?? 0) + t.route_days);

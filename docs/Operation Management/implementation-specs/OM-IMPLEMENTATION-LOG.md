@@ -140,6 +140,30 @@ rephased/adjusted value একই নামে বা silently interchange ক�
 
 ---
 
+### 2026-10-24 — PO22 Family Allocation Trace + ordered-PO eligibility (DEV READY; PROD UNVERIFIED)
+
+- **Owner need:** family planning must be auditable as a material flow, not just a final ratio:
+  source stock / arrival → direct or group use → future projection → explicit residual, with a
+  human-readable reason on every row and no UUID exposed to the user.
+- **DEV correction:** 4A Item Plan now has **Allocation trace**. Its four copyable, filterable
+  grids show (1) sources by material/location and dated arrival, (2) dated direct/group allocation
+  flow and the current deterministic-engine rule, (3) engine future orders, and (4) each member's
+  end-of-horizon residual/carry. This reads the engine result; it does not create a competing
+  browser-side allocation calculation.
+- **Lifecycle safety rule:** an `ORDERED` / `PO_REMAINDER` quantity is a purchasing risk signal,
+  not plant-available stock. It remains visible in arrivals/trace, but Family Planning now removes
+  it from `confirmed_arrivals` before coverage and allocation. Posted GR and in-transit material
+  remain eligible on their actual ETA-to-plant date.
+- **Scope truth:** this does not yet implement the later owner-designed group Target/Critical,
+  small-group rotation and free-excess redistribution algorithm. The report makes the existing
+  engine's source, allocations, projections and residual explicit so that design can be validated
+  without silently inventing a new allocation method.
+- **Verification:** focused PO22 Deno suites **36 passed**; Planning/Item Plan handler type checks,
+  focused frontend ESLint, production build and `git diff --check` passed. Production remains
+  unverified until the promoted commit is deployed and recalculated against a live family.
+
+---
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from
