@@ -125,6 +125,14 @@ Deno.test("family planner: no stock-out and no member below Critical once lots c
   assert(result.group_unmet.length === 0, `group unmet on ${result.group_unmet.slice(0, 3).map((u) => `${u.group_id} ${u.day}`).join(", ")}`);
 });
 
+Deno.test("W3: every family member conserves opening, arrivals, lots, allocations, expiry and carry", () => {
+  const result = planFamily({ ...rdpFamily(), confirmed_arrivals: [{ source_key: "DA-ETA", material_id: "DA", eta_to_plant: "2026-10-25", qty_base: 2500 }] });
+  assert(result.allocation_reconciliation.length === 4, "each family member must have a reconciliation row");
+  assert(result.allocation_reconciliation.every((row) => row.variance_qty_base === 0), `source-to-destination reconciliation failed: ${JSON.stringify(result.allocation_reconciliation)}`);
+  const da = result.allocation_reconciliation.find((row) => row.material_id === "DA");
+  assert((da?.confirmed_arrival_qty_base ?? 0) === 2500 && (da?.group_allocated_qty_base ?? 0) > 0, "dated inbound must join the same conserved waterfall as group allocations");
+});
+
 Deno.test("family planner: RDP's early need is bridged by the fast domestic member, later ones by the cheapest that arrives in time", () => {
   const buys = planFamily(rdpFamily()).advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
   const rdp = buys.filter((b) => b.covers.includes("RDP")).sort((a, b) => String(a.estimated_plant_eta).localeCompare(String(b.estimated_plant_eta)));

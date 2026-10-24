@@ -164,6 +164,52 @@ rephased/adjusted value একই নামে বা silently interchange ক�
 
 ---
 
+### 2026-10-24 — PO22 Family Waterfall W1/W2 safeguards (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- **W1 — individual Desired Max:** `material_requirement_policy` now has an
+  effective-dated, append-only `desired_max_days_override`. Leaving it blank
+  retains the canonical `Target + calculated order cycle`; a saved value must
+  be at least Target. The same effective value is handed to both the
+  individual buy/protection calculation and the group Desired-Max derivation.
+  It is exposed in PO22 Requirement Material Settings and Policy History, not
+  re-derived in React.
+- **W2 — confirmed inbound after horizon:** a valid ERP PO/CSN ETA within the
+  run joins Family stock on its exact ETA. A valid ETA later than the horizon
+  now returns labelled **After horizon** evidence and cannot inflate current
+  coverage or suppress a current recommendation. Missing/stale ETA remains
+  risk-only. This preserves the rule that monthly selection gates *new buys*
+  only, never valid existing stock/inbound.
+- **Evidence:** planner/Requirement Deno checks and 37 W1 + 23 W2 focused
+  regression tests pass. W1 migration `20261024120000` is in code only; no
+  DEV/PROD migration, data write, promotion, deployment, or live recalculation
+  occurred. Therefore this is not a live-fix claim.
+- **Remaining:** W3 must make the first/second waterfall a conserved
+  source-to-destination ledger, then W4/W5 will consume that canonical output
+  for future projections, Store advice and Critical actions. The family daily
+  table presentation remains explicitly deferred.
+
+### 2026-10-24 — PO22 Family Waterfall W3a conservation invariant (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- The Family engine now proves conservation for every member before a Family
+  plan is returned: `opening + confirmed ETA + engine lot = direct use + group
+  use + planning expiry + closing`. A non-zero variance raises
+  `FAMILY_PLANNER_QUANTITY_NOT_CONSERVED`; it cannot be hidden by the UI or an
+  Excel export.
+- Planning and 4A receive the identical labelled reconciliation source. This
+  is server-calculated evidence, not a second browser allocator. It includes
+  opening, confirmed arrival, engine lot, own allocation, group allocation,
+  expiry, closing and variance.
+- The receipt-expiry path now records the exact quantity actually removed from
+  the virtual aggregate balance, so it is reconciled rather than silently
+  clamped.
+- Verification: Deno checks for Family, Planning and Item Plan handlers; Family
+  planner 18/18 and Item Plan 18/18 including a confirmed-inbound conservation
+  case; diff guard passed.
+- **Still not claimed:** W3b's explicit virtual second-excess rotation and its
+  report policy, W4 projection/Store consumption, W5 Critical action chain,
+  migration application, deployment, or any live recalculation. The Family
+  daily table presentation remains deferred.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from

@@ -30,7 +30,8 @@ contracts completely.
 |---|---|---|
 | W1 | Effective-dated material Desired Max override: migration, save/history/list API, Requirement grid, planner handoff. | Blank derives from Target+cycle; override carries by date and changes family protection; Target guard rejects a lower override. |
 | W2 | Horizon classification for confirmed ERP receipts. | In-horizon receipt joins only on ETA; after-horizon receipt is visible but cannot cover/bypass buy; no ETA is risk-only. |
-| W3 | Canonical reservation ledger and two-pass waterfall. | Source=allocation+residual; direct reserve, small-group-first, covered-skip and second rotation tests. |
+| W3a | Canonical source-to-destination conservation ledger. | Every member proves `opening + confirmed ETA + engine lot = own use + group use + expiry + closing`; a mismatch is a planner error, never a browser calculation. |
+| W3b | Virtual two-pass waterfall/residual policy on the W3a ledger. | Direct reserve, small-group-first, covered-skip, and second-rotation rules are explicit and tested; only genuine demand/coverage is allocated, never invented zero-demand consumption. |
 | W4 | Projection and Store advice consume W3 results, with bridge reallocation on future receipt. | RP20/group30, unselected run-down and future inbound bridge regressions. |
 | W5 | Group-scoped Critical action chain and labelled report/export API. | A group deficit exposes ordered actions and no UUID leaks to UI/Excel. |
 | W6 | Regression matrix and implementation-log evidence. | Standalone PO22 behavior remains unchanged; full suite green. |

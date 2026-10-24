@@ -116,6 +116,18 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
     closing_qty_base: number;
     rule: "DIRECT_EXCLUSIVE_RESERVE" | "GROUP_WATERFALL";
   }>;
+  /** Per-member proof that the event-time waterfall did not create or double-count stock. */
+  allocation_reconciliation: ReadonlyArray<{
+    material_id: string;
+    opening_qty_base: number;
+    confirmed_arrival_qty_base: number;
+    planned_lot_qty_base: number;
+    own_allocated_qty_base: number;
+    group_allocated_qty_base: number;
+    expired_qty_base: number;
+    closing_qty_base: number;
+    variance_qty_base: number;
+  }>;
 };
 
 type Pool = { key: string; group_id: string; candidates: string[]; demand: number[] };
@@ -203,6 +215,7 @@ type Sim = {
   poolFreeShort: number[][];
   poolFree: number[][]; // free stock this pool could still use after the day (reserve-adjusted)
   poolDraw: number[][][]; // pool → member → day: who served the group (the consumption ratio)
+  expired: number[]; // planning-only receipt life loss; must reconcile stock conservation
 };
 
 export function planFamily(input: FamilyPlannerInput): FamilyResult {
@@ -366,6 +379,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       planned: ids.map(() => zeros()), ownBalance: ids.map(() => zeros()), freeAfter: ids.map(() => zeros()),
       poolUnmet: pools.map(() => zeros()), poolFreeShort: pools.map(() => zeros()), poolFree: pools.map(() => zeros()),
       poolDraw: pools.map(() => ids.map(() => zeros())),
+      expired: ids.map(() => 0),
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
@@ -376,7 +390,9 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       for (let m = 0; m < M; m += 1) {
         for (const receipt of receiptLeft[m]) {
           if (receipt.qty_base <= EPSILON || receipt.valid_until >= allDays[i]) continue;
-          bal[m] = Math.max(0, bal[m] - receipt.qty_base);
+          const expired = Math.min(Math.max(0, bal[m]), receipt.qty_base);
+          bal[m] = roundQty(bal[m] - expired);
+          s.expired[m] = roundQty(s.expired[m] + expired);
           receipt.qty_base = 0;
         }
       }
@@ -713,6 +729,26 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     });
   }
 
+  // This is a calculation invariant, not a browser-side report formula. It
+  // locks every current/future source to one direct/group destination or the
+  // retained closing/expiry balance before later waterfall work is added.
+  const allocationReconciliation: FamilyResult["allocation_reconciliation"][number][] = ids.map((id, m) => {
+    const opening = Math.max(0, Number(input.opening_qty_by_material[id] ?? 0));
+    const confirmedQty = confirmed[m].reduce((sum, qty) => sum + qty, 0);
+    const plannedQty = sim.planned[m].reduce((sum, qty) => sum + qty, 0);
+    const ownQty = own[m].reduce((sum, qty) => sum + qty, 0);
+    const groupQty = sim.draw[m].reduce((sum, qty) => sum + qty, 0);
+    const closing = sim.closing[m][N - 1] ?? opening;
+    const expired = sim.expired[m];
+    const variance = roundQty(opening + confirmedQty + plannedQty - ownQty - groupQty - expired - closing);
+    if (Math.abs(variance) > 0.00001) throw new Error(`FAMILY_PLANNER_QUANTITY_NOT_CONSERVED:${id}`);
+    return {
+      material_id: id, opening_qty_base: roundQty(opening), confirmed_arrival_qty_base: roundQty(confirmedQty), planned_lot_qty_base: roundQty(plannedQty),
+      own_allocated_qty_base: roundQty(ownQty), group_allocated_qty_base: roundQty(groupQty), expired_qty_base: roundQty(expired),
+      closing_qty_base: roundQty(closing), variance_qty_base: variance,
+    };
+  });
+
   return {
     rows: rows.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.day.localeCompare(b.day)),
     risks: risks.sort((a, b) => a.material_id.localeCompare(b.material_id)),
@@ -723,6 +759,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     allocation_rows: allocationRows.sort((a, b) => a.day.localeCompare(b.day)
       || a.destination_kind.localeCompare(b.destination_kind) || String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))
       || a.material_id.localeCompare(b.material_id)),
+    allocation_reconciliation: allocationReconciliation,
     group_mix: (() => {
       const mix = new Map<string, Record<string, number>>();
       pools.forEach((pool, p) => {

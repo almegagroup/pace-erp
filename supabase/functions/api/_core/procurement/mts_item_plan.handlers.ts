@@ -446,6 +446,14 @@ export async function buildItemPlan(
               : "Waterfall use: smallest eligible group first; direct Desired-Max and narrower-group reserve stay protected. Then FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
           };
         }),
+      allocation_reconciliation: projection.allocation_reconciliation
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row) => ({
+          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          opening_qty: round(row.opening_qty_base), confirmed_arrival_qty: round(row.confirmed_arrival_qty_base), planned_lot_qty: round(row.planned_lot_qty_base),
+          own_allocated_qty: round(row.own_allocated_qty_base), group_allocated_qty: round(row.group_allocated_qty_base),
+          expired_qty: round(row.expired_qty_base), closing_qty: round(row.closing_qty_base), variance_qty: round(row.variance_qty_base),
+        })),
       arrivals: buildArrivals(),
       future_orders: futureOrders,
       transfers,

@@ -823,6 +823,12 @@ export async function computePlanning(p: PlanningParams) {
         ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
         : "Waterfall use: smallest eligible group first; direct Desired-Max and narrower-group reserve stay protected. Then FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
     })),
+    allocation_reconciliation: projection.allocation_reconciliation.map((row) => ({
+      material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+      opening_qty: row.opening_qty_base, confirmed_arrival_qty: row.confirmed_arrival_qty_base, planned_lot_qty: row.planned_lot_qty_base,
+      own_allocated_qty: row.own_allocated_qty_base, group_allocated_qty: row.group_allocated_qty_base,
+      expired_qty: row.expired_qty_base, closing_qty: row.closing_qty_base, variance_qty: row.variance_qty_base,
+    })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
     reschedulable_arrivals: req.output.rows.filter((row) => !arrivalScope || arrivalScope.has(row.material_id)).flatMap((row) => {
