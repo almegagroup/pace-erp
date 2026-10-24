@@ -1,4 +1,4 @@
-import { assemblePlanningInput, chooseVendor, selectGroupMember, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, chooseVendor, isFamilyAllocatableArrival, selectGroupMember, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -15,6 +15,12 @@ Deno.test("D3 member selection: single, cheapest of several, none", () => {
   equal(selectGroupMember(["A", "B"], new Set(["A"]), price), { material_id: "A", reason: "SINGLE_SELECTED" }, "single");
   equal(selectGroupMember(["A", "B"], new Set(["A", "B"]), price), { material_id: "B", reason: "CHEAPEST_SELECTED" }, "cheapest");
   equal(selectGroupMember(["A", "B"], new Set(), price), { material_id: null, reason: "NONE_SELECTED" }, "none");
+});
+
+Deno.test("family allocation: ordered PO remainder is risk-only until it ships", () => {
+  equal(isFamilyAllocatableArrival("PO_REMAINDER"), false, "an unshipped PO cannot cover a family need");
+  equal(isFamilyAllocatableArrival("IN_TRANSIT"), true, "an in-transit consignment joins on its plant ETA");
+  equal(isFamilyAllocatableArrival("POSTED_GR"), true, "a posted GR on the CC date remains an actual arrival");
 });
 
 function row(id: string, stock: number, daily: Array<[string, number]>, target = 5): RequirementRow {
