@@ -188,6 +188,18 @@ Deno.test("family planner: a missing ETA is visible as risk but never credited a
   assert(JSON.stringify(result.arrival_flags.map((flag) => [flag.source_key, flag.assumed_eta])) === JSON.stringify([["PO-without-ETA", null]]), "ETA risk remains explainable");
 });
 
+Deno.test("W2: a confirmed ETA after the horizon stays visible but cannot create current cover", () => {
+  const result = planFamily({
+    as_of: "2026-10-24", horizon_end: "2026-10-25", opening_qty_by_material: { M: 0 },
+    own_demand: [{ material_id: "M", required_by: "2026-10-24", qty_base: 10 }], group_demand: [],
+    confirmed_arrivals: [{ source_key: "PO-after-horizon", material_id: "M", eta_to_plant: "2026-11-01", qty_base: 100 }],
+    policies: [{ material_id: "M", target_days: 5, critical_days: 2, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null }],
+    plan_buys: false,
+  });
+  assert(result.rows.every((row) => row.confirmed_arrival_qty_base === 0), "after-horizon receipt must not inflate this run's balance");
+  assert(JSON.stringify(result.arrival_flags.map((flag) => [flag.source_key, flag.reason, flag.eta_to_plant])) === JSON.stringify([["PO-after-horizon", "ETA_AFTER_HORIZON", "2026-11-01"]]), "after-horizon confirmed receipt must remain visible evidence");
+});
+
 Deno.test("smart consumption ratio: every member with free stock serves the group, none piles up", () => {
   const result = planFamily({ ...rdpFamily(), plan_buys: false });
   const first = result.group_mix.find((g) => g.group_id === "RDP" && g.day === AS_OF);

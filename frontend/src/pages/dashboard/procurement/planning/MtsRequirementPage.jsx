@@ -1576,7 +1576,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "material_name", label: "Material", width: "240px" },
     { key: "document", label: "Document", width: "280px" },
     { key: "eta_to_plant", label: "CSN ETA", width: "100px", render: (f) => dash(f.eta_to_plant) },
-    { key: "reason", label: "Issue", width: "110px", render: (f) => (f.reason === "ETA_PASSED" ? badge("OVERDUE") : badge("ETA_UNKNOWN")), copyValue: (f) => f.reason },
+    { key: "reason", label: "Issue", width: "130px", render: (f) => (f.reason === "ETA_PASSED" ? badge("OVERDUE") : f.reason === "ETA_AFTER_HORIZON" ? badge("AFTER HORIZON") : badge("ETA_UNKNOWN")), copyValue: (f) => f.reason },
     { key: "message", label: "Action", width: "420px" },
   ];
   const groupColumns = [

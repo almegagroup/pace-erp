@@ -270,7 +270,16 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       continue;
     }
     const i = dayIndex.get(eta);
-    if (i === undefined) continue;
+    if (i === undefined) {
+      // A confirmed ERP PO/CSN remains evidence even when it lands after the
+      // current Family horizon.  It must not silently disappear or inflate
+      // today's safety cover / suppress a current buy recommendation.
+      arrivalFlags.push({
+        source_key: a.source_key, material_id: a.material_id, eta_to_plant: eta, assumed_eta: null, reason: "ETA_AFTER_HORIZON",
+        message: `Confirmed plant ETA ${eta} is after this planning horizon — shown as future evidence, not counted as current Family stock.`,
+      });
+      continue;
+    }
     confirmed[mIndex.get(a.material_id)!][i] += a.qty_base;
   }
   const manual: Planned[] = [];
