@@ -420,33 +420,57 @@ async function resolvePackingSfgBatchOptions(
   const batchNumbers = [...ledgerByBatch.keys()];
   if (batchNumbers.length === 0) return [];
 
-  const { data: batchRows, error: batchErr } = await serviceRoleClient
-    .schema("erp_production")
-    .from("batch_number_instance")
-    .select("batch_number, source_process_order_id")
-    .eq("company_id", companyId)
-    .eq("prodshade_material_id", materialId)
-    .in("batch_number", batchNumbers);
-  if (batchErr) {
-    console.error("[packing_order.resolvePackingSfgBatchOptions] batch instance query failed:", JSON.stringify(batchErr));
+  // MTS records batch ownership in batch_number_instance with a Prodshade ID.
+  // MTO/HPS/MTEST's existing records deliberately retain that column as NULL,
+  // even though process_order carries the same company/material/batch identity.
+  // Keep MTS scoped by Prodshade (the cross-Prodshade duplicate safeguard), then
+  // fall back to that canonical Process PO identity for the non-MTS shape.
+  let batchRows: JsonRecord[];
+  let directProcessRows: JsonRecord[];
+  try {
+    [batchRows, directProcessRows] = await Promise.all([
+      fetchInChunks<JsonRecord>(batchNumbers, (idChunk) =>
+        serviceRoleClient
+          .schema("erp_production")
+          .from("batch_number_instance")
+          .select("batch_number, source_process_order_id")
+          .eq("company_id", companyId)
+          .eq("prodshade_material_id", materialId)
+          .in("batch_number", idChunk)),
+      fetchInChunks<JsonRecord>(batchNumbers, (idChunk) =>
+        serviceRoleClient
+          .schema("erp_production")
+          .from("process_order")
+          .select("id, po_number, batch_number, status, machine_id, material_id, stroke_master_id")
+          .eq("company_id", companyId)
+          .eq("material_id", materialId)
+          .in("batch_number", idChunk)),
+    ]);
+  } catch (err) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] batch/process lookup failed:", err instanceof Error ? err.message : String(err));
     throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
   }
 
-  const processOrderIds = [...new Set(((batchRows ?? []) as JsonRecord[])
+  const processOrderIds = [...new Set(batchRows
     .map((row) => toTrimmedString(row.source_process_order_id))
     .filter(Boolean))];
-  const { data: processRows, error: processErr } = processOrderIds.length
-    ? await serviceRoleClient
+  let instanceProcessRows: JsonRecord[];
+  try {
+    instanceProcessRows = await fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
+      serviceRoleClient
         .schema("erp_production")
         .from("process_order")
         .select("id, po_number, batch_number, status, machine_id, material_id, stroke_master_id")
+        .eq("company_id", companyId)
         .eq("material_id", materialId)
-        .in("id", processOrderIds)
-    : { data: [], error: null };
-  if (processErr) {
-    console.error("[packing_order.resolvePackingSfgBatchOptions] process order query failed:", JSON.stringify(processErr));
+        .in("id", idChunk));
+  } catch (err) {
+    console.error("[packing_order.resolvePackingSfgBatchOptions] batch-instance Process PO lookup failed:", err instanceof Error ? err.message : String(err));
     throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
   }
+  const processRows = [...new Map(
+    [...directProcessRows, ...instanceProcessRows].map((row) => [String(row.id), row]),
+  ).values()];
 
   const machineIds = [...new Set(((processRows ?? []) as JsonRecord[])
     .map((row) => toTrimmedString(row.machine_id))
@@ -496,16 +520,31 @@ async function resolvePackingSfgBatchOptions(
     throw new Error("PROD_PACK_SFG_BATCH_LOOKUP_FAILED");
   }
 
-  const batchMap = new Map(((batchRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.batch_number), row]));
-  const processMap = new Map(((processRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  const batchMap = new Map(batchRows.map((row) => [toTrimmedString(row.batch_number), row]));
+  const processMap = new Map(processRows.map((row) => [String(row.id), row]));
+  const directProcessByBatch = new Map<string, JsonRecord>();
+  for (const processOrder of directProcessRows) {
+    const batchNumber = toTrimmedString(processOrder.batch_number);
+    if (!batchNumber) continue;
+    const existing = directProcessByBatch.get(batchNumber);
+    if (!existing || (
+      toUpperTrimmedString(processOrder.status) === "VERIFIED"
+      && toUpperTrimmedString(existing.status) !== "VERIFIED"
+    )) {
+      directProcessByBatch.set(batchNumber, processOrder);
+    }
+  }
   const machineMap = new Map(((machineRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   const prodshadeMap = new Map(((prodshadeRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
   const strokeMap = new Map(((strokeRows ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
 
   return batchNumbers.map((batchNumber) => {
     const batch = batchMap.get(batchNumber);
-    const processOrderId = toTrimmedString(batch?.source_process_order_id) || null;
-    const processOrder = processOrderId ? processMap.get(processOrderId) ?? null : null;
+    const instanceProcessOrderId = toTrimmedString(batch?.source_process_order_id);
+    const processOrder = (instanceProcessOrderId ? processMap.get(instanceProcessOrderId) : null)
+      ?? directProcessByBatch.get(batchNumber)
+      ?? null;
+    const processOrderId = processOrder ? toTrimmedString(processOrder.id) || null : null;
     const machineId = toTrimmedString(processOrder?.machine_id);
     const prodshadeId = toTrimmedString(processOrder?.material_id);
     const strokeId = toTrimmedString(processOrder?.stroke_master_id);
