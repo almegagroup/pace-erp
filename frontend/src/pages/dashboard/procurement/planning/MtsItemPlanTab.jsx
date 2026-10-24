@@ -62,7 +62,7 @@ const GAP_LABEL = {
 /** Owner 2026-10-22: the day grid gets the full width; everything else opens from a button. */
 const ITEM_PLAN_PANELS = [
   { id: "prediction", label: "Prediction" },
-  { id: "allocation", label: "Allocation trace" },
+  { id: "allocation", label: "Family allocation report" },
   { id: "arrivals", label: "Arrivals / Future Orders" },
   { id: "lots", label: "Your lots" },
   { id: "vendors", label: "Compare vendors" },
@@ -146,39 +146,13 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   }, [view]);
   const monthSource = useMemo(() => new Map((plan?.month_sources ?? []).map((m) => [m.month.slice(0, 7), m.source])), [plan]);
 
-  // Owner 2026-10-24: a family plan must be auditable.  Do not make the user
-  // infer a material's route from only the closing balance: show every direct
-  // (exclusive) draw, every group draw, and the balance carried to the next
-  // date.  This is deliberately a report of the engine result, not a second
-  // allocator in the browser.
+  // Owner 2026-10-24: this report comes already allocated and labelled by the
+  // server engine.  React must not infer a route from closing balances.
   const allocationTraceRows = useMemo(() => {
-    const rows = [];
-    for (const daily of view?.member_daily ?? []) {
-      const groupDraws = daily.group_draws ?? [];
-      const groupTotal = groupDraws.reduce((sum, draw) => sum + Number(draw.qty ?? 0), 0);
-      const ownUse = Math.max(0, Number(daily.use ?? 0) - groupTotal);
-      const member = memberName.get(daily.material_id) ?? "—";
-      if (ownUse > 0.000001) {
-        rows.push({
-          key: `${daily.day}|${daily.material_id}|OWN`, day: daily.day, member,
-          flow: "Exclusive / direct use", destination: "Own required use", qty: ownUse,
-          rule: "Own (exclusive/direct) demand is consumed before this member's free stock is offered to groups.",
-          closing: daily.closing,
-        });
-      }
-      for (const [index, draw] of groupDraws.entries()) {
-        const qty = Number(draw.qty ?? 0);
-        if (qty <= 0.000001) continue;
-        rows.push({
-          key: `${daily.day}|${daily.material_id}|GROUP|${draw.group}|${index}`, day: daily.day, member,
-          flow: "Group allocation", destination: draw.group ?? "—", qty,
-          rule: "Only free stock is used first: own Target protection and narrower-group reserve remain protected. Expiry-risk stock overrides normal sequence; otherwise saved sequence or Method C applies.",
-          closing: daily.closing,
-        });
-      }
-    }
-    return rows.sort((a, b) => a.day.localeCompare(b.day) || a.destination.localeCompare(b.destination) || a.member.localeCompare(b.member));
-  }, [view, memberName]);
+    return [...(view?.allocation_rows ?? [])]
+      .map((row, index) => ({ ...row, key: row.key ?? `${row.day}|${row.material_code ?? ""}|${row.flow}|${row.destination}|${index}`, member: `${row.material_code ?? ""} ${row.material_name ?? ""}`.trim() || "—" }))
+      .sort((a, b) => a.day.localeCompare(b.day) || a.destination.localeCompare(b.destination) || a.member.localeCompare(b.member));
+  }, [view]);
 
   const sourceTraceRows = useMemo(() => {
     const rows = [];
@@ -201,11 +175,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
         key: `INBOUND|${arrival.material_id}|${arrival.reference}|${index}`,
         source: arrival.status ?? "Inbound", member: `${arrival.material_code ?? ""} ${arrival.material_name ?? ""}`.trim(),
         date: arrival.rescheduled_eta ?? arrival.eta_plant ?? "—", qty: Number(arrival.qty ?? 0),
-        availability: arrival.status === "ORDERED" ? "Risk only — not usable until dispatch / plant arrival" : "Joins the family only on ETA to Plant",
+        availability: (arrival.rescheduled_eta ?? arrival.eta_plant) ? "Joins the family on this valid ETA to Plant" : "Risk only — no valid ETA to Plant",
         detail: [arrival.reference, arrival.vendor].filter(Boolean).join(" · ") || "—",
-        rule: arrival.status === "ORDERED"
-          ? "Ordered stock must not be consumed by the allocation trace before its dispatch/arrival status is confirmed."
-          : "The lot becomes available on its ETA-to-Plant date; it is not used before that date.",
+        rule: (arrival.rescheduled_eta ?? arrival.eta_plant)
+          ? "Every dated receipt—including an ordered PO with delivery date—enters the waterfall on its ETA-to-Plant date, never before."
+          : "Without a valid ETA this receipt is a risk/action item, not usable Family stock.",
       });
     }
     return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.member.localeCompare(b.member));
@@ -742,8 +716,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               {panel === "allocation" ? (
               <>
               <section className="grid gap-1 border border-sky-200 bg-sky-50 p-2">
-                <h3 className="text-sm font-semibold text-slate-800">Family allocation trace</h3>
-                <p className="text-xs text-slate-600">This is the engine&apos;s auditable flow: each counted source, the date it becomes usable, every direct/exclusive consumption, every member-to-group draw, the resulting carry, then the future-lot reason. It never substitutes a browser calculation for the engine.</p>
+                <h3 className="text-sm font-semibold text-slate-800">Family allocation report</h3>
+                <p className="text-xs text-slate-600">This is the engine&apos;s auditable waterfall: counted source, usable date, direct/exclusive reserve, member-to-group use, carry and future-lot reason. It is a report of the server engine, not a browser calculation.</p>
               </section>
               <section className="grid gap-1">
                 <h3 className="text-sm font-semibold text-slate-800">1. Material sources — what can enter the family</h3>

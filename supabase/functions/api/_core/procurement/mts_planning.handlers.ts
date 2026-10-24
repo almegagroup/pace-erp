@@ -27,8 +27,9 @@ import {
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
+import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -401,6 +402,7 @@ export async function computePlanning(p: PlanningParams) {
     forecastBeyondPlan: false, rescheduleOverrides: p.rescheduleOverrides, policyOverrides: p.policyOverrides,
     reuseLoads: p.reuseLoads,
   });
+  const groupCoveragePolicies = await loadGroupCoveragePolicyVersions(p.companyId);
   const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
@@ -492,6 +494,7 @@ export async function computePlanning(p: PlanningParams) {
     if (r.group_id && r.candidates.length > 1) groupDemand.push({ group_id: r.group_id, candidates: r.candidates, required_by: r.day, qty_base: r.qty });
     else if (r.candidates[0]) ownDemand.push({ material_id: r.candidates[0], required_by: r.day, qty_base: r.qty });
   }
+  const familyArrivalCandidates = assembly.input.confirmed_arrivals;
   const familyInput: FamilyPlannerInput = {
     as_of: assembly.input.as_of,
     horizon_end: assembly.input.horizon_end,
@@ -499,18 +502,20 @@ export async function computePlanning(p: PlanningParams) {
     opening_receipts: openingReceipts,
     own_demand: ownDemand,
     group_demand: groupDemand,
-    // Owner rule (2026-10-24): an open PO that has not shipped is risk evidence,
-    // not family stock.  It remains visible in the Item Plan arrival/trace
-    // report, but may join allocation only after it becomes an actual movement
-    // (AT_GATE / IN_TRANSIT / STO / Sub-CSN / posted GR) with a plant date.
-    confirmed_arrivals: assembly.input.confirmed_arrivals
-      .filter((arrival) => isFamilyAllocatableArrival(arrival.lifecycle_kind))
+    group_coverage_policies: groupCoveragePolicies,
+    // A CC-date GR and every future inbound with a valid plant ETA participate
+    // on that date. An ordered PO is usable only when its delivery/CSN ETA exists.
+    confirmed_arrivals: familyArrivalCandidates
+      .filter((arrival) => isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
       .map((arrival) => ({
         source_key: arrival.source_key,
         material_id: arrival.material_id,
         eta_to_plant: arrival.eta_to_plant,
         qty_base: arrival.qty_base,
       })),
+    arrival_risks: familyArrivalCandidates
+      .filter((arrival) => !isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
+      .map(familyArrivalRisk),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     group_orders: req.input.groupOrders,
@@ -574,13 +579,16 @@ export async function computePlanning(p: PlanningParams) {
       own_demand: familyInput.own_demand.filter((d) => members.has(d.material_id)),
       group_demand: groupDemand,
       confirmed_arrivals: familyInput.confirmed_arrivals.filter((a) => members.has(a.material_id)),
+      arrival_risks: (familyInput.arrival_risks ?? []).filter((a) => members.has(a.material_id)),
       policies: familyInput.policies.filter((pol) => members.has(pol.material_id)),
       manual_lots: (familyInput.manual_lots ?? []).filter((l) => members.has(l.material_id)),
     };
   };
 
-  // Owner 2026-10-22: the Store gets the planner's consumption ratio — a group line's period use is
-  // split over its members as the family planner consumes them (stock rotation, own use protected).
+  // Store receives a period total, never a day-by-day issue list. Its material
+  // ratio is nevertheless calculated from the canonical event-day group bucket
+  // draws, so an ETA, policy date or expired lot changes the next applicable
+  // period automatically without a second allocation formula here.
   const storeRowsByRatio = (() => {
     const range = (period: string) => (period === "CM" ? [calendar.asOf, calendar.cmEnd] : [calendar.nmStart, calendar.nmEnd]);
     const shareCache = new Map<string, { shares: Map<string, number>; unmet: number } | null>();
@@ -801,7 +809,49 @@ export async function computePlanning(p: PlanningParams) {
     // for every group that has a new-buy recommendation, not just sparse rows.
     selection_groups: selectionGroups,
     group_risks: projection.group_pool_risks.map((g) => ({ ...g, group_label: g.group_id ? groupLabel.get(g.group_id) ?? "—" : "—" })),
+    group_actions: projection.group_actions.map((action) => ({
+      group_label: groupLabel.get(action.group_id) ?? "—",
+      first_below_target_day: action.first_below_target_day,
+      first_below_critical_day: action.first_below_critical_day,
+      first_shortage_day: action.first_shortage_day,
+      unresolved_qty_base: action.unresolved_qty_base,
+      ordered_actions: action.ordered_actions,
+    })),
     group_assignments: groupAssignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
+    // Server-owned waterfall evidence.  Keep UUIDs inside the engine only: this
+    // endpoint returns business labels so grids and Excel never need a lookup.
+    allocation_rows: projection.allocation_rows.map((row) => ({
+      day: row.day,
+      material_name: nameOf(row.material_id),
+      material_code: codeOf(row.material_id),
+      uom: uom(row.material_id),
+      destination: row.destination_kind === "OWN" ? "Own required use" : groupLabel.get(row.group_id ?? "") ?? "—",
+      flow: row.destination_kind === "OWN" ? "Exclusive / direct use" : "Group allocation",
+      qty: row.qty_base,
+      closing: row.closing_qty_base,
+      rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
+        ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
+        : "Waterfall use: direct Desired-Max protection first; then each group receives an event-day Desired-Max bucket from smallest eligible group to broadest. Group use consumes only its bucket; within it FEFO, saved sequence, no-future-buy run-down, then normal rotation apply.",
+    })),
+    group_bucket_reservations: projection.group_bucket_reservations.map((row) => ({
+      day: row.day, group_label: groupLabel.get(row.group_id) ?? "—",
+      material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+      reserved_qty: row.reserved_qty_base, rule: row.rule,
+    })),
+    allocation_reconciliation: projection.allocation_reconciliation.map((row) => ({
+      material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+      opening_qty: row.opening_qty_base, confirmed_arrival_qty: row.confirmed_arrival_qty_base, planned_lot_qty: row.planned_lot_qty_base,
+      own_allocated_qty: row.own_allocated_qty_base, group_allocated_qty: row.group_allocated_qty_base,
+      expired_qty: row.expired_qty_base, closing_qty: row.closing_qty_base, variance_qty: row.variance_qty_base,
+    })),
+    // W3b's next-coverage reservation ledger is deliberately separate from
+    // daily Store consumption. It makes the final real carry's waterfall
+    // purpose reviewable without fabricating future demand or exposing UUIDs.
+    waterfall_reservations: projection.waterfall_reservations.map((row) => ({
+      material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+      group_label: row.group_id ? groupLabel.get(row.group_id) ?? "—" : null,
+      qty: row.qty_base, available_after_qty: row.available_after_qty_base, stage: row.stage, rule: row.rule,
+    })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
     reschedulable_arrivals: req.output.rows.filter((row) => !arrivalScope || arrivalScope.has(row.material_id)).flatMap((row) => {
@@ -834,6 +884,11 @@ export async function computePlanning(p: PlanningParams) {
       material_name: row.material_id ? nameOf(row.material_id) : "Group — not assigned",
       material_code: codeOf(row.material_id),
       uom: uom(row.material_id),
+      planned_consumption_reason: row.line_type === "FIXED"
+        ? "Direct/exclusive product requirement; protected before shared family allocation."
+        : row.material_id
+          ? `Family waterfall allocation for ${groupLabel.get(row.group_id ?? "") ?? "eligible group"}.`
+          : `Family group shortage: no eligible member stock could be allocated for ${groupLabel.get(row.group_id ?? "") ?? "this group"}.`,
     })),
   };
   console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));

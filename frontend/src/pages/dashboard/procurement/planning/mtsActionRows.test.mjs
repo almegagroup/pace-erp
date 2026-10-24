@@ -17,6 +17,7 @@ const plan = {
     { material_id: "D", material_name: "TS U2121", status: "NO_BUY", sequence: 0 },
   ],
   group_assignments: [{ group_id: "G", group_label: "MHEC", month: "2026-12-01", reason: "NONE_SELECTED", uncovered_qty: 400 }],
+  group_actions: [{ group_id: "G", group_label: "MHEC", first_below_critical_day: "2026-10-23", first_shortage_day: "2026-10-24", unresolved_qty_base: 400, ordered_actions: ["Bridge lot", "Transfer", "Escalate emergency"] }],
   arrival_flags: [{ material_id: "A", material_name: "GABROSA", reason: "ETA_PASSED", document: "CSN 1", message: "update it" }],
 };
 
@@ -24,6 +25,7 @@ test("actions are ordered urgent → this week → planned → fix data, then by
   const rows = buildActionRows(plan);
   assert.deepEqual(rows.map((r) => [r.level, r.material, r.action]), [
     ["URGENT", "GABROSA", "Order today"],
+    ["URGENT", "MHEC", "Resolve group stock-out risk"],
     ["URGENT", "ELOTEX MP 2050", "Set Target / Critical days"],
     ["SOON", "GABROSA", "Update CSN ETA (overdue)"],
     ["SOON", "COMBIZELL", "Order (next order #2)"],

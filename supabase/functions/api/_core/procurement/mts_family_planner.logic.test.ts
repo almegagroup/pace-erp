@@ -125,6 +125,14 @@ Deno.test("family planner: no stock-out and no member below Critical once lots c
   assert(result.group_unmet.length === 0, `group unmet on ${result.group_unmet.slice(0, 3).map((u) => `${u.group_id} ${u.day}`).join(", ")}`);
 });
 
+Deno.test("W3: every family member conserves opening, arrivals, lots, allocations, expiry and carry", () => {
+  const result = planFamily({ ...rdpFamily(), confirmed_arrivals: [{ source_key: "DA-ETA", material_id: "DA", eta_to_plant: "2026-10-25", qty_base: 2500 }] });
+  assert(result.allocation_reconciliation.length === 4, "each family member must have a reconciliation row");
+  assert(result.allocation_reconciliation.every((row) => row.variance_qty_base === 0), `source-to-destination reconciliation failed: ${JSON.stringify(result.allocation_reconciliation)}`);
+  const da = result.allocation_reconciliation.find((row) => row.material_id === "DA");
+  assert((da?.confirmed_arrival_qty_base ?? 0) === 2500 && (da?.group_allocated_qty_base ?? 0) > 0, "dated inbound must join the same conserved waterfall as group allocations");
+});
+
 Deno.test("family planner: RDP's early need is bridged by the fast domestic member, later ones by the cheapest that arrives in time", () => {
   const buys = planFamily(rdpFamily()).advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
   const rdp = buys.filter((b) => b.covers.includes("RDP")).sort((a, b) => String(a.estimated_plant_eta).localeCompare(String(b.estimated_plant_eta)));
@@ -176,12 +184,173 @@ Deno.test("family arrival optimizer: a piece is not pushed months away while the
   assert(optimum.best.eta <= "2026-12-31", `best date ${optimum.best.eta} is too far`);
 });
 
+Deno.test("family planner: a missing ETA is visible as risk but never credited as CC-date stock", () => {
+  const result = planFamily({
+    as_of: "2026-10-24", horizon_end: "2026-10-25", opening_qty_by_material: { M: 0 },
+    own_demand: [{ material_id: "M", required_by: "2026-10-24", qty_base: 10 }], group_demand: [],
+    confirmed_arrivals: [{ source_key: "PO-without-ETA", material_id: "M", eta_to_plant: null, qty_base: 100 }],
+    policies: [{ material_id: "M", target_days: 5, critical_days: 2, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null }],
+    plan_buys: false,
+  });
+  assert(result.rows.find((row) => row.material_id === "M" && row.day === "2026-10-24")?.confirmed_arrival_qty_base === 0, "no ETA must not inflate CC-date balance");
+  assert(JSON.stringify(result.arrival_flags.map((flag) => [flag.source_key, flag.assumed_eta])) === JSON.stringify([["PO-without-ETA", null]]), "ETA risk remains explainable");
+});
+
+Deno.test("W2: a confirmed ETA after the horizon stays visible but cannot create current cover", () => {
+  const result = planFamily({
+    as_of: "2026-10-24", horizon_end: "2026-10-25", opening_qty_by_material: { M: 0 },
+    own_demand: [{ material_id: "M", required_by: "2026-10-24", qty_base: 10 }], group_demand: [],
+    confirmed_arrivals: [{ source_key: "PO-after-horizon", material_id: "M", eta_to_plant: "2026-11-01", qty_base: 100 }],
+    policies: [{ material_id: "M", target_days: 5, critical_days: 2, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null }],
+    plan_buys: false,
+  });
+  assert(result.rows.every((row) => row.confirmed_arrival_qty_base === 0), "after-horizon receipt must not inflate this run's balance");
+  assert(JSON.stringify(result.arrival_flags.map((flag) => [flag.source_key, flag.reason, flag.eta_to_plant])) === JSON.stringify([["PO-after-horizon", "ETA_AFTER_HORIZON", "2026-11-01"]]), "after-horizon confirmed receipt must remain visible evidence");
+});
+
 Deno.test("smart consumption ratio: every member with free stock serves the group, none piles up", () => {
   const result = planFamily({ ...rdpFamily(), plan_buys: false });
   const first = result.group_mix.find((g) => g.group_id === "RDP" && g.day === AS_OF);
   assert(first, "RDP mix on day one");
   const used = Object.keys(first.draws).filter((id) => first.draws[id] > 0);
   assert(used.includes("EL") && used.includes("RP"), `both ELOTEX and RP-4099 rotate: ${JSON.stringify(first.draws)}`);
+});
+
+Deno.test("family waterfall: exclusive Desired-Max reserve is never double-allocated to a shared group", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-11-30", opening_qty_by_material: { EXCLUSIVE: 50, ALT: 100 },
+    own_demand: Array.from({ length: 61 }, (_, i) => ({ material_id: "EXCLUSIVE", required_by: addDays("2026-10-01", i), qty_base: 1 })),
+    group_demand: [{ group_id: "G", candidates: ["EXCLUSIVE", "ALT"], required_by: "2026-10-01", qty_base: 10 }],
+    confirmed_arrivals: [],
+    policies: [
+      { material_id: "EXCLUSIVE", target_days: 20, critical_days: 10, cycle_days: 30, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+      { material_id: "ALT", target_days: 30, critical_days: 15, cycle_days: 30, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+    ], plan_buys: false,
+  });
+  const mix = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-01");
+  assert(mix?.draws.EXCLUSIVE === undefined, `exclusive reserve was incorrectly used by group: ${JSON.stringify(mix)}`);
+  assert(mix?.draws.ALT === 10, `eligible alternate should serve group: ${JSON.stringify(mix)}`);
+  const allocation = result.allocation_rows.filter((row) => row.day === "2026-10-01");
+  assert(allocation.some((row) => row.material_id === "ALT" && row.destination_kind === "GROUP" && row.group_id === "G" && row.qty_base === 10 && row.rule === "GROUP_WATERFALL"), `server allocation evidence must contain the actual group draw: ${JSON.stringify(allocation)}`);
+  assert(!allocation.some((row) => row.material_id === "EXCLUSIVE" && row.destination_kind === "GROUP"), `server allocation evidence must not pretend reserved exclusive stock served a group: ${JSON.stringify(allocation)}`);
+});
+
+Deno.test("W3c: each event day creates narrow-to-broad Desired-Max buckets before group consumption", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-01",
+    opening_qty_by_material: { VN: 30, RP: 100 }, own_demand: [],
+    group_demand: [
+      { group_id: "A", candidates: ["VN"], required_by: "2026-10-01", qty_base: 10 },
+      { group_id: "C", candidates: ["VN", "RP"], required_by: "2026-10-01", qty_base: 10 },
+    ],
+    group_coverage_policies: [
+      { material_group_id: "A", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { material_group_id: "C", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+    ],
+    confirmed_arrivals: [], policies: [policy("VN", 0, 0, []), policy("RP", 0, 0, [])], plan_buys: false,
+  });
+  const bucket = (group: string, material: string) => result.group_bucket_reservations
+    .find((row) => row.group_id === group && row.material_id === material && row.day === "2026-10-01")?.reserved_qty_base ?? 0;
+  // A needs its 10 today plus two Desired-Max forward days, leaving no VN
+  // available for C. C is still fully served, but from RP; it cannot silently
+  // borrow A's protected family bucket.
+  assert(bucket("A", "VN") === 30, `A must own the first 30 KG VN bucket: ${JSON.stringify(result.group_bucket_reservations)}`);
+  assert(bucket("C", "VN") === 0 && bucket("C", "RP") === 30, `C must receive the next eligible stock, not A's VN bucket: ${JSON.stringify(result.group_bucket_reservations)}`);
+  const cMix = result.group_mix.find((row) => row.group_id === "C" && row.day === "2026-10-01");
+  assert(cMix?.draws.RP === 10 && cMix.draws.VN === undefined, `group draw must consume its own bucket: ${JSON.stringify(cMix)}`);
+});
+
+Deno.test("family waterfall: group buy sizes to derived Desired Max but individual RP guard still triggers at 20", () => {
+  const base = {
+    as_of: "2026-10-01", horizon_end: "2026-11-15", opening_qty_by_material: { RP: 21, ALT: 1_000 },
+    own_demand: Array.from({ length: 46 }, (_, i) => ({ material_id: "RP", required_by: addDays("2026-10-01", i), qty_base: 1 })),
+    group_demand: Array.from({ length: 46 }, (_, i) => ({ group_id: "RDP", candidates: ["RP", "ALT"], required_by: addDays("2026-10-01", i), qty_base: 1 })),
+    confirmed_arrivals: [], selections: new Map([["2026-10-01", new Set(["RP"])], ["2026-11-01", new Set(["RP"])]]), selection_controlled_members: new Set(["RP", "ALT"]),
+    policies: [
+      policy("RP", 20, 10, [{ vendor: "LOCAL", lead: 0, cost: 100 }]),
+      policy("ALT", 30, 15, [{ vendor: "ALT", lead: 0, cost: 100 }]),
+    ],
+  } satisfies FamilyPlannerInput;
+  const result = planFamily(base);
+  const ownRp = result.advisory_buys.find((buy) => buy.material_id === "RP" && buy.need_kind === "OWN" && buy.status !== "NO_BUY");
+  assert(ownRp?.need_date === "2026-10-01", `RP should connect at its individual 20-day guard: ${JSON.stringify(ownRp)}`);
+  const group = planFamily({ ...base, opening_qty_by_material: { RP: 0, ALT: 0 }, own_demand: [], group_demand: [{ group_id: "RDP", candidates: ["RP", "ALT"], required_by: "2026-10-01", qty_base: 10 }] })
+    .advisory_buys.find((buy) => buy.need_kind === "GROUP" && buy.status !== "NO_BUY");
+  assert(group?.max_cover_days === 60, `group Desired Max should be rounded-up member max 60: ${JSON.stringify(group)}`);
+});
+
+Deno.test("family waterfall: a group-only RP member still projects at its individual 20-day guard", () => {
+  const days = Array.from({ length: 46 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-11-15",
+    // The fixed group order makes RP's actual eligible-group consumption
+    // visible. It has no exclusive/own BOM demand at all.
+    opening_qty_by_material: { RP: 210, ALT: 5_000 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "RDP", candidates: ["RP", "ALT"], required_by, qty_base: 10 })),
+    group_coverage_policies: [{ group_id: "RDP", effective_from: "2026-10-01", target_days: 30, critical_days: 15, desired_max_days_override: null }],
+    confirmed_arrivals: [],
+    policies: [
+      policy("RP", 20, 10, [{ vendor: "LOCAL", lead: 0, cost: 100 }]),
+      policy("ALT", 30, 15, [{ vendor: "ALT", lead: 0, cost: 100 }]),
+    ],
+    group_orders: new Map([["RDP", { mode: "FIXED_ORDER", member_order: ["RP", "ALT"] }]]),
+    selections: new Map([["2026-10-01", new Set(["RP"])], ["2026-11-01", new Set(["RP"])]]),
+    selection_controlled_members: new Set(["RP", "ALT"]),
+  });
+  const rp = result.advisory_buys.find((buy) => buy.material_id === "RP" && buy.need_kind === "OWN" && buy.status !== "NO_BUY");
+  assert(rp?.need_date === "2026-10-01", `RP must connect at its own 20-day guard, not wait for group Target 30: ${JSON.stringify(rp)}`);
+  assert(rp?.reason.includes("Member guard"), `the reason must identify the group-only individual guard: ${JSON.stringify(rp)}`);
+});
+
+Deno.test("family waterfall: an individual Desired-Max override changes family member lot sizing", () => {
+  const days = Array.from({ length: 50 }, (_, i) => addDays("2026-10-01", i));
+  const base = {
+    as_of: "2026-10-01", horizon_end: "2026-11-19", opening_qty_by_material: { M: 21 },
+    own_demand: days.map((required_by) => ({ material_id: "M", required_by, qty_base: 1 })), group_demand: [], confirmed_arrivals: [],
+    policies: [{ ...policy("M", 20, 10, [{ vendor: "V", lead: 0, cost: 1 }]), desired_max_days_override: 25 }],
+  } satisfies FamilyPlannerInput;
+  const buy = planFamily(base).advisory_buys.find((row) => row.material_id === "M" && row.status !== "NO_BUY");
+  assert(buy?.max_cover_days === 25 && buy.recommended_po_qty_base === 5, `family lot must refill to saved Desired Max 25, got ${JSON.stringify(buy)}`);
+});
+
+Deno.test("family waterfall: a group below Critical returns the ordered action chain", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { A: 0 }, own_demand: [],
+    group_demand: [{ group_id: "G", candidates: ["A"], required_by: "2026-10-01", qty_base: 10 }], confirmed_arrivals: [],
+    group_coverage_policies: [{ group_id: "G", effective_from: "2026-10-01", target_days: 5, critical_days: 2, desired_max_days_override: null }],
+    policies: [policy("A", 5, 2, [])], plan_buys: false,
+  });
+  const action = result.group_actions.find((row) => row.group_id === "G");
+  assert(action?.first_below_critical_day === "2026-10-01" && action.first_shortage_day === "2026-10-01", `group Critical/shortage must be explicit: ${JSON.stringify(action)}`);
+  assert(action?.ordered_actions[0].startsWith("Bridge") && action.ordered_actions.at(-1)?.startsWith("Escalate"), `action chain order is incorrect: ${JSON.stringify(action)}`);
+});
+
+Deno.test("W4: a confirmed future arrival joins group allocation only from its ETA", () => {
+  const days = Array.from({ length: 5 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-05", opening_qty_by_material: { BRIDGE: 100, INBOUND: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["BRIDGE", "INBOUND"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "INBOUND-ETA", material_id: "INBOUND", eta_to_plant: "2026-10-03", qty_base: 100 }],
+    policies: [policy("BRIDGE", 0, 0, []), policy("INBOUND", 0, 0, [])], plan_buys: false,
+  });
+  const before = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-02");
+  const onEta = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-03");
+  assert(before?.draws.INBOUND === undefined, `future receipt was used before ETA: ${JSON.stringify(before)}`);
+  assert((onEta?.draws.INBOUND ?? 0) > 0, `future receipt must re-enter the same group waterfall on ETA: ${JSON.stringify(onEta)}`);
+});
+
+Deno.test("family consumption: an eligible unselected member runs down before a replenishable alternative", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { RUN_DOWN: 100, BUYABLE: 100 },
+    own_demand: [], group_demand: [{ group_id: "G", candidates: ["RUN_DOWN", "BUYABLE"], required_by: "2026-10-01", qty_base: 10 }], confirmed_arrivals: [],
+    policies: [
+      { material_id: "RUN_DOWN", target_days: 0, critical_days: 0, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+      { material_id: "BUYABLE", target_days: 0, critical_days: 0, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+    ],
+    selections: new Map([["2026-10-01", new Set(["BUYABLE"])]]), selection_controlled_members: new Set(["RUN_DOWN", "BUYABLE"]), plan_buys: false,
+  });
+  const mix = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-01");
+  assert(mix?.draws.RUN_DOWN === 10 && mix.draws.BUYABLE === undefined, `unselected stock should run down first: ${JSON.stringify(mix)}`);
 });
 
 Deno.test("short-life receipt overrides saved group order only until Store should consume it", () => {
@@ -216,4 +385,33 @@ Deno.test("expired virtual receipt is not counted as cover", () => {
     plan_buys: false,
   });
   assert(result.rows.find((row) => row.material_id === "M" && row.day === "2026-10-01")?.closing_qty_base === 0, "expired stock must not cover planning");
+});
+
+Deno.test("W3b: ending carry follows direct reserve, narrow-group Desired Max, then second rotation", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-01",
+    opening_qty_by_material: { DIRECT: 100, A: 100, B: 100 },
+    own_demand: [{ material_id: "DIRECT", required_by: "2026-10-01", qty_base: 10 }],
+    group_demand: [
+      { group_id: "SMALL", candidates: ["A"], required_by: "2026-10-01", qty_base: 10 },
+      { group_id: "LARGE", candidates: ["A", "B"], required_by: "2026-10-01", qty_base: 10 },
+    ],
+    group_coverage_policies: [
+      { material_group_id: "SMALL", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { material_group_id: "LARGE", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+    ],
+    confirmed_arrivals: [],
+    policies: [policy("DIRECT", 1, 0, []), policy("A", 0, 0, []), policy("B", 0, 0, [])],
+    plan_buys: false,
+  });
+  const reservations = result.waterfall_reservations;
+  assert(reservations.some((row) => row.material_id === "DIRECT" && row.stage === "DIRECT_DESIRED_MAX"), `direct reserve missing: ${JSON.stringify(reservations)}`);
+  assert(reservations.some((row) => row.group_id === "SMALL" && row.stage === "GROUP_DESIRED_MAX"), `small group Desired-Max pass missing: ${JSON.stringify(reservations)}`);
+  assert(reservations.some((row) => row.group_id === "LARGE" && row.stage === "GROUP_DESIRED_MAX"), `next eligible group Desired-Max pass missing: ${JSON.stringify(reservations)}`);
+  assert(reservations.some((row) => row.stage === "SECOND_ROTATION"), `genuine excess must make a second rotation: ${JSON.stringify(reservations)}`);
+  for (const id of ["DIRECT", "A", "B"]) {
+    const finalClosing = result.rows.find((row) => row.material_id === id && row.day === "2026-10-01")?.closing_qty_base ?? 0;
+    const reserved = reservations.filter((row) => row.material_id === id).reduce((sum, row) => sum + row.qty_base, 0);
+    assert(Math.abs(finalClosing - reserved) < 0.00001, `${id} final carry is not fully accounted for: closing=${finalClosing}, reserved=${reserved}`);
+  }
 });

@@ -1849,6 +1849,14 @@ export function saveMtsGroupUsageOrder(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/group-usage-order", data);
 }
 
+export function getMtsGroupPolicy(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/group-policy", undefined, params);
+}
+
+export function saveMtsGroupPolicy(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/group-policy", data);
+}
+
 export function saveMtsRequirementPolicies(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/policies", data);
 }

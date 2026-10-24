@@ -26,6 +26,8 @@ export type OptimizerCoveragePolicyVersion = Readonly<{
   effective_from: string;
   target_days: number | null;
   critical_days: number | null;
+  /** User-set Desired Max; null derives Target + the effective order cycle. */
+  desired_max_days_override?: number | null;
 }>;
 
 export type OptimizerMaterialPlanningPolicy = Readonly<{
@@ -33,6 +35,8 @@ export type OptimizerMaterialPlanningPolicy = Readonly<{
   /** Used when no dated version applies. */
   target_days: number | null;
   critical_days: number | null;
+  /** Fallback only when no dated policy version applies. */
+  desired_max_days_override?: number | null;
   /** Optional dated versions; the latest effective_from <= day wins over the plain fields. */
   coverage_versions?: readonly OptimizerCoveragePolicyVersion[];
   /** Vendor minimum and order multiple are separate enforceable constraints (D4). */
@@ -130,8 +134,10 @@ export type OptimizerArrivalFlag = Readonly<{
   source_key: string;
   material_id: string;
   eta_to_plant: string | null;
-  assumed_eta: string;
-  reason: "ETA_PASSED" | "ETA_MISSING";
+  /** Legacy non-family projections can assume today; Family Planning never invents an arrival. */
+  assumed_eta: string | null;
+  /** AFTER_HORIZON is confirmed supply, but cannot cover the current run. */
+  reason: "ETA_PASSED" | "ETA_MISSING" | "ETA_AFTER_HORIZON";
   message: string;
 }>;
 

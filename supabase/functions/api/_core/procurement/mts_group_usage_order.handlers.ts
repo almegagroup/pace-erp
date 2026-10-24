@@ -34,7 +34,7 @@ const text = (value: unknown) => String(value ?? "").trim();
 const MAX_ROWS_PER_SAVE = 500;
 
 /** Groups used by this company's MTS strokes (RM) / Pack BOMs (PM), with every member. */
-async function loadCompanyGroups(companyId: string) {
+export async function loadCompanyGroups(companyId: string) {
   const masters = await loadFormulationMasters(companyId, []);
   const groups = new Map<string, { kinds: Set<"RM" | "PM">; members: Set<string> }>();
   const touch = (groupId: string | null, kind: "RM" | "PM", lineMaterial: string) => {

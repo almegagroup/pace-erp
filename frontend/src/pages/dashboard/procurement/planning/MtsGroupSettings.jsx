@@ -10,7 +10,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { pushToast } from "../../../../store/uiToast.js";
-import { getMtsGroupUsageOrder, saveMtsGroupUsageOrder } from "../procurementApi.js";
+import { getMtsGroupPolicy, getMtsGroupUsageOrder, getMtsPlanning, saveMtsGroupPolicy, saveMtsGroupUsageOrder } from "../procurementApi.js";
 
 const MODE_LABEL = {
   MOST_STOCK_FIRST: "Most stock first",
@@ -28,18 +28,35 @@ function errorText(error) {
 function memberLabel(member) {
   return member ? `${member.material_code ? `${member.material_code} — ` : ""}${member.material_name}` : "—";
 }
+function coverageLabel(policy) {
+  const desired = policy?.desired_max_days_override;
+  return `Target ${policy?.target_days ?? 30} d / Critical ${policy?.critical_days ?? 15} d · Desired Max ${desired === null || desired === undefined ? "Auto (derived)" : `${desired} d (override)`}`;
+}
 
-export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
+export default function MtsGroupSettings({ companyId, planMonth, asOf, today, canEdit }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [drafts, setDrafts] = useState({});
+  const [policyDrafts, setPolicyDrafts] = useState({});
   const [saving, setSaving] = useState(false);
   const groupsQ = useQuery({
     queryKey: ["procurement", "mts-requirement", "group-usage-order", companyId, asOf],
     queryFn: () => getMtsGroupUsageOrder({ company_id: companyId, as_of: asOf }),
     enabled: Boolean(companyId) && open,
   });
+  const policyQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "group-policy", companyId, asOf],
+    queryFn: () => getMtsGroupPolicy({ company_id: companyId, as_of: asOf }),
+    enabled: Boolean(companyId) && open,
+  });
+  const planningQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "planning", companyId, planMonth, asOf, "group-policy-preview"],
+    queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf }),
+    enabled: Boolean(companyId && planMonth && asOf) && open,
+  });
   const rows = useMemo(() => groupsQ.data?.rows ?? [], [groupsQ.data]);
+  const policyByGroup = useMemo(() => new Map((policyQ.data?.rows ?? []).map((row) => [row.material_group_id, row.policy])), [policyQ.data]);
+  const memberMax = useMemo(() => new Map((planningQ.data?.material_advice ?? []).map((row) => [row.material_id, row.max_days])), [planningQ.data]);
   const editable = canEdit && groupsQ.data?.can_edit !== false;
 
   function draftOf(row) {
@@ -53,6 +70,19 @@ export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
   function setDraft(row, patch) {
     setDrafts((current) => ({ ...current, [row.material_group_id]: { ...draftOf(row), ...patch } }));
   }
+  function policyDraftOf(row) {
+    const policy = policyByGroup.get(row.material_group_id) ?? { target_days: 30, critical_days: 15, desired_max_days_override: null };
+    return policyDrafts[row.material_group_id] ?? {
+      target_cov_days: String(policy.target_days ?? 30),
+      critical_cov_days: String(policy.critical_days ?? 15),
+      desired_max_days_override: policy.desired_max_days_override === null || policy.desired_max_days_override === undefined ? "" : String(policy.desired_max_days_override),
+      effective_from: today,
+      remarks: "",
+    };
+  }
+  function setPolicyDraft(row, patch) {
+    setPolicyDrafts((current) => ({ ...current, [row.material_group_id]: { ...policyDraftOf(row), ...patch } }));
+  }
   function move(row, index, step) {
     const order = [...draftOf(row).member_order];
     const target = index + step;
@@ -61,6 +91,7 @@ export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
     setDraft(row, { member_order: order });
   }
   const dirtyIds = Object.keys(drafts).filter((id) => drafts[id].order_mode);
+  const dirtyPolicyIds = Object.keys(policyDrafts);
 
   async function handleSave() {
     setSaving(true);
@@ -82,6 +113,27 @@ export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
       setSaving(false);
     }
   }
+  async function handlePolicySave() {
+    setSaving(true);
+    try {
+      const rowsToSave = dirtyPolicyIds.map((id) => ({
+        material_group_id: id, effective_from: policyDrafts[id].effective_from,
+        target_cov_days: Number(policyDrafts[id].target_cov_days), critical_cov_days: Number(policyDrafts[id].critical_cov_days),
+        desired_max_days_override: policyDrafts[id].desired_max_days_override === "" ? null : Number(policyDrafts[id].desired_max_days_override),
+        remarks: policyDrafts[id].remarks || null,
+      }));
+      const result = await saveMtsGroupPolicy({ company_id: companyId, rows: rowsToSave });
+      const saved = result?.result?.saved ?? 0;
+      const unchanged = result?.result?.unchanged ?? 0;
+      pushToast({ message: `Saved ${saved} group coverage policy row(s)${unchanged ? `, ${unchanged} unchanged` : ""}.`, tone: "success" });
+      setPolicyDrafts({});
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement"] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="border border-slate-300 bg-white">
@@ -90,16 +142,14 @@ export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50"
       >
-        <span>Group Settings — which member is used first</span>
+        <span>Group Settings — coverage policy and member use order</span>
         <span className="text-xs text-slate-500">{open ? "Hide" : "Show"}</span>
       </button>
       {open ? (
         <div className="grid gap-2 border-t border-slate-200 p-3">
           <p className="text-xs text-slate-600">
-            When a Stroke / Pack BOM line can use several members of a group, this decides which one is used first — in the
-            Requirement / Planning / Store Report and in MTS production (Process PO auto-pick). No setting = default:
-            planning uses <b>Most stock first</b> (Method C); production keeps its own rule (own item first, then the
-            alternate with the least stock). Protected stock (Target / Critical of a member's own exclusive use) still applies.
+            Target and Critical protect the group. Desired Max is derived from the member-level calculated Max Days unless you override it.
+            Member use order applies after FEFO and hard exclusive protection. No use-order setting = Most stock first (Method C).
           </p>
           <div className="flex flex-wrap gap-2">
             <button
@@ -112,8 +162,16 @@ export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
             </button>
             <button
               type="button"
-              onClick={() => setDrafts({})}
-              disabled={dirtyIds.length === 0 || saving}
+              onClick={() => void handlePolicySave()}
+              disabled={!editable || saving || dirtyPolicyIds.length === 0}
+              className="h-8 border border-violet-600 bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {saving ? "Saving…" : `Save coverage ${dirtyPolicyIds.length || ""}`.trim()}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDrafts({}); setPolicyDrafts({}); }}
+              disabled={(dirtyIds.length === 0 && dirtyPolicyIds.length === 0) || saving}
               className="h-8 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
               Discard changes
@@ -130,6 +188,9 @@ export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
                 <tr>
                   <th className="border border-slate-200 px-2 py-1">Group</th>
                   <th className="border border-slate-200 px-2 py-1">RM / PM</th>
+                  <th className="border border-slate-200 px-2 py-1">Target / Critical</th>
+                  <th className="border border-slate-200 px-2 py-1">Desired Max days</th>
+                  <th className="border border-slate-200 px-2 py-1">Coverage policy schedule</th>
                   <th className="border border-slate-200 px-2 py-1">Members (unrestricted stock)</th>
                   <th className="border border-slate-200 px-2 py-1">In force now</th>
                   <th className="border border-slate-200 px-2 py-1">Use first</th>
@@ -140,12 +201,48 @@ export default function MtsGroupSettings({ companyId, asOf, today, canEdit }) {
               <tbody>
                 {rows.map((row) => {
                   const draft = draftOf(row);
+                  const coverage = policyDraftOf(row);
                   const dirty = Boolean(drafts[row.material_group_id]?.order_mode);
+                  const policyDirty = Boolean(policyDrafts[row.material_group_id]);
+                  const policy = policyByGroup.get(row.material_group_id) ?? null;
+                  const futurePolicies = [...(policyQ.data?.rows ?? [])]
+                    .find((item) => item.material_group_id === row.material_group_id)?.future_policies ?? [];
                   const memberById = new Map(row.members.map((m) => [m.material_id, m]));
+                  const memberMaxDays = row.members
+                    .map((m) => memberMax.get(m.material_id))
+                    .filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)) && Number(value) >= 0)
+                    .map(Number);
+                  const average = memberMaxDays.length === row.members.length && memberMaxDays.length
+                    ? memberMaxDays.reduce((sum, value) => sum + value, 0) / memberMaxDays.length : null;
+                  const derivedMax = average === null ? null : [...memberMaxDays].sort((a, b) => a - b).find((value) => value + 1e-9 >= average) ?? null;
                   return (
-                    <tr key={row.material_group_id} className={dirty ? "bg-sky-50 align-top" : "align-top"}>
+                    <tr key={row.material_group_id} className={dirty || policyDirty ? "bg-sky-50 align-top" : "align-top"}>
                       <td className="border border-slate-200 px-2 py-1 font-semibold">{row.group_name}</td>
                       <td className="border border-slate-200 px-2 py-1">{row.kind}</td>
+                      <td className="border border-slate-200 px-2 py-1">
+                        <div className="flex items-center gap-1">
+                          <input type="number" min="0" className={`${INPUT} w-16`} value={coverage.target_cov_days} disabled={!editable} onChange={(event) => setPolicyDraft(row, { target_cov_days: event.target.value })} />
+                          <span>/</span>
+                          <input type="number" min="0" className={`${INPUT} w-16`} value={coverage.critical_cov_days} disabled={!editable} onChange={(event) => setPolicyDraft(row, { critical_cov_days: event.target.value })} />
+                        </div>
+                        <input type="date" className={`${INPUT} mt-1 w-32`} value={coverage.effective_from} disabled={!editable} onChange={(event) => setPolicyDraft(row, { effective_from: event.target.value })} />
+                      </td>
+                      <td className="border border-slate-200 px-2 py-1">
+                        <span>{derivedMax === null ? "Missing member Max" : `Derived ${derivedMax} d`}</span>
+                        <input type="number" min="0" placeholder="Override" className={`${INPUT} mt-1 w-24`} value={coverage.desired_max_days_override} disabled={!editable} onChange={(event) => setPolicyDraft(row, { desired_max_days_override: event.target.value })} />
+                      </td>
+                      <td className="border border-slate-200 px-2 py-1">
+                        <span className="block text-slate-800">
+                          Now{policy?.effective_from ? ` · from ${policy.effective_from}` : " · default"}: {coverageLabel(policy)}
+                        </span>
+                        {futurePolicies.length ? (
+                          <ul className="mt-1 grid gap-0.5 border-t border-slate-100 pt-1 text-amber-800">
+                            {futurePolicies.map((future) => (
+                              <li key={future.effective_from}>From {future.effective_from}: {coverageLabel(future)}</li>
+                            ))}
+                          </ul>
+                        ) : <span className="mt-1 block text-slate-500">No future coverage change scheduled.</span>}
+                      </td>
                       <td className="border border-slate-200 px-2 py-1">
                         {draft.order_mode === "FIXED_ORDER" ? (
                           <ol className="grid gap-1">

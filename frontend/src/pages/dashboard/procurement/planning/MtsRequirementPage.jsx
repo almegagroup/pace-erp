@@ -697,6 +697,7 @@ function policyDraftBase(row, today) {
   return {
     target_cov_days: policy?.target_cov_days ?? "",
     critical_cov_days: policy?.critical_cov_days ?? "",
+    desired_max_days_override: policy?.desired_max_days_override ?? "",
     moq_qty: policy?.moq_qty ?? "",
     moq_uom_code: policy?.moq_uom_code ?? row.base_uom_code ?? "",
     moq_source: policy?.moq_source ?? "NONE",
@@ -721,12 +722,14 @@ function parseNumberOrBlank(value) {
 function validateDraft(draft, row) {
   const target = parseNumberOrBlank(draft.target_cov_days);
   const critical = parseNumberOrBlank(draft.critical_cov_days);
+  const desiredMax = parseNumberOrBlank(draft.desired_max_days_override);
   const moq = parseNumberOrBlank(draft.moq_qty);
   const rate = parseNumberOrBlank(draft.carrying_rate_per_uom);
-  if (Number.isNaN(target) || Number.isNaN(critical) || Number.isNaN(moq) || Number.isNaN(rate)) return "numbers only";
+  if (Number.isNaN(target) || Number.isNaN(critical) || Number.isNaN(desiredMax) || Number.isNaN(moq) || Number.isNaN(rate)) return "numbers only";
   if (rate !== "" && rate < 0) return "Rate may not be negative";
-  if ((target !== "" && target < 0) || (critical !== "" && critical < 0) || (moq !== "" && moq < 0)) return "values may not be negative";
+  if ((target !== "" && target < 0) || (critical !== "" && critical < 0) || (desiredMax !== "" && desiredMax < 0) || (moq !== "" && moq < 0)) return "values may not be negative";
   if (target === "" && critical !== "") return "Critical needs Target";
+  if (desiredMax !== "" && (target === "" || desiredMax < target)) return "Desired Max needs Target and cannot be lower";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(draft.effective_from ?? ""))) return "Effective From is required";
   if (draft.moq_source === "NONE" && (moq !== "" || draft.moq_active)) return "MOQ source 'No fixed MOQ' cannot carry a quantity";
   if (moq !== "" && !draft.moq_uom_code) return "MOQ needs a unit";
@@ -749,6 +752,7 @@ function PolicyHistory({ companyId, materialId }) {
     { key: "status", label: "Status", width: "100px" },
     { key: "target_cov_days", label: "Target", width: "70px", align: "right", render: (r) => fmtDays(r.target_cov_days) },
     { key: "critical_cov_days", label: "Critical", width: "70px", align: "right", render: (r) => fmtDays(r.critical_cov_days) },
+    { key: "desired_max_days_override", label: "Desired Max", width: "100px", align: "right", render: (r) => fmtDays(r.desired_max_days_override), copyValue: (r) => r.desired_max_days_override ?? "" },
     { key: "moq", label: "MOQ", width: "120px", align: "right", render: (r) => (r.moq_qty === null ? "—" : `${fmtQty(r.moq_qty)} ${r.moq_uom_code ?? ""}`), copyValue: (r) => r.moq_qty ?? "" },
     { key: "moq_source", label: "MOQ Source", width: "100px" },
     { key: "moq_active", label: "Active", width: "60px", render: (r) => yesNo(r.moq_active) },
@@ -944,10 +948,10 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
     {
       key: "current", label: "Current Policy", width: "220px",
       render: (r) => (r.policy
-        ? `T ${fmtDays(r.policy.target_cov_days) || "—"} / C ${fmtDays(r.policy.critical_cov_days) || "—"} · MOQ ${r.policy.moq_qty === null ? "—" : `${fmtQty(r.policy.moq_qty)} ${r.policy.moq_uom_code ?? ""}`} (${r.policy.moq_source})`
+        ? `T ${fmtDays(r.policy.target_cov_days) || "—"} / C ${fmtDays(r.policy.critical_cov_days) || "—"} / Max ${fmtDays(r.policy.desired_max_days_override) || "Auto"} · MOQ ${r.policy.moq_qty === null ? "—" : `${fmtQty(r.policy.moq_qty)} ${r.policy.moq_uom_code ?? ""}`} (${r.policy.moq_source})`
         : <span className="text-slate-400">No policy</span>),
       filterValue: (r) => (r.policy ? "Has policy" : "No policy"),
-      copyValue: (r) => (r.policy ? `${r.policy.target_cov_days ?? ""}/${r.policy.critical_cov_days ?? ""}` : ""),
+      copyValue: (r) => (r.policy ? `${r.policy.target_cov_days ?? ""}/${r.policy.critical_cov_days ?? ""}/${r.policy.desired_max_days_override ?? ""}` : ""),
     },
     { key: "target_cov_days", label: "Target Cov Days", width: "110px", filterable: false, render: (r) => numberInput(r, "target_cov_days"), copyValue: (r) => valueOf(r, "target_cov_days") },
     {
@@ -957,6 +961,11 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
         return numberInput(r, "critical_cov_days", "w-20", typeof target === "number" && Number.isFinite(target) ? `⌈${target}/2⌉=${Math.ceil(target / 2)}` : "");
       },
       copyValue: (r) => valueOf(r, "critical_cov_days"),
+    },
+    {
+      key: "desired_max_days_override", label: "Desired Max Days", width: "145px", filterable: false,
+      render: (r) => numberInput(r, "desired_max_days_override", "w-24", "Auto: Target + cycle"),
+      copyValue: (r) => valueOf(r, "desired_max_days_override"),
     },
     {
       key: "carrying_rate_per_uom", label: "Rate (₹ / base UoM)", width: "120px", filterable: false,
@@ -1061,7 +1070,7 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
       copyValue: (r) => r.suggestion_reason ?? "",
     },
     {
-      key: "engine_advice", label: "Engine: Max days / best lot", width: "260px", filterable: false,
+      key: "engine_advice", label: "Engine: calculated Max / best lot", width: "270px", filterable: false,
       render: (r) => {
         if (!showAdvice) return <span className="text-slate-400 text-xs">Load advice ↑</span>;
         const a = adviceByMaterial.get(r.material_id);
@@ -1157,6 +1166,7 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
         effective_from: draft.effective_from,
         target_cov_days: draft.target_cov_days === "" ? null : Number(draft.target_cov_days),
         critical_cov_days: draft.critical_cov_days === "" ? null : Number(draft.critical_cov_days),
+        desired_max_days_override: draft.desired_max_days_override === "" ? null : Number(draft.desired_max_days_override),
         moq_qty: draft.moq_qty === "" ? null : Number(draft.moq_qty),
         moq_uom_code: draft.moq_qty === "" ? null : draft.moq_uom_code,
         moq_source: draft.moq_source,
@@ -1193,7 +1203,7 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
 
   return (
     <div className="grid gap-2">
-      <MtsGroupSettings companyId={companyId} asOf={asOf} today={today} canEdit={canEdit} />
+      <MtsGroupSettings companyId={companyId} planMonth={planMonth} asOf={asOf} today={today} canEdit={canEdit} />
       <div className="flex flex-wrap items-end gap-3">
         <button
           type="button"
@@ -1566,7 +1576,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "material_name", label: "Material", width: "240px" },
     { key: "document", label: "Document", width: "280px" },
     { key: "eta_to_plant", label: "CSN ETA", width: "100px", render: (f) => dash(f.eta_to_plant) },
-    { key: "reason", label: "Issue", width: "110px", render: (f) => (f.reason === "ETA_PASSED" ? badge("OVERDUE") : badge("ETA_UNKNOWN")), copyValue: (f) => f.reason },
+    { key: "reason", label: "Issue", width: "130px", render: (f) => (f.reason === "ETA_PASSED" ? badge("OVERDUE") : f.reason === "ETA_AFTER_HORIZON" ? badge("AFTER HORIZON") : badge("ETA_UNKNOWN")), copyValue: (f) => f.reason },
     { key: "message", label: "Action", width: "420px" },
   ];
   const groupColumns = [
@@ -1620,7 +1630,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
 
       {(plan?.arrival_flags ?? []).length > 0 ? (
         <section className="grid gap-1">
-          <h3 className="text-sm font-semibold text-rose-800">CSN ETA needs update (assumed arriving today until changed in CSN Tracker)</h3>
+          <h3 className="text-sm font-semibold text-rose-800">Inbound ETA needs update (risk only — not counted as stock until a valid ETA)</h3>
           <ErpDenseGrid {...GRID_PROPS} columns={flagColumns} rows={plan.arrival_flags} rowKey={(f) => f.source_key} maxHeight="30vh" />
         </section>
       ) : null}
@@ -1840,6 +1850,7 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
     { key: "group_label", label: "Material group", width: "180px", render: (r) => dash(r.group_label) },
     { key: "material_document_name", label: "Document name", width: "220px", render: (r) => dash(r.material_document_name) },
     { key: "material_name", label: "Material to use", width: "240px", render: (r) => (r.material_id ? r.material_name : <span className="text-rose-700">{r.material_name}</span>) },
+    { key: "planned_consumption_reason", label: "Planned consumption reason", width: "330px", render: (r) => r.planned_consumption_reason ?? "—", copyValue: (r) => r.planned_consumption_reason ?? "" },
     { key: "receipt_reference", label: "Use first from", width: "220px", render: (r) => r.receipt_reference ? <span className={r.receipt_expiry_priority ? "font-semibold text-amber-800" : ""}>{r.receipt_reference}</span> : "—", copyValue: (r) => r.receipt_reference ?? "" },
     { key: "receipt_valid_until", label: "Planning valid through", width: "150px", render: (r) => dash(r.receipt_valid_until), copyValue: (r) => r.receipt_valid_until ?? "" },
     { key: "receipt_basis", label: "Source basis", width: "135px", render: (r) => dash(r.receipt_basis), copyValue: (r) => r.receipt_basis ?? "" },

@@ -249,7 +249,9 @@ export async function buildItemPlan(
     }
     const addDaysIso = (day: string | null, n: number | null) => (day && n !== null ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : null);
     const coverOn = (id: string, day: string | null) => rowsByMember.get(id)?.find((r) => r.day === day) ?? null;
-    const coversLabel = (covers: readonly string[]) => covers.map((c) => (c === "OWN" ? "Own use" : groupLabel.get(c) ?? "—")).join(", ") || null;
+    const coversLabel = (covers: readonly string[]) => covers.map((c) => (
+      c === "OWN" ? "Own use" : c === "MEMBER_GUARD" ? "Individual member guard" : groupLabel.get(c) ?? "—"
+    )).join(", ") || null;
     const futureOrders = plan.buys
       .filter((b) => memberSet.has(b.material_id) && (b.status === "ADVISORY" || b.status === "ADVISORY_LATE"))
       .flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }]).map((lot) => {
@@ -429,6 +431,45 @@ export async function buildItemPlan(
         return grid.map((g) => ({ ...g, events: events.get(g.day) ?? [] }));
       })(),
       member_daily: memberDaily,
+      // Keep the allocation report server-owned.  The frontend may sort/filter
+      // these already-labelled rows but must never infer an allocation from a
+      // closing balance or a UUID lookup.
+      allocation_rows: projection.allocation_rows
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row, index) => {
+          const flow = row.destination_kind === "OWN" ? "Exclusive / direct use" : "Group allocation";
+          const destination = row.destination_kind === "OWN" ? "Own required use" : groupLabel.get(row.group_id ?? "") ?? "—";
+          return {
+            key: `${row.day}|${codeOf(row.material_id) ?? ""}|${flow}|${destination}|${index}`,
+            day: row.day, material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+            flow, destination, qty: round(row.qty_base), closing: round(row.closing_qty_base),
+            rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
+              ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
+              : "Waterfall use: direct Desired-Max protection first; then each group receives an event-day Desired-Max bucket from smallest eligible group to broadest. Group use consumes only its bucket; within it FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
+          };
+        }),
+      group_bucket_reservations: projection.group_bucket_reservations
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row) => ({
+          day: row.day, group_label: groupLabel.get(row.group_id) ?? "—",
+          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          reserved_qty: round(row.reserved_qty_base), rule: row.rule,
+        })),
+      allocation_reconciliation: projection.allocation_reconciliation
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row) => ({
+          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          opening_qty: round(row.opening_qty_base), confirmed_arrival_qty: round(row.confirmed_arrival_qty_base), planned_lot_qty: round(row.planned_lot_qty_base),
+          own_allocated_qty: round(row.own_allocated_qty_base), group_allocated_qty: round(row.group_allocated_qty_base),
+          expired_qty: round(row.expired_qty_base), closing_qty: round(row.closing_qty_base), variance_qty: round(row.variance_qty_base),
+        })),
+      waterfall_reservations: projection.waterfall_reservations
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row) => ({
+          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          group_label: row.group_id ? groupLabel.get(row.group_id) ?? "—" : null,
+          qty: round(row.qty_base), available_after_qty: round(row.available_after_qty_base), stage: row.stage, rule: row.rule,
+        })),
       arrivals: buildArrivals(),
       future_orders: futureOrders,
       transfers,

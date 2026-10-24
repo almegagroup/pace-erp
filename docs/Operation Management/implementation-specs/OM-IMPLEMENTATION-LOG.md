@@ -164,6 +164,138 @@ rephased/adjusted value একই নামে বা silently interchange ক�
 
 ---
 
+### 2026-10-24 — PO22 Family Waterfall W1/W2 safeguards (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- **W1 — individual Desired Max:** `material_requirement_policy` now has an
+  effective-dated, append-only `desired_max_days_override`. Leaving it blank
+  retains the canonical `Target + calculated order cycle`; a saved value must
+  be at least Target. The same effective value is handed to both the
+  individual buy/protection calculation and the group Desired-Max derivation.
+  It is exposed in PO22 Requirement Material Settings and Policy History, not
+  re-derived in React.
+- **W2 — confirmed inbound after horizon:** a valid ERP PO/CSN ETA within the
+  run joins Family stock on its exact ETA. A valid ETA later than the horizon
+  now returns labelled **After horizon** evidence and cannot inflate current
+  coverage or suppress a current recommendation. Missing/stale ETA remains
+  risk-only. This preserves the rule that monthly selection gates *new buys*
+  only, never valid existing stock/inbound.
+- **Evidence:** planner/Requirement Deno checks and 37 W1 + 23 W2 focused
+  regression tests pass. W1 migration `20261024120000` is in code only; no
+  DEV/PROD migration, data write, promotion, deployment, or live recalculation
+  occurred. Therefore this is not a live-fix claim.
+- **Remaining:** W3 must make the first/second waterfall a conserved
+  source-to-destination ledger, then W4/W5 will consume that canonical output
+  for future projections, Store advice and Critical actions. The family daily
+  table presentation remains explicitly deferred.
+
+### 2026-10-24 — PO22 Family Waterfall W3a conservation invariant (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- The Family engine now proves conservation for every member before a Family
+  plan is returned: `opening + confirmed ETA + engine lot = direct use + group
+  use + planning expiry + closing`. A non-zero variance raises
+  `FAMILY_PLANNER_QUANTITY_NOT_CONSERVED`; it cannot be hidden by the UI or an
+  Excel export.
+- Planning and 4A receive the identical labelled reconciliation source. This
+  is server-calculated evidence, not a second browser allocator. It includes
+  opening, confirmed arrival, engine lot, own allocation, group allocation,
+  expiry, closing and variance.
+- The receipt-expiry path now records the exact quantity actually removed from
+  the virtual aggregate balance, so it is reconciled rather than silently
+  clamped.
+- Verification: Deno checks for Family, Planning and Item Plan handlers; Family
+  planner 18/18 and Item Plan 18/18 including a confirmed-inbound conservation
+  case; diff guard passed.
+- **Still not claimed:** W3b's explicit virtual second-excess rotation and its
+  report policy, W4 projection/Store consumption, W5 Critical action chain,
+  migration application, deployment, or any live recalculation. The Family
+  daily table presentation remains deferred.
+
+### 2026-10-24 — PO22 Family individual guard inside a shared group (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- Corrected a genuine Family-projection gap: a material used only through an
+  eligible group had no direct `own_demand`, so its individual Target was
+  never evaluated. For example, RP-4099 could wait for RDP's broader 30-day
+  guard instead of connecting at RP's 20-day Target.
+- A group-only member now uses its actual simulated group draw for the
+  individual guard. A member that has direct/exclusive demand (for example
+  DA1100) continues to use that direct demand for its individual protection;
+  this prevents duplicate same-day member and group lots.
+- The Family lot-sizing path now honours an effective-dated individual Desired
+  Max override rather than always recomputing `Target + cycle`.
+- Verification: Family planner 20/20, including RP20/RDP30 and Desired-Max
+  override regressions; `deno check` and diff guard passed. No migration was
+  applied; no deployment, live recalculation or data mutation occurred.
+
+### 2026-10-24 — PO22 Family group-Critical action chain (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- Family now returns a group-level risk whenever its free eligible cover reaches
+  Critical or cannot meet a dated group requirement. It is independent of the
+  individual-material risk list.
+- The Action tab renders the agreed escalation order: bridge lot → transfer →
+  expedite/faster eligible vendor → eligible alternative → emergency action
+  with the exact stock-out date when no option is feasible. The output uses
+  business labels only; internal group UUIDs remain inside the engine.
+- The action is advisory: it creates no PO, CSN, transfer, alternative or
+  Store issue, and it never masks an unresolved group quantity.
+- Verification: Family planner 21/21; Planning handler type check; Action-row
+  tests 2/2; diff guard. No migration application, deploy or live data action.
+
+### 2026-10-24 — PO22 Family W4 dated-inbound / Store hand-off (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- Confirmed inbound is now regression-locked as an event-time Family source:
+  it is never available before its valid plant ETA, and it joins the same group
+  waterfall from that date. Because Store's CM/NM member shares are calculated
+  from that engine group mix, a bridge material is automatically reduced when
+  the dated inbound begins serving the group.
+- A lot raised for a group-only member's individual Target is labelled
+  **Individual member guard** in the 4A/arrival report, rather than the
+  misleading `Own use` label. Direct/exclusive lots retain `Own use`.
+- Verification: Family planner 22/22 including ETA bridge; Item Plan logic
+  18/18; Family/Item Plan checks and diff guard pass. No migration was applied,
+  and no deploy, live recalculation or data mutation occurred.
+
+### 2026-10-24 — PO22 Family W3b second-waterfall reservation ledger (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- The engine now turns each member's actual non-negative end-of-horizon carry
+  into one conserved, labelled next-coverage purpose ledger: direct/exclusive
+  Desired-Max reserve first; smallest eligible group through Group Desired Max;
+  the next eligible group; then narrow-to-broad rotation of genuine excess.
+- A quantity without approved eligible Family demand is explicitly retained as
+  carry. It is never represented as zero-demand consumption, a fabricated
+  projection, or a physical Store issue. The ledger therefore complements the
+  event-time group mix; it does not replace it.
+- Planning and 4A receive business material/group labels, quantities remaining
+  after each reservation, stage and rule. UUIDs do not cross the API boundary.
+- Verification: Family planner 23/23 including a direct → small group → next
+  group → second rotation regression and per-material final-balance
+  conservation; Family, Planning and Item Plan `deno check`; diff guard pass.
+  No migration was applied and no deployment, live recalculation or data
+  mutation occurred.
+
+### 2026-10-25 — PO22 Family W3c event-day bucket / Store-period source lock (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- **Root rule:** direct/exclusive Desired-Max is protected first. On every
+  event day, before a group consumes, the engine reserves a virtual bucket for
+  the group's current requirement plus its Desired-Max forward cover. Buckets
+  are allocated smallest eligible group to broadest; a broad group cannot use
+  a narrow group's bucket.
+- **Within a bucket:** expiry/FEFO wins only for the expiring quantity, then
+  the user-saved sequence, then an eligible member with no authorised future
+  buy is run down, then Method-C stock/cost-weighted rotation. This is a
+  planning reservation only: it posts no Store issue and it does not invent
+  demand.
+- **One source of truth:** `group_mix`, group risk/projection and PO22 Store
+  period quantities are all derived from that same simulated bucket draw.
+  Store remains a period-level instruction (not a daily issue list); dated ETA
+  / expiry / policy events naturally affect the applicable engine period.
+- **Audit boundary:** Planning and 4A expose labelled bucket rows for a future
+  Family-only presentation, while UUIDs remain internal. The existing
+  CC-calibrated daily table layout is unchanged by this engine correction.
+- **Verification:** Family planner **24/24** including the new narrow-group
+  bucket regression; Family, Planning and Item Plan `deno check` pass. No
+  migration was applied and no deployment, live recalculation or data mutation
+  occurred.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from
