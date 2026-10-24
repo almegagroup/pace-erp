@@ -86,18 +86,25 @@ export function totalLeadTimeDays(policy: OptimizerMaterialPlanningPolicy): numb
   return null;
 }
 
-function coverageAt(policy: OptimizerMaterialPlanningPolicy | undefined, day: string): { target: number | null; critical: number | null } {
-  if (!policy) return { target: null, critical: null };
+function coverageAt(policy: OptimizerMaterialPlanningPolicy | undefined, day: string): { target: number | null; critical: number | null; desiredMaxOverride: number | null } {
+  if (!policy) return { target: null, critical: null, desiredMaxOverride: null };
   let target = policy.target_days;
   let critical = policy.critical_days;
+  let desiredMaxOverride = policy.desired_max_days_override ?? null;
   let best: string | null = null;
   for (const version of policy.coverage_versions ?? []) {
     if (version.effective_from > day || (best !== null && version.effective_from <= best)) continue;
     best = version.effective_from;
     target = version.target_days;
     critical = version.critical_days;
+    desiredMaxOverride = version.desired_max_days_override ?? null;
   }
-  return { target: validDays(target) ? target : null, critical: validDays(critical) ? critical : null };
+  const safeTarget = validDays(target) ? target : null;
+  return {
+    target: safeTarget,
+    critical: validDays(critical) ? critical : null,
+    desiredMaxOverride: safeTarget !== null && validDays(desiredMaxOverride) && desiredMaxOverride >= safeTarget ? desiredMaxOverride : null,
+  };
 }
 
 /**
@@ -315,7 +322,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
     for (const st of ordered) {
       const { policy, demand, cover, leadTime } = st;
       const materialId = st.id;
-      const { target, critical } = coverageAt(policy, day);
+      const { target, critical, desiredMaxOverride } = coverageAt(policy, day);
       let planned = st.planned;
       let closing = st.closing;
 
@@ -331,13 +338,14 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
               const pick = pickVendorOption(policy!, day, input.as_of);
               const lotLead = pick ? pick.option.lead_time_days : leadTime;
               const cycle = pick?.option.cycle_days ?? policy!.cycle_days ?? null;
-              const sizedRequired = cycle !== null && cycle > 0 ? qtyToRestore(demand, index, closing, target! + cycle) : required;
+              const desiredMax = desiredMaxOverride ?? (cycle !== null && cycle > 0 ? target! + cycle : null);
+              const sizedRequired = desiredMax !== null ? qtyToRestore(demand, index, closing, desiredMax) : required;
               const constraints = pick
                 ? { ...policy!, vendor_moq_qty_base: pick.option.moq_qty_base, order_multiple_qty_base: pick.option.order_multiple_qty_base, delivery_lot_qty_base: pick.option.delivery_lot_qty_base ?? null }
                 : policy!;
               const orderQty = applySinglePurchaseConstraints(sizedRequired, constraints);
-              const p2 = pick || cycle !== null
-                ? { vendor_id: pick?.option.vendor_id ?? null, max_cover_days: cycle !== null ? roundQty(target! + cycle) : null, bridge: pick?.bridge ?? false, cheapest_vendor_id: pick?.cheapest ?? null }
+              const p2 = pick || cycle !== null || desiredMaxOverride !== null
+                ? { vendor_id: pick?.option.vendor_id ?? null, max_cover_days: desiredMax === null ? null : roundQty(desiredMax), bridge: pick?.bridge ?? false, cheapest_vendor_id: pick?.cheapest ?? null }
                 : {};
               st.sequence += 1;
               if (lotLead === null) {
@@ -376,6 +384,7 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
                     ? `PO-by date ${poBy} has already passed; ordering today arrives ${eta}. The cover gap until then stays visible.`
                     : pick?.bridge
                       ? "Bridge: the cheapest vendor cannot arrive in time, so this lot uses the fastest vendor; the cheaper vendor takes the later lots."
+                      : desiredMaxOverride !== null ? "Sized to the effective user-set Desired Max; vendor MOQ / multiple respected."
                       : cycle !== null ? "Sized to Max days (Target + best order cycle); vendor MOQ / multiple respected." : "Deterministic Target-cover replenishment; lead time = Booking Time + route lead time.",
                   advisory_only: true as const,
                   ...p2,

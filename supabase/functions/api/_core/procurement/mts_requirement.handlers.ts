@@ -890,7 +890,7 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
 
 async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[]; raw: JsonRecord[] }> {
   const raw = await fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, order_uom_code, source_system, created_by, created_at")
+    .select("id, material_id, effective_from, version_no, target_cov_days, critical_cov_days, desired_max_days_override, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, order_uom_code, source_system, created_by, created_at")
     .eq("company_id", companyId).eq("is_current", true).order("id"), "MTS_REQ_POLICY_LOAD_FAILED");
   return {
     raw,
@@ -899,6 +899,7 @@ async function loadPolicies(companyId: string): Promise<{ policies: PolicyRow[];
       effective_from: text(row.effective_from),
       target_cov_days: num(row.target_cov_days),
       critical_cov_days: num(row.critical_cov_days),
+      desired_max_days_override: num(row.desired_max_days_override),
       moq_qty: num(row.moq_qty),
       moq_uom_code: text(row.moq_uom_code) || null,
       moq_source: (text(row.moq_source) || "NONE") as PolicyRow["moq_source"],
@@ -1375,6 +1376,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
             version_no: Number(current.version_no),
             target_cov_days: num(current.target_cov_days),
             critical_cov_days: num(current.critical_cov_days),
+            desired_max_days_override: num(current.desired_max_days_override),
             moq_qty: num(current.moq_qty),
             moq_uom_code: text(current.moq_uom_code) || null,
             moq_source: text(current.moq_source) || "NONE",
@@ -1386,7 +1388,7 @@ export async function getMtsRequirementPoliciesHandler(req: Request, ctx: ReqHan
             updated_by: users.get(text(current.created_by)) ?? "—",
             updated_at: current.created_at,
           } : null,
-          future_policies: future.map((f) => ({ effective_from: text(f.effective_from), target_cov_days: num(f.target_cov_days), critical_cov_days: num(f.critical_cov_days) })),
+          future_policies: future.map((f) => ({ effective_from: text(f.effective_from), target_cov_days: num(f.target_cov_days), critical_cov_days: num(f.critical_cov_days), desired_max_days_override: num(f.desired_max_days_override) })),
           lead_time_effective: lead?.effective ?? null,
           lead_time_source: lead?.effective_source ?? "UNKNOWN",
           lead_time_configured_max: lead?.configured_max ?? null,
@@ -1418,7 +1420,7 @@ export async function getMtsRequirementPolicyHistoryHandler(req: Request, ctx: R
     const materialId = text(url.searchParams.get("material_id"));
     if (!materialId) return fail(req, ctx, "MTS_REQ_INVALID_INPUT", 400, "material_id is required.");
     const { data, error } = await serviceRoleClient.schema("erp_planning").from("material_requirement_policy")
-      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, order_uom_code, source_system, created_by, created_at")
+      .select("effective_from, version_no, is_current, target_cov_days, critical_cov_days, desired_max_days_override, moq_qty, moq_uom_code, moq_source, moq_active, remarks, carrying_rate_per_uom, order_uom_code, source_system, created_by, created_at")
       .eq("company_id", companyId).eq("material_id", materialId)
       .order("created_at", { ascending: false }).range(0, 999);
     if (error) throw new Error("MTS_REQ_POLICY_HISTORY_FAILED");
@@ -1431,6 +1433,7 @@ export async function getMtsRequirementPolicyHistoryHandler(req: Request, ctx: R
         status: r.is_current === true ? "Current" : "Superseded",
         target_cov_days: num(r.target_cov_days),
         critical_cov_days: num(r.critical_cov_days),
+        desired_max_days_override: num(r.desired_max_days_override),
         moq_qty: num(r.moq_qty),
         moq_uom_code: text(r.moq_uom_code) || null,
         moq_source: text(r.moq_source),
@@ -1476,17 +1479,23 @@ export async function saveMtsRequirementPoliciesHandler(req: Request, ctx: ReqHa
         return fail(req, ctx, "MTS_REQ_POLICY_MATERIAL_NOT_IN_COMPANY", 400, "A material on this save is not used by this company's MTS Strokes / Pack BOMs.");
       }
       if (!isIsoDate(effectiveFrom)) return fail(req, ctx, "MTS_REQ_POLICY_INVALID_INPUT", 400, "Every row needs a valid Effective From date (YYYY-MM-DD).");
-      const numericFields = ["target_cov_days", "critical_cov_days", "moq_qty", "carrying_rate_per_uom"] as const;
+      const numericFields = ["target_cov_days", "critical_cov_days", "desired_max_days_override", "moq_qty", "carrying_rate_per_uom"] as const;
       for (const field of numericFields) {
         if (row[field] !== null && row[field] !== undefined && row[field] !== "" && num(row[field]) === null) {
           return fail(req, ctx, "MTS_REQ_POLICY_INVALID_INPUT", 400, `${field} must be a number.`);
         }
       }
+      const targetDays = num(row.target_cov_days);
+      const desiredMaxDays = num(row.desired_max_days_override);
+      if (desiredMaxDays !== null && (targetDays === null || desiredMaxDays < targetDays)) {
+        return fail(req, ctx, "MTS_REQ_POLICY_DESIRED_MAX_INVALID", 400, "Desired Max Days needs Target Days and cannot be below it.");
+      }
       rows.push({
         material_id: materialId,
         effective_from: effectiveFrom,
-        target_cov_days: num(row.target_cov_days),
+        target_cov_days: targetDays,
         critical_cov_days: num(row.critical_cov_days),
+        desired_max_days_override: desiredMaxDays,
         moq_qty: num(row.moq_qty),
         moq_uom_code: text(row.moq_uom_code) || null,
         moq_source: text(row.moq_source).toUpperCase() || "NONE",

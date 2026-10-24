@@ -121,16 +121,22 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
 type Pool = { key: string; group_id: string; candidates: string[]; demand: number[] };
 type Planned = { material_id: string; index: number; qty: number };
 
-function targetAt(policy: OptimizerMaterialPlanningPolicy | undefined, day: string): { target: number | null; critical: number | null } {
-  if (!policy) return { target: null, critical: null };
+function targetAt(policy: OptimizerMaterialPlanningPolicy | undefined, day: string): { target: number | null; critical: number | null; desiredMaxOverride: number | null } {
+  if (!policy) return { target: null, critical: null, desiredMaxOverride: null };
   let target = policy.target_days;
   let critical = policy.critical_days;
+  let desiredMaxOverride = policy.desired_max_days_override ?? null;
   let best: string | null = null;
   for (const v of policy.coverage_versions ?? []) {
     if (v.effective_from > day || (best !== null && v.effective_from <= best)) continue;
-    best = v.effective_from; target = v.target_days; critical = v.critical_days;
+    best = v.effective_from; target = v.target_days; critical = v.critical_days; desiredMaxOverride = v.desired_max_days_override ?? null;
   }
-  return { target: valid(target) ? target : null, critical: valid(critical) ? critical : null };
+  const safeTarget = valid(target) ? target : null;
+  return {
+    target: safeTarget,
+    critical: valid(critical) ? critical : null,
+    desiredMaxOverride: safeTarget !== null && valid(desiredMaxOverride) && desiredMaxOverride >= safeTarget ? desiredMaxOverride : null,
+  };
 }
 
 /** Days `balance` covers after index `from`, walking `use`; beyond the horizon the average use. */
@@ -280,7 +286,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const memberDesiredMax = ids.map((id, m) => allDays.map((d, i) => {
     const target = targets[m][i].target;
     if (target === null) return null;
-    return target + (policyOf.get(id)?.cycle_days ?? DEFAULT_CYCLE_DAYS);
+    return targets[m][i].desiredMaxOverride ?? (target + (policyOf.get(id)?.cycle_days ?? DEFAULT_CYCLE_DAYS));
   }));
   const protection = ids.map((_, m) => allDays.map((_d, i) => {
     const desired = memberDesiredMax[m][i];

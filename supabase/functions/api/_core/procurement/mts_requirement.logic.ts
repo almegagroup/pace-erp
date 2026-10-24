@@ -1659,6 +1659,8 @@ export type PolicyRow = {
   effective_from: string;
   target_cov_days: number | null;
   critical_cov_days: number | null;
+  /** User-set Desired Max. Null derives Target + calculated order cycle. */
+  desired_max_days_override?: number | null;
   moq_qty: number | null;
   moq_uom_code: string | null;
   moq_source: "VENDOR" | "COMPANY" | "NONE";

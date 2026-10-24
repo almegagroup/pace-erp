@@ -92,6 +92,27 @@ Deno.test("D3: Target/Critical are effective-dated per material", () => {
   equal([row(result, "2026-10-14").target_days, row(result, "2026-10-15").target_days, row(result, "2026-10-15").critical_days], [5, 10, 4], "version applies from its date");
 });
 
+Deno.test("W1: an effective Desired Max override sizes the lot instead of Target plus cycle", () => {
+  const result = projectDailyCoverage(input({
+    opening_qty_by_material: { M1: 6 },
+    policies: [policy({ target_days: 5, critical_days: 2, route_lead_time_days: 0, cycle_days: 20, desired_max_days_override: 8 })],
+  }));
+  const first = result.advisory_buys[0];
+  const firstDay = row(result, "2026-10-01");
+  equal([first.max_cover_days, first.recommended_po_qty_base, firstDay.closing_qty_base, firstDay.max_cover_days], [8, 4, 9, 9], "user Desired Max replaces calculated Target + cycle; replenishment deliberately restores one day above the trigger floor");
+});
+
+Deno.test("W1: a dated Desired Max override starts only on its effective day", () => {
+  const result = projectDailyCoverage(input({
+    opening_qty_by_material: { M1: 6 },
+    policies: [policy({
+      target_days: 0, critical_days: 0, route_lead_time_days: 0, cycle_days: 20,
+      coverage_versions: [{ effective_from: "2026-10-02", target_days: 5, critical_days: 2, desired_max_days_override: 8 }],
+    })],
+  }));
+  equal([result.advisory_buys[0].need_date, result.advisory_buys[0].max_cover_days], ["2026-10-02", 8], "the override begins on its effective date, not before");
+});
+
 Deno.test("missing Target/Critical policy stays UNKNOWN even when current stock is positive", () => {
   equal(projectDailyCoverage(input({ policies: [] })).advisory_buys[0].status, "UNKNOWN_POLICY", "policy absence cannot become no-buy");
 });

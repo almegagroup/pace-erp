@@ -133,13 +133,14 @@ export function assemblePlanningInput(args: {
     const vendor = (override ? terms.find((t) => t.vendor_id === override) : undefined) ?? chooseVendor(terms);
     chosen.set(id, vendor);
     const versions = args.policies.filter((p) => p.material_id === id)
-      .map((p) => ({ effective_from: p.effective_from, target_days: p.target_cov_days, critical_days: p.critical_cov_days }));
+      .map((p) => ({ effective_from: p.effective_from, target_days: p.target_cov_days, critical_days: p.critical_cov_days, desired_max_days_override: p.desired_max_days_override ?? null }));
     const policy = row.policy;
     const policyMoq = policy?.moq_active ? args.policyMoqBase.get(id) ?? null : null;
     policies.push({
       material_id: id,
       target_days: policy?.target_cov_days ?? null,
       critical_days: policy?.critical_cov_days ?? null,
+      desired_max_days_override: policy?.desired_max_days_override ?? null,
       coverage_versions: versions,
       vendor_moq_qty_base: vendor?.moq_base ?? policyMoq,
       order_multiple_qty_base: vendor?.multiple_base ?? null,
