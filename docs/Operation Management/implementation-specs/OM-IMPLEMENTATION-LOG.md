@@ -226,6 +226,20 @@ rephased/adjusted value একই নামে বা silently interchange ক�
   override regressions; `deno check` and diff guard passed. No migration was
   applied; no deployment, live recalculation or data mutation occurred.
 
+### 2026-10-24 — PO22 Family group-Critical action chain (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- Family now returns a group-level risk whenever its free eligible cover reaches
+  Critical or cannot meet a dated group requirement. It is independent of the
+  individual-material risk list.
+- The Action tab renders the agreed escalation order: bridge lot → transfer →
+  expedite/faster eligible vendor → eligible alternative → emergency action
+  with the exact stock-out date when no option is feasible. The output uses
+  business labels only; internal group UUIDs remain inside the engine.
+- The action is advisory: it creates no PO, CSN, transfer, alternative or
+  Store issue, and it never masks an unresolved group quantity.
+- Verification: Family planner 21/21; Planning handler type check; Action-row
+  tests 2/2; diff guard. No migration application, deploy or live data action.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from

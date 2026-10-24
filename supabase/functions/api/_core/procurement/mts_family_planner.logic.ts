@@ -128,6 +128,15 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
     closing_qty_base: number;
     variance_qty_base: number;
   }>;
+  /** Group protection is independent from individual member guards. */
+  group_actions: ReadonlyArray<{
+    group_id: string;
+    first_below_target_day: string | null;
+    first_below_critical_day: string | null;
+    first_shortage_day: string | null;
+    unresolved_qty_base: number;
+    ordered_actions: readonly string[];
+  }>;
 };
 
 type Pool = { key: string; group_id: string; candidates: string[]; demand: number[] };
@@ -721,6 +730,39 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const groupPoolRisks: OptimizerGroupPoolRisk[] = [...unmetByGroup].sort(([a], [b]) => a.localeCompare(b))
     .map(([group_id, v]) => ({ group_id, unresolved_qty_base: v.qty, first_day: v.first }));
 
+  // Target is the desired operating safety; Critical is the escalation point.
+  // Do not hide a Critical group merely because the planner could not create a
+  // buy: surface the agreed operational sequence rather than calling the plan
+  // unworkable or silently consuming protected stock.
+  const groupActions: FamilyResult["group_actions"][number][] = pools.flatMap((pool, p) => {
+    let firstTarget: string | null = null;
+    let firstCritical: string | null = null;
+    let firstShortage: string | null = null;
+    for (let i = 0; i < N; i += 1) {
+      const coverage = groupCoverageAt(pool, i);
+      const cover = coverDays(sim.poolFree[p][i], pool.demand, i);
+      if (firstTarget === null && cover !== null && cover <= coverage.target) firstTarget = allDays[i];
+      if (firstCritical === null && cover !== null && cover <= coverage.critical) firstCritical = allDays[i];
+      if (firstShortage === null && sim.poolUnmet[p][i] > EPSILON) firstShortage = allDays[i];
+    }
+    if (firstCritical === null && firstShortage === null) return [];
+    const unresolvedQty = groupUnmet.filter((row) => row.group_id === pool.group_id).reduce((sum, row) => sum + row.qty_base, 0);
+    return [{
+      group_id: pool.group_id,
+      first_below_target_day: firstTarget,
+      first_below_critical_day: firstCritical,
+      first_shortage_day: firstShortage,
+      unresolved_qty_base: roundQty(unresolvedQty),
+      ordered_actions: [
+        "Bridge lot from an eligible member/vendor",
+        "Transfer from an eligible company/location surplus",
+        "Expedite or use a faster eligible vendor",
+        "Approve an eligible alternative material",
+        "Escalate emergency action; report the exact stock-out date if no option is feasible",
+      ],
+    }];
+  });
+
   // Explainability is emitted by the simulator itself, never re-derived by the
   // browser from closing balances.  `sim.use` includes the member's own demand
   // plus pool draws, so the difference is the exact direct/exclusive draw.
@@ -776,6 +818,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       || a.destination_kind.localeCompare(b.destination_kind) || String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))
       || a.material_id.localeCompare(b.material_id)),
     allocation_reconciliation: allocationReconciliation,
+    group_actions: groupActions.sort((a, b) => a.group_id.localeCompare(b.group_id)),
     group_mix: (() => {
       const mix = new Map<string, Record<string, number>>();
       pools.forEach((pool, p) => {

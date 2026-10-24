@@ -807,6 +807,14 @@ export async function computePlanning(p: PlanningParams) {
     // for every group that has a new-buy recommendation, not just sparse rows.
     selection_groups: selectionGroups,
     group_risks: projection.group_pool_risks.map((g) => ({ ...g, group_label: g.group_id ? groupLabel.get(g.group_id) ?? "—" : "—" })),
+    group_actions: projection.group_actions.map((action) => ({
+      group_label: groupLabel.get(action.group_id) ?? "—",
+      first_below_target_day: action.first_below_target_day,
+      first_below_critical_day: action.first_below_critical_day,
+      first_shortage_day: action.first_shortage_day,
+      unresolved_qty_base: action.unresolved_qty_base,
+      ordered_actions: action.ordered_actions,
+    })),
     group_assignments: groupAssignments.map((a) => ({ ...a, group_label: groupLabel.get(a.group_id) ?? "—", assigned_material_name: a.assigned_material_id ? nameOf(a.assigned_material_id) : null })),
     // Server-owned waterfall evidence.  Keep UUIDs inside the engine only: this
     // endpoint returns business labels so grids and Excel never need a lookup.

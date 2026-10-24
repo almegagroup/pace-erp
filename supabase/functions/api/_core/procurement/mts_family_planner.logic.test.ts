@@ -288,6 +288,18 @@ Deno.test("family waterfall: an individual Desired-Max override changes family m
   assert(buy?.max_cover_days === 25 && buy.recommended_po_qty_base === 5, `family lot must refill to saved Desired Max 25, got ${JSON.stringify(buy)}`);
 });
 
+Deno.test("family waterfall: a group below Critical returns the ordered action chain", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { A: 0 }, own_demand: [],
+    group_demand: [{ group_id: "G", candidates: ["A"], required_by: "2026-10-01", qty_base: 10 }], confirmed_arrivals: [],
+    group_coverage_policies: [{ group_id: "G", effective_from: "2026-10-01", target_days: 5, critical_days: 2, desired_max_days_override: null }],
+    policies: [policy("A", 5, 2, [])], plan_buys: false,
+  });
+  const action = result.group_actions.find((row) => row.group_id === "G");
+  assert(action?.first_below_critical_day === "2026-10-01" && action.first_shortage_day === "2026-10-01", `group Critical/shortage must be explicit: ${JSON.stringify(action)}`);
+  assert(action?.ordered_actions[0].startsWith("Bridge") && action.ordered_actions.at(-1)?.startsWith("Escalate"), `action chain order is incorrect: ${JSON.stringify(action)}`);
+});
+
 Deno.test("family consumption: an eligible unselected member runs down before a replenishable alternative", () => {
   const result = planFamily({
     as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { RUN_DOWN: 100, BUYABLE: 100 },

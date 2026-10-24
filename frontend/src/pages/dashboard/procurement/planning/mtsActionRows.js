@@ -47,6 +47,19 @@ export function buildActionRows(plan) {
     push({ kind: "DATA", level: "FIX_DATA", group_id: group.group_id, material: group.group_label, code: null, uom: null, action: "Set up a vendor for a member of this group",
       by_when: null, qty: group.uncovered_qty, vendor: null, why: `Group short ${String(group.month).slice(0, 7)} and no member has a vendor, so no buy can be planned.` });
   }
+  for (const group of plan.group_actions ?? []) {
+    const shortage = group.first_shortage_day ?? null;
+    const critical = group.first_below_critical_day ?? null;
+    if (!shortage && !critical) continue;
+    push({
+      kind: "GROUP_RISK", level: shortage ? "URGENT" : "SOON", group_id: group.group_id ?? null,
+      material: group.group_label ?? "Eligible material group", code: null, uom: null,
+      action: shortage ? "Resolve group stock-out risk" : "Resolve group Critical risk",
+      by_when: shortage ?? critical, qty: group.unresolved_qty_base > 0 ? group.unresolved_qty_base : null, vendor: null,
+      shortage_day: shortage, critical_day: critical,
+      why: `Follow in order: ${(group.ordered_actions ?? []).join(" → ")}.`,
+    });
+  }
   for (const flag of plan.arrival_flags ?? []) {
     push({ kind: "DATA", level: "SOON", material_id: flag.material_id, material: flag.material_name, code: null, uom: null,
       action: flag.reason === "ETA_PASSED" ? "Update CSN ETA (overdue)" : "Enter CSN ETA", by_when: asOf, qty: null, vendor: null, why: `${flag.document}: ${flag.message}` });
