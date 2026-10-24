@@ -1193,7 +1193,7 @@ function SettingsTab({ companyId, planMonth, asOf, access, today }) {
 
   return (
     <div className="grid gap-2">
-      <MtsGroupSettings companyId={companyId} asOf={asOf} today={today} canEdit={canEdit} />
+      <MtsGroupSettings companyId={companyId} planMonth={planMonth} asOf={asOf} today={today} canEdit={canEdit} />
       <div className="flex flex-wrap items-end gap-3">
         <button
           type="button"

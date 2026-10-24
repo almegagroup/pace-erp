@@ -70,3 +70,22 @@ Items deliberately outside this phase: a physical Store issue ledger, changing
 the existing single-item Prediction table, and unapproved alterations to PO21
 demand rules.
 
+## Implementation evidence
+
+### F0 — complete on `agent/codex` (`43d3daf9`)
+
+The dependency order, non-negotiable rules, deferred UI boundary and acceptance
+matrix were committed before code changes.
+
+### F1 — code complete on `agent/codex`, pending migration application / release
+
+- Added append-only, effective-dated group coverage policy migration:
+  `20261024100000_po22_family_group_coverage_policy.sql`.
+- Added company-scoped GET/POST API routes using the existing distinct
+  Requirement view and policy-write ACL resources.
+- Extended PO22 Group Settings with Target/Critical, effective date, derived
+  Desired Max preview and explicit Desired Max override.  The preview consumes
+  Planning's individual calculated Max values; it does not invent a UI cycle.
+- Deterministic policy tests pass (3/3), existing family planner tests pass
+  (12/12), backend checks pass, focused frontend lint and production build pass.
+

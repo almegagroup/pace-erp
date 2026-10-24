@@ -45,7 +45,7 @@ for the fast-forward process.
 
 | Feature / contract | Evidence branch and commit | Status | Accepted baseline? | Test evidence | Open issue / blocker | Next action / owner |
 |---|---|---|---|---|---|---|
-| PO22 final Family Waterfall (F0–F8) | `agent/codex` on base `fa49abca` (owner-directed 2026-10-24) | **In progress — design contract recorded before code** | No | Contract task list: `docs/mts-planning/PO22-FAMILY-WATERFALL-IMPLEMENTATION-TASKS.md`; implementation tests begin at F0 | This direct owner instruction supersedes the 2026-10-19 owner-assignment note below for this bounded family-planning phase. No migration, data write, deployment, or UI calculation change yet. | Implement F0, commit its contract/test evidence, then proceed sequentially through F1–F8. Owner: Codex. |
+| PO22 final Family Waterfall (F0–F8) | `agent/codex`: `43d3daf9` + unpromoted F1 work (owner-directed 2026-10-24) | **In progress — F0 contract and F1 group-policy code complete** | No | F1: group-policy pure tests 3/3; existing family planner 12/12; direct handler checks, focused ESLint and production build pass | This direct owner instruction supersedes the 2026-10-19 owner-assignment note below for this bounded family-planning phase. F1 migration is a file only—no DB/data write, deployment, or release claimed. | Commit F1 evidence, then implement F2 canonical input assembly. Owner: Codex. |
 
 | Feature / contract | Evidence branch and commit | Status | Accepted baseline? | Test evidence | Open issue / blocker | Next action / owner |
 |---|---|---|---|---|---|---|
