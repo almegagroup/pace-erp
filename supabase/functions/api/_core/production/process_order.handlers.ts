@@ -2429,7 +2429,7 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
         ...packingPlanRows.map((row) => toTrimmedString(row.storage_location_id)),
         ...packingLines.map((line) => toTrimmedString(line.issue_sloc_id)),
       ].filter(Boolean))];
-      const [packingMaterialMap, packCodeResult, locationResult] = await Promise.all([
+      const [packingMaterialMap, packCodeResult, locationResult, packBomResult] = await Promise.all([
         getMaterialMapByIds(
           packingLines.flatMap((line) => [toTrimmedString(line.material_id), toTrimmedString(line.actual_material_id)]),
           "[process_order.getProcessOrder]",
@@ -2442,18 +2442,47 @@ export async function getProcessOrderHandler(req: Request, ctx: ProdHandlerConte
         locationIds.length > 0
           ? serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", locationIds)
           : Promise.resolve({ data: [], error: null }),
+        enrichedPackingOrders.length > 0
+          ? serviceRoleClient
+              .schema("erp_production")
+              .from("pack_bom")
+              .select("sku_material_id, lines:pack_bom_line(material_id, qty, line_type)")
+              .eq("company_id", String(poRow.company_id))
+              .eq("status", "ACTIVE")
+              .in("sku_material_id", enrichedPackingOrders.map((row) => String(row.material_id ?? "")).filter(Boolean))
+          : Promise.resolve({ data: [], error: null }),
       ]);
-      if (packCodeResult.error || locationResult.error) {
-        console.error("[process_order.getProcessOrder] MTS review label lookup failed:", JSON.stringify(packCodeResult.error ?? locationResult.error));
+      if (packCodeResult.error || locationResult.error || packBomResult.error) {
+        console.error("[process_order.getProcessOrder] MTS review label lookup failed:", JSON.stringify(packCodeResult.error ?? locationResult.error ?? packBomResult.error));
         throw new Error("PROD_PO_FETCH_FAILED");
       }
       const packCodeMap = new Map(((packCodeResult.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
       const locationMap = new Map(((locationResult.data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+      const packBomQtyBySkuAndMaterial = new Map<string, number>();
+      for (const bom of (packBomResult.data ?? []) as JsonRecord[]) {
+        const skuMaterialId = toTrimmedString(bom.sku_material_id);
+        for (const bomLine of (Array.isArray(bom.lines) ? bom.lines : []) as JsonRecord[]) {
+          if (toUpperTrimmedString(bomLine.line_type) !== "INPUT") continue;
+          const materialId = toTrimmedString(bomLine.material_id);
+          if (skuMaterialId && materialId) {
+            packBomQtyBySkuAndMaterial.set(`${skuMaterialId}|${materialId}`, mtsQty(bomLine.qty));
+          }
+        }
+      }
+      const packingOrderById = new Map(enrichedPackingOrders.map((row) => [String(row.id), row]));
       const linesByPackingOrder = new Map<string, JsonRecord[]>();
       for (const line of packingLines) {
         const packingOrderId = String(line.packing_order_id ?? "");
+        const packingOrder = packingOrderById.get(packingOrderId);
+        const displayAllocation = String(line.line_type) === "PM"
+          ? getMtsPackingPmDisplayAllocation(
+              line.total_qty,
+              packBomQtyBySkuAndMaterial.get(`${String(packingOrder?.material_id ?? "")}|${String(line.material_id ?? "")}`),
+            )
+          : { bom_qty_per_bag: null, allocated_bag_count: null };
         const item = {
           ...line,
+          ...displayAllocation,
           material: packingMaterialMap.get(String(line.material_id ?? "")) ?? null,
           actual_material: packingMaterialMap.get(String(line.actual_material_id ?? "")) ?? null,
           issue_storage_location: locationMap.get(String(line.issue_sloc_id ?? "")) ?? null,
@@ -5026,6 +5055,23 @@ export function resolveMtsPackingPmActualQty(params: {
     return mtsQty(totalQty * actualPacks / plannedPacks);
   }
   return mtsQty(mtsQty(params.qtyPerPack) * actualPacks);
+}
+
+// `qty_per_pack` on a mixed alternate line is a technical PO-wide allocation
+// ratio (allocated total / all packs), not the Pack BOM's business quantity
+// for one bag. Keep that ratio for legacy calculations, but expose the two
+// business facts separately so Page 6 can say "1 per bag; 773 bags" rather
+// than presenting 0.277061 as if a physical bag were fractional.
+export function getMtsPackingPmDisplayAllocation(totalQty: unknown, packBomQtyPerBag: unknown): {
+  bom_qty_per_bag: number | null;
+  allocated_bag_count: number | null;
+} {
+  const bomQty = mtsQty(packBomQtyPerBag);
+  if (bomQty <= EPSILON) return { bom_qty_per_bag: null, allocated_bag_count: null };
+  return {
+    bom_qty_per_bag: bomQty,
+    allocated_bag_count: mtsQty(mtsQty(totalQty) / bomQty),
+  };
 }
 
 // §138 (2026-09-22, business owner): MTS Verify's RM/PM consumption must post one

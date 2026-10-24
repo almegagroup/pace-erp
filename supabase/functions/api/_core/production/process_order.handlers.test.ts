@@ -1,9 +1,12 @@
 // Run: SUPABASE_URL=http://localhost SUPABASE_SERVICE_ROLE_KEY=x deno test --no-check --allow-read --allow-env --allow-net
 // The production import pulls in serviceRoleClient; these tests make no network calls.
-import { resolveMtsPackingPmActualQty } from "./process_order.handlers.ts";
+import {
+  getMtsPackingPmDisplayAllocation,
+  resolveMtsPackingPmActualQty,
+} from "./process_order.handlers.ts";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
-  if (actual !== expected) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`${message}: expected ${expected}, got ${actual}`);
   }
 }
@@ -67,5 +70,13 @@ Deno.test("MTS Verify derives planned packs from selected output data if the hea
     }),
     773,
     "a missing projection field must never recreate the rounded fractional total",
+  );
+});
+
+Deno.test("MTS PM display keeps the Pack BOM quantity and full alternate bag allocation distinct", () => {
+  assertEqual(
+    getMtsPackingPmDisplayAllocation(773, 1),
+    { bom_qty_per_bag: 1, allocated_bag_count: 773 },
+    "773 alternate units of a one-per-bag Pack BOM are 773 full bags, not 0.277061 bags",
   );
 });
