@@ -407,6 +407,14 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
             if (take > EPSILON) takeFrom(m, take);
           }
         } else {
+          // A member not authorised for a buy in any remaining month is not
+          // discarded. After FEFO it is deliberately run down before normal
+          // proportional rotation with replenishable alternatives.
+          for (const m of [...cand].filter((member) => hasNoFutureReplenishment(ids[member], i)).sort((a, b) => ids[a].localeCompare(ids[b]))) {
+            if (need <= EPSILON) break;
+            const take = Math.min(free(m), need);
+            if (take > EPSILON) takeFrom(m, take);
+          }
           // Smart consumption ratio (owner 2026-10-22, default): the group's use is shared over the
           // members in proportion to their free stock, tilted to the costlier stock (it ties up more
           // working capital). Every member rotates, none piles up, own use stays protected, and the
@@ -451,6 +459,9 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   // it; a displayed candidate is fail-closed when unchecked.
   const isSelectedForNewBuy = (id: string, i: number) => !input.selection_controlled_members?.has(id)
     || Boolean(input.selections?.get(monthOf(i))?.has(id));
+  /** Existing stock stays eligible; no authorised future buy makes it run-down priority. */
+  const hasNoFutureReplenishment = (id: string, i: number) => Boolean(input.selection_controlled_members?.has(id))
+    && !allDays.slice(i).some((_day, offset) => isSelectedForNewBuy(id, i + offset));
 
   const ownNeed = (sim: Sim, m: number): Need | null => {
     const id = ids[m];

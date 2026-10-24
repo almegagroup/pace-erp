@@ -231,6 +231,20 @@ Deno.test("family waterfall: group buy sizes to derived Desired Max but individu
   assert(group?.max_cover_days === 60, `group Desired Max should be rounded-up member max 60: ${JSON.stringify(group)}`);
 });
 
+Deno.test("family consumption: an eligible unselected member runs down before a replenishable alternative", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { RUN_DOWN: 100, BUYABLE: 100 },
+    own_demand: [], group_demand: [{ group_id: "G", candidates: ["RUN_DOWN", "BUYABLE"], required_by: "2026-10-01", qty_base: 10 }], confirmed_arrivals: [],
+    policies: [
+      { material_id: "RUN_DOWN", target_days: 0, critical_days: 0, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+      { material_id: "BUYABLE", target_days: 0, critical_days: 0, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+    ],
+    selections: new Map([["2026-10-01", new Set(["BUYABLE"])]]), selection_controlled_members: new Set(["RUN_DOWN", "BUYABLE"]), plan_buys: false,
+  });
+  const mix = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-01");
+  assert(mix?.draws.RUN_DOWN === 10 && mix.draws.BUYABLE === undefined, `unselected stock should run down first: ${JSON.stringify(mix)}`);
+});
+
 Deno.test("short-life receipt overrides saved group order only until Store should consume it", () => {
   const result = planFamily({
     as_of: "2026-10-01", horizon_end: "2026-10-02",

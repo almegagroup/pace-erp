@@ -118,3 +118,16 @@ matrix were committed before code changes.
   30-day group coexistence.  The later F6 trace will expose each resulting
   allocation path and residual quantity to the UI.
 
+### F4 — code complete on `agent/codex`, pending release
+
+- Existing planning-only shelf-life advice remains FEFO using recorded expiry
+  or the approved 120-day opening/GRN convention; it remains advisory, not an
+  issue ledger.
+- After hard direct protection, FEFO and a saved group sequence, a selected-out
+  member's still-eligible stock is explicitly run down before a member that can
+  still receive an authorised future buy.  Selection never hides stock.
+- The existing period-level Store output continues to derive its split from the
+  simulated family mix and carries `Period, material/group, planned quantity,
+  Mother Group, Child Group` labels.  Its physical receipt source remains
+  attached only where current stock can back the advice.
+
