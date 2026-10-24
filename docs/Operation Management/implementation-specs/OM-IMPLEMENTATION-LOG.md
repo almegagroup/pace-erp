@@ -210,6 +210,22 @@ rephased/adjusted value একই নামে বা silently interchange ক�
   migration application, deployment, or any live recalculation. The Family
   daily table presentation remains deferred.
 
+### 2026-10-24 — PO22 Family individual guard inside a shared group (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- Corrected a genuine Family-projection gap: a material used only through an
+  eligible group had no direct `own_demand`, so its individual Target was
+  never evaluated. For example, RP-4099 could wait for RDP's broader 30-day
+  guard instead of connecting at RP's 20-day Target.
+- A group-only member now uses its actual simulated group draw for the
+  individual guard. A member that has direct/exclusive demand (for example
+  DA1100) continues to use that direct demand for its individual protection;
+  this prevents duplicate same-day member and group lots.
+- The Family lot-sizing path now honours an effective-dated individual Desired
+  Max override rather than always recomputing `Target + cycle`.
+- Verification: Family planner 20/20, including RP20/RDP30 and Desired-Max
+  override regressions; `deno check` and diff guard passed. No migration was
+  applied; no deployment, live recalculation or data mutation occurred.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from

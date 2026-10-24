@@ -510,13 +510,20 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   const ownNeed = (sim: Sim, m: number): Need | null => {
     const id = ids[m];
     const policy = policyOf.get(id);
-    if (!policy || own[m].every((q) => q <= EPSILON)) return null;
+    // A shared member can have no exclusive BOM use yet still carry a real
+    // individual Target.  Its guard is measured against the group's actual
+    // simulated draw from that member.  Otherwise RP-4099-style members could
+    // only be replenished at the broader group Target and their 20-day
+    // individual rule would never trigger.
+    const usesGroupAsIndividualDemand = isSharedGroupMember[m] && own[m].every((qty) => qty <= EPSILON);
+    const memberUse = usesGroupAsIndividualDemand ? sim.use[m] : own[m];
+    if (!policy || memberUse.every((q) => q <= EPSILON)) return null;
     const from = (pendingOwn.get(id) ?? -1) + 1;
     for (let i = from; i < N; i += 1) {
       const t = targets[m][i].target;
       if (t === null || targets[m][i].critical === null) continue;
       const cover = isSharedGroupMember[m]
-        ? coverDays(sim.ownBalance[m][i], own[m], i)
+        ? coverDays(sim.ownBalance[m][i], memberUse, i)
         : standaloneCoverageDays(sim.ownBalance[m][i], own[m], i, finalOwnDailyUse[m][i]);
       const safetyFloor = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][i] * t;
       const atCoverageTarget = cover !== null && cover <= t;
@@ -588,10 +595,17 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     let lotQty: number;
     {
       const cycle = need.option?.option.cycle_days ?? policy.cycle_days ?? DEFAULT_CYCLE_DAYS;
-      const window = need.kind === "GROUP" ? groupCoverageAt(need.pool!, need.index).desired : t + cycle;
+      // For an individual/member guard, a saved Desired-Max override replaces
+      // the calculated Target + cycle.  Group coverage keeps its independently
+      // derived/overridden Desired Max.
+      const window = need.kind === "GROUP"
+        ? groupCoverageAt(need.pool!, need.index).desired
+        : memberDesiredMax[m][need.index] ?? (t + cycle);
       const before = arrivalIndex - 1;
+      const usesGroupAsIndividualDemand = isSharedGroupMember[m] && own[m].every((qty) => qty <= EPSILON);
+      const memberUse = usesGroupAsIndividualDemand ? sim.use[m] : own[m];
       const demandRequired = need.kind === "OWN"
-        ? useAhead(own[m], before, window + 1) - Math.max(0, before >= 0 ? sim.ownBalance[m][before] : Number(input.opening_qty_by_material[id] ?? 0))
+        ? useAhead(memberUse, before, window + 1) - Math.max(0, before >= 0 ? sim.ownBalance[m][before] : Number(input.opening_qty_by_material[id] ?? 0))
         : useAhead(need.pool!.demand, before, window + 1) - (before >= 0 ? sim.poolFree[pools.indexOf(need.pool!)][before] : 0);
       const availableBeforeArrival = Math.max(0, before >= 0 ? sim.ownBalance[m][before] : Number(input.opening_qty_by_material[id] ?? 0));
       // Scope deliberately limited to standalone own-use materials (Tot White).
@@ -613,7 +627,9 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       const poBy = addDays(allDays[need.index], -lead);
       const covers = need.kind === "OWN" ? ["OWN"] : [need.pool!.group_id];
       const why = need.kind === "OWN"
-        ? `Own use: cover of its own (exclusive) use falls to Target ${t} days on ${allDays[need.index]}.`
+        ? (usesGroupAsIndividualDemand
+          ? `Member guard: its allocated eligible-group use falls to its individual Target ${t} days on ${allDays[need.index]}.`
+          : `Own use: cover of its own (exclusive) use falls to Target ${t} days on ${allDays[need.index]}.`)
         : `Group ${need.pool!.group_id}: free stock of its members falls to Target ${t} days on ${allDays[need.index]}; refill is sized to Group Desired Max ${window} days; ${need.late ? "fastest member to arrive" : "cheapest member that arrives in time"}.`;
       buys.push({
         material_id: id, sequence: seq, required_qty_base: roundQty(Math.max(0, required)), recommended_po_qty_base: orderQty,

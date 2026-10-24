@@ -254,6 +254,40 @@ Deno.test("family waterfall: group buy sizes to derived Desired Max but individu
   assert(group?.max_cover_days === 60, `group Desired Max should be rounded-up member max 60: ${JSON.stringify(group)}`);
 });
 
+Deno.test("family waterfall: a group-only RP member still projects at its individual 20-day guard", () => {
+  const days = Array.from({ length: 46 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-11-15",
+    // The fixed group order makes RP's actual eligible-group consumption
+    // visible. It has no exclusive/own BOM demand at all.
+    opening_qty_by_material: { RP: 210, ALT: 5_000 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "RDP", candidates: ["RP", "ALT"], required_by, qty_base: 10 })),
+    group_coverage_policies: [{ group_id: "RDP", effective_from: "2026-10-01", target_days: 30, critical_days: 15, desired_max_days_override: null }],
+    confirmed_arrivals: [],
+    policies: [
+      policy("RP", 20, 10, [{ vendor: "LOCAL", lead: 0, cost: 100 }]),
+      policy("ALT", 30, 15, [{ vendor: "ALT", lead: 0, cost: 100 }]),
+    ],
+    group_orders: new Map([["RDP", { mode: "FIXED_ORDER", member_order: ["RP", "ALT"] }]]),
+    selections: new Map([["2026-10-01", new Set(["RP"])], ["2026-11-01", new Set(["RP"])]]),
+    selection_controlled_members: new Set(["RP", "ALT"]),
+  });
+  const rp = result.advisory_buys.find((buy) => buy.material_id === "RP" && buy.need_kind === "OWN" && buy.status !== "NO_BUY");
+  assert(rp?.need_date === "2026-10-01", `RP must connect at its own 20-day guard, not wait for group Target 30: ${JSON.stringify(rp)}`);
+  assert(rp?.reason.includes("Member guard"), `the reason must identify the group-only individual guard: ${JSON.stringify(rp)}`);
+});
+
+Deno.test("family waterfall: an individual Desired-Max override changes family member lot sizing", () => {
+  const days = Array.from({ length: 50 }, (_, i) => addDays("2026-10-01", i));
+  const base = {
+    as_of: "2026-10-01", horizon_end: "2026-11-19", opening_qty_by_material: { M: 21 },
+    own_demand: days.map((required_by) => ({ material_id: "M", required_by, qty_base: 1 })), group_demand: [], confirmed_arrivals: [],
+    policies: [{ ...policy("M", 20, 10, [{ vendor: "V", lead: 0, cost: 1 }]), desired_max_days_override: 25 }],
+  } satisfies FamilyPlannerInput;
+  const buy = planFamily(base).advisory_buys.find((row) => row.material_id === "M" && row.status !== "NO_BUY");
+  assert(buy?.max_cover_days === 25 && buy.recommended_po_qty_base === 5, `family lot must refill to saved Desired Max 25, got ${JSON.stringify(buy)}`);
+});
+
 Deno.test("family consumption: an eligible unselected member runs down before a replenishable alternative", () => {
   const result = planFamily({
     as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { RUN_DOWN: 100, BUYABLE: 100 },
