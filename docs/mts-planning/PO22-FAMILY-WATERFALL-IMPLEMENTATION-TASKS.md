@@ -131,3 +131,16 @@ matrix were committed before code changes.
   Mother Group, Child Group` labels.  Its physical receipt source remains
   attached only where current stock can back the advice.
 
+### F5 — code complete on `agent/codex`, pending release
+
+- Existing engine constraints remain one shared calculation: individual Target
+  triggers a projected buy, sizing follows Desired Max / cycle and MOQ,
+  multiple, vendor lead time and INR landed-cost evidence remain applied.
+- Group Target triggers are now policy-driven, while individual material
+  triggers remain independent.  Therefore a 20-day RP-4099 guard is never
+  delayed by a 30-day group guard.
+- Critical/stockout dates continue to flow to the Action list for an order,
+  ETA correction, lead-time/data repair, or an explicit risk.  The UI wording
+  now correctly states that an invalid ETA is risk-only, rather than claiming
+  it was assumed into today's stock.
+

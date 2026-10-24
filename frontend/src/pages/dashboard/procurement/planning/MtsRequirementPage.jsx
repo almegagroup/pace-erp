@@ -1620,7 +1620,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
 
       {(plan?.arrival_flags ?? []).length > 0 ? (
         <section className="grid gap-1">
-          <h3 className="text-sm font-semibold text-rose-800">CSN ETA needs update (assumed arriving today until changed in CSN Tracker)</h3>
+          <h3 className="text-sm font-semibold text-rose-800">Inbound ETA needs update (risk only — not counted as stock until a valid ETA)</h3>
           <ErpDenseGrid {...GRID_PROPS} columns={flagColumns} rows={plan.arrival_flags} rowKey={(f) => f.source_key} maxHeight="30vh" />
         </section>
       ) : null}
