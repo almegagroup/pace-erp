@@ -837,6 +837,14 @@ export async function computePlanning(p: PlanningParams) {
       own_allocated_qty: row.own_allocated_qty_base, group_allocated_qty: row.group_allocated_qty_base,
       expired_qty: row.expired_qty_base, closing_qty: row.closing_qty_base, variance_qty: row.variance_qty_base,
     })),
+    // W3b's next-coverage reservation ledger is deliberately separate from
+    // daily Store consumption. It makes the final real carry's waterfall
+    // purpose reviewable without fabricating future demand or exposing UUIDs.
+    waterfall_reservations: projection.waterfall_reservations.map((row) => ({
+      material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+      group_label: row.group_id ? groupLabel.get(row.group_id) ?? "—" : null,
+      qty: row.qty_base, available_after_qty: row.available_after_qty_base, stage: row.stage, rule: row.rule,
+    })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
     reschedulable_arrivals: req.output.rows.filter((row) => !arrivalScope || arrivalScope.has(row.material_id)).flatMap((row) => {

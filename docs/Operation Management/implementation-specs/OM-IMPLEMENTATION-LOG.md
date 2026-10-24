@@ -254,6 +254,24 @@ rephased/adjusted value একই নামে বা silently interchange ক�
   18/18; Family/Item Plan checks and diff guard pass. No migration was applied,
   and no deploy, live recalculation or data mutation occurred.
 
+### 2026-10-24 — PO22 Family W3b second-waterfall reservation ledger (CODE CHECKED; NOT APPLIED / PROD UNVERIFIED)
+
+- The engine now turns each member's actual non-negative end-of-horizon carry
+  into one conserved, labelled next-coverage purpose ledger: direct/exclusive
+  Desired-Max reserve first; smallest eligible group through Group Desired Max;
+  the next eligible group; then narrow-to-broad rotation of genuine excess.
+- A quantity without approved eligible Family demand is explicitly retained as
+  carry. It is never represented as zero-demand consumption, a fabricated
+  projection, or a physical Store issue. The ledger therefore complements the
+  event-time group mix; it does not replace it.
+- Planning and 4A receive business material/group labels, quantities remaining
+  after each reservation, stage and rule. UUIDs do not cross the API boundary.
+- Verification: Family planner 23/23 including a direct → small group → next
+  group → second rotation regression and per-material final-balance
+  conservation; Family, Planning and Item Plan `deno check`; diff guard pass.
+  No migration was applied and no deployment, live recalculation or data
+  mutation occurred.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from

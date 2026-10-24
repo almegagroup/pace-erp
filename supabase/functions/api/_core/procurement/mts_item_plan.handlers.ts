@@ -456,6 +456,13 @@ export async function buildItemPlan(
           own_allocated_qty: round(row.own_allocated_qty_base), group_allocated_qty: round(row.group_allocated_qty_base),
           expired_qty: round(row.expired_qty_base), closing_qty: round(row.closing_qty_base), variance_qty: round(row.variance_qty_base),
         })),
+      waterfall_reservations: projection.waterfall_reservations
+        .filter((row) => memberSet.has(row.material_id))
+        .map((row) => ({
+          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          group_label: row.group_id ? groupLabel.get(row.group_id) ?? "—" : null,
+          qty: round(row.qty_base), available_after_qty: round(row.available_after_qty_base), stage: row.stage, rule: row.rule,
+        })),
       arrivals: buildArrivals(),
       future_orders: futureOrders,
       transfers,

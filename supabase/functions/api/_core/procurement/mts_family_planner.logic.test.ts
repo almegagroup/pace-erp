@@ -361,3 +361,32 @@ Deno.test("expired virtual receipt is not counted as cover", () => {
   });
   assert(result.rows.find((row) => row.material_id === "M" && row.day === "2026-10-01")?.closing_qty_base === 0, "expired stock must not cover planning");
 });
+
+Deno.test("W3b: ending carry follows direct reserve, narrow-group Desired Max, then second rotation", () => {
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: "2026-10-01",
+    opening_qty_by_material: { DIRECT: 100, A: 100, B: 100 },
+    own_demand: [{ material_id: "DIRECT", required_by: "2026-10-01", qty_base: 10 }],
+    group_demand: [
+      { group_id: "SMALL", candidates: ["A"], required_by: "2026-10-01", qty_base: 10 },
+      { group_id: "LARGE", candidates: ["A", "B"], required_by: "2026-10-01", qty_base: 10 },
+    ],
+    group_coverage_policies: [
+      { material_group_id: "SMALL", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { material_group_id: "LARGE", effective_from: "2026-10-01", target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+    ],
+    confirmed_arrivals: [],
+    policies: [policy("DIRECT", 1, 0, []), policy("A", 0, 0, []), policy("B", 0, 0, [])],
+    plan_buys: false,
+  });
+  const reservations = result.waterfall_reservations;
+  assert(reservations.some((row) => row.material_id === "DIRECT" && row.stage === "DIRECT_DESIRED_MAX"), `direct reserve missing: ${JSON.stringify(reservations)}`);
+  assert(reservations.some((row) => row.group_id === "SMALL" && row.stage === "GROUP_DESIRED_MAX"), `small group Desired-Max pass missing: ${JSON.stringify(reservations)}`);
+  assert(reservations.some((row) => row.group_id === "LARGE" && row.stage === "GROUP_DESIRED_MAX"), `next eligible group Desired-Max pass missing: ${JSON.stringify(reservations)}`);
+  assert(reservations.some((row) => row.stage === "SECOND_ROTATION"), `genuine excess must make a second rotation: ${JSON.stringify(reservations)}`);
+  for (const id of ["DIRECT", "A", "B"]) {
+    const finalClosing = result.rows.find((row) => row.material_id === id && row.day === "2026-10-01")?.closing_qty_base ?? 0;
+    const reserved = reservations.filter((row) => row.material_id === id).reduce((sum, row) => sum + row.qty_base, 0);
+    assert(Math.abs(finalClosing - reserved) < 0.00001, `${id} final carry is not fully accounted for: closing=${finalClosing}, reserved=${reserved}`);
+  }
+});

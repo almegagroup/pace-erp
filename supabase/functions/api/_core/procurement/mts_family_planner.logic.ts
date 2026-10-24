@@ -137,6 +137,19 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
     unresolved_qty_base: number;
     ordered_actions: readonly string[];
   }>;
+  /**
+   * Post-horizon reservation of the actual closing carry. It never consumes
+   * physical stock or invents demand; it makes the owner-approved waterfall
+   * allocation explicit for the next dated planning event.
+   */
+  waterfall_reservations: ReadonlyArray<{
+    material_id: string;
+    group_id: string | null;
+    qty_base: number;
+    available_after_qty_base: number;
+    stage: "DIRECT_DESIRED_MAX" | "GROUP_DESIRED_MAX" | "SECOND_ROTATION" | "CARRY_NO_APPROVED_DEMAND";
+    rule: string;
+  }>;
 };
 
 type Pool = { key: string; group_id: string; candidates: string[]; demand: number[] };
@@ -809,6 +822,92 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     };
   });
 
+  // W3b — reserve the *real calculated closing* into the next coverage
+  // waterfall. This is deliberately separate from daily consumption: when
+  // PO21 has no approved eligible demand, remaining stock is carried with an
+  // explicit reason instead of being falsely consumed or assigned.
+  const reservationBalance = sim.closing.map((series) => Math.max(0, series[N - 1] ?? 0));
+  const waterfallReservations: FamilyResult["waterfall_reservations"][number][] = [];
+  const reserve = (m: number, groupId: string | null, requested: number, stage: FamilyResult["waterfall_reservations"][number]["stage"], rule: string) => {
+    const qty = Math.min(Math.max(0, requested), reservationBalance[m]);
+    if (qty <= EPSILON) return 0;
+    reservationBalance[m] = roundQty(reservationBalance[m] - qty);
+    waterfallReservations.push({
+      material_id: ids[m], group_id: groupId, qty_base: roundQty(qty), available_after_qty_base: roundQty(reservationBalance[m]), stage, rule,
+    });
+    return qty;
+  };
+  const finalIndex = N - 1;
+  // Pass 0: no shared group may borrow the member's future direct/exclusive
+  // Desired-Max protection. A group-only material has zero direct reserve.
+  for (let m = 0; m < M; m += 1) {
+    const desired = memberDesiredMax[m][finalIndex] ?? 0;
+    const directNeed = useAhead(own[m], finalIndex, desired);
+    reserve(m, null, directNeed, "DIRECT_DESIRED_MAX", "Direct/exclusive Desired-Max reserve before any group allocation.");
+  }
+  const virtualCandidateOrder = (p: number) => {
+    const pool = pools[p];
+    const candidates = candIdx[p].filter((m) => reservationBalance[m] > EPSILON);
+    const saved = input.group_orders?.get(pool.group_id);
+    if (saved) return orderByGroupUsage(candidates.map((m) => ids[m]), (id) => reservationBalance[mIndex.get(id)!], saved)
+      .map((id) => mIndex.get(id)!).filter((m) => reservationBalance[m] > EPSILON);
+    return [...candidates].sort((a, b) => {
+      const runDownA = hasNoFutureReplenishment(ids[a], finalIndex) ? 1 : 0;
+      const runDownB = hasNoFutureReplenishment(ids[b], finalIndex) ? 1 : 0;
+      return runDownB - runDownA
+        || (reservationBalance[b] * costTilt[b]) - (reservationBalance[a] * costTilt[a])
+        || ids[a].localeCompare(ids[b]);
+    });
+  };
+  const reserveForGroup = (p: number, requested: number, stage: "GROUP_DESIRED_MAX" | "SECOND_ROTATION", rule: string) => {
+    let left = Math.max(0, requested);
+    for (const m of virtualCandidateOrder(p)) {
+      if (left <= EPSILON) break;
+      left -= reserve(m, pools[p].group_id, left, stage, rule);
+    }
+    return left;
+  };
+  const groupRate = pools.map((pool) => pool.demand.reduce((sum, qty) => sum + qty, 0) / Math.max(1, N));
+  // Pass 1: narrow groups reserve to their own Desired Max first. A group
+  // which is already satisfied receives no further Desired-Max reservation;
+  // its candidates remain available to the next eligible group.
+  pools.forEach((pool, p) => {
+    if (groupRate[p] <= EPSILON) return;
+    const desired = groupCoverageAt(pool, finalIndex).desired;
+    reserveForGroup(p, groupRate[p] * desired, "GROUP_DESIRED_MAX", "Smallest-member-count group first; reserve through its Group Desired Max, then skip to the next eligible group.");
+  });
+  // Pass 2: genuine usable excess rotates through every still-demanding
+  // eligible group in the same narrow-to-broad priority. A round is one
+  // average demand day per group, so no material is stranded merely because
+  // every group has already reached Desired Max.
+  const MAX_ROTATION_STEPS = 100_000;
+  for (let step = 0; step < MAX_ROTATION_STEPS; step += 1) {
+    let moved = false;
+    for (let p = 0; p < pools.length; p += 1) {
+      if (groupRate[p] <= EPSILON || virtualCandidateOrder(p).length === 0) continue;
+      const left = reserveForGroup(p, groupRate[p], "SECOND_ROTATION", "Genuine excess rotation after all Group Desired-Max reservations; narrow-to-broad round-robin priority.");
+      if (left + EPSILON < groupRate[p]) moved = true;
+    }
+    if (!moved) break;
+  }
+  // The only permitted residual is a material that has no approved eligible
+  // group demand in this horizon (or a defensive rotation bound). It remains
+  // visible carry for the next dated run, never fake consumption.
+  reservationBalance.forEach((qty, m) => {
+    if (qty <= EPSILON) return;
+    const hasEligibleDemand = pools.some((pool, p) => groupRate[p] > EPSILON && candIdx[p].includes(m));
+    reserve(m, null, qty, "CARRY_NO_APPROVED_DEMAND", hasEligibleDemand
+      ? "Carry retained after the bounded second rotation; it remains eligible for the next dated Family planning run."
+      : "No approved eligible group demand in this horizon; carry forward without inventing consumption.");
+  });
+  // W3b must close its own ledger too: every non-negative ending balance is
+  // either reserved to one future purpose or labelled carry.
+  for (let m = 0; m < M; m += 1) {
+    const allocated = waterfallReservations.filter((row) => row.material_id === ids[m]).reduce((sum, row) => sum + row.qty_base, 0);
+    const closing = Math.max(0, sim.closing[m][finalIndex] ?? 0);
+    if (Math.abs(roundQty(closing - allocated)) > 0.00001) throw new Error(`FAMILY_PLANNER_RESERVATION_NOT_CONSERVED:${ids[m]}`);
+  }
+
   return {
     rows: rows.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.day.localeCompare(b.day)),
     risks: risks.sort((a, b) => a.material_id.localeCompare(b.material_id)),
@@ -821,6 +920,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       || a.material_id.localeCompare(b.material_id)),
     allocation_reconciliation: allocationReconciliation,
     group_actions: groupActions.sort((a, b) => a.group_id.localeCompare(b.group_id)),
+    waterfall_reservations: waterfallReservations,
     group_mix: (() => {
       const mix = new Map<string, Record<string, number>>();
       pools.forEach((pool, p) => {
