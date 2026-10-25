@@ -260,6 +260,41 @@ Deno.test("W3c: each event day creates narrow-to-broad Desired-Max buckets befor
   assert(cMix?.draws.RP === 10 && cMix.draws.VN === undefined, `group draw must consume its own bucket: ${JSON.stringify(cMix)}`);
 });
 
+Deno.test("family waterfall: a MOQ group refill uses the actual free pool cover, not only one event-day bucket", () => {
+  // Production BETON shape: BETONE is the only authorised future purchase;
+  // SAPCOMER is an eligible group member but has neither stock nor a future buy.
+  // A late MOQ refill must carry the group above Target.  It must not be
+  // re-bought every following day merely because the event-day Desired-Max
+  // bucket is refreshed and one day of that bucket is consumed.
+  const asOf = "2026-10-25";
+  const end = "2026-12-31";
+  const days = Array.from({ length: 68 }, (_, i) => addDays(asOf, i));
+  const betonePolicy = policy("BETONE", 25, 13, [{ vendor: "HIMADRI", lead: 16, cost: 1 }]);
+  betonePolicy.vendor_moq_qty_base = 2_000;
+  betonePolicy.vendor_options = (betonePolicy.vendor_options ?? []).map((option) => ({ ...option, moq_qty_base: 2_000 }));
+  const result = planFamily({
+    as_of: asOf, horizon_end: end,
+    opening_qty_by_material: { BETONE: 700, SAPCOMER: 0 },
+    own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "BETON", candidates: ["BETONE", "SAPCOMER"], required_by, qty_base: 45.533 })),
+    confirmed_arrivals: [],
+    policies: [
+      betonePolicy,
+      { material_id: "SAPCOMER", target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+    ],
+    selections: new Map([["2026-10-01", new Set(["BETONE"])], ["2026-11-01", new Set(["BETONE"])], ["2026-12-01", new Set(["BETONE"])]]),
+    selection_controlled_members: new Set(["BETONE", "SAPCOMER"]),
+  });
+  const groupBuys = result.advisory_buys.filter((buy) => buy.need_kind === "GROUP" && buy.material_id === "BETONE" && buy.status !== "NO_BUY");
+  assert(groupBuys.length > 0, `BETONE must cover its eligible BETON group: ${JSON.stringify(result.advisory_buys)}`);
+  const first = groupBuys[0];
+  assert(first.recommended_po_qty_base !== null && first.recommended_po_qty_base >= 2_000, `MOQ must be respected: ${JSON.stringify(first)}`);
+  const immediateRepeat = groupBuys.find((buy) => buy.estimated_plant_eta && first.estimated_plant_eta
+    && buy.estimated_plant_eta > first.estimated_plant_eta
+    && buy.estimated_plant_eta <= addDays(first.estimated_plant_eta, 1));
+  assert(!immediateRepeat, `a BETON refill must not create another group buy on the next day: ${JSON.stringify(groupBuys)}`);
+});
+
 Deno.test("family waterfall: group buy sizes to derived Desired Max but individual RP guard still triggers at 20", () => {
   const base = {
     as_of: "2026-10-01", horizon_end: "2026-11-15", opening_qty_by_material: { RP: 21, ALT: 1_000 },

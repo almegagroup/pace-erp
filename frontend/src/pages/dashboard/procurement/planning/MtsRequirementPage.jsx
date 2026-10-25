@@ -1748,17 +1748,31 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
   }, [selQ.data]);
   const members = useMemo(() => {
     const seen = new Map();
+    for (const group of plan?.groups ?? []) seen.set(group.group_id, group.group_label);
     for (const group of plan?.selection_groups ?? []) seen.set(group.group_id, group.group_label);
     for (const a of plan?.group_assignments ?? []) if (!seen.has(a.group_id)) seen.set(a.group_id, a.group_label);
     return seen;
   }, [plan]);
+  // The server's `selection_groups` is authoritative and complete.  Merge it
+  // with the daily grid's sparse `groups` rather than choosing one array: an
+  // older/cached response can contain an empty selection_groups array while
+  // it still has a valid member list in groups.  A heading can therefore never
+  // falsely say that an active mapped member is absent merely due to payload
+  // shape.  Group IDs, not group codes/names, keep this strictly company-safe.
+  const selectorMembersByGroup = useMemo(() => {
+    const byGroup = new Map();
+    for (const group of [...(plan?.groups ?? []), ...(plan?.selection_groups ?? [])]) {
+      const membersForGroup = byGroup.get(group.group_id) ?? new Map();
+      for (const member of group.members ?? []) {
+        membersForGroup.set(member.material_id, `${member.material_code ?? ""} ${member.material_name ?? ""}`.trim() || member.material_id);
+      }
+      byGroup.set(group.group_id, membersForGroup);
+    }
+    return byGroup;
+  }, [plan]);
   if (selQ.error) return <p className="text-xs text-slate-500">Member selection is not available for your access yet.</p>;
   if (members.size === 0) return null;
-  // `groups` is intentionally sparse for the daily requirement grid.  The
-  // backend supplies `selection_groups` for the complete active candidate set.
-  // Keep the legacy fallback so a saved/older planning run remains readable.
-  const selectorGroups = plan?.selection_groups ?? plan?.groups ?? [];
-  const groupMembers = (groupId) => new Map((selectorGroups.find((g) => g.group_id === groupId)?.members ?? []).map((m) => [m.material_id, `${m.material_code ?? ""} ${m.material_name}`.trim()]));
+  const groupMembers = (groupId) => selectorMembersByGroup.get(groupId) ?? new Map();
   const value = (materialId, month) => drafts[`${materialId}|${month}`] ?? current.get(`${materialId}|${month}`) ?? false;
   async function save() {
     try {
@@ -1794,7 +1808,7 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
                 ))}
               </div>
             ))}
-            {groupMembers(groupId).size === 0 ? <span className="text-slate-500">No active mapped member is available for this group.</span> : null}
+            {groupMembers(groupId).size === 0 ? <span className="text-slate-500">No active member is mapped to this group in the current company. New buy is blocked until the company-owned group mapping is fixed.</span> : null}
           </div>
         ))}
         {canEdit ? <button type="button" onClick={() => void save()} disabled={Object.keys(drafts).length === 0} className="h-7 w-40 border border-sky-600 bg-sky-600 px-2 font-semibold text-white disabled:opacity-50">Save selection</button> : null}

@@ -274,12 +274,32 @@ export async function loadFormulationMasters(companyId: string, extraStrokeIds: 
   ]);
 
   const groupIds = unique([...strokeLines, ...bomLines].map((l) => text(l.material_group_id)));
-  const [memberRows, mappedMaterialIds] = await Promise.all([
+  // Material groups are company-owned.  Material-company mapping alone is not
+  // enough to establish that ownership because the same material can be
+  // mapped to more than one company.  Never let a stroke line from CMP003
+  // load the members of a same-named CMP005 group (or the reverse).
+  const [groupRows, mappedMaterialIds] = await Promise.all([
     groupIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
-      .schema("erp_master").from("material_category_group_member")
-      .select("id, group_id, material_id, active").in("group_id", chunk)),
+      .schema("erp_master").from("material_category_group")
+      .select("id, company_id, group_code").in("id", chunk)),
     loadCompanyMappedMaterialIds(companyId),
   ]);
+  const ownedGroupIds = new Set(groupRows.filter((group) => text(group.company_id) === companyId).map((group) => text(group.id)));
+  const foreignGroups = groupRows.filter((group) => text(group.company_id) !== companyId);
+  const missingGroupIds = groupIds.filter((groupId) => !groupRows.some((group) => text(group.id) === groupId));
+  if (foreignGroups.length || missingGroupIds.length) {
+    const labels = [
+      ...foreignGroups.map((group) => text(group.group_code) || text(group.id)),
+      ...missingGroupIds,
+    ];
+    warnings.push({
+      code: "MATERIAL_GROUP_NOT_OWNED_BY_COMPANY",
+      message: `Material group(s) not owned by this company were excluded from planning: ${labels.join(", ")}. Re-map the formulation line to this company's group.`,
+    });
+  }
+  const memberRows = ownedGroupIds.size === 0 ? [] as JsonRecord[] : await fetchInChunks<JsonRecord>([...ownedGroupIds], (chunk) => serviceRoleClient
+    .schema("erp_master").from("material_category_group_member")
+    .select("id, group_id, material_id, active").in("group_id", chunk));
   const directMaterialIds = [
     ...strokeLines.map((l) => text(l.material_id)),
     ...bomLines.filter((l) => text(l.line_type) === "INPUT").map((l) => text(l.material_id)),
