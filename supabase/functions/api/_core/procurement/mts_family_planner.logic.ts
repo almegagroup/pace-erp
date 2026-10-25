@@ -556,7 +556,16 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         if (need > EPSILON) s.poolUnmet[p][i] = need;
       });
       pools.forEach((_pool, p) => {
-        s.poolFree[p][i] = bucket[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
+        // `bucket[p]` is this event day's protected Desired-Max allocation,
+        // not the entire usable pool balance.  A MOQ or a prior engine lot
+        // can leave genuine eligible excess in `unreserved`; treating only
+        // the bucket remainder as coverage makes every normal next day look
+        // like "Desired Max minus one day's use" and repeatedly creates a
+        // new buy.  Coverage and sizing must see both (while still excluding
+        // another group's bucket and every direct/exclusive reserve).
+        const bucketFree = bucket[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
+        const genuineExcess = candIdx[p].reduce((sum, m) => sum + Math.max(0, unreserved[m]), 0);
+        s.poolFree[p][i] = roundQty(bucketFree + genuineExcess);
         ids.forEach((_id, m) => { s.poolBucket[p][m][i] = roundQty(Math.max(0, bucket[p][m]) + s.poolDraw[p][m][i]); });
       });
       for (let m = 0; m < M; m += 1) {
