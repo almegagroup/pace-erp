@@ -317,6 +317,25 @@ rephased/adjusted value একই নামে বা silently interchange ক�
 
 ### 2026-10-26 — PO22 Family remaining-engine sequence (AUDITED; DO NOT SKIP ORDER)
 
+0. **W2b — ETA-authoritative connected supply (NEW, OWNER-LOCKED 2026-10-26; must precede W3g):**
+   A CSN Tracker row with a valid future **Plant ETA** is planning supply from that
+   ETA date whether its status is `ORD` (ordered/not shipped) or `TRN` (in
+   transit).  `ORD` and `TRN` differ only in the human confidence label; neither
+   may be excluded from supply simply because it is not shipped.  Missing,
+   invalid or already-passed ETA remains risk-only.
+   - **W2b.1 — canonical arrival input:** assemble `ORD` and `TRN` rows into one
+     ETA supply input, keyed by the physical PO/CSN line so an order and its later
+     CSN cannot be counted twice.
+   - **W2b.2 — simulator contract:** credit the quantity exactly on Plant ETA,
+     never before it; use it in Requirement, Planning and Family waterfall before
+     proposing a new engine lot.
+   - **W2b.3 — explainability:** show `In transit — expected` for `TRN` and
+     `Ordered, not shipped — planned ETA; monitor dispatch` for `ORD`.  Both
+     remain coverage; an ETA problem is the only reason to show risk-only.
+   - **W2b.4 — regression/UAT:** prove `ORD` and `TRN` with the same valid ETA
+     produce the same planning coverage; prove PO/CSN deduplication; prove a
+     valid 31-Oct `ORD` prevents an unnecessary BETONE purchase that its arrival
+     would cover.  Run this with CMP003 production data read-only before release.
 1. **W3g — persistent purpose balances (core, not yet implemented):** Opening, GRN/CSN ETA and
    engine receipts must allocate a physical quantity once into Direct/Exclusive → narrowest group
    → broader group → second rotation.  Each purpose balance then declines only through its own
