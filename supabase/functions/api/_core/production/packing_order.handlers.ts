@@ -30,6 +30,7 @@ import {
 } from "./production.shared.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
 import { findFirstPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
+import { fetchPackingOrderFoCapacities } from "./packing_order_fo_capacity.reader.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1380,7 +1381,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
 
     // §8B PERF: INDEPENDENT -- material lookup, machine lookup, and the FO
     // allocation sum each read only `rows`, never each other's result.
-    const [materialMap, machineById, allocatedByPo] = await Promise.all([
+    const [materialMap, machineById, foCapacityByPo] = await Promise.all([
       getMaterialMapByIds(
         rows.map((row) => String(row.material_id ?? "")),
         "[packing_order.listPackingOrders]",
@@ -1403,33 +1404,16 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
         }
         return map;
       })(),
-      // §83.18-REVISED: surface FO-allocation room directly on this list so the
-      // Plan Feed "find Packing PO to allocate" flow can show Total/Allocated/
-      // Available before the user commits a qty, instead of only failing at
-      // submit time.
-      (async () => {
-        const map = new Map<string, number>();
-        if (poIds.length === 0) return map;
-        const { data: allocs, error: allocErr } = await serviceRoleClient
-          .schema("erp_production").from("plan_feed_packing_order_allocation")
-          .select("packing_order_id, allocated_qty_kg")
-          .in("packing_order_id", poIds);
-        if (allocErr) {
-          console.error("[packing_order.listPackingOrders] allocation query failed:", JSON.stringify(allocErr));
-          throw new Error("PROD_PACK_LIST_FAILED");
-        }
-        for (const a of (allocs ?? []) as JsonRecord[]) {
-          const key = String(a.packing_order_id);
-          map.set(key, (map.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
-        }
-        return map;
-      })(),
+      // A dispatched FO allocation has fulfilled that FO's reservation; it
+      // must not consume the same Packing PO balance a second time here.
+      fetchPackingOrderFoCapacities(rows as Array<JsonRecord & { id: string }>),
     ]);
 
     return okResponse({
       data: rows.map((row) => {
         const totalQty = Number(row.actual_qty_kg) || Number(row.planned_qty_kg) || 0;
-        const allocatedQty = allocatedByPo.get(String(row.id)) ?? 0;
+        const foCapacity = foCapacityByPo.get(String(row.id));
+        const allocatedQty = foCapacity?.allocated_qty_kg ?? 0;
         const parentProcessOrder = parentProcessOrderFor(row);
         const effectiveMachineId = toTrimmedString(row.machine_id)
           || toTrimmedString(parentProcessOrder?.machine_id);
@@ -1457,7 +1441,7 @@ export async function listPackingOrdersHandler(req: Request, ctx: ProdHandlerCon
           material: materialMap.get(String(row.material_id ?? "")) ?? null,
           machine: machineById.get(effectiveMachineId) ?? null,
           fo_allocated_qty_kg: allocatedQty,
-          fo_available_qty_kg: Math.max(0, totalQty - allocatedQty),
+          fo_available_qty_kg: foCapacity?.free_qty_kg ?? Math.max(0, totalQty - allocatedQty),
         };
       }),
       pagination: { page, per_page: perPage, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / perPage) },

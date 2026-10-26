@@ -21,6 +21,8 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
+import { availableForPlanFeed } from "./packing_order_fo_capacity.ts";
+import { fetchPackingOrderFoCapacities } from "./packing_order_fo_capacity.reader.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
   assertProdReadRole,
@@ -308,29 +310,12 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
 
   const materialMap = await getMaterialMapByIds(((pos ?? []) as JsonRecord[]).map((p) => String(p.material_id ?? "")));
 
-  // Room to increase each row: total across every FO for that Packing PO, minus what's
-  // allocated to OTHER FOs (this row's own qty is excluded so the UI can show "you can
-  // raise this up to X more" rather than a number that already double-counts itself).
-  const { data: allOtherAllocs, error: otherAllocErr } = await serviceRoleClient
-    .schema("erp_production").from("plan_feed_packing_order_allocation")
-    .select("plan_feed_id, packing_order_id, allocated_qty_kg")
-    .in("packing_order_id", poIds);
-  if (otherAllocErr) {
-    console.error("[plan_feed.fetchAllocationsForFo] other-allocations query failed:", JSON.stringify(otherAllocErr));
-    throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
-  }
-  const otherAllocatedByPo = new Map<string, number>();
-  for (const a of (allOtherAllocs ?? []) as JsonRecord[]) {
-    if (String(a.plan_feed_id) === planFeedId) continue;
-    const key = String(a.packing_order_id);
-    otherAllocatedByPo.set(key, (otherAllocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
-  }
+  const capacityByPo = await fetchPackingOrderFoCapacities((pos ?? []) as Array<JsonRecord & { id: string }>);
 
   return rows.map((row) => {
     const po = poMap.get(String(row.packing_order_id)) ?? null;
     const procInfo = po ? strokeByProcessOrder.get(String((po as JsonRecord).process_order_id ?? "")) ?? null : null;
-    const totalQty = po ? (Number((po as JsonRecord).actual_qty_kg) || Number((po as JsonRecord).planned_qty_kg) || 0) : 0;
-    const otherAllocated = otherAllocatedByPo.get(String(row.packing_order_id)) ?? 0;
+    const capacity = capacityByPo.get(String(row.packing_order_id));
     return {
       ...row,
       plan_feed_item: itemById.get(toTrimmedString(row.plan_feed_item_id)) ?? null,
@@ -339,7 +324,10 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
         material: materialMap.get(String((po as JsonRecord).material_id ?? "")) ?? null,
         batch_number: procInfo?.batch_number ?? null,
         actual_stroke: procInfo?.stroke ?? null,
-        available_qty_kg_excl_this_fo: Math.max(0, totalQty - otherAllocated),
+        // A dispatched qty that belongs to this FO fulfils (rather than adds
+        // to) its reservation. This prevents the remaining balance barrel
+        // from disappearing after a partial FO dispatch.
+        available_qty_kg_excl_this_fo: capacity ? availableForPlanFeed(capacity, planFeedId) : 0,
       } : null,
     };
   });
@@ -1072,24 +1060,6 @@ async function getFoSoMapConsumedQty(planFeedId: string): Promise<number> {
   return ((data ?? []) as JsonRecord[]).reduce((sum, row) => sum + (Number(row.allocated_qty) || 0), 0);
 }
 
-// Single-Packing-PO version of the same dispatched-qty sum listUnmappedStockHandler
-// computes in bulk above (see that handler's own comment for the full "why") -- used
-// by upsertFoAllocation, which only ever validates one packing_order_id at a time, so
-// there is no N-PO batching benefit to be had here (§8B: a genuinely single-row lookup
-// doesn't need chunking).
-async function sumDispatchedQtyForPackingOrder(packingOrderId: string): Promise<number> {
-  const { data, error } = await serviceRoleClient
-    .schema("erp_procurement").from("delivery_challan_line")
-    .select("quantity, delivery_challan!inner(status)")
-    .eq("packing_order_id", packingOrderId)
-    .neq("delivery_challan.status", "CANCELLED");
-  if (error) {
-    console.error("[plan_feed.sumDispatchedQtyForPackingOrder] query failed:", JSON.stringify(error));
-    throw new Error("PROD_PLAN_FEED_DISPATCH_LOOKUP_FAILED");
-  }
-  return ((data ?? []) as JsonRecord[]).reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
-}
-
 async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOnly: boolean): Promise<Response> {
   try {
     const planFeedId = getIdFromPath(req);
@@ -1222,31 +1192,17 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
         "Packing PO material differs from this FO's SKU — confirm to allocate anyway");
     }
 
-    const totalOutputQty = Number((po as JsonRecord).actual_qty_kg) || Number((po as JsonRecord).planned_qty_kg) || 0;
+    const capacity = (await fetchPackingOrderFoCapacities([po as JsonRecord & { id: string }])).get(packingOrderId);
+    if (!capacity) throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
+    const availableQty = availableForPlanFeed(capacity, planFeedId);
+    const otherReservedQty = [...capacity.reserved_by_plan_feed.entries()]
+      .filter(([otherPlanFeedId]) => otherPlanFeedId !== planFeedId)
+      .reduce((sum, [, quantity]) => sum + quantity, 0);
 
-    // §Q-reversal-2026-09-30-d (business owner follow-up) -- same root cause as
-    // listUnmappedStockHandler above and the CORS/PR19 dispatch checks (commit
-    // 66e97eb): this Packing PO's own already-dispatched (or on an active,
-    // not-yet-PGI'd Delivery Order) quantity was never subtracted before allowing a
-    // NEW or increased FO allocation against it, so stock that has already left the
-    // building (or is committed to leave) could be mapped to a different FO.
-    const [{ data: otherAllocs, error: otherErr }, dispatchedQty] = await Promise.all([
-      serviceRoleClient
-        .schema("erp_production").from("plan_feed_packing_order_allocation")
-        .select("plan_feed_id, allocated_qty_kg")
-        .eq("packing_order_id", packingOrderId),
-      sumDispatchedQtyForPackingOrder(packingOrderId),
-    ]);
-    if (otherErr) throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
-    const otherSum = ((otherAllocs ?? []) as JsonRecord[])
-      .filter((a) => String(a.plan_feed_id) !== planFeedId)
-      .reduce((sum, a) => sum + (Number(a.allocated_qty_kg) || 0), 0);
-    const availableQty = Math.max(0, totalOutputQty - dispatchedQty);
-
-    if (otherSum + requestedQty > availableQty + QTY_TOL) {
-      const dispatchNote = dispatchedQty > QTY_TOL ? `, already dispatched/on an active Delivery Order: ${dispatchedQty}` : "";
+    if (requestedQty > availableQty + QTY_TOL) {
+      const dispatchNote = capacity.dispatched_qty_kg > QTY_TOL ? `, already dispatched/on an active Delivery Order: ${capacity.dispatched_qty_kg}` : "";
       return foErr(req, ctx, "PROD_PLAN_FEED_ALLOCATION_EXCEEDS_STOCK", 422,
-        `Allocation exceeds this Packing PO's available qty (${availableQty}, already allocated elsewhere: ${otherSum}${dispatchNote})`);
+        `Allocation exceeds this Packing PO's available qty (${availableQty}, still reserved by other FOs: ${otherReservedQty}${dispatchNote})`);
     }
 
     const now = new Date().toISOString();
@@ -1323,45 +1279,14 @@ export async function listUnmappedStockHandler(req: Request, ctx: ProdHandlerCon
     const poRows = (pos ?? []) as JsonRecord[];
     if (poRows.length === 0) return okResponse({ data: { total_free_qty_kg: 0, lines: [] } }, ctx.request_id, req);
 
-    const poIds = poRows.map((p) => String(p.id));
-    // §Q-reversal-2026-09-30-c (business owner follow-up) -- this handler previously only
-    // subtracted FO allocation, never dispatched quantity, so a Packing PO already fully
-    // dispatched (whether FO-linked or the §136 Independent/non-FO path -- both stamp
-    // delivery_challan_line.packing_order_id the same way) still showed its whole
-    // actual_qty_kg as "free" here. Same fix shape as computeSkuAvailability
-    // (partial_reversal.handlers.ts) and reversePackingOrderHandler's own dispatch/FO-map
-    // block: a non-cancelled Delivery Challan line against this packing_order_id is a live
-    // commitment (dispatched or merely on an active, not-yet-PGI'd DO), not "free" stock.
-    const [{ data: allocs, error: allocErr }, dcLineRows] = await Promise.all([
-      serviceRoleClient
-        .schema("erp_production").from("plan_feed_packing_order_allocation")
-        .select("packing_order_id, allocated_qty_kg")
-        .in("packing_order_id", poIds),
-      fetchInChunks<JsonRecord>(poIds, (chunk) =>
-        serviceRoleClient.schema("erp_procurement").from("delivery_challan_line")
-          .select("packing_order_id, quantity, delivery_challan!inner(status)")
-          .in("packing_order_id", chunk)
-          .neq("delivery_challan.status", "CANCELLED")),
-    ]);
-    if (allocErr) throw new Error("PROD_PLAN_FEED_UNMAPPED_FAILED");
-
-    const allocatedByPo = new Map<string, number>();
-    for (const a of (allocs ?? []) as JsonRecord[]) {
-      const key = String(a.packing_order_id);
-      allocatedByPo.set(key, (allocatedByPo.get(key) ?? 0) + (Number(a.allocated_qty_kg) || 0));
-    }
-    const dispatchedByPo = new Map<string, number>();
-    for (const row of dcLineRows) {
-      const key = toTrimmedString(row.packing_order_id);
-      if (!key) continue;
-      dispatchedByPo.set(key, (dispatchedByPo.get(key) ?? 0) + Number(row.quantity ?? 0));
-    }
+    const capacityByPo = await fetchPackingOrderFoCapacities(poRows as Array<JsonRecord & { id: string }>);
 
     const lines = poRows.map((p) => {
-      const actualQty = Number(p.actual_qty_kg) || 0;
-      const allocated = allocatedByPo.get(String(p.id)) ?? 0;
-      const dispatched = dispatchedByPo.get(String(p.id)) ?? 0;
-      const freeQty = Math.max(0, actualQty - allocated - dispatched);
+      const capacity = capacityByPo.get(String(p.id));
+      const actualQty = capacity?.total_output_qty_kg ?? (Number(p.actual_qty_kg) || 0);
+      const dispatched = capacity?.dispatched_qty_kg ?? 0;
+      const freeQty = capacity?.free_qty_kg ?? 0;
+      const allocated = capacity?.allocated_qty_kg ?? 0;
       return {
         packing_order_id: p.id, po_number: p.po_number, actual_qty_kg: actualQty,
         allocated_qty_kg: allocated, dispatched_qty_kg: dispatched, free_qty_kg: freeQty,

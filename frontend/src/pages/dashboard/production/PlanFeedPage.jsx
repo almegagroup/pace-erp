@@ -1779,10 +1779,17 @@ export default function PlanFeedPage() {
                     </button>
                     {allocCandidate && (() => {
                       const totalQty = Number(allocCandidate.actual_qty_kg) || Number(allocCandidate.planned_qty_kg) || 0;
-                      const ownExisting = (editData.allocations ?? []).find(
+                      const existingAllocation = (editData.allocations ?? []).find(
                         (a) => a.packing_order_id === allocCandidate.id,
-                      )?.allocated_qty_kg ?? 0;
-                      const availableForThisFo = (allocCandidate.fo_available_qty_kg ?? totalQty) + Number(ownExisting);
+                      );
+                      const ownExisting = existingAllocation?.allocated_qty_kg ?? 0;
+                      // The edit payload knows whether this FO's earlier allocation
+                      // has already dispatched. Do not blindly add that historic
+                      // allocation back to the generic free quantity: once
+                      // dispatched it is no longer stock that this FO can increase.
+                      const availableForThisFo = existingAllocation
+                        ? Number(existingAllocation.packing_order?.available_qty_kg_excl_this_fo ?? 0)
+                        : Number(allocCandidate.fo_available_qty_kg ?? totalQty);
                       return (
                         <>
                           <div className="text-sm text-slate-600">
