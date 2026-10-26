@@ -53,23 +53,30 @@ const EPSILON = 0.0000001;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Family Planning may use any inbound piece only when it has a real plant ETA
- * on/after the CC date. This includes an ordered PO with a delivery/CSN ETA.
- * Missing or stale ETA is risk evidence only, never invented stock.
+ * Family Planning date for an open inbound piece (owner 2026-10-26, supersedes the W2b
+ * "risk-only" rule): a valid plant ETA on/after the CC date joins on that date. A piece still
+ * open in ERP whose ETA has passed, or that has no ETA (CSN ETA, else PO expected delivery), is
+ * assumed to arrive on the CC date — same rule as the Requirement tab (D5) — and is flagged so
+ * the user updates CSN Tracker. It is never dropped, so the planner does not buy it again.
  */
+export function familyArrivalEta(etaToPlant: string | null, asOf: string): string {
+  return etaToPlant !== null && ISO_DAY.test(etaToPlant) && etaToPlant >= asOf ? etaToPlant : asOf;
+}
+
+/** True when the piece keeps its own ETA (no assumption, no flag). */
 export function isFamilyAllocatableArrival(_lifecycleKind: string, etaToPlant: string | null, asOf: string): boolean {
   return etaToPlant !== null && ISO_DAY.test(etaToPlant) && etaToPlant >= asOf;
 }
 
-/** Human-readable risk kept beside, but outside, the Family stock simulation. */
-export function familyArrivalRisk(arrival: OptimizerConfirmedArrival): OptimizerArrivalFlag {
+/** Flag for a piece whose ETA had to be assumed (CC date); it is still counted as Family stock. */
+export function familyArrivalRisk(arrival: OptimizerConfirmedArrival, asOf: string): OptimizerArrivalFlag {
   const missing = arrival.eta_to_plant === null || !ISO_DAY.test(arrival.eta_to_plant);
   return {
     source_key: arrival.source_key, material_id: arrival.material_id, eta_to_plant: arrival.eta_to_plant,
-    assumed_eta: null, reason: missing ? "ETA_MISSING" : "ETA_PASSED",
+    assumed_eta: asOf, reason: missing ? "ETA_MISSING" : "ETA_PASSED",
     message: missing
-      ? "No valid plant ETA — this receipt is risk-only and is not counted as Family stock. Set ETA to plant in CSN Tracker or the PO."
-      : "Plant ETA has passed without receipt — this receipt is risk-only and is not counted as Family stock. Update the CSN Tracker or PO ETA.",
+      ? `No plant ETA — assumed to arrive today (${asOf}) so it is not bought again. Set ETA to plant in CSN Tracker or the PO.`
+      : `Plant ETA ${arrival.eta_to_plant} has passed without receipt — assumed to arrive today (${asOf}) so it is not bought again. Update the CSN Tracker ETA.`,
   };
 }
 

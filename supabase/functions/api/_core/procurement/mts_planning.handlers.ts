@@ -29,7 +29,7 @@ import {
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -504,19 +504,17 @@ export async function computePlanning(p: PlanningParams) {
     own_demand: ownDemand,
     group_demand: groupDemand,
     group_coverage_policies: groupCoveragePolicies,
-    // A CC-date GR and every future inbound with a valid plant ETA participate
-    // on that date. An ordered PO is usable only when its delivery/CSN ETA exists.
-    confirmed_arrivals: familyArrivalCandidates
-      .filter((arrival) => isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
-      .map((arrival) => ({
-        source_key: arrival.source_key,
-        material_id: arrival.material_id,
-        eta_to_plant: arrival.eta_to_plant,
-        qty_base: arrival.qty_base,
-      })),
+    // Every open inbound piece participates: a valid future ETA on that date; a passed or
+    // missing ETA on the CC date, flagged (owner 2026-10-26, same as the Requirement tab).
+    confirmed_arrivals: familyArrivalCandidates.map((arrival) => ({
+      source_key: arrival.source_key,
+      material_id: arrival.material_id,
+      eta_to_plant: familyArrivalEta(arrival.eta_to_plant, assembly.input.as_of),
+      qty_base: arrival.qty_base,
+    })),
     arrival_risks: familyArrivalCandidates
       .filter((arrival) => !isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
-      .map(familyArrivalRisk),
+      .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of)),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     group_orders: req.input.groupOrders,

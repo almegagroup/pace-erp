@@ -1,4 +1,4 @@
-import { assemblePlanningInput, chooseVendor, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, chooseVendor, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -17,14 +17,18 @@ Deno.test("D3 member selection: single, cheapest of several, none", () => {
   equal(selectGroupMember(["A", "B"], new Set(), price), { material_id: null, reason: "NONE_SELECTED" }, "none");
 });
 
-Deno.test("family input: any dated receipt joins on its ETA; missing/stale ETA is risk-only", () => {
+Deno.test("family input: a dated receipt joins on its ETA; a passed or missing ETA is counted today and flagged", () => {
   const asOf = "2026-10-24";
-  equal(isFamilyAllocatableArrival("PO_REMAINDER", "2026-11-15", asOf), true, "an ordered PO with delivery date joins on that date");
-  equal(isFamilyAllocatableArrival("IN_TRANSIT", "2026-10-25", asOf), true, "an in-transit consignment joins on its plant ETA");
-  equal(isFamilyAllocatableArrival("POSTED_GR", asOf, asOf), true, "a posted GR on the CC date remains an actual arrival");
-  equal(isFamilyAllocatableArrival("PO_REMAINDER", null, asOf), false, "missing ETA cannot become stock today");
-  equal(isFamilyAllocatableArrival("IN_TRANSIT", "2026-10-23", asOf), false, "stale ETA cannot become stock today");
-  equal(familyArrivalRisk({ source_key: "PO-1", material_id: "M", eta_to_plant: null, qty_base: 25, lifecycle_kind: "PO_REMAINDER" }).assumed_eta, null, "risk has no invented receipt date");
+  equal(familyArrivalEta("2026-11-15", asOf), "2026-11-15", "an ordered PO with delivery date joins on that date");
+  equal(familyArrivalEta(asOf, asOf), asOf, "a posted GR on the CC date remains an actual arrival");
+  equal(isFamilyAllocatableArrival("IN_TRANSIT", "2026-10-25", asOf), true, "a future ETA needs no flag");
+  // Owner 2026-10-26 (CMP005 Silres / Excelcon A 850): a TRN CSN whose ETA passed is still coming.
+  equal(familyArrivalEta("2026-10-19", asOf), asOf, "passed ETA is counted today, not dropped");
+  equal(familyArrivalEta(null, asOf), asOf, "missing ETA is counted today, not dropped");
+  equal(isFamilyAllocatableArrival("IN_TRANSIT", "2026-10-19", asOf), false, "a passed ETA is flagged");
+  const flag = familyArrivalRisk({ source_key: "CSN-1", material_id: "M", eta_to_plant: "2026-10-19", qty_base: 25, lifecycle_kind: "IN_TRANSIT" }, asOf);
+  equal(flag.assumed_eta, asOf, "the flag says which day it was counted on");
+  equal(flag.reason, "ETA_PASSED", "passed ETA reason");
 });
 
 function row(id: string, stock: number, daily: Array<[string, number]>, target = 5): RequirementRow {
