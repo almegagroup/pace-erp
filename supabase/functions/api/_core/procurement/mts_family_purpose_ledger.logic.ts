@@ -45,6 +45,8 @@ export type PurposeLedgerDay = {
   closing_qty: number;
   target_qty: number;
   desired_qty: number;
+  /** Remaining quantity needed to restore this purpose to Desired Max. */
+  desired_shortfall_qty: number;
   shortage_qty: number;
   by_material: Readonly<Record<string, number>>;
   consumed_by_material: Readonly<Record<string, number>>;
@@ -273,6 +275,7 @@ export function runFamilyPurposeLedger(args: {
         closing_qty: round(closing),
         target_qty: round(target),
         desired_qty: round(desired),
+        desired_shortfall_qty: round(Math.max(0, desired - closing)),
         shortage_qty: round(need),
         by_material: Object.fromEntries(
           [...balance.entries()].filter(([, qty]) => qty > EPSILON).map((

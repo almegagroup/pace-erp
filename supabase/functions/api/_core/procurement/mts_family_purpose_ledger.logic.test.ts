@@ -208,3 +208,21 @@ Deno.test("W3h: BETONE, SAPCOMER and BENTONE keep direct, narrow and broad balan
     `no new receipt means no daily re-allocation: ${JSON.stringify(day1)}`,
   );
 });
+
+Deno.test("W3h: a zero-stock overlap exposes each purpose's Desired-Max shortfall before one MOQ decision", () => {
+  const result = runFamilyPurposeLedger({
+    opening: { BETONE: 0, SAPCOMER: 0, BENTONE: 0 },
+    days: 1,
+    supplies: [],
+    purposes: [
+      { id: "DIRECT:BETONE", priority: 0, candidates: ["BETONE"], demand: [20], target_balance: [500], desired_balance: [1_100] },
+      { id: "GROUP:BETON", priority: 1, candidates: ["BETONE", "SAPCOMER"], demand: [25], target_balance: [625], desired_balance: [1_375] },
+      { id: "GROUP:BROAD", priority: 2, candidates: ["BETONE", "SAPCOMER", "BENTONE"], demand: [30], target_balance: [900], desired_balance: [1_650] },
+    ],
+  });
+  const shortfall = Object.fromEntries(result.rows.map((row) => [row.purpose_id, row.desired_shortfall_qty]));
+  assert(
+    shortfall["DIRECT:BETONE"] === 1_100 && shortfall["GROUP:BETON"] === 1_375 && shortfall["GROUP:BROAD"] === 1_650,
+    `each purpose must state its own shortfall before a single physical receipt is sized: ${JSON.stringify(result.rows)}`,
+  );
+});
