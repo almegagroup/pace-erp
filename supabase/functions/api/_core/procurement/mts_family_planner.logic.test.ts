@@ -338,6 +338,35 @@ Deno.test("family waterfall: a MOQ group refill uses the actual free pool cover,
   assert(!immediateRepeat, `a BETON refill must not create another group buy on the next day: ${JSON.stringify(groupBuys)}`);
 });
 
+Deno.test("W3g: a live group purpose reserve carries until Target, then uses only genuine free stock", () => {
+  // A daily virtual re-bucket would show 30 KG on every row.  The live
+  // purpose balance starts at 30, carries down to 20 after the next draw, and
+  // is restored only immediately before the following draw would take it
+  // below its 1-day Target.  No receipt and no engine lot is invented.
+  const days = ["2026-10-01", "2026-10-02", "2026-10-03"];
+  const result = planFamily({
+    as_of: days[0], horizon_end: days.at(-1)!,
+    opening_qty_by_material: { BETONE: 50 },
+    own_demand: [],
+    group_demand: days.map((required_by) => ({
+      group_id: "BETON", candidates: ["BETONE"], required_by, qty_base: 10,
+    })),
+    confirmed_arrivals: [],
+    policies: [policy("BETONE", 20, 10, [{ vendor: "HIMADRI", lead: 0, cost: 1 }])],
+    group_coverage_policies: [{
+      material_group_id: "BETON", effective_from: days[0], target_days: 1,
+      critical_days: 0, desired_max_days_override: 2,
+    }],
+    plan_buys: false,
+  });
+  const reserve = (day: string) => result.group_bucket_reservations
+    .find((row) => row.group_id === "BETON" && row.day === day && row.material_id === "BETONE")
+    ?.reserved_qty_base;
+  assert(reserve(days[0]) === 30 && reserve(days[1]) === 20 && reserve(days[2]) === 30,
+    `the group reserve must carry then refill at Target, not rebuild daily: ${JSON.stringify(result.group_bucket_reservations)}`);
+  assert(result.advisory_buys.every((buy) => buy.status === "NO_BUY"), JSON.stringify(result.advisory_buys));
+});
+
 Deno.test("family waterfall: an unconfigured zero-stock member does not collapse a group's derived Desired Max to Target", () => {
   // Production BETON shape: SAPCOMER remains an eligible existing-stock
   // alternative, but it has zero stock, no future buy selection and no

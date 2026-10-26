@@ -5,9 +5,11 @@
  * Demand is kept in its two real kinds:
  *   OWN   — a member's exclusive use (a Stroke / Pack BOM line with only that material).
  *   GROUP — a group pool (RDP, RDP_TLA …): any listed candidate may serve it.
- * Each day: a member first meets its own use; a group then takes only the members' free stock —
- * stock above Target days of the member's own use (protection) — in Group Settings order
- * (default Method C: most free first). Protected stock is used last (recorded as borrowed).
+ * Direct/exclusive protection is always retained first.  Each group then owns a
+ * persistent claim on genuine free physical stock: it is created on opening / a
+ * dated receipt, declines only through that group's use, and can be restored
+ * from real unreserved stock only when it reaches Target.  Group Settings order
+ * (default Method C: most free first) selects the material inside that claim.
  *
  * Needs, earliest first, one lot at a time, re-simulating the whole family after each lot:
  *   OWN need   — a member's own cover (own use only) falls to its Target → that member is bought.
@@ -105,10 +107,10 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
   /** Consumption ratio: per group and day, how much each member serves (Store instruction basis). */
   group_mix: ReadonlyArray<{ group_id: string; day: string; draws: Readonly<Record<string, number>> }>;
   /**
-   * Canonical event-day virtual buckets.  A bucket is a reservation for one
-   * group's current requirement plus its Desired-Max forward cover; it does
-   * not post or remove physical stock.  Group draw and Store ratio must only
-   * consume from the bucket assigned to that group.
+   * Canonical carried group-purpose balances.  An opening/receipt event
+   * creates a claim for current use plus Desired-Max forward cover; the claim
+   * then declines only through that group's draw.  Store ratio may consume
+   * only its own group's balance.
    */
   group_bucket_reservations: ReadonlyArray<{
     group_id: string;
@@ -251,7 +253,7 @@ type Sim = {
   poolFreeShort: number[][];
   poolFree: number[][]; // free stock this pool could still use after the day (reserve-adjusted)
   poolDraw: number[][][]; // pool → member → day: who served the group (the consumption ratio)
-  poolBucket: number[][][]; // pool → member → day: event-day Desired-Max virtual reservation
+  poolBucket: number[][][]; // pool → member → day: carried Group Desired-Max purpose reservation
   expired: number[]; // planning-only receipt life loss; must reconcile stock conservation
 };
 
@@ -411,6 +413,10 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
     const receiptLeft = simulatedOpeningReceipts.map((rows) => rows.map((row) => ({ ...row })));
+    // A group reserve is a claim on real physical stock.  It is created on
+    // the opening/receipt event, then reduced only by that group's draw.  It
+    // must not be recreated from the whole balance on every calendar day.
+    const purposeReserve = pools.map(() => Array.from({ length: M }, () => 0));
     for (let i = 0; i < N; i += 1) {
       // A receipt is usable through valid_until.  Expired virtual stock is not
       // silently counted as cover; this is a planning warning, never a stock post.
@@ -420,6 +426,19 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           const expired = Math.min(Math.max(0, bal[m]), receipt.qty_base);
           bal[m] = roundQty(bal[m] - expired);
           s.expired[m] = roundQty(s.expired[m] + expired);
+          // A purpose reservation is only a claim on the underlying physical
+          // stock.  If that stock expires, remove the claim as well (broad
+          // groups lose their later waterfall claim first).  Otherwise a
+          // future group draw could consume an already-expired VINNAPAS/GRN
+          // balance and make the material go negative.
+          let expiredReserve = expired;
+          for (let p = purposeReserve.length - 1; p >= 0 && expiredReserve > EPSILON; p -= 1) {
+            const reserved = purposeReserve[p][m];
+            const released = Math.min(reserved, expiredReserve);
+            if (released <= EPSILON) continue;
+            purposeReserve[p][m] = roundQty(reserved - released);
+            expiredReserve = roundQty(expiredReserve - released);
+          }
           receipt.qty_base = 0;
         }
       }
@@ -437,23 +456,21 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           ownLeft -= used;
         }
       }
-      // Allocate a virtual event-day bucket before any group consumes.  This
-      // is the operational version of the family waterfall: direct/exclusive
-      // protection has already been removed, then groups receive their
-      // current need plus Desired-Max forward cover from narrow to broad. A
-      // later group cannot borrow a narrower group's bucket just because that
-      // group happens to consume first today.
-      const bucket = pools.map(() => Array.from({ length: M }, () => 0));
-      const unreserved = ids.map((_id, m) => Math.max(0, bal[m] - protection[m][i]));
+      // Direct/exclusive protection stays first.  Group reserves then persist
+      // through days until their own group consumes them.
+      const newlyAvailable = i === 0 || ids.some((_id, m) => confirmed[m][i] > EPSILON || s.planned[m][i] > EPSILON);
+      const unreserved = ids.map((_id, m) => Math.max(0, bal[m] - protection[m][i]
+        - purposeReserve.reduce((sum, reserve) => sum + reserve[m], 0)));
       const takeBucket = (p: number, m: number, qty: number) => {
         const take = Math.min(Math.max(0, qty), unreserved[m]);
         if (take <= EPSILON) return 0;
-        bucket[p][m] = roundQty(bucket[p][m] + take);
+        purposeReserve[p][m] = roundQty(purposeReserve[p][m] + take);
         unreserved[m] = roundQty(unreserved[m] - take);
         return take;
       };
-      pools.forEach((pool, p) => {
+      if (newlyAvailable) pools.forEach((pool, p) => {
         let wanted = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).desired);
+        wanted = Math.max(0, wanted - purposeReserve[p].reduce((sum, qty) => sum + qty, 0));
         if (wanted <= EPSILON) return;
         const cand = candIdx[p];
         const order = input.group_orders?.get(pool.group_id);
@@ -496,17 +513,36 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           }
         }
       });
+      // When a carried balance cannot meet today's use, genuine unreserved
+      // stock may hand off before consumption.  This preserves the current
+      // day's group demand (e.g. DA after VINNAPAS runs down); it is not a
+      // fabricated receipt or a daily Desired-Max rebuild.
+      if (!newlyAvailable) pools.forEach((pool, p) => {
+        const reserve = purposeReserve[p].reduce((sum, qty) => sum + qty, 0);
+        const targetQty = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).target);
+        if (reserve + EPSILON >= targetQty) return;
+        let wanted = Math.max(0, pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).desired) - reserve);
+        const cand = candIdx[p];
+        const order = input.group_orders?.get(pool.group_id);
+        const sequence = order
+          ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => unreserved[mIndex.get(id)!], order).map((id) => mIndex.get(id)!)
+          : [...cand].sort((a, b) => unreserved[b] * costTilt[b] - unreserved[a] * costTilt[a] || ids[a].localeCompare(ids[b]));
+        for (const m of sequence) {
+          if (wanted <= EPSILON) break;
+          wanted = roundQty(wanted - takeBucket(p, m, wanted));
+        }
+      });
       pools.forEach((pool, p) => {
         let need = pool.demand[i];
         if (need <= EPSILON) return;
         const cand = candIdx[p];
-        const free = (m: number) => Math.max(0, bucket[p][m]);
+        const free = (m: number) => Math.max(0, purposeReserve[p][m]);
         const order = input.group_orders?.get(pool.group_id);
         const ordered = (fn: (m: number) => number) => (order
           ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => fn(mIndex.get(id)!), order).map((id) => mIndex.get(id)!)
           : [...cand].sort((a, b) => fn(b) - fn(a) || cand.indexOf(a) - cand.indexOf(b)));
         const takeFrom = (m: number, qty: number) => {
-          bal[m] -= qty; bucket[p][m] -= qty; need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
+          bal[m] -= qty; purposeReserve[p][m] -= qty; need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
           let left = qty;
           for (const receipt of receiptLeft[m]) {
             if (left <= EPSILON) break;
@@ -564,17 +600,10 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         if (need > EPSILON) s.poolUnmet[p][i] = need;
       });
       pools.forEach((_pool, p) => {
-        // `bucket[p]` is this event day's protected Desired-Max allocation,
-        // not the entire usable pool balance.  A MOQ or a prior engine lot
-        // can leave genuine eligible excess in `unreserved`; treating only
-        // the bucket remainder as coverage makes every normal next day look
-        // like "Desired Max minus one day's use" and repeatedly creates a
-        // new buy.  Coverage and sizing must see both (while still excluding
-        // another group's bucket and every direct/exclusive reserve).
-        const bucketFree = bucket[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
+        const bucketFree = purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
         const genuineExcess = candIdx[p].reduce((sum, m) => sum + Math.max(0, unreserved[m]), 0);
         s.poolFree[p][i] = roundQty(bucketFree + genuineExcess);
-        ids.forEach((_id, m) => { s.poolBucket[p][m][i] = roundQty(Math.max(0, bucket[p][m]) + s.poolDraw[p][m][i]); });
+        ids.forEach((_id, m) => { s.poolBucket[p][m][i] = roundQty(Math.max(0, purposeReserve[p][m]) + s.poolDraw[p][m][i]); });
       });
       for (let m = 0; m < M; m += 1) {
         s.closing[m][i] = bal[m];

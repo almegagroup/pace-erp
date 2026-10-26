@@ -337,16 +337,23 @@ rephased/adjusted value একই নামে বা silently interchange ক�
      valid 31-Oct `ORD` prevents an unnecessary BETONE purchase that its arrival
      would cover.  The remaining release check is the CMP003 production-data
      read-only UAT after deployment.
-1. **W3g — persistent purpose balances (core, not yet implemented):** Opening, GRN/CSN ETA and
+1. **W3g — persistent purpose balances (core, partially live):** Opening, GRN/CSN ETA and
    engine receipts must allocate a physical quantity once into Direct/Exclusive → narrowest group
    → broader group → second rotation.  Each purpose balance then declines only through its own
    consumption.  A buy is triggered only when that purpose reaches its configured Target, not
    because the browser/server recreates a Desired-Max bucket the next day.
-   - **W3g-a foundation (2026-10-26):** a pure, tested purpose ledger now carries
-     Direct/Exclusive → narrow group → broad group balances and emits the exact
-     physical-material allocation at each event day.  It is intentionally not
-     yet the live simulator: FEFO, expiry, conservation and selected-member
-     purchase authority must remain intact when the adapter is introduced.
+   - **W3g-a foundation (2026-10-26):** a pure, tested purpose ledger carries
+     Direct/Exclusive → narrow group → broad group balances and emits the
+     physical-material allocation at each event day.
+   - **W3g-b live group reserve (2026-10-26):** Family simulation now carries
+     each group's physical reservation across days.  It is made from genuine
+     free stock on opening, GRN/CSN ETA or engine-lot events, is reduced only
+     by that group's consumption, and is restored from genuine free stock only
+     when the group would fall below Target.  An expiry releases its associated
+     reservation before any later group draw.  Direct/exclusive protection,
+     FEFO, selection authority, conservation and the existing one-receipt MOQ
+     path remain the authoritative safeguards.  The remaining W3g/W3i work is
+     to expose a receipt-to-purpose trace rather than to replace those guards.
 2. **W3h — overlapping-family receipt decision (depends on W3g):** For BETONE/SAPCOMER/BENTONE
    shapes, simulate all existing eligible stock and dated receipts first.  A proposed material must
    be assessed against every overlapping group purpose on that arrival day.  MOQ/multiple is applied
