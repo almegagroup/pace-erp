@@ -426,6 +426,34 @@ Deno.test("W3g-c: a large excess uses bulk waterfall rounds instead of freezing 
   assert(Date.now() - started < 1_500, "large excess waterfall must complete promptly for a PO22 request");
 });
 
+Deno.test("W3b: final family-reservation rotation batches excess instead of blocking unrelated PO22 saves", () => {
+  // W3b runs after the daily simulation to explain where the physical closing
+  // stock sits next. This deliberately has many pools and a large residual:
+  // the former 100,000 literal-round loop produced hundreds of thousands of
+  // report rows and blocked Node's shared request loop for minutes.
+  const asOf = "2026-10-01";
+  const members = Array.from({ length: 12 }, (_, i) => `M${i + 1}`);
+  const groups = Array.from({ length: 18 }, (_, i) => `G${i + 1}`);
+  const started = Date.now();
+  const result = planFamily({
+    as_of: asOf, horizon_end: asOf,
+    opening_qty_by_material: Object.fromEntries(members.map((id) => [id, 100_000])),
+    own_demand: [],
+    group_demand: groups.map((group_id) => ({ group_id, candidates: members, required_by: asOf, qty_base: 1 })),
+    confirmed_arrivals: [],
+    policies: members.map((id) => policy(id, 0, 0, [])),
+    group_coverage_policies: groups.map((group_id) => ({
+      group_id, effective_from: asOf, target_days: 1, critical_days: 0, desired_max_days_override: 2,
+    })),
+    plan_buys: false,
+  });
+  const elapsed = Date.now() - started;
+  const reserved = result.waterfall_reservations.reduce((sum, row) => sum + row.qty_base, 0);
+  const calculatedClosing = result.allocation_reconciliation.reduce((sum, row) => sum + row.closing_qty_base, 0);
+  assert(Math.abs(reserved - calculatedClosing) < 0.01, `all final stock must retain one explainable destination: ${JSON.stringify(result.waterfall_reservations.slice(-10))}`);
+  assert(result.waterfall_reservations.length < 1_000, `bulk rotation must not emit a row per tiny day-slice: ${result.waterfall_reservations.length}`);
+  assert(elapsed < 1_500, `final reservation waterfall must complete promptly, took ${elapsed}ms`);
+});
 Deno.test("family waterfall: an unconfigured zero-stock member does not collapse a group's derived Desired Max to Target", () => {
   // Production BETON shape: SAPCOMER remains an eligible existing-stock
   // alternative, but it has zero stock, no future buy selection and no

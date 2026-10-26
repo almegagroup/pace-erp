@@ -1208,17 +1208,51 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   // eligible group in the same narrow-to-broad priority. A round is one
   // average demand day per group, so no material is stranded merely because
   // every group has already reached Desired Max.
-  const MAX_ROTATION_STEPS = 100_000;
-  for (let step = 0; step < MAX_ROTATION_STEPS; step += 1) {
+  // Pass 2: genuine usable excess rotates through every still-demanding
+  // eligible group in the same narrow-to-broad priority. A round is one
+  // average demand day per group, so no material is stranded merely because
+  // every group has already reached Desired Max.
+  //
+  // Do not execute this one average-day round literally for every unit of a
+  // large opening / MOQ balance. This block is called while building the
+  // ordinary PO22 payload, so a 100,000-round safety cap used to hold the
+  // Node event loop for minutes and make unrelated saves (for example
+  // Payment Terms) wait behind the planner. Run one genuine round, then
+  // apply the identical round in bulk through the next material-depletion
+  // boundary. The next pass deliberately re-evaluates member order from the
+  // remaining physical balance, retaining the existing waterfall priority.
+  while (reservationBalance.some((qty) => qty > EPSILON)) {
+    const beforeRound = [...reservationBalance];
+    const roundByPool = pools.map(() => Array.from({ length: M }, () => 0));
+    const roundByMaterial = Array.from({ length: M }, () => 0);
     let moved = false;
     for (let p = 0; p < pools.length; p += 1) {
       if (groupRate[p] <= EPSILON || virtualCandidateOrder(p).length === 0) continue;
+      const beforePool = [...reservationBalance];
       const left = reserveForGroup(p, groupRate[p], "SECOND_ROTATION", "Genuine excess rotation after all Group Desired-Max reservations; narrow-to-broad round-robin priority.");
-      if (left + EPSILON < groupRate[p]) moved = true;
+      const used = roundQty(Math.max(0, groupRate[p] - left));
+      if (used <= EPSILON) continue;
+      moved = true;
+      beforePool.forEach((qty, m) => {
+        const allocated = roundQty(Math.max(0, qty - reservationBalance[m]));
+        if (allocated <= EPSILON) return;
+        roundByPool[p][m] = allocated;
+        roundByMaterial[m] = roundQty(roundByMaterial[m] + allocated);
+      });
     }
     if (!moved) break;
-  }
-  // The only permitted residual is a material that has no approved eligible
+
+    let extraRounds = Number.POSITIVE_INFINITY;
+    roundByMaterial.forEach((used, m) => {
+      if (used <= EPSILON) return;
+      extraRounds = Math.min(extraRounds, Math.max(0, Math.floor((beforeRound[m] + EPSILON) / used) - 1));
+    });
+    if (!(extraRounds > 0 && Number.isFinite(extraRounds))) continue;
+    roundByPool.forEach((byMaterial, p) => byMaterial.forEach((used, m) => {
+      if (used <= EPSILON) return;
+      reserve(m, pools[p].group_id, roundQty(used * extraRounds), "SECOND_ROTATION", "Genuine excess rotation after all Group Desired-Max reservations; narrow-to-broad round-robin priority.");
+    }));
+  }  // The only permitted residual is a material that has no approved eligible
   // group demand in this horizon (or a defensive rotation bound). It remains
   // visible carry for the next dated run, never fake consumption.
   reservationBalance.forEach((qty, m) => {
