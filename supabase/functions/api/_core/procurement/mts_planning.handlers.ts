@@ -29,7 +29,7 @@ import {
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -594,19 +594,12 @@ export async function computePlanning(p: PlanningParams) {
   // period automatically without a second allocation formula here.
   const storeRowsByRatio = (() => {
     const range = (period: string) => (period === "CM" ? [calendar.asOf, calendar.cmEnd] : [calendar.nmStart, calendar.nmEnd]);
-    const shareCache = new Map<string, { shares: Map<string, number>; unmet: number } | null>();
+    const shareCache = new Map<string, ReturnType<typeof storeGroupPeriodShares>>();
     const shareOf = (groupId: string, period: string) => {
       const key = `${groupId}|${period}`;
       if (shareCache.has(key)) return shareCache.get(key)!;
       const [from, to] = range(period);
-      const draws = new Map<string, number>();
-      for (const m of projection.group_mix) {
-        if (m.group_id !== groupId || m.day < from || m.day > to) continue;
-        for (const [id, q] of Object.entries(m.draws)) draws.set(id, (draws.get(id) ?? 0) + q);
-      }
-      const unmet = projection.group_unmet.filter((u) => u.group_id === groupId && u.day >= from && u.day <= to).reduce((sum, u) => sum + u.qty_base, 0);
-      const total = [...draws.values()].reduce((a, b) => a + b, 0) + unmet;
-      const value = total > 0 ? { shares: new Map([...draws].map(([id, q]) => [id, q / total])), unmet: unmet / total } : null;
+      const value = storeGroupPeriodShares({ group_id: groupId, from, to, group_mix: projection.group_mix, group_unmet: projection.group_unmet });
       shareCache.set(key, value);
       return value;
     };
@@ -622,7 +615,7 @@ export async function computePlanning(p: PlanningParams) {
       for (const [id, f] of [...share.shares].sort(([a], [b]) => a.localeCompare(b))) {
         if (f * row.demand_qty > 1e-6) out.push({ ...row, material_id: id, executable_qty: r6(row.demand_qty * f), not_backed_qty: 0 });
       }
-      if (share.unmet * row.demand_qty > 1e-6) out.push({ ...row, material_id: null, executable_qty: 0, not_backed_qty: r6(row.demand_qty * share.unmet) });
+      if (share.unmet_share * row.demand_qty > 1e-6) out.push({ ...row, material_id: null, executable_qty: 0, not_backed_qty: r6(row.demand_qty * share.unmet_share) });
     }
     return out;
   })();

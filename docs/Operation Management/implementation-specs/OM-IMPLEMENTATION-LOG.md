@@ -376,6 +376,11 @@ rephased/adjusted value একই নামে বা silently interchange ক�
 5. **F4 presentation check:** The period-level Store Report already supplies Period, parent/child
    product group, material, planned quantity and reason.  After W3g it must be verified against the
    same purpose balances; it is not a daily physical issue ledger.
+   - **F4 canonical period-share check (2026-10-26):** Store's CM/NM material mix is now a pure,
+     tested aggregation of the Family simulator's actual event-day group draws plus its explicit
+     unmet share.  Store cannot independently consider opening stock, MOQ, policy, or a second
+     consumption ratio.  It remains period-level advice and continues to mark future/short stock
+     as not backed rather than claiming a physical issue.
 6. **Release gate:** Add BETON and RDP overlapping-group fixtures, run full PO22 checks/build,
    perform read-only CMP003 production UAT, then promote only with the owner-authorised
    fast-forward path.

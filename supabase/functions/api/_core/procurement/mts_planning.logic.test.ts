@@ -1,4 +1,4 @@
-import { assemblePlanningInput, chooseVendor, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, chooseVendor, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -61,6 +61,21 @@ Deno.test("store schedule: month name for a whole month, start day for a partial
   equal(storePeriodLabel("NM", buildCalendar("2026-10-01", "2026-10-20")!), "November 2026", "NM is always a whole month");
   equal(storePeriodLabel("CM", buildCalendar("2026-10-01", "2026-10-01")!), "October 2026", "CM from day 1");
   equal(storePeriodLabel("CM", buildCalendar("2026-10-01", "2026-10-20")!), "October 2026 (from 20)", "partial CM");
+});
+
+Deno.test("store schedule: group material ratio is the Family event-day draw ratio, not a second rule", () => {
+  const result = storeGroupPeriodShares({
+    group_id: "BETON", from: "2026-10-24", to: "2026-10-31",
+    group_mix: [
+      { group_id: "BETON", day: "2026-10-24", draws: { BETONE: 20, SAPCOMER: 5 } },
+      { group_id: "BETON", day: "2026-10-25", draws: { BETONE: 10 } },
+      { group_id: "OTHER", day: "2026-10-24", draws: { BENTONE: 99 } },
+    ],
+    group_unmet: [{ group_id: "BETON", day: "2026-10-26", qty_base: 15 }],
+  });
+  if (!result) throw new Error("expected a period share");
+  equal([...result.shares.entries()].sort(), [["BETONE", 0.6], ["SAPCOMER", 0.1]], "only canonical BETON event-day draws contribute");
+  equal(result.unmet_share, 0.3, "unmet share remains explicit rather than being assigned to a material");
 });
 
 Deno.test("store schedule: transfer hint only for what counted stock cannot back", () => {

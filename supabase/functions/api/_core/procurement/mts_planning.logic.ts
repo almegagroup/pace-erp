@@ -202,6 +202,42 @@ export function storePeriodLabel(period: "CM" | "NM", calendar: PlanningCalendar
 }
 
 /**
+ * Store is a period-level instruction, while Family Planning makes the
+ * material decision on individual event days.  This is the only permitted
+ * bridge between the two: aggregate the planner's actual group draws in the
+ * requested period, then return a material share and the still-unmet share.
+ *
+ * It deliberately does not look at an opening balance, MOQ, or a policy.  All
+ * of those decisions have already happened in the Family simulator.  Keeping
+ * this helper pure and narrow prevents the Store report from developing a
+ * second (and potentially conflicting) consumption-ratio formula.
+ */
+export function storeGroupPeriodShares(args: {
+  group_id: string;
+  from: string;
+  to: string;
+  group_mix: ReadonlyArray<{ group_id: string; day: string; draws: Readonly<Record<string, number>> }>;
+  group_unmet: ReadonlyArray<{ group_id: string; day: string; qty_base: number }>;
+}): { shares: Map<string, number>; unmet_share: number } | null {
+  const draws = new Map<string, number>();
+  for (const mix of args.group_mix) {
+    if (mix.group_id !== args.group_id || mix.day < args.from || mix.day > args.to) continue;
+    for (const [materialId, qty] of Object.entries(mix.draws)) {
+      if (qty > EPSILON) draws.set(materialId, (draws.get(materialId) ?? 0) + qty);
+    }
+  }
+  const unmet = args.group_unmet
+    .filter((row) => row.group_id === args.group_id && row.day >= args.from && row.day <= args.to)
+    .reduce((sum, row) => sum + Math.max(0, row.qty_base), 0);
+  const total = [...draws.values()].reduce((sum, qty) => sum + qty, 0) + unmet;
+  if (total <= EPSILON) return null;
+  return {
+    shares: new Map([...draws].map(([materialId, qty]) => [materialId, qty / total])),
+    unmet_share: unmet / total,
+  };
+}
+
+/**
  * Transfer instruction per material: stock sitting in a transfer-source location (e.g. R003) that
  * the schedule needs because counted stock does not back it. Qty = min(that stock, not-backed qty).
  * R→R advisory only (rToRTransferRoute); never posts anything.
