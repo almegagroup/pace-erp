@@ -607,7 +607,19 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       };
       if (allocationEvent) {
         const nextSlice = (pool: Pool) => pool.demand.slice(i).find((qty) => qty > EPSILON) ?? 0;
-        for (let pass = 0; pass < 10_000 && unreserved.some((qty) => qty > EPSILON); pass += 1) {
+        // Do not allocate a small day-slice one pass at a time.  A large MOQ
+        // (or a low-volume group) can otherwise repeat the exact same
+        // narrow-to-broad allocation thousands of times in one request and
+        // make every PO22 tab wait for the shared planning query.  Build one
+        // genuine waterfall round, then repeat that *same* round in bulk until
+        // one material would be exhausted.  The next round re-evaluates FEFO,
+        // saved order, run-down and normal stock/cost order from the remaining
+        // physical balance.  Thus this is mathematically the same rotation,
+        // but bounded by material depletion events rather than stock quantity.
+        while (unreserved.some((qty) => qty > EPSILON)) {
+          const beforeRound = [...unreserved];
+          const roundByPool = pools.map(() => Array.from({ length: M }, () => 0));
+          const roundByMaterial = Array.from({ length: M }, () => 0);
           let moved = false;
           pools.forEach((pool, p) => {
             let wanted = nextSlice(pool);
@@ -625,10 +637,30 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
               if (wanted <= EPSILON) break;
               const took = takeExcess(p, m, wanted);
               wanted = roundQty(wanted - took);
-              moved ||= took > EPSILON;
+              if (took <= EPSILON) continue;
+              roundByPool[p][m] = roundQty(roundByPool[p][m] + took);
+              roundByMaterial[m] = roundQty(roundByMaterial[m] + took);
+              moved = true;
             }
           });
           if (!moved) break;
+
+          // A complete round has just been applied.  Repeat it as many times
+          // as every material used in that round can support.  The smallest
+          // quotient identifies the next material boundary; after it, a fresh
+          // normal-order calculation is required and the loop continues.
+          let extraRounds = Number.POSITIVE_INFINITY;
+          roundByMaterial.forEach((used, m) => {
+            if (used <= EPSILON) return;
+            extraRounds = Math.min(extraRounds, Math.max(0, Math.floor((beforeRound[m] + EPSILON) / used) - 1));
+          });
+          if (!(extraRounds > 0 && Number.isFinite(extraRounds))) continue;
+          pools.forEach((_pool, p) => roundByPool[p].forEach((used, m) => {
+            if (used <= EPSILON) return;
+            const additional = roundQty(used * extraRounds);
+            excessReserve[p][m] = roundQty(excessReserve[p][m] + additional);
+            unreserved[m] = roundQty(Math.max(0, unreserved[m] - additional));
+          }));
         }
       }
       pools.forEach((pool, p) => {

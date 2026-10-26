@@ -397,6 +397,35 @@ Deno.test("W3g-c: overlapping groups receive one global excess claim, then re-wa
   );
 });
 
+Deno.test("W3g-c: a large excess uses bulk waterfall rounds instead of freezing the PO22 request", () => {
+  // CMP003 has high-opening, low daily-use families.  The excess must still
+  // rotate through every eligible group, but the implementation must not run
+  // one tiny day-slice ten thousand times on every event day.
+  const asOf = "2026-10-01";
+  const days = Array.from({ length: 31 }, (_, i) => addDays(asOf, i));
+  const started = Date.now();
+  const result = planFamily({
+    as_of: asOf, horizon_end: days.at(-1)!,
+    opening_qty_by_material: { A: 120_000, B: 120_000, C: 120_000 },
+    own_demand: [],
+    group_demand: days.flatMap((required_by) => [
+      { group_id: "NARROW", candidates: ["A", "B"], required_by, qty_base: 2 },
+      { group_id: "MIDDLE", candidates: ["A", "B", "C"], required_by, qty_base: 2 },
+      { group_id: "BROAD", candidates: ["A", "B", "C"], required_by, qty_base: 2 },
+    ]),
+    confirmed_arrivals: [],
+    policies: [policy("A", 0, 0, []), policy("B", 0, 0, []), policy("C", 0, 0, [])],
+    group_coverage_policies: [
+      { group_id: "NARROW", effective_from: asOf, target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { group_id: "MIDDLE", effective_from: asOf, target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { group_id: "BROAD", effective_from: asOf, target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+    ],
+    plan_buys: false,
+  });
+  assert(result.group_unmet.length === 0, `large excess must remain usable by every group: ${JSON.stringify(result.group_unmet)}`);
+  assert(Date.now() - started < 1_500, "large excess waterfall must complete promptly for a PO22 request");
+});
+
 Deno.test("family waterfall: an unconfigured zero-stock member does not collapse a group's derived Desired Max to Target", () => {
   // Production BETON shape: SAPCOMER remains an eligible existing-stock
   // alternative, but it has zero stock, no future buy selection and no
