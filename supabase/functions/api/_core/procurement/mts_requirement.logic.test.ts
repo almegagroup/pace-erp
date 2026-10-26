@@ -8,6 +8,7 @@
  *   [T22] Excel export parity         → frontend exports the grid's own filtered rows/columns
  */
 import {
+  displayUnitOf,
   addDays,
   allocateDemand,
   applyCompanyMaterialMapping,
@@ -985,4 +986,14 @@ Deno.test("What-if policy overrides: every effective row of the item, others unt
   assertEqual(effectivePolicy(out, "RM-C", "2026-10-20")!.target_cov_days, 20, "item without policy gets one");
   assertEqual(policies[0].target_cov_days, 40, "input not mutated");
   assertEqual(applyPolicyOverrides(policies, new Map()).length, 3, "no overrides → same rows");
+});
+
+Deno.test("PO22 display unit: Material Settings Order UoM first, then a vendor Supply UoM, else base", () => {
+  const material = { material_id: "M", material_type: "RM", base_uom_code: "KG", status: "ACTIVE", to_base_factors: { BAG: 25, MT: 1000 } };
+  const policyFirst = displayUnitOf(material, "BAG", ["MT"]);
+  if (policyFirst?.uom_code !== "BAG" || policyFirst.base_per_unit !== 25) throw new Error(`policy order UoM wins: ${JSON.stringify(policyFirst)}`);
+  const vendor = displayUnitOf(material, null, ["MT"]);
+  if (vendor?.uom_code !== "MT" || vendor.base_per_unit !== 1000) throw new Error(`vendor supply UoM next: ${JSON.stringify(vendor)}`);
+  if (displayUnitOf(material, "KG", []) !== null) throw new Error("the base unit itself is no display unit");
+  if (displayUnitOf(material, "DRUM", ["LTR"]) !== null) throw new Error("a unit without a verified conversion is never shown");
 });

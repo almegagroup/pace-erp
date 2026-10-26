@@ -571,6 +571,27 @@ export function orderUnitOf(material: MaterialInfo | undefined, vendorSupplyUom:
   return null;
 }
 
+/** Unit every PO22 quantity is shown in (owner 2026-10-26: "only Order UoM"). */
+export type DisplayUnit = { uom_code: string; base_per_unit: number };
+
+/**
+ * Display unit of a material: Material Settings Order UoM, else a company vendor's MM03 Supply
+ * UoM (first with a verified conversion, in code order), else none = base UoM. Only a unit with a
+ * fixed master conversion counts, so a displayed number always converts back exactly.
+ */
+export function displayUnitOf(material: MaterialInfo | undefined, policyOrderUom: string | null | undefined, vendorSupplyUoms: readonly (string | null | undefined)[]): DisplayUnit | null {
+  if (!material) return null;
+  const base = String(material.base_uom_code ?? "").toUpperCase();
+  const vendorUnits = [...new Set(vendorSupplyUoms.map((u) => String(u ?? "").trim().toUpperCase()).filter(Boolean))].sort();
+  for (const raw of [policyOrderUom, ...vendorUnits]) {
+    const unit = String(raw ?? "").trim().toUpperCase();
+    if (!unit || unit === base) continue;
+    const factor = material.to_base_factors[unit];
+    if (factor && factor > 0) return { uom_code: unit, base_per_unit: factor };
+  }
+  return null;
+}
+
 function activeMembers(input: ExplosionInput, groupId: string | null): string[] {
   if (!groupId) return [];
   // Defensive until the database uniqueness migration reaches every environment:

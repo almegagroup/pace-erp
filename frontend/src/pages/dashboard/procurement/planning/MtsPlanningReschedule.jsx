@@ -35,7 +35,7 @@ function addDays(day, n) {
   return day ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : "";
 }
 
-export default function MtsPlanningReschedule({ companyId, planMonth, asOf, demandAt, arrivals }) {
+export default function MtsPlanningReschedule({ companyId, planMonth, asOf, demandAt, arrivals, du }) {
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState({});
   const [preview, setPreview] = useState(null);
@@ -107,7 +107,7 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
   const columns = [
     { key: "material_name", label: "Material", width: "240px", render: (a) => `${a.material_code ?? ""} ${a.material_name}`.trim() },
     { key: "reference", label: "PO / CSN", width: "280px" },
-    { key: "qty", label: "Qty", width: "110px", align: "right", render: (a) => `${fmtQty(a.qty)} ${a.uom ?? ""}`, copyValue: (a) => a.qty },
+    { key: "qty", label: "Qty", width: "120px", align: "right", render: (a) => (du ? `${fmtQty(du.qty(a.qty, a.material_id))} ${du.uom(a.material_id, a.uom)}` : `${fmtQty(a.qty)} ${a.uom ?? ""}`).trim(), copyValue: (a) => (du ? `${fmtQty(du.qty(a.qty, a.material_id))} ${du.uom(a.material_id, a.uom)}` : a.qty) },
     { key: "eta_plant", label: "Source ETA (CSN / PO)", width: "130px", render: (a) => a.eta_plant ?? "—" },
     { key: "rescheduled_eta", label: "Saved planning ETA", width: "130px", render: (a) => a.rescheduled_eta ?? "—" },
     {

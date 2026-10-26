@@ -421,16 +421,16 @@ export async function buildItemPlan(
         const push = (day: string | null, e: Record<string, unknown>) => { if (day) events.set(day, [...(events.get(day) ?? []), e]); };
         for (const a of buildArrivals()) {
           push(a.rescheduled_eta ?? a.eta_plant ?? calendar.asOf, {
-            kind: "ARRIVAL", member: `${a.material_code ?? ""} ${a.material_name}`.trim(), qty: a.qty, uom: a.uom, reference: a.reference,
+            kind: "ARRIVAL", material_id: a.material_id, member: `${a.material_code ?? ""} ${a.material_name}`.trim(), qty: a.qty, uom: a.uom, reference: a.reference,
             vendor: a.vendor, status: a.status, movable: Boolean(a.reschedule_key),
             why: a.advice ? `Engine: ${a.advice.shift_days < 0 ? "prepone" : "postpone"} to ${a.advice.suggested_eta} — ${a.advice.reason}` : null,
           });
         }
         for (const f of futureOrders) {
-          push(f.eta_plant, { kind: "ENGINE", member: `${f.material_code ?? ""} ${f.material_name}`.trim(), qty: f.qty, uom: f.uom, vendor: f.vendor, po_by: f.po_by, covers: f.covers, why: f.reason, late: f.late });
+          push(f.eta_plant, { kind: "ENGINE", material_id: f.material_id, member: `${f.material_code ?? ""} ${f.material_name}`.trim(), qty: f.qty, uom: f.uom, vendor: f.vendor, po_by: f.po_by, covers: f.covers, why: f.reason, late: f.late });
         }
         for (const l of userLots) {
-          push(l.plant_eta, { kind: "YOU", member: `${l.material_code ?? ""} ${l.material_name}`.trim(), qty: round(l.qty_base), uom: l.uom, vendor: l.vendor_label, why: "Your quantity" });
+          push(l.plant_eta, { kind: "YOU", material_id: l.material_id, member: `${l.material_code ?? ""} ${l.material_name}`.trim(), qty: round(l.qty_base), uom: l.uom, vendor: l.vendor_label, why: "Your quantity" });
         }
         return grid.map((g) => ({ ...g, events: events.get(g.day) ?? [] }));
       })(),
@@ -445,7 +445,7 @@ export async function buildItemPlan(
           const destination = row.destination_kind === "OWN" ? "Own required use" : groupLabel.get(row.group_id ?? "") ?? "—";
           return {
             key: `${row.day}|${codeOf(row.material_id) ?? ""}|${flow}|${destination}|${index}`,
-            day: row.day, material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+            day: row.day, material_id: row.material_id, material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
             flow, destination, qty: round(row.qty_base), closing: round(row.closing_qty_base),
             source_reference: row.source_reference,
             source_kind: row.source_kind === "OPENING" ? "Counted opening stock"
@@ -460,14 +460,14 @@ export async function buildItemPlan(
       group_bucket_reservations: projection.group_bucket_reservations
         .filter((row) => memberSet.has(row.material_id))
         .map((row) => ({
-          day: row.day, group_label: groupLabel.get(row.group_id) ?? "—",
+          day: row.day, group_label: groupLabel.get(row.group_id) ?? "—", material_id: row.material_id,
           material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
           reserved_qty: round(row.reserved_qty_base), rule: row.rule,
         })),
       allocation_reconciliation: projection.allocation_reconciliation
         .filter((row) => memberSet.has(row.material_id))
         .map((row) => ({
-          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          material_id: row.material_id, material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
           opening_qty: round(row.opening_qty_base), confirmed_arrival_qty: round(row.confirmed_arrival_qty_base), planned_lot_qty: round(row.planned_lot_qty_base),
           own_allocated_qty: round(row.own_allocated_qty_base), group_allocated_qty: round(row.group_allocated_qty_base),
           expired_qty: round(row.expired_qty_base), closing_qty: round(row.closing_qty_base), variance_qty: round(row.variance_qty_base),
@@ -475,7 +475,7 @@ export async function buildItemPlan(
       waterfall_reservations: projection.waterfall_reservations
         .filter((row) => memberSet.has(row.material_id))
         .map((row) => ({
-          material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
+          material_id: row.material_id, material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
           group_label: row.group_id ? groupLabel.get(row.group_id) ?? "—" : null,
           qty: round(row.qty_base), available_after_qty: round(row.available_after_qty_base), stage: row.stage, rule: row.rule,
         })),

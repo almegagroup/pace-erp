@@ -38,13 +38,23 @@ function copyTable(columns, rows) {
   });
 }
 
-export function VendorDateCompare({ plan, materialId, defaultDate, onAddLot }) {
+export function VendorDateCompare({ plan, materialId, defaultDate, onAddLot, unitOf }) {
   const [memberId, setMemberId] = useState(materialId);
   const [date, setDate] = useState(defaultDate ?? "");
   const [qty, setQty] = useState("");
   const choice = (plan.vendor_choices ?? []).find((c) => c.material_id === memberId) ?? (plan.vendor_choices ?? [])[0] ?? null;
   const options = choice?.options ?? [];
-  const wanted = Number(qty) || 0;
+  // Owner 2026-10-26: typed and shown in the member's display (Order) unit; each vendor's lot in its
+  // own order unit. Quantities sent to the plan stay in base UoM.
+  const display = unitOf?.(choice?.material_id) ?? null;
+  const inputFactor = display && Number(display.base_per_unit) > 0 ? Number(display.base_per_unit) : 1;
+  const inputUom = display?.uom_code ?? choice?.uom ?? "";
+  const wanted = (Number(qty) || 0) * inputFactor;
+  const unitFor = (o) => (o.order_unit && Number(o.order_unit.base_per_order_unit) > 0
+    ? { factor: Number(o.order_unit.base_per_order_unit), uom: o.order_unit.order_uom_code }
+    : { factor: inputFactor, uom: inputUom });
+  const q = (o, value) => (value === null || value === undefined ? "—" : `${fmtQty(Number(value) / unitFor(o).factor)} ${unitFor(o).uom}`.trim());
+  const cost = (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "—" : `₹${(o.unit_total_cost * unitFor(o).factor).toLocaleString("en-IN", { maximumFractionDigits: 2 })} / ${unitFor(o).uom}`);
   const rows = options.map((o) => {
     const lot = wanted > 0 ? vendorLotQty(wanted, o) : null;
     const inTime = !date || !o.earliest_plant_eta ? null : date >= o.earliest_plant_eta;
@@ -67,7 +77,7 @@ export function VendorDateCompare({ plan, materialId, defaultDate, onAddLot }) {
           <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className={CELL_INPUT} />
         </label>
         <label className="grid gap-0.5">
-          <span>Qty ({choice?.uom ?? ""})</span>
+          <span>Qty ({inputUom})</span>
           <input type="number" min="0" value={qty} onChange={(event) => setQty(event.target.value)} className={`${CELL_INPUT} w-28`} />
         </label>
         <button
@@ -78,9 +88,9 @@ export function VendorDateCompare({ plan, materialId, defaultDate, onAddLot }) {
             { label: "Lead days", key: "lead_time_days", copyValue: (r) => fmtDays(r.lead_time_days) },
             { label: "Earliest at plant", key: "earliest_plant_eta" },
             { label: "By your date?", key: "in_time", copyValue: (r) => r.inTime === null ? "—" : r.inTime ? "Yes" : "No — too early" },
-            { label: "MOQ / multiple", key: "moq", copyValue: (r) => `${fmtQty(r.moq_qty)} / ${fmtQty(r.order_multiple_qty)}` },
-            { label: "Lot qty", key: "lot", copyValue: (r) => r.lot === null ? "—" : fmtQty(r.lot) },
-            { label: "Full cost / unit", key: "unit_total_cost", copyValue: (r) => r.unit_total_cost === null ? "—" : `₹${r.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` },
+            { label: "MOQ / multiple", key: "moq", copyValue: (r) => `${q(r, r.moq_qty)} / ${q(r, r.order_multiple_qty)}` },
+            { label: "Lot qty", key: "lot", copyValue: (r) => q(r, r.lot) },
+            { label: "Full cost / unit", key: "unit_total_cost", copyValue: (r) => cost(r) },
             { label: "Lot value", key: "value", copyValue: (r) => fmtMoney(r.value) },
             { label: "Freight", key: "freight_term", copyValue: (r) => FREIGHT_LABEL[r.freight_term] ?? r.freight_term ?? "—" },
             { label: "Cost gaps", key: "cost_missing", copyValue: (r) => r.cost_missing?.length ? r.cost_missing.join(", ") : "Complete" },
@@ -105,9 +115,9 @@ export function VendorDateCompare({ plan, materialId, defaultDate, onAddLot }) {
                   <td className="pr-3">{fmtDays(r.lead_time_days)}</td>
                   <td className="pr-3">{r.earliest_plant_eta ?? "—"}</td>
                   <td className={`pr-3 ${r.inTime === false ? "text-rose-700" : ""}`}>{r.inTime === null ? "—" : r.inTime ? "Yes" : "No — too early"}</td>
-                  <td className="pr-3">{fmtQty(r.moq_qty)} / {fmtQty(r.order_multiple_qty)}</td>
-                  <td className="pr-3">{r.lot === null ? "—" : fmtQty(r.lot)}</td>
-                  <td className="pr-3">{r.unit_total_cost === null ? "—" : `₹${r.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}</td>
+                  <td className="pr-3">{q(r, r.moq_qty)} / {q(r, r.order_multiple_qty)}</td>
+                  <td className="pr-3">{q(r, r.lot)}</td>
+                  <td className="pr-3">{cost(r)}</td>
                   <td className="pr-3">{fmtMoney(r.value)}</td>
                   <td className="pr-3">{FREIGHT_LABEL[r.freight_term] ?? r.freight_term ?? "—"}</td>
                   <td className="pr-3">{r.cost_missing?.length ? r.cost_missing.join(", ") : "Complete"}</td>

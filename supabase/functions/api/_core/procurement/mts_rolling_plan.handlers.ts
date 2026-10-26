@@ -68,7 +68,23 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const { req: reqData, projection, assembly, calendar, vendorOptions } = plan._internal;
     const company = (companyRes.data ?? {}) as JsonRecord;
     const nameOf = (id: string) => text(reqData.materialRows.get(id)?.material_name) || "—";
-    const uomOf = (id: string) => text(reqData.materialRows.get(id)?.base_uom_code) || null;
+    // Owner 2026-10-26: every quantity in the material's display (Order) UoM; calculations stay in base.
+    const displayUnits = plan.display_units as Record<string, { uom_code: string; base_per_unit: number }>;
+    const unitOf = (id: string | null | undefined) => (id ? displayUnits[id] ?? null : null);
+    const baseUomOf = (id: string) => text(reqData.materialRows.get(id)?.base_uom_code) || null;
+    const uomOf = (id: string) => unitOf(id)?.uom_code ?? baseUomOf(id);
+    const inUnit = (unit: { base_per_unit: number } | null, qty: number | null | undefined) => (qty === null || qty === undefined ? null : unit ? round(qty / unit.base_per_unit) : round(qty));
+    const dq = (id: string | null | undefined, qty: number | null | undefined) => inUnit(unitOf(id), qty);
+    /** A family grid sums members: one unit only when every member shows the same one, else base. */
+    const familyUnit = (ids: string[]) => {
+      const units = ids.map(unitOf);
+      if (units.length === 0 || units.some((u) => !u)) return null;
+      return units.every((u) => u!.uom_code === units[0]!.uom_code && u!.base_per_unit === units[0]!.base_per_unit) ? units[0] : null;
+    };
+    /** A buy / lot in the unit it is ordered in, else the display unit. */
+    const shownLot = (id: string, qtyBase: number | null | undefined, orderUnit: { base_per_order_unit: number; order_uom_code: string } | null | undefined) => (orderUnit
+      ? { qty: inOrderUnit(qtyBase ?? null, orderUnit), uom: orderUnit.order_uom_code, per: orderUnit.base_per_order_unit }
+      : { qty: dq(id, qtyBase), uom: uomOf(id), per: unitOf(id)?.base_per_unit ?? 1 });
     const rowById = new Map(reqData.output.rows.map((r) => [r.material_id, r]));
     const days = dayRange(calendar.asOf, calendar.horizonEnd);
 
@@ -124,6 +140,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const unmet = new Map(days.map((day) => [day, 0]));
       for (const u of projection.group_unmet) if (groupSet.has(u.group_id) && unmet.has(u.day)) unmet.set(u.day, (unmet.get(u.day) ?? 0) + u.qty_base);
       const grid = familyDayGrid(days, memberRows, unmet);
+      const fu = familyUnit(memberIds);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
 
       // Left side: today + every day something arrives or you fixed a quantity.
@@ -133,10 +150,10 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const rows = grid.filter((g, index) => index === 0 || g.arrivals > 0 || ownByDay.has(g.day)).map((g) => {
         const today = events.filter((e) => e.date === g.day);
         return {
-          day: g.day, opening: g.opening, arrivals: g.arrivals, dispatch: round(ownByDay.get(g.day) ?? 0) || null,
-          use: g.use, closing: g.closing, max_days: g.max_days, min_stock: g.min_stock, min_days: g.min_days,
+          day: g.day, opening: inUnit(fu, g.opening), arrivals: inUnit(fu, g.arrivals), dispatch: inUnit(fu, ownByDay.get(g.day) ?? 0) || null,
+          use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), max_days: g.max_days, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days,
           references: today.map((e) => e.reference),
-          qtys: today.map((e) => round(e.qty)),
+          qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
           statuses: today.map((e) => arrivalStatus(e.kind, e.date_source)),
           best_dates: today.map((e) => {
@@ -156,17 +173,17 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const prediction = [
         ...advisory.filter((b) => memberSet.has(b.material_id)).flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }])
           .map((lot) => ({
-            source: "ENGINE", material: nameOf(b.material_id), supplier: b.vendor_label ?? null, date: lot.plant_eta, qty: round(lot.qty_base),
-            order_qty: inOrderUnit(lot.qty_base, b.order_unit), order_uom: b.order_unit?.order_uom_code ?? null,
+            source: "ENGINE", material: nameOf(b.material_id), supplier: b.vendor_label ?? null, date: lot.plant_eta,
+            qty: shownLot(b.material_id, lot.qty_base, b.order_unit).qty, uom: shownLot(b.material_id, lot.qty_base, b.order_unit).uom,
             po_by: b.recommended_po_by, ...legs(b.material_id, b.vendor_id, lot.plant_eta),
           }))),
         ...userLots.filter((l) => memberSet.has(l.material_id)).map((l) => ({
           source: "YOU", material: nameOf(l.material_id),
           supplier: l.vendor_id ? (plan._internal.vendorTerms.get(l.material_id) ?? []).find((t) => t.vendor_id === l.vendor_id)?.vendor_label ?? null : null,
-          date: l.plant_eta as string | null, qty: round(l.qty_base),
+          date: l.plant_eta as string | null,
           ...(() => {
-            const unit = plan._internal.orderUnitFor(l.material_id, l.vendor_id);
-            return { order_qty: inOrderUnit(l.qty_base, unit), order_uom: unit?.order_uom_code ?? null };
+            const shown = shownLot(l.material_id, l.qty_base, plan._internal.orderUnitFor(l.material_id, l.vendor_id));
+            return { qty: shown.qty, uom: shown.uom };
           })(),
           po_by: null as string | null, ...legs(l.material_id, l.vendor_id, l.plant_eta),
         })),
@@ -180,7 +197,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         title: family.is_family ? family.group_ids.map((g) => groupLabel.get(g) ?? "—").sort().join(" / ") : nameOf(id),
         is_family: family.is_family,
         members: memberIds.map(nameOf).sort(),
-        uom: uomOf(id),
+        uom: fu?.uom_code ?? baseUomOf(id),
         target_days: selected?.policy?.target_cov_days ?? null,
         critical_days: selected?.policy?.critical_cov_days ?? null,
         first_shortage_day: grid.find((g) => g.closing < -0.000001)?.day ?? null,
@@ -202,35 +219,38 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       material: nameOf(r.material_id), type: r.kind, uom: uomOf(r.material_id),
       target_cov_days: r.metrics.target_cov_days, critical_cov_days: r.metrics.critical_cov_days,
       current_stk_days: r.metrics.current_stk_days, next_month_cov: r.metrics.next_month_cov,
-      current_req: r.metrics.sheet_current_req, current_prorata: r.metrics.current_prorata_daily,
-      req_nm: r.metrics.nm_req, prorata_nm: r.metrics.nm_prorata_daily,
-      current_stock: r.metrics.current_stock, intransit_cm: r.metrics.intransit_cm, intransit_nm: r.metrics.intransit_nm,
+      current_req: dq(r.material_id, r.metrics.sheet_current_req), current_prorata: dq(r.material_id, r.metrics.current_prorata_daily),
+      req_nm: dq(r.material_id, r.metrics.nm_req), prorata_nm: dq(r.material_id, r.metrics.nm_prorata_daily),
+      current_stock: dq(r.material_id, r.metrics.current_stock), intransit_cm: dq(r.material_id, r.metrics.intransit_cm), intransit_nm: dq(r.material_id, r.metrics.intransit_nm),
       below_target: r.metrics.below_target_with_in, below_critical: r.metrics.below_critical_with_in,
       first_shortage_day: risks.get(r.material_id)?.first_shortage_day ?? null,
       first_below_critical_day: risks.get(r.material_id)?.first_below_critical_day ?? null,
     })).sort((a, b) => Number(Boolean(b.first_shortage_day)) - Number(Boolean(a.first_shortage_day)) || Number(b.below_critical) - Number(a.below_critical) || a.material.localeCompare(b.material));
 
-    const buys = advisory.map((b) => ({
-      material: nameOf(b.material_id), type: rowById.get(b.material_id)?.kind ?? null, uom: uomOf(b.material_id),
-      late: b.status === "ADVISORY_LATE", po_by: b.recommended_po_by, qty: b.recommended_po_qty_base,
-      order_uom: b.order_unit?.order_uom_code ?? null, order_qty: inOrderUnit(b.recommended_po_qty_base, b.order_unit),
+    const buys = advisory.map((b) => {
+      const shown = shownLot(b.material_id, b.recommended_po_qty_base, b.order_unit);
+      return {
+      material: nameOf(b.material_id), type: rowById.get(b.material_id)?.kind ?? null, uom: shown.uom,
+      late: b.status === "ADVISORY_LATE", po_by: b.recommended_po_by, qty: shown.qty,
       plant_eta: b.estimated_plant_eta,
-      lots: (b.lots ?? []).map((l) => `${l.plant_eta}: ${round(l.qty_base)}${b.order_unit ? ` (${inOrderUnit(l.qty_base, b.order_unit)} ${b.order_unit.order_uom_code})` : ""}`).join(" · "),
-      supplier: b.vendor_label ?? null, full_cost_per_unit: b.vendor_unit_total_cost ?? null,
+      lots: (b.lots ?? []).map((l) => `${l.plant_eta}: ${shownLot(b.material_id, l.qty_base, b.order_unit).qty} ${shown.uom ?? ""}`.trim()).join(" · "),
+      // Cost per the unit shown (engine cost is per base unit).
+      supplier: b.vendor_label ?? null, full_cost_per_unit: b.vendor_unit_total_cost === null || b.vendor_unit_total_cost === undefined ? null : Math.round(b.vendor_unit_total_cost * shown.per * 100) / 100,
       value: b.vendor_unit_total_cost !== null && b.vendor_unit_total_cost !== undefined && b.recommended_po_qty_base !== null ? Math.round(b.vendor_unit_total_cost * b.recommended_po_qty_base) : null,
       cost_missing: (b.vendor_cost_missing ?? []).join(", "), reason: b.reason,
-    })).sort((a, b) => String(a.po_by ?? "9999").localeCompare(String(b.po_by ?? "9999")));
+      };
+    }).sort((a, b) => String(a.po_by ?? "9999").localeCompare(String(b.po_by ?? "9999")));
 
     const store = plan.store_rows.filter((r) => r.executable_qty > 0 || r.not_backed_qty > 0 || r.transfer_hint).map((r) => ({
       period: r.period_label, product: r.product, source: r.source, line_type: r.line_type, group: r.group_label,
-      material: r.material_name, uom: r.uom, demand_qty: r.demand_qty, from_stock: r.executable_qty, not_backed: r.not_backed_qty, transfer: r.transfer_hint,
+      material: r.material_name, uom: r.material_id ? uomOf(r.material_id) : r.uom, demand_qty: dq(r.material_id, r.demand_qty), from_stock: dq(r.material_id, r.executable_qty), not_backed: dq(r.material_id, r.not_backed_qty), transfer: r.transfer_hint,
     }));
 
     const arrivals = reqData.output.rows.flatMap((r) => r.inbound_events.map((e) => {
       const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
       return {
         material: nameOf(r.material_id), uom: uomOf(r.material_id), reference: e.reference, supplier: supplierOf(e.reference, e.csn_id),
-        status: arrivalStatus(e.kind, e.date_source), qty: round(e.qty),
+        status: arrivalStatus(e.kind, e.date_source), qty: dq(r.material_id, e.qty),
         source_eta: e.original_date !== undefined ? e.original_date : e.date,
         planning_eta: e.original_date !== undefined ? e.date : null,
         overdue: Boolean(e.date && e.date < calendar.asOf), no_eta: !e.date,

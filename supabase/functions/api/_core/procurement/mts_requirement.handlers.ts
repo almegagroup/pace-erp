@@ -87,6 +87,8 @@ import {
   type StrokeInfo,
   type StrokePeriod,
   toMaterialBase,
+  displayUnitOf,
+  type DisplayUnit,
   type UomConversion,
   type Warning,
 } from "./mts_requirement.logic.ts";
@@ -1160,6 +1162,36 @@ export async function computeRequirement(
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/procurement/mts-requirement/report?company_id&plan_month=YYYY-MM&as_of=YYYY-MM-DD[&demand_at=ISO]
 // ─────────────────────────────────────────────────────────────────────────────
+/** MM03 Supply UoMs of this company's active vendors, per material (display unit fallback). */
+export async function loadVendorSupplyUoms(companyId: string, materialIds: string[]): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (materialIds.length === 0) return result;
+  const [vmiRows, mapRes] = await Promise.all([
+    fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
+      .select("vendor_id, material_id, supply_uom_code").eq("status", "ACTIVE").in("material_id", chunk)),
+    serviceRoleClient.schema("erp_master").from("vendor_company_map").select("vendor_id").eq("company_id", companyId).eq("active", true).limit(5000),
+  ]);
+  const companyVendors = new Set(((mapRes.data ?? []) as JsonRecord[]).map((row) => text(row.vendor_id)));
+  for (const row of vmiRows) {
+    if (!companyVendors.has(text(row.vendor_id)) || !text(row.supply_uom_code)) continue;
+    const id = text(row.material_id);
+    result.set(id, [...(result.get(id) ?? []), text(row.supply_uom_code)]);
+  }
+  return result;
+}
+
+/** material_id → display unit (only materials that have one; the rest show in base UoM). */
+export function buildDisplayUnits(
+  ids: readonly string[], materials: ReadonlyMap<string, MaterialInfo>, policyOrderUom: (id: string) => string | null | undefined, supplyUoms: ReadonlyMap<string, readonly string[]>,
+): Record<string, DisplayUnit> {
+  const out: Record<string, DisplayUnit> = {};
+  for (const id of ids) {
+    const unit = displayUnitOf(materials.get(id), policyOrderUom(id), supplyUoms.get(id) ?? []);
+    if (unit) out[id] = unit;
+  }
+  return out;
+}
+
 export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
@@ -1179,7 +1211,7 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     const demandAt = demandAtRaw && Number.isFinite(Date.parse(demandAtRaw)) ? new Date(demandAtRaw).toISOString() : null;
     if (demandAtRaw && !demandAt) return fail(req, ctx, "MTS_REQ_INVALID_DEMAND_AT", 400, "demand_at must be an ISO date-time.");
     const {
-      planLines, settings, policyLoad, masters, materialRows, applyReservations, inbound, locationRoles, output, fingerprint,
+      planLines, settings, policyLoad, masters, materialRows, materials, applyReservations, inbound, locationRoles, output, fingerprint,
     } = await computeRequirement(companyId, calendar, asOf, today, demandAt);
 
     // Labels (R-01: never show raw ids).
@@ -1187,11 +1219,12 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
       ...row.stock.required_locations, ...row.stock.other_locations, ...row.pools.map((p) => p.storage_location_id),
     ]));
     const groupIds = unique([...output.rows.flatMap((row) => row.pools.map((p) => p.group_id)), ...output.groups.map((g) => g.group_id)]);
-    const [locationLabels, groupRows, policyUsers] = await Promise.all([
+    const [locationLabels, groupRows, policyUsers, supplyUoms] = await Promise.all([
       loadLocationLabels(locationIds),
       groupIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
         .schema("erp_master").from("material_category_group").select("id, group_code, group_name").in("id", chunk)),
       resolveUserDisplayNames(policyLoad.raw.map((r) => text(r.created_by))),
+      loadVendorSupplyUoms(companyId, output.rows.map((row) => row.material_id)),
     ]);
     const groupLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ")]));
     const nameOf = (id: string) => text(materialRows.get(id)?.material_name) || "—";
@@ -1280,7 +1313,11 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     const groups = output.groups.map(({ uncovered_by_day: _uncovered, ...group }) => ({
       ...group,
       group_label: groupLabel.get(group.group_id) ?? "—",
-      members: group.members.map((member) => ({ ...member, material_name: nameOf(member.material_id), material_code: text(materialRows.get(member.material_id)?.pace_code) || null })),
+      base_uom_code: unique(group.members.map((member) => text(materialRows.get(member.material_id)?.base_uom_code))).join(" / ") || null,
+      members: group.members.map((member) => ({
+        ...member, material_name: nameOf(member.material_id), material_code: text(materialRows.get(member.material_id)?.pace_code) || null,
+        base_uom_code: text(materialRows.get(member.material_id)?.base_uom_code) || null,
+      })),
     })).sort((a, b) => a.group_label.localeCompare(b.group_label));
 
     const labelWarning = (w: Warning) => ({
@@ -1324,6 +1361,8 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         cm_days_in_month: calendar.cmDaysInMonth, cm_days_left: calendar.cmDaysLeft, nm_days_in_month: calendar.nmDaysInMonth,
       },
       demand_version: { demand_at: demandAt, label: demandAt ? `Plan as at ${demandAt}` : "Current effective plan" },
+      // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.
+      display_units: buildDisplayUnits(output.rows.map((row) => row.material_id), materials, (id) => output.rows.find((row) => row.material_id === id)?.policy?.order_uom_code, supplyUoms),
       provenance: {
         calculated_at: new Date().toISOString(),
         source_fingerprint: fingerprint,
