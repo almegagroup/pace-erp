@@ -21,6 +21,7 @@
  */
 import { orderByGroupUsage, type GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
 import { DEFAULT_GROUP_TARGET_DAYS, defaultCriticalDays, effectiveGroupCoveragePolicies, groupDesiredMaxDays, type GroupCoveragePolicyVersion } from "./mts_group_policy.logic.ts";
+import { runFamilyPurposeLedger } from "./mts_family_purpose_ledger.logic.ts";
 import { applySinglePurchaseConstraints, pickVendorOption, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import { roundQty } from "./mts_requirement.logic.ts";
 import type {
@@ -738,7 +739,45 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           : 0;
         requiredByNeed.push(Math.max(otherDemandRequired, otherSafetyRequired));
       }
-      const combinedRequired = requiredByNeed.reduce((sum, qty) => sum + Math.max(0, qty), 0);
+      let combinedRequired = requiredByNeed.reduce((sum, qty) => sum + Math.max(0, qty), 0);
+      // When several direct/group purposes require this exact material/vendor/
+      // arrival, size one physical receipt from a single purpose ledger.  It
+      // allocates the real pre-arrival stock Direct → narrow → broad first, so
+      // shared stock is not subtracted once for every visible group row.
+      if (needsForLot.length > 1) {
+        const opening = Object.fromEntries(ids.map((material, materialIndex) => [
+          material,
+          Math.max(0, before >= 0 ? sim.ownBalance[materialIndex][before] : Number(input.opening_qty_by_material[material] ?? 0)),
+        ]));
+        const ledger = runFamilyPurposeLedger({
+          opening,
+          supplies: [],
+          days: 1,
+          purposes: needsForLot.map((candidate) => {
+            const candidateMaterial = mIndex.get(candidate.material)!;
+            const candidateTarget = candidate.kind === "GROUP"
+              ? groupCoverageAt(candidate.pool!, candidate.index).target
+              : targets[candidateMaterial][candidate.index].target ?? 0;
+            const candidateWindow = candidate.kind === "GROUP"
+              ? groupCoverageAt(candidate.pool!, candidate.index).desired
+              : memberDesiredMax[candidateMaterial][candidate.index] ?? (candidateTarget + cycle);
+            const candidateUse = candidate.kind === "GROUP"
+              ? candidate.pool!.demand
+              : (isSharedGroupMember[candidateMaterial] && own[candidateMaterial].every((qty) => qty <= EPSILON)
+                ? sim.use[candidateMaterial]
+                : own[candidateMaterial]);
+            return {
+              id: `${candidate.kind}:${candidate.pool?.key ?? candidate.material}`,
+              priority: candidate.kind === "OWN" ? 0 : 1 + pools.indexOf(candidate.pool!),
+              candidates: candidate.kind === "OWN" ? [candidate.material] : candidate.pool!.candidates,
+              demand: [candidateUse[arrivalIndex] ?? 0],
+              target_balance: [useAhead(candidateUse, arrivalIndex + 1, candidateTarget)],
+              desired_balance: [useAhead(candidateUse, arrivalIndex + 1, candidateWindow)],
+            };
+          }),
+        });
+        combinedRequired = ledger.rows.reduce((sum, row) => sum + row.shortage_qty + row.desired_shortfall_qty, 0);
+      }
       const constraints = need.option
         ? { ...policy, vendor_moq_qty_base: need.option.option.moq_qty_base, order_multiple_qty_base: need.option.option.order_multiple_qty_base, delivery_lot_qty_base: need.option.option.delivery_lot_qty_base ?? null }
         : policy;
@@ -800,13 +839,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       // Leave additional same-material groups for the next whole-family
       // simulation: their pools may overlap, so blindly summing them here
       // could count the same eligible stock twice.
-      let includedGroup = false;
-      const sameReceipt = sameArrivalNeeds.filter((candidate) => {
-        if (candidate.kind === "OWN") return true;
-        if (includedGroup) return false;
-        includedGroup = true;
-        return true;
-      });
+      const sameReceipt = sameArrivalNeeds;
       place(sameReceipt, sim);
       sim = simulate([...manual, ...engineLots]);
     }

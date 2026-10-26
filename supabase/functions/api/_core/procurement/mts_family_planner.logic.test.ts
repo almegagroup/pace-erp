@@ -64,6 +64,31 @@ Deno.test("family waterfall: same-material own and group needs on one arrival cr
   assert(buys[0].recommended_po_qty_base !== null && buys[0].recommended_po_qty_base > 0, `one net lot must retain a quantity: ${JSON.stringify(buys[0])}`);
 });
 
+Deno.test("family waterfall: one BETONE receipt nets direct, narrow and broad same-day purposes", () => {
+  const days = daysTo("2026-10-31");
+  const betone = policy("BETONE", 1, 0, [{ vendor: "HIMADRI", lead: 0, cost: 1 }]);
+  betone.cycle_days = 60;
+  betone.vendor_moq_qty_base = 2_000;
+  betone.vendor_options = [{ vendor_id: "HIMADRI", lead_time_days: 0, moq_qty_base: 2_000, order_multiple_qty_base: null, unit_cost: 1, cycle_days: 60 }];
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: "2026-10-31", opening_qty_by_material: { BETONE: 0, SAPCOMER: 0, BENTONE: 0 },
+    own_demand: days.map((required_by) => ({ material_id: "BETONE", required_by, qty_base: 20 })),
+    group_demand: [
+      ...days.map((required_by) => ({ group_id: "NARROW", candidates: ["BETONE", "SAPCOMER"], required_by, qty_base: 25 })),
+      ...days.map((required_by) => ({ group_id: "BROAD", candidates: ["BETONE", "SAPCOMER", "BENTONE"], required_by, qty_base: 30 })),
+    ], confirmed_arrivals: [],
+    policies: [betone,
+      { material_id: "SAPCOMER", target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+      { material_id: "BENTONE", target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null }],
+    group_coverage_policies: [
+      { material_group_id: "NARROW", effective_from: AS_OF, target_days: 1, critical_days: 0, desired_max_days_override: 60 },
+      { material_group_id: "BROAD", effective_from: AS_OF, target_days: 1, critical_days: 0, desired_max_days_override: 60 },
+    ], selections: new Map([["2026-10-01", new Set(["BETONE"])]]), selection_controlled_members: new Set(["BETONE", "SAPCOMER", "BENTONE"]),
+  });
+  const buys = result.advisory_buys.filter((buy) => buy.material_id === "BETONE" && buy.status !== "NO_BUY");
+  assert(buys.length === 1 && buys[0].covers.includes("OWN") && buys[0].covers.includes("NARROW") && buys[0].covers.includes("BROAD"), JSON.stringify(buys));
+});
+
 Deno.test("family planner: reaching Target again after an engine lot creates the next projection", () => {
   // This mirrors the TOT White shape: the first 25-day trigger is not a one-time
   // alert.  Its 10-day order cycle restores cover to 35 days, then a new lot is
