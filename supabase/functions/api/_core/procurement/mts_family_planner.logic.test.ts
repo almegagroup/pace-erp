@@ -477,6 +477,24 @@ Deno.test("W4: a confirmed future arrival joins group allocation only from its E
   assert((onEta?.draws.INBOUND ?? 0) > 0, `future receipt must re-enter the same group waterfall on ETA: ${JSON.stringify(onEta)}`);
 });
 
+Deno.test("W3i: allocation trace preserves the physical planning source", () => {
+  const result = planFamily({
+    as_of: "2026-10-24", horizon_end: "2026-10-24",
+    opening_qty_by_material: { BETONE: 0 },
+    own_demand: [{ material_id: "BETONE", required_by: "2026-10-24", qty_base: 10 }],
+    group_demand: [],
+    confirmed_arrivals: [{
+      source_key: "PO ASC/P2026/0271 · CSN 3000000223",
+      material_id: "BETONE", eta_to_plant: "2026-10-24", qty_base: 10,
+    }],
+    policies: [policy("BETONE", 20, 10, [])],
+    plan_buys: false,
+  });
+  const row = result.allocation_rows.find((item) => item.destination_kind === "OWN");
+  assert(row?.source_kind === "CONFIRMED_ETA" && row.source_reference.includes("CSN 3000000223"),
+    `the trace must expose the receipt that supplied the planning draw: ${JSON.stringify(result.allocation_rows)}`);
+});
+
 Deno.test("family consumption: an eligible unselected member runs down before a replenishable alternative", () => {
   const result = planFamily({
     as_of: "2026-10-01", horizon_end: "2026-10-02", opening_qty_by_material: { RUN_DOWN: 100, BUYABLE: 100 },

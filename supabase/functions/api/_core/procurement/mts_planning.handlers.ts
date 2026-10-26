@@ -832,9 +832,14 @@ export async function computePlanning(p: PlanningParams) {
       flow: row.destination_kind === "OWN" ? "Exclusive / direct use" : "Group allocation",
       qty: row.qty_base,
       closing: row.closing_qty_base,
+      source_reference: row.source_reference,
+      source_kind: row.source_kind === "OPENING" ? "Counted opening stock"
+        : row.source_kind === "CONFIRMED_ETA" ? "Confirmed ETA receipt"
+        : row.source_kind === "MANUAL_LOT" ? "Your fixed planning lot"
+        : "Engine planning lot",
       rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
         ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
-        : "Waterfall use: direct Desired-Max protection first; then each group receives an event-day Desired-Max bucket from smallest eligible group to broadest. Group use consumes only its bucket; within it FEFO, saved sequence, no-future-buy run-down, then normal rotation apply.",
+        : "Waterfall use: direct Desired-Max protection applies first; each group carries its own reserve until Target, then uses only genuine free stock. Within it FEFO, saved sequence, no-future-buy run-down, then normal rotation apply.",
     })),
     group_bucket_reservations: projection.group_bucket_reservations.map((row) => ({
       day: row.day, group_label: groupLabel.get(row.group_id) ?? "—",

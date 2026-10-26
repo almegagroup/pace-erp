@@ -365,6 +365,11 @@ rephased/adjusted value একই নামে বা silently interchange ক�
 3. **W3i — receipt/allocation trace (depends on W3g/W3h):** Expose, without UUIDs, the receipt,
    its direct/group quantities, remaining purpose coverage, Target trigger and any actual excess.
    This is engine evidence; it does not claim a Store issue happened.
+   - **W3i source trace (2026-10-26):** the existing Family allocation report now receives the
+     exact planning source for every simulated direct/group draw: counted opening stock, a confirmed
+     ETA receipt, a user-fixed planning lot, or an engine lot.  It also shows the carried group
+     reserve after each day and keeps future-order Target trigger and end-of-horizon carry separate.
+     All labels are resolved server-side; no UUID is returned to the browser or Excel copy path.
 4. **F8 — final Family 4A presentation (depends on W3i):** Replace the current generic daily view
    only for Family Planning with the owner-approved readable allocation table.  Other PO22 views
    remain unchanged.

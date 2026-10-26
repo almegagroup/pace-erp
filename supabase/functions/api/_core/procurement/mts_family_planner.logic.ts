@@ -69,6 +69,9 @@ export type FamilyOpeningReceipt = {
   expiry_priority: boolean;
 };
 
+type FamilyAllocationSourceKind = "OPENING" | "CONFIRMED_ETA" | "MANUAL_LOT" | "ENGINE_LOT";
+type SimReceipt = FamilyOpeningReceipt & { source_kind: FamilyAllocationSourceKind };
+
 export type FamilyPlannerInput = {
   as_of: string;
   horizon_end: string;
@@ -130,6 +133,9 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
     group_id: string | null;
     qty_base: number;
     closing_qty_base: number;
+    /** Physical planning source consumed by this draw; never a Store issue confirmation. */
+    source_reference: string;
+    source_kind: FamilyAllocationSourceKind;
     rule: "DIRECT_EXCLUSIVE_RESERVE" | "GROUP_WATERFALL";
   }>;
   /** Per-member proof that the event-time waterfall did not create or double-count stock. */
@@ -169,7 +175,13 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
 };
 
 type Pool = { key: string; group_id: string; candidates: string[]; demand: number[] };
-type Planned = { material_id: string; index: number; qty: number };
+type Planned = {
+  material_id: string;
+  index: number;
+  qty: number;
+  source_reference: string;
+  source_kind: Extract<FamilyAllocationSourceKind, "MANUAL_LOT" | "ENGINE_LOT">;
+};
 
 function targetAt(policy: OptimizerMaterialPlanningPolicy | undefined, day: string): { target: number | null; critical: number | null; desiredMaxOverride: number | null } {
   if (!policy) return { target: null, critical: null, desiredMaxOverride: null };
@@ -254,6 +266,15 @@ type Sim = {
   poolFree: number[][]; // free stock this pool could still use after the day (reserve-adjusted)
   poolDraw: number[][][]; // pool → member → day: who served the group (the consumption ratio)
   poolBucket: number[][][]; // pool → member → day: carried Group Desired-Max purpose reservation
+  sourceDraws: Array<{
+    day: number;
+    material: number;
+    destination_kind: "OWN" | "GROUP";
+    group: number | null;
+    qty: number;
+    source_reference: string;
+    source_kind: FamilyAllocationSourceKind;
+  }>;
   expired: number[]; // planning-only receipt life loss; must reconcile stock conservation
 };
 
@@ -308,6 +329,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
 
   const arrivalFlags: OptimizerArrivalFlag[] = [...(input.arrival_risks ?? [])];
   const confirmed = ids.map(() => zeros());
+  const confirmedSources = new Map<string, Array<{ qty: number; reference: string }>>();
   for (const a of input.confirmed_arrivals) {
     if (!valid(a.qty_base) || a.qty_base <= EPSILON) continue;
     let eta = a.eta_to_plant;
@@ -332,13 +354,25 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       });
       continue;
     }
-    confirmed[mIndex.get(a.material_id)!][i] += a.qty_base;
+    const materialIndex = mIndex.get(a.material_id)!;
+    confirmed[materialIndex][i] += a.qty_base;
+    const sourceKey = `${materialIndex}|${i}`;
+    confirmedSources.set(sourceKey, [
+      ...(confirmedSources.get(sourceKey) ?? []),
+      { qty: a.qty_base, reference: a.source_key },
+    ]);
   }
   const manual: Planned[] = [];
   for (const l of input.manual_lots ?? []) {
     const i = dayIndex.get(l.plant_eta);
     if (i === undefined || !valid(l.qty_base) || l.qty_base <= EPSILON || !mIndex.has(l.material_id)) continue;
-    manual.push({ material_id: l.material_id, index: i, qty: l.qty_base });
+    manual.push({
+      material_id: l.material_id,
+      index: i,
+      qty: l.qty_base,
+      source_reference: `Your lot (${l.plant_eta})`,
+      source_kind: "MANUAL_LOT",
+    });
   }
 
   const targets = ids.map((id) => allDays.map((d) => targetAt(policyOf.get(id), d)));
@@ -408,11 +442,12 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       poolUnmet: pools.map(() => zeros()), poolFreeShort: pools.map(() => zeros()), poolFree: pools.map(() => zeros()),
       poolDraw: pools.map(() => ids.map(() => zeros())),
       poolBucket: pools.map(() => ids.map(() => zeros())),
+      sourceDraws: [],
       expired: ids.map(() => 0),
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
-    const receiptLeft = simulatedOpeningReceipts.map((rows) => rows.map((row) => ({ ...row })));
+    const receiptLeft: SimReceipt[][] = simulatedOpeningReceipts.map((rows) => rows.map((row) => ({ ...row, source_kind: "OPENING" })));
     // A group reserve is a claim on real physical stock.  It is created on
     // the opening/receipt event, then reduced only by that group's draw.  It
     // must not be recreated from the whole balance on every calendar day.
@@ -443,6 +478,18 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         }
       }
       for (let m = 0; m < M; m += 1) {
+        for (const source of confirmedSources.get(`${m}|${i}`) ?? []) {
+          receiptLeft[m].push({
+            material_id: ids[m], qty_base: source.qty, valid_until: "9999-12-31",
+            reference: source.reference, expiry_priority: false, source_kind: "CONFIRMED_ETA",
+          });
+        }
+        for (const lot of lots.filter((row) => row.index === i && mIndex.get(row.material_id) === m)) {
+          receiptLeft[m].push({
+            material_id: ids[m], qty_base: lot.qty, valid_until: "9999-12-31",
+            reference: lot.source_reference, expiry_priority: false, source_kind: lot.source_kind,
+          });
+        }
         s.arrival[m][i] = confirmed[m][i];
         bal[m] += confirmed[m][i] + s.planned[m][i] - own[m][i];
         s.use[m][i] = own[m][i];
@@ -454,6 +501,10 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           const used = Math.min(ownLeft, receipt.qty_base);
           receipt.qty_base -= used;
           ownLeft -= used;
+          s.sourceDraws.push({
+            day: i, material: m, destination_kind: "OWN", group: null, qty: used,
+            source_reference: receipt.reference, source_kind: receipt.source_kind,
+          });
         }
       }
       // Direct/exclusive protection stays first.  Group reserves then persist
@@ -549,6 +600,10 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
             const used = Math.min(left, receipt.qty_base);
             receipt.qty_base -= used;
             left -= used;
+            s.sourceDraws.push({
+              day: i, material: m, destination_kind: "GROUP", group: p, qty: used,
+              source_reference: receipt.reference, source_kind: receipt.source_kind,
+            });
           }
         };
         // A short-life GRN/Opening receipt gets first call on this group's
@@ -836,7 +891,13 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         bridge: need.option?.bridge ?? false, cheapest_vendor_id: need.option?.cheapest ?? null,
         covers, need_kind: needsForLot.some((candidate) => candidate.kind === "GROUP") ? "GROUP" : "OWN",
       });
-      engineLots.push({ material_id: id, index: arrivalIndex, qty: lotQty });
+      engineLots.push({
+        material_id: id,
+        index: arrivalIndex,
+        qty: lotQty,
+        source_reference: `Engine lot ${id} #${sequence.get(id) ?? 1}`,
+        source_kind: "ENGINE_LOT",
+      });
     }
     for (const candidate of needsForLot) {
       if (candidate.kind === "OWN") pendingOwn.set(id, candidate.late ? arrivalIndex : candidate.index);
@@ -966,29 +1027,20 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     }];
   });
 
-  // Explainability is emitted by the simulator itself, never re-derived by the
-  // browser from closing balances.  `sim.use` includes the member's own demand
-  // plus pool draws, so the difference is the exact direct/exclusive draw.
-  const allocationRows: FamilyResult["allocation_rows"][number][] = [];
-  for (let i = 0; i < N; i += 1) {
-    for (let m = 0; m < ids.length; m += 1) {
-      const ownQty = sim.use[m][i] - sim.draw[m][i];
-      if (ownQty > EPSILON) allocationRows.push({
-        day: allDays[i], material_id: ids[m], destination_kind: "OWN", group_id: null,
-        qty_base: roundQty(ownQty), closing_qty_base: roundQty(sim.closing[m][i]), rule: "DIRECT_EXCLUSIVE_RESERVE",
-      });
-    }
-    pools.forEach((pool, p) => {
-      for (let m = 0; m < ids.length; m += 1) {
-        const qty = sim.poolDraw[p][m][i];
-        if (qty <= EPSILON) continue;
-        allocationRows.push({
-          day: allDays[i], material_id: ids[m], destination_kind: "GROUP", group_id: pool.group_id,
-          qty_base: roundQty(qty), closing_qty_base: roundQty(sim.closing[m][i]), rule: "GROUP_WATERFALL",
-        });
-      }
-    });
-  }
+  // Explainability is emitted by the simulator itself, never re-derived by
+  // the browser from closing balances.  The trace retains the planning source
+  // that actually supplied a draw (opening, a dated ERP receipt, a fixed lot
+  // or an engine lot).  It remains planning evidence, not a Store issue post.
+  const allocationRows: FamilyResult["allocation_rows"][number][] = sim.sourceDraws
+    .filter((row) => row.qty > EPSILON)
+    .map((row) => ({
+      day: allDays[row.day], material_id: ids[row.material],
+      destination_kind: row.destination_kind,
+      group_id: row.group === null ? null : pools[row.group].group_id,
+      qty_base: roundQty(row.qty), closing_qty_base: roundQty(sim.closing[row.material][row.day]),
+      source_reference: row.source_reference, source_kind: row.source_kind,
+      rule: row.destination_kind === "OWN" ? "DIRECT_EXCLUSIVE_RESERVE" : "GROUP_WATERFALL",
+    }));
 
   // This is a calculation invariant, not a browser-side report formula. It
   // locks every current/future source to one direct/group destination or the
