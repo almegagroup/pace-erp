@@ -75,6 +75,8 @@ export type OptimizerVendorOption = Readonly<{
   unit_cost: number | null;
   /** Best order cycle for this vendor (economic, working-capital aware); null = use policy.cycle_days. */
   cycle_days: number | null;
+  /** Owner 2026-10-26: vendor credit days (advance = 0); tilts the group consumption ratio. null = unknown (neutral). */
+  credit_days?: number | null;
   /** Owner 2026-10-21: what the comparable cost includes / misses (shown, never used as a number). */
   freight_term?: string | null;
   cost_missing?: readonly string[];

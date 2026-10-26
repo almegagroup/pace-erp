@@ -35,12 +35,15 @@ import type {
   OptimizerMaterialRisk,
   OptimizerPlannedLot,
   OptimizerProjectionResult,
+  OptimizerVendorOption,
 } from "./mts_optimizer_phase3d.types.ts";
 
 const EPSILON = 0.0000001;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_CYCLE_DAYS = 30;
 const MAX_LOTS = 400;
+/** Credit-days tilt smoothing (owner 2026-10-26): one month. */
+const CREDIT_TILT_SMOOTHING_DAYS = 30;
 
 function addDays(day: string, amount: number): string { return new Date(Date.parse(`${day}T00:00:00Z`) + amount * 86_400_000).toISOString().slice(0, 10); }
 function dayList(from: string, through: string): string[] { const out: string[] = []; for (let d = from; d <= through; d = addDays(d, 1)) out.push(d); return out; }
@@ -290,20 +293,33 @@ function plannerMaterialIds(input: FamilyPlannerInput): string[] {
   ])].sort();
 }
 
-/** Company-wide average unit cost behind the consumption-ratio cost tilt. */
-function plannerCostAverage(input: FamilyPlannerInput, ids: readonly string[]): number | null {
+/** Cost and credit days of the vendor a member would normally be rebought from (its cheapest). */
+function tiltInputs(policy: OptimizerMaterialPlanningPolicy | undefined): { cost: number | null; credit: number | null } {
+  const options = (policy?.vendor_options ?? []).filter((o) => o.unit_cost !== null && o.unit_cost > 0);
+  const cheapest = options.length ? options.reduce((a, b) => ((b.unit_cost as number) < (a.unit_cost as number) ? b : a)) : null;
+  const creditOf = (o: OptimizerVendorOption | undefined) => (o?.credit_days === null || o?.credit_days === undefined ? null : Math.max(0, o.credit_days));
+  return {
+    cost: cheapest ? cheapest.unit_cost : null,
+    credit: cheapest ? creditOf(cheapest) : creditOf((policy?.vendor_options ?? []).find((o) => o.credit_days !== null && o.credit_days !== undefined)),
+  };
+}
+
+/** Company-wide averages behind the consumption-ratio tilt (cost and vendor credit days). */
+type TiltBasis = { cost: number | null; credit: number | null };
+function plannerTiltBasis(input: FamilyPlannerInput, ids: readonly string[]): TiltBasis {
   const policyOf = new Map(input.policies.map((p) => [p.material_id, p]));
-  const known = ids.map((id) => {
-    const costs = (policyOf.get(id)?.vendor_options ?? []).map((o) => o.unit_cost).filter((c): c is number => c !== null && c > 0);
-    return costs.length ? Math.min(...costs) : null;
-  }).filter((c): c is number => c !== null);
-  return known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
+  const rows = ids.map((id) => tiltInputs(policyOf.get(id)));
+  const avg = (values: Array<number | null>) => {
+    const known = values.filter((v): v is number => v !== null);
+    return known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
+  };
+  return { cost: avg(rows.map((r) => r.cost)), credit: avg(rows.map((r) => r.credit)) };
 }
 
 /**
  * Owner 2026-10-26 (performance): materials that share no group never affect each other's
  * waterfall, needs or lots, so each connected family is planned on its own and the results are
- * joined. The company-wide cost average is passed in so the cost tilt is identical to a single
+ * joined. The company-wide cost / credit averages are passed in so the tilt is identical to a single
  * company-wide run. Before this, every lot re-simulated all ~108 materials (PROD: 258 s for one
  * Planning request, blocking every other request on the server).
  */
@@ -329,8 +345,8 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     const root = find(id);
     components.set(root, (components.get(root) ?? new Set<string>()).add(id));
   }
-  const costAverage = plannerCostAverage(input, ids);
-  if (components.size <= 1) return planFamilyComponent(input, costAverage);
+  const tiltBasis = plannerTiltBasis(input, ids);
+  if (components.size <= 1) return planFamilyComponent(input, tiltBasis);
   const parts = [...components.values()].map((members) => {
     const has = (id: string) => members.has(id);
     return planFamilyComponent({
@@ -343,7 +359,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       arrival_risks: input.arrival_risks?.filter((a) => has(a.material_id)),
       policies: input.policies.filter((p) => has(p.material_id)),
       manual_lots: input.manual_lots?.filter((l) => has(l.material_id)),
-    }, costAverage);
+    }, tiltBasis);
   });
   const all = <K extends keyof FamilyResult>(key: K) => parts.flatMap((part) => [...(part[key] as readonly unknown[])]) as unknown as FamilyResult[K];
   const mixByKey = new Map<string, Record<string, number>>();
@@ -367,7 +383,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
   };
 }
 
-function planFamilyComponent(input: FamilyPlannerInput, costAverage: number | null): FamilyResult {
+function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): FamilyResult {
   if (!ISO_DAY.test(input.as_of) || !ISO_DAY.test(input.horizon_end) || input.horizon_end < input.as_of) throw new Error("FAMILY_PLANNER_INVALID_HORIZON");
   const allDays = dayList(input.as_of, input.horizon_end);
   const N = allDays.length;
@@ -496,17 +512,20 @@ function planFamilyComponent(input: FamilyPlannerInput, costAverage: number | nu
     return { target, critical, desired };
   };
 
-  // Holding-cost tilt for the consumption ratio: costlier stock (more money tied up) is used a bit
-  // more; unknown cost = neutral. Clamped so cost never overrides stock levels.
-  const unitCost = ids.map((id) => {
-    const costs = (policyOf.get(id)?.vendor_options ?? []).map((o) => o.unit_cost).filter((c): c is number => c !== null && c > 0);
-    return costs.length ? Math.min(...costs) : null;
+  // Consumption-ratio tilt (owner 2026-10-22 cost, 2026-10-26 credit days). Inside a group, a
+  // member's share of the use follows its free stock, tilted towards:
+  //   - costlier stock (more money tied up), and
+  //   - stock whose usual vendor gives longer credit: using it brings its re-buy forward, and that
+  //     re-buy is paid later, so cash goes out later. Advance / 0 days is the least favoured.
+  // Both are relative to the company-wide average; unknown = neutral. The combined tilt is clamped
+  // to 0.5–2 so money never overrides stock levels.
+  const tiltOf = ids.map((id) => tiltInputs(policyOf.get(id)));
+  const costTilt = tiltOf.map(({ cost, credit }) => {
+    const byCost = cost === null || tiltBasis.cost === null ? 1 : cost / tiltBasis.cost;
+    // Smoothed by one month so 0 vs 15 days does not swing the ratio like 0 vs 90 days would.
+    const byCredit = credit === null || tiltBasis.credit === null ? 1 : (credit + CREDIT_TILT_SMOOTHING_DAYS) / (tiltBasis.credit + CREDIT_TILT_SMOOTHING_DAYS);
+    return Math.min(2, Math.max(0.5, byCost * byCredit));
   });
-  const known = unitCost.filter((c): c is number => c !== null);
-  // Company-wide average (planFamily passes it), so a per-family run tilts exactly like a whole-company run.
-  void known;
-  const avgCost = costAverage;
-  const costTilt = unitCost.map((c) => (c === null || avgCost === null ? 1 : Math.min(2, Math.max(0.5, c / avgCost))));
   const candIdx = pools.map((pool) => pool.candidates.filter((c) => mIndex.has(c)).map((c) => mIndex.get(c)!));
   const simulatedOpeningReceipts = ids.map((id) => {
     const opening = Math.max(0, Number(input.opening_qty_by_material[id] ?? 0));

@@ -471,6 +471,7 @@ export async function computePlanning(p: PlanningParams) {
         order_multiple_qty_base: term.multiple_base, delivery_lot_qty_base: term.lot_base,
         unit_cost: unitCost === null ? null : Math.round(unitCost * 10000) / 10000, cycle_days: cycle,
         freight_term: freightTerm, cost_missing: missing,
+        credit_days: term.advance ? 0 : term.credit_days ?? null,
       };
     });
     if (options.length) vendorOptions.set(id, options);

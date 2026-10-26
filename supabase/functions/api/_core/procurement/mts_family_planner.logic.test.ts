@@ -696,3 +696,26 @@ Deno.test("company scale: each family plans independently, fast, and never hits 
   const perFamily = lots(alone);
   assert(lots(result) >= perFamily * 29, `company lots ${lots(result)} < 29 × ${perFamily}: the lot cap truncated the plan`);
 });
+
+Deno.test("smart consumption ratio: equal stock and price, the longer-credit member is used more; unknown credit is neutral", () => {
+  const days = daysTo("2026-11-30");
+  const member = (id: string, credit: number | null): OptimizerMaterialPlanningPolicy => ({
+    material_id: id, target_days: 20, critical_days: 10, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, cycle_days: 30,
+    vendor_options: [{ vendor_id: `V${id}`, lead_time_days: 10, moq_qty_base: null, order_multiple_qty_base: null, unit_cost: 100, cycle_days: 30, credit_days: credit }],
+  });
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2026-11-30", plan_buys: false,
+    opening_qty_by_material: { ADV: 30000, C30: 30000, C90: 30000, UNK: 30000 },
+    own_demand: [],
+    group_demand: days.map((d) => ({ group_id: "G", candidates: ["ADV", "C30", "C90", "UNK"], required_by: d, qty_base: 1000 })),
+    confirmed_arrivals: [],
+    policies: [member("ADV", 0), member("C30", 30), member("C90", 90), member("UNK", null)],
+  };
+  const first = planFamily(input).group_mix.find((g) => g.group_id === "G" && g.day === AS_OF);
+  assert(first, "group mix on day one");
+  const d = first.draws;
+  assert(d.C90 > d.C30 && d.C30 > d.ADV, `longer credit is used more: ${JSON.stringify(d)}`);
+  assert(d.ADV > 0, `advance stock still rotates: ${JSON.stringify(d)}`);
+  // Company average credit = 40 days → unknown sits between 30 and 90 days, i.e. neutral.
+  assert(d.UNK > d.C30 && d.UNK < d.C90, `unknown credit is neutral: ${JSON.stringify(d)}`);
+});
