@@ -1,4 +1,4 @@
-import { runFamilyPurposeLedger } from "./mts_family_purpose_ledger.logic.ts";
+import { buildFamilyPurposeLedgerInput, runFamilyPurposeLedger } from "./mts_family_purpose_ledger.logic.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -29,4 +29,17 @@ Deno.test("W3g: an eligible alternative is pre-allocated but VINNAPAS is consume
   const day0 = result.rows.find((row) => row.day === 0)!;
   assert(day0.opening_qty === 50 && day0.closing_qty === 30 && day0.by_material.DA === 30 && day0.consumed_by_material.VINNAPAS === 20,
     `the 20 KG VINNAPAS must be consumed before the pre-allocated DA balance: ${JSON.stringify(result.rows)}`);
+});
+
+Deno.test("W3g adapter: dated PO22 demand and ETA supplies keep their exact event day", () => {
+  const input = buildFamilyPurposeLedgerInput({
+    days: ["2026-10-25", "2026-10-26"], opening: { BETONE: 100 },
+    purposes: [
+      { id: "BETON", priority: 2, candidates: ["BETONE"], day: "2026-10-25", demand_qty: 20, target_qty: 30, desired_qty: 60 },
+      { id: "BETON", priority: 2, candidates: ["BETONE"], day: "2026-10-26", demand_qty: 20, target_qty: 30, desired_qty: 60 },
+    ],
+    supplies: [{ day: "2026-10-26", material_id: "BETONE", qty: 2_000, reference: "CSN 1" }],
+  });
+  assert(input.purposes[0].demand[0] === 20 && input.purposes[0].demand[1] === 20, JSON.stringify(input));
+  assert(input.supplies[0].day === 1 && input.supplies[0].qty === 2_000, JSON.stringify(input));
 });

@@ -48,6 +48,48 @@ export type PurposeLedgerResult = {
   unallocated_by_day: readonly Readonly<Record<string, number>>[];
 };
 
+/** Transport shape used by the PO22 planner adapter before it calls the pure ledger. */
+export type DatedFamilyPurpose = {
+  id: string;
+  priority: number;
+  candidates: readonly string[];
+  consume_order?: readonly string[];
+  day: string;
+  demand_qty: number;
+  target_qty: number;
+  desired_qty: number;
+};
+
+export type DatedFamilySupply = { day: string; material_id: string; qty: number; reference: string };
+
+export function buildFamilyPurposeLedgerInput(args: {
+  days: readonly string[];
+  opening: Readonly<Record<string, number>>;
+  purposes: readonly DatedFamilyPurpose[];
+  supplies: readonly DatedFamilySupply[];
+}): { opening: Readonly<Record<string, number>>; supplies: readonly FamilySupply[]; purposes: readonly FamilyPurpose[]; days: number } {
+  const index = new Map(args.days.map((day, i) => [day, i]));
+  type MutablePurpose = Omit<FamilyPurpose, "demand" | "target_balance" | "desired_balance"> & { demand: number[]; target_balance: number[]; desired_balance: number[] };
+  const byPurpose = new Map<string, MutablePurpose>();
+  for (const row of args.purposes) {
+    const i = index.get(row.day);
+    if (i === undefined) continue;
+    const existing = byPurpose.get(row.id) ?? {
+      id: row.id, priority: row.priority, candidates: row.candidates, consume_order: row.consume_order,
+      demand: Array.from({ length: args.days.length }, () => 0), target_balance: Array.from({ length: args.days.length }, () => 0), desired_balance: Array.from({ length: args.days.length }, () => 0),
+    };
+    existing.demand[i] = round(existing.demand[i] + Math.max(0, row.demand_qty));
+    existing.target_balance[i] = Math.max(existing.target_balance[i], Math.max(0, row.target_qty));
+    existing.desired_balance[i] = Math.max(existing.desired_balance[i], Math.max(0, row.desired_qty));
+    byPurpose.set(row.id, existing);
+  }
+  const supplies = args.supplies.flatMap((row) => {
+    const day = index.get(row.day);
+    return day === undefined || row.qty <= EPSILON ? [] : [{ day, material_id: row.material_id, qty: row.qty, reference: row.reference }];
+  });
+  return { opening: args.opening, supplies, purposes: [...byPurpose.values()], days: args.days.length };
+}
+
 export function runFamilyPurposeLedger(args: {
   opening: Readonly<Record<string, number>>;
   supplies: readonly FamilySupply[];
