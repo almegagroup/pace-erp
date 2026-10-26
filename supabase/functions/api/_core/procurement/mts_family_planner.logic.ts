@@ -278,7 +278,96 @@ type Sim = {
   expired: number[]; // planning-only receipt life loss; must reconcile stock conservation
 };
 
+/** Every material the planner sees in this input (same set the per-family run builds). */
+function plannerMaterialIds(input: FamilyPlannerInput): string[] {
+  return [...new Set<string>([
+    ...Object.keys(input.opening_qty_by_material),
+    ...(input.opening_receipts ?? []).map((r) => r.material_id),
+    ...input.own_demand.map((r) => r.material_id),
+    ...input.group_demand.flatMap((r) => r.candidates),
+    ...input.confirmed_arrivals.map((r) => r.material_id),
+    ...(input.manual_lots ?? []).map((l) => l.material_id),
+  ])].sort();
+}
+
+/** Company-wide average unit cost behind the consumption-ratio cost tilt. */
+function plannerCostAverage(input: FamilyPlannerInput, ids: readonly string[]): number | null {
+  const policyOf = new Map(input.policies.map((p) => [p.material_id, p]));
+  const known = ids.map((id) => {
+    const costs = (policyOf.get(id)?.vendor_options ?? []).map((o) => o.unit_cost).filter((c): c is number => c !== null && c > 0);
+    return costs.length ? Math.min(...costs) : null;
+  }).filter((c): c is number => c !== null);
+  return known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
+}
+
+/**
+ * Owner 2026-10-26 (performance): materials that share no group never affect each other's
+ * waterfall, needs or lots, so each connected family is planned on its own and the results are
+ * joined. The company-wide cost average is passed in so the cost tilt is identical to a single
+ * company-wide run. Before this, every lot re-simulated all ~108 materials (PROD: 258 s for one
+ * Planning request, blocking every other request on the server).
+ */
 export function planFamily(input: FamilyPlannerInput): FamilyResult {
+  if (!ISO_DAY.test(input.as_of) || !ISO_DAY.test(input.horizon_end) || input.horizon_end < input.as_of) throw new Error("FAMILY_PLANNER_INVALID_HORIZON");
+  const ids = plannerMaterialIds(input);
+  const parent = new Map(ids.map((id) => [id, id]));
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    let walk = id;
+    while (parent.get(walk) !== root) { const next = parent.get(walk)!; parent.set(walk, root); walk = next; }
+    return root;
+  };
+  for (const g of input.group_demand) {
+    for (let k = 1; k < g.candidates.length; k += 1) {
+      const a = find(g.candidates[0]); const b = find(g.candidates[k]);
+      if (a !== b) parent.set(a < b ? b : a, a < b ? a : b);
+    }
+  }
+  const components = new Map<string, Set<string>>();
+  for (const id of ids) {
+    const root = find(id);
+    components.set(root, (components.get(root) ?? new Set<string>()).add(id));
+  }
+  const costAverage = plannerCostAverage(input, ids);
+  if (components.size <= 1) return planFamilyComponent(input, costAverage);
+  const parts = [...components.values()].map((members) => {
+    const has = (id: string) => members.has(id);
+    return planFamilyComponent({
+      ...input,
+      opening_qty_by_material: Object.fromEntries(Object.entries(input.opening_qty_by_material).filter(([id]) => has(id))),
+      opening_receipts: input.opening_receipts?.filter((r) => has(r.material_id)),
+      own_demand: input.own_demand.filter((r) => has(r.material_id)),
+      group_demand: input.group_demand.filter((r) => r.candidates.length > 0 && has(r.candidates[0])),
+      confirmed_arrivals: input.confirmed_arrivals.filter((a) => has(a.material_id)),
+      arrival_risks: input.arrival_risks?.filter((a) => has(a.material_id)),
+      policies: input.policies.filter((p) => has(p.material_id)),
+      manual_lots: input.manual_lots?.filter((l) => has(l.material_id)),
+    }, costAverage);
+  });
+  const all = <K extends keyof FamilyResult>(key: K) => parts.flatMap((part) => [...(part[key] as readonly unknown[])]) as unknown as FamilyResult[K];
+  const mixByKey = new Map<string, Record<string, number>>();
+  for (const part of parts) for (const m of part.group_mix) mixByKey.set(`${m.group_id}|${m.day}`, { ...(mixByKey.get(`${m.group_id}|${m.day}`) ?? {}), ...m.draws });
+  return {
+    rows: [...all("rows")].sort((a, b) => a.material_id.localeCompare(b.material_id) || a.day.localeCompare(b.day)),
+    risks: [...all("risks")].sort((a, b) => a.material_id.localeCompare(b.material_id)),
+    group_pool_risks: [...all("group_pool_risks")].sort((a, b) => String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))),
+    arrival_flags: [...all("arrival_flags")].sort((a, b) => a.source_key.localeCompare(b.source_key)),
+    advisory_buys: [...all("advisory_buys")].sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
+    group_unmet: all("group_unmet"),
+    allocation_rows: [...all("allocation_rows")].sort((a, b) => a.day.localeCompare(b.day)
+      || a.destination_kind.localeCompare(b.destination_kind) || String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))
+      || a.material_id.localeCompare(b.material_id)),
+    allocation_reconciliation: [...all("allocation_reconciliation")].sort((a, b) => a.material_id.localeCompare(b.material_id)),
+    group_actions: [...all("group_actions")].sort((a, b) => a.group_id.localeCompare(b.group_id)),
+    waterfall_reservations: all("waterfall_reservations"),
+    group_bucket_reservations: [...all("group_bucket_reservations")].sort((a, b) => a.day.localeCompare(b.day) || a.group_id.localeCompare(b.group_id) || a.material_id.localeCompare(b.material_id)),
+    group_mix: [...mixByKey].map(([k, draws]) => ({ group_id: k.split("|")[0], day: k.split("|")[1], draws }))
+      .sort((a, b) => a.day.localeCompare(b.day) || a.group_id.localeCompare(b.group_id)),
+  };
+}
+
+function planFamilyComponent(input: FamilyPlannerInput, costAverage: number | null): FamilyResult {
   if (!ISO_DAY.test(input.as_of) || !ISO_DAY.test(input.horizon_end) || input.horizon_end < input.as_of) throw new Error("FAMILY_PLANNER_INVALID_HORIZON");
   const allDays = dayList(input.as_of, input.horizon_end);
   const N = allDays.length;
@@ -414,7 +503,9 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     return costs.length ? Math.min(...costs) : null;
   });
   const known = unitCost.filter((c): c is number => c !== null);
-  const avgCost = known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
+  // Company-wide average (planFamily passes it), so a per-family run tilts exactly like a whole-company run.
+  void known;
+  const avgCost = costAverage;
   const costTilt = unitCost.map((c) => (c === null || avgCost === null ? 1 : Math.min(2, Math.max(0.5, c / avgCost))));
   const candIdx = pools.map((pool) => pool.candidates.filter((c) => mIndex.has(c)).map((c) => mIndex.get(c)!));
   const simulatedOpeningReceipts = ids.map((id) => {

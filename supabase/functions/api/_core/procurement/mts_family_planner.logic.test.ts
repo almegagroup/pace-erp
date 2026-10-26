@@ -658,3 +658,41 @@ Deno.test("W3b: ending carry follows direct reserve, narrow-group Desired Max, t
     assert(Math.abs(finalClosing - reserved) < 0.00001, `${id} final carry is not fully accounted for: closing=${finalClosing}, reserved=${reserved}`);
   }
 });
+
+/** The same RDP family under prefixed ids, so one company input can hold many independent families. */
+function prefixedFamily(prefix: string): FamilyPlannerInput {
+  const f = rdpFamily();
+  const id = (m: string) => `${prefix}${m}`;
+  return {
+    ...f,
+    opening_qty_by_material: Object.fromEntries(Object.entries(f.opening_qty_by_material).map(([m, q]) => [id(m), q])),
+    own_demand: f.own_demand.map((d) => ({ ...d, material_id: id(d.material_id) })),
+    group_demand: f.group_demand.map((g) => ({ ...g, group_id: id(g.group_id), candidates: g.candidates.map(id) })),
+    policies: f.policies.map((p) => ({ ...p, material_id: id(p.material_id) })),
+  };
+}
+
+Deno.test("company scale: each family plans independently, fast, and never hits the lot cap", () => {
+  const families = Array.from({ length: 30 }, (_, k) => prefixedFamily(`F${k}_`));
+  const company: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: END,
+    opening_qty_by_material: Object.assign({}, ...families.map((f) => f.opening_qty_by_material)),
+    own_demand: families.flatMap((f) => f.own_demand),
+    group_demand: families.flatMap((f) => f.group_demand),
+    // An arrival of an unrelated family must not re-allocate this one.
+    confirmed_arrivals: [{ source_key: "F1-ETA", material_id: "F1_DA", eta_to_plant: "2026-11-05", qty_base: 20000 }],
+    policies: families.flatMap((f) => f.policies),
+  };
+  const started = performance.now();
+  const result = planFamily(company);
+  const elapsed = performance.now() - started;
+  assert(elapsed < 20_000, `company plan took ${Math.round(elapsed)} ms`);
+
+  const alone = planFamily(prefixedFamily("F0_"));
+  const pick = <T extends { material_id: string }>(rows: T[]) => JSON.stringify(rows.filter((r) => r.material_id.startsWith("F0_")));
+  assert(pick(result.advisory_buys) === pick(alone.advisory_buys), "F0 buys change when other families are planned alongside");
+  assert(pick(result.rows) === pick(alone.rows), "F0 projection changes when other families are planned alongside");
+  const lots = (r: typeof result) => r.advisory_buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE").length;
+  const perFamily = lots(alone);
+  assert(lots(result) >= perFamily * 29, `company lots ${lots(result)} < 29 × ${perFamily}: the lot cap truncated the plan`);
+});
