@@ -420,7 +420,9 @@ export async function buildItemPlan(
         const events = new Map<string, Array<Record<string, unknown>>>();
         const push = (day: string | null, e: Record<string, unknown>) => { if (day) events.set(day, [...(events.get(day) ?? []), e]); };
         for (const a of buildArrivals()) {
-          push(a.rescheduled_eta ?? a.eta_plant ?? calendar.asOf, {
+          // A passed / missing ETA is counted today by the planner, so it is listed today.
+          const when = a.rescheduled_eta ?? a.eta_plant ?? null;
+          push(when && when >= calendar.asOf ? when : calendar.asOf, {
             kind: "ARRIVAL", material_id: a.material_id, member: `${a.material_code ?? ""} ${a.material_name}`.trim(), qty: a.qty, uom: a.uom, reference: a.reference,
             vendor: a.vendor, status: a.status, movable: Boolean(a.reschedule_key),
             why: a.advice ? `Engine: ${a.advice.shift_days < 0 ? "prepone" : "postpone"} to ${a.advice.suggested_eta} — ${a.advice.reason}` : null,
@@ -490,7 +492,10 @@ export async function buildItemPlan(
         const row = rowById.get(id);
         const issues: string[] = [];
         if (row?.policy?.target_cov_days === null || row?.policy?.target_cov_days === undefined || row?.policy?.critical_cov_days === null || row?.policy?.critical_cov_days === undefined) issues.push("NO_TARGET_CRITICAL");
-        if ((vendorOptions.get(id) ?? []).length === 0) issues.push("NO_VENDOR");
+        // Owner 2026-10-26: a group is bought through any member that has a vendor, so "no vendor" is
+        // a gap only when NO member of the family has one.
+        const familyHasVendor = memberIds.some((member) => (vendorOptions.get(member) ?? []).length > 0);
+        if ((vendorOptions.get(id) ?? []).length === 0) { if (!familyHasVendor) issues.push("NO_VENDOR"); }
         else if (plan.buys.some((b) => b.material_id === id && b.status === "UNKNOWN_LEAD_TIME")) issues.push("NO_LEAD_TIME");
         const shortage = plan.risks.find((r) => r.material_id === id)?.first_shortage_day ?? null;
         return { material_id: id, material_code: codeOf(id), material_name: nameOf(id), issues, first_shortage_day: shortage };

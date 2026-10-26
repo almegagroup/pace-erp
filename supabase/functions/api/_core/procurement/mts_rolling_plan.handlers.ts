@@ -15,6 +15,7 @@ import { okResponse } from "../response.ts";
 import { arrivalStatus, dayRange, familyClosure, familyDayGrid, poNumberOfReference } from "./mts_item_plan.logic.ts";
 import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
+import { groupCoveredBy } from "./mts_requirement.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -122,11 +123,20 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const po = poNumberOfReference(reference);
       return (csnId ? vendorByCsn.get(csnId) : null) ?? (po ? vendorByPo.get(po) ?? null : null);
     };
+    // Owner 2026-10-26: for now the report leaves out Bulk RM — a material this company buys on
+    // Bulk delivery POs (purchase_order.delivery_type = BULK).
+    const bulkPos = await serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id")
+      .eq("company_id", companyId).eq("delivery_type", "BULK").neq("status", "CANCELLED").limit(10000);
+    if (bulkPos.error) throw new Error("MTS_ROLLING_BULK_LOAD_FAILED");
+    const bulkPoIds = ((bulkPos.data ?? []) as JsonRecord[]).map((row) => text(row.id));
+    const bulkLines = bulkPoIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(bulkPoIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order_line").select("material_id").in("po_id", chunk));
+    const bulkRm = new Set(bulkLines.map((row) => text(row.material_id)).filter(Boolean));
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
-    const active = new Set(projection.rows.filter((r) => r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0).map((r) => r.material_id));
+    const active = new Set(projection.rows.filter((r) => !bulkRm.has(r.material_id) && (r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0)).map((r) => r.material_id));
     const seen = new Set<string>();
     const blocks = [];
     for (const id of [...active].filter((m) => ["RM", "PM"].includes(rowById.get(m)?.kind ?? "")).sort((a, b) => nameOf(a).localeCompare(nameOf(b)))) {
@@ -148,7 +158,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const ownByDay = new Map<string, number>();
       for (const l of userLots) if (memberSet.has(l.material_id)) ownByDay.set(l.plant_eta, (ownByDay.get(l.plant_eta) ?? 0) + l.qty_base);
       const rows = grid.filter((g, index) => index === 0 || g.arrivals > 0 || ownByDay.has(g.day)).map((g) => {
-        const today = events.filter((e) => e.date === g.day);
+        // Owner 2026-10-26: an open piece whose ETA passed or is missing is counted today (as the
+        // planner does), so it must be listed on today's row with its PO / vendor / status.
+        const today = events.filter((e) => (e.date && e.date >= calendar.asOf ? e.date : calendar.asOf) === g.day);
         return {
           day: g.day, opening: inUnit(fu, g.opening), arrivals: inUnit(fu, g.arrivals), dispatch: inUnit(fu, ownByDay.get(g.day) ?? 0) || null,
           use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), max_days: g.max_days, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days,
@@ -200,13 +212,22 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         uom: fu?.uom_code ?? baseUomOf(id),
         target_days: selected?.policy?.target_cov_days ?? null,
         critical_days: selected?.policy?.critical_cov_days ?? null,
+        // Each member's own stock and how many days it lasts at its average use (owner 2026-10-26).
+        members_stock: memberIds.map((m) => {
+          const rowsOf = projection.rows.filter((r) => r.material_id === m);
+          const opening = Number(rowsOf[0]?.opening_qty_base ?? 0);
+          const daily = rowsOf.reduce((sum, r) => sum + r.demand_qty_base, 0) / Math.max(1, rowsOf.length);
+          const lasts = daily > 0.000001 ? `${Math.floor(opening / daily + 1e-9)} d` : "no use";
+          return `${nameOf(m)}: ${dq(m, opening)} ${uomOf(m) ?? ""} (${lasts})`.replace(/\s+\(/, " (");
+        }),
         first_shortage_day: grid.find((g) => g.closing < -0.000001)?.day ?? null,
         // Why the engine places no lot (owner 2026-10-21): shown on the block title line.
         gaps: memberIds.flatMap((m) => {
           const r = rowById.get(m);
           const out: string[] = [];
           if (r?.policy?.target_cov_days == null || r?.policy?.critical_cov_days == null) out.push(`${nameOf(m)}: no Target/Critical`);
-          if ((vendorOptions.get(m) ?? []).length === 0) out.push(`${nameOf(m)}: no vendor`);
+          // Owner 2026-10-26: a group is bought through any member that has a vendor.
+          if ((vendorOptions.get(m) ?? []).length === 0 && !memberIds.some((member) => (vendorOptions.get(member) ?? []).length > 0)) out.push(`${nameOf(m)}: no vendor`);
           return out;
         }),
         rows, prediction,
@@ -215,19 +236,25 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
 
     // ── RM / PM requirement (only rows with demand) ──
     const risks = new Map(projection.risks.map((r) => [r.material_id, r]));
-    const requirement = reqData.output.rows.filter((r) => (r.kind === "RM" || r.kind === "PM") && r.metrics.identifier !== "NO_DEMAND").map((r) => ({
+    const requirement = reqData.output.rows.filter((r) => (r.kind === "RM" || r.kind === "PM") && !bulkRm.has(r.material_id) && r.metrics.identifier !== "NO_DEMAND").map((r) => {
+      // Owner 2026-10-26: other members of its group carry the group's demand → not critical, with a remark.
+      const covering = groupCoveredBy(r, reqData.output.groups);
+      const covered = covering !== null;
+      return {
+      note: covering ? `Group demand is met by other members: ${covering.map(nameOf).join(", ")}` : "",
       material: nameOf(r.material_id), type: r.kind, uom: uomOf(r.material_id),
       target_cov_days: r.metrics.target_cov_days, critical_cov_days: r.metrics.critical_cov_days,
       current_stk_days: r.metrics.current_stk_days, next_month_cov: r.metrics.next_month_cov,
       current_req: dq(r.material_id, r.metrics.sheet_current_req), current_prorata: dq(r.material_id, r.metrics.current_prorata_daily),
       req_nm: dq(r.material_id, r.metrics.nm_req), prorata_nm: dq(r.material_id, r.metrics.nm_prorata_daily),
       current_stock: dq(r.material_id, r.metrics.current_stock), intransit_cm: dq(r.material_id, r.metrics.intransit_cm), intransit_nm: dq(r.material_id, r.metrics.intransit_nm),
-      below_target: r.metrics.below_target_with_in, below_critical: r.metrics.below_critical_with_in,
-      first_shortage_day: risks.get(r.material_id)?.first_shortage_day ?? null,
-      first_below_critical_day: risks.get(r.material_id)?.first_below_critical_day ?? null,
-    })).sort((a, b) => Number(Boolean(b.first_shortage_day)) - Number(Boolean(a.first_shortage_day)) || Number(b.below_critical) - Number(a.below_critical) || a.material.localeCompare(b.material));
+      below_target: covered ? false : r.metrics.below_target_with_in, below_critical: covered ? false : r.metrics.below_critical_with_in,
+      first_shortage_day: covered ? null : risks.get(r.material_id)?.first_shortage_day ?? null,
+      first_below_critical_day: covered ? null : risks.get(r.material_id)?.first_below_critical_day ?? null,
+      };
+    }).sort((a, b) => Number(Boolean(b.first_shortage_day)) - Number(Boolean(a.first_shortage_day)) || Number(b.below_critical) - Number(a.below_critical) || a.material.localeCompare(b.material));
 
-    const buys = advisory.map((b) => {
+    const buys = advisory.filter((b) => !bulkRm.has(b.material_id)).map((b) => {
       const shown = shownLot(b.material_id, b.recommended_po_qty_base, b.order_unit);
       return {
       material: nameOf(b.material_id), type: rowById.get(b.material_id)?.kind ?? null, uom: shown.uom,
@@ -241,12 +268,13 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       };
     }).sort((a, b) => String(a.po_by ?? "9999").localeCompare(String(b.po_by ?? "9999")));
 
-    const store = plan.store_rows.filter((r) => r.executable_qty > 0 || r.not_backed_qty > 0 || r.transfer_hint).map((r) => ({
-      period: r.period_label, product: r.product, source: r.source, line_type: r.line_type, group: r.group_label,
+    const store = plan.store_rows.filter((r) => !(r.material_id && bulkRm.has(r.material_id)) && (r.executable_qty > 0 || r.not_backed_qty > 0 || r.transfer_hint)).map((r) => ({
+      period: r.period_label, mother_group: r.mother_group, child_group: r.child_group, product: r.product, source: r.source, line_type: r.line_type, group: r.group_label,
+      reason: r.planned_consumption_reason ?? null, use_first: r.receipt_reference ?? null,
       material: r.material_name, uom: r.material_id ? uomOf(r.material_id) : r.uom, demand_qty: dq(r.material_id, r.demand_qty), from_stock: dq(r.material_id, r.executable_qty), not_backed: dq(r.material_id, r.not_backed_qty), transfer: r.transfer_hint,
     }));
 
-    const arrivals = reqData.output.rows.flatMap((r) => r.inbound_events.map((e) => {
+    const arrivals = reqData.output.rows.filter((r) => !bulkRm.has(r.material_id)).flatMap((r) => r.inbound_events.map((e) => {
       const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
       return {
         material: nameOf(r.material_id), uom: uomOf(r.material_id), reference: e.reference, supplier: supplierOf(e.reference, e.csn_id),
@@ -277,6 +305,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       company_id: companyId, company_code: text(company.company_code) || null, company_name: text(company.company_name) || null,
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
       demand_label: plan.demand_version.label,
+      bulk_rm_excluded: bulkRm.size,
       summary, blocks, requirement, buys, store, arrivals,
       generated_at: new Date().toISOString(),
     }, ctx.request_id, req);

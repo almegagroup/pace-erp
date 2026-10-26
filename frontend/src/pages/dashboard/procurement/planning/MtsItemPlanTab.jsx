@@ -370,6 +370,31 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "locations", label: "Stock by location (now)", width: "320px", render: (m) => (m.locations.length ? m.locations.map((l) => `${l.location}: ${mq(l.qty, m.material_id, m.uom)}`).join(" · ") : "—"), copyValue: (m) => m.locations.map((l) => `${l.location}: ${mq(l.qty, m.material_id, m.uom)}`).join(" · ") },
   ];
 
+  // Owner 2026-10-26 (4A): one simple line per member — stock, inbound, own use, group use,
+  // closing, cover and the reason. Built from the server's reconciliation, never re-derived here.
+  const glanceRows = (view?.allocation_reconciliation ?? []).map((r) => {
+    const member = (plan?.members ?? []).find((m) => m.material_id === r.material_id);
+    const first = (memberDaily.get(view?.grid?.[0]?.day ?? "") ?? []).find((m) => m.material_id === r.material_id);
+    const reasons = [
+      r.own_allocated_qty > 0 ? "Own (exclusive) use is protected first" : "",
+      r.group_allocated_qty > 0 ? `Serves ${(member?.groups ?? []).join(" / ") || "its group"} from free stock` : "",
+      r.confirmed_arrival_qty > 0 ? "Inbound counted on its ETA" : "",
+      r.planned_lot_qty > 0 ? "Engine / your lot added" : "",
+      r.closing_qty < 0 ? "SHORT — stock runs out in the horizon" : r.closing_qty > 0 ? "Balance carries forward" : "",
+    ].filter(Boolean).join(" · ");
+    return { ...r, key: r.material_id, member: `${r.material_code ?? ""} ${r.material_name ?? ""}`.trim(), cover_days: first?.max_days ?? null, reason: reasons || "—" };
+  });
+  const glanceColumns = [
+    { key: "member", label: "Material", width: "260px" },
+    { key: "opening_qty", label: "Stock now", width: "120px", align: "right", render: (r) => mq(r.opening_qty, r.material_id, r.uom), copyValue: (r) => mq(r.opening_qty, r.material_id, r.uom) },
+    { key: "confirmed_arrival_qty", label: "Inbound (ETA)", width: "120px", align: "right", render: (r) => (r.confirmed_arrival_qty ? mq(r.confirmed_arrival_qty, r.material_id, r.uom) : "—"), copyValue: (r) => mq(r.confirmed_arrival_qty, r.material_id, r.uom) },
+    { key: "own_allocated_qty", label: "Exclusive use", width: "120px", align: "right", render: (r) => mq(r.own_allocated_qty, r.material_id, r.uom), copyValue: (r) => mq(r.own_allocated_qty, r.material_id, r.uom) },
+    { key: "group_allocated_qty", label: "Group use", width: "120px", align: "right", render: (r) => mq(r.group_allocated_qty, r.material_id, r.uom), copyValue: (r) => mq(r.group_allocated_qty, r.material_id, r.uom) },
+    { key: "cover_days", label: "Cover now (days)", width: "110px", align: "right", render: (r) => fmtDays(r.cover_days) || "—", copyValue: (r) => r.cover_days ?? "" },
+    { key: "closing_qty", label: "Closing at horizon", width: "130px", align: "right", render: (r) => <span className={r.closing_qty < 0 ? "font-semibold text-rose-700" : ""}>{mq(r.closing_qty, r.material_id, r.uom)}</span>, copyValue: (r) => mq(r.closing_qty, r.material_id, r.uom) },
+    { key: "reason", label: "Reason", width: "420px", render: (r) => <span className="whitespace-normal text-xs">{r.reason}</span>, copyValue: (r) => r.reason },
+  ];
+
   const traceSourceColumns = [
     { key: "source", label: "Source", width: "150px" },
     { key: "member", label: "Material", width: "240px" },
@@ -779,6 +804,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               <section className="grid gap-1 border border-sky-200 bg-sky-50 p-2">
                 <h3 className="text-sm font-semibold text-slate-800">Family allocation report</h3>
                 <p className="text-xs text-slate-600">This is the engine&apos;s auditable waterfall: counted source, usable date, direct/exclusive reserve, member-to-group use, carry and future-lot reason. It is a report of the server engine, not a browser calculation.</p>
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">At a glance — stock, inbound, who uses it, cover and why</h3>
+                <ErpDenseGrid {...GRID_PROPS} columns={glanceColumns} rows={glanceRows} rowKey={(r) => r.key} emptyMessage="No member in this family." maxHeight="24vh" />
               </section>
               <section className="grid gap-1">
                 <h3 className="text-sm font-semibold text-slate-800">1. Material sources — what can enter the family</h3>

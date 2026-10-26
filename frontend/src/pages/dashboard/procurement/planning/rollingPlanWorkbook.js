@@ -161,6 +161,10 @@ function writeBlocks(sheet, companies, kind) {
     const facts = [`Unit ${b.uom ?? "—"}`, `Target ${b.target_days ?? "—"} d`, `Critical ${b.critical_days ?? "—"} d`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "",
       (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
     const factRow = sheet.addRow([facts]);
+    if (b.is_family && (b.members_stock ?? []).length) {
+      const stockRow = sheet.addRow([`Member stock: ${b.members_stock.join(" · ")}`]);
+      stockRow.getCell(1).font = { italic: true };
+    }
     if (b.first_shortage_day || (b.gaps ?? []).length) factRow.getCell(1).font = { bold: true, color: { argb: RED } };
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
@@ -207,6 +211,7 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Company", value: (c) => companyLabel(c) },
     { label: "Horizon", value: (c) => `${c.calendar.as_of} → ${c.calendar.horizon_end}` },
     { label: "Demand", value: (c) => c.demand_label },
+    { label: "Bulk RM left out", value: (c) => c.bulk_rm_excluded ?? 0, num: true },
     { label: "Materials planned", value: (c) => c.summary.materials_planned, num: true },
     { label: "Runs out", value: (c) => c.summary.runs_out, num: true },
     { label: "Below Critical", value: (c) => c.summary.below_critical, num: true },
@@ -254,8 +259,9 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
       { label: "CURRENT_STOCK", value: (r) => num(r.current_stock), num: true }, { label: "INTRANSIT CM", value: (r) => num(r.intransit_cm), num: true },
       { label: "INTRANSIT NM", value: (r) => num(r.intransit_nm), num: true },
       { label: "Runs out on", value: (r) => day(r.first_shortage_day) }, { label: "Below Critical from", value: (r) => day(r.first_below_critical_day) },
+      { label: "Remark", key: "note" },
     ], c.requirement, { color: (r) => (r.first_shortage_day ? RED : r.below_critical ? AMBER : null) });
-    widths(sheet, [40, 6, 7, 10, 10, 12, 12, 12, 12, 12, 12, 13, 12, 12, 12, 14]);
+    widths(sheet, [40, 6, 7, 10, 10, 12, 12, 12, 12, 12, 12, 13, 12, 12, 12, 14, 50]);
     sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 1 }];
   }
 
@@ -273,13 +279,16 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   // STORE_INSTRUCTIONS
   const store = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
   addTable(store, [
-    { label: "Company", value: (r) => r.company }, { label: "Period", key: "period" }, { label: "Product", key: "product" },
+    { label: "Company", value: (r) => r.company }, { label: "Period", key: "period" },
+    { label: "Parent group", value: (r) => r.mother_group ?? "" }, { label: "Child group", value: (r) => r.child_group ?? "" },
+    { label: "Product", key: "product" },
     { label: "Stroke / Pack BOM", key: "source" }, { label: "Line", key: "line_type" }, { label: "Material group", key: "group" },
     { label: "Material to use", key: "material" }, { label: "Line demand", value: (r) => num(r.demand_qty), num: true },
     { label: "From physical stock", value: (r) => num(r.from_stock), num: true }, { label: "Not yet backed", value: (r) => num(r.not_backed), num: true },
-    { label: "UoM", key: "uom" }, { label: "Transfer first", key: "transfer" },
+    { label: "UoM", key: "uom" }, { label: "Planned consumption reason", value: (r) => r.reason ?? "" },
+    { label: "Use first from", value: (r) => r.use_first ?? "" }, { label: "Transfer first", key: "transfer" },
   ], companies.flatMap((c) => c.store.map((s) => ({ ...s, company: companyLabel(c) }))), { color: (r) => (r.not_backed > 0 ? RED : null) });
-  widths(store, [26, 16, 34, 34, 8, 22, 34, 12, 14, 14, 7, 40]);
+  widths(store, [26, 16, 22, 22, 34, 34, 8, 22, 34, 12, 14, 14, 7, 60, 34, 40]);
 
   // ARRIVALS
   const arr = wb.addWorksheet(sheetName("ARRIVALS", used));

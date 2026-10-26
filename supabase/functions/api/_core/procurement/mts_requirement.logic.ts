@@ -571,6 +571,50 @@ export function orderUnitOf(material: MaterialInfo | undefined, vendorSupplyUom:
   return null;
 }
 
+export type ProductionAssignmentRow = { company_id: string; plan_month: string; sku_material_id: string; production_company_id: string | null };
+
+/**
+ * PO21 cross-company production, carried forward (owner 2026-10-26): the producing company chosen
+ * for a SKU in one plan month stays in force for every later month until a newer choice (another
+ * company, or "own company" = null) is saved for that SKU. Returns one row per owner company × SKU
+ * × requested month with the effective producer (null = made at the owner itself).
+ */
+export function effectiveProductionAssignments(rows: readonly ProductionAssignmentRow[], months: readonly string[]): ProductionAssignmentRow[] {
+  const bySku = new Map<string, ProductionAssignmentRow[]>();
+  for (const row of rows) {
+    const key = `${row.company_id}|${row.sku_material_id}`;
+    bySku.set(key, [...(bySku.get(key) ?? []), { ...row, plan_month: row.plan_month.slice(0, 10) }]);
+  }
+  const out: ProductionAssignmentRow[] = [];
+  for (const list of bySku.values()) {
+    list.sort((a, b) => a.plan_month.localeCompare(b.plan_month));
+    for (const month of months.map((m) => m.slice(0, 10))) {
+      const latest = [...list].reverse().find((row) => row.plan_month <= month);
+      if (latest) out.push({ company_id: latest.company_id, plan_month: month, sku_material_id: latest.sku_material_id, production_company_id: latest.production_company_id });
+    }
+  }
+  return out;
+}
+
+/**
+ * Owner 2026-10-26: a material with no exclusive use of its own that sits in groups whose whole
+ * demand (CM + NM) is met from the members' stock is not "critical" just because its own stock is
+ * low — the other members carry the group. Returns the covering members' ids, or null when the
+ * material's own cover really matters (own exclusive use, no group, or a group that is short).
+ */
+export function groupCoveredBy(
+  row: { material_id: string; fixed_demand_qty: number; pools: ReadonlyArray<{ group_id: string | null }> },
+  groups: ReadonlyArray<{ group_id: string; uncovered_cm: number; uncovered_nm: number; members: ReadonlyArray<{ material_id: string; drawn_qty: number; usable_stock: number }> }>,
+): string[] | null {
+  if (row.fixed_demand_qty > 0.000001) return null;
+  const ids = [...new Set(row.pools.map((p) => p.group_id).filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return null;
+  const mine = ids.map((id) => groups.find((g) => g.group_id === id));
+  if (mine.some((g) => !g || g.uncovered_cm > 0.000001 || g.uncovered_nm > 0.000001)) return null;
+  const covering = [...new Set(mine.flatMap((g) => g!.members.filter((m) => m.material_id !== row.material_id && (m.drawn_qty > 0.000001 || m.usable_stock > 0.000001)).map((m) => m.material_id)))];
+  return covering.length > 0 ? covering : null;
+}
+
 /** Unit every PO22 quantity is shown in (owner 2026-10-26: "only Order UoM"). */
 export type DisplayUnit = { uom_code: string; base_per_unit: number };
 

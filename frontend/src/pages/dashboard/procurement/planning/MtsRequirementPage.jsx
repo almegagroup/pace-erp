@@ -306,10 +306,11 @@ export default function MtsRequirementPage() {
 function riskMatch(row, filter) {
   switch (filter) {
     case "WITH_DEMAND": return row.identifier !== "NO_DEMAND";
-    case "CRITICAL": return row.below_critical === true;
-    case "BELOW_TARGET": return row.below_target === true;
-    case "CRITICAL_WITH_IN": return row.below_critical_with_in === true;
-    case "BELOW_TARGET_WITH_IN": return row.below_target_with_in === true;
+    // A material whose group is carried by other members is not a risk of its own (owner 2026-10-26).
+    case "CRITICAL": return row.below_critical === true && !row.covered_by_group;
+    case "BELOW_TARGET": return row.below_target === true && !row.covered_by_group;
+    case "CRITICAL_WITH_IN": return row.below_critical_with_in === true && !row.covered_by_group;
+    case "BELOW_TARGET_WITH_IN": return row.below_target_with_in === true && !row.covered_by_group;
     case "NM_SHORT": return row.status_nm === "SHORT_IN_NM" || row.status_nm === "SHORT_BEFORE_NM";
     case "INBOUND_RISK": return row.inbound_risk === "OVERDUE" || row.inbound_risk === "ETA_UNKNOWN";
     case "NO_POLICY": return row.identifier === "NO_POLICY";
@@ -326,7 +327,14 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
     textColumn("base_uom_code", "UoM", "identity", { width: "60px", read: (r) => du.uom(r.material_id, r.base_uom_code) }),
     qtyColumn("priority_score", "Identifier (0–3)", "identity", { width: "100px", count: true }),
     textColumn("reorder_flag", "ID2 (at reorder level)", "identity", { width: "130px", read: (r) => (r.reorder_flag === null ? "" : yesNo(r.reorder_flag)), render: (r) => flag(r.reorder_flag) }),
-    textColumn("identifier", "Status", "identity", { width: "120px", render: (r) => badge(r.identifier) }),
+    textColumn("identifier", "Status", "identity", {
+      width: "190px",
+      read: (r) => (r.covered_by_group && ["CRITICAL", "BELOW_TARGET"].includes(r.identifier) ? "COVERED_BY_GROUP" : r.identifier),
+      render: (r) => (r.covered_by_group && ["CRITICAL", "BELOW_TARGET"].includes(r.identifier)
+        ? <span title={r.group_cover_note ?? ""} className="bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-800">COVERED BY GROUP</span>
+        : badge(r.identifier)),
+    }),
+    textColumn("group_cover_note", "Remark", "identity", { width: "300px", read: (r) => r.group_cover_note ?? "" }),
     {
       key: "sources", label: "Sources", group: "identity", width: "90px", filterable: false,
       render: (r) => (
