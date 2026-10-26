@@ -271,6 +271,12 @@ export function monthRange(first: string, count: number): string[] {
 
 export type ArrivalStatus = "ACTUAL_GR" | "AT_GATE" | "IN_TRANSIT" | "ORDERED" | "BULK" | "STO" | "SUB_CSN";
 
+export type ArrivalPlanningCoverage = {
+  state: "COVERAGE" | "RISK_ONLY";
+  label: string;
+  detail: string;
+};
+
 export function arrivalStatus(kind: string, dateSource: string): ArrivalStatus {
   if (kind === "POSTED_GR") return "ACTUAL_GR";
   if (kind === "AT_GATE") return "AT_GATE";
@@ -279,6 +285,31 @@ export function arrivalStatus(kind: string, dateSource: string): ArrivalStatus {
   if (kind === "SUB_CSN_PLANNED") return "SUB_CSN";
   if (dateSource === "BULK_CALL_OFF") return "BULK";
   return "ORDERED";
+}
+
+/**
+ * Planning rule W2b: a real Plant ETA is supply on that date, whether the
+ * document is still ORD or is already TRN.  Status changes confidence and the
+ * instruction to the buyer; it must never change the coverage calculation.
+ */
+export function arrivalPlanningCoverage(kind: string, etaToPlant: string | null, asOf: string): ArrivalPlanningCoverage {
+  const validFutureEta = !!etaToPlant && /^\d{4}-\d{2}-\d{2}$/.test(etaToPlant) && etaToPlant >= asOf;
+  if (!validFutureEta) {
+    return {
+      state: "RISK_ONLY",
+      label: "Risk only",
+      detail: !etaToPlant || !/^\d{4}-\d{2}-\d{2}$/.test(etaToPlant)
+        ? "No valid ETA to Plant — not counted as planning supply."
+        : "Plant ETA has passed without receipt — not counted as planning supply.",
+    };
+  }
+  if (kind === "IN_TRANSIT") {
+    return { state: "COVERAGE", label: "Coverage from ETA", detail: "In transit — expected at Plant ETA." };
+  }
+  if (kind === "PO_REMAINDER") {
+    return { state: "COVERAGE", label: "Coverage from ETA", detail: "Ordered, not shipped — planned Plant ETA; monitor dispatch." };
+  }
+  return { state: "COVERAGE", label: "Coverage from ETA", detail: "Counted as planning supply on its Plant ETA." };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

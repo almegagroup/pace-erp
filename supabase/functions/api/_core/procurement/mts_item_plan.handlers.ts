@@ -23,7 +23,7 @@ import {
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import {
-  arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, poNumberOfReference, storeKey, wholeDays,
+  arrivalPlanningCoverage, arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, poNumberOfReference, storeKey, wholeDays,
 } from "./mts_item_plan.logic.ts";
 import type { OptimizerDailyProjectionRow, OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import type { PolicyOverride } from "./mts_requirement.logic.ts";
@@ -201,6 +201,7 @@ export async function buildItemPlan(
 
     const buildArrivals = () => memberIds.flatMap((id) => (rowById.get(id)?.inbound_events ?? []).map((event) => {
       const csn = event.csn_id ? csnById.get(event.csn_id) : undefined;
+      const coverage = arrivalPlanningCoverage(event.kind, event.date, calendar.asOf);
       return {
         material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id),
         reference: event.reference, qty: round(event.qty),
@@ -210,6 +211,9 @@ export async function buildItemPlan(
         eta_port: csn ? text(csn.eta_at_port).slice(0, 10) || null : null,
         eta_plant: event.original_date !== undefined ? event.original_date : event.date,
         rescheduled_eta: event.original_date !== undefined ? event.date : null,
+        planning_coverage: coverage.state,
+        planning_coverage_label: coverage.label,
+        planning_coverage_detail: coverage.detail,
         reschedule_key: event.reschedule_key ?? null,
         ...adviceFor(id, event.reschedule_key ?? null),
       };

@@ -175,7 +175,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
         key: `INBOUND|${arrival.material_id}|${arrival.reference}|${index}`,
         source: arrival.status ?? "Inbound", member: `${arrival.material_code ?? ""} ${arrival.material_name ?? ""}`.trim(),
         date: arrival.rescheduled_eta ?? arrival.eta_plant ?? "—", qty: Number(arrival.qty ?? 0),
-        availability: (arrival.rescheduled_eta ?? arrival.eta_plant) ? "Joins the family on this valid ETA to Plant" : "Risk only — no valid ETA to Plant",
+        availability: arrival.planning_coverage_detail ?? ((arrival.rescheduled_eta ?? arrival.eta_plant) ? "Joins the family on this valid ETA to Plant" : "Risk only — no valid ETA to Plant"),
         detail: [arrival.reference, arrival.vendor].filter(Boolean).join(" · ") || "—",
         rule: (arrival.rescheduled_eta ?? arrival.eta_plant)
           ? "Every dated receipt—including an ordered PO with delivery date—enters the waterfall on its ETA-to-Plant date, never before."
@@ -360,6 +360,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "etd", label: "ETD", width: "100px", render: (a) => a.etd ?? "—" },
     { key: "eta_port", label: "ETA Port", width: "100px", render: (a) => a.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (a) => a.eta_plant ?? "—" },
+    {
+      key: "planning_coverage", label: "Planning coverage", width: "290px",
+      render: (a) => <span className={`text-xs ${a.planning_coverage === "RISK_ONLY" ? "text-rose-700" : "text-emerald-700"}`}>{a.planning_coverage_detail ?? "—"}</span>,
+      copyValue: (a) => a.planning_coverage_detail ?? "",
+    },
     {
       key: "rescheduled_eta", label: "Rescheduled ETA (planning)", width: "260px", filterable: false,
       render: (a) => (!a.reschedule_key ? <span className="text-xs text-slate-400">cannot move</span> : drafts[a.reschedule_key]?.clear ? (
