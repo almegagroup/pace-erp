@@ -46,6 +46,24 @@ Deno.test("family planner: a delivery lot is one PO, never a queued multi-lot pu
   assert(elBuys.every((buy) => buy.recommended_po_qty_base === 24000 && buy.lots.length === 1 && buy.lots[0].qty_base === 24000), `ELOTEX must be one 24 MT purchase per recommendation: ${JSON.stringify(elBuys)}`);
 });
 
+Deno.test("family waterfall: same-material own and group needs on one arrival create one MOQ lot", () => {
+  const days = daysTo("2026-10-31");
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: "2026-10-31",
+    opening_qty_by_material: { BETONE: 0 },
+    own_demand: days.map((required_by) => ({ material_id: "BETONE", required_by, qty_base: 20 })),
+    group_demand: days.map((required_by) => ({ group_id: "BETON", candidates: ["BETONE"], required_by, qty_base: 25 })),
+    confirmed_arrivals: [],
+    policies: [{ ...policy("BETONE", 1, 0, [{ vendor: "HIMADRI", lead: 0, cost: 1 }]), vendor_moq_qty_base: 2_000,
+      vendor_options: [{ vendor_id: "HIMADRI", lead_time_days: 0, moq_qty_base: 2_000, order_multiple_qty_base: null, unit_cost: 1, cycle_days: 30 }] }],
+    group_coverage_policies: [{ group_id: "BETON", effective_from: AS_OF, target_days: 1, critical_days: 0, desired_max_days_override: 31 }],
+  });
+  const buys = result.advisory_buys.filter((buy) => buy.material_id === "BETONE" && buy.status !== "NO_BUY");
+  assert(buys.length === 1, `one same-day physical BETONE lot is required, got ${JSON.stringify(buys)}`);
+  assert(buys[0].covers.includes("OWN") && buys[0].covers.includes("BETON"), `one lot must expose both purposes: ${JSON.stringify(buys[0])}`);
+  assert(buys[0].recommended_po_qty_base !== null && buys[0].recommended_po_qty_base > 0, `one net lot must retain a quantity: ${JSON.stringify(buys[0])}`);
+});
+
 Deno.test("family planner: reaching Target again after an engine lot creates the next projection", () => {
   // This mirrors the TOT White shape: the first 25-day trigger is not a one-time
   // alert.  Its 10-day order cycle restores cover to 35 days, then a new lot is

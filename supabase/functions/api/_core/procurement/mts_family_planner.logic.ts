@@ -673,7 +673,16 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     return best;
   };
 
-  const place = (need: Need, sim: Sim) => {
+  /**
+   * One physical purchase can cover more than one requirement.  In particular,
+   * an own/exclusive guard and one eligible group can ask for the
+   * same material on the same arrival day.  They are separate safety purposes,
+   * not separate POs: net their requirements first, then apply MOQ/multiple
+   * once.  The next simulation allocates that one receipt through the normal
+   * event-day waterfall.
+   */
+  const place = (needsForLot: readonly Need[], sim: Sim) => {
+    const need = needsForLot[0];
     const id = need.material;
     const m = mIndex.get(id)!;
     const policy = policyOf.get(id)!;
@@ -705,24 +714,44 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         ? Math.max(0, own[m][arrivalIndex] + finalOwnDailyUse[m][need.index] * window - availableBeforeArrival)
         : 0;
       const required = Math.max(demandRequired, safetyRequired);
+      const requiredByNeed = [required];
+      for (const other of needsForLot.slice(1)) {
+        const otherPoolIndex = other.pool ? pools.indexOf(other.pool) : -1;
+        const otherTarget = other.kind === "GROUP" ? groupCoverageAt(other.pool!, other.index).target : targets[m][other.index].target ?? 0;
+        const otherWindow = other.kind === "GROUP"
+          ? groupCoverageAt(other.pool!, other.index).desired
+          : memberDesiredMax[m][other.index] ?? (otherTarget + cycle);
+        const otherBefore = arrivalIndex - 1;
+        const otherMemberUse = usesGroupAsIndividualDemand ? sim.use[m] : own[m];
+        const otherDemandRequired = other.kind === "OWN"
+          ? useAhead(otherMemberUse, otherBefore, otherWindow + 1) - Math.max(0, otherBefore >= 0 ? sim.ownBalance[m][otherBefore] : Number(input.opening_qty_by_material[id] ?? 0))
+          : useAhead(other.pool!.demand, otherBefore, otherWindow + 1) - (otherBefore >= 0 ? sim.poolFree[otherPoolIndex][otherBefore] : 0);
+        const otherSafetyRequired = other.kind === "OWN" && !isSharedGroupMember[m]
+          ? Math.max(0, own[m][arrivalIndex] + finalOwnDailyUse[m][other.index] * otherWindow - availableBeforeArrival)
+          : 0;
+        requiredByNeed.push(Math.max(otherDemandRequired, otherSafetyRequired));
+      }
+      const combinedRequired = requiredByNeed.reduce((sum, qty) => sum + Math.max(0, qty), 0);
       const constraints = need.option
         ? { ...policy, vendor_moq_qty_base: need.option.option.moq_qty_base, order_multiple_qty_base: need.option.option.order_multiple_qty_base, delivery_lot_qty_base: need.option.option.delivery_lot_qty_base ?? null }
         : policy;
-      const orderQty = applySinglePurchaseConstraints(Math.max(roundQty(required), EPSILON * 10), constraints) ?? 0;
+      const orderQty = applySinglePurchaseConstraints(Math.max(roundQty(combinedRequired), EPSILON * 10), constraints) ?? 0;
       lotQty = orderQty;
       const seq = (sequence.get(id) ?? 0) + 1;
       sequence.set(id, seq);
       const poBy = addDays(allDays[need.index], -lead);
-      const covers = need.kind === "OWN"
+      const covers = [...new Set(needsForLot.flatMap((candidate) => candidate.kind === "OWN"
         ? [usesGroupAsIndividualDemand ? "MEMBER_GUARD" : "OWN"]
-        : [need.pool!.group_id];
-      const why = need.kind === "OWN"
-        ? (usesGroupAsIndividualDemand
-          ? `Member guard: its allocated eligible-group use falls to its individual Target ${t} days on ${allDays[need.index]}.`
-          : `Own use: cover of its own (exclusive) use falls to Target ${t} days on ${allDays[need.index]}.`)
-        : `Group ${need.pool!.group_id}: free stock of its members falls to Target ${t} days on ${allDays[need.index]}; refill is sized to Group Desired Max ${window} days; ${need.late ? "fastest member to arrive" : "cheapest member that arrives in time"}.`;
+        : [candidate.pool!.group_id]))];
+      const why = needsForLot.length === 1
+        ? (need.kind === "OWN"
+          ? (usesGroupAsIndividualDemand
+            ? `Member guard: its allocated eligible-group use falls to its individual Target ${t} days on ${allDays[need.index]}.`
+            : `Own use: cover of its own (exclusive) use falls to Target ${t} days on ${allDays[need.index]}.`)
+          : `Group ${need.pool!.group_id}: free stock of its members falls to Target ${t} days on ${allDays[need.index]}; refill is sized to Group Desired Max ${window} days; ${need.late ? "fastest member to arrive" : "cheapest member that arrives in time"}.`)
+        : `One physical ${id} lot nets ${covers.map((cover) => cover === "OWN" ? "own use" : cover === "MEMBER_GUARD" ? "member guard" : `group ${cover}`).join(" + ")} on the same arrival date; MOQ / multiple applied once, then the event-day waterfall allocates it.`;
       buys.push({
-        material_id: id, sequence: seq, required_qty_base: roundQty(Math.max(0, required)), recommended_po_qty_base: orderQty,
+        material_id: id, sequence: seq, required_qty_base: roundQty(Math.max(0, combinedRequired)), recommended_po_qty_base: orderQty,
         recommended_po_by: need.late ? input.as_of : poBy, estimated_plant_eta: allDays[arrivalIndex], need_date: allDays[need.index],
         lots: [{ lot_no: 1, plant_eta: allDays[arrivalIndex], qty_base: roundQty(lotQty) }], total_lead_time_days: lead,
         status: need.late ? "ADVISORY_LATE" : "ADVISORY",
@@ -730,12 +759,14 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         advisory_only: true,
         vendor_id: need.option?.option.vendor_id ?? null, max_cover_days: roundQty(window),
         bridge: need.option?.bridge ?? false, cheapest_vendor_id: need.option?.cheapest ?? null,
-        covers, need_kind: need.kind,
+        covers, need_kind: needsForLot.some((candidate) => candidate.kind === "GROUP") ? "GROUP" : "OWN",
       });
       engineLots.push({ material_id: id, index: arrivalIndex, qty: lotQty });
     }
-    if (need.kind === "OWN") pendingOwn.set(id, need.late ? arrivalIndex : need.index);
-    else pendingGroup.set(need.pool!.key, need.late ? arrivalIndex : need.index);
+    for (const candidate of needsForLot) {
+      if (candidate.kind === "OWN") pendingOwn.set(id, candidate.late ? arrivalIndex : candidate.index);
+      else pendingGroup.set(candidate.pool!.key, candidate.late ? arrivalIndex : candidate.index);
+    }
   };
 
   let sim = simulate([...manual]);
@@ -747,7 +778,29 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       if (needs.length === 0) break;
       // DEPENDENT: one lot at a time, earliest need first; the next need is found on the new projection.
       needs.sort((a, b) => a.index - b.index || (a.kind === "OWN" ? 0 : 1) - (b.kind === "OWN" ? 0 : 1) || a.material.localeCompare(b.material));
-      place(needs[0], sim);
+      const first = needs[0];
+      const firstPolicy = policyOf.get(first.material)!;
+      const firstLead = first.option?.option.lead_time_days ?? totalLeadTimeDays(firstPolicy) ?? 0;
+      const firstArrival = first.late ? Math.min(N - 1, firstLead) : first.index;
+      const sameArrivalNeeds = needs.filter((candidate) => {
+        if (candidate.material !== first.material) return false;
+        const policy = policyOf.get(candidate.material)!;
+        const lead = candidate.option?.option.lead_time_days ?? totalLeadTimeDays(policy) ?? 0;
+        const arrival = candidate.late ? Math.min(N - 1, lead) : candidate.index;
+        return arrival === firstArrival && (candidate.option?.option.vendor_id ?? null) === (first.option?.option.vendor_id ?? null);
+      });
+      // An own guard and one group need can safely be netted into this receipt.
+      // Leave additional same-material groups for the next whole-family
+      // simulation: their pools may overlap, so blindly summing them here
+      // could count the same eligible stock twice.
+      let includedGroup = false;
+      const sameReceipt = sameArrivalNeeds.filter((candidate) => {
+        if (candidate.kind === "OWN") return true;
+        if (includedGroup) return false;
+        includedGroup = true;
+        return true;
+      });
+      place(sameReceipt, sim);
       sim = simulate([...manual, ...engineLots]);
     }
   }

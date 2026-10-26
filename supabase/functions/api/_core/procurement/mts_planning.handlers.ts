@@ -537,7 +537,10 @@ export async function computePlanning(p: PlanningParams) {
     const byKey = new Map<string, { group_id: string; month: string; assigned_material_id: string | null; reason: AssignmentReason; uncovered_qty: number }>();
     for (const b of projection.advisory_buys) {
       if (b.need_kind !== "GROUP" || !b.need_date || (b.status !== "ADVISORY" && b.status !== "ADVISORY_LATE")) continue;
-      for (const groupId of b.covers) {
+      // A consolidated physical receipt can carry both an own/member guard and
+      // group purposes.  Only real persisted group ids belong in the monthly
+      // group-assignment table; OWN/MEMBER_GUARD are business-purpose labels.
+      for (const groupId of b.covers.filter((cover) => cover !== "OWN" && cover !== "MEMBER_GUARD")) {
         const key = `${groupId}|${b.need_date.slice(0, 7)}|${b.material_id}`;
         const month = `${b.need_date.slice(0, 7)}-01`;
         const selected = selections.map.get(month) ?? new Set<string>();

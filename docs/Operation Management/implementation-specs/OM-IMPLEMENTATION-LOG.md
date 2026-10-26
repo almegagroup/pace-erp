@@ -296,6 +296,25 @@ rephased/adjusted value একই নামে বা silently interchange ক�
   migration was applied and no deployment, live recalculation or data mutation
   occurred.
 
+### 2026-10-26 — PO22 Family same-arrival physical-lot netting (CODE CHECKED; PROMOTION PENDING)
+
+- **Audit finding:** the Family simulator already brings confirmed, manual and engine receipts into
+  the daily event-time waterfall.  The remaining defect is earlier in the buy loop: an `OWN` guard
+  and a `GROUP` guard for the same material, vendor and plant-arrival date could each apply MOQ and
+  emit two physical recommendations.
+- **Locked correction:** compatible needs are netted before MOQ / order multiple are applied.  The
+  emitted advisory is one physical receipt, carries every business purpose (`Own use`, `Member
+  guard`, and/or the resolved group), and is then re-simulated through the existing event-day
+  direct-protection → narrow-group → broad-group waterfall. It nets one OWN/member guard and one
+  group purpose. Additional overlapping groups deliberately wait for the next complete simulation;
+  summing them would double-count shared eligible stock. This does not merge different
+  materials, vendors or arrival dates.
+- **Output safety:** Planning's monthly group-assignment writer ignores `OWN` and `MEMBER_GUARD`
+  purpose labels on a consolidated receipt; only real group ids are assignment destinations.
+- **Regression:** a same-day BETONE own + BETON group fixture asserts one advisory receipt with
+  both purposes.  Final Family / Planning handler / frontend checks and production UAT remain
+  pending before this may be called released.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from
