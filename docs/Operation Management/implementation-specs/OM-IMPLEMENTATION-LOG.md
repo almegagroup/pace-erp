@@ -322,6 +322,11 @@ rephased/adjusted value একই নামে বা silently interchange ক�
    → broader group → second rotation.  Each purpose balance then declines only through its own
    consumption.  A buy is triggered only when that purpose reaches its configured Target, not
    because the browser/server recreates a Desired-Max bucket the next day.
+   - **W3g-a foundation (2026-10-26):** a pure, tested purpose ledger now carries
+     Direct/Exclusive → narrow group → broad group balances and emits the exact
+     physical-material allocation at each event day.  It is intentionally not
+     yet the live simulator: FEFO, expiry, conservation and selected-member
+     purchase authority must remain intact when the adapter is introduced.
 2. **W3h — overlapping-family receipt decision (depends on W3g):** For BETONE/SAPCOMER/BENTONE
    shapes, simulate all existing eligible stock and dated receipts first.  A proposed material must
    be assessed against every overlapping group purpose on that arrival day.  MOQ/multiple is applied
