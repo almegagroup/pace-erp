@@ -331,6 +331,10 @@ rephased/adjusted value একই নামে বা silently interchange ক�
    shapes, simulate all existing eligible stock and dated receipts first.  A proposed material must
    be assessed against every overlapping group purpose on that arrival day.  MOQ/multiple is applied
    once per actual material/vendor/arrival receipt, never once per visible group row.
+   - **W3h-a missing-Max guard (2026-10-26):** an eligible zero-stock member with
+     no item policy no longer collapses the group's derived Desired Max to its
+     Target.  It may still consume actual stock/inbound, but cannot suppress a
+     configured member's replenishment window or cause an immediate next-day MOQ.
 3. **W3i — receipt/allocation trace (depends on W3g/W3h):** Expose, without UUIDs, the receipt,
    its direct/group quantities, remaining purpose coverage, Target trigger and any actual excess.
    This is engine evidence; it does not claim a Store issue happened.
