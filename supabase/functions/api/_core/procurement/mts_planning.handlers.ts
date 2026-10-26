@@ -25,11 +25,12 @@ import {
   requireRequirementPolicyAccess,
   requireRequirementViewAccess,
   todayInIndia,
+  buildDisplayUnits,
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -148,7 +149,8 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       vendor_id: vendorId, vendor_label: label.get(vendorId) ?? "—", material_id: materialId,
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
-      last_price: num(row.last_purchase_price),
+      // VMI keeps the price per its Supply UoM (e.g. ₹/MT); every cost here is per base unit.
+      last_price: (() => { const price = num(row.last_purchase_price); const perSupply = toMaterialBase(material, 1, unit); return price === null || !perSupply || perSupply <= 0 ? null : price / perSupply; })(),
       currency: resolvePurchaseCurrency({
         po_line_currency: poCurrencyByVmi.get(text(row.id))?.currency ?? null,
         vmi_last_purchase_currency: text(row.last_purchase_currency) || null,
@@ -471,6 +473,7 @@ export async function computePlanning(p: PlanningParams) {
         order_multiple_qty_base: term.multiple_base, delivery_lot_qty_base: term.lot_base,
         unit_cost: unitCost === null ? null : Math.round(unitCost * 10000) / 10000, cycle_days: cycle,
         freight_term: freightTerm, cost_missing: missing,
+        credit_days: term.advance ? 0 : term.credit_days ?? null,
       };
     });
     if (options.length) vendorOptions.set(id, options);
@@ -503,19 +506,17 @@ export async function computePlanning(p: PlanningParams) {
     own_demand: ownDemand,
     group_demand: groupDemand,
     group_coverage_policies: groupCoveragePolicies,
-    // A CC-date GR and every future inbound with a valid plant ETA participate
-    // on that date. An ordered PO is usable only when its delivery/CSN ETA exists.
-    confirmed_arrivals: familyArrivalCandidates
-      .filter((arrival) => isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
-      .map((arrival) => ({
-        source_key: arrival.source_key,
-        material_id: arrival.material_id,
-        eta_to_plant: arrival.eta_to_plant,
-        qty_base: arrival.qty_base,
-      })),
+    // Every open inbound piece participates: a valid future ETA on that date; a passed or
+    // missing ETA on the CC date, flagged (owner 2026-10-26, same as the Requirement tab).
+    confirmed_arrivals: familyArrivalCandidates.map((arrival) => ({
+      source_key: arrival.source_key,
+      material_id: arrival.material_id,
+      eta_to_plant: familyArrivalEta(arrival.eta_to_plant, assembly.input.as_of),
+      qty_base: arrival.qty_base,
+    })),
     arrival_risks: familyArrivalCandidates
       .filter((arrival) => !isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
-      .map(familyArrivalRisk),
+      .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of)),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     group_orders: req.input.groupOrders,
@@ -871,6 +872,8 @@ export async function computePlanning(p: PlanningParams) {
       }));
     }).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
+    // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.
+    display_units: buildDisplayUnits(universe, req.materials, (id) => policyOrderUom.get(id), new Map(universe.map((id) => [id, (vendorTerms.get(id) ?? []).map((t) => t.supply_uom_code ?? "")]))),
     store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),

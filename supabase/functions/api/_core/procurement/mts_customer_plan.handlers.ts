@@ -32,6 +32,7 @@
  */
 
 import type { ContextResolution } from "../../_pipeline/context.ts";
+import { effectiveProductionAssignments } from "./mts_requirement.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
@@ -115,18 +116,26 @@ async function requirePlanProductionCompanyAccess(req: Request, ctx: MtsPlanHand
   return allowed ? null : planError(req, ctx, "MTS_PLAN_FORBIDDEN", 403, "You cannot choose the producing company for this company's plan.");
 }
 
-/** Cross-company production assignments of this company (empty when the table is not deployed). */
+/**
+ * Cross-company production assignments of this company, carried forward to later months until a
+ * newer choice is saved (empty when the table is not deployed).
+ */
 async function loadProductionAssignments(companyId: string, months: string[]): Promise<Map<string, string>> {
+  const last = [...months].map((m) => m.slice(0, 10)).sort().pop() ?? "";
   const { data, error } = await serviceRoleClient.schema("erp_planning").from("customer_plan_production_company")
-    .select("plan_month, sku_material_id, production_company_id").eq("company_id", companyId).eq("is_current", true).in("plan_month", months).limit(5000);
+    .select("company_id, plan_month, sku_material_id, production_company_id").eq("company_id", companyId).eq("is_current", true).lte("plan_month", last).limit(20000);
   if (error) {
     const code = String((error as { code?: string }).code ?? "");
     if (code === "42P01" || code === "PGRST205" || code === "PGRST106") return new Map();
     throw new Error("MTS_PLAN_PRODUCTION_COMPANY_LOAD_FAILED");
   }
+  const rows = ((data ?? []) as JsonRecord[]).map((row) => ({
+    company_id: textValue(row.company_id), plan_month: textValue(row.plan_month).slice(0, 10), sku_material_id: textValue(row.sku_material_id),
+    production_company_id: textValue(row.production_company_id) || null,
+  }));
   const result = new Map<string, string>(); // `${month}|${sku}` → producing company id
-  for (const row of (data ?? []) as JsonRecord[]) {
-    if (textValue(row.production_company_id)) result.set(`${textValue(row.plan_month).slice(0, 10)}|${textValue(row.sku_material_id)}`, textValue(row.production_company_id));
+  for (const row of effectiveProductionAssignments(rows, months)) {
+    if (row.production_company_id) result.set(`${row.plan_month}|${row.sku_material_id}`, row.production_company_id);
   }
   return result;
 }

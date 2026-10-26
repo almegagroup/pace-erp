@@ -149,7 +149,7 @@ export default function MtsGroupSettings({ companyId, planMonth, asOf, today, ca
         <div className="grid gap-2 border-t border-slate-200 p-3">
           <p className="text-xs text-slate-600">
             Target and Critical protect the group. Desired Max is derived from the member-level calculated Max Days unless you override it.
-            Member use order applies after FEFO and hard exclusive protection. No use-order setting = Most stock first (Method C).
+            Member use order applies after FEFO and hard exclusive protection. No use-order setting = Most stock first (Method C): the group&apos;s use is shared by each member&apos;s free stock, a little more from costlier stock and from stock whose usual vendor gives longer credit days.
           </p>
           <div className="flex flex-wrap gap-2">
             <button

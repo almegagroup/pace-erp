@@ -26,7 +26,8 @@ import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
 import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
 import MtsGroupSettings from "./MtsGroupSettings.jsx";
-import { qtyWithOrderUnit } from "./mtsOrderUnit.js";
+import { makeDisplayUnits, qtyInDisplayUnit } from "./mtsOrderUnit.js";
+import { PO22_LIVE_QUERY } from "./mtsLiveQuery.js";
 import MtsItemPlanTab from "./MtsItemPlanTab.jsx";
 import MtsPlanningReschedule from "./MtsPlanningReschedule.jsx";
 import MtsRollingPlanDownload from "./MtsRollingPlanDownload.jsx";
@@ -155,8 +156,10 @@ function flag(value) {
 }
 
 // Numeric column helper: right-aligned, copy/filter/export as a plain number.
-function qtyColumn(key, label, group, options = {}) {
-  const read = options.read ?? ((row) => row[key]);
+function baseQtyColumn(key, label, group, options = {}) {
+  const source = options.read ?? ((row) => row[key]);
+  // Owner 2026-10-26: quantities in the material's display (Order) UoM; days / counts unchanged.
+  const read = options.du && !options.days && !options.count ? (row) => options.du.qty(source(row), row.material_id) : source;
   const format = options.days ? fmtDays : fmtQty;
   return {
     key, label, group, width: options.width ?? "110px", align: "right",
@@ -303,10 +306,11 @@ export default function MtsRequirementPage() {
 function riskMatch(row, filter) {
   switch (filter) {
     case "WITH_DEMAND": return row.identifier !== "NO_DEMAND";
-    case "CRITICAL": return row.below_critical === true;
-    case "BELOW_TARGET": return row.below_target === true;
-    case "CRITICAL_WITH_IN": return row.below_critical_with_in === true;
-    case "BELOW_TARGET_WITH_IN": return row.below_target_with_in === true;
+    // A material whose group is carried by other members is not a risk of its own (owner 2026-10-26).
+    case "CRITICAL": return row.below_critical === true && !row.covered_by_group;
+    case "BELOW_TARGET": return row.below_target === true && !row.covered_by_group;
+    case "CRITICAL_WITH_IN": return row.below_critical_with_in === true && !row.covered_by_group;
+    case "BELOW_TARGET_WITH_IN": return row.below_target_with_in === true && !row.covered_by_group;
     case "NM_SHORT": return row.status_nm === "SHORT_IN_NM" || row.status_nm === "SHORT_BEFORE_NM";
     case "INBOUND_RISK": return row.inbound_risk === "OVERDUE" || row.inbound_risk === "ETA_UNKNOWN";
     case "NO_POLICY": return row.identifier === "NO_POLICY";
@@ -314,15 +318,23 @@ function riskMatch(row, filter) {
   }
 }
 
-function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty) {
+function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty, du) {
+  const qtyColumn = (key, label, group, options = {}) => baseQtyColumn(key, label, group, { ...options, du });
   return [
     textColumn("material_name", "Material (ITEMS)", "identity", { width: "260px" }),
     textColumn("material_code", "Material Code", "identity", { width: "110px" }),
     textColumn("material_type", "TYPE", "identity", { width: "60px" }),
-    textColumn("base_uom_code", "UoM", "identity", { width: "60px" }),
-    qtyColumn("priority_score", "Identifier (0–3)", "identity", { width: "100px" }),
+    textColumn("base_uom_code", "UoM", "identity", { width: "60px", read: (r) => du.uom(r.material_id, r.base_uom_code) }),
+    qtyColumn("priority_score", "Identifier (0–3)", "identity", { width: "100px", count: true }),
     textColumn("reorder_flag", "ID2 (at reorder level)", "identity", { width: "130px", read: (r) => (r.reorder_flag === null ? "" : yesNo(r.reorder_flag)), render: (r) => flag(r.reorder_flag) }),
-    textColumn("identifier", "Status", "identity", { width: "120px", render: (r) => badge(r.identifier) }),
+    textColumn("identifier", "Status", "identity", {
+      width: "190px",
+      read: (r) => (r.covered_by_group && ["CRITICAL", "BELOW_TARGET"].includes(r.identifier) ? "COVERED_BY_GROUP" : r.identifier),
+      render: (r) => (r.covered_by_group && ["CRITICAL", "BELOW_TARGET"].includes(r.identifier)
+        ? <span title={r.group_cover_note ?? ""} className="bg-emerald-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-800">COVERED BY GROUP</span>
+        : badge(r.identifier)),
+    }),
+    textColumn("group_cover_note", "Remark", "identity", { width: "300px", read: (r) => r.group_cover_note ?? "" }),
     {
       key: "sources", label: "Sources", group: "identity", width: "90px", filterable: false,
       render: (r) => (
@@ -335,7 +347,7 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
 
     qtyColumn("target_cov_days", "Target Cov", "policy", { days: true, width: "90px" }),
     qtyColumn("critical_cov_days", "Critical Cov", "policy", { days: true, width: "90px" }),
-    qtyColumn("moq_qty", "MOQ", "policy", { width: "90px" }),
+    qtyColumn("moq_qty", "MOQ", "policy", { width: "90px", count: true }),
     textColumn("moq_uom_code", "MOQ UoM", "policy", { width: "80px" }),
     textColumn("moq_source", "MOQ Source", "policy", { width: "100px" }),
     textColumn("moq_active", "MOQ Active", "policy", { width: "90px", read: (r) => yesNo(r.moq_active) }),
@@ -404,7 +416,7 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
     qtyColumn("lead_time_observed_avg", "Observed Avg", "leadtime", { days: true, width: "100px" }),
     qtyColumn("lead_time_observed_max", "Observed Max", "leadtime", { days: true, width: "100px" }),
     qtyColumn("lead_time_observed_p90", "Observed P90", "leadtime", { days: true, width: "100px" }),
-    qtyColumn("lead_time_observed_count", "Samples", "leadtime", { width: "70px" }),
+    qtyColumn("lead_time_observed_count", "Samples", "leadtime", { width: "70px", count: true }),
     qtyColumn("avg_daily_req", "Avg Daily Req", "leadtime"),
     qtyColumn("safety_day_stock", "Safety Day Stock (Target × prorata)", "leadtime", { width: "160px" }),
     qtyColumn("lead_time_stock", "Lead time Stock", "leadtime"),
@@ -433,18 +445,23 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
 }
 
 /** D3: material-null group pools — the group's shortage is never assigned to a member. */
-function GroupsView({ groups, expanded, setExpanded, loading }) {
+function GroupsView({ groups, expanded, setExpanded, loading, du }) {
+  // A group's quantities show in its members' common unit (else base UoM); members in their own.
+  const gq = (g, value) => fmtQty(du.qtyIn(value, du.groupUnit((g.members ?? []).map((m) => m.material_id))));
+  const gUom = (g) => du.groupUnit((g.members ?? []).map((m) => m.material_id))?.uom_code ?? g.base_uom_code ?? "";
+  const mq = (m, value) => fmtQty(du.qty(value, m.material_id));
   const columns = [
     { key: "group_label", label: "Group", width: "240px" },
     { key: "kind", label: "RM / PM", width: "70px" },
-    { key: "cm_demand", label: "Group demand CM (rest)", width: "150px", align: "right", render: (g) => fmtQty(g.cm_demand), copyValue: (g) => g.cm_demand },
-    { key: "nm_demand", label: "Group demand NM", width: "130px", align: "right", render: (g) => fmtQty(g.nm_demand), copyValue: (g) => g.nm_demand },
-    { key: "covered_from_stock", label: "Met from members' stock", width: "160px", align: "right", render: (g) => fmtQty(g.covered_from_stock), copyValue: (g) => g.covered_from_stock },
-    { key: "uncovered_cm", label: "Group shortage CM", width: "130px", align: "right", render: (g) => <span className={g.uncovered_cm > 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(g.uncovered_cm)}</span>, copyValue: (g) => g.uncovered_cm },
-    { key: "uncovered_nm", label: "Group shortage NM", width: "130px", align: "right", render: (g) => <span className={g.uncovered_nm > 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(g.uncovered_nm)}</span>, copyValue: (g) => g.uncovered_nm },
+    { key: "uom", label: "UoM", width: "60px", render: (g) => dash(gUom(g)), copyValue: (g) => gUom(g) },
+    { key: "cm_demand", label: "Group demand CM (rest)", width: "150px", align: "right", render: (g) => gq(g, g.cm_demand), copyValue: (g) => gq(g, g.cm_demand) },
+    { key: "nm_demand", label: "Group demand NM", width: "130px", align: "right", render: (g) => gq(g, g.nm_demand), copyValue: (g) => gq(g, g.nm_demand) },
+    { key: "covered_from_stock", label: "Met from members' stock", width: "160px", align: "right", render: (g) => gq(g, g.covered_from_stock), copyValue: (g) => gq(g, g.covered_from_stock) },
+    { key: "uncovered_cm", label: "Group shortage CM", width: "130px", align: "right", render: (g) => <span className={g.uncovered_cm > 0 ? "font-semibold text-rose-700" : ""}>{gq(g, g.uncovered_cm)}</span>, copyValue: (g) => gq(g, g.uncovered_cm) },
+    { key: "uncovered_nm", label: "Group shortage NM", width: "130px", align: "right", render: (g) => <span className={g.uncovered_nm > 0 ? "font-semibold text-rose-700" : ""}>{gq(g, g.uncovered_nm)}</span>, copyValue: (g) => gq(g, g.uncovered_nm) },
     { key: "first_uncovered_day", label: "First short day", width: "110px", render: (g) => dash(g.first_uncovered_day) },
     { key: "cover_days", label: "Cover days", width: "90px", align: "right", render: (g) => (g.cover_days === null ? "Through NM" : g.cover_days) },
-    { key: "members_inbound_total", label: "Members' incoming", width: "130px", align: "right", render: (g) => fmtQty(g.members_inbound_total), copyValue: (g) => g.members_inbound_total },
+    { key: "members_inbound_total", label: "Members' incoming", width: "130px", align: "right", render: (g) => gq(g, g.members_inbound_total), copyValue: (g) => gq(g, g.members_inbound_total) },
     { key: "member_flag", label: "Member below Target / Critical", width: "190px", render: (g) => (g.any_member_below_critical ? badge("CRITICAL") : g.any_member_below_target ? badge("BELOW_TARGET") : "") },
     {
       key: "members_btn", label: "Members", width: "90px", filterable: false,
@@ -458,9 +475,9 @@ function GroupsView({ groups, expanded, setExpanded, loading }) {
   const memberColumns = [
     { key: "material_name", label: "Member", width: "260px" },
     { key: "material_code", label: "Code", width: "110px", render: (m) => dash(m.material_code) },
-    { key: "fixed_demand_qty", label: "Own fixed demand (met first)", width: "180px", align: "right", render: (m) => fmtQty(m.fixed_demand_qty) },
-    { key: "drawn_qty", label: "Given to this group", width: "140px", align: "right", render: (m) => fmtQty(m.drawn_qty) },
-    { key: "usable_stock", label: "Counted stock", width: "120px", align: "right", render: (m) => fmtQty(m.usable_stock) },
+    { key: "fixed_demand_qty", label: "Own fixed demand (met first)", width: "180px", align: "right", render: (m) => `${mq(m, m.fixed_demand_qty)} ${du.uom(m.material_id, m.base_uom_code)}`.trim() },
+    { key: "drawn_qty", label: "Given to this group", width: "140px", align: "right", render: (m) => `${mq(m, m.drawn_qty)} ${du.uom(m.material_id, m.base_uom_code)}`.trim() },
+    { key: "usable_stock", label: "Counted stock", width: "120px", align: "right", render: (m) => `${mq(m, m.usable_stock)} ${du.uom(m.material_id, m.base_uom_code)}`.trim() },
     { key: "target_cov_days", label: "Target / Critical", width: "120px", render: (m) => `${fmtDays(m.target_cov_days) || "—"} / ${fmtDays(m.critical_cov_days) || "—"}` },
     { key: "flag", label: "Member cover", width: "130px", render: (m) => (m.below_critical ? badge("CRITICAL") : m.below_target ? badge("BELOW_TARGET") : m.below_target === false ? "OK" : "—") },
   ];
@@ -485,15 +502,17 @@ function GroupsView({ groups, expanded, setExpanded, loading }) {
   );
 }
 
-function SourceDetail({ row }) {
+function SourceDetail({ row, du }) {
+  const q = (value) => fmtQty(du.qty(value, row.material_id));
+  const unit = du.uom(row.material_id, row.base_uom_code);
   const poolColumns = [
     { key: "kind", label: "Kind", width: "50px" },
     { key: "group_label", label: "Material Group", width: "200px", render: (p) => dash(p.group_label), copyValue: (p) => p.group_label ?? "" },
     { key: "use_primary", label: "Use Primary", width: "90px", render: (p) => (p.use_primary === null ? "—" : yesNo(p.use_primary)) },
     { key: "candidates", label: "Eligible Members (target first)", width: "280px", render: (p) => p.candidates.join(", "), copyValue: (p) => p.candidates.join(", ") },
     { key: "required_location", label: "Req SLoc", width: "80px" },
-    { key: "pool_total", label: "Pool Demand", width: "110px", align: "right", render: (p) => fmtQty(p.pool_total) },
-    { key: "this_material_qty", label: "This Material", width: "110px", align: "right", render: (p) => fmtQty(p.this_material_qty) },
+    { key: "pool_total", label: `Pool Demand (${unit})`, width: "130px", align: "right", render: (p) => q(p.pool_total) },
+    { key: "this_material_qty", label: `This Material (${unit})`, width: "130px", align: "right", render: (p) => q(p.this_material_qty) },
     { key: "outer_qty", label: "User Pack Qty (CM + NM)", width: "150px", align: "right", render: (p) => (p.outer_qty === null ? "—" : `${fmtQty(p.outer_qty)} ${p.outer_uom_code ?? ""}`), copyValue: (p) => p.outer_qty ?? "" },
     { key: "fill_qty_per_outer", label: "Fill / Pack", width: "110px", align: "right", render: (p) => (p.fill_qty_per_outer === null ? "—" : `${fmtQty(p.fill_qty_per_outer)} KG`), copyValue: (p) => p.fill_qty_per_outer ?? "" },
     { key: "strokes", label: "Effective Stroke(s)", width: "260px", render: (p) => (p.strokes.length ? p.strokes.join("; ") : "—"), copyValue: (p) => p.strokes.join("; ") },
@@ -505,7 +524,7 @@ function SourceDetail({ row }) {
     { key: "reference", label: "Document (PO / CSN / GE / Lot)", width: "360px" },
     { key: "date", label: "ETA to Plant", width: "100px", render: (e) => e.date ?? "UNKNOWN", copyValue: (e) => e.date ?? "UNKNOWN" },
     { key: "date_source", label: "Date Source", width: "180px" },
-    { key: "qty", label: "Qty (base)", width: "110px", align: "right", render: (e) => fmtQty(e.qty) },
+    { key: "qty", label: `Qty (${unit})`, width: "110px", align: "right", render: (e) => q(e.qty) },
   ];
   const routeColumns = [
     { key: "vendor_label", label: "Vendor", width: "260px" },
@@ -545,18 +564,20 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
     queryKey: reportKey,
     queryFn: () => getMtsRequirementReport({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
     enabled: Boolean(companyId && planMonth && asOf),
+    ...PO22_LIVE_QUERY,
   });
   const report = reportQ.data ?? null;
   const toggleExpanded = useCallback((id) => setExpanded((current) => (current === id ? "" : id)), []);
   const [showPackQty, setShowPackQty] = useState(false);
   const togglePackQty = useCallback(() => setShowPackQty((current) => !current), []);
-  const allColumns = useMemo(() => buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty), [expanded, toggleExpanded, showPackQty, togglePackQty]);
+  const du = useMemo(() => makeDisplayUnits(report?.display_units), [report]);
+  const allColumns = useMemo(() => buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty, du), [expanded, toggleExpanded, showPackQty, togglePackQty, du]);
   const columns = useMemo(() => allColumns.filter((c) => c.group === "identity" || !hiddenGroups.has(c.group)), [allColumns, hiddenGroups]);
   const rows = useMemo(() => (report?.rows ?? [])
     .filter((row) => typeFilter === "ALL" || row.material_type === typeFilter)
     .filter((row) => riskMatch(row, riskFilter)), [report, typeFilter, riskFilter]);
   const onFilteredRowsChange = useCallback((visible) => { filteredRef.current = visible; }, []);
-  const renderExpandedRow = useCallback((row) => (expanded === row.material_id ? <SourceDetail row={row} /> : null), [expanded]);
+  const renderExpandedRow = useCallback((row) => (expanded === row.material_id ? <SourceDetail row={row} du={du} /> : null), [expanded, du]);
 
   function toggleGroup(id) {
     setHiddenGroups((current) => {
@@ -672,7 +693,7 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
         </details>
       ) : null}
       {view === "GROUPS" ? (
-        <GroupsView groups={(report?.groups ?? []).filter((g) => typeFilter === "ALL" || g.kind === typeFilter)} expanded={expandedGroup} setExpanded={setExpandedGroup} loading={reportQ.isLoading} />
+        <GroupsView groups={(report?.groups ?? []).filter((g) => typeFilter === "ALL" || g.kind === typeFilter)} expanded={expandedGroup} setExpanded={setExpandedGroup} loading={reportQ.isLoading} du={du} />
       ) : (
         <ErpDenseGrid
           {...GRID_PROPS}
@@ -1477,12 +1498,14 @@ function usePlanningQuery(companyId, planMonth, asOf, demandAt) {
     queryKey: ["procurement", "mts-requirement", "planning", companyId, planMonth, asOf, demandAt],
     queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
     enabled: Boolean(companyId && planMonth && asOf),
+    ...PO22_LIVE_QUERY,
   });
 }
 
 /** Owner: Critical + Replenishment in one simple list — what to do, by when, why. */
 function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
   const planningQ = usePlanningQuery(companyId, planMonth, asOf, demandAt);
+  const du = useMemo(() => makeDisplayUnits(planningQ.data?.display_units), [planningQ.data]);
   const rows = useMemo(() => buildActionRows(planningQ.data ?? null), [planningQ.data]);
   const counts = useMemo(() => Object.fromEntries(Object.keys(ACTION_LEVELS).map((level) => [level, rows.filter((r) => r.level === level).length])), [rows]);
   const levelTone = { URGENT: "bg-rose-100 text-rose-800", SOON: "bg-amber-100 text-amber-800", PLAN: "bg-sky-100 text-sky-800", FIX_DATA: "bg-slate-100 text-slate-700" };
@@ -1492,7 +1515,7 @@ function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
     { key: "material", label: "Material / Group", width: "260px" },
     { key: "code", label: "Code", width: "100px", render: (r) => dash(r.code) },
     { key: "by_when", label: "By when", width: "100px", render: (r) => dash(r.by_when) },
-    { key: "qty", label: "Qty", width: "180px", align: "right", render: (r) => qtyWithOrderUnit(r.qty, r.uom, r.order_unit), copyValue: (r) => r.qty ?? "" },
+    { key: "qty", label: "Qty", width: "160px", align: "right", render: (r) => qtyInDisplayUnit(r.qty, r.uom, r.order_unit ?? du.unitOf(r.material_id)), copyValue: (r) => qtyInDisplayUnit(r.qty, r.uom, r.order_unit ?? du.unitOf(r.material_id)) },
     { key: "vendor", label: "Vendor", width: "220px", render: (r) => dash(r.vendor) },
     { key: "shortage_day", label: "Runs out", width: "100px", render: (r) => (r.shortage_day ? <span className="font-semibold text-rose-700">{r.shortage_day}</span> : "—"), copyValue: (r) => r.shortage_day ?? "" },
     { key: "why", label: "Why", width: "420px" },
@@ -1535,6 +1558,10 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
   }, [plan]);
   const dailyRows = useMemo(() => (plan?.daily ?? []).filter((r) => r.material_id === dailyMaterial), [plan, dailyMaterial]);
+  const du = useMemo(() => makeDisplayUnits(plan?.display_units), [plan]);
+  // Owner 2026-10-26: one unit per quantity — the lot's order unit, else the material's display unit.
+  const buyQty = (b, value) => qtyInDisplayUnit(value, b.uom, b.order_unit ?? du.unitOf(b.material_id));
+  const dq = (r, value) => (value === null || value === undefined || value === "" ? "" : qtyInDisplayUnit(value, r.uom, du.unitOf(r.material_id)));
 
   async function saveRun() {
     setSaving(true);
@@ -1554,11 +1581,11 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "material_code", label: "Code", width: "100px", render: (b) => dash(b.material_code) },
     { key: "status", label: "Status", width: "130px", render: (b) => buyBadge(b.status), copyValue: (b) => BUY_STATUS_LABEL[b.status] ?? b.status },
     { key: "sequence", label: "#", width: "40px", align: "right", render: (b) => (b.sequence || "") },
-    { key: "required_qty_base", label: "Required", width: "110px", align: "right", render: (b) => fmtQty(b.required_qty_base), copyValue: (b) => b.required_qty_base },
-    { key: "recommended_po_qty_base", label: "PO Qty (MOQ / multiple)", width: "200px", align: "right", render: (b) => qtyWithOrderUnit(b.recommended_po_qty_base, b.uom, b.order_unit), copyValue: (b) => b.recommended_po_qty_base ?? "" },
+    { key: "required_qty_base", label: "Required", width: "120px", align: "right", render: (b) => buyQty(b, b.required_qty_base), copyValue: (b) => buyQty(b, b.required_qty_base) },
+    { key: "recommended_po_qty_base", label: "PO Qty (MOQ / multiple)", width: "160px", align: "right", render: (b) => buyQty(b, b.recommended_po_qty_base), copyValue: (b) => buyQty(b, b.recommended_po_qty_base) },
     { key: "recommended_po_by", label: "PO By", width: "100px", render: (b) => dash(b.recommended_po_by) },
     { key: "estimated_plant_eta", label: "Plant ETA", width: "100px", render: (b) => dash(b.estimated_plant_eta) },
-    { key: "lots", label: "Delivery Lots", width: "220px", render: (b) => ((b.lots ?? []).length ? b.lots.map((l) => `${l.plant_eta}: ${fmtQty(l.qty_base)}`).join(" · ") : "—"), copyValue: (b) => (b.lots ?? []).map((l) => `${l.plant_eta}:${l.qty_base}`).join(" ") },
+    { key: "lots", label: "Delivery Lots", width: "220px", render: (b) => ((b.lots ?? []).length ? b.lots.map((l) => `${l.plant_eta}: ${buyQty(b, l.qty_base)}`).join(" · ") : "—"), copyValue: (b) => (b.lots ?? []).map((l) => `${l.plant_eta}: ${buyQty(b, l.qty_base)}`).join(" · ") },
     { key: "vendor_label", label: "Vendor", width: "220px", render: (b) => dash(b.vendor_label) },
     { key: "vendor_basis", label: "Vendor basis", width: "140px", render: (b) => ({ LOWEST_TOTAL_COST: "Lowest total cost", FASTEST_FEASIBLE: "Fastest (cost unknown)" }[b.vendor_basis] ?? "—") },
     {
@@ -1576,25 +1603,26 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
     { key: "material_name", label: "Material", width: "240px" },
     { key: "document", label: "Document", width: "280px" },
     { key: "eta_to_plant", label: "CSN ETA", width: "100px", render: (f) => dash(f.eta_to_plant) },
+    { key: "assumed_eta", label: "Counted on", width: "100px", render: (f) => dash(f.assumed_eta) },
     { key: "reason", label: "Issue", width: "130px", render: (f) => (f.reason === "ETA_PASSED" ? badge("OVERDUE") : f.reason === "ETA_AFTER_HORIZON" ? badge("AFTER HORIZON") : badge("ETA_UNKNOWN")), copyValue: (f) => f.reason },
     { key: "message", label: "Action", width: "420px" },
   ];
   const groupColumns = [
     { key: "group_label", label: "Group", width: "240px" },
     { key: "month", label: "Month", width: "90px", render: (a) => String(a.month).slice(0, 7) },
-    { key: "uncovered_qty", label: "Group shortage", width: "120px", align: "right", render: (a) => fmtQty(a.uncovered_qty), copyValue: (a) => a.uncovered_qty },
+    { key: "uncovered_qty", label: "Group shortage", width: "130px", align: "right", render: (a) => (a.assigned_material_id ? qtyInDisplayUnit(a.uncovered_qty, a.uom, du.unitOf(a.assigned_material_id)) : fmtQty(a.uncovered_qty)), copyValue: (a) => (a.assigned_material_id ? qtyInDisplayUnit(a.uncovered_qty, a.uom, du.unitOf(a.assigned_material_id)) : a.uncovered_qty) },
     { key: "assigned_material_name", label: "Planned through member", width: "240px", render: (a) => (a.assigned_material_name ?? <span className="font-semibold text-rose-700">Select a member for new buy</span>), copyValue: (a) => a.assigned_material_name ?? "" },
     { key: "reason", label: "Basis", width: "220px", render: (a) => ({ SINGLE_SELECTED: "Your selection", CHEAPEST_SELECTED: "Cheapest of selected", AUTO_SELECTED: "Engine chose (legacy result — recalculate)", NONE_SELECTED: "No member selected — new buy is blocked" }[a.reason] ?? a.reason) },
   ];
   const dailyColumns = [
     { key: "day", label: "Date", width: "100px" },
-    { key: "opening_qty_base", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening_qty_base), copyValue: (r) => r.opening_qty_base },
-    { key: "confirmed_arrival_qty_base", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.confirmed_arrival_qty_base ? fmtQty(r.confirmed_arrival_qty_base) : ""), copyValue: (r) => r.confirmed_arrival_qty_base },
-    { key: "planned_lot_qty_base", label: "Proposed Lot", width: "110px", align: "right", render: (r) => (r.planned_lot_qty_base ? <span className="font-semibold text-sky-800">{fmtQty(r.planned_lot_qty_base)}</span> : ""), copyValue: (r) => r.planned_lot_qty_base },
-    { key: "demand_qty_base", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.demand_qty_base), copyValue: (r) => r.demand_qty_base },
-    { key: "closing_qty_base", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing_qty_base < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing_qty_base)}</span>, copyValue: (r) => r.closing_qty_base },
+    { key: "opening_qty_base", label: "Opening", width: "110px", align: "right", render: (r) => dq(r, r.opening_qty_base), copyValue: (r) => dq(r, r.opening_qty_base) },
+    { key: "confirmed_arrival_qty_base", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.confirmed_arrival_qty_base ? dq(r, r.confirmed_arrival_qty_base) : ""), copyValue: (r) => (r.confirmed_arrival_qty_base ? dq(r, r.confirmed_arrival_qty_base) : "") },
+    { key: "planned_lot_qty_base", label: "Proposed Lot", width: "110px", align: "right", render: (r) => (r.planned_lot_qty_base ? <span className="font-semibold text-sky-800">{dq(r, r.planned_lot_qty_base)}</span> : ""), copyValue: (r) => (r.planned_lot_qty_base ? dq(r, r.planned_lot_qty_base) : "") },
+    { key: "demand_qty_base", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => dq(r, r.demand_qty_base), copyValue: (r) => dq(r, r.demand_qty_base) },
+    { key: "closing_qty_base", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing_qty_base < 0 ? "font-semibold text-rose-700" : ""}>{dq(r, r.closing_qty_base)}</span>, copyValue: (r) => dq(r, r.closing_qty_base) },
     { key: "max_cover_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_cover_days) || "—", copyValue: (r) => r.max_cover_days ?? "" },
-    { key: "min_stock_qty_base", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock_qty_base), copyValue: (r) => r.min_stock_qty_base },
+    { key: "min_stock_qty_base", label: "Min Stock", width: "110px", align: "right", render: (r) => dq(r, r.min_stock_qty_base), copyValue: (r) => dq(r, r.min_stock_qty_base) },
     { key: "min_cover_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_cover_days) || "—", copyValue: (r) => r.min_cover_days ?? "" },
     { key: "target_days", label: "Target / Critical", width: "110px", render: (r) => `${fmtDays(r.target_days) || "—"} / ${fmtDays(r.critical_days) || "—"}` },
   ];
@@ -1620,13 +1648,13 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
           columns={buyColumns}
           rows={buys}
           rowKey={(b) => `${b.material_id}|${b.sequence}|${b.status}`}
-          renderExpandedRow={(b) => (costOpen === `${b.material_id}|${b.sequence}` ? <CostCompare options={b.cost_options} basis={plan?.cost_basis} uom={b.uom} /> : null)}
+          renderExpandedRow={(b) => (costOpen === `${b.material_id}|${b.sequence}` ? <CostCompare options={b.cost_options} basis={plan?.cost_basis} uom={b.uom} unit={b.order_unit ?? du.unitOf(b.material_id)} /> : null)}
           emptyMessage={planningQ.isLoading ? "Calculating…" : "No buy needed in CM + NM."}
           maxHeight="40vh"
         />
       </section>
 
-      <MtsPlanningReschedule companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandAt} arrivals={plan?.reschedulable_arrivals ?? []} />
+      <MtsPlanningReschedule companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandAt} arrivals={plan?.reschedulable_arrivals ?? []} du={du} />
 
       {(plan?.arrival_flags ?? []).length > 0 ? (
         <section className="grid gap-1">
@@ -1696,18 +1724,22 @@ function AiExplain({ companyId, planMonth, asOf, demandAt, buys }) {
 }
 
 /** D8/D10/D11: per-vendor total cost for one buy (advisory). */
-function CostCompare({ options, basis, uom }) {
+function CostCompare({ options, basis, uom, unit }) {
+  // Owner 2026-10-26: rates per display (Order) unit and quantities in it; backend values are per base unit.
+  const factor = unit && Number(unit.base_per_order_unit ?? unit.base_per_unit) > 0 ? Number(unit.base_per_order_unit ?? unit.base_per_unit) : 1;
+  const unitLabel = unit ? (unit.order_uom_code ?? unit.uom_code) : (uom ?? "unit");
+  const rate = (value) => fmtQty(Number(value) * factor);
   const columns = [
     { key: "rank", label: "Rank", width: "50px", render: (o) => (o.rank ?? "—") },
     { key: "vendor_label", label: "Vendor", width: "220px" },
     { key: "feasible", label: "On time", width: "70px", render: (o) => (o.feasible ? "Yes" : <span className="text-rose-700">No</span>) },
     { key: "lead_time_days", label: "Lead (d)", width: "70px", align: "right", render: (o) => (o.lead_time_days ?? "—") },
-    { key: "unit_price_inr", label: `Price ₹/${uom ?? "unit"}`, width: "110px", align: "right", render: (o) => (o.unit_price_inr === null ? "—" : `${fmtQty(o.unit_price_inr)}${o.currency && o.currency !== "INR" ? ` (${o.currency} @ ${o.fx_inr ?? "?"})` : ""}`) },
-    { key: "landed_adder", label: "Landed ₹/unit", width: "120px", align: "right", render: (o) => (o.landed_adder === null ? "—" : `${fmtQty(o.landed_adder)}${o.landed_basis === "PROVISIONAL" ? " (draft)" : o.landed_basis === "INCLUDED_IN_PO_RATE" ? " (FOR included)" : ""}`) },
+    { key: "unit_price_inr", label: `Price ₹/${unitLabel}`, width: "110px", align: "right", render: (o) => (o.unit_price_inr === null ? "—" : `${rate(o.unit_price_inr)}${o.currency && o.currency !== "INR" ? ` (${o.currency} @ ${o.fx_inr ?? "?"})` : ""}`) },
+    { key: "landed_adder", label: `Landed ₹/${unitLabel}`, width: "120px", align: "right", render: (o) => (o.landed_adder === null ? "—" : `${rate(o.landed_adder)}${o.landed_basis === "PROVISIONAL" ? " (draft)" : o.landed_basis === "INCLUDED_IN_PO_RATE" ? " (FOR included)" : ""}`) },
     { key: "days_money_tied", label: "Days money tied", width: "120px", align: "right", render: (o) => (o.days_money_tied ?? "—") },
-    { key: "financing_per_unit", label: "Interest ₹/unit", width: "110px", align: "right", render: (o) => (o.financing_per_unit === null ? "—" : fmtQty(o.financing_per_unit)) },
-    { key: "total_per_unit", label: "Total ₹/unit", width: "110px", align: "right", render: (o) => (o.total_per_unit === null ? "—" : <strong>{fmtQty(o.total_per_unit)}</strong>) },
-    { key: "order_qty", label: "Order qty", width: "110px", align: "right", render: (o) => (o.order_qty === null ? "—" : fmtQty(o.order_qty)) },
+    { key: "financing_per_unit", label: `Interest ₹/${unitLabel}`, width: "110px", align: "right", render: (o) => (o.financing_per_unit === null ? "—" : rate(o.financing_per_unit)) },
+    { key: "total_per_unit", label: `Total ₹/${unitLabel}`, width: "110px", align: "right", render: (o) => (o.total_per_unit === null ? "—" : <strong>{rate(o.total_per_unit)}</strong>) },
+    { key: "order_qty", label: `Order qty (${unitLabel})`, width: "110px", align: "right", render: (o) => (o.order_qty === null ? "—" : fmtQty(Number(o.order_qty) / factor)) },
     { key: "excess_cost", label: "MOQ excess cost ₹", width: "130px", align: "right", render: (o) => (o.excess_cost === null ? "—" : fmtQty(o.excess_cost)) },
     { key: "total_cost", label: "Total cost ₹", width: "130px", align: "right", render: (o) => (o.total_cost === null ? "—" : <strong>{fmtQty(o.total_cost)}</strong>) },
     { key: "missing", label: "Not known", width: "220px", render: (o) => ((o.missing ?? []).length ? <span className="text-amber-700">{o.missing.join(", ")}</span> : "") },
@@ -1827,6 +1859,9 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
   const runsQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-runs", companyId], queryFn: () => listMtsPlanningRuns({ company_id: companyId }), enabled: Boolean(companyId), retry: false });
   const runQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-run", companyId, runId], queryFn: () => getMtsPlanningRun({ company_id: companyId, id: runId }), enabled: Boolean(companyId && runId) });
   const source = runId ? runQ.data?.run?.result ?? null : liveQ.data ?? null;
+  // Owner 2026-10-26: quantities in the material's display (Order) UoM; a group line keeps base UoM.
+  const du = useMemo(() => makeDisplayUnits(source?.display_units ?? liveQ.data?.display_units), [source, liveQ.data]);
+  const sq = (materialId, value) => fmtQty(du.qty(value, materialId));
   // Owner: product rows grouped by parent → child product group, then product.
   const rows = useMemo(() => [...(source?.store_rows ?? [])].sort((a, b) =>
     String(a.mother_group ?? "~").localeCompare(String(b.mother_group ?? "~")) || String(a.child_group ?? "~").localeCompare(String(b.child_group ?? "~"))
@@ -1835,7 +1870,7 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
     const map = new Map();
     for (const r of rows) {
       const key = r.material_id ?? `group:${r.group_id}`;
-      const seen = map.get(key) ?? { key, material_name: r.material_name, document_name: r.material_document_name, group_label: r.material_id ? "" : r.group_label, uom: r.uom, executable_qty: 0, not_backed_qty: 0, transfer_hint: r.transfer_hint ?? null };
+      const seen = map.get(key) ?? { key, material_id: r.material_id ?? null, material_name: r.material_name, document_name: r.material_document_name, group_label: r.material_id ? "" : r.group_label, uom: r.uom, executable_qty: 0, not_backed_qty: 0, transfer_hint: r.transfer_hint ?? null };
       seen.executable_qty += r.executable_qty;
       seen.not_backed_qty += r.not_backed_qty;
       map.set(key, seen);
@@ -1868,18 +1903,18 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
     { key: "receipt_reference", label: "Use first from", width: "220px", render: (r) => r.receipt_reference ? <span className={r.receipt_expiry_priority ? "font-semibold text-amber-800" : ""}>{r.receipt_reference}</span> : "—", copyValue: (r) => r.receipt_reference ?? "" },
     { key: "receipt_valid_until", label: "Planning valid through", width: "150px", render: (r) => dash(r.receipt_valid_until), copyValue: (r) => r.receipt_valid_until ?? "" },
     { key: "receipt_basis", label: "Source basis", width: "135px", render: (r) => dash(r.receipt_basis), copyValue: (r) => r.receipt_basis ?? "" },
-    { key: "demand_qty", label: "Line demand", width: "110px", align: "right", render: (r) => fmtQty(r.demand_qty), copyValue: (r) => r.demand_qty },
-    { key: "executable_qty", label: "From physical stock", width: "130px", align: "right", render: (r) => (r.executable_qty ? <span className="font-semibold text-emerald-800">{fmtQty(r.executable_qty)}</span> : ""), copyValue: (r) => r.executable_qty },
-    { key: "not_backed_qty", label: "Not yet backed (future / short)", width: "180px", align: "right", render: (r) => (r.not_backed_qty ? <span className="text-rose-700">{fmtQty(r.not_backed_qty)}</span> : ""), copyValue: (r) => r.not_backed_qty },
-    { key: "uom", label: "UoM", width: "60px", render: (r) => dash(r.uom) },
+    { key: "demand_qty", label: "Line demand", width: "110px", align: "right", render: (r) => sq(r.material_id, r.demand_qty), copyValue: (r) => sq(r.material_id, r.demand_qty) },
+    { key: "executable_qty", label: "From physical stock", width: "130px", align: "right", render: (r) => (r.executable_qty ? <span className="font-semibold text-emerald-800">{sq(r.material_id, r.executable_qty)}</span> : ""), copyValue: (r) => sq(r.material_id, r.executable_qty) },
+    { key: "not_backed_qty", label: "Not yet backed (future / short)", width: "180px", align: "right", render: (r) => (r.not_backed_qty ? <span className="text-rose-700">{sq(r.material_id, r.not_backed_qty)}</span> : ""), copyValue: (r) => sq(r.material_id, r.not_backed_qty) },
+    { key: "uom", label: "UoM", width: "60px", render: (r) => dash(du.uom(r.material_id, r.uom)), copyValue: (r) => du.uom(r.material_id, r.uom) },
     { key: "transfer_hint", label: "Transfer first", width: "320px", render: (r) => (r.transfer_hint ? <span className="font-semibold text-amber-800">{r.transfer_hint}</span> : "—"), copyValue: (r) => r.transfer_hint ?? "" },
   ];
   const materialColumns = [
     { key: "material_name", label: "Material", width: "260px", render: (m) => (m.group_label ? `${m.group_label} (not assigned)` : m.material_name) },
     { key: "document_name", label: "Document name", width: "220px", render: (m) => dash(m.document_name) },
-    { key: "executable_qty", label: "From physical stock", width: "140px", align: "right", render: (m) => fmtQty(m.executable_qty), copyValue: (m) => m.executable_qty },
-    { key: "not_backed_qty", label: "Not yet backed", width: "140px", align: "right", render: (m) => fmtQty(m.not_backed_qty), copyValue: (m) => m.not_backed_qty },
-    { key: "uom", label: "UoM", width: "60px", render: (m) => dash(m.uom) },
+    { key: "executable_qty", label: "From physical stock", width: "140px", align: "right", render: (m) => sq(m.material_id, m.executable_qty), copyValue: (m) => sq(m.material_id, m.executable_qty) },
+    { key: "not_backed_qty", label: "Not yet backed", width: "140px", align: "right", render: (m) => sq(m.material_id, m.not_backed_qty), copyValue: (m) => sq(m.material_id, m.not_backed_qty) },
+    { key: "uom", label: "UoM", width: "60px", render: (m) => dash(du.uom(m.material_id, m.uom)), copyValue: (m) => du.uom(m.material_id, m.uom) },
     { key: "transfer_hint", label: "Transfer first", width: "320px", render: (m) => (m.transfer_hint ? <span className="font-semibold text-amber-800">{m.transfer_hint}</span> : "—"), copyValue: (m) => m.transfer_hint ?? "" },
   ];
   const groupColumnsSummary = [

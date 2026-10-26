@@ -8,6 +8,9 @@
  *   [T22] Excel export parity         → frontend exports the grid's own filtered rows/columns
  */
 import {
+  displayUnitOf,
+  effectiveProductionAssignments,
+  groupCoveredBy,
   addDays,
   allocateDemand,
   applyCompanyMaterialMapping,
@@ -985,4 +988,42 @@ Deno.test("What-if policy overrides: every effective row of the item, others unt
   assertEqual(effectivePolicy(out, "RM-C", "2026-10-20")!.target_cov_days, 20, "item without policy gets one");
   assertEqual(policies[0].target_cov_days, 40, "input not mutated");
   assertEqual(applyPolicyOverrides(policies, new Map()).length, 3, "no overrides → same rows");
+});
+
+Deno.test("PO22 display unit: Material Settings Order UoM first, then a vendor Supply UoM, else base", () => {
+  const material = { material_id: "M", material_type: "RM", base_uom_code: "KG", status: "ACTIVE", to_base_factors: { BAG: 25, MT: 1000 } };
+  const policyFirst = displayUnitOf(material, "BAG", ["MT"]);
+  if (policyFirst?.uom_code !== "BAG" || policyFirst.base_per_unit !== 25) throw new Error(`policy order UoM wins: ${JSON.stringify(policyFirst)}`);
+  const vendor = displayUnitOf(material, null, ["MT"]);
+  if (vendor?.uom_code !== "MT" || vendor.base_per_unit !== 1000) throw new Error(`vendor supply UoM next: ${JSON.stringify(vendor)}`);
+  if (displayUnitOf(material, "KG", []) !== null) throw new Error("the base unit itself is no display unit");
+  if (displayUnitOf(material, "DRUM", ["LTR"]) !== null) throw new Error("a unit without a verified conversion is never shown");
+});
+
+Deno.test("PO21 cross-company production carries forward until a newer choice is saved", () => {
+  const rows = [
+    { company_id: "C5", plan_month: "2026-10-01", sku_material_id: "S1", production_company_id: "C3" },
+    { company_id: "C5", plan_month: "2026-10-01", sku_material_id: "S2", production_company_id: "C3" },
+    { company_id: "C5", plan_month: "2026-12-01", sku_material_id: "S2", production_company_id: null }, // back to own company
+  ];
+  const months = ["2026-09-01", "2026-10-01", "2026-11-01", "2026-12-01"];
+  const effective = effectiveProductionAssignments(rows, months);
+  const at = (sku: string, month: string) => effective.find((r) => r.sku_material_id === sku && r.plan_month === month);
+  if (at("S1", "2026-09-01")) throw new Error("before the first choice nothing is moved");
+  if (at("S1", "2026-11-01")?.production_company_id !== "C3") throw new Error("S1 stays at C3 in November");
+  if (at("S1", "2026-12-01")?.production_company_id !== "C3") throw new Error("S1 stays at C3 in December");
+  if (at("S2", "2026-11-01")?.production_company_id !== "C3") throw new Error("S2 still at C3 in November");
+  if (at("S2", "2026-12-01")?.production_company_id !== null) throw new Error("S2 is own company again from December");
+});
+
+Deno.test("a pure group member is not critical when other members carry the group's demand", () => {
+  const groups = [
+    { group_id: "G", uncovered_cm: 0, uncovered_nm: 0, members: [{ material_id: "MC60", drawn_qty: 0, usable_stock: 0 }, { material_id: "MEC", drawn_qty: 500, usable_stock: 9000 }] },
+    { group_id: "SHORT", uncovered_cm: 10, uncovered_nm: 0, members: [{ material_id: "MC60", drawn_qty: 0, usable_stock: 0 }, { material_id: "X", drawn_qty: 5, usable_stock: 5 }] },
+  ];
+  const covered = groupCoveredBy({ material_id: "MC60", fixed_demand_qty: 0, pools: [{ group_id: "G" }] }, groups);
+  if (JSON.stringify(covered) !== JSON.stringify(["MEC"])) throw new Error(`covered by MEC: ${JSON.stringify(covered)}`);
+  if (groupCoveredBy({ material_id: "MC60", fixed_demand_qty: 40, pools: [{ group_id: "G" }] }, groups) !== null) throw new Error("its own exclusive use still counts");
+  if (groupCoveredBy({ material_id: "MC60", fixed_demand_qty: 0, pools: [{ group_id: "G" }, { group_id: "SHORT" }] }, groups) !== null) throw new Error("a short group is the member's problem");
+  if (groupCoveredBy({ material_id: "MC60", fixed_demand_qty: 0, pools: [] }, groups) !== null) throw new Error("no group, no cover");
 });

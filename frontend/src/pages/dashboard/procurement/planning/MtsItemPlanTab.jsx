@@ -22,7 +22,8 @@ import { pushToast } from "../../../../store/uiToast.js";
 import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario, simulateMtsItemPlan } from "../procurementApi.js";
 import { TargetWhatIf, VendorDateCompare } from "./MtsItemPlanWhatIf.jsx";
 import { lotVendorFlags } from "./mtsItemPlanLots.js";
-import { orderQtyText } from "./mtsOrderUnit.js";
+import { makeDisplayUnits, orderQtyText, qtyInDisplayUnit } from "./mtsOrderUnit.js";
+import { PO22_LIVE_QUERY } from "./mtsLiveQuery.js";
 
 // Owner 2026-10-21: FOR = freight inside the price; otherwise we pay it (AC01 landed cost).
 const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we pay)", EX_TRANSPORTER_GODOWN: "Ex godown (we pay)" };
@@ -33,6 +34,12 @@ const GRID_PROPS = { cellNavigate: true, columnFilter: true, searchBar: true, st
 const STATUS_LABEL = { ACTUAL_GR: "Actual GR", AT_GATE: "At gate", IN_TRANSIT: "In transit", ORDERED: "Ordered (not shipped)", BULK: "Bulk call-off", STO: "STO", SUB_CSN: "Sub-CSN" };
 const STATUS_TONE = { ACTUAL_GR: "bg-emerald-200 text-emerald-900", AT_GATE: "bg-emerald-100 text-emerald-800", IN_TRANSIT: "bg-sky-100 text-sky-800", ORDERED: "bg-amber-100 text-amber-800", BULK: "bg-slate-100 text-slate-700", STO: "bg-violet-100 text-violet-800", SUB_CSN: "bg-violet-100 text-violet-800" };
 
+/** The lot editor keeps the typed text (order unit) beside qty_base; it is never sent to the API. */
+function withoutShownQty(lot) {
+  const rest = { ...lot };
+  delete rest.qty_display;
+  return rest;
+}
 function fmtQty(value) {
   if (value === null || value === undefined || value === "") return "—";
   return Number(value).toLocaleString("en-IN", { maximumFractionDigits: 3 });
@@ -108,6 +115,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     queryKey: ["procurement", "mts-requirement", "planning", companyId, planMonth, asOf, demandAt],
     queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
     enabled: Boolean(companyId && planMonth && asOf),
+    ...PO22_LIVE_QUERY,
   });
   const materials = useMemo(() => {
     const seen = new Map();
@@ -124,6 +132,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     queryKey: itemKey,
     queryFn: () => getMtsItemPlan({ company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId }),
     enabled: Boolean(companyId && planMonth && asOf && materialId),
+    ...PO22_LIVE_QUERY,
   });
   const plan = itemQ.data ?? null;
   // What the grids show: the preview while one is open, else the saved plan.
@@ -138,6 +147,33 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     return 0;
   };
   const uom = plan?.members?.find((m) => m.is_selected)?.uom ?? "";
+  // Owner 2026-10-26: every quantity in the material's display (Order) UoM; calculations stay in base.
+  const du = useMemo(() => makeDisplayUnits(planningQ.data?.display_units), [planningQ.data]);
+  const familyIds = (view?.members ?? plan?.members ?? []).map((m) => m.material_id);
+  // The family grid sums members: one unit only when every member shows the same one, else base.
+  const familyUnit = familyIds.length > 1 ? du.groupUnit(familyIds) : du.unitOf(materialId);
+  const familyUom = familyUnit?.uom_code ?? uom;
+  const fq = (value) => fmtQty(du.qtyIn(value, familyUnit));
+  const selFactor = Number(du.unitOf(materialId)?.base_per_unit) > 0 ? Number(du.unitOf(materialId).base_per_unit) : 1;
+  const selUom = du.uom(materialId, uom);
+  const mq = (value, id, baseUom) => qtyInDisplayUnit(value, baseUom, du.unitOf(id));
+  const mqn = (value, id) => fmtQty(du.qty(value, id));
+  const lotText = (qty, baseUom, orderQty, orderUom, id) => (orderUom && orderQty !== null && orderQty !== undefined ? orderQtyText(orderQty, orderUom) : mq(qty, id, baseUom));
+  // A fixed lot is typed and shown in its vendor's order unit, else the material's display unit.
+  const lotUnit = (l) => {
+    const choice = (plan?.vendor_choices ?? []).find((c) => c.material_id === l.material_id);
+    const unit = (l.vendor_id ? choice?.options?.find((o) => o.vendor_id === l.vendor_id)?.order_unit : null) ?? choice?.order_unit ?? null;
+    if (unit && Number(unit.base_per_order_unit) > 0) return { factor: Number(unit.base_per_order_unit), uom: unit.order_uom_code };
+    const display = du.unitOf(l.material_id);
+    return display ? { factor: Number(display.base_per_unit), uom: display.uom_code } : { factor: 1, uom: (plan?.members ?? []).find((m) => m.material_id === l.material_id)?.uom ?? "" };
+  };
+  const lotQtyText = (l, qtyBase) => { const u = lotUnit(l); return `${fmtQty(Number(qtyBase) / u.factor)} ${u.uom}`.trim(); };
+  // Cost per the unit the lot is shown in (backend value is per base unit).
+  const unitCostText = (o) => {
+    const perUnit = o.order_uom && Number(o.order_qty) > 0 ? Number(o.qty) / Number(o.order_qty) : Number(du.unitOf(o.material_id)?.base_per_unit) || 1;
+    const unitLabel = o.order_uom && Number(o.order_qty) > 0 ? o.order_uom : du.uom(o.material_id, o.uom);
+    return `${(Number(o.unit_total_cost) * perUnit).toLocaleString("en-IN", { maximumFractionDigits: 2 })} / ${unitLabel}`;
+  };
   const memberName = useMemo(() => new Map((plan?.members ?? []).map((m) => [m.material_id, `${m.material_code ?? ""} ${m.material_name}`.trim()])), [plan]);
   const memberDaily = useMemo(() => {
     const byDay = new Map();
@@ -170,7 +206,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       for (const [index, location] of (member.locations ?? []).entries()) {
         if (!(Number(location.qty) > 0.000001)) continue;
         rows.push({
-          key: `STOCK|${member.material_id}|${location.location}|${index}`,
+          key: `STOCK|${member.material_id}|${location.location}|${index}`, material_id: member.material_id, uom: member.uom,
           source: "Counted stock", member: `${member.material_code ?? ""} ${member.material_name ?? ""}`.trim(),
           date: plan?.calendar?.as_of ?? asOf, qty: Number(location.qty),
           availability: "Available from the CC date", detail: location.location,
@@ -182,7 +218,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     }
     for (const [index, arrival] of (view?.arrivals ?? []).entries()) {
       rows.push({
-        key: `INBOUND|${arrival.material_id}|${arrival.reference}|${index}`,
+        key: `INBOUND|${arrival.material_id}|${arrival.reference}|${index}`, material_id: arrival.material_id, uom: arrival.uom,
         source: arrival.status ?? "Inbound", member: `${arrival.material_code ?? ""} ${arrival.material_name ?? ""}`.trim(),
         date: arrival.rescheduled_eta ?? arrival.eta_plant ?? "—", qty: Number(arrival.qty ?? 0),
         availability: arrival.planning_coverage_detail ?? ((arrival.rescheduled_eta ?? arrival.eta_plant) ? "Joins the family on this valid ETA to Plant" : "Risk only — no valid ETA to Plant"),
@@ -202,7 +238,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       if (!seen || row.day > seen.day) finalByMember.set(row.material_id, row);
     }
     return [...finalByMember.values()].map((row) => ({
-      material_id: row.material_id, member: memberName.get(row.material_id) ?? "—", day: row.day,
+      material_id: row.material_id, uom: row.uom, member: memberName.get(row.material_id) ?? "—", day: row.day,
       qty: Math.max(0, Number(row.closing ?? 0)), max_days: row.max_days,
       result: Number(row.closing ?? 0) > 0.000001
         ? "Residual: carries into the next eligible demand date; if no eligible demand remains, it is visible as excess / expiry-risk stock."
@@ -233,8 +269,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "import_etd", label: "Import ETD", width: "100px", render: (p) => p.import_etd ?? "—" },
     { key: "port_eta", label: "LCL-ETD / Port ETA", width: "120px", render: (p) => p.port_eta ?? "—" },
     { key: "date", label: "Date", width: "100px", render: (p) => <span className="font-semibold">{p.date ?? "—"}</span>, copyValue: (p) => p.date ?? "" },
-    { key: "qty", label: "Quantity to Dispatch", width: "130px", align: "right", render: (p) => `${fmtQty(p.qty)} ${p.uom ?? ""}`, copyValue: (p) => p.qty },
-    { key: "order_qty", label: "In order unit", width: "120px", align: "right", render: (p) => orderQtyText(p.order_qty, p.order_uom) || "—", copyValue: (p) => p.order_qty ?? "" },
+    { key: "qty", label: "Quantity to Dispatch", width: "140px", align: "right", render: (p) => lotText(p.qty, p.uom, p.order_qty, p.order_uom, p.material_id), copyValue: (p) => lotText(p.qty, p.uom, p.order_qty, p.order_uom, p.material_id) },
     { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (p) => fmtDays(p.max_days), copyValue: (p) => p.max_days ?? "" },
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (p) => fmtDays(p.min_days), copyValue: (p) => p.min_days ?? "" },
     { key: "material_name", label: "Member", width: "200px", render: (p) => `${p.material_code ?? ""} ${p.material_name}`.trim() },
@@ -257,14 +292,16 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       },
       copyValue: (r) => carryForwardLabel(r),
     },
-    { key: "opening", label: "Opening", width: "110px", align: "right", render: (r) => fmtQty(r.opening), copyValue: (r) => r.opening },
-    { key: "arrivals", label: "ETA to Plant", width: "110px", align: "right", render: (r) => (r.arrivals ? fmtQty(r.arrivals) : ""), copyValue: (r) => r.arrivals },
+    { key: "opening", label: `Opening (${familyUom})`, width: "120px", align: "right", render: (r) => fq(r.opening), copyValue: (r) => fq(r.opening) },
+    { key: "arrivals", label: `ETA to Plant (${familyUom})`, width: "130px", align: "right", render: (r) => (r.arrivals ? fq(r.arrivals) : ""), copyValue: (r) => (r.arrivals ? fq(r.arrivals) : "") },
     {
       // Sheet PLANNING "Quantity to Dispatch": the engine's lots, overwritten by typing your own.
-      key: "planned_lot", label: "Quantity to Dispatch", width: "170px", align: "right", filterable: false,
+      key: "planned_lot", label: `Quantity to Dispatch (${selUom})`, width: "180px", align: "right", filterable: false,
       render: (r) => {
         const own = ownDispatch.get(r.day);
-        const shown = own ?? (r.planned_lot || "");
+        const baseShown = own ?? (r.planned_lot || "");
+        // Typed and shown in the selected item's display unit; stored in base UoM.
+        const shown = baseShown === "" ? "" : Math.round((Number(baseShown) / selFactor) * 1000) / 1000;
         const input = (
           <input
             key={`${r.day}|${shown}`}
@@ -272,7 +309,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
             min="0"
             defaultValue={shown}
             title={own !== undefined ? "Your quantity (not saved until you Save)" : r.planned_lot ? "Engine lot — type to change" : "Type a quantity to dispatch on this day"}
-            onBlur={(event) => { if (String(event.target.value) !== String(shown)) setDispatchQty(r.day, event.target.value); }}
+            onBlur={(event) => { if (String(event.target.value) !== String(shown)) setDispatchQty(r.day, event.target.value === "" ? 0 : Number(event.target.value) * selFactor); }}
             onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
             className={`h-6 w-24 border px-1 text-right text-xs outline-none ${own !== undefined ? "border-sky-500 bg-sky-100 font-semibold text-sky-900" : r.planned_lot ? "border-slate-300 bg-white font-semibold text-sky-800" : "border-transparent bg-transparent hover:border-slate-300"}`}
           />
@@ -282,23 +319,23 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
         return extra > 0.001 ? (
           <span className="flex items-center justify-end gap-1">
             {input}
-            <span className="text-[10px] text-slate-600" title="Engine lot on the same day">{`+${fmtQty(extra)} engine`}</span>
+            <span className="text-[10px] text-slate-600" title="Engine lot on the same day">{`+${mqn(extra, materialId)} engine`}</span>
           </span>
         ) : input;
       },
-      copyValue: (r) => r.planned_lot,
+      copyValue: (r) => (r.planned_lot ? mqn(r.planned_lot, materialId) : ""),
     },
-    { key: "use", label: "Pro-rata Use", width: "110px", align: "right", render: (r) => fmtQty(r.use), copyValue: (r) => r.use },
+    { key: "use", label: `Pro-rata Use (${familyUom})`, width: "130px", align: "right", render: (r) => fq(r.use), copyValue: (r) => fq(r.use) },
     // Group demand that no member's stock could carry that day (shortage of the whole group).
-    { key: "unmet_group", label: "Group shortfall", width: "110px", align: "right", render: (r) => (r.unmet_group >= 0.001 ? <span className="font-semibold text-rose-700" title="Group demand no member had stock for">{fmtQty(r.unmet_group)}</span> : ""), copyValue: (r) => (r.unmet_group >= 0.001 ? r.unmet_group : "") },
-    { key: "closing", label: "Closing", width: "110px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fmtQty(r.closing)}</span>, copyValue: (r) => r.closing },
+    { key: "unmet_group", label: "Group shortfall", width: "110px", align: "right", render: (r) => (r.unmet_group >= 0.001 ? <span className="font-semibold text-rose-700" title="Group demand no member had stock for">{fq(r.unmet_group)}</span> : ""), copyValue: (r) => (r.unmet_group >= 0.001 ? fq(r.unmet_group) : "") },
+    { key: "closing", label: `Closing (${familyUom})`, width: "120px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fq(r.closing)}</span>, copyValue: (r) => fq(r.closing) },
     { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
     {
       key: "prorata_max_days", label: "Prorata Max Days", width: "130px", align: "right",
       render: (r) => <span title="Closing stock ÷ this row's Pro-rata Use. This is an audit value; engine Max Days still follows future approved demand.">{fmtDays(r.prorata_max_days)}</span>,
       copyValue: (r) => r.prorata_max_days ?? "",
     },
-    { key: "min_stock", label: "Min Stock", width: "110px", align: "right", render: (r) => fmtQty(r.min_stock), copyValue: (r) => r.min_stock },
+    { key: "min_stock", label: `Min Stock (${familyUom})`, width: "120px", align: "right", render: (r) => fq(r.min_stock), copyValue: (r) => fq(r.min_stock) },
     { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_days), copyValue: (r) => r.min_days ?? "" },
     {
       // Owner 2026-10-22: what arrives this day, from where, in what state, for what and why.
@@ -310,7 +347,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               <span className={`mr-1 px-1 font-semibold ${e.kind === "ARRIVAL" ? "bg-sky-100 text-sky-800" : e.kind === "ENGINE" ? "bg-amber-100 text-amber-800" : "bg-violet-100 text-violet-800"}`}>
                 {e.kind === "ARRIVAL" ? (STATUS_LABEL[e.status] ?? e.status) : e.kind === "ENGINE" ? (e.late ? "Engine (late)" : "Engine") : "You"}
               </span>
-              <span className="font-semibold">{e.member}</span> {fmtQty(e.qty)} {e.uom ?? ""}
+              <span className="font-semibold">{e.member}</span> {mq(e.qty, e.material_id, e.uom)}
               {e.reference ? <span> · {e.reference}</span> : null}
               {e.vendor ? <span> · {e.vendor}</span> : null}
               {e.po_by ? <span> · PO by {e.po_by}</span> : null}
@@ -328,16 +365,41 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   const memberColumns = [
     { key: "material", label: "Member", width: "260px", render: (m) => <span className={m.is_selected ? "font-semibold text-sky-900" : ""}>{`${m.material_code ?? ""} ${m.material_name}`.trim()}</span>, copyValue: (m) => `${m.material_code ?? ""} ${m.material_name}`.trim() },
     { key: "role", label: "Used as", width: "260px", render: (m) => [m.exclusive ? "Exclusive" : "", ...m.groups.map((g) => `Group: ${g}`)].filter(Boolean).join(" · ") || "—" },
-    { key: "usable_stock", label: "Counted stock", width: "120px", align: "right", render: (m) => `${fmtQty(m.usable_stock)} ${m.uom ?? ""}`, copyValue: (m) => m.usable_stock },
+    { key: "usable_stock", label: "Counted stock", width: "120px", align: "right", render: (m) => mq(m.usable_stock, m.material_id, m.uom), copyValue: (m) => mq(m.usable_stock, m.material_id, m.uom) },
     { key: "target", label: "Target / Critical", width: "110px", render: (m) => `${fmtDays(m.target_days)} / ${fmtDays(m.critical_days)}` },
-    { key: "locations", label: "Stock by location (now)", width: "320px", render: (m) => (m.locations.length ? m.locations.map((l) => `${l.location}: ${fmtQty(l.qty)}`).join(" · ") : "—"), copyValue: (m) => m.locations.map((l) => `${l.location}:${l.qty}`).join(" ") },
+    { key: "locations", label: "Stock by location (now)", width: "320px", render: (m) => (m.locations.length ? m.locations.map((l) => `${l.location}: ${mq(l.qty, m.material_id, m.uom)}`).join(" · ") : "—"), copyValue: (m) => m.locations.map((l) => `${l.location}: ${mq(l.qty, m.material_id, m.uom)}`).join(" · ") },
+  ];
+
+  // Owner 2026-10-26 (4A): one simple line per member — stock, inbound, own use, group use,
+  // closing, cover and the reason. Built from the server's reconciliation, never re-derived here.
+  const glanceRows = (view?.allocation_reconciliation ?? []).map((r) => {
+    const member = (plan?.members ?? []).find((m) => m.material_id === r.material_id);
+    const first = (memberDaily.get(view?.grid?.[0]?.day ?? "") ?? []).find((m) => m.material_id === r.material_id);
+    const reasons = [
+      r.own_allocated_qty > 0 ? "Own (exclusive) use is protected first" : "",
+      r.group_allocated_qty > 0 ? `Serves ${(member?.groups ?? []).join(" / ") || "its group"} from free stock` : "",
+      r.confirmed_arrival_qty > 0 ? "Inbound counted on its ETA" : "",
+      r.planned_lot_qty > 0 ? "Engine / your lot added" : "",
+      r.closing_qty < 0 ? "SHORT — stock runs out in the horizon" : r.closing_qty > 0 ? "Balance carries forward" : "",
+    ].filter(Boolean).join(" · ");
+    return { ...r, key: r.material_id, member: `${r.material_code ?? ""} ${r.material_name ?? ""}`.trim(), cover_days: first?.max_days ?? null, reason: reasons || "—" };
+  });
+  const glanceColumns = [
+    { key: "member", label: "Material", width: "260px" },
+    { key: "opening_qty", label: "Stock now", width: "120px", align: "right", render: (r) => mq(r.opening_qty, r.material_id, r.uom), copyValue: (r) => mq(r.opening_qty, r.material_id, r.uom) },
+    { key: "confirmed_arrival_qty", label: "Inbound (ETA)", width: "120px", align: "right", render: (r) => (r.confirmed_arrival_qty ? mq(r.confirmed_arrival_qty, r.material_id, r.uom) : "—"), copyValue: (r) => mq(r.confirmed_arrival_qty, r.material_id, r.uom) },
+    { key: "own_allocated_qty", label: "Exclusive use", width: "120px", align: "right", render: (r) => mq(r.own_allocated_qty, r.material_id, r.uom), copyValue: (r) => mq(r.own_allocated_qty, r.material_id, r.uom) },
+    { key: "group_allocated_qty", label: "Group use", width: "120px", align: "right", render: (r) => mq(r.group_allocated_qty, r.material_id, r.uom), copyValue: (r) => mq(r.group_allocated_qty, r.material_id, r.uom) },
+    { key: "cover_days", label: "Cover now (days)", width: "110px", align: "right", render: (r) => fmtDays(r.cover_days) || "—", copyValue: (r) => r.cover_days ?? "" },
+    { key: "closing_qty", label: "Closing at horizon", width: "130px", align: "right", render: (r) => <span className={r.closing_qty < 0 ? "font-semibold text-rose-700" : ""}>{mq(r.closing_qty, r.material_id, r.uom)}</span>, copyValue: (r) => mq(r.closing_qty, r.material_id, r.uom) },
+    { key: "reason", label: "Reason", width: "420px", render: (r) => <span className="whitespace-normal text-xs">{r.reason}</span>, copyValue: (r) => r.reason },
   ];
 
   const traceSourceColumns = [
     { key: "source", label: "Source", width: "150px" },
     { key: "member", label: "Material", width: "240px" },
     { key: "date", label: "Available / ETA date", width: "130px" },
-    { key: "qty", label: "Qty", width: "110px", align: "right", render: (r) => fmtQty(r.qty), copyValue: (r) => r.qty },
+    { key: "qty", label: "Qty", width: "130px", align: "right", render: (r) => mq(r.qty, r.material_id, r.uom), copyValue: (r) => mq(r.qty, r.material_id, r.uom) },
     { key: "availability", label: "When it may be used", width: "280px", render: (r) => <span className={String(r.availability).startsWith("Risk") ? "font-semibold text-amber-800" : ""}>{r.availability}</span> },
     { key: "detail", label: "Location / document", width: "330px" },
     { key: "rule", label: "Rule followed", width: "460px", render: (r) => <span className="whitespace-normal text-xs">{r.rule}</span> },
@@ -350,8 +412,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "destination", label: "Covered for", width: "260px" },
     { key: "source_kind", label: "Source type", width: "160px" },
     { key: "source_reference", label: "Source reference", width: "220px" },
-    { key: "qty", label: "Allocated qty", width: "120px", align: "right", render: (r) => fmtQty(r.qty), copyValue: (r) => r.qty },
-    { key: "closing", label: "Carry after date", width: "130px", align: "right", render: (r) => fmtQty(r.closing), copyValue: (r) => r.closing },
+    { key: "qty", label: "Allocated qty", width: "130px", align: "right", render: (r) => mq(r.qty, r.material_id, r.uom), copyValue: (r) => mq(r.qty, r.material_id, r.uom) },
+    { key: "closing", label: "Carry after date", width: "140px", align: "right", render: (r) => mq(r.closing, r.material_id, r.uom), copyValue: (r) => mq(r.closing, r.material_id, r.uom) },
     { key: "rule", label: "Rule followed", width: "510px", render: (r) => <span className="whitespace-normal text-xs">{r.rule}</span> },
   ];
 
@@ -359,14 +421,14 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "day", label: "Date", width: "110px" },
     { key: "group_label", label: "Group", width: "220px" },
     { key: "member", label: "Material carrying reserve", width: "260px" },
-    { key: "reserved_qty", label: "Reserve after group use", width: "170px", align: "right", render: (r) => fmtQty(r.reserved_qty), copyValue: (r) => r.reserved_qty },
+    { key: "reserved_qty", label: "Reserve after group use", width: "170px", align: "right", render: (r) => mq(r.reserved_qty, r.material_id, r.uom), copyValue: (r) => mq(r.reserved_qty, r.material_id, r.uom) },
     { key: "rule", label: "Meaning", width: "450px", render: () => <span className="whitespace-normal text-xs">This is the group&apos;s carried planning reserve after that date&apos;s use. It is not a new PO or a Store issue; it can be refilled only from real free stock when the group reaches Target.</span> },
   ];
 
   const traceExcessColumns = [
     { key: "member", label: "Material", width: "260px" },
     { key: "day", label: "Horizon date", width: "130px" },
-    { key: "qty", label: "Residual qty", width: "130px", align: "right", render: (r) => fmtQty(r.qty), copyValue: (r) => r.qty },
+    { key: "qty", label: "Residual qty", width: "140px", align: "right", render: (r) => mq(r.qty, r.material_id, r.uom), copyValue: (r) => mq(r.qty, r.material_id, r.uom) },
     { key: "max_days", label: "Max days", width: "100px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
     { key: "result", label: "Where the balance goes", width: "620px", render: (r) => <span className="whitespace-normal text-xs">{r.result}</span> },
   ];
@@ -376,7 +438,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "material_name", label: "Member", width: "220px", render: (a) => `${a.material_code ?? ""} ${a.material_name}`.trim() },
     { key: "reference", label: "PO / CSN", width: "300px" },
     { key: "vendor", label: "Vendor", width: "200px", render: (a) => a.vendor ?? "—" },
-    { key: "qty", label: "Qty", width: "110px", align: "right", render: (a) => `${fmtQty(a.qty)} ${a.uom ?? ""}`, copyValue: (a) => a.qty },
+    { key: "qty", label: "Qty", width: "130px", align: "right", render: (a) => mq(a.qty, a.material_id, a.uom), copyValue: (a) => mq(a.qty, a.material_id, a.uom) },
     { key: "etd", label: "ETD", width: "100px", render: (a) => a.etd ?? "—" },
     { key: "eta_port", label: "ETA Port", width: "100px", render: (a) => a.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (a) => a.eta_plant ?? "—" },
@@ -452,15 +514,14 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "material_name", label: "Member", width: "200px", render: (o) => `${o.material_code ?? ""} ${o.material_name}`.trim() },
     { key: "vendor", label: "Vendor", width: "200px", render: (o) => o.vendor ?? "—" },
     { key: "covers", label: "For", width: "160px", render: (o) => o.covers ?? "—" },
-    { key: "qty", label: "Qty", width: "110px", align: "right", render: (o) => `${fmtQty(o.qty)} ${o.uom ?? ""}`, copyValue: (o) => o.qty },
-    { key: "order_qty", label: "In order unit", width: "120px", align: "right", render: (o) => orderQtyText(o.order_qty, o.order_uom) || "—", copyValue: (o) => o.order_qty ?? "" },
+    { key: "qty", label: "Qty", width: "130px", align: "right", render: (o) => lotText(o.qty, o.uom, o.order_qty, o.order_uom, o.material_id), copyValue: (o) => lotText(o.qty, o.uom, o.order_qty, o.order_uom, o.material_id) },
     { key: "po_by", label: "PO by", width: "100px", render: (o) => o.po_by ?? "—" },
     { key: "etd", label: "ETD", width: "100px", render: (o) => o.etd ?? "—" },
     { key: "eta_port", label: "ETA Port", width: "100px", render: (o) => o.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (o) => o.eta_plant ?? "—" },
     { key: "days", label: "After / before lot days", width: "160px", render: (o) => `${fmtDays(o.max_days_on_arrival)} / ${fmtDays(o.min_days_on_arrival)}`, copyValue: (o) => `${o.max_days_on_arrival ?? ""}/${o.min_days_on_arrival ?? ""}` },
     { key: "max_days_planned", label: "Planned Max days", width: "130px", render: (o) => (o.max_days_planned === null ? "—" : `${fmtDays(o.max_days_planned)}${o.max_days_basis === "DEFAULT" ? " (default — no cost data)" : ""}`), copyValue: (o) => o.max_days_planned ?? "" },
-    { key: "unit_total_cost", label: "Full cost / unit (₹)", width: "150px", render: (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "—" : o.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })), copyValue: (o) => o.unit_total_cost ?? "" },
+    { key: "unit_total_cost", label: "Full cost (₹)", width: "150px", render: (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "—" : unitCostText(o)), copyValue: (o) => (o.unit_total_cost === null || o.unit_total_cost === undefined ? "" : unitCostText(o)) },
     { key: "freight_term", label: "Freight", width: "130px", render: (o) => FREIGHT_LABEL[o.freight_term] ?? o.freight_term ?? "—" },
     { key: "cost_missing", label: "Cost gaps", width: "220px", render: (o) => (o.cost_missing?.length ? `Missing: ${o.cost_missing.join(", ")}` : "Complete"), copyValue: (o) => (o.cost_missing ?? []).join("; ") },
     { key: "reason", label: "Why", width: "360px", render: (o) => (o.bridge && o.cheapest_vendor ? `${o.reason} Cheapest: ${o.cheapest_vendor}.` : o.reason) },
@@ -475,7 +536,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "material_name", label: "Member", width: "220px", render: (t) => `${t.material_code ?? ""} ${t.material_name}`.trim() },
     { key: "from", label: "From", width: "80px" },
     { key: "to", label: "To", width: "80px" },
-    { key: "qty", label: "Qty", width: "110px", align: "right", render: (t) => `${fmtQty(t.qty)} ${t.uom ?? ""}`, copyValue: (t) => t.qty },
+    { key: "qty", label: "Qty", width: "130px", align: "right", render: (t) => mq(t.qty, t.material_id, t.uom), copyValue: (t) => mq(t.qty, t.material_id, t.uom) },
     { key: "by", label: "By", width: "100px" },
   ];
   const ALT_LABEL = { GROUP_MEMBER: "Group member spare", TRANSFER: "R ↔ R / P ↔ P transfer", RESCHEDULE: "Advance an ordered lot", OTHER_COMPANY: "Other company (STO / Sub-CSN)", OTHER_VENDOR: "Other vendor", SAFETY_COMPROMISE: "Safety compromise", TRADER: "Domestic trader (last)" };
@@ -521,7 +582,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   async function saveLots(lots, source, note) {
     setSaving(true);
     try {
-      const result = await saveMtsItemPlanScenario({ company_id: companyId, material_id: materialId, manual_lots: lots, source, note });
+      const result = await saveMtsItemPlanScenario({ company_id: companyId, material_id: materialId, manual_lots: lots.map(withoutShownQty), source, note });
       pushToast({ message: `Plan saved as version ${result?.result?.version_no ?? ""}. Recalculating…`, tone: "success" });
       setLotDraft(null);
       setPreview(null);
@@ -540,7 +601,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     try {
       const result = await reviewMtsItemPlanWithAi({
         company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId,
-        ...(lotDraft ? { manual_lots: lotDraft } : {}), question: question || undefined,
+        ...(lotDraft ? { manual_lots: lotDraft.map(withoutShownQty) } : {}), question: question || undefined,
       });
       setAiResult(result);
     } catch (error) {
@@ -555,7 +616,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     setPreviewBusy(true);
     try {
       const reschedules = pending.map(([key, d]) => ({ reschedule_key: key, date: d.clear ? null : d.date || d.row.rescheduled_eta || null }));
-      const manualLots = (lots ?? lotDraft ?? plan?.scenario?.manual_lots ?? []).filter((l) => Number(l.qty_base) > 0).map((l) => ({ ...l, qty_base: Number(l.qty_base) }));
+      const manualLots = (lots ?? lotDraft ?? plan?.scenario?.manual_lots ?? []).filter((l) => Number(l.qty_base) > 0).map((l) => ({ ...withoutShownQty(l), qty_base: Number(l.qty_base) }));
       const result = await simulateMtsItemPlan({
         company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId,
         manual_lots: manualLots, reschedules, ...(targetOverrides ? { target_overrides: targetOverrides } : {}),
@@ -651,8 +712,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                     <tr key={label} className={label === "Preview" ? "font-semibold text-indigo-900" : ""}>
                       <td className="pr-3">{label}</td><td className="pr-3">{m.shortage_days}</td><td className="pr-3">{m.first_shortage_day ?? "—"}</td>
                       <td className="pr-3">{m.days_below_target}</td><td className="pr-3">{m.days_below_critical ?? "—"}</td><td className="pr-3">{fmtDays(m.lowest_max_days)}</td>
-                      <td className="pr-3">{fmtQty(m.average_closing)}</td><td className="pr-3">{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td>
-                      <td>{(orders ?? []).length} ({fmtQty((orders ?? []).reduce((sum, o) => sum + o.qty, 0))})</td>
+                      <td className="pr-3">{fq(m.average_closing)} {familyUom}</td><td className="pr-3">{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td>
+                      <td>{(orders ?? []).length} ({fq((orders ?? []).reduce((sum, o) => sum + o.qty, 0))} {familyUom})</td>
                     </tr>
                   ))}
                 </tbody>
@@ -705,11 +766,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                     {(memberDaily.get(r.day) ?? []).map((m) => (
                       <div key={m.material_id} className="flex flex-wrap gap-3">
                         <span className="w-56 font-semibold text-slate-800">{memberName.get(m.material_id) ?? "—"}</span>
-                        <span>Opening {fmtQty(m.opening)}</span>
-                        <span>Arrival {fmtQty(m.arrivals)}</span>
-                        <span>Use {fmtQty(m.use)}</span>
-                        {m.group_draws?.length ? <span>For group: {m.group_draws.map((g) => `${g.group}: ${fmtQty(g.qty)}`).join(" · ")}</span> : null}
-                        <span>Closing {fmtQty(m.closing)}</span>
+                        <span>Opening {mq(m.opening, m.material_id, m.uom)}</span>
+                        <span>Arrival {mq(m.arrivals, m.material_id, m.uom)}</span>
+                        <span>Use {mq(m.use, m.material_id, m.uom)}</span>
+                        {m.group_draws?.length ? <span>For group: {m.group_draws.map((g) => `${g.group}: ${mq(g.qty, m.material_id, m.uom)}`).join(" · ")}</span> : null}
+                        <span>Closing {mq(m.closing, m.material_id, m.uom)}</span>
                         <span>Max {fmtDays(m.max_days)} d · Min {fmtDays(m.min_days)} d</span>
                         <span className={m.critical_days !== null && m.max_days !== null && m.max_days < m.critical_days ? "font-semibold text-rose-700" : m.target_days !== null && m.max_days !== null && m.max_days < m.target_days ? "font-semibold text-amber-700" : ""}>
                           Target {fmtDays(m.target_days)} / Critical {fmtDays(m.critical_days)}
@@ -743,6 +804,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               <section className="grid gap-1 border border-sky-200 bg-sky-50 p-2">
                 <h3 className="text-sm font-semibold text-slate-800">Family allocation report</h3>
                 <p className="text-xs text-slate-600">This is the engine&apos;s auditable waterfall: counted source, usable date, direct/exclusive reserve, member-to-group use, carry and future-lot reason. It is a report of the server engine, not a browser calculation.</p>
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">At a glance — stock, inbound, who uses it, cover and why</h3>
+                <ErpDenseGrid {...GRID_PROPS} columns={glanceColumns} rows={glanceRows} rowKey={(r) => r.key} emptyMessage="No member in this family." maxHeight="24vh" />
               </section>
               <section className="grid gap-1">
                 <h3 className="text-sm font-semibold text-slate-800">1. Material sources — what can enter the family</h3>
@@ -812,7 +877,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                     onClick={() => copyTable([
                       { label: "Member", key: "member", copyValue: (l) => memberName.get(l.material_id) ?? "—" },
                       { label: "Plant date", key: "plant_eta" },
-                      { label: "Qty", key: "qty_base", copyValue: (l) => fmtQty(l.qty_base) },
+                      { label: "Qty", key: "qty_base", copyValue: (l) => lotQtyText(l, l.qty_base) },
                       { label: "Vendor", key: "vendor", copyValue: (l) => lotVendorFlags(l, plan.vendor_choices).option?.vendor_label ?? "Any (engine)" },
                       { label: "Value / check", key: "check", copyValue: (l) => {
                         const flag = lotVendorFlags(l, plan.vendor_choices);
@@ -820,7 +885,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                         return [
                           flag.value === null ? "no cost" : `₹${Math.round(flag.value).toLocaleString("en-IN")}`,
                           flag.tooEarly ? `too early (earliest ${flag.option.earliest_plant_eta})` : "",
-                          flag.belowMoq ? `below MOQ ${fmtQty(flag.option.moq_qty)}` : "",
+                          flag.belowMoq ? `below MOQ ${lotQtyText(l, flag.option.moq_qty)}` : "",
                         ].filter(Boolean).join("; ");
                       } },
                     ], lotDraft ?? plan.user_lots ?? [])}
@@ -836,25 +901,29 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                         <tr key={`${l.material_id}|${i}`}>
                           <td className="pr-2">
                             {lotDraft ? (
-                              <select value={l.material_id} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, material_id: event.target.value } : x)))} className={CELL_INPUT}>
+                              <select value={l.material_id} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, material_id: event.target.value, qty_display: undefined } : x)))} className={CELL_INPUT}>
                                 {(plan.members ?? []).map((m) => <option key={m.material_id} value={m.material_id}>{`${m.material_code ?? ""} ${m.material_name}`.trim()}</option>)}
                               </select>
                             ) : memberName.get(l.material_id) ?? "—"}
                           </td>
                           <td className="pr-2">{lotDraft ? <input type="date" value={l.plant_eta} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, plant_eta: event.target.value } : x)))} className={CELL_INPUT} /> : l.plant_eta}</td>
-                          <td className="pr-2">{lotDraft ? <input type="number" min="0" value={l.qty_base} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, qty_base: event.target.value } : x)))} className={`${CELL_INPUT} w-28`} /> : fmtQty(l.qty_base)}
-                            {(() => {
-                              // Order UoM: the vendor's MM03 Supply UoM, else the Material Settings Order UoM.
-                              const choice = (plan.vendor_choices ?? []).find((c) => c.material_id === l.material_id);
-                              const unit = (l.vendor_id ? choice?.options?.find((o) => o.vendor_id === l.vendor_id)?.order_unit : null) ?? choice?.order_unit ?? null;
-                              return unit && Number(l.qty_base) > 0
-                                ? <span className="ml-1 text-slate-500">= {orderQtyText(Number(l.qty_base) / unit.base_per_order_unit, unit.order_uom_code)}</span>
-                                : null;
-                            })()}
+                          <td className="pr-2">
+                            {lotDraft ? (
+                              <span className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={l.qty_display ?? (l.qty_base === "" || l.qty_base === null || l.qty_base === undefined ? "" : Math.round((Number(l.qty_base) / lotUnit(l).factor) * 1000) / 1000)}
+                                  onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, qty_display: event.target.value, qty_base: event.target.value === "" ? "" : Number(event.target.value) * lotUnit(x).factor } : x)))}
+                                  className={`${CELL_INPUT} w-28`}
+                                />
+                                <span className="text-slate-500">{lotUnit(l).uom}</span>
+                              </span>
+                            ) : lotQtyText(l, l.qty_base)}
                           </td>
                           <td className="pr-2">
                             {lotDraft ? (
-                              <select value={l.vendor_id ?? ""} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, vendor_id: event.target.value || null } : x)))} className={CELL_INPUT}>
+                              <select value={l.vendor_id ?? ""} onChange={(event) => setLotDraft((d) => d.map((x, j) => (j === i ? { ...x, vendor_id: event.target.value || null, qty_display: undefined } : x)))} className={CELL_INPUT}>
                                 <option value="">Any (engine)</option>
                                 {((plan.vendor_choices ?? []).find((c) => c.material_id === l.material_id)?.options ?? []).map((o) => (
                                   <option key={o.vendor_id} value={o.vendor_id}>{`${o.vendor_label} · ${o.lead_time_days ?? "?"} d${o.unit_total_cost === null ? "" : ` · ₹${o.unit_total_cost.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}`}</option>
@@ -870,7 +939,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                                 <span>
                                   {f.value === null ? "no cost" : `₹${Math.round(f.value).toLocaleString("en-IN")}`}
                                   {f.tooEarly ? <span className="ml-1 font-semibold text-rose-700">{`too early (earliest ${f.option.earliest_plant_eta})`}</span> : null}
-                                  {f.belowMoq ? <span className="ml-1 font-semibold text-amber-700">{`below MOQ ${fmtQty(f.option.moq_qty)}`}</span> : null}
+                                  {f.belowMoq ? <span className="ml-1 font-semibold text-amber-700">{`below MOQ ${lotQtyText(l, f.option.moq_qty)}`}</span> : null}
                                 </span>
                               );
                             })()}
@@ -896,6 +965,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 key={`vendor|${materialId}`}
                 plan={plan}
                 materialId={materialId}
+                unitOf={du.unitOf}
                 defaultDate={plan.future_orders?.[0]?.eta_plant ?? effAsOf}
                 onAddLot={(lot, andPreview) => {
                   const next = [...(lotDraft ?? plan.scenario?.manual_lots ?? []), lot];
@@ -949,7 +1019,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                       <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th>Avg stock value</th></tr></thead>
                       <tbody>
                         {[["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]].filter(([, m]) => m).map(([label, m]) => (
-                          <tr key={label}><td className="pr-3 font-semibold">{label}</td><td className="pr-3">{m.shortage_days}</td><td className="pr-3">{m.days_below_target}</td><td className="pr-3">{fmtDays(m.lowest_max_days)}</td><td className="pr-3">{fmtQty(m.average_closing)}</td><td>{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td></tr>
+                          <tr key={label}><td className="pr-3 font-semibold">{label}</td><td className="pr-3">{m.shortage_days}</td><td className="pr-3">{m.days_below_target}</td><td className="pr-3">{fmtDays(m.lowest_max_days)}</td><td className="pr-3">{fq(m.average_closing)} {familyUom}</td><td>{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td></tr>
                         ))}
                       </tbody>
                     </table>

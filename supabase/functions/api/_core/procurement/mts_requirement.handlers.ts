@@ -87,6 +87,11 @@ import {
   type StrokeInfo,
   type StrokePeriod,
   toMaterialBase,
+  displayUnitOf,
+  effectiveProductionAssignments,
+  groupCoveredBy,
+  type DisplayUnit,
+  type ProductionAssignmentRow,
   type UomConversion,
   type Warning,
 } from "./mts_requirement.logic.ts";
@@ -388,18 +393,20 @@ export async function loadFormulationMasters(companyId: string, extraStrokeIds: 
  *   plus other companies' lines for SKU-months assigned to this company (tagged origin_company_id).
  */
 export async function loadPlanLines(companyId: string, months: string[]): Promise<PlanLineVersion[]> {
-  const [own, outgoing, incoming] = await Promise.all([
+  const [own, assignmentRows] = await Promise.all([
     fetchAllPages(() => serviceRoleClient.schema("erp_planning").from("customer_plan_line")
       .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at")
       .eq("company_id", companyId).in("plan_month", months)
       .order("created_at", { ascending: true }).order("id", { ascending: true }), "MTS_REQ_PLAN_LOAD_FAILED"),
-    loadProductionAssignments({ company_id: companyId }, months),
-    loadProductionAssignments({ production_company_id: companyId }, months),
+    loadProductionAssignments(months),
   ]);
-  const away = new Set(outgoing.filter((a) => text(a.production_company_id) && text(a.production_company_id) !== companyId)
-    .map((a) => `${text(a.plan_month).slice(0, 10)}|${text(a.sku_material_id)}`));
-  const incomingKeys = new Set(incoming.map((a) => `${text(a.company_id)}|${text(a.plan_month).slice(0, 10)}|${text(a.sku_material_id)}`));
-  const sourceCompanies = unique(incoming.map((a) => text(a.company_id)));
+  // A producing-company choice carries forward to later months until a newer one is saved.
+  const effective = effectiveProductionAssignments(assignmentRows, months);
+  const away = new Set(effective.filter((a) => a.company_id === companyId && a.production_company_id && a.production_company_id !== companyId)
+    .map((a) => `${a.plan_month}|${a.sku_material_id}`));
+  const incoming = effective.filter((a) => a.company_id !== companyId && a.production_company_id === companyId);
+  const incomingKeys = new Set(incoming.map((a) => `${a.company_id}|${a.plan_month}|${a.sku_material_id}`));
+  const sourceCompanies = unique(incoming.map((a) => a.company_id));
   const sourceLines = sourceCompanies.length === 0 ? [] : await fetchInChunks<JsonRecord>(sourceCompanies, (chunk) => serviceRoleClient
     .schema("erp_planning").from("customer_plan_line")
     .select("id, entry_id, version_no, plan_month, plan_type, urgent_mode, urgent_from_date, urgent_to_date, sku_material_id, base_qty, is_cancelled, created_at, company_id")
@@ -427,13 +434,15 @@ export async function loadPlanLines(companyId: string, months: string[]): Promis
   ];
 }
 
-/** Current PO21 production-company assignments (empty when the table is not deployed yet). */
-async function loadProductionAssignments(filter: { company_id?: string; production_company_id?: string }, months: string[]): Promise<JsonRecord[]> {
-  let query = serviceRoleClient.schema("erp_planning").from("customer_plan_production_company")
-    .select("company_id, plan_month, sku_material_id, production_company_id").eq("is_current", true).in("plan_month", months);
-  if (filter.company_id) query = query.eq("company_id", filter.company_id);
-  if (filter.production_company_id) query = query.eq("production_company_id", filter.production_company_id);
-  const { data, error } = await query.limit(5000);
+/**
+ * Every current PO21 production-company choice made in or before the last requested month (empty
+ * when the table is not deployed yet). The table is tiny, so all companies are read and the
+ * carry-forward is resolved in memory by `effectiveProductionAssignments`.
+ */
+async function loadProductionAssignments(months: string[]): Promise<ProductionAssignmentRow[]> {
+  const last = [...months].map((m) => m.slice(0, 10)).sort().pop() ?? "";
+  const { data, error } = await serviceRoleClient.schema("erp_planning").from("customer_plan_production_company")
+    .select("company_id, plan_month, sku_material_id, production_company_id").eq("is_current", true).lte("plan_month", last).limit(20000);
   if (error) {
     // Table not deployed yet → no cross-company production (legacy behaviour). Any other error
     // must stop the run: silently ignoring it could plan a demand twice or not at all.
@@ -441,7 +450,10 @@ async function loadProductionAssignments(filter: { company_id?: string; producti
     if (code === "42P01" || code === "PGRST205" || code === "PGRST106") return [];
     throw new Error("MTS_REQ_PRODUCTION_COMPANY_LOAD_FAILED");
   }
-  return (data ?? []) as JsonRecord[];
+  return ((data ?? []) as JsonRecord[]).map((row) => ({
+    company_id: text(row.company_id), plan_month: text(row.plan_month).slice(0, 10), sku_material_id: text(row.sku_material_id),
+    production_company_id: text(row.production_company_id) || null,
+  }));
 }
 
 export async function loadStrokeSettings(companyId: string, months: string[]) {
@@ -1160,6 +1172,36 @@ export async function computeRequirement(
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/procurement/mts-requirement/report?company_id&plan_month=YYYY-MM&as_of=YYYY-MM-DD[&demand_at=ISO]
 // ─────────────────────────────────────────────────────────────────────────────
+/** MM03 Supply UoMs of this company's active vendors, per material (display unit fallback). */
+export async function loadVendorSupplyUoms(companyId: string, materialIds: string[]): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>();
+  if (materialIds.length === 0) return result;
+  const [vmiRows, mapRes] = await Promise.all([
+    fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
+      .select("vendor_id, material_id, supply_uom_code").eq("status", "ACTIVE").in("material_id", chunk)),
+    serviceRoleClient.schema("erp_master").from("vendor_company_map").select("vendor_id").eq("company_id", companyId).eq("active", true).limit(5000),
+  ]);
+  const companyVendors = new Set(((mapRes.data ?? []) as JsonRecord[]).map((row) => text(row.vendor_id)));
+  for (const row of vmiRows) {
+    if (!companyVendors.has(text(row.vendor_id)) || !text(row.supply_uom_code)) continue;
+    const id = text(row.material_id);
+    result.set(id, [...(result.get(id) ?? []), text(row.supply_uom_code)]);
+  }
+  return result;
+}
+
+/** material_id → display unit (only materials that have one; the rest show in base UoM). */
+export function buildDisplayUnits(
+  ids: readonly string[], materials: ReadonlyMap<string, MaterialInfo>, policyOrderUom: (id: string) => string | null | undefined, supplyUoms: ReadonlyMap<string, readonly string[]>,
+): Record<string, DisplayUnit> {
+  const out: Record<string, DisplayUnit> = {};
+  for (const id of ids) {
+    const unit = displayUnitOf(materials.get(id), policyOrderUom(id), supplyUoms.get(id) ?? []);
+    if (unit) out[id] = unit;
+  }
+  return out;
+}
+
 export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);
@@ -1179,7 +1221,7 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     const demandAt = demandAtRaw && Number.isFinite(Date.parse(demandAtRaw)) ? new Date(demandAtRaw).toISOString() : null;
     if (demandAtRaw && !demandAt) return fail(req, ctx, "MTS_REQ_INVALID_DEMAND_AT", 400, "demand_at must be an ISO date-time.");
     const {
-      planLines, settings, policyLoad, masters, materialRows, applyReservations, inbound, locationRoles, output, fingerprint,
+      planLines, settings, policyLoad, masters, materialRows, materials, applyReservations, inbound, locationRoles, output, fingerprint,
     } = await computeRequirement(companyId, calendar, asOf, today, demandAt);
 
     // Labels (R-01: never show raw ids).
@@ -1187,11 +1229,12 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
       ...row.stock.required_locations, ...row.stock.other_locations, ...row.pools.map((p) => p.storage_location_id),
     ]));
     const groupIds = unique([...output.rows.flatMap((row) => row.pools.map((p) => p.group_id)), ...output.groups.map((g) => g.group_id)]);
-    const [locationLabels, groupRows, policyUsers] = await Promise.all([
+    const [locationLabels, groupRows, policyUsers, supplyUoms] = await Promise.all([
       loadLocationLabels(locationIds),
       groupIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(groupIds, (chunk) => serviceRoleClient
         .schema("erp_master").from("material_category_group").select("id, group_code, group_name").in("id", chunk)),
       resolveUserDisplayNames(policyLoad.raw.map((r) => text(r.created_by))),
+      loadVendorSupplyUoms(companyId, output.rows.map((row) => row.material_id)),
     ]);
     const groupLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ")]));
     const nameOf = (id: string) => text(materialRows.get(id)?.material_name) || "—";
@@ -1230,6 +1273,11 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         stock_protection_used: row.stock.protection_used,
         fixed_demand_qty: row.fixed_demand_qty,
         group_share_qty: row.group_share_qty,
+        // Owner 2026-10-26: not critical when other members of its group carry the group's demand.
+        ...(() => {
+          const covering = groupCoveredBy(row, output.groups);
+          return { covered_by_group: covering !== null, group_cover_note: covering ? `Group demand is met by other members: ${covering.map(nameOf).join(", ")}` : null };
+        })(),
         // D1/D12: stock in a transfer-source location (R003, unconfigured) is shown, not counted.
         // R→R advisory only: stock outside R stores is shown as "held at", never as a transfer.
         transfer_suggestion: row.stock.other_sloc_unrestricted > 0
@@ -1280,7 +1328,11 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
     const groups = output.groups.map(({ uncovered_by_day: _uncovered, ...group }) => ({
       ...group,
       group_label: groupLabel.get(group.group_id) ?? "—",
-      members: group.members.map((member) => ({ ...member, material_name: nameOf(member.material_id), material_code: text(materialRows.get(member.material_id)?.pace_code) || null })),
+      base_uom_code: unique(group.members.map((member) => text(materialRows.get(member.material_id)?.base_uom_code))).join(" / ") || null,
+      members: group.members.map((member) => ({
+        ...member, material_name: nameOf(member.material_id), material_code: text(materialRows.get(member.material_id)?.pace_code) || null,
+        base_uom_code: text(materialRows.get(member.material_id)?.base_uom_code) || null,
+      })),
     })).sort((a, b) => a.group_label.localeCompare(b.group_label));
 
     const labelWarning = (w: Warning) => ({
@@ -1301,8 +1353,9 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
       notes.push({ code: "LOCATION_POLICY_NOT_SET", message: "No planning location policy for this company yet: stock is counted only at each stroke / Pack BOM line's own location (legacy rule)." });
     }
     // PO21 cross-company production (owner 2026-10-20): say exactly what moved in / out, never a stale "not available".
-    const outgoing = await loadProductionAssignments({ company_id: companyId }, [calendar.cmStart, calendar.nmStart]);
-    const away = outgoing.filter((a) => text(a.production_company_id) && text(a.production_company_id) !== companyId);
+    const outgoing = effectiveProductionAssignments(await loadProductionAssignments([calendar.cmStart, calendar.nmStart]), [calendar.cmStart, calendar.nmStart])
+      .filter((a) => a.company_id === companyId);
+    const away = outgoing.filter((a) => a.production_company_id && a.production_company_id !== companyId);
     const incomingKeys = unique(planLines.filter((l) => l.origin_company_id).map((l) => `${l.origin_company_id}|${l.plan_month}|${l.sku_material_id}`));
     if (incomingKeys.length > 0 || away.length > 0) {
       const codeIds = unique([...incomingKeys.map((k) => k.split("|")[0]), ...away.map((a) => text(a.production_company_id))]);
@@ -1324,6 +1377,8 @@ export async function getMtsRequirementReportHandler(req: Request, ctx: ReqHandl
         cm_days_in_month: calendar.cmDaysInMonth, cm_days_left: calendar.cmDaysLeft, nm_days_in_month: calendar.nmDaysInMonth,
       },
       demand_version: { demand_at: demandAt, label: demandAt ? `Plan as at ${demandAt}` : "Current effective plan" },
+      // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.
+      display_units: buildDisplayUnits(output.rows.map((row) => row.material_id), materials, (id) => output.rows.find((row) => row.material_id === id)?.policy?.order_uom_code, supplyUoms),
       provenance: {
         calculated_at: new Date().toISOString(),
         source_fingerprint: fingerprint,
