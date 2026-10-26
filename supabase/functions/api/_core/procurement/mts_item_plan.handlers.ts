@@ -23,7 +23,7 @@ import {
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import {
-  arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, poNumberOfReference, storeKey, wholeDays,
+  arrivalPlanningCoverage, arrivalStatus, companySpare, dayRange, familyClosure, familyDayGrid, locationTransfers, poNumberOfReference, storeKey, wholeDays,
 } from "./mts_item_plan.logic.ts";
 import type { OptimizerDailyProjectionRow, OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import type { PolicyOverride } from "./mts_requirement.logic.ts";
@@ -201,6 +201,7 @@ export async function buildItemPlan(
 
     const buildArrivals = () => memberIds.flatMap((id) => (rowById.get(id)?.inbound_events ?? []).map((event) => {
       const csn = event.csn_id ? csnById.get(event.csn_id) : undefined;
+      const coverage = arrivalPlanningCoverage(event.kind, event.date, calendar.asOf);
       return {
         material_id: id, material_code: codeOf(id), material_name: nameOf(id), uom: uomOf(id),
         reference: event.reference, qty: round(event.qty),
@@ -210,6 +211,9 @@ export async function buildItemPlan(
         eta_port: csn ? text(csn.eta_at_port).slice(0, 10) || null : null,
         eta_plant: event.original_date !== undefined ? event.original_date : event.date,
         rescheduled_eta: event.original_date !== undefined ? event.date : null,
+        planning_coverage: coverage.state,
+        planning_coverage_label: coverage.label,
+        planning_coverage_detail: coverage.detail,
         reschedule_key: event.reschedule_key ?? null,
         ...adviceFor(id, event.reschedule_key ?? null),
       };
@@ -443,9 +447,14 @@ export async function buildItemPlan(
             key: `${row.day}|${codeOf(row.material_id) ?? ""}|${flow}|${destination}|${index}`,
             day: row.day, material_code: codeOf(row.material_id), material_name: nameOf(row.material_id), uom: uomOf(row.material_id),
             flow, destination, qty: round(row.qty_base), closing: round(row.closing_qty_base),
+            source_reference: row.source_reference,
+            source_kind: row.source_kind === "OPENING" ? "Counted opening stock"
+              : row.source_kind === "CONFIRMED_ETA" ? "Confirmed ETA receipt"
+              : row.source_kind === "MANUAL_LOT" ? "Your fixed planning lot"
+              : "Engine planning lot",
             rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
               ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
-              : "Waterfall use: direct Desired-Max protection first; then each group receives an event-day Desired-Max bucket from smallest eligible group to broadest. Group use consumes only its bucket; within it FEFO, saved sequence, no-future-buy run-down, then normal rotation.",
+              : "Waterfall use: direct Desired-Max protection applies first; each group carries its own reserve until Target, then uses only genuine free stock. Within it FEFO, saved sequence, no-future-buy run-down, then normal rotation apply.",
           };
         }),
       group_bucket_reservations: projection.group_bucket_reservations

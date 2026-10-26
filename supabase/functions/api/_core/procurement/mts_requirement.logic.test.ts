@@ -916,6 +916,18 @@ Deno.test("Distribution mode: Sub-CSN share of an open PO line is removed before
   assertEqual(partial.map((e) => [e.kind, e.qty]), [["PO_REMAINDER", 9000]], "own 9 MT remains");
 });
 
+Deno.test("PO22 W2b: ORD and TRN ETA are one physical PO-line supply, never two receipts", () => {
+  const base = {
+    material_id: "BETONE", po_number: "ASC/P0200/2026-27", line_number: 1, open_qty: 2000, base_per_po_unit: 1,
+    expected_delivery_date: "2026-11-05", at_gate: [], lots: [], committed_transfer_base: 0,
+  };
+  const ord = partitionPoLineInbound({ ...base, csns: [{ csn_number: "CSN-ORD", status: "ORD", dispatch_qty: 0, received_qty: 0, eta: "2026-10-31", is_mother_with_children: false }] }, "2026-10-26", []);
+  const trn = partitionPoLineInbound({ ...base, csns: [{ csn_number: "CSN-TRN", status: "TRN", dispatch_qty: 2000, received_qty: 0, eta: "2026-10-31", is_mother_with_children: false }] }, "2026-10-26", []);
+  assertEqual(ord.map((event) => [event.kind, event.qty, event.date]), [["PO_REMAINDER", 2000, "2026-10-31"]], "ORD with ETA is a single dated PO remainder");
+  assertEqual(trn.map((event) => [event.kind, event.qty, event.date]), [["IN_TRANSIT", 2000, "2026-10-31"]], "TRN with ETA is a single dated CSN receipt");
+  assertEqual(ord[0].qty, trn[0].qty, "status transition must not manufacture a second physical supply");
+});
+
 Deno.test("Method C: a narrower group (fewer members) is served before a broader one sharing a member", () => {
   const calendar = buildCalendar("2026-11-01", "2026-11-01")!;
   const roles = new Map<string, "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED">([["R001", "COUNTED"]]);

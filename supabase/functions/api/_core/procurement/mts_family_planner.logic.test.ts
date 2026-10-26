@@ -46,6 +46,49 @@ Deno.test("family planner: a delivery lot is one PO, never a queued multi-lot pu
   assert(elBuys.every((buy) => buy.recommended_po_qty_base === 24000 && buy.lots.length === 1 && buy.lots[0].qty_base === 24000), `ELOTEX must be one 24 MT purchase per recommendation: ${JSON.stringify(elBuys)}`);
 });
 
+Deno.test("family waterfall: same-material own and group needs on one arrival create one MOQ lot", () => {
+  const days = daysTo("2026-10-31");
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: "2026-10-31",
+    opening_qty_by_material: { BETONE: 0 },
+    own_demand: days.map((required_by) => ({ material_id: "BETONE", required_by, qty_base: 20 })),
+    group_demand: days.map((required_by) => ({ group_id: "BETON", candidates: ["BETONE"], required_by, qty_base: 25 })),
+    confirmed_arrivals: [],
+    policies: [{ ...policy("BETONE", 1, 0, [{ vendor: "HIMADRI", lead: 0, cost: 1 }]), vendor_moq_qty_base: 2_000,
+      vendor_options: [{ vendor_id: "HIMADRI", lead_time_days: 0, moq_qty_base: 2_000, order_multiple_qty_base: null, unit_cost: 1, cycle_days: 30 }] }],
+    group_coverage_policies: [{ group_id: "BETON", effective_from: AS_OF, target_days: 1, critical_days: 0, desired_max_days_override: 31 }],
+  });
+  const buys = result.advisory_buys.filter((buy) => buy.material_id === "BETONE" && buy.status !== "NO_BUY");
+  assert(buys.length === 1, `one same-day physical BETONE lot is required, got ${JSON.stringify(buys)}`);
+  assert(buys[0].covers.includes("OWN") && buys[0].covers.includes("BETON"), `one lot must expose both purposes: ${JSON.stringify(buys[0])}`);
+  assert(buys[0].recommended_po_qty_base !== null && buys[0].recommended_po_qty_base > 0, `one net lot must retain a quantity: ${JSON.stringify(buys[0])}`);
+});
+
+Deno.test("family waterfall: one BETONE receipt nets direct, narrow and broad same-day purposes", () => {
+  const days = daysTo("2026-10-31");
+  const betone = policy("BETONE", 1, 0, [{ vendor: "HIMADRI", lead: 0, cost: 1 }]);
+  betone.cycle_days = 60;
+  betone.vendor_moq_qty_base = 2_000;
+  betone.vendor_options = [{ vendor_id: "HIMADRI", lead_time_days: 0, moq_qty_base: 2_000, order_multiple_qty_base: null, unit_cost: 1, cycle_days: 60 }];
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: "2026-10-31", opening_qty_by_material: { BETONE: 0, SAPCOMER: 0, BENTONE: 0 },
+    own_demand: days.map((required_by) => ({ material_id: "BETONE", required_by, qty_base: 20 })),
+    group_demand: [
+      ...days.map((required_by) => ({ group_id: "NARROW", candidates: ["BETONE", "SAPCOMER"], required_by, qty_base: 25 })),
+      ...days.map((required_by) => ({ group_id: "BROAD", candidates: ["BETONE", "SAPCOMER", "BENTONE"], required_by, qty_base: 30 })),
+    ], confirmed_arrivals: [],
+    policies: [betone,
+      { material_id: "SAPCOMER", target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+      { material_id: "BENTONE", target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null }],
+    group_coverage_policies: [
+      { material_group_id: "NARROW", effective_from: AS_OF, target_days: 1, critical_days: 0, desired_max_days_override: 60 },
+      { material_group_id: "BROAD", effective_from: AS_OF, target_days: 1, critical_days: 0, desired_max_days_override: 60 },
+    ], selections: new Map([["2026-10-01", new Set(["BETONE"])]]), selection_controlled_members: new Set(["BETONE", "SAPCOMER", "BENTONE"]),
+  });
+  const buys = result.advisory_buys.filter((buy) => buy.material_id === "BETONE" && buy.status !== "NO_BUY");
+  assert(buys.length === 1 && buys[0].covers.includes("OWN") && buys[0].covers.includes("NARROW") && buys[0].covers.includes("BROAD"), JSON.stringify(buys));
+});
+
 Deno.test("family planner: reaching Target again after an engine lot creates the next projection", () => {
   // This mirrors the TOT White shape: the first 25-day trigger is not a one-time
   // alert.  Its 10-day order cycle restores cover to 35 days, then a new lot is
@@ -295,6 +338,96 @@ Deno.test("family waterfall: a MOQ group refill uses the actual free pool cover,
   assert(!immediateRepeat, `a BETON refill must not create another group buy on the next day: ${JSON.stringify(groupBuys)}`);
 });
 
+Deno.test("W3g: a live group purpose reserve carries until Target, then uses only genuine free stock", () => {
+  // A daily virtual re-bucket would show 30 KG on every row.  The live
+  // purpose balance starts at 30, carries down to 20 after the next draw, and
+  // is restored only immediately before the following draw would take it
+  // below its 1-day Target.  No receipt and no engine lot is invented.
+  const days = ["2026-10-01", "2026-10-02", "2026-10-03"];
+  const result = planFamily({
+    as_of: days[0], horizon_end: days.at(-1)!,
+    opening_qty_by_material: { BETONE: 50 },
+    own_demand: [],
+    group_demand: days.map((required_by) => ({
+      group_id: "BETON", candidates: ["BETONE"], required_by, qty_base: 10,
+    })),
+    confirmed_arrivals: [],
+    policies: [policy("BETONE", 20, 10, [{ vendor: "HIMADRI", lead: 0, cost: 1 }])],
+    group_coverage_policies: [{
+      material_group_id: "BETON", effective_from: days[0], target_days: 1,
+      critical_days: 0, desired_max_days_override: 2,
+    }],
+    plan_buys: false,
+  });
+  const reserve = (day: string) => result.group_bucket_reservations
+    .find((row) => row.group_id === "BETON" && row.day === day && row.material_id === "BETONE")
+    ?.reserved_qty_base;
+  assert(reserve(days[0]) === 30 && reserve(days[1]) === 20 && reserve(days[2]) === 30,
+    `the group reserve must carry then refill at Target, not rebuild daily: ${JSON.stringify(result.group_bucket_reservations)}`);
+  assert(result.advisory_buys.every((buy) => buy.status === "NO_BUY"), JSON.stringify(result.advisory_buys));
+});
+
+Deno.test("W3g-c: overlapping groups receive one global excess claim, then re-waterfall it at Target", () => {
+  // Both groups can consume BETONE.  Four days need 80 KG in total; the
+  // planner must retain exactly 20 KG, not let each group report the same
+  // 20 KG residual as its own free coverage and postpone a necessary buy.
+  const days = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"];
+  const result = planFamily({
+    as_of: days[0], horizon_end: days.at(-1)!,
+    opening_qty_by_material: { BETONE: 100 }, own_demand: [],
+    group_demand: days.flatMap((required_by) => [
+      { group_id: "NARROW", candidates: ["BETONE"], required_by, qty_base: 10 },
+      { group_id: "BROAD", candidates: ["BETONE"], required_by, qty_base: 10 },
+    ]),
+    confirmed_arrivals: [], policies: [policy("BETONE", 1, 0, [{ vendor: "HIMADRI", lead: 0, cost: 1 }])],
+    group_coverage_policies: [
+      { material_group_id: "NARROW", effective_from: days[0], target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { material_group_id: "BROAD", effective_from: days[0], target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+    ],
+    plan_buys: false,
+  });
+  const reconciliation = result.allocation_reconciliation.find((row) => row.material_id === "BETONE")!;
+  assert(
+    reconciliation.group_allocated_qty_base === 80 && reconciliation.closing_qty_base === 20 && reconciliation.variance_qty_base === 0,
+    `one 100 KG opening must be consumed once across both purposes: ${JSON.stringify(reconciliation)}`,
+  );
+  assert(
+    result.group_mix.filter((row) => row.day === days.at(-1)!).every((row) => row.draws.BETONE === 10),
+    `both overlapping groups must remain serviceable from their real, separately claimed stock: ${JSON.stringify(result.group_mix)}`,
+  );
+});
+
+Deno.test("family waterfall: an unconfigured zero-stock member does not collapse a group's derived Desired Max to Target", () => {
+  // Production BETON shape: SAPCOMER remains an eligible existing-stock
+  // alternative, but it has zero stock, no future buy selection and no
+  // individual Target/Max policy.  Its missing policy must not turn BETONE's
+  // 20 + 30 = 50-day derived Max into the 30-day group Target; that was the
+  // source of an immediate next-day MOQ projection after a late receipt.
+  const asOf = "2026-10-25";
+  const days = Array.from({ length: 20 }, (_, i) => addDays(asOf, i));
+  const betone = policy("BETONE", 20, 10, [{ vendor: "HIMADRI", lead: 16, cost: 1 }]);
+  betone.vendor_moq_qty_base = 2_000;
+  betone.vendor_options = (betone.vendor_options ?? []).map((option) => ({ ...option, moq_qty_base: 2_000 }));
+  const result = planFamily({
+    as_of: asOf, horizon_end: days.at(-1)!,
+    opening_qty_by_material: { BETONE: 700, SAPCOMER: 0 },
+    own_demand: days.map((required_by) => ({ material_id: "BETONE", required_by, qty_base: 20 })),
+    group_demand: days.map((required_by) => ({ group_id: "BETON", candidates: ["BETONE", "SAPCOMER"], required_by, qty_base: 45.533 })),
+    confirmed_arrivals: [],
+    policies: [
+      betone,
+      { material_id: "SAPCOMER", target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, delivery_lot_qty_base: null, configured_lead_time_days: null },
+    ],
+    group_coverage_policies: [{ material_group_id: "BETON", effective_from: asOf, target_days: 30, critical_days: 15, desired_max_days_override: null }],
+    selections: new Map([["2026-10-01", new Set(["BETONE"])], ["2026-11-01", new Set(["BETONE"])]]),
+    selection_controlled_members: new Set(["BETONE", "SAPCOMER"]),
+  });
+  const groupBuys = result.advisory_buys.filter((buy) => buy.material_id === "BETONE" && buy.need_kind === "GROUP" && buy.status !== "NO_BUY");
+  assert(groupBuys[0]?.max_cover_days === 50, `BETONE's configured Desired Max must govern the group, got ${JSON.stringify(groupBuys)}`);
+  assert(!groupBuys.some((buy, index) => index > 0 && buy.estimated_plant_eta === addDays(groupBuys[0].estimated_plant_eta!, 1)),
+    `a late receipt must not produce a next-day group MOQ buy: ${JSON.stringify(groupBuys)}`);
+});
+
 Deno.test("family waterfall: group buy sizes to derived Desired Max but individual RP guard still triggers at 20", () => {
   const base = {
     as_of: "2026-10-01", horizon_end: "2026-11-15", opening_qty_by_material: { RP: 21, ALT: 1_000 },
@@ -372,6 +505,24 @@ Deno.test("W4: a confirmed future arrival joins group allocation only from its E
   const onEta = result.group_mix.find((row) => row.group_id === "G" && row.day === "2026-10-03");
   assert(before?.draws.INBOUND === undefined, `future receipt was used before ETA: ${JSON.stringify(before)}`);
   assert((onEta?.draws.INBOUND ?? 0) > 0, `future receipt must re-enter the same group waterfall on ETA: ${JSON.stringify(onEta)}`);
+});
+
+Deno.test("W3i: allocation trace preserves the physical planning source", () => {
+  const result = planFamily({
+    as_of: "2026-10-24", horizon_end: "2026-10-24",
+    opening_qty_by_material: { BETONE: 0 },
+    own_demand: [{ material_id: "BETONE", required_by: "2026-10-24", qty_base: 10 }],
+    group_demand: [],
+    confirmed_arrivals: [{
+      source_key: "PO ASC/P2026/0271 · CSN 3000000223",
+      material_id: "BETONE", eta_to_plant: "2026-10-24", qty_base: 10,
+    }],
+    policies: [policy("BETONE", 20, 10, [])],
+    plan_buys: false,
+  });
+  const row = result.allocation_rows.find((item) => item.destination_kind === "OWN");
+  assert(row?.source_kind === "CONFIRMED_ETA" && row.source_reference.includes("CSN 3000000223"),
+    `the trace must expose the receipt that supplied the planning draw: ${JSON.stringify(result.allocation_rows)}`);
 });
 
 Deno.test("family consumption: an eligible unselected member runs down before a replenishable alternative", () => {

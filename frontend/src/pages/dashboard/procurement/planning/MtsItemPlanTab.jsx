@@ -154,6 +154,16 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
       .sort((a, b) => a.day.localeCompare(b.day) || a.destination.localeCompare(b.destination) || a.member.localeCompare(b.member));
   }, [view]);
 
+  const groupReserveRows = useMemo(() => (
+    [...(view?.group_bucket_reservations ?? [])]
+      .map((row, index) => ({
+        ...row,
+        key: `${row.day}|${row.group_label}|${row.material_code ?? ""}|${index}`,
+        member: `${row.material_code ?? ""} ${row.material_name ?? ""}`.trim() || "—",
+      }))
+      .sort((a, b) => a.day.localeCompare(b.day) || a.group_label.localeCompare(b.group_label) || a.member.localeCompare(b.member))
+  ), [view]);
+
   const sourceTraceRows = useMemo(() => {
     const rows = [];
     for (const member of plan?.members ?? []) {
@@ -175,7 +185,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
         key: `INBOUND|${arrival.material_id}|${arrival.reference}|${index}`,
         source: arrival.status ?? "Inbound", member: `${arrival.material_code ?? ""} ${arrival.material_name ?? ""}`.trim(),
         date: arrival.rescheduled_eta ?? arrival.eta_plant ?? "—", qty: Number(arrival.qty ?? 0),
-        availability: (arrival.rescheduled_eta ?? arrival.eta_plant) ? "Joins the family on this valid ETA to Plant" : "Risk only — no valid ETA to Plant",
+        availability: arrival.planning_coverage_detail ?? ((arrival.rescheduled_eta ?? arrival.eta_plant) ? "Joins the family on this valid ETA to Plant" : "Risk only — no valid ETA to Plant"),
         detail: [arrival.reference, arrival.vendor].filter(Boolean).join(" · ") || "—",
         rule: (arrival.rescheduled_eta ?? arrival.eta_plant)
           ? "Every dated receipt—including an ordered PO with delivery date—enters the waterfall on its ETA-to-Plant date, never before."
@@ -338,9 +348,19 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "member", label: "Material used", width: "240px" },
     { key: "flow", label: "Step", width: "150px" },
     { key: "destination", label: "Covered for", width: "260px" },
+    { key: "source_kind", label: "Source type", width: "160px" },
+    { key: "source_reference", label: "Source reference", width: "220px" },
     { key: "qty", label: "Allocated qty", width: "120px", align: "right", render: (r) => fmtQty(r.qty), copyValue: (r) => r.qty },
     { key: "closing", label: "Carry after date", width: "130px", align: "right", render: (r) => fmtQty(r.closing), copyValue: (r) => r.closing },
     { key: "rule", label: "Rule followed", width: "510px", render: (r) => <span className="whitespace-normal text-xs">{r.rule}</span> },
+  ];
+
+  const traceReserveColumns = [
+    { key: "day", label: "Date", width: "110px" },
+    { key: "group_label", label: "Group", width: "220px" },
+    { key: "member", label: "Material carrying reserve", width: "260px" },
+    { key: "reserved_qty", label: "Reserve after group use", width: "170px", align: "right", render: (r) => fmtQty(r.reserved_qty), copyValue: (r) => r.reserved_qty },
+    { key: "rule", label: "Meaning", width: "450px", render: () => <span className="whitespace-normal text-xs">This is the group&apos;s carried planning reserve after that date&apos;s use. It is not a new PO or a Store issue; it can be refilled only from real free stock when the group reaches Target.</span> },
   ];
 
   const traceExcessColumns = [
@@ -360,6 +380,11 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     { key: "etd", label: "ETD", width: "100px", render: (a) => a.etd ?? "—" },
     { key: "eta_port", label: "ETA Port", width: "100px", render: (a) => a.eta_port ?? "—" },
     { key: "eta_plant", label: "ETA Plant", width: "100px", render: (a) => a.eta_plant ?? "—" },
+    {
+      key: "planning_coverage", label: "Planning coverage", width: "290px",
+      render: (a) => <span className={`text-xs ${a.planning_coverage === "RISK_ONLY" ? "text-rose-700" : "text-emerald-700"}`}>{a.planning_coverage_detail ?? "—"}</span>,
+      copyValue: (a) => a.planning_coverage_detail ?? "",
+    },
     {
       key: "rescheduled_eta", label: "Rescheduled ETA (planning)", width: "260px", filterable: false,
       render: (a) => (!a.reschedule_key ? <span className="text-xs text-slate-400">cannot move</span> : drafts[a.reschedule_key]?.clear ? (
@@ -724,16 +749,21 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                 <ErpDenseGrid {...GRID_PROPS} columns={traceSourceColumns} rows={sourceTraceRows} rowKey={(r) => r.key} emptyMessage="No counted stock or future source in this family." maxHeight="26vh" />
               </section>
               <section className="grid gap-1">
-                <h3 className="text-sm font-semibold text-slate-800">2. Allocation flow — material → own use / group → carry</h3>
+                <h3 className="text-sm font-semibold text-slate-800">2. Carried group reserve — what remains protected for each group</h3>
+                <p className="text-xs text-slate-500">The reserve starts from opening/receipt stock, falls only when that group consumes it, and is not rebuilt every day. It is a planning balance, not a physical Store issue instruction.</p>
+                <ErpDenseGrid {...GRID_PROPS} columns={traceReserveColumns} rows={groupReserveRows} rowKey={(r) => r.key} emptyMessage="No group reserve applies to this material family." maxHeight="26vh" />
+              </section>
+              <section className="grid gap-1">
+                <h3 className="text-sm font-semibold text-slate-800">3. Allocation flow — material → own use / group → carry</h3>
                 <p className="text-xs text-slate-500">Each row is one actual engine draw. “Carry after date” is the member balance after all draws on that date; it is the balance available to later eligible dates, not a new purchase recommendation.</p>
                 <ErpDenseGrid {...GRID_PROPS} columns={traceFlowColumns} rows={allocationTraceRows} rowKey={(r) => r.key} emptyMessage="No direct or group consumption in this horizon." maxHeight="36vh" />
               </section>
               <section className="grid gap-1">
-                <h3 className="text-sm font-semibold text-slate-800">3. Projection — why a new lot is proposed</h3>
+                <h3 className="text-sm font-semibold text-slate-800">4. Projection — why a new lot is proposed</h3>
                 <ErpDenseGrid {...GRID_PROPS} columns={orderColumns} rows={view.future_orders ?? []} rowKey={(o) => `${o.material_id}|${o.sequence}|${o.lot_no}|trace`} emptyMessage="No engine lot is needed in this horizon." maxHeight="24vh" />
               </section>
               <section className="grid gap-1">
-                <h3 className="text-sm font-semibold text-slate-800">4. End-of-horizon excess / carry</h3>
+                <h3 className="text-sm font-semibold text-slate-800">5. End-of-horizon excess / carry</h3>
                 <ErpDenseGrid {...GRID_PROPS} columns={traceExcessColumns} rows={excessTraceRows} rowKey={(r) => r.material_id} emptyMessage="No family member in this horizon." maxHeight="22vh" />
               </section>
               </>

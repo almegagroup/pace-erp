@@ -1,4 +1,5 @@
 import {
+  arrivalPlanningCoverage,
   arrivalStatus,
   companySpare,
   locationTransfers,
@@ -150,6 +151,15 @@ Deno.test("buildCalendar extra months: default unchanged, 6-month horizon when a
   assertEqual([six.months.length, six.horizonEnd, six.nmEnd], [6, "2027-03-31", "2026-11-30"], "CM + NM + 4");
   assertEqual(arrivalStatus("PO_REMAINDER", "BULK_CALL_OFF"), "BULK", "bulk label");
   assertEqual(arrivalStatus("POSTED_GR", "GRN_POSTED_ON_CC_DATE"), "ACTUAL_GR", "same-day posted GR is clearly marked as an actual plant arrival");
+  assertEqual(
+    [
+      arrivalPlanningCoverage("PO_REMAINDER", "2026-10-31", "2026-10-26").state,
+      arrivalPlanningCoverage("IN_TRANSIT", "2026-10-31", "2026-10-26").state,
+      arrivalPlanningCoverage("PO_REMAINDER", null, "2026-10-26").state,
+    ],
+    ["COVERAGE", "COVERAGE", "RISK_ONLY"],
+    "a dated ORD and TRN both cover planning; only ETA-less ORD is risk-only",
+  );
 });
 
 Deno.test("P2 rescheduleAdvice: advance when needed earlier, postpone when not needed, quiet when on time", () => {

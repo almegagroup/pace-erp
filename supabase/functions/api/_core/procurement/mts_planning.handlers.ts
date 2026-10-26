@@ -29,7 +29,7 @@ import {
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -537,7 +537,10 @@ export async function computePlanning(p: PlanningParams) {
     const byKey = new Map<string, { group_id: string; month: string; assigned_material_id: string | null; reason: AssignmentReason; uncovered_qty: number }>();
     for (const b of projection.advisory_buys) {
       if (b.need_kind !== "GROUP" || !b.need_date || (b.status !== "ADVISORY" && b.status !== "ADVISORY_LATE")) continue;
-      for (const groupId of b.covers) {
+      // A consolidated physical receipt can carry both an own/member guard and
+      // group purposes.  Only real persisted group ids belong in the monthly
+      // group-assignment table; OWN/MEMBER_GUARD are business-purpose labels.
+      for (const groupId of b.covers.filter((cover) => cover !== "OWN" && cover !== "MEMBER_GUARD")) {
         const key = `${groupId}|${b.need_date.slice(0, 7)}|${b.material_id}`;
         const month = `${b.need_date.slice(0, 7)}-01`;
         const selected = selections.map.get(month) ?? new Set<string>();
@@ -591,19 +594,12 @@ export async function computePlanning(p: PlanningParams) {
   // period automatically without a second allocation formula here.
   const storeRowsByRatio = (() => {
     const range = (period: string) => (period === "CM" ? [calendar.asOf, calendar.cmEnd] : [calendar.nmStart, calendar.nmEnd]);
-    const shareCache = new Map<string, { shares: Map<string, number>; unmet: number } | null>();
+    const shareCache = new Map<string, ReturnType<typeof storeGroupPeriodShares>>();
     const shareOf = (groupId: string, period: string) => {
       const key = `${groupId}|${period}`;
       if (shareCache.has(key)) return shareCache.get(key)!;
       const [from, to] = range(period);
-      const draws = new Map<string, number>();
-      for (const m of projection.group_mix) {
-        if (m.group_id !== groupId || m.day < from || m.day > to) continue;
-        for (const [id, q] of Object.entries(m.draws)) draws.set(id, (draws.get(id) ?? 0) + q);
-      }
-      const unmet = projection.group_unmet.filter((u) => u.group_id === groupId && u.day >= from && u.day <= to).reduce((sum, u) => sum + u.qty_base, 0);
-      const total = [...draws.values()].reduce((a, b) => a + b, 0) + unmet;
-      const value = total > 0 ? { shares: new Map([...draws].map(([id, q]) => [id, q / total])), unmet: unmet / total } : null;
+      const value = storeGroupPeriodShares({ group_id: groupId, from, to, group_mix: projection.group_mix, group_unmet: projection.group_unmet });
       shareCache.set(key, value);
       return value;
     };
@@ -619,7 +615,7 @@ export async function computePlanning(p: PlanningParams) {
       for (const [id, f] of [...share.shares].sort(([a], [b]) => a.localeCompare(b))) {
         if (f * row.demand_qty > 1e-6) out.push({ ...row, material_id: id, executable_qty: r6(row.demand_qty * f), not_backed_qty: 0 });
       }
-      if (share.unmet * row.demand_qty > 1e-6) out.push({ ...row, material_id: null, executable_qty: 0, not_backed_qty: r6(row.demand_qty * share.unmet) });
+      if (share.unmet_share * row.demand_qty > 1e-6) out.push({ ...row, material_id: null, executable_qty: 0, not_backed_qty: r6(row.demand_qty * share.unmet_share) });
     }
     return out;
   })();
@@ -829,9 +825,14 @@ export async function computePlanning(p: PlanningParams) {
       flow: row.destination_kind === "OWN" ? "Exclusive / direct use" : "Group allocation",
       qty: row.qty_base,
       closing: row.closing_qty_base,
+      source_reference: row.source_reference,
+      source_kind: row.source_kind === "OPENING" ? "Counted opening stock"
+        : row.source_kind === "CONFIRMED_ETA" ? "Confirmed ETA receipt"
+        : row.source_kind === "MANUAL_LOT" ? "Your fixed planning lot"
+        : "Engine planning lot",
       rule: row.rule === "DIRECT_EXCLUSIVE_RESERVE"
         ? "Hard direct/exclusive protection applies first through this member's Desired Max; only genuine free stock may move to a group."
-        : "Waterfall use: direct Desired-Max protection first; then each group receives an event-day Desired-Max bucket from smallest eligible group to broadest. Group use consumes only its bucket; within it FEFO, saved sequence, no-future-buy run-down, then normal rotation apply.",
+        : "Waterfall use: direct Desired-Max protection applies first; each group carries its own reserve until Target, then uses only genuine free stock. Within it FEFO, saved sequence, no-future-buy run-down, then normal rotation apply.",
     })),
     group_bucket_reservations: projection.group_bucket_reservations.map((row) => ({
       day: row.day, group_label: groupLabel.get(row.group_id) ?? "—",

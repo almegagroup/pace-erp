@@ -296,6 +296,105 @@ rephased/adjusted value একই নামে বা silently interchange ক�
   migration was applied and no deployment, live recalculation or data mutation
   occurred.
 
+### 2026-10-26 — PO22 Family same-arrival physical-lot netting (CODE CHECKED; PROMOTION PENDING)
+
+- **Audit finding:** the Family simulator already brings confirmed, manual and engine receipts into
+  the daily event-time waterfall.  The remaining defect is earlier in the buy loop: an `OWN` guard
+  and a `GROUP` guard for the same material, vendor and plant-arrival date could each apply MOQ and
+  emit two physical recommendations.
+- **Locked correction:** compatible needs are netted before MOQ / order multiple are applied.  The
+  emitted advisory is one physical receipt, carries every business purpose (`Own use`, `Member
+  guard`, and/or the resolved group), and is then re-simulated through the existing event-day
+  direct-protection → narrow-group → broad-group waterfall. It nets one OWN/member guard and one
+  group purpose. Additional overlapping groups deliberately wait for the next complete simulation;
+  summing them would double-count shared eligible stock. This does not merge different
+  materials, vendors or arrival dates.
+- **Output safety:** Planning's monthly group-assignment writer ignores `OWN` and `MEMBER_GUARD`
+  purpose labels on a consolidated receipt; only real group ids are assignment destinations.
+- **Regression:** a same-day BETONE own + BETON group fixture asserts one advisory receipt with
+  both purposes.  Final Family / Planning handler / frontend checks and production UAT remain
+  pending before this may be called released.
+
+### 2026-10-26 — PO22 Family remaining-engine sequence (AUDITED; DO NOT SKIP ORDER)
+
+0. **W2b — ETA-authoritative connected supply (OWNER-LOCKED 2026-10-26; COMPLETE IN CODE):**
+   A CSN Tracker row with a valid future **Plant ETA** is planning supply from that
+   ETA date whether its status is `ORD` (ordered/not shipped) or `TRN` (in
+   transit).  `ORD` and `TRN` differ only in the human confidence label; neither
+   may be excluded from supply simply because it is not shipped.  Missing,
+   invalid or already-passed ETA remains risk-only.
+   - **W2b.1 — canonical arrival input (complete):** assemble `ORD` and `TRN` rows into one
+     ETA supply input, keyed by the physical PO/CSN line so an order and its later
+     CSN cannot be counted twice.
+   - **W2b.2 — simulator contract (complete):** credit the quantity exactly on Plant ETA,
+     never before it; use it in Requirement, Planning and Family waterfall before
+     proposing a new engine lot.
+   - **W2b.3 — explainability (complete):** show `In transit — expected` for `TRN` and
+     `Ordered, not shipped — planned ETA; monitor dispatch` for `ORD`.  Both
+     remain coverage; an ETA problem is the only reason to show risk-only.
+   - **W2b.4 — regression/UAT:** the unit regressions prove `ORD` and `TRN` with the same valid ETA
+     produce the same planning coverage; prove PO/CSN deduplication; prove a
+     valid 31-Oct `ORD` prevents an unnecessary BETONE purchase that its arrival
+     would cover.  The remaining release check is the CMP003 production-data
+     read-only UAT after deployment.
+1. **W3g — persistent purpose balances (core, partially live):** Opening, GRN/CSN ETA and
+   engine receipts must allocate a physical quantity once into Direct/Exclusive → narrowest group
+   → broader group → second rotation.  Each purpose balance then declines only through its own
+   consumption.  A buy is triggered only when that purpose reaches its configured Target, not
+   because the browser/server recreates a Desired-Max bucket the next day.
+   - **W3g-a foundation (2026-10-26):** a pure, tested purpose ledger carries
+     Direct/Exclusive → narrow group → broad group balances and emits the
+     physical-material allocation at each event day.
+   - **W3g-b live group reserve (2026-10-26):** Family simulation now carries
+     each group's physical reservation across days.  It is made from genuine
+     free stock on opening, GRN/CSN ETA or engine-lot events, is reduced only
+     by that group's consumption, and is restored from genuine free stock only
+     when the group would fall below Target.  An expiry releases its associated
+     reservation before any later group draw.  Direct/exclusive protection,
+     FEFO, selection authority, conservation and the existing one-receipt MOQ
+     path remain the authoritative safeguards.
+   - **W3g-c global excess ledger (complete, 2026-10-26):** live Family
+     simulation now gives every genuine residual unit one movable group claim
+     after Direct/Exclusive and narrow-to-broad Desired-Max protection.  The
+     movable claim is released on a real receipt or when any hard group claim
+     falls below its Target window; the engine then re-creates hard protection
+     first and runs one global second rotation.  A quantity can therefore not
+     appear as cover in both RDP_TLA and RDP.  FEFO, saved order, unselected
+     member run-down, MOQ/multiple, ETA timing and per-material conservation
+     remain inside the same simulator.  The Desired-Max bucket table continues
+     to show only hard protection; movable excess contributes to real coverage
+     but is never falsely presented as a second group's hard reservation.
+2. **W3h — overlapping-family receipt decision (depends on W3g):** For BETONE/SAPCOMER/BENTONE
+   shapes, simulate all existing eligible stock and dated receipts first.  A proposed material must
+   be assessed against every overlapping group purpose on that arrival day.  MOQ/multiple is applied
+   once per actual material/vendor/arrival receipt, never once per visible group row.
+   - **W3h-a missing-Max guard (2026-10-26):** an eligible zero-stock member with
+     no item policy no longer collapses the group's derived Desired Max to its
+     Target.  It may still consume actual stock/inbound, but cannot suppress a
+     configured member's replenishment window or cause an immediate next-day MOQ.
+3. **W3i — receipt/allocation trace (depends on W3g/W3h):** Expose, without UUIDs, the receipt,
+   its direct/group quantities, remaining purpose coverage, Target trigger and any actual excess.
+   This is engine evidence; it does not claim a Store issue happened.
+   - **W3i source trace (2026-10-26):** the existing Family allocation report now receives the
+     exact planning source for every simulated direct/group draw: counted opening stock, a confirmed
+     ETA receipt, a user-fixed planning lot, or an engine lot.  It also shows the carried group
+     reserve after each day and keeps future-order Target trigger and end-of-horizon carry separate.
+     All labels are resolved server-side; no UUID is returned to the browser or Excel copy path.
+4. **F8 — final Family 4A presentation (depends on W3i):** Replace the current generic daily view
+   only for Family Planning with the owner-approved readable allocation table.  Other PO22 views
+   remain unchanged.
+5. **F4 presentation check:** The period-level Store Report already supplies Period, parent/child
+   product group, material, planned quantity and reason.  After W3g it must be verified against the
+   same purpose balances; it is not a daily physical issue ledger.
+   - **F4 canonical period-share check (2026-10-26):** Store's CM/NM material mix is now a pure,
+     tested aggregation of the Family simulator's actual event-day group draws plus its explicit
+     unmet share.  Store cannot independently consider opening stock, MOQ, policy, or a second
+     consumption ratio.  It remains period-level advice and continues to mark future/short stock
+     as not backed rather than claiming a physical issue.
+6. **Release gate:** Add BETON and RDP overlapping-group fixtures, run full PO22 checks/build,
+   perform read-only CMP003 production UAT, then promote only with the owner-authorised
+   fast-forward path.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from
