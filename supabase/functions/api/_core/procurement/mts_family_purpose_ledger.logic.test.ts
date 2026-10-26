@@ -27,6 +27,6 @@ Deno.test("W3g: an eligible alternative is pre-allocated but VINNAPAS is consume
     purposes: [{ id: "RDP_TLA", priority: 1, candidates: ["VINNAPAS", "DA"], consume_order: ["VINNAPAS", "DA"], demand: [20, 20], target_balance: [10, 10], desired_balance: [30, 30] }],
   });
   const day0 = result.rows.find((row) => row.day === 0)!;
-  assert(day0.opening_qty === 50 && day0.closing_qty === 30 && day0.by_material.DA === 30,
+  assert(day0.opening_qty === 50 && day0.closing_qty === 30 && day0.by_material.DA === 30 && day0.consumed_by_material.VINNAPAS === 20,
     `the 20 KG VINNAPAS must be consumed before the pre-allocated DA balance: ${JSON.stringify(result.rows)}`);
 });

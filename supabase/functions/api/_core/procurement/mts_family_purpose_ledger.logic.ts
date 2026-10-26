@@ -40,6 +40,7 @@ export type PurposeLedgerDay = {
   desired_qty: number;
   shortage_qty: number;
   by_material: Readonly<Record<string, number>>;
+  consumed_by_material: Readonly<Record<string, number>>;
 };
 
 export type PurposeLedgerResult = {
@@ -103,6 +104,7 @@ export function runFamilyPurposeLedger(args: {
       const openingQty = sum(balance);
       let need = Math.max(0, purpose.demand[day] ?? 0);
       let consumed = 0;
+      const consumedByMaterial = new Map<string, number>();
       for (const material of candidatesFor(purpose)) {
         if (need <= EPSILON) break;
         const take = Math.min(need, balance.get(material) ?? 0);
@@ -110,6 +112,7 @@ export function runFamilyPurposeLedger(args: {
         balance.set(material, round((balance.get(material) ?? 0) - take));
         need = round(need - take);
         consumed = round(consumed + take);
+        consumedByMaterial.set(material, round((consumedByMaterial.get(material) ?? 0) + take));
       }
       const target = Math.max(0, purpose.target_balance[day] ?? 0);
       const desired = Math.max(target, purpose.desired_balance[day] ?? target);
@@ -124,6 +127,7 @@ export function runFamilyPurposeLedger(args: {
         day, purpose_id: purpose.id, opening_qty: round(openingQty), allocated_qty: round(allocated), consumed_qty: round(consumed),
         closing_qty: round(closing), target_qty: round(target), desired_qty: round(desired), shortage_qty: round(need),
         by_material: Object.fromEntries([...balance.entries()].filter(([, qty]) => qty > EPSILON).map(([material, qty]) => [material, round(qty)])),
+        consumed_by_material: Object.fromEntries([...consumedByMaterial.entries()].filter(([, qty]) => qty > EPSILON).map(([material, qty]) => [material, round(qty)])),
       });
     }
     unallocatedByDay.push(Object.fromEntries([...unallocated.entries()].filter(([, qty]) => qty > EPSILON).map(([material, qty]) => [material, round(qty)])));
