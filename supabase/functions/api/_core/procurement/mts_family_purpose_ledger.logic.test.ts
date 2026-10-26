@@ -1,5 +1,6 @@
 import {
   buildFamilyPurposeLedgerInput,
+  runGlobalFamilyPurposeLedger,
   runFamilyPurposeLedger,
 } from "./mts_family_purpose_ledger.logic.ts";
 
@@ -224,5 +225,54 @@ Deno.test("W3h: a zero-stock overlap exposes each purpose's Desired-Max shortfal
   assert(
     shortfall["DIRECT:BETONE"] === 1_100 && shortfall["GROUP:BETON"] === 1_375 && shortfall["GROUP:BROAD"] === 1_650,
     `each purpose must state its own shortfall before a single physical receipt is sized: ${JSON.stringify(result.rows)}`,
+  );
+});
+
+Deno.test("W3g-c: excess is globally conserved and rotates only once across overlapping purposes", () => {
+  // Two overlapping groups can both use BETONE.  The 20 KG after their hard
+  // Desired-Max claims is assigned once, not shown as free coverage in both
+  // groups.  The row-level hard/excess split is the audit proof.
+  const result = runGlobalFamilyPurposeLedger({
+    opening: { BETONE: 100 },
+    supplies: [],
+    days: 1,
+    purposes: [
+      { id: "NARROW", priority: 1, candidates: ["BETONE"], demand: [10], target_balance: [10], desired_balance: [30] },
+      { id: "BROAD", priority: 2, candidates: ["BETONE"], demand: [10], target_balance: [10], desired_balance: [30] },
+    ],
+  });
+  const narrow = result.rows.find((row) => row.purpose_id === "NARROW")!;
+  const broad = result.rows.find((row) => row.purpose_id === "BROAD")!;
+  const physicalClosing = narrow.closing_qty + broad.closing_qty + (result.unallocated_by_day[0].BETONE ?? 0);
+  assert(
+    narrow.hard_allocated_qty === 40 && broad.hard_allocated_qty === 40 &&
+      narrow.excess_allocated_qty === 10 && broad.excess_allocated_qty === 10,
+    `hard protection must be filled first and the one 20 KG excess must rotate once: ${JSON.stringify(result.rows)}`,
+  );
+  assert(
+    physicalClosing === 80 && result.unallocated_by_day[0].BETONE === undefined,
+    `100 KG opening less 20 KG consumption must leave exactly 80 KG, without duplicate group claims: ${JSON.stringify(result)}`,
+  );
+});
+
+Deno.test("W3g-c: when a hard purpose falls below Target, movable excess is released before re-waterfall", () => {
+  const result = runGlobalFamilyPurposeLedger({
+    opening: { BETONE: 100 },
+    supplies: [],
+    days: 4,
+    purposes: [
+      { id: "NARROW", priority: 1, candidates: ["BETONE"], demand: [10, 10, 10, 10], target_balance: [20, 20, 20, 20], desired_balance: [30, 30, 30, 30] },
+      { id: "BROAD", priority: 2, candidates: ["BETONE"], demand: [10, 10, 10, 10], target_balance: [20, 20, 20, 20], desired_balance: [30, 30, 30, 30] },
+    ],
+  });
+  const day3 = result.rows.filter((row) => row.day === 3);
+  const physicalClosing = day3.reduce((total, row) => total + row.closing_qty, 0) + (result.unallocated_by_day[3].BETONE ?? 0);
+  assert(
+    day3.some((row) => row.hard_allocated_qty > 0) && day3.every((row) => row.excess_allocated_qty >= 0),
+    `Target breach must trigger one real re-waterfall, not fabricate a receipt: ${JSON.stringify(day3)}`,
+  );
+  assert(
+    physicalClosing === 20,
+    `100 KG opening less four 20 KG demand slices must conserve exactly 20 KG: ${JSON.stringify(result)}`,
   );
 });

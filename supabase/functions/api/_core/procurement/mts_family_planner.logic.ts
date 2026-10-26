@@ -452,6 +452,12 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     // the opening/receipt event, then reduced only by that group's draw.  It
     // must not be recreated from the whole balance on every calendar day.
     const purposeReserve = pools.map(() => Array.from({ length: M }, () => 0));
+    // A second, movable claim for the stock left after every purpose has its
+    // Desired-Max protection.  Unlike `purposeReserve`, this claim is released
+    // and waterfalled again on the next receipt or when any hard purpose falls
+    // below Target.  This makes an overlapping group see physical excess once,
+    // not once per group.
+    const excessReserve = pools.map(() => Array.from({ length: M }, () => 0));
     for (let i = 0; i < N; i += 1) {
       // A receipt is usable through valid_until.  Expired virtual stock is not
       // silently counted as cover; this is a planning warning, never a stock post.
@@ -472,6 +478,13 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
             const released = Math.min(reserved, expiredReserve);
             if (released <= EPSILON) continue;
             purposeReserve[p][m] = roundQty(reserved - released);
+            expiredReserve = roundQty(expiredReserve - released);
+          }
+          for (let p = excessReserve.length - 1; p >= 0 && expiredReserve > EPSILON; p -= 1) {
+            const reserved = excessReserve[p][m];
+            const released = Math.min(reserved, expiredReserve);
+            if (released <= EPSILON) continue;
+            excessReserve[p][m] = roundQty(reserved - released);
             expiredReserve = roundQty(expiredReserve - released);
           }
           receipt.qty_base = 0;
@@ -511,7 +524,8 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       // through days until their own group consumes them.
       const newlyAvailable = i === 0 || ids.some((_id, m) => confirmed[m][i] > EPSILON || s.planned[m][i] > EPSILON);
       const unreserved = ids.map((_id, m) => Math.max(0, bal[m] - protection[m][i]
-        - purposeReserve.reduce((sum, reserve) => sum + reserve[m], 0)));
+        - purposeReserve.reduce((sum, reserve) => sum + reserve[m], 0)
+        - excessReserve.reduce((sum, reserve) => sum + reserve[m], 0)));
       const takeBucket = (p: number, m: number, qty: number) => {
         const take = Math.min(Math.max(0, qty), unreserved[m]);
         if (take <= EPSILON) return 0;
@@ -519,7 +533,23 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         unreserved[m] = roundQty(unreserved[m] - take);
         return take;
       };
-      if (newlyAvailable) pools.forEach((pool, p) => {
+      const releaseExcess = () => {
+        excessReserve.forEach((reserve) => reserve.forEach((qty, m) => {
+          if (qty <= EPSILON) return;
+          unreserved[m] = roundQty(unreserved[m] + qty);
+          reserve[m] = 0;
+        }));
+      };
+      const hardTargetBreach = pools.some((pool, p) => {
+        const targetQty = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).target);
+        // `targetQty` includes the current draw plus the configured forward
+        // Target window.  Therefore a carried balance exactly equal to this
+        // value still safely serves today; refill only once it falls below.
+        return purposeReserve[p].reduce((sum, qty) => sum + qty, 0) + EPSILON < targetQty;
+      });
+      const allocationEvent = newlyAvailable || hardTargetBreach;
+      if (allocationEvent) releaseExcess();
+      if (allocationEvent) pools.forEach((pool, p) => {
         let wanted = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).desired);
         wanted = Math.max(0, wanted - purposeReserve[p].reduce((sum, qty) => sum + qty, 0));
         if (wanted <= EPSILON) return;
@@ -564,36 +594,58 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
           }
         }
       });
-      // When a carried balance cannot meet today's use, genuine unreserved
-      // stock may hand off before consumption.  This preserves the current
-      // day's group demand (e.g. DA after VINNAPAS runs down); it is not a
-      // fabricated receipt or a daily Desired-Max rebuild.
-      if (!newlyAvailable) pools.forEach((pool, p) => {
-        const reserve = purposeReserve[p].reduce((sum, qty) => sum + qty, 0);
-        const targetQty = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).target);
-        if (reserve + EPSILON >= targetQty) return;
-        let wanted = Math.max(0, pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).desired) - reserve);
-        const cand = candIdx[p];
-        const order = input.group_orders?.get(pool.group_id);
-        const sequence = order
-          ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => unreserved[mIndex.get(id)!], order).map((id) => mIndex.get(id)!)
-          : [...cand].sort((a, b) => unreserved[b] * costTilt[b] - unreserved[a] * costTilt[a] || ids[a].localeCompare(ids[b]));
-        for (const m of sequence) {
-          if (wanted <= EPSILON) break;
-          wanted = roundQty(wanted - takeBucket(p, m, wanted));
+      // Second rotation: every genuine residual unit receives one, and only
+      // one, purpose owner.  A small slice per group keeps the narrow → broad
+      // waterfall fair; the member sequence still observes FEFO, saved order,
+      // and no-future-buy run-down before normal stock/cost rotation.
+      const takeExcess = (p: number, m: number, qty: number) => {
+        const take = Math.min(Math.max(0, qty), unreserved[m]);
+        if (take <= EPSILON) return 0;
+        excessReserve[p][m] = roundQty(excessReserve[p][m] + take);
+        unreserved[m] = roundQty(unreserved[m] - take);
+        return take;
+      };
+      if (allocationEvent) {
+        const nextSlice = (pool: Pool) => pool.demand.slice(i).find((qty) => qty > EPSILON) ?? 0;
+        for (let pass = 0; pass < 10_000 && unreserved.some((qty) => qty > EPSILON); pass += 1) {
+          let moved = false;
+          pools.forEach((pool, p) => {
+            let wanted = nextSlice(pool);
+            if (wanted <= EPSILON) return;
+            const cand = candIdx[p];
+            const order = input.group_orders?.get(pool.group_id);
+            const expiryFirst = [...cand].filter((m) => receiptLeft[m].some((r) => r.expiry_priority && r.qty_base > EPSILON))
+              .sort((a, b) => ids[a].localeCompare(ids[b]));
+            const saved = order
+              ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => unreserved[mIndex.get(id)!], order).map((id) => mIndex.get(id)!)
+              : [];
+            const runDown = order ? [] : [...cand].filter((m) => hasNoFutureReplenishment(ids[m], i)).sort((a, b) => ids[a].localeCompare(ids[b]));
+            const normal = [...cand].sort((a, b) => unreserved[b] * costTilt[b] - unreserved[a] * costTilt[a] || ids[a].localeCompare(ids[b]));
+            for (const m of [...new Set([...expiryFirst, ...saved, ...runDown, ...normal])]) {
+              if (wanted <= EPSILON) break;
+              const took = takeExcess(p, m, wanted);
+              wanted = roundQty(wanted - took);
+              moved ||= took > EPSILON;
+            }
+          });
+          if (!moved) break;
         }
-      });
+      }
       pools.forEach((pool, p) => {
         let need = pool.demand[i];
         if (need <= EPSILON) return;
         const cand = candIdx[p];
-        const free = (m: number) => Math.max(0, purposeReserve[p][m]);
+        const free = (m: number) => Math.max(0, purposeReserve[p][m]) + Math.max(0, excessReserve[p][m]);
         const order = input.group_orders?.get(pool.group_id);
         const ordered = (fn: (m: number) => number) => (order
           ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => fn(mIndex.get(id)!), order).map((id) => mIndex.get(id)!)
           : [...cand].sort((a, b) => fn(b) - fn(a) || cand.indexOf(a) - cand.indexOf(b)));
         const takeFrom = (m: number, qty: number) => {
-          bal[m] -= qty; purposeReserve[p][m] -= qty; need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
+          bal[m] -= qty;
+          const hard = Math.min(Math.max(0, purposeReserve[p][m]), qty);
+          purposeReserve[p][m] = roundQty(purposeReserve[p][m] - hard);
+          excessReserve[p][m] = roundQty(excessReserve[p][m] - Math.max(0, qty - hard));
+          need -= qty; s.draw[m][i] += qty; s.use[m][i] += qty; s.poolDraw[p][m][i] += qty;
           let left = qty;
           for (const receipt of receiptLeft[m]) {
             if (left <= EPSILON) break;
@@ -655,9 +707,13 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
         if (need > EPSILON) s.poolUnmet[p][i] = need;
       });
       pools.forEach((_pool, p) => {
-        const bucketFree = purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
-        const genuineExcess = candIdx[p].reduce((sum, m) => sum + Math.max(0, unreserved[m]), 0);
-        s.poolFree[p][i] = roundQty(bucketFree + genuineExcess);
+        const bucketFree = purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0)
+          + excessReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
+        s.poolFree[p][i] = roundQty(bucketFree);
+        // The existing bucket table remains the auditable Desired-Max hard
+        // protection.  Movable second-rotation excess contributes to actual
+        // coverage (`poolFree`) but is deliberately not mislabelled as a
+        // group-specific Desired-Max reservation.
         ids.forEach((_id, m) => { s.poolBucket[p][m][i] = roundQty(Math.max(0, purposeReserve[p][m]) + s.poolDraw[p][m][i]); });
       });
       for (let m = 0; m < M; m += 1) {

@@ -353,19 +353,17 @@ rephased/adjusted value একই নামে বা silently interchange ক�
      reservation before any later group draw.  Direct/exclusive protection,
      FEFO, selection authority, conservation and the existing one-receipt MOQ
      path remain the authoritative safeguards.
-   - **W3g-c global excess ledger (open; do not shortcut):** the owner-approved
-     second rotation must become one live, conserved purpose ledger across all
-     overlapping pools—not merely a post-horizon report.  Every excess unit
-     must have one group claim; when a group's hard Target claim is reached,
-     movable excess must be released and re-waterfalled before a new buy.  The
-     implementation must prove that an RDP_TLA/RDP-style overlap cannot count
-     the same DA/VINNAPAS/RP quantity for two group covers, cannot create a
-     late shortage, and cannot alter direct/exclusive protection, FEFO, MOQ or
-     selection authority.  A 2026-10-26 prototype that allocated all excess
-     live failed the existing RDP no-stock-out regression, so it was discarded
-     rather than committed.  This requires an atomic global allocator and new
-     overlap fixtures; it must not be approximated by independent per-group
-     buckets.
+   - **W3g-c global excess ledger (complete, 2026-10-26):** live Family
+     simulation now gives every genuine residual unit one movable group claim
+     after Direct/Exclusive and narrow-to-broad Desired-Max protection.  The
+     movable claim is released on a real receipt or when any hard group claim
+     falls below its Target window; the engine then re-creates hard protection
+     first and runs one global second rotation.  A quantity can therefore not
+     appear as cover in both RDP_TLA and RDP.  FEFO, saved order, unselected
+     member run-down, MOQ/multiple, ETA timing and per-material conservation
+     remain inside the same simulator.  The Desired-Max bucket table continues
+     to show only hard protection; movable excess contributes to real coverage
+     but is never falsely presented as a second group's hard reservation.
 2. **W3h — overlapping-family receipt decision (depends on W3g):** For BETONE/SAPCOMER/BENTONE
    shapes, simulate all existing eligible stock and dated receipts first.  A proposed material must
    be assessed against every overlapping group purpose on that arrival day.  MOQ/multiple is applied

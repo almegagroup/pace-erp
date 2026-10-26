@@ -367,6 +367,36 @@ Deno.test("W3g: a live group purpose reserve carries until Target, then uses onl
   assert(result.advisory_buys.every((buy) => buy.status === "NO_BUY"), JSON.stringify(result.advisory_buys));
 });
 
+Deno.test("W3g-c: overlapping groups receive one global excess claim, then re-waterfall it at Target", () => {
+  // Both groups can consume BETONE.  Four days need 80 KG in total; the
+  // planner must retain exactly 20 KG, not let each group report the same
+  // 20 KG residual as its own free coverage and postpone a necessary buy.
+  const days = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"];
+  const result = planFamily({
+    as_of: days[0], horizon_end: days.at(-1)!,
+    opening_qty_by_material: { BETONE: 100 }, own_demand: [],
+    group_demand: days.flatMap((required_by) => [
+      { group_id: "NARROW", candidates: ["BETONE"], required_by, qty_base: 10 },
+      { group_id: "BROAD", candidates: ["BETONE"], required_by, qty_base: 10 },
+    ]),
+    confirmed_arrivals: [], policies: [policy("BETONE", 1, 0, [{ vendor: "HIMADRI", lead: 0, cost: 1 }])],
+    group_coverage_policies: [
+      { material_group_id: "NARROW", effective_from: days[0], target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+      { material_group_id: "BROAD", effective_from: days[0], target_days: 1, critical_days: 0, desired_max_days_override: 2 },
+    ],
+    plan_buys: false,
+  });
+  const reconciliation = result.allocation_reconciliation.find((row) => row.material_id === "BETONE")!;
+  assert(
+    reconciliation.group_allocated_qty_base === 80 && reconciliation.closing_qty_base === 20 && reconciliation.variance_qty_base === 0,
+    `one 100 KG opening must be consumed once across both purposes: ${JSON.stringify(reconciliation)}`,
+  );
+  assert(
+    result.group_mix.filter((row) => row.day === days.at(-1)!).every((row) => row.draws.BETONE === 10),
+    `both overlapping groups must remain serviceable from their real, separately claimed stock: ${JSON.stringify(result.group_mix)}`,
+  );
+});
+
 Deno.test("family waterfall: an unconfigured zero-stock member does not collapse a group's derived Desired Max to Target", () => {
   // Production BETON shape: SAPCOMER remains an eligible existing-stock
   // alternative, but it has zero stock, no future buy selection and no
