@@ -315,6 +315,30 @@ rephased/adjusted value একই নামে বা silently interchange ক�
   both purposes.  Final Family / Planning handler / frontend checks and production UAT remain
   pending before this may be called released.
 
+### 2026-10-26 — PO22 Family remaining-engine sequence (AUDITED; DO NOT SKIP ORDER)
+
+1. **W3g — persistent purpose balances (core, not yet implemented):** Opening, GRN/CSN ETA and
+   engine receipts must allocate a physical quantity once into Direct/Exclusive → narrowest group
+   → broader group → second rotation.  Each purpose balance then declines only through its own
+   consumption.  A buy is triggered only when that purpose reaches its configured Target, not
+   because the browser/server recreates a Desired-Max bucket the next day.
+2. **W3h — overlapping-family receipt decision (depends on W3g):** For BETONE/SAPCOMER/BENTONE
+   shapes, simulate all existing eligible stock and dated receipts first.  A proposed material must
+   be assessed against every overlapping group purpose on that arrival day.  MOQ/multiple is applied
+   once per actual material/vendor/arrival receipt, never once per visible group row.
+3. **W3i — receipt/allocation trace (depends on W3g/W3h):** Expose, without UUIDs, the receipt,
+   its direct/group quantities, remaining purpose coverage, Target trigger and any actual excess.
+   This is engine evidence; it does not claim a Store issue happened.
+4. **F8 — final Family 4A presentation (depends on W3i):** Replace the current generic daily view
+   only for Family Planning with the owner-approved readable allocation table.  Other PO22 views
+   remain unchanged.
+5. **F4 presentation check:** The period-level Store Report already supplies Period, parent/child
+   product group, material, planned quantity and reason.  After W3g it must be verified against the
+   same purpose balances; it is not a daily physical issue ledger.
+6. **Release gate:** Add BETON and RDP overlapping-group fixtures, run full PO22 checks/build,
+   perform read-only CMP003 production UAT, then promote only with the owner-authorised
+   fast-forward path.
+
 ### 2026-10-24 — PO22 CMP005 prorata hand-off defect (DEV FIXED; PROD UNVERIFIED)
 
 - **Observed defect:** Requirement correctly rephased Calcium Formate's current-month demand from
