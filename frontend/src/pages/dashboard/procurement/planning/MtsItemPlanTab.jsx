@@ -23,6 +23,7 @@ import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsIt
 import { TargetWhatIf, VendorDateCompare } from "./MtsItemPlanWhatIf.jsx";
 import { lotVendorFlags } from "./mtsItemPlanLots.js";
 import { orderQtyText } from "./mtsOrderUnit.js";
+import { PO22_LIVE_QUERY } from "./mtsLiveQuery.js";
 
 // Owner 2026-10-21: FOR = freight inside the price; otherwise we pay it (AC01 landed cost).
 const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we pay)", EX_TRANSPORTER_GODOWN: "Ex godown (we pay)" };
@@ -108,6 +109,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     queryKey: ["procurement", "mts-requirement", "planning", companyId, planMonth, asOf, demandAt],
     queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
     enabled: Boolean(companyId && planMonth && asOf),
+    ...PO22_LIVE_QUERY,
   });
   const materials = useMemo(() => {
     const seen = new Map();
@@ -124,6 +126,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     queryKey: itemKey,
     queryFn: () => getMtsItemPlan({ company_id: companyId, plan_month: effMonth, as_of: effAsOf, demand_at: demandAt || undefined, material_id: materialId }),
     enabled: Boolean(companyId && planMonth && asOf && materialId),
+    ...PO22_LIVE_QUERY,
   });
   const plan = itemQ.data ?? null;
   // What the grids show: the preview while one is open, else the saved plan.

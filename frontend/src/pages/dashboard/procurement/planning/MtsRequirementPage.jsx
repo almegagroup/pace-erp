@@ -27,6 +27,7 @@ import { pushToast } from "../../../../store/uiToast.js";
 import { ACTION_LEVELS, buildActionRows } from "./mtsActionRows.js";
 import MtsGroupSettings from "./MtsGroupSettings.jsx";
 import { qtyWithOrderUnit } from "./mtsOrderUnit.js";
+import { PO22_LIVE_QUERY } from "./mtsLiveQuery.js";
 import MtsItemPlanTab from "./MtsItemPlanTab.jsx";
 import MtsPlanningReschedule from "./MtsPlanningReschedule.jsx";
 import MtsRollingPlanDownload from "./MtsRollingPlanDownload.jsx";
@@ -545,6 +546,7 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
     queryKey: reportKey,
     queryFn: () => getMtsRequirementReport({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
     enabled: Boolean(companyId && planMonth && asOf),
+    ...PO22_LIVE_QUERY,
   });
   const report = reportQ.data ?? null;
   const toggleExpanded = useCallback((id) => setExpanded((current) => (current === id ? "" : id)), []);
@@ -1477,6 +1479,7 @@ function usePlanningQuery(companyId, planMonth, asOf, demandAt) {
     queryKey: ["procurement", "mts-requirement", "planning", companyId, planMonth, asOf, demandAt],
     queryFn: () => getMtsPlanning({ company_id: companyId, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined }),
     enabled: Boolean(companyId && planMonth && asOf),
+    ...PO22_LIVE_QUERY,
   });
 }
 
