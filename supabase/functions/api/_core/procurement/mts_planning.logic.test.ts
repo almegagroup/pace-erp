@@ -1,3 +1,4 @@
+import { classifyBulkMaterials } from "./mts_bulk_rule.ts";
 import { memberMattersForGaps, priceUnitCode, assemblePlanningInput, chooseVendor, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
@@ -116,4 +117,13 @@ Deno.test("gap filter: a member with no stock, no demand and no purchase tick is
   equal(memberMattersForGaps({ opening_qty: 12, horizon_demand_qty: 0, selected_any_month: false }), true, "holds stock");
   equal(memberMattersForGaps({ opening_qty: 0, horizon_demand_qty: 5, selected_any_month: false }), true, "has demand");
   equal(memberMattersForGaps({ opening_qty: 0, horizon_demand_qty: 0, selected_any_month: true }), true, "ticked for a buy");
+});
+
+Deno.test("Bulk follows the PO type: own BULK PO = Bulk; own Standard-only = not Bulk; no own PO = other companies' BULK", () => {
+  const bulk = classifyBulkMaterials({
+    ownBulk: new Set(["SAND"]),
+    ownAnyPo: new Set(["SAND", "DOLOMITE_STD", "TANKER_ONLY"]),
+    otherBulk: new Set(["DOLOMITE_STD", "DOLOMITE_NO_PO", "SAND"]),
+  });
+  equal([...bulk].sort(), ["DOLOMITE_NO_PO", "SAND"], "DOLOMITE_STD has own Standard POs; DOLOMITE_NO_PO has none here");
 });

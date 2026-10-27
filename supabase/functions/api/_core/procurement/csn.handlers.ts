@@ -81,20 +81,72 @@ const TRACKER_INLINE_FIELDS = new Set([
   "lc_opened_date",
   "lc_number",
 ]);
-const MOTHER_PROPAGATION_FIELDS = [
-  "port_of_loading_id",
-  "port_of_discharge_id",
-  "vessel_name",
-  "voyage_number",
-  "bl_number",
-  "scheduled_eta_to_port",
-  "etd",
-  "etd_is_manual_override",
-  "bl_date",
-  "eta_at_port",
-  "eta_at_port_is_manual_override",
-  "ata_at_port",
-];
+// Feasibility §88.3 (business owner, 2026-10-27): until a Sub-CSN is linked to
+// an STO, every Mother CSN field flows into it automatically EXCEPT the ones
+// below, which belong to the Sub-CSN itself. This is an exclusion list (not an
+// allow-list) on purpose -- the old 12-field allow-list silently dropped
+// indent/LC/invoice/BOE/payment fields (found live on Tianpu, CSN 3000000362),
+// and any new consignment_note column would have been dropped the same way.
+const SUB_CSN_OWN_FIELDS = new Set([
+  // identity / hierarchy
+  "id",
+  "csn_number",
+  "mother_csn_id",
+  "is_mother_csn",
+  // allocation -- the Sub-CSN's own share and destination
+  "dispatch_qty",
+  "total_dispatch_qty",
+  "consignee_company_id",
+  // recomputed per Sub-CSN from its own allotted company's transit time (Brief §5.4)
+  "eta_to_plant_calculated",
+  "transit_days_snapshot",
+  // own lifecycle
+  "status",
+  "pre_ge_status",
+  "inactive_reason_code",
+  "inactive_from_status",
+  "inactive_at",
+  "inactive_by",
+  "gate_entry_id",
+  "gate_entry_date",
+  "grn_id",
+  "grn_date",
+  "received_qty",
+  "total_received_qty",
+  // STO link (§88.4)
+  "sto_id",
+  "sto_line_id",
+  "sto_source_snapshot",
+  // port-to-destination leg -- each Sub-CSN has its own (§88.3)
+  "post_clearance_lr_date",
+  "lr_number_port_to_plant",
+  "vehicle_number_port_to_plant",
+  "transporter_id",
+  "transporter_name_freetext",
+  "last_mile_transporter_id",
+  "last_mile_transporter_freetext",
+  "lr_date",
+  "lr_number",
+  "vehicle_number",
+  "domestic_transporter_id",
+  "domestic_transporter_freetext",
+  "cha_id",
+  "cha_name_freetext",
+  "cha_docket_number",
+  "soft_copy_received",
+  "hard_copy_received",
+  "hard_copy_courier_number",
+  "courier_dispatch_date",
+  "courier_received_date",
+  "courier_date_to_cha",
+  "courier_cha_receive_date",
+  "remarks",
+  // audit
+  "created_by",
+  "created_at",
+  "last_updated_by",
+  "last_updated_at",
+]);
 const BOOLEAN_FIELDS = new Set([
   "indent_required",
   "has_rebate",
@@ -987,35 +1039,71 @@ export async function recalculateCsnsForPoDeliveryDate(
     }
 
     if (csn.is_mother_csn === true) {
-      await syncSubCsnsFromMother(csnId, updates);
+      await syncSubCsnsFromMother(csnId, updates, updatedBy);
     }
     await writeCsnFieldHistory(csnId, csn, updated as CsnRow, updatedBy, Object.keys(updates));
   }));
 }
 
-async function syncSubCsnsFromMother(motherId: string, updates: JsonRecord): Promise<void> {
-  const subUpdates: JsonRecord = {};
-  for (const field of MOTHER_PROPAGATION_FIELDS) {
-    if (updates[field] !== undefined) {
-      subUpdates[field] = updates[field];
+function pickMotherFieldsForSubCsn(source: JsonRecord): JsonRecord {
+  const picked: JsonRecord = {};
+  for (const [field, value] of Object.entries(source)) {
+    if (value !== undefined && !SUB_CSN_OWN_FIELDS.has(field)) {
+      picked[field] = value;
     }
   }
+  return picked;
+}
 
-  if (Object.keys(subUpdates).length === 0) {
+// Pushes the Mother's changed fields into every Sub-CSN that is not yet
+// STO-linked. A linked Sub-CSN is independent (§88.4) -- it keeps
+// mother_csn_id/po_id/sto_source_snapshot for audit but is never overwritten.
+async function syncSubCsnsFromMother(motherId: string, updates: JsonRecord, actorId: string): Promise<void> {
+  const motherFields = pickMotherFieldsForSubCsn(updates);
+  if (Object.keys(motherFields).length === 0) {
     return;
   }
 
-  subUpdates.last_updated_at = new Date().toISOString();
-
-  const { error } = await serviceRoleClient
+  const { data: subRows, error: subError } = await serviceRoleClient
     .schema("erp_procurement")
     .from("consignment_note")
-    .update(subUpdates)
-    .eq("mother_csn_id", motherId);
+    .select("*")
+    .eq("mother_csn_id", motherId)
+    .is("sto_id", null)
+    .not("status", "in", '("CAN","KOF")');
 
-  if (error) {
+  if (subError) {
     throw new Error("PROCUREMENT_SUB_CSN_SYNC_FAILED");
   }
+
+  // Each Sub-CSN is its own row with its own allotted company -> independent writes.
+  await Promise.all(((subRows as CsnRow[] | null) ?? []).map(async (sub) => {
+    const cascade = await recalculateAndBuildUpdates(sub, motherFields);
+    const subUpdates: JsonRecord = {
+      ...motherFields,
+      last_updated_at: new Date().toISOString(),
+      last_updated_by: actorId,
+    };
+    for (const ownComputed of ["transit_days_snapshot", "eta_to_plant_calculated"]) {
+      if (cascade[ownComputed] !== undefined) {
+        subUpdates[ownComputed] = cascade[ownComputed];
+      }
+    }
+
+    const { data: updated, error } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("consignment_note")
+      .update(subUpdates)
+      .eq("id", sub.id)
+      .select("*")
+      .single();
+
+    if (error || !updated) {
+      throw new Error("PROCUREMENT_SUB_CSN_SYNC_FAILED");
+    }
+
+    await writeCsnFieldHistory(String(sub.id), sub, updated as CsnRow, actorId, Object.keys(subUpdates));
+  }));
 }
 
 export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
@@ -1541,6 +1629,20 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
       }
     }
 
+    // Brief §5.4: a changed Allotted Company must re-snapshot port-to-plant transit
+    // from that company's own master row (e.g. CMP003 = 1 day, CMP005 = 4 days),
+    // unless the user also typed a transit value by hand in the same save.
+    const consigneeChanged = updates.consignee_company_id !== undefined
+      && toTrimmedString(updates.consignee_company_id) !== toTrimmedString(csn.consignee_company_id);
+    const asTransitKey = (value: unknown) => (value == null || value === "" ? "" : String(Number(value)));
+    const transitTypedByUser = updates.transit_days_snapshot !== undefined
+      && asTransitKey(updates.transit_days_snapshot) !== asTransitKey(csn.transit_days_snapshot);
+    if (consigneeChanged && !transitTypedByUser) {
+      const transit = await getPortPlantTransit({ ...csn, ...updates } as CsnRow);
+      updates.transit_days_snapshot = transit?.transit_days != null ? Number(transit.transit_days) : null;
+      shouldRecalculate = true;
+    }
+
     if (shouldRecalculate) {
       Object.assign(updates, await recalculateAndBuildUpdates(csn, updates));
     }
@@ -1571,7 +1673,7 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
     }
 
     if (data.is_mother_csn === true || (csn.is_mother_csn === true)) {
-      await syncSubCsnsFromMother(id, updates);
+      await syncSubCsnsFromMother(id, updates, ctx.auth_user_id);
     }
 
     await writeCsnFieldHistory(id, csn, data as CsnRow, ctx.auth_user_id, Object.keys(updates));
@@ -1609,6 +1711,9 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       mother_csn_id: id,
       is_mother_csn: false,
       consignee_company_id: toTrimmedString(body.consignee_company_id) || null,
+      // The Mother's snapshot is its own consignee's transit; the Sub-CSN takes
+      // its own from the allotted company's master row (Brief §5.4).
+      transit_days_snapshot: null,
       status: CSN_STATUS.ORDERED,
       dispatch_qty: 0,
       total_received_qty: 0,
@@ -2488,7 +2593,7 @@ export async function inlineUpdateCSNHandler(req: Request, ctx: ProcurementHandl
     }
 
     if (data.is_mother_csn === true) {
-      await syncSubCsnsFromMother(id, updates);
+      await syncSubCsnsFromMother(id, updates, ctx.auth_user_id);
     }
 
     await writeCsnFieldHistory(id, csn, data as CsnRow, ctx.auth_user_id, [field]);
