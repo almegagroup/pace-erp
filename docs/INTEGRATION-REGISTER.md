@@ -41,6 +41,13 @@ Open PR evidence at the time of record: PR #675 (`agent/claude → main`) is
 **closed** and was reported conflicting; no open PR is an approved substitute
 for the fast-forward process.
 
+## Active integration tasks
+
+| Module / phase | Evidence branch and commit | Status | Tests | Next action / owner |
+|---|---|---|---|---|
+| Procurement — AC03 Auditor read-only access (CMP003) | `agent/codex`, based on `origin/dev` `94a4dffc` | Production ACL repair complete: AC01 remains hidden for Audit; AC03 is the same GRN/invoice-verification data and row drawer in read-only mode, with the existing Excel export. Rebuilt the two active CMP003 Audit menu snapshots (`P0010`, `P0079`) from the current ACL version. | Production verification: both users now have `AC01` / `PROC_IV_LIST` `is_visible=false` and `AC03` / `PROC_LC_LIST` `is_visible=true`; route read capability remains present and no Write grant exists. | Commit this operational evidence to `agent/codex`, then fast-forward it to `dev`; owner decides later `dev` → `main` release. Owner: Codex. |
+| Procurement — PO quantity-amendment CSN decision | `agent/codex`, based on `origin/dev` `f85480c8` | Implemented locally: amendment approval now offers explicit Yes / No / Cancel approval; cancelling cannot silently become “No CSN”. Authorised production recovery completed for CMP003 PO `ASCP2627-0149`: CSN `3000000386`, `ORD`, quantity `200`, with a backfill remark. | Focused ESLint passes; `npm.cmd run build` passes (pre-existing duplicate GRN attribute and bundle-size warnings only); production record re-read after insert. | Commit, fast-forward to `dev`; owner decides later `dev` → `main` release. Owner: Codex. |
+
 ## PO22 canonical progress and decision register
 
 | Feature / contract | Evidence branch and commit | Status | Accepted baseline? | Test evidence | Open issue / blocker | Next action / owner |

@@ -248,12 +248,32 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
 
     // ── RM / PM requirement (only rows with demand) ──
     const risks = new Map(projection.risks.map((r) => [r.material_id, r]));
+    // Owner 2026-10-27: a group-only item (no exclusive use) that runs out while every group it serves
+    // stays above that group's Critical / shortage through the whole horizon is not a purchase
+    // problem — the other members carry the group. The alert stays (it is real stock), with this remark.
+    const groupActionsById = new Map<string, typeof projection.group_actions[number][]>();
+    for (const action of projection.group_actions) groupActionsById.set(action.group_id, [...(groupActionsById.get(action.group_id) ?? []), action]);
+    const groupStaysCovered = (r: { material_id: string; fixed_demand_qty: number; pools: ReadonlyArray<{ group_id: string | null }> }): { groups: string[]; members: string[] } | null => {
+      if (r.fixed_demand_qty > 0.000001) return null;
+      const ids = unique(r.pools.map((pool) => pool.group_id).filter((id): id is string => Boolean(id)));
+      if (ids.length === 0) return null;
+      if (ids.some((id) => {
+        const actions = groupActionsById.get(id) ?? [];
+        return actions.length === 0 || actions.some((a) => a.first_shortage_day || a.first_below_critical_day);
+      })) return null;
+      const members = unique(ids.flatMap((id) => (reqData.output.groups.find((g) => g.group_id === id)?.members ?? [])
+        .filter((m) => m.material_id !== r.material_id && (m.drawn_qty > 0.000001 || m.usable_stock > 0.000001)).map((m) => m.material_id)));
+      return members.length > 0 ? { groups: ids.map((id) => groupLabel.get(id) ?? "—"), members } : null;
+    };
     const requirement = reqData.output.rows.filter((r) => (r.kind === "RM" || r.kind === "PM") && !bulkRm.has(r.material_id) && r.metrics.identifier !== "NO_DEMAND").map((r) => {
       // Owner 2026-10-26: other members of its group carry the group's demand → not critical, with a remark.
       const covering = groupCoveredBy(r, reqData.output.groups);
       const covered = covering !== null;
+      const stays = covered ? null : groupStaysCovered(r);
       return {
-      note: covering ? `Group demand is met by other members: ${covering.map(nameOf).join(", ")}` : "",
+      note: covering ? `Group demand is met by other members: ${covering.map(nameOf).join(", ")}`
+        : stays ? `Its own stock runs out, but group ${stays.groups.join(" + ")} stays covered by: ${stays.members.map(nameOf).join(", ")} — no purchase needed for this item.` : "",
+      group_covered: Boolean(stays) && Boolean(risks.get(r.material_id)?.first_shortage_day || r.metrics.below_critical_with_in),
       material: nameOf(r.material_id), type: r.kind, uom: uomOf(r.material_id),
       target_cov_days: r.metrics.target_cov_days, critical_cov_days: r.metrics.critical_cov_days,
       current_stk_days: r.metrics.current_stk_days, next_month_cov: r.metrics.next_month_cov,
@@ -301,6 +321,39 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       };
     })).sort((a, b) => String(a.planning_eta ?? a.source_eta ?? "9999").localeCompare(String(b.planning_eta ?? b.source_eta ?? "9999")));
 
+    // ── Explain: the waterfall, day by day (owner 2026-10-27). Base units; one row per material and day. ──
+    const roleOf = (id: string) => {
+      const row = rowById.get(id);
+      if (!row) return "—";
+      const hasGroups = row.pools.some((pool) => Boolean(pool.group_id));
+      if (row.fixed_demand_qty > 0.000001) return hasGroups ? "Exclusive use + group" : "Exclusive use";
+      return hasGroups ? "Group only" : "—";
+    };
+    const explain = {
+      daily: plan.daily.filter((d) => !bulkRm.has(d.material_id)).map((d) => {
+        const closing = round(d.closing_qty_base);
+        const cover = d.max_cover_days;
+        const flag = closing < -0.000001 ? "STOCK-OUT"
+          : d.critical_days !== null && cover !== null && cover <= d.critical_days ? "BELOW CRITICAL"
+          : d.target_days !== null && cover !== null && cover <= d.target_days ? "AT / BELOW TARGET" : "";
+        return {
+          material: d.material_name, uom: d.uom, role: roleOf(d.material_id), day: d.day,
+          opening: round(d.opening_qty_base), arrival: round(d.confirmed_arrival_qty_base), engine_lot: round(d.planned_lot_qty_base),
+          use: round(d.demand_qty_base), group_draw: round(d.group_draw_qty_base), closing,
+          cover_days: cover, target_days: d.target_days, critical_days: d.critical_days, flag,
+        };
+      }),
+      draws: plan.allocation_rows.map((a) => ({
+        day: a.day, material: a.material_name, uom: a.uom, destination: a.destination, flow: a.flow,
+        qty: round(a.qty), closing: round(a.closing), source: a.source_reference, source_kind: a.source_kind,
+      })),
+      groups: plan.group_actions.map((g) => ({
+        group: g.group_label, first_below_target_day: g.first_below_target_day, first_below_critical_day: g.first_below_critical_day,
+        first_shortage_day: g.first_shortage_day, unresolved_qty: round(g.unresolved_qty_base), actions: g.ordered_actions.join(" → "),
+        members: unique(plan.groups.filter((x) => x.group_label === g.group_label).flatMap((x) => x.members.map((m) => m.material_name))).join(", "),
+      })),
+    };
+
     const summary = {
       materials_planned: requirement.length,
       runs_out: requirement.filter((r) => r.first_shortage_day).length,
@@ -320,7 +373,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
       demand_label: plan.demand_version.label,
       bulk_rm_excluded: bulkRm.size,
-      summary, blocks, requirement, buys, store, arrivals,
+      summary, blocks, requirement, buys, store, arrivals, explain,
       generated_at: new Date().toISOString(),
     }, ctx.request_id, req);
   } catch (error) {

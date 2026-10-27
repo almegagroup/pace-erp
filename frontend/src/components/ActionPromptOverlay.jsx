@@ -3,7 +3,7 @@ import ModalBase from "./layer/ModalBase.jsx";
 import { resolveActionPrompt, subscribeActionPrompt, unsubscribeActionPrompt } from "../store/actionPrompt.js";
 
 export default function ActionPromptOverlay() {
-  const [snapshot, setSnapshot] = useState({ visible: false, eyebrow: "", title: "", message: "", label: "", placeholder: "", defaultValue: "", required: false, confirmOnly: false, confirmLabel: "Confirm" });
+  const [snapshot, setSnapshot] = useState({ visible: false, eyebrow: "", title: "", message: "", label: "", placeholder: "", defaultValue: "", required: false, confirmOnly: false, confirmLabel: "Confirm", secondaryLabel: "", cancelLabel: "Cancel" });
   const [value, setValue] = useState("");
   const inputRef = useRef(null);
 
@@ -32,7 +32,11 @@ export default function ActionPromptOverlay() {
   }
 
   function handleCancel() {
-    resolveActionPrompt(snapshot.confirmOnly ? false : null);
+    resolveActionPrompt(snapshot.confirmOnly && !snapshot.secondaryLabel ? false : null);
+  }
+
+  function handleSecondaryDecision() {
+    resolveActionPrompt(false);
   }
 
   return (
@@ -65,7 +69,10 @@ export default function ActionPromptOverlay() {
       }
       actions={
         <>
-          <button style={secondaryStyle} data-erp-nav-item="true" onClick={handleCancel}>Cancel</button>
+          <button style={secondaryStyle} data-erp-nav-item="true" onClick={handleCancel}>{snapshot.cancelLabel || "Cancel"}</button>
+          {snapshot.confirmOnly && snapshot.secondaryLabel ? (
+            <button style={secondaryStyle} data-erp-nav-item="true" onClick={handleSecondaryDecision}>{snapshot.secondaryLabel}</button>
+          ) : null}
           <button style={primaryStyle} data-erp-nav-item="true" onClick={handleConfirm}
             disabled={!snapshot.confirmOnly && snapshot.required && !value.trim()}
           >{snapshot.confirmLabel || "Confirm"}</button>

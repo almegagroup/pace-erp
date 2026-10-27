@@ -4,7 +4,8 @@
  * every company the user can see in one file. Tabs:
  *   SUMMARY · PLAN (PO21, company × 3 months) · RM_PLANNING · PM_PLANNING (family / item blocks:
  *   today + arrival rows, then Prediction) · <Company>_RM_PM (requirement) · BUY_PLAN ·
- *   STORE_INSTRUCTIONS · ARRIVALS.
+ *   STORE_INSTRUCTIONS · ARRIVALS · EXPLAIN_README · EXPLAIN_DAILY · EXPLAIN_DRAWS · EXPLAIN_GROUPS
+ *   (the waterfall day by day: what each material did, what each group drew from whom, when a guard fired).
  * Names only, never PACE codes. Loaded with a dynamic import so exceljs stays out of the page bundle.
  */
 import ExcelJS from "exceljs";
@@ -239,11 +240,12 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Below Critical from", value: (r) => day(r.first_below_critical_day) },
     { label: "Stock days now", value: (r) => num(r.current_stk_days), num: true },
     { label: "Target / Critical", value: (r) => `${r.target_cov_days ?? "—"} / ${r.critical_cov_days ?? "—"}` },
+    { label: "Note", value: (r) => r.note ?? "" },
   ], companies.flatMap((c) => c.requirement.filter((r) => r.first_shortage_day || r.below_critical).map((r) => ({ ...r, company: companyLabel(c) }))),
-  { color: (r) => (r.first_shortage_day ? RED : AMBER) });
+  { color: (r) => (r.group_covered ? AMBER : r.first_shortage_day ? RED : AMBER) });
   const skipped = companies.flatMap((c) => c.notes ?? []);
   if (skipped.length) { summary.addRow([]); skipped.forEach((n) => summary.addRow([n])); }
-  widths(summary, [34, 30, 26, 14, 10, 12, 12, 12, 12, 16, 14, 14, 14]);
+  widths(summary, [34, 30, 26, 14, 10, 12, 12, 12, 12, 16, 14, 14, 14, 70]);
 
   // PLAN
   writePlan(wb.addWorksheet(sheetName("PLAN", used)), companies);
@@ -265,7 +267,7 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
       { label: "INTRANSIT NM", value: (r) => num(r.intransit_nm), num: true },
       { label: "Runs out on", value: (r) => day(r.first_shortage_day) }, { label: "Below Critical from", value: (r) => day(r.first_below_critical_day) },
       { label: "Remark", key: "note" },
-    ], c.requirement, { color: (r) => (r.first_shortage_day ? RED : r.below_critical ? AMBER : null) });
+    ], c.requirement, { color: (r) => (r.group_covered ? AMBER : r.first_shortage_day ? RED : r.below_critical ? AMBER : null) });
     widths(sheet, [40, 6, 7, 10, 10, 12, 12, 12, 12, 12, 12, 13, 12, 12, 12, 14, 50]);
     sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 1 }];
   }
@@ -307,7 +309,85 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
   widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 60]);
 
+  writeExplain(wb, companies, used);
+
   return wb;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPLAIN: the waterfall day by day (owner 2026-10-27). Quantities are in the material's BASE unit (see UoM).
+// ─────────────────────────────────────────────────────────────────────────────
+const EXPLAIN_README = [
+  ["How the plan decides — read this first"],
+  [""],
+  ["1. Three kinds of guard decide whether to buy:"],
+  ["   • Own guard — the item has an exclusive/direct use. Stock for that use is protected first (through its Target + order cycle); groups cannot touch it."],
+  ["   • Group guard — the group's members together (free stock, after every member's protected direct use) cover the group's demand for fewer days than the group's Target. This is the only guard for a group-only item."],
+  ["   • There is NO separate guard on a group-only item (role \"Group only\"). If it runs out the other members carry the group; the plan buys only when the group itself reaches its Target."],
+  [""],
+  ["2. Every day the engine does this, in order (sheet EXPLAIN_DAILY = result, EXPLAIN_DRAWS = who gave what):"],
+  ["   a. Receipts of that day arrive (confirmed ETAs and engine lots); stock past its expiry is dropped."],
+  ["   b. Direct/exclusive use is taken first, oldest receipt first."],
+  ["   c. Each group claims stock for today's demand plus its Desired-Max days ahead — smallest group first, then the broader ones."],
+  ["   d. Inside a group the members are used in this order: expiring stock first → the saved Group Settings order → members with no future buy authorised (run down first) → otherwise in proportion to free stock, tilted to costlier stock and longer vendor credit (tilt capped 0.5–2×)."],
+  ["   e. Left-over stock is shared once more narrow-to-broad, so one physical unit is claimed by one group only."],
+  ["   f. The day's group demand is drawn from the members as decided in (d) — see EXPLAIN_DRAWS."],
+  ["   g. Guards are tested on the closing balance; a guard that is hit asks for a lot (lead time → PO-by, then MOQ / multiple)."],
+  [""],
+  ["3. Columns in EXPLAIN_DAILY: Opening + Arrival + Engine lot − Use = Closing. 'Group draw' is the part of Use that was group demand drawn from this item. Cover days = days the closing balance lasts at the item's coming use. Flag: AT / BELOW TARGET, BELOW CRITICAL or STOCK-OUT for the item itself."],
+  ["   A flag on a 'Group only' item is information, not an order: look at EXPLAIN_GROUPS — only the group's own dates matter for buying."],
+  [""],
+  ["4. Arrivals counted: only confirmed ETAs inside the horizon. An ETA after the horizon (e.g. a late-January CSN) is shown in ARRIVALS but is not stock for this run."],
+  ["5. Everything here is advisory — no PO or stock movement is created by this file."],
+];
+
+function writeExplain(wb, companies, used) {
+  const withExplain = companies.filter((c) => c.explain);
+  if (withExplain.length === 0) return;
+
+  const readme = wb.addWorksheet(sheetName("EXPLAIN_README", used));
+  EXPLAIN_README.forEach((line, i) => {
+    const row = readme.addRow(line);
+    if (i === 0) row.getCell(1).font = { bold: true, size: 14 };
+  });
+  readme.getColumn(1).width = 190;
+
+  const daily = wb.addWorksheet(sheetName("EXPLAIN_DAILY", used));
+  addTable(daily, [
+    { label: "Company", value: (r) => r.company }, { label: "Material", key: "material" }, { label: "Role", key: "role" },
+    { label: "Date", value: (r) => day(r.day) }, { label: "UoM (base)", key: "uom" },
+    { label: "Opening", value: (r) => num(r.opening), num: true }, { label: "Arrival (confirmed)", value: (r) => num(r.arrival) || null, num: true },
+    { label: "Engine lot", value: (r) => num(r.engine_lot) || null, num: true }, { label: "Use", value: (r) => num(r.use), num: true },
+    { label: "of which group draw", value: (r) => num(r.group_draw) || null, num: true }, { label: "Closing", value: (r) => num(r.closing), num: true },
+    { label: "Cover days", value: (r) => days(r.cover_days), num: true },
+    { label: "Target", value: (r) => num(r.target_days), num: true }, { label: "Critical", value: (r) => num(r.critical_days), num: true },
+    { label: "Flag", key: "flag" },
+  ], withExplain.flatMap((c) => c.explain.daily.map((d) => ({ ...d, company: companyLabel(c) }))),
+  { color: (r) => (r.flag === "STOCK-OUT" ? RED : r.flag === "BELOW CRITICAL" ? (r.role === "Group only" ? AMBER : RED) : r.flag ? AMBER : null) });
+  widths(daily, [26, 40, 20, 12, 9, 13, 14, 12, 12, 14, 13, 10, 8, 9, 18]);
+  daily.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
+  daily.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 15 } };
+
+  const draws = wb.addWorksheet(sheetName("EXPLAIN_DRAWS", used));
+  addTable(draws, [
+    { label: "Company", value: (r) => r.company }, { label: "Date", value: (r) => day(r.day) }, { label: "Material", key: "material" },
+    { label: "UoM (base)", key: "uom" }, { label: "Goes to", key: "destination" }, { label: "Flow", key: "flow" },
+    { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "Closing after draw", value: (r) => num(r.closing), num: true },
+    { label: "Taken from (receipt)", key: "source" }, { label: "Receipt kind", key: "source_kind" },
+  ], withExplain.flatMap((c) => c.explain.draws.map((d) => ({ ...d, company: companyLabel(c) }))));
+  widths(draws, [26, 12, 40, 9, 30, 22, 13, 17, 36, 26]);
+  draws.views = [{ state: "frozen", xSplit: 0, ySplit: 1 }];
+  draws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 10 } };
+
+  const groups = wb.addWorksheet(sheetName("EXPLAIN_GROUPS", used));
+  addTable(groups, [
+    { label: "Company", value: (r) => r.company }, { label: "Group", key: "group" }, { label: "Members", key: "members" },
+    { label: "First below Target", value: (r) => day(r.first_below_target_day) }, { label: "First below Critical", value: (r) => day(r.first_below_critical_day) },
+    { label: "First shortage", value: (r) => day(r.first_shortage_day) }, { label: "Unmet qty (base)", value: (r) => num(r.unresolved_qty), num: true },
+    { label: "Action chain", key: "actions" },
+  ], withExplain.flatMap((c) => c.explain.groups.map((g) => ({ ...g, company: companyLabel(c) }))),
+  { color: (r) => (r.first_shortage_day ? RED : r.first_below_critical_day ? RED : r.first_below_target_day ? AMBER : null) });
+  widths(groups, [26, 30, 70, 16, 18, 14, 16, 90]);
 }
 
 export async function downloadRollingPlanWorkbook({ companies, asOf, fileName }) {
