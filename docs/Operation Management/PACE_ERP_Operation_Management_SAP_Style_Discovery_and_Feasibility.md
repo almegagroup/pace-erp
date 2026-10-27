@@ -11507,6 +11507,21 @@ CSN-055 [MOTHER] — CMP003, 25MT
 
 Mother CSN tracks physical arrival at importing company independently. Sub CSN statuses do not drive Mother CSN status.
 
+**Mother → Sub-CSN auto-sync (LOCKED 2026-10-27, business owner — found live on prod, Tianpu CSN 3000000362):**
+until a Sub-CSN is linked to an STO, **every** Mother field flows into it automatically, except
+the Sub-CSN's own fields: identity/hierarchy, allocation (`dispatch_qty`, Allotted Company),
+its own lifecycle (status, GE/GRN, inactive), the STO link, audit columns, its own
+`transit_days_snapshot`/`eta_to_plant_calculated` (recomputed from the Allotted Company's own
+port-to-plant transit), and the **port-to-destination leg** (LR/vehicle/transporter/last-mile,
+CHA, courier/hard-copy, remarks). The code previously used a 12-field allow-list (vessel/BL/port/
+ETD/ETA only), so indent/LC/invoice/BOE/payment changes on the Mother never reached its Subs —
+now an exclusion list (`SUB_CSN_OWN_FIELDS`, `csn.handlers.ts`), so a new column syncs by default.
+Once STO-linked (§88.4) the Sub-CSN is independent and is never overwritten again; it keeps
+`mother_csn_id`, `po_id`/`po_line_id` and `sto_source_snapshot` for audit. Same fix: a Sub-CSN no
+longer inherits the Mother's `transit_days_snapshot` at creation, and changing Allotted Company
+re-snapshots transit from that company's master row (Tianpu's Subs for CMP005/CMP011 carried the
+Mother's CMP003 1-day transit instead of their own 4 days).
+
 ---
 
 ### 88.4 — Sub CSN → STO Transformation
