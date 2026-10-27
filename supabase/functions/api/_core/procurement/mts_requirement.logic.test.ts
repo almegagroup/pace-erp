@@ -530,6 +530,23 @@ Deno.test("applyCompanyMaterialMapping: unmapped members leave the pool, unmappe
   assertEqual(result.unmappedMembers, ["RM-Y"], "member unmapped listed");
 });
 
+Deno.test("applyCompanyMaterialMapping: a material in several groups keeps every group (RDP_TLA inside RDP_PLC inside RDP)", () => {
+  const result = applyCompanyMaterialMapping({
+    directMaterialIds: [],
+    members: [
+      { material_id: "DA", active: true, group_id: "TLA" },
+      { material_id: "DA", active: true, group_id: "PLC" },
+      { material_id: "DA", active: true, group_id: "RDP" },
+      { material_id: "DA", active: true, group_id: "RDP" },
+      { material_id: "WK", active: true, group_id: "TLA" },
+      { material_id: "WK", active: true, group_id: "RDP" },
+    ],
+    mapped: new Set(["DA", "WK"]),
+  });
+  assertEqual(result.members.map((m) => `${m.group_id}|${m.material_id}`).sort(), ["PLC|DA", "RDP|DA", "RDP|WK", "TLA|DA", "TLA|WK"], "one row per group and material, none dropped");
+  assertEqual(result.universe.sort(), ["DA", "WK"], "universe lists each material once");
+});
+
 Deno.test("Owner 2026-10-20 option A: a BULK PO is available from the as-of day, no CSN ETA asked", () => {
   const warnings: Warning[] = [];
   const events = partitionPoLineInbound({

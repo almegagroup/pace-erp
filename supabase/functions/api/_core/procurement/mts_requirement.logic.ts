@@ -991,13 +991,17 @@ export function applyCompanyMaterialMapping(input: {
 }): { members: GroupMember[]; universe: string[]; unmappedDirect: string[]; unmappedMembers: string[] } {
   // Data integrity is enforced in the database too, but one repeated row must not make
   // planning count the same material twice while a historical environment is being repaired.
-  const membersByMaterial = new Map<string, GroupMember>();
+  // Keyed by group AND material: a material may legitimately sit in several groups (RDP_TLA inside
+  // RDP_PLC inside RDP). Keying by material alone kept only the first group and silently dropped
+  // every other membership (found 2026-10-27 on the CMP003 MHEC / RDP / MC 60 families).
+  const membersByGroupAndMaterial = new Map<string, GroupMember>();
   for (const member of input.members) {
     if (!input.mapped.has(member.material_id)) continue;
-    const prior = membersByMaterial.get(member.material_id);
-    membersByMaterial.set(member.material_id, prior ? { ...prior, active: prior.active || member.active } : member);
+    const key = `${member.group_id ?? ""}|${member.material_id}`;
+    const prior = membersByGroupAndMaterial.get(key);
+    membersByGroupAndMaterial.set(key, prior ? { ...prior, active: prior.active || member.active } : member);
   }
-  const members = [...membersByMaterial.values()];
+  const members = [...membersByGroupAndMaterial.values()];
   const unmappedMembers = [...new Set(input.members.filter((m) => !input.mapped.has(m.material_id)).map((m) => m.material_id))].sort();
   const direct = [...new Set(input.directMaterialIds.filter(Boolean))];
   const unmappedDirect = direct.filter((id) => !input.mapped.has(id)).sort();
