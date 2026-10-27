@@ -29,6 +29,7 @@ import {
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
+import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
@@ -405,6 +406,7 @@ export async function computePlanning(p: PlanningParams) {
     reuseLoads: p.reuseLoads,
   });
   const groupCoveragePolicies = await loadGroupCoveragePolicyVersions(p.companyId);
+  const bulkMaterials = await loadBulkMaterialIds(p.companyId);
   const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
@@ -874,6 +876,9 @@ export async function computePlanning(p: PlanningParams) {
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
     // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.
     display_units: buildDisplayUnits(universe, req.materials, (id) => policyOrderUom.get(id), new Map(universe.map((id) => [id, (vendorTerms.get(id) ?? []).map((t) => t.supply_uom_code ?? "")]))),
+    // Owner 2026-10-27: Bulk RM is out of PO22 for now; the Action tab drops these materials and groups.
+    bulk_material_ids: [...bulkMaterials],
+    bulk_group_ids: bulkOnlyGroupIds(req.masters.groupMembers, bulkMaterials),
     store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),

@@ -38,3 +38,10 @@ test("no-buy materials never appear", () => {
   assert.equal(buildActionRows(plan).some((r) => r.material === "TS U2121"), false);
   assert.deepEqual(buildActionRows(null), []);
 });
+
+test("Bulk RM and groups made only of Bulk RM are left out", () => {
+  const rows = buildActionRows({ ...plan, bulk_material_ids: ["A"], bulk_group_ids: ["G"] });
+  assert.equal(rows.some((r) => r.material_id === "A"), false);
+  assert.equal(rows.some((r) => r.group_id === "G"), false);
+  assert.equal(rows.some((r) => r.material_id === "B"), true);
+});

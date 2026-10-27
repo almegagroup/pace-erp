@@ -16,6 +16,7 @@ import { arrivalStatus, dayRange, familyClosure, familyDayGrid, poNumberOfRefere
 import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
 import { groupCoveredBy } from "./mts_requirement.logic.ts";
+import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -125,13 +126,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     };
     // Owner 2026-10-26: for now the report leaves out Bulk RM — a material this company buys on
     // Bulk delivery POs (purchase_order.delivery_type = BULK).
-    const bulkPos = await serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id")
-      .eq("company_id", companyId).eq("delivery_type", "BULK").neq("status", "CANCELLED").limit(10000);
-    if (bulkPos.error) throw new Error("MTS_ROLLING_BULK_LOAD_FAILED");
-    const bulkPoIds = ((bulkPos.data ?? []) as JsonRecord[]).map((row) => text(row.id));
-    const bulkLines = bulkPoIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(bulkPoIds, (chunk) => serviceRoleClient
-      .schema("erp_procurement").from("purchase_order_line").select("material_id").in("po_id", chunk));
-    const bulkRm = new Set(bulkLines.map((row) => text(row.material_id)).filter(Boolean));
+    const bulkRm = await loadBulkMaterialIds(companyId);
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
