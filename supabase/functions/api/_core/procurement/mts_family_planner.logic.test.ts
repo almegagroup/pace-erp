@@ -504,13 +504,13 @@ Deno.test("family waterfall: group buy sizes to derived Desired Max but individu
   assert(group?.max_cover_days === 60, `group Desired Max should be rounded-up member max 60: ${JSON.stringify(group)}`);
 });
 
-Deno.test("family waterfall: a group-only RP member still projects at its individual 20-day guard", () => {
+Deno.test("family waterfall: a group-only member has no individual guard; the group's own Target decides the buy", () => {
   const days = Array.from({ length: 46 }, (_, i) => addDays("2026-10-01", i));
-  const result = planFamily({
+  const base = {
     as_of: "2026-10-01", horizon_end: "2026-11-15",
     // The fixed group order makes RP's actual eligible-group consumption
     // visible. It has no exclusive/own BOM demand at all.
-    opening_qty_by_material: { RP: 210, ALT: 5_000 }, own_demand: [],
+    own_demand: [],
     group_demand: days.map((required_by) => ({ group_id: "RDP", candidates: ["RP", "ALT"], required_by, qty_base: 10 })),
     group_coverage_policies: [{ group_id: "RDP", effective_from: "2026-10-01", target_days: 30, critical_days: 15, desired_max_days_override: null }],
     confirmed_arrivals: [],
@@ -518,13 +518,19 @@ Deno.test("family waterfall: a group-only RP member still projects at its indivi
       policy("RP", 20, 10, [{ vendor: "LOCAL", lead: 0, cost: 100 }]),
       policy("ALT", 30, 15, [{ vendor: "ALT", lead: 0, cost: 100 }]),
     ],
-    group_orders: new Map([["RDP", { mode: "FIXED_ORDER", member_order: ["RP", "ALT"] }]]),
+    group_orders: new Map([["RDP", { mode: "FIXED_ORDER" as const, member_order: ["RP", "ALT"] }]]),
     selections: new Map([["2026-10-01", new Set(["RP"])], ["2026-11-01", new Set(["RP"])]]),
     selection_controlled_members: new Set(["RP", "ALT"]),
-  });
-  const rp = result.advisory_buys.find((buy) => buy.material_id === "RP" && buy.need_kind === "OWN" && buy.status !== "NO_BUY");
-  assert(rp?.need_date === "2026-10-01", `RP must connect at its own 20-day guard, not wait for group Target 30: ${JSON.stringify(rp)}`);
-  assert(rp?.reason.includes("Member guard"), `the reason must identify the group-only individual guard: ${JSON.stringify(rp)}`);
+  } satisfies Omit<FamilyPlannerInput, "opening_qty_by_material">;
+  // RP is used first and runs out, but ALT carries the whole group: nothing to buy.
+  const carried = planFamily({ ...base, opening_qty_by_material: { RP: 210, ALT: 5_000 } });
+  const carriedBuys = carried.advisory_buys.filter((buy) => buy.status !== "NO_BUY");
+  assert(carriedBuys.length === 0, `a group-only member running out must not buy while the group is covered by ALT: ${JSON.stringify(carriedBuys)}`);
+  assert(!carried.advisory_buys.some((buy) => buy.reason.includes("Member guard")), "no member guard exists for a group-only member");
+  // When the group itself falls to its Target, the buy is attributed to the group.
+  const short = planFamily({ ...base, opening_qty_by_material: { RP: 210, ALT: 150 } });
+  const shortBuy = short.advisory_buys.find((buy) => buy.status !== "NO_BUY");
+  assert(shortBuy?.need_kind === "GROUP" && shortBuy.reason.includes("Group RDP"), `a short group buys at the group guard: ${JSON.stringify(shortBuy)}`);
 });
 
 Deno.test("family waterfall: an individual Desired-Max override changes family member lot sizing", () => {
