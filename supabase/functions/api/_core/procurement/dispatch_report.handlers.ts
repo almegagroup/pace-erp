@@ -148,7 +148,7 @@ export async function getDispatchReportHandler(
     const dcIds = uniqueValues([...invoices.map((row) => row.dc_id), ...dcLines.map((row) => row.dc_id)]);
     const dcHeaders = await fetchInChunks<JsonRecord>(dcIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("delivery_challan")
-      .select("id, transporter_id, transporter_name_freetext, vehicle_number, lr_number, lr_date, gross_weight, net_weight, driver_name, driver_number, driver_contact_number")
+      .select("id, dispatch_date, transporter_id, transporter_name_freetext, vehicle_number, lr_number, lr_date, gross_weight, net_weight, driver_name, driver_number, driver_contact_number")
       .in("id", chunk));
     const dcHeaderById = new Map(dcHeaders.map((row) => [textValue(row.id), row]));
 
@@ -378,6 +378,12 @@ export async function getDispatchReportHandler(
         inbound_number: textValue(invoice.inbound_number),
         apl_invoice_status: aplInvoiceStatus,
         stock_movement: stockMovement,
+        // `dispatch_date` is the DO's operational dispatch/stock-movement
+        // date. It is deliberately not the Tally Invoice Date or the
+        // timestamp at which the invoice row happened to be saved.
+        stock_movement_date: stockMovement === "No"
+          ? ""
+          : joined(lineDetails.map((entry) => entry.dc.dispatch_date)),
         pack_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.pack_qty ?? dcLineById.get(textValue(line.dc_line_id))?.pack_qty), 0), 6),
         pack_uom: joined(lines.map((line) => line.pack_uom_code || dcLineById.get(textValue(line.dc_line_id))?.pack_uom_code)),
         base_qty: rounded(lines.reduce((sum, line) => sum + numberValue(line.quantity), 0), 6),

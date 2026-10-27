@@ -117,6 +117,7 @@ const GRID_COLUMNS = [
   { key: "invoice_number", label: "PACE Invoice #", width: "130px", render: (r) => r.invoice_number || "—" },
   { key: "apl_invoice_status", label: "APL Invoice", width: "270px", render: (r) => r.apl_invoice_status || "" },
   { key: "stock_movement", label: "Stock Movement", width: "135px", render: (r) => <span className={r.stock_movement === "Yes" ? "font-semibold text-emerald-800" : r.stock_movement === "Reversed" ? "font-semibold text-rose-700" : "font-semibold text-amber-800"}>{r.stock_movement || "No"}</span> },
+  { key: "stock_movement_date", label: "Stock Movement Date", width: "145px", render: (r) => r.stock_movement_date || "—" },
   { key: "tally_invoice_date", label: "Tally Invoice Date", width: "120px" },
   { key: "tally_invoice_number", label: "Tally Invoice #", width: "130px" },
   { key: "inbound_number", label: "IBN", width: "110px", render: (r) => r.inbound_number || "—" },
