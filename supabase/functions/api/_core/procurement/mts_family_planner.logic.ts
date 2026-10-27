@@ -892,13 +892,16 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
   const ownNeed = (sim: Sim, m: number): Need | null => {
     const id = ids[m];
     const policy = policyOf.get(id);
-    // A shared member can have no exclusive BOM use yet still carry a real
-    // individual Target.  Its guard is measured against the group's actual
-    // simulated draw from that member.  Otherwise RP-4099-style members could
-    // only be replenished at the broader group Target and their 20-day
-    // individual rule would never trigger.
+    // Owner 2026-10-27: a material with NO exclusive use of its own, that only serves
+    // groups, has no individual guard. Its use is whatever the waterfall happens to draw
+    // from it, so a guard on that draw is self-fulfilling: the biggest stock is drawn
+    // first and always "falls to Target" first even while the group is comfortable (and
+    // every lot it receives raises its own draw again). When such a member runs out the
+    // other members carry the group; a purchase is needed only when the group itself
+    // falls to its Target (groupNeed). Exclusive use keeps its guard.
     const usesGroupAsIndividualDemand = isSharedGroupMember[m] && own[m].every((qty) => qty <= EPSILON);
-    const memberUse = usesGroupAsIndividualDemand ? sim.use[m] : own[m];
+    if (usesGroupAsIndividualDemand) return null;
+    const memberUse = own[m];
     if (!policy || memberUse.every((q) => q <= EPSILON)) return null;
     const from = (pendingOwn.get(id) ?? -1) + 1;
     for (let i = from; i < N; i += 1) {

@@ -56,3 +56,26 @@ test("companyLabel: an internal UUID is never exported as a company name", () =>
   assert.equal(companyLabel({ company_id: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_name: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_code: "CMP003" }), "CMP003");
   assert.equal(companyLabel({ company_id: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_name: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_code: "" }), "—");
 });
+
+test("EXPLAIN tabs: README, daily waterfall, draws and group dates; a group-covered alert stays amber with its remark", async () => {
+  const explain = {
+    daily: [
+      { material: "COMBIZELL", uom: "KG", role: "Group only", day: "2026-11-26", opening: 40000, arrival: 0, engine_lot: 0, use: 1250, group_draw: 1250, closing: 38750, cover_days: 30, target_days: 30, critical_days: 20, flag: "AT / BELOW TARGET" },
+      { material: "COMBIZELL", uom: "KG", role: "Group only", day: "2026-12-07", opening: 1000, arrival: 0, engine_lot: 0, use: 1250, group_draw: 1250, closing: -250, cover_days: 0, target_days: 30, critical_days: 20, flag: "STOCK-OUT" },
+    ],
+    draws: [{ day: "2026-11-26", material: "COMBIZELL", uom: "KG", destination: "MHEC", flow: "Group allocation", qty: 1250, closing: 38750, source: "Opening stock 6000000023", source_kind: "Counted opening stock" }],
+    groups: [{ group: "MHEC", members: "COMBIZELL, TS U2121", first_below_target_day: null, first_below_critical_day: null, first_shortage_day: null, unresolved_qty: 0, actions: "" }],
+  };
+  const covered = { material: "COMBIZELL", type: "RM", uom: "KG", target_cov_days: 30, critical_cov_days: 20, current_stk_days: 60, next_month_cov: 40, current_req: 1, current_prorata: 1, req_nm: 1, prorata_nm: 1, current_stock: 1000, intransit_cm: 0, intransit_nm: 0, below_target: true, below_critical: true, first_shortage_day: "2026-12-07", first_below_critical_day: "2026-11-26", note: "Its own stock runs out, but group MHEC stays covered by: TS U2121 — no purchase needed for this item.", group_covered: true };
+  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings", { explain, requirement: [covered] })], asOf: "2026-10-27" });
+  const names = wb.worksheets.map((s) => s.name);
+  assert.deepEqual(names.slice(-4), ["EXPLAIN_README", "EXPLAIN_DAILY", "EXPLAIN_DRAWS", "EXPLAIN_GROUPS"]);
+  const dailySheet = wb.getWorksheet("EXPLAIN_DAILY");
+  assert.equal(dailySheet.rowCount, 3, "header + 2 daily rows");
+  assert.equal(dailySheet.getRow(3).getCell(15).value, "STOCK-OUT");
+  const summary = wb.getWorksheet("SUMMARY");
+  let remark = "";
+  summary.eachRow((row) => row.eachCell((cell) => { if (String(cell.value ?? "").startsWith("Its own stock runs out")) { remark = String(cell.value); assert.equal(cell.font?.color?.argb, "FFB45309", "group-covered alert is amber, not red"); } }));
+  assert.ok(remark.includes("stays covered"), "the group-covered remark is on the Summary attention list");
+  await wb.xlsx.writeBuffer();
+});

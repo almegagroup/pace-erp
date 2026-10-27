@@ -26120,3 +26120,21 @@ AC01-এর Lot/PO balance live (GRN-এর সময়ের as-of নয়)�
 **Verification:** সব CI guard exit 0, strict manifest check, eslint, `vite build`, `deno check` (নতুন error নেই), dev DB rolled-back test:
 lot 1000 → GE 300 (cancelled GE 200 উপেক্ষিত) = 700 → নিজের GE বাদে = 1000 → POSTED GRN 280 = 720 → reverse = 700 → split GRN 150 = 850; ভুল lot format
 (`'1'` DB-তে) CHECK-এ reject। `po_line_available_qty` `open_qty` ব্যবহার করে — GRN post-এ app handler `open_qty` কমায়, তাই test-এ সরাসরি insert করলে সেটা অপরিবর্তিত।
+
+---
+
+## 146. PO22 — group-only item-এর নিজস্ব "Member guard" তুলে দেওয়া + EXPLAIN sheets (LOCKED 2026-10-27, business owner)
+
+**Trigger:** CMP003 MHEC family — Combizell (RM-00098) সবচেয়ে বেশি stock বলে waterfall থেকে সবচেয়ে বেশি draw পায়, তাই সবার আগে নিজের Target (30 d)-এ নামে (২৬ নভেম্বর) আর ৬ ডিসেম্বর শূন্য হয়। অথচ family ৩১ ডিসেম্বর পর্যন্ত ≥৪৮ দিনের উপরে (TS U2121 ও Gabrosa-র arrival সহ)। তবু engine Combizell-এর জন্য নতুন 24,000 KG lot (ETA ৩১ ডিসেম্বর) প্রস্তাব করছিল। PO 0189 (ETA ২৯ জানুয়ারি) horizon-এর বাইরে বলে হিসাবে নেই।
+
+**Root cause:** `ownNeed()` একটা group-only member-এর (নিজস্ব exclusive use নেই) "individual demand" ধরত waterfall ওর থেকে যা তুলছে সেটাই (`sim.use`)। এটা self-fulfilling — বড় stock আগে ব্যবহার হয়, তাই সবসময় আগে Target-এ নামে; আর নতুন lot পেলে ওর draw আবার বাড়ে, তাই পরের দিনই আবার guard ধরে (CMP005-এ `AP EXT WALL PUTTY 20KG WOVENSACK RP-P53784P` — শুধু GROUP lines, রোজ ~10 NOS-এর lot, ৫–১৬ ডিসেম্বর)। ওই ছোট lot-গুলোর ETA অঙ্ক ঠিক ছিল (PO-by + 15 d lead); ভুল ছিল পুনরাবৃত্তি।
+
+**Locked rule:**
+- **Exclusive/Direct use আছে** → Own guard থাকে (ওই use-এর stock Target + cycle পর্যন্ত protected, group ছুঁতে পারে না)।
+- **Group-only member** → নিজস্ব guard **নেই**। একটা member শূন্য হলে বাকি member দিয়ে group চলে; কেনা হবে শুধু **group guard** ভাঙলে (সব member-এর free stock মিলিয়ে group Target)।
+- আজকের BUY_PLAN-এ ১১৮টা প্রস্তাবের ২৪টা এই "Member guard" থেকে এসেছিল।
+- **Alert:** group-only item-এর "Runs out" / "Below Critical" দেখানো থাকে (আসল stock), কিন্তু যে group-গুলো সে serve করে সেগুলো পুরো horizon-এ Critical/shortage-এর উপরে থাকলে amber + remark ("Its own stock runs out, but group X stays covered by: …"), Summary-র attention list-এও Note column।
+
+**Code:** `mts_family_planner.logic.ts` `ownNeed()` (group-only হলে `return null`); পুরনো test "a group-only RP member still projects at its individual 20-day guard" উল্টে নতুন নিয়মে লেখা হয়েছে। `mts_rolling_plan.handlers.ts` — `group_covered` + remark + `explain` payload। `rollingPlanWorkbook.js` — **EXPLAIN_README / EXPLAIN_DAILY / EXPLAIN_DRAWS / EXPLAIN_GROUPS** (প্রতিদিন প্রতি material-এর opening/arrival/lot/use/group draw/closing/cover/flag, কোন group কোন receipt থেকে কত নিল, group-এর first below Target/Critical/shortage তারিখ; base UoM-এ)।
+
+**বাকি:** live click-through (deployed app-এ Excel নামিয়ে CMP003/CMP005-এর MHEC ও WOVENSACK মেলানো); `place()`-এ `MEMBER_GUARD` label এখন dead path (আচরণে প্রভাব নেই, পরে সাফ করা যায়)।
