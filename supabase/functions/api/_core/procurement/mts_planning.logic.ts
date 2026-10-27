@@ -270,3 +270,16 @@ export function storeTransferHints(
   }
   return hints;
 }
+
+/**
+ * Unit a vendor-material price is quoted in. Supply UoM when set; else the unit of the latest PO line,
+ * but only when a GRN wrote the price (GRN stores the PO rate, per PO unit); a price typed in MM03
+ * (no GRN yet) is per base unit. Owner 2026-10-27: Dolomite 240# ₹5,725 per MT was read per KG (1000x).
+ */
+export function priceUnitCode(input: { supply_uom_code: string | null | undefined; last_grn_date: string | null | undefined; latest_po_uom: string | null | undefined; base_uom_code: string | null | undefined }): string {
+  const supply = String(input.supply_uom_code ?? "").trim();
+  if (supply) return supply;
+  const po = String(input.latest_po_uom ?? "").trim();
+  if (input.last_grn_date && po) return po;
+  return String(input.base_uom_code ?? "").trim();
+}

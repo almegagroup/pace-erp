@@ -1,4 +1,4 @@
-import { assemblePlanningInput, chooseVendor, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { priceUnitCode, assemblePlanningInput, chooseVendor, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -94,4 +94,11 @@ Deno.test("store schedule: transfer hint only for what counted stock cannot back
   equal(storeTransferHints([onlyShopFloor], new Map([["A", 120]]), labels, () => "KG").get("A"), "Transfer 120 KG from R003 to an R store (destination UNKNOWN)", "no R destination → UNKNOWN, not fabricated");
   const fromFg = { ...r, stock: { ...r.stock, other_locations: ["F1"] } };
   equal(storeTransferHints([fromFg], new Map([["A", 120]]), labels, () => "KG").size, 0, "F/S stock is never an R→R transfer");
+});
+
+Deno.test("price unit: Supply UoM first, then the latest PO unit only for a GRN-written price, else base", () => {
+  equal(priceUnitCode({ supply_uom_code: "MT", last_grn_date: null, latest_po_uom: "BAG", base_uom_code: "KG" }), "MT", "price unit");
+  equal(priceUnitCode({ supply_uom_code: null, last_grn_date: "2026-10-26", latest_po_uom: "MT", base_uom_code: "KG" }), "MT", "price unit");
+  equal(priceUnitCode({ supply_uom_code: null, last_grn_date: null, latest_po_uom: "MT", base_uom_code: "KG" }), "KG", "price unit");
+  equal(priceUnitCode({ supply_uom_code: "", last_grn_date: "2026-10-26", latest_po_uom: null, base_uom_code: "KG" }), "KG", "price unit");
 });

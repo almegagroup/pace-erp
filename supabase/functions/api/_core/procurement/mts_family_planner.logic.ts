@@ -222,7 +222,11 @@ function coverDays(balance: number, use: readonly number[], from: number): numbe
     left = Math.max(0, left - need);
     covered += 1;
   }
-  const avg = total / use.length;
+  // Beyond the horizon, extrapolate at the average of the days that actually use stock. Averaging over
+  // the whole horizon let zero-demand months (no PO21 plan) dilute the rate, so a few hundred kg looked
+  // like 500+ days (owner 2026-10-27: DISPELAIR P 893 498 d, MECELLOSE FMC 1258 d).
+  const activeDays = use.reduce((n, q) => n + (q > EPSILON ? 1 : 0), 0);
+  const avg = activeDays > 0 ? total / activeDays : 0;
   return avg <= EPSILON ? covered : covered + Math.floor(left / avg + EPSILON);
 }
 

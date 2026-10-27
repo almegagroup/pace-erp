@@ -207,11 +207,18 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         uom: fu?.uom_code ?? baseUomOf(id),
         target_days: selected?.policy?.target_cov_days ?? null,
         critical_days: selected?.policy?.critical_cov_days ?? null,
+        // Every member's own Target / Critical (the pair above is only the first member's).
+        members_policy: memberIds.map((m) => {
+          const pol = rowById.get(m)?.policy;
+          return `${nameOf(m)}: ${pol?.target_cov_days ?? "—"} / ${pol?.critical_cov_days ?? "—"} d`;
+        }),
         // Each member's own stock and how many days it lasts at its average use (owner 2026-10-26).
         members_stock: memberIds.map((m) => {
           const rowsOf = projection.rows.filter((r) => r.material_id === m);
           const opening = Number(rowsOf[0]?.opening_qty_base ?? 0);
-          const daily = rowsOf.reduce((sum, r) => sum + r.demand_qty_base, 0) / Math.max(1, rowsOf.length);
+          // Average over the days that actually use stock, so zero-demand months do not stretch the days (owner 2026-10-27).
+          const activeDays = rowsOf.filter((r) => r.demand_qty_base > 0.000001).length;
+          const daily = activeDays > 0 ? rowsOf.reduce((sum, r) => sum + r.demand_qty_base, 0) / activeDays : 0;
           const lasts = daily > 0.000001 ? `${Math.floor(opening / daily + 1e-9)} d` : "no use";
           return `${nameOf(m)}: ${dq(m, opening)} ${uomOf(m) ?? ""} (${lasts})`.replace(/\s+\(/, " (");
         }),

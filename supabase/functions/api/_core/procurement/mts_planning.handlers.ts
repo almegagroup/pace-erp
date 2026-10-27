@@ -31,7 +31,7 @@ import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -81,7 +81,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   if (universe.length === 0) return result;
   const [vmiRows, mapRes] = await Promise.all([
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
-      .select("id, vendor_id, material_id, moq_qty, order_multiple_qty, delivery_lot_qty, supply_uom_code, booking_time_days, last_purchase_price, last_purchase_currency")
+      .select("id, vendor_id, material_id, moq_qty, order_multiple_qty, delivery_lot_qty, supply_uom_code, booking_time_days, last_purchase_price, last_purchase_currency, last_grn_date")
       .eq("status", "ACTIVE").in("material_id", chunk)),
     serviceRoleClient.schema("erp_master").from("vendor_company_map").select("vendor_id").eq("company_id", companyId).eq("active", true).limit(5000),
   ]);
@@ -106,7 +106,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     .filter((po) => !["CANCELLED", "REJECTED"].includes(text(po.status).toUpperCase()))
     .map((po) => [text(po.id), po]));
   const recentPoLines = poById.size === 0 ? [] : await fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_procurement")
-    .from("purchase_order_line").select("po_id, vendor_material_info_id, currency_code").in("vendor_material_info_id", chunk));
+    .from("purchase_order_line").select("po_id, vendor_material_info_id, currency_code, po_uom_code").in("vendor_material_info_id", chunk));
   const termIds = unique(termRows.map((t) => text(t.payment_term_id)));
   const terms = termIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(termIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("payment_terms_master").select("id, credit_days, advance_pct, payment_method, payment_type").in("id", chunk));
@@ -138,12 +138,28 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     const seen = poCurrencyByVmi.get(vmiId);
     if (!seen || date >= seen.po_date) poCurrencyByVmi.set(vmiId, { currency, po_date: date });
   }
+  // Owner 2026-10-27: a VMI price is per the unit of the PO it came from (Dolomite 240# is ₹5,725 per MT, PO UoM MT),
+  // but supply_uom_code is often blank. Without it the price was read per KG and the order value came out 1000x.
+  // Blank Supply UoM falls back to the latest linked non-cancelled PO line's UoM, then to base.
+  const poUomByVmi = new Map<string, { uom: string; po_date: string }>();
+  for (const line of recentPoLines) {
+    const po = poById.get(text(line.po_id));
+    const vmiId = text(line.vendor_material_info_id);
+    const uom = text(line.po_uom_code).toUpperCase();
+    if (!po || !vmiId || !uom) continue;
+    const date = text(po.po_date);
+    const seen = poUomByVmi.get(vmiId);
+    if (!seen || date >= seen.po_date) poUomByVmi.set(vmiId, { uom, po_date: date });
+  }
   for (const row of rows) {
     const materialId = text(row.material_id);
     const vendorId = text(row.vendor_id);
     const material = materials.get(materialId);
     const unit = text(row.supply_uom_code) || material?.base_uom_code || "";
     const toBase = (value: unknown) => { const q = num(value); return q === null ? null : toMaterialBase(material, q, unit); };
+    // The price unit (not the MOQ unit): Supply UoM, else the latest PO line UoM, else base.
+    // Only a GRN writes the price in the PO unit; a price typed in MM03 (no GRN yet) is per base unit.
+    const priceUnit = priceUnitCode({ supply_uom_code: text(row.supply_uom_code), last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
     const booking = num(row.booking_time_days);
     const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days - (booking ?? 0));
     result.set(materialId, [...(result.get(materialId) ?? []), {
@@ -151,7 +167,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
       // VMI keeps the price per its Supply UoM (e.g. ₹/MT); every cost here is per base unit.
-      last_price: (() => { const price = num(row.last_purchase_price); const perSupply = toMaterialBase(material, 1, unit); return price === null || !perSupply || perSupply <= 0 ? null : price / perSupply; })(),
+      last_price: (() => { const price = num(row.last_purchase_price); const perSupply = toMaterialBase(material, 1, priceUnit); return price === null || !perSupply || perSupply <= 0 ? null : price / perSupply; })(),
       currency: resolvePurchaseCurrency({
         po_line_currency: poCurrencyByVmi.get(text(row.id))?.currency ?? null,
         vmi_last_purchase_currency: text(row.last_purchase_currency) || null,
@@ -893,7 +909,10 @@ export async function computePlanning(p: PlanningParams) {
       material_name: row.material_id ? nameOf(row.material_id) : "Group — not assigned",
       material_code: codeOf(row.material_id),
       uom: uom(row.material_id),
-      planned_consumption_reason: row.line_type === "FIXED"
+      planned_consumption_reason: row.line_type === "FIXED" && row.group_id
+        // A line that names a group but is FIXED has Use Primary = No: only the group's other members may supply it.
+        ? `Use Primary = No for ${groupLabel.get(row.group_id) ?? "this group"}: only the group's other member(s) supply this line, the group's primary item is not used.`
+        : row.line_type === "FIXED"
         ? "Direct/exclusive product requirement; protected before shared family allocation."
         : row.material_id
           ? `Family waterfall allocation for ${groupLabel.get(row.group_id ?? "") ?? "eligible group"}.`
