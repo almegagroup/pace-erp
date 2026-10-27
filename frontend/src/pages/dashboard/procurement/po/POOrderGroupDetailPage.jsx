@@ -94,7 +94,10 @@ export default function POOrderGroupDetailPage() {
         title: "Create a CSN for the increased quantity?",
         message: `This approval includes a quantity-increasing amendment:\n${summary}\n\nYes — a new CSN is created for the extra quantity.\nNo — the PO quantity increases, no new CSN is created.`,
         confirmLabel: "Yes, Create CSN",
+        secondaryLabel: "No, Skip CSN",
+        cancelLabel: "Cancel Approval",
       });
+      if (createCsnForQtyIncrease === null) return;
     }
     const remarks = (await openActionPrompt({ eyebrow: "Purchase Order Order", title: "Approve all POs in this order?", label: "Remarks (optional)", placeholder: "Optional approval remarks" })) ?? "";
     await runAction(

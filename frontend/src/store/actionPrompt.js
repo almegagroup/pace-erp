@@ -9,6 +9,8 @@ let state = {
   required: false,
   confirmOnly: false,
   confirmLabel: "Confirm",
+  secondaryLabel: "",
+  cancelLabel: "Cancel",
 };
 
 let listeners = [];
@@ -40,13 +42,16 @@ export function openActionPrompt(config) {
     required: config?.required ?? false,
     confirmOnly: false,
     confirmLabel: config?.confirmLabel ?? "Confirm",
+    secondaryLabel: "",
+    cancelLabel: "Cancel",
   };
   emit();
   return new Promise((resolve) => { resolver = resolve; });
 }
 
-// Pure yes/no confirmation — PACE's own modal instead of the browser's
-// native window.confirm(). Resolves true (Confirm) or false (Cancel/Escape).
+// Confirmation with an optional explicit secondary decision. When a
+// secondary label is supplied, Escape/Cancel resolves null so it cannot be
+// mistaken for that business decision.
 export function openConfirmPrompt(config) {
   if (resolver) return Promise.resolve(false);
   state = {
@@ -60,6 +65,8 @@ export function openConfirmPrompt(config) {
     required: false,
     confirmOnly: true,
     confirmLabel: config?.confirmLabel ?? "Confirm",
+    secondaryLabel: config?.secondaryLabel ?? "",
+    cancelLabel: config?.cancelLabel ?? "Cancel",
   };
   emit();
   return new Promise((resolve) => { resolver = resolve; });
@@ -79,6 +86,8 @@ export function resolveActionPrompt(value) {
     required: false,
     confirmOnly: false,
     confirmLabel: "Confirm",
+    secondaryLabel: "",
+    cancelLabel: "Cancel",
   };
   emit();
   if (currentResolver) currentResolver(value);

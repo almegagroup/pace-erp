@@ -41,6 +41,12 @@ Open PR evidence at the time of record: PR #675 (`agent/claude → main`) is
 **closed** and was reported conflicting; no open PR is an approved substitute
 for the fast-forward process.
 
+## Active integration tasks
+
+| Module / phase | Evidence branch and commit | Status | Tests | Next action / owner |
+|---|---|---|---|---|
+| Procurement — PO quantity-amendment CSN decision | `agent/codex`, based on `origin/dev` `f85480c8` | Implemented locally: amendment approval now offers explicit Yes / No / Cancel approval; cancelling cannot silently become “No CSN”. Authorised production recovery completed for CMP003 PO `ASCP2627-0149`: CSN `3000000386`, `ORD`, quantity `200`, with a backfill remark. | Focused ESLint passes; `npm.cmd run build` passes (pre-existing duplicate GRN attribute and bundle-size warnings only); production record re-read after insert. | Commit, fast-forward to `dev`; owner decides later `dev` → `main` release. Owner: Codex. |
+
 ## PO22 canonical progress and decision register
 
 | Feature / contract | Evidence branch and commit | Status | Accepted baseline? | Test evidence | Open issue / blocker | Next action / owner |
