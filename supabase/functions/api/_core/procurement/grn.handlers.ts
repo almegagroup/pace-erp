@@ -581,7 +581,7 @@ export async function getGELinesForGRNHandler(
     const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
     const poLineMap = new Map((poLineResp.data ?? []).map((pl: JsonRecord) => [pl.id, pl]));
     const poMap = new Map<string, JsonRecord>((poResp.data ?? []).map((p: JsonRecord) => [String(p.id), p]));
-    const vendorMap = new Map((vendorResp.data ?? []).map((v: JsonRecord) => [v.id, v]));
+    const vendorMap = new Map<string, JsonRecord>((vendorResp.data ?? []).map((v: JsonRecord) => [String(v.id), v]));
     const csnMap = new Map((csnResp.data ?? []).map((c: JsonRecord) => [c.id, c]));
     const grnByLineId = new Map((existingGrnResp.data ?? []).map((g: JsonRecord) => [g.gate_entry_line_id, g]));
     // Merged AFTER the plain rows so a split's new (POSTED) GRN wins over its
@@ -732,6 +732,14 @@ export async function getGELinesForGRNHandler(
         po_rate: poLine?.unit_rate ?? null,
         po_gst_terms: po?.gst_terms ?? null,
         vendor_id: po?.vendor_id ?? null,
+        // A Gate Entry may legitimately contain lines from several vendors.
+        // Carry the selected PO line's vendor details with that line so the
+        // GRN form never falls back to the GE's first line vendor.
+        vendor_code: vendor?.vendor_code ?? null,
+        vendor_name: vendor?.vendor_name ?? null,
+        vendor_gst: vendor?.gst_number ?? null,
+        vendor_address: [vendor?.reg_address_line1, vendor?.reg_address_city, vendor?.reg_address_state, vendor?.reg_address_pin]
+          .filter(Boolean).join(", ") || null,
         vendor_type: po?.vendor_type ?? "DOMESTIC",
         // §3.7/§3.2.7 -- drives GRNPostFlow's tab-hiding (Bulk, invoice not
         // yet known) and the mandatory Ship-To dropdown (any CRCP GRN).
