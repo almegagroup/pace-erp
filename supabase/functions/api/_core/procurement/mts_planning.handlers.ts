@@ -12,7 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
-import { buildCalendar, isIsoDate, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
+import { buildCalendar, isIsoDate, isTransferFed, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   cachedLoad,
   computeRequirement,
@@ -29,8 +29,9 @@ import {
 } from "./mts_requirement.handlers.ts";
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
+import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
@@ -80,7 +81,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   if (universe.length === 0) return result;
   const [vmiRows, mapRes] = await Promise.all([
     fetchInChunks<JsonRecord>(universe, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
-      .select("id, vendor_id, material_id, moq_qty, order_multiple_qty, delivery_lot_qty, supply_uom_code, booking_time_days, last_purchase_price, last_purchase_currency")
+      .select("id, vendor_id, material_id, moq_qty, order_multiple_qty, delivery_lot_qty, supply_uom_code, booking_time_days, last_purchase_price, last_purchase_currency, last_grn_date")
       .eq("status", "ACTIVE").in("material_id", chunk)),
     serviceRoleClient.schema("erp_master").from("vendor_company_map").select("vendor_id").eq("company_id", companyId).eq("active", true).limit(5000),
   ]);
@@ -105,7 +106,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     .filter((po) => !["CANCELLED", "REJECTED"].includes(text(po.status).toUpperCase()))
     .map((po) => [text(po.id), po]));
   const recentPoLines = poById.size === 0 ? [] : await fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_procurement")
-    .from("purchase_order_line").select("po_id, vendor_material_info_id, currency_code").in("vendor_material_info_id", chunk));
+    .from("purchase_order_line").select("po_id, vendor_material_info_id, currency_code, po_uom_code").in("vendor_material_info_id", chunk));
   const termIds = unique(termRows.map((t) => text(t.payment_term_id)));
   const terms = termIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(termIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("payment_terms_master").select("id, credit_days, advance_pct, payment_method, payment_type").in("id", chunk));
@@ -137,12 +138,28 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     const seen = poCurrencyByVmi.get(vmiId);
     if (!seen || date >= seen.po_date) poCurrencyByVmi.set(vmiId, { currency, po_date: date });
   }
+  // Owner 2026-10-27: a VMI price is per the unit of the PO it came from (Dolomite 240# is ₹5,725 per MT, PO UoM MT),
+  // but supply_uom_code is often blank. Without it the price was read per KG and the order value came out 1000x.
+  // Blank Supply UoM falls back to the latest linked non-cancelled PO line's UoM, then to base.
+  const poUomByVmi = new Map<string, { uom: string; po_date: string }>();
+  for (const line of recentPoLines) {
+    const po = poById.get(text(line.po_id));
+    const vmiId = text(line.vendor_material_info_id);
+    const uom = text(line.po_uom_code).toUpperCase();
+    if (!po || !vmiId || !uom) continue;
+    const date = text(po.po_date);
+    const seen = poUomByVmi.get(vmiId);
+    if (!seen || date >= seen.po_date) poUomByVmi.set(vmiId, { uom, po_date: date });
+  }
   for (const row of rows) {
     const materialId = text(row.material_id);
     const vendorId = text(row.vendor_id);
     const material = materials.get(materialId);
     const unit = text(row.supply_uom_code) || material?.base_uom_code || "";
     const toBase = (value: unknown) => { const q = num(value); return q === null ? null : toMaterialBase(material, q, unit); };
+    // The price unit (not the MOQ unit): Supply UoM, else the latest PO line UoM, else base.
+    // Only a GRN writes the price in the PO unit; a price typed in MM03 (no GRN yet) is per base unit.
+    const priceUnit = priceUnitCode({ supply_uom_code: text(row.supply_uom_code), last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
     const booking = num(row.booking_time_days);
     const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days - (booking ?? 0));
     result.set(materialId, [...(result.get(materialId) ?? []), {
@@ -150,7 +167,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
       booking_days: booking, route_days: routeDays.length ? Math.max(...routeDays) : null,
       // VMI keeps the price per its Supply UoM (e.g. ₹/MT); every cost here is per base unit.
-      last_price: (() => { const price = num(row.last_purchase_price); const perSupply = toMaterialBase(material, 1, unit); return price === null || !perSupply || perSupply <= 0 ? null : price / perSupply; })(),
+      last_price: (() => { const price = num(row.last_purchase_price); const perSupply = toMaterialBase(material, 1, priceUnit); return price === null || !perSupply || perSupply <= 0 ? null : price / perSupply; })(),
       currency: resolvePurchaseCurrency({
         po_line_currency: poCurrencyByVmi.get(text(row.id))?.currency ?? null,
         vmi_last_purchase_currency: text(row.last_purchase_currency) || null,
@@ -405,6 +422,7 @@ export async function computePlanning(p: PlanningParams) {
     reuseLoads: p.reuseLoads,
   });
   const groupCoveragePolicies = await loadGroupCoveragePolicyVersions(p.companyId);
+  const bulkMaterials = await loadBulkMaterialIds(p.companyId);
   const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
   const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
@@ -497,7 +515,17 @@ export async function computePlanning(p: PlanningParams) {
     if (r.group_id && r.candidates.length > 1) groupDemand.push({ group_id: r.group_id, candidates: r.candidates, required_by: r.day, qty_base: r.qty });
     else if (r.candidates[0]) ownDemand.push({ material_id: r.candidates[0], required_by: r.day, qty_base: r.qty });
   }
-  const familyArrivalCandidates = assembly.input.confirmed_arrivals;
+  // Owner 2026-10-27: a transfer-fed material (stock lives in the transfer-source store) gets no MTS supply from
+  // its CSN / PO: they land in that store. The waterfall asks only for what it needs; the Store transfers it.
+  const transferFed = new Set(req.output.rows.filter((r) => r.kind === "RM" && isTransferFed(r.stock)).map((r) => r.material_id));
+  const transferIncoming = new Map<string, { qty: number; label: string }>();
+  for (const arrival of assembly.input.confirmed_arrivals) {
+    if (!transferFed.has(arrival.material_id)) continue;
+    const seen = transferIncoming.get(arrival.material_id);
+    const when = arrival.eta_to_plant ?? "no ETA";
+    transferIncoming.set(arrival.material_id, { qty: (seen?.qty ?? 0) + arrival.qty_base, label: seen ? `${seen.label}, ${when}` : `ETA ${when}` });
+  }
+  const familyArrivalCandidates = assembly.input.confirmed_arrivals.filter((arrival) => !transferFed.has(arrival.material_id));
   const familyInput: FamilyPlannerInput = {
     as_of: assembly.input.as_of,
     horizon_end: assembly.input.horizon_end,
@@ -733,7 +761,7 @@ export async function computePlanning(p: PlanningParams) {
       remaining -= take;
     }
   }
-  const transferHint = storeTransferHints(req.output.rows, notBacked, (id) => locationLabels.get(id) ?? "—", uom);
+  const transferHint = storeTransferHints(req.output.rows, notBacked, (id) => locationLabels.get(id) ?? "—", uom, transferIncoming);
   const groupHint = storeTransferHints([...groupTransferNeed.keys()].map((id) => rowById.get(id)!).filter(Boolean), groupTransferNeed, (id) => locationLabels.get(id) ?? "—", uom);
   const prodshadesOf = (row: { kind: string; prodshade_ids: string[]; sku_ids: string[] }) =>
     unique(row.kind === "PM" ? row.sku_ids.map((sku) => req.masters.skus.get(sku)?.prodshade_material_id ?? "").filter(Boolean) : row.prodshade_ids);
@@ -874,6 +902,10 @@ export async function computePlanning(p: PlanningParams) {
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
     // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.
     display_units: buildDisplayUnits(universe, req.materials, (id) => policyOrderUom.get(id), new Map(universe.map((id) => [id, (vendorTerms.get(id) ?? []).map((t) => t.supply_uom_code ?? "")]))),
+    // Owner 2026-10-27: Bulk RM is out of PO22 for now; the Action tab drops these materials and groups.
+    transfer_fed_material_ids: [...transferFed],
+    bulk_material_ids: [...bulkMaterials],
+    bulk_group_ids: bulkOnlyGroupIds(req.masters.groupMembers, bulkMaterials),
     store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),
@@ -888,7 +920,10 @@ export async function computePlanning(p: PlanningParams) {
       material_name: row.material_id ? nameOf(row.material_id) : "Group — not assigned",
       material_code: codeOf(row.material_id),
       uom: uom(row.material_id),
-      planned_consumption_reason: row.line_type === "FIXED"
+      planned_consumption_reason: row.line_type === "FIXED" && row.group_id
+        // A line that names a group but is FIXED has Use Primary = No: only the group's other members may supply it.
+        ? `Use Primary = No for ${groupLabel.get(row.group_id) ?? "this group"}: only the group's other member(s) supply this line, the group's primary item is not used.`
+        : row.line_type === "FIXED"
         ? "Direct/exclusive product requirement; protected before shared family allocation."
         : row.material_id
           ? `Family waterfall allocation for ${groupLabel.get(row.group_id ?? "") ?? "eligible group"}.`
@@ -897,7 +932,7 @@ export async function computePlanning(p: PlanningParams) {
   };
   console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor };
+  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

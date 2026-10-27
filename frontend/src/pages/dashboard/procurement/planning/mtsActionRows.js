@@ -17,8 +17,14 @@ export function buildActionRows(plan) {
   if (!plan) return [];
   const asOf = plan.calendar.as_of;
   const riskOf = new Map((plan.risks ?? []).map((r) => [r.material_id, r]));
+  // Owner 2026-10-27: Bulk RM (and groups made only of Bulk RM) stay out of PO22 for now.
+  const bulkMaterials = new Set(plan.bulk_material_ids ?? []);
+  const bulkGroups = new Set(plan.bulk_group_ids ?? []);
   const rows = [];
-  const push = (row) => rows.push({ id: `${row.kind}|${row.material_id ?? row.group_id ?? ""}|${rows.length}`, ...row });
+  const push = (row) => {
+    if ((row.material_id && bulkMaterials.has(row.material_id)) || (row.group_id && bulkGroups.has(row.group_id))) return;
+    rows.push({ id: `${row.kind}|${row.material_id ?? row.group_id ?? ""}|${rows.length}`, ...row });
+  };
 
   for (const buy of plan.buys ?? []) {
     const risk = riskOf.get(buy.material_id);

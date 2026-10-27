@@ -15,7 +15,9 @@ import { okResponse } from "../response.ts";
 import { arrivalStatus, dayRange, familyClosure, familyDayGrid, poNumberOfReference } from "./mts_item_plan.logic.ts";
 import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
-import { groupCoveredBy } from "./mts_requirement.logic.ts";
+import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
+import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
+import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -66,7 +68,15 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       serviceRoleClient.schema("erp_master").from("companies").select("company_code, company_name").eq("id", companyId).maybeSingle(),
     ]);
     const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ROLLING_EXTRA_MONTHS, manualLots: userLots });
-    const { req: reqData, projection, assembly, calendar, vendorOptions } = plan._internal;
+    const { req: reqData, projection, assembly, calendar, vendorOptions, selections } = plan._internal;
+    const mattersForGaps = (m: string) => {
+      const rowsOf = projection.rows.filter((r) => r.material_id === m);
+      return memberMattersForGaps({
+        opening_qty: Number(rowsOf[0]?.opening_qty_base ?? 0),
+        horizon_demand_qty: rowsOf.reduce((sum, r) => sum + r.demand_qty_base, 0),
+        selected_any_month: [...selections.values()].some((set) => set.has(m)),
+      });
+    };
     const company = (companyRes.data ?? {}) as JsonRecord;
     const nameOf = (id: string) => text(reqData.materialRows.get(id)?.material_name) || "—";
     // Owner 2026-10-26: every quantity in the material's display (Order) UoM; calculations stay in base.
@@ -125,13 +135,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     };
     // Owner 2026-10-26: for now the report leaves out Bulk RM — a material this company buys on
     // Bulk delivery POs (purchase_order.delivery_type = BULK).
-    const bulkPos = await serviceRoleClient.schema("erp_procurement").from("purchase_order").select("id")
-      .eq("company_id", companyId).eq("delivery_type", "BULK").neq("status", "CANCELLED").limit(10000);
-    if (bulkPos.error) throw new Error("MTS_ROLLING_BULK_LOAD_FAILED");
-    const bulkPoIds = ((bulkPos.data ?? []) as JsonRecord[]).map((row) => text(row.id));
-    const bulkLines = bulkPoIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(bulkPoIds, (chunk) => serviceRoleClient
-      .schema("erp_procurement").from("purchase_order_line").select("material_id").in("po_id", chunk));
-    const bulkRm = new Set(bulkLines.map((row) => text(row.material_id)).filter(Boolean));
+    const bulkRm = await loadBulkMaterialIds(companyId);
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
@@ -212,11 +216,18 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         uom: fu?.uom_code ?? baseUomOf(id),
         target_days: selected?.policy?.target_cov_days ?? null,
         critical_days: selected?.policy?.critical_cov_days ?? null,
+        // Every member's own Target / Critical (the pair above is only the first member's).
+        members_policy: memberIds.map((m) => {
+          const pol = rowById.get(m)?.policy;
+          return `${nameOf(m)}: ${pol?.target_cov_days ?? "—"} / ${pol?.critical_cov_days ?? "—"} d`;
+        }),
         // Each member's own stock and how many days it lasts at its average use (owner 2026-10-26).
         members_stock: memberIds.map((m) => {
           const rowsOf = projection.rows.filter((r) => r.material_id === m);
           const opening = Number(rowsOf[0]?.opening_qty_base ?? 0);
-          const daily = rowsOf.reduce((sum, r) => sum + r.demand_qty_base, 0) / Math.max(1, rowsOf.length);
+          // Average over the days that actually use stock, so zero-demand months do not stretch the days (owner 2026-10-27).
+          const activeDays = rowsOf.filter((r) => r.demand_qty_base > 0.000001).length;
+          const daily = activeDays > 0 ? rowsOf.reduce((sum, r) => sum + r.demand_qty_base, 0) / activeDays : 0;
           const lasts = daily > 0.000001 ? `${Math.floor(opening / daily + 1e-9)} d` : "no use";
           return `${nameOf(m)}: ${dq(m, opening)} ${uomOf(m) ?? ""} (${lasts})`.replace(/\s+\(/, " (");
         }),
@@ -225,6 +236,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         gaps: memberIds.flatMap((m) => {
           const r = rowById.get(m);
           const out: string[] = [];
+          if (!mattersForGaps(m)) return out;
           if (r?.policy?.target_cov_days == null || r?.policy?.critical_cov_days == null) out.push(`${nameOf(m)}: no Target/Critical`);
           // Owner 2026-10-26: a group is bought through any member that has a vendor.
           if ((vendorOptions.get(m) ?? []).length === 0 && !memberIds.some((member) => (vendorOptions.get(member) ?? []).length > 0)) out.push(`${nameOf(m)}: no vendor`);
@@ -276,6 +288,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
 
     const arrivals = reqData.output.rows.filter((r) => !bulkRm.has(r.material_id)).flatMap((r) => r.inbound_events.map((e) => {
       const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
+      const fed = r.kind === "RM" && isTransferFed(r.stock);
       return {
         material: nameOf(r.material_id), uom: uomOf(r.material_id), reference: e.reference, supplier: supplierOf(e.reference, e.csn_id),
         status: arrivalStatus(e.kind, e.date_source), qty: dq(r.material_id, e.qty),
@@ -283,7 +296,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         planning_eta: e.original_date !== undefined ? e.date : null,
         overdue: Boolean(e.date && e.date < calendar.asOf), no_eta: !e.date,
         movable: Boolean(e.reschedule_key),
-        engine_best_date: o && o.shift_days !== 0 ? o.best.eta : null, engine_reason: o?.reason ?? null,
+        engine_best_date: fed ? null : o && o.shift_days !== 0 ? o.best.eta : null,
+        engine_reason: fed ? "Lands in the transfer-source store, so it is not MTS supply. The waterfall asks the Store for a transfer when it needs stock." : o?.reason ?? null,
       };
     })).sort((a, b) => String(a.planning_eta ?? a.source_eta ?? "9999").localeCompare(String(b.planning_eta ?? b.source_eta ?? "9999")));
 

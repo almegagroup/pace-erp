@@ -30,7 +30,7 @@ export default function MtsRollingPlanDownload({ runtimeContext, planMonth, asOf
     const list = buildTransactionCompanyList(runtimeContext).map((c) => {
       const companyName = readable(c.company_name);
       const companyCode = readable(c.company_code);
-      return { id: String(c.id ?? c.company_id ?? ""), companyName, companyCode, label: companyName || companyCode || "—" };
+      return { id: String(c.id ?? c.company_id ?? ""), companyName, companyCode, label: companyCode && companyName ? `${companyCode} · ${companyName}` : companyName || companyCode || "—" };
     }).filter((c) => c.id);
     if (list.length === 0) { pushToast({ message: "No company in your access.", tone: "error" }); return; }
     const companies = [];

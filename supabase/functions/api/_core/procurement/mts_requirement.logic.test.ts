@@ -14,6 +14,7 @@ import {
   addDays,
   allocateDemand,
   applyCompanyMaterialMapping,
+  isTransferFed,
   bucketInbound,
   buildCalendar,
   buildRequirementRows,
@@ -528,6 +529,29 @@ Deno.test("applyCompanyMaterialMapping: unmapped members leave the pool, unmappe
   assertEqual(result.universe.sort(), ["RM-A"], "inactive member not in universe; unmapped never");
   assertEqual(result.unmappedDirect, ["RM-X"], "direct unmapped listed");
   assertEqual(result.unmappedMembers, ["RM-Y"], "member unmapped listed");
+});
+
+Deno.test("applyCompanyMaterialMapping: a material in several groups keeps every group (RDP_TLA inside RDP_PLC inside RDP)", () => {
+  const result = applyCompanyMaterialMapping({
+    directMaterialIds: [],
+    members: [
+      { material_id: "DA", active: true, group_id: "TLA" },
+      { material_id: "DA", active: true, group_id: "PLC" },
+      { material_id: "DA", active: true, group_id: "RDP" },
+      { material_id: "DA", active: true, group_id: "RDP" },
+      { material_id: "WK", active: true, group_id: "TLA" },
+      { material_id: "WK", active: true, group_id: "RDP" },
+    ],
+    mapped: new Set(["DA", "WK"]),
+  });
+  assertEqual(result.members.map((m) => `${m.group_id}|${m.material_id}`).sort(), ["PLC|DA", "RDP|DA", "RDP|WK", "TLA|DA", "TLA|WK"], "one row per group and material, none dropped");
+  assertEqual(result.universe.sort(), ["DA", "WK"], "universe lists each material once");
+});
+
+Deno.test("isTransferFed: stock mostly in the transfer-source store means purchases land there", () => {
+  assertEqual(isTransferFed({ other_sloc_unrestricted: 2937, unrestricted_at_required: 158 }), true, "Gluconate R003 2937 vs counted 158");
+  assertEqual(isTransferFed({ other_sloc_unrestricted: 0, unrestricted_at_required: 18605 }), false, "RDP item, nothing in R003");
+  assertEqual(isTransferFed({ other_sloc_unrestricted: 100, unrestricted_at_required: 5000 }), false, "counted stock dominates");
 });
 
 Deno.test("Owner 2026-10-20 option A: a BULK PO is available from the as-of day, no CSN ETA asked", () => {

@@ -254,19 +254,52 @@ export function storeTransferHints(
   notBackedByMaterial: ReadonlyMap<string, number>,
   locationLabel: (id: string) => string,
   uomOf: (id: string) => string | null,
+  /** Transfer-fed material: open CSN / PO quantity that will land in the transfer-source store (owner 2026-10-27). */
+  incoming?: ReadonlyMap<string, { qty: number; label: string }>,
 ): Map<string, string> {
   const hints = new Map<string, string>();
   for (const row of rows) {
     const short = notBackedByMaterial.get(row.material_id) ?? 0;
-    const available = row.stock.other_sloc_unrestricted;
+    const coming = incoming?.get(row.material_id);
+    const available = row.stock.other_sloc_unrestricted + (coming?.qty ?? 0);
     if (short <= EPSILON || available <= EPSILON) continue;
+    // Owner 2026-10-27: the stroke line may name a shop floor (S001); the stock moves between R stores, so a
+    // shop floor S00n is fed from its R store R00n (same assumption the Store note already states).
+    const toFeedStore = (code: string) => { const m = /^S(\d+)$/i.exec(code.trim()); return m ? `R${m[1]}` : code; };
     const route = rToRTransferRoute(
       row.stock.other_locations.map(locationLabel),
-      [...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)].map(locationLabel),
+      [...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)].map(locationLabel).map(toFeedStore),
     );
     if (!route) continue; // R→R only — stock outside R stores is never a transfer instruction
     const qty = Math.round(Math.min(short, available) * 1000) / 1000;
-    hints.set(row.material_id, `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${route.from} to ${route.to}`.replace(/\s+/g, " ").trim());
+    const base = `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${route.from} to ${route.to}`;
+    const unit = uomOf(row.material_id) ?? "";
+    const detail = coming && coming.qty > EPSILON
+      ? ` (${route.from} on hand ${Math.round(row.stock.other_sloc_unrestricted * 1000) / 1000} ${unit} + arriving ${Math.round(coming.qty * 1000) / 1000} ${unit}: ${coming.label})`
+      : "";
+    hints.set(row.material_id, `${base}${detail}`.replace(/\s+/g, " ").trim());
   }
   return hints;
+}
+
+/**
+ * Unit a vendor-material price is quoted in. Supply UoM when set; else the unit of the latest PO line,
+ * but only when a GRN wrote the price (GRN stores the PO rate, per PO unit); a price typed in MM03
+ * (no GRN yet) is per base unit. Owner 2026-10-27: Dolomite 240# ₹5,725 per MT was read per KG (1000x).
+ */
+export function priceUnitCode(input: { supply_uom_code: string | null | undefined; last_grn_date: string | null | undefined; latest_po_uom: string | null | undefined; base_uom_code: string | null | undefined }): string {
+  const supply = String(input.supply_uom_code ?? "").trim();
+  if (supply) return supply;
+  const po = String(input.latest_po_uom ?? "").trim();
+  if (input.last_grn_date && po) return po;
+  return String(input.base_uom_code ?? "").trim();
+}
+
+/**
+ * A planning gap (no Target/Critical, no vendor) only matters for a member that can actually be planned: it holds
+ * stock, has demand in the horizon, or is ticked for a new purchase in some month. A member with none of these
+ * (owner 2026-10-27: SAPCOMER D, no stock, no demand, never ticked) must not turn the whole family red.
+ */
+export function memberMattersForGaps(input: { opening_qty: number; horizon_demand_qty: number; selected_any_month: boolean }): boolean {
+  return input.opening_qty > EPSILON || input.horizon_demand_qty > EPSILON || input.selected_any_month;
 }

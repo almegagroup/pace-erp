@@ -40,7 +40,10 @@ export function companyLabel(c) {
   const labels = [c.company_name, c.company_code]
     .map((value) => String(value ?? "").trim())
     .filter((value) => value && !UUID_RE.test(value));
-  return labels[0] || "—";
+  // Owner 2026-10-27: several companies share one name (CMP003 / CMP010 "ALMEGA SURFACE COATS LLP"), so the
+  // code leads wherever a company is named.
+  const [name, code] = labels;
+  return code ? `${code} · ${name}` : name || "—";
 }
 /** Excel sheet name: ≤ 31 chars, no []:*?/\ . */
 export function sheetName(base, used) {
@@ -158,7 +161,9 @@ function writeBlocks(sheet, companies, kind) {
     const title = sheet.addRow([`${companyLabel(b.company)} — ${b.title}${b.is_family ? ` (family: ${b.members.join(", ")})` : ""}`]);
     title.getCell(1).font = { bold: true };
     title.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TITLE_FILL } };
-    const facts = [`Unit ${b.uom ?? "—"}`, `Target ${b.target_days ?? "—"} d`, `Critical ${b.critical_days ?? "—"} d`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "",
+    // A family has one Target / Critical per member: show each, not just the first member's pair.
+    const policyFacts = b.is_family && (b.members_policy ?? []).length ? `Target / Critical — ${b.members_policy.join(" · ")}` : null;
+    const facts = [`Unit ${b.uom ?? "—"}`, ...(policyFacts ? [policyFacts] : [`Target ${b.target_days ?? "—"} d`, `Critical ${b.critical_days ?? "—"} d`]), b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "",
       (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
     const factRow = sheet.addRow([facts]);
     if (b.is_family && (b.members_stock ?? []).length) {
