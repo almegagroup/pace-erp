@@ -365,6 +365,16 @@ async function resolveGateExitPersonName(
 // counts -- a small stop-gap PO must not permanently end a continuous Bulk PO.
 // With no live successor the window ends at this document's own cutoff_date,
 // or stays open (null) when it has none.
+async function fetchPoContinuitySuccessorIds(poId: string): Promise<Set<string>> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("purchase_order_continuity_exception")
+    .select("successor_po_id")
+    .eq("po_id", poId);
+  if (error) throw new Error("GE_PO_CONTINUITY_LOOKUP_FAILED");
+  return new Set(((data ?? []) as JsonRecord[]).map((row) => String(row.successor_po_id)));
+}
+
 async function resolveBulkDocumentWindowUpperBound(
   table: "purchase_order" | "stock_transfer_order",
   documentId: string,
@@ -386,10 +396,16 @@ async function resolveBulkDocumentWindowUpperBound(
   for (const [column, value] of Object.entries(groupingFilters)) {
     query = query.eq(column, value);
   }
-  const { data: candidates } = await query;
+  // PO Continuity (business owner, 2026-10-27) -- a per-PO exception the user
+  // sets on the earlier PO: the successors chosen there never end its window.
+  const [{ data: candidates }, continuityIds] = await Promise.all([
+    query,
+    table === "purchase_order" ? fetchPoContinuitySuccessorIds(documentId) : Promise.resolve(new Set<string>()),
+  ]);
   const ENDED_LINE_STATUSES = new Set(["KNOCKED_OFF", "CANCELLED"]);
   const successorDates = ((candidates ?? []) as JsonRecord[])
     .filter((row) => {
+      if (continuityIds.has(String(row.id))) return false;
       if (toUpperTrimmedString(row.status) === "CANCELLED") return false;
       const lines = (Array.isArray(row[lineTable]) ? row[lineTable] : []) as JsonRecord[];
       return lines.some((line) => !ENDED_LINE_STATUSES.has(toUpperTrimmedString(line.line_status)));

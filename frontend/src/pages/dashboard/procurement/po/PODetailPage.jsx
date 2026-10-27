@@ -26,11 +26,14 @@ import {
   knockOffPO,
   setPoCrcp,
   setPoEffectiveDate,
+  getPoContinuity,
+  setPoContinuity,
   updatePurchaseOrder,
 } from "../procurementApi.js";
 import DocumentFlowSection from "../DocumentFlowSection.jsx";
 import CrcpEditModal from "../CrcpEditModal.jsx";
 import EffectiveDateEditModal from "../EffectiveDateEditModal.jsx";
+import PoContinuityModal from "../PoContinuityModal.jsx";
 
 async function readJsonSafe(response) {
   try {
@@ -166,6 +169,9 @@ export default function PODetailPage() {
   const [effectiveDateModalOpen, setEffectiveDateModalOpen] = useState(false);
   const [effectiveDateSaving, setEffectiveDateSaving] = useState(false);
   const [effectiveDateError, setEffectiveDateError] = useState("");
+  const [continuityModalOpen, setContinuityModalOpen] = useState(false);
+  const [continuitySaving, setContinuitySaving] = useState(false);
+  const [continuityError, setContinuityError] = useState("");
   // Section 145 -- Bulk "Order in LOT". Lot Amend mode is entered from the Lot Amend list (the flag
   // also travels in the screen-stack context because the stack can replay the route without its query).
   const queryClient = useQueryClient();
@@ -219,6 +225,33 @@ export default function PODetailPage() {
       setEffectiveDateError(saveError instanceof Error ? saveError.message : "PROCUREMENT_EFFECTIVE_DATE_UPDATE_FAILED");
     } finally {
       setEffectiveDateSaving(false);
+    }
+  }
+
+  // PO Continuity (2026-10-27) — exception to the Bulk Effective Date rule.
+  // Offered only while this Bulk PO still has a live balance (a line not
+  // Knocked-Off/Cancelled with open qty); the backend re-checks the same.
+  const canSetContinuity = canEditCrcp
+    && String(po?.delivery_type || "").toUpperCase() === "BULK"
+    && Boolean(po?.effective_start_date)
+    && (po?.lines ?? []).some((line) => !["KNOCKED_OFF", "CANCELLED"].includes(String(line.line_status || "").toUpperCase()) && Number(line.open_qty ?? 0) > 0);
+  const continuityQuery = useQuery({
+    queryKey: ["procurement", "po-continuity", id],
+    enabled: Boolean(id) && continuityModalOpen,
+    queryFn: () => getPoContinuity(id),
+  });
+
+  async function handleSaveContinuity(successorPoIds) {
+    setContinuitySaving(true);
+    setContinuityError("");
+    try {
+      await setPoContinuity(id, { successor_po_ids: successorPoIds });
+      setContinuityModalOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "po-continuity", id] });
+    } catch (saveError) {
+      setContinuityError(saveError instanceof Error ? saveError.message : "PROCUREMENT_PO_CONTINUITY_UPDATE_FAILED");
+    } finally {
+      setContinuitySaving(false);
     }
   }
 
@@ -717,6 +750,9 @@ export default function PODetailPage() {
         // editable at any status except CANCELLED/CLOSED (same guard as CRCP).
         ...(canEditCrcp && String(po?.delivery_type || "").toUpperCase() === "BULK"
           ? [{ key: "effective-date", label: po?.effective_start_date ? `Effective Date: ${po.effective_start_date}` : "Set Effective Date", tone: "neutral", onClick: () => setEffectiveDateModalOpen(true) }]
+          : []),
+        ...(canSetContinuity
+          ? [{ key: "po-continuity", label: "PO Continuity", tone: "neutral", onClick: () => { setContinuityError(""); setContinuityModalOpen(true); } }]
           : []),
       ]}
     >
@@ -1436,6 +1472,19 @@ export default function PODetailPage() {
           saving={effectiveDateSaving}
           error={effectiveDateError}
           onSave={handleSaveEffectiveDate}
+        />
+      ) : null}
+      {continuityModalOpen && !continuityQuery.isLoading ? (
+        <PoContinuityModal
+          key={continuityQuery.dataUpdatedAt}
+          visible={continuityModalOpen}
+          onClose={() => setContinuityModalOpen(false)}
+          candidates={continuityQuery.data?.candidates ?? []}
+          loading={false}
+          loadError={continuityQuery.error ? continuityQuery.error.message || "PROCUREMENT_PO_CONTINUITY_LOOKUP_FAILED" : ""}
+          saving={continuitySaving}
+          error={continuityError}
+          onSave={handleSaveContinuity}
         />
       ) : null}
     </>
