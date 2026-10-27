@@ -697,7 +697,15 @@ case "GET:/api/admin/control-panel":
 
   /* ------------------------------------------
    * Admin Audit Logging (ID-9.14)
+   * Successful GETs are read-only and are not logged: /api/me alone
+   * (SessionWatchdog probe) wrote ~10k rows/day and drained prod Disk IO.
+   * Failed GETs and every write are still logged.
    * ------------------------------------------ */
+
+  const isSuccessfulRead = routeKey.startsWith("GET:") && response.status < 400;
+  if (isSuccessfulRead) {
+    return response;
+  }
 
   await logAdminAction(
     {

@@ -94,6 +94,10 @@ async function resolvePostingScopedOrderIds(
       .select("stock_document_id, batch_number, company_id")
       .gte("posting_date", dateFrom)
       .lte("posting_date", dateTo)
+      // posting_date first lets Postgres walk idx_sl_posting_date with a small
+      // incremental sort; ordering by id alone scanned the whole pkey per page
+      // (prod: 2.5s -> 34ms, 21k -> 1.4k buffers at offset 20000).
+      .order("posting_date", { ascending: true })
       .order("id", { ascending: true })
       .range(offset, offset + pageSize - 1);
     if (companyIds) query = query.in("company_id", companyIds);
