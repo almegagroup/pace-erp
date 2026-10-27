@@ -263,17 +263,16 @@ export function storeTransferHints(
     const coming = incoming?.get(row.material_id);
     const available = row.stock.other_sloc_unrestricted + (coming?.qty ?? 0);
     if (short <= EPSILON || available <= EPSILON) continue;
+    // Owner 2026-10-27: the stroke line may name a shop floor (S001); the stock moves between R stores, so a
+    // shop floor S00n is fed from its R store R00n (same assumption the Store note already states).
+    const toFeedStore = (code: string) => { const m = /^S(\d+)$/i.exec(code.trim()); return m ? `R${m[1]}` : code; };
     const route = rToRTransferRoute(
       row.stock.other_locations.map(locationLabel),
-      [...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)].map(locationLabel),
+      [...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)].map(locationLabel).map(toFeedStore),
     );
     if (!route) continue; // R→R only — stock outside R stores is never a transfer instruction
     const qty = Math.round(Math.min(short, available) * 1000) / 1000;
-    // The MTS location that needs the stock may be a shop floor (S001), not an R store: name it instead of "UNKNOWN".
-    const destinations = [...new Set([...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)].map(locationLabel))].filter((d) => d && !route.from.includes(d));
-    // Only for a transfer-fed material (owner rule); elsewhere an unknown destination stays UNKNOWN, never fabricated.
-    const to = coming && route.to.includes("UNKNOWN") && destinations.length > 0 ? destinations.join(" / ") : route.to;
-    const base = `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${route.from} to ${to}`;
+    const base = `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${route.from} to ${route.to}`;
     const unit = uomOf(row.material_id) ?? "";
     const detail = coming && coming.qty > EPSILON
       ? ` (${route.from} on hand ${Math.round(row.stock.other_sloc_unrestricted * 1000) / 1000} ${unit} + arriving ${Math.round(coming.qty * 1000) / 1000} ${unit}: ${coming.label})`
