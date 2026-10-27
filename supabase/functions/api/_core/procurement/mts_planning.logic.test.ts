@@ -1,4 +1,4 @@
-import { priceUnitCode, assemblePlanningInput, chooseVendor, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { memberMattersForGaps, priceUnitCode, assemblePlanningInput, chooseVendor, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -109,4 +109,11 @@ Deno.test("transfer hint counts the CSN quantity that lands in the transfer-sour
   const row = { material_id: "G", stock: { other_sloc_unrestricted: 2937, other_locations: ["R003"], required_locations: ["S001"] }, pools: [] } as unknown as RequirementRow;
   const hints = storeTransferHints([row], new Map([["G", 10000]]), (id) => id, () => "KG", new Map([["G", { qty: 42000, label: "ETA 2026-10-11, 2026-08-21" }]]));
   equal(hints.get("G")?.startsWith("Transfer 10000 KG from R003 to R001 (R003 on hand 2937 KG + arriving 42000 KG"), true, "hint text");
+});
+
+Deno.test("gap filter: a member with no stock, no demand and no purchase tick is not a planning gap", () => {
+  equal(memberMattersForGaps({ opening_qty: 0, horizon_demand_qty: 0, selected_any_month: false }), false, "SAPCOMER D");
+  equal(memberMattersForGaps({ opening_qty: 12, horizon_demand_qty: 0, selected_any_month: false }), true, "holds stock");
+  equal(memberMattersForGaps({ opening_qty: 0, horizon_demand_qty: 5, selected_any_month: false }), true, "has demand");
+  equal(memberMattersForGaps({ opening_qty: 0, horizon_demand_qty: 0, selected_any_month: true }), true, "ticked for a buy");
 });

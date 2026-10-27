@@ -294,3 +294,12 @@ export function priceUnitCode(input: { supply_uom_code: string | null | undefine
   if (input.last_grn_date && po) return po;
   return String(input.base_uom_code ?? "").trim();
 }
+
+/**
+ * A planning gap (no Target/Critical, no vendor) only matters for a member that can actually be planned: it holds
+ * stock, has demand in the horizon, or is ticked for a new purchase in some month. A member with none of these
+ * (owner 2026-10-27: SAPCOMER D, no stock, no demand, never ticked) must not turn the whole family red.
+ */
+export function memberMattersForGaps(input: { opening_qty: number; horizon_demand_qty: number; selected_any_month: boolean }): boolean {
+  return input.opening_qty > EPSILON || input.horizon_demand_qty > EPSILON || input.selected_any_month;
+}

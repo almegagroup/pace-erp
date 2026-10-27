@@ -28,6 +28,7 @@ import {
 import type { OptimizerDailyProjectionRow, OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import type { PolicyOverride } from "./mts_requirement.logic.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
+import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import {
   fail,
   handleError,
@@ -107,7 +108,7 @@ export async function buildItemPlan(
       rescheduleOverrides: sim.rescheduleOverrides, policyOverrides: sim.policyOverrides, arrivalFamilyOf: materialId,
       reuseLoads: sim.reuseLoads,
     });
-    const { req: reqData, projection, assembly, calendar, vendorOptions, vendorTerms, orderUnitFor } = plan._internal;
+    const { req: reqData, projection, assembly, calendar, vendorOptions, vendorTerms, orderUnitFor, selections } = plan._internal;
     // Order UoM (owner 2026-10-22): the same quantity in the unit it is ordered in.
     const orderFields = (id: string, vendorId: string | null | undefined, qtyBase: number) => {
       const unit = orderUnitFor(id, vendorId);
@@ -491,6 +492,11 @@ export async function buildItemPlan(
       plan_gaps: memberIds.map((id) => {
         const row = rowById.get(id);
         const issues: string[] = [];
+        // A member with no stock, no demand and no purchase tick cannot be planned and is not a gap (owner 2026-10-27).
+        const myRows = projection.rows.filter((r) => r.material_id === id);
+        if (!memberMattersForGaps({ opening_qty: Number(myRows[0]?.opening_qty_base ?? 0), horizon_demand_qty: myRows.reduce((sum, r) => sum + r.demand_qty_base, 0), selected_any_month: [...selections.values()].some((set) => set.has(id)) })) {
+          return { material_id: id, material_code: codeOf(id), material_name: nameOf(id), issues, first_shortage_day: null };
+        }
         if (row?.policy?.target_cov_days === null || row?.policy?.target_cov_days === undefined || row?.policy?.critical_cov_days === null || row?.policy?.critical_cov_days === undefined) issues.push("NO_TARGET_CRITICAL");
         // Owner 2026-10-26: a group is bought through any member that has a vendor, so "no vendor" is
         // a gap only when NO member of the family has one.

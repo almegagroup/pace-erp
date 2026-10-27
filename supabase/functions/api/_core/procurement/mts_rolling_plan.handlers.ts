@@ -17,6 +17,7 @@ import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
 import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
+import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -67,7 +68,15 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       serviceRoleClient.schema("erp_master").from("companies").select("company_code, company_name").eq("id", companyId).maybeSingle(),
     ]);
     const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ROLLING_EXTRA_MONTHS, manualLots: userLots });
-    const { req: reqData, projection, assembly, calendar, vendorOptions } = plan._internal;
+    const { req: reqData, projection, assembly, calendar, vendorOptions, selections } = plan._internal;
+    const mattersForGaps = (m: string) => {
+      const rowsOf = projection.rows.filter((r) => r.material_id === m);
+      return memberMattersForGaps({
+        opening_qty: Number(rowsOf[0]?.opening_qty_base ?? 0),
+        horizon_demand_qty: rowsOf.reduce((sum, r) => sum + r.demand_qty_base, 0),
+        selected_any_month: [...selections.values()].some((set) => set.has(m)),
+      });
+    };
     const company = (companyRes.data ?? {}) as JsonRecord;
     const nameOf = (id: string) => text(reqData.materialRows.get(id)?.material_name) || "—";
     // Owner 2026-10-26: every quantity in the material's display (Order) UoM; calculations stay in base.
@@ -227,6 +236,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         gaps: memberIds.flatMap((m) => {
           const r = rowById.get(m);
           const out: string[] = [];
+          if (!mattersForGaps(m)) return out;
           if (r?.policy?.target_cov_days == null || r?.policy?.critical_cov_days == null) out.push(`${nameOf(m)}: no Target/Critical`);
           // Owner 2026-10-26: a group is bought through any member that has a vendor.
           if ((vendorOptions.get(m) ?? []).length === 0 && !memberIds.some((member) => (vendorOptions.get(member) ?? []).length > 0)) out.push(`${nameOf(m)}: no vendor`);
