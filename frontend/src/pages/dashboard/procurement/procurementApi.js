@@ -386,6 +386,17 @@ export function setPoEffectiveDate(id, data) {
   return fetchProcurement("PATCH", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/effective-date`, data);
 }
 
+// PO Continuity (2026-10-27) — exception to the Bulk Effective Date rule.
+// The response has no total/next_cursor key, so fetchProcurement unwraps it
+// to { po_id, candidates } (bug pattern #15).
+export function getPoContinuity(id) {
+  return fetchProcurement("GET", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/continuity`);
+}
+
+export function setPoContinuity(id, data) {
+  return fetchProcurement("PUT", `/api/procurement/purchase-orders/${encodeURIComponent(id)}/continuity`, data);
+}
+
 // Section 145 -- Bulk "Order in LOT". The list handler returns okResponse({ data: rows }) with no
 // total/next_cursor, so fetchProcurement already hands back the BARE ARRAY (bug pattern #15).
 export function listPoLotOrders(params) {

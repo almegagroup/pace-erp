@@ -390,6 +390,8 @@ import {
   listLotOrdersHandler,
   setPoCrcpHandler,
   setPoEffectiveDateHandler,
+  getPoContinuityHandler,
+  setPoContinuityHandler,
   listMaterialUomConversionsForProcurementHandler,
   listPOsHandler,
   listPOOrderGroupsHandler,
@@ -1896,6 +1898,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/purchase-orders\/[^/]+\/effective-date$/.test(pathname) && req.method === "PATCH") {
     return await setPoEffectiveDateHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/continuity$/.test(pathname) && req.method === "GET") {
+    return await getPoContinuityHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/purchase-orders\/[^/]+\/continuity$/.test(pathname) && req.method === "PUT") {
+    return await setPoContinuityHandler(req, ctx);
   }
 
   // Section 145 -- Bulk "Order in LOT": Lot Amend (add lots, goes to approval).

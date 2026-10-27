@@ -3600,6 +3600,164 @@ export async function setPoEffectiveDateHandler(
   }
 }
 
+// ── PO Continuity (business owner, 2026-10-27) ───────────────────────────────
+// An exception to the §3.7 Bulk Effective Date rule, chosen per PO: the later
+// POs the user ticks here no longer end this PO's challan/invoice date window
+// at their own effective_start_date, so GE/GR keep working against this PO
+// while they are active. The general rule is untouched for every other pair.
+// Saved directly, no approval. Available only while this PO still has a live
+// balance (BULK, not Cancelled/Closed, a line not Knocked-Off/Cancelled with
+// open qty).
+const PO_CONTINUITY_ENDED_LINE_STATUSES = new Set(["KNOCKED_OFF", "CANCELLED"]);
+
+type PoContinuityState = {
+  po: PurchaseOrderRow;
+  candidates: JsonRecord[];
+  selectedIds: Set<string>;
+};
+
+async function loadPoContinuityState(
+  ctx: ProcurementHandlerContext,
+  poId: string,
+): Promise<PoContinuityState | { error: string; status: number; message: string }> {
+  const po = await getPOById(poId);
+  if (!po) return { error: "PROCUREMENT_PO_NOT_FOUND", status: 404, message: "Purchase order not found" };
+  try {
+    await assertCompanyScope(ctx, toTrimmedString(po.company_id));
+  } catch {
+    return { error: "COMPANY_SCOPE_VIOLATION", status: 403, message: "You do not have access to this company." };
+  }
+  if (toUpperTrimmedString(po.delivery_type) !== "BULK") {
+    return { error: "PROCUREMENT_PO_CONTINUITY_BULK_ONLY", status: 400, message: "PO Continuity only applies to Bulk delivery type." };
+  }
+  const effectiveStartDate = toTrimmedString(po.effective_start_date);
+  if (!effectiveStartDate) {
+    return { error: "PROCUREMENT_PO_CONTINUITY_EFFECTIVE_DATE_MISSING", status: 400, message: "Set this PO's Effective Start Date first." };
+  }
+
+  const lines = await getPOLines(poId);
+  const liveLines = lines.filter((line) =>
+    !PO_CONTINUITY_ENDED_LINE_STATUSES.has(toUpperTrimmedString(line.line_status)) && Number(line.open_qty ?? 0) > 0
+  );
+  const status = toUpperTrimmedString(po.status);
+  if (status === "CANCELLED" || status === "CLOSED" || liveLines.length === 0) {
+    return { error: "PROCUREMENT_PO_CONTINUITY_NOT_ALLOWED", status: 400, message: "PO Continuity needs an open balance on a PO that is not Cancelled, Closed or Knocked-Off." };
+  }
+  const materialIds = [...new Set(liveLines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+
+  // Same grouping key as the Gate Entry window rule: vendor + company + material,
+  // a later effective_start_date, and still live (header not Cancelled, a line
+  // for one of this PO's materials not Knocked-Off/Cancelled).
+  const [{ data: successorRows, error: successorError }, { data: selectedRows, error: selectedError }] = await Promise.all([
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order")
+      .select("id, po_number, po_date, status, effective_start_date, purchase_order_line!inner(material_id, line_status, ordered_qty, open_qty, po_uom_code)")
+      .eq("company_id", toTrimmedString(po.company_id))
+      .eq("vendor_id", toTrimmedString(po.vendor_id))
+      .neq("id", poId)
+      .not("effective_start_date", "is", null)
+      .gt("effective_start_date", effectiveStartDate)
+      .in("purchase_order_line.material_id", materialIds)
+      .order("effective_start_date", { ascending: true })
+      .limit(200),
+    serviceRoleClient
+      .schema("erp_procurement")
+      .from("purchase_order_continuity_exception")
+      .select("successor_po_id")
+      .eq("po_id", poId),
+  ]);
+  if (successorError || selectedError) throw new Error("PROCUREMENT_PO_CONTINUITY_LOOKUP_FAILED");
+
+  const selectedIds = new Set(((selectedRows ?? []) as JsonRecord[]).map((row) => String(row.successor_po_id)));
+  const candidates = ((successorRows ?? []) as JsonRecord[])
+    .map((row) => {
+      const rowLines = (Array.isArray(row.purchase_order_line) ? row.purchase_order_line : []) as JsonRecord[];
+      const live = toUpperTrimmedString(row.status) !== "CANCELLED"
+        && rowLines.some((line) => !PO_CONTINUITY_ENDED_LINE_STATUSES.has(toUpperTrimmedString(line.line_status)));
+      return {
+        id: String(row.id),
+        po_number: row.po_number ?? null,
+        po_date: row.po_date ?? null,
+        status: row.status ?? null,
+        effective_start_date: row.effective_start_date ?? null,
+        ordered_qty: rowLines.reduce((sum, line) => sum + Number(line.ordered_qty ?? 0), 0),
+        open_qty: rowLines.reduce((sum, line) => sum + Number(line.open_qty ?? 0), 0),
+        uom_code: toTrimmedString(rowLines[0]?.po_uom_code) || null,
+        live,
+        selected: selectedIds.has(String(row.id)),
+      };
+    })
+    // A PO that no longer ends the window is not offered, unless it is already
+    // part of the saved exception (so the user can see and untick it).
+    .filter((row) => row.live || row.selected);
+
+  return { po, candidates, selectedIds };
+}
+
+export async function getPoContinuityHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const state = await loadPoContinuityState(ctx, getPoIdFromPath(req));
+    if ("error" in state) return procurementErrorResponse(req, ctx, state.error, state.status, state.message);
+    return okResponse({ data: { po_id: String(state.po.id), candidates: state.candidates } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_PO_CONTINUITY_LOOKUP_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "PO Continuity could not be loaded");
+  }
+}
+
+export async function setPoContinuityHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const poId = getPoIdFromPath(req);
+    const body = await parseBody(req);
+    const requestedIds = Array.isArray(body.successor_po_ids)
+      ? [...new Set((body.successor_po_ids as unknown[]).map((value) => toTrimmedString(value)).filter(Boolean))]
+      : null;
+    if (!requestedIds) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_CONTINUITY_INVALID", 400, "successor_po_ids must be a list.");
+    }
+
+    const state = await loadPoContinuityState(ctx, poId);
+    if ("error" in state) return procurementErrorResponse(req, ctx, state.error, state.status, state.message);
+    const canEdit = await canMaintainPoCrcp(ctx, toTrimmedString(state.po.company_id));
+    if (!canEdit) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_CONTINUITY_FORBIDDEN", 403, "You do not have edit access to this purchase order's company.");
+    }
+    const allowedIds = new Set(state.candidates.map((row) => String(row.id)));
+    if (requestedIds.some((id) => !allowedIds.has(id))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_PO_CONTINUITY_SUCCESSOR_INVALID", 400, "Only a later active PO of the same vendor, company and material can be selected.");
+    }
+
+    const toAdd = requestedIds.filter((id) => !state.selectedIds.has(id));
+    const toRemove = [...state.selectedIds].filter((id) => !requestedIds.includes(id));
+    // INDEPENDENT: the insert and the delete touch disjoint successor rows.
+    const [insertResult, deleteResult] = await Promise.all([
+      toAdd.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("purchase_order_continuity_exception")
+          .insert(toAdd.map((successorId) => ({ po_id: poId, successor_po_id: successorId, created_by: ctx.auth_user_id })))
+        : Promise.resolve({ error: null }),
+      toRemove.length > 0
+        ? serviceRoleClient.schema("erp_procurement").from("purchase_order_continuity_exception")
+          .delete().eq("po_id", poId).in("successor_po_id", toRemove)
+        : Promise.resolve({ error: null }),
+    ]);
+    if (insertResult.error || deleteResult.error) throw new Error("PROCUREMENT_PO_CONTINUITY_UPDATE_FAILED");
+
+    return okResponse({ data: { po_id: poId, successor_po_ids: requestedIds } }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_PO_CONTINUITY_UPDATE_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "PO Continuity update failed");
+  }
+}
+
 // §3.7 "Bulk PO/STO — Effective Date + Cutoff mechanism" — a Bulk PO/STO with no
 // successor (same vendor+company+material, later effective_start_date) must not
 // knock off unbounded; the caller must supply a cutoff_date at that moment instead.

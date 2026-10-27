@@ -1006,6 +1006,16 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { PATCH: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" } },
   },
   {
+    // PO Continuity (2026-10-27) — exception to the Bulk Effective Date rule,
+    // same lightweight ordinary-access pattern as Effective Date above. Reading
+    // the candidate list is PO-detail VIEW; saving it is EDIT (no approval).
+    pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/continuity$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROC_PO_LIST",   action: "VIEW" },
+      PUT: { skipAcl: false, resourceCode: "PROC_PO_CREATE", action: "EDIT" },
+    },
+  },
+  {
     // Section 145 -- Bulk "Order in LOT": Lot Amend. Same authority as amend (EDIT); the lot then
     // goes through the ordinary PO approval (APPROVE) before it counts.
     pattern: /^\/api\/procurement\/purchase-orders\/[^/]+\/lots$/,
