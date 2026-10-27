@@ -17,6 +17,18 @@ function statusBadge(status) {
   return <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800">PENDING</span>;
 }
 
+function vendorDisplay(row) {
+  if (!row?.vendor_name) return "—";
+  return `${row.vendor_code || ""} — ${row.vendor_name}`.replace(/^( — )/, "");
+}
+
+function gateEntryVendorDisplay(lines) {
+  const vendors = [...new Set((lines ?? []).map(vendorDisplay).filter((value) => value !== "—"))];
+  if (vendors.length === 0) return "—";
+  if (vendors.length === 1) return vendors[0];
+  return "Multiple vendors — see line";
+}
+
 // ── Screen 1: GE number entry ────────────────────────────────────────────────
 function GENumberEntryScreen({ onLoad }) {
   const [geNumber, setGeNumber] = useState("");
@@ -107,7 +119,7 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
               ["GE type", ge.ge_type],
               ["Vehicle", ge.vehicle_number],
               ["Driver", ge.driver_name],
-              ["Vendor", ge.vendor_name ? `${ge.vendor_code} — ${ge.vendor_name}` : "—"],
+              ["Vendor", gateEntryVendorDisplay(lines)],
               ["Entry type", ge.vendor_type],
               ...(ge.remarks ? [["Remarks", ge.remarks]] : []),
             ].map(([label, value]) => (
@@ -137,6 +149,7 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
                 ),
               },
               { key: "po_number", label: "PO", width: "120px", render: (row) => row.po_number || "—" },
+              { key: "vendor", label: "Vendor", width: "210px", render: vendorDisplay },
               // Section 145 -- Order in LOT: the lot this Gate Entry line was received against.
               { key: "lot_number", label: "Lot", width: "70px", render: (row) => row.lot_number || "—" },
               { key: "ge_qty", label: "Invoice qty", width: "110px", render: (row) => `${row.ge_qty} ${row.uom_code || ""}` },
@@ -194,6 +207,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   }, [tabCount]);
 
   const vendorType = geLine.vendor_type ?? "DOMESTIC";
+  const selectedVendorDisplay = vendorDisplay(geLine);
   const isImport = vendorType === "IMPORT";
 
   // §3.2.7 "GRN-level Ship To Leg capture" -- CRCP-general, any delivery_type.
@@ -606,19 +620,19 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
           <ErpSectionCard eyebrow="Vendor" title="Vendor details (read-only)">
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
               {[
-                ["Vendor", geHeader.vendor_name ? `${geHeader.vendor_code} — ${geHeader.vendor_name}` : "—"],
-                ["Type", geHeader.vendor_type ?? "—"],
-                ["GST number", geHeader.vendor_gst ?? "—"],
+                ["Vendor", selectedVendorDisplay],
+                ["Type", geLine.vendor_type ?? "—"],
+                ["GST number", geLine.vendor_gst ?? "—"],
               ].map(([label, value]) => (
                 <div key={label}>
                   <p className="text-[11px] text-slate-500">{label}</p>
                   <p className="mt-0.5 text-sm font-medium text-slate-900">{value}</p>
                 </div>
               ))}
-              {geHeader.vendor_address && (
+              {geLine.vendor_address && (
                 <div className="col-span-full">
                   <p className="text-[11px] text-slate-500">Registered address</p>
-                  <p className="mt-0.5 text-sm text-slate-900">{geHeader.vendor_address}</p>
+                  <p className="mt-0.5 text-sm text-slate-900">{geLine.vendor_address}</p>
                 </div>
               )}
             </div>
