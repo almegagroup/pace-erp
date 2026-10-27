@@ -15,7 +15,7 @@ import { okResponse } from "../response.ts";
 import { arrivalStatus, dayRange, familyClosure, familyDayGrid, poNumberOfReference } from "./mts_item_plan.logic.ts";
 import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
 import { computePlanning, readParams } from "./mts_planning.handlers.ts";
-import { groupCoveredBy } from "./mts_requirement.logic.ts";
+import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
 
@@ -278,6 +278,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
 
     const arrivals = reqData.output.rows.filter((r) => !bulkRm.has(r.material_id)).flatMap((r) => r.inbound_events.map((e) => {
       const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
+      const fed = r.kind === "RM" && isTransferFed(r.stock);
       return {
         material: nameOf(r.material_id), uom: uomOf(r.material_id), reference: e.reference, supplier: supplierOf(e.reference, e.csn_id),
         status: arrivalStatus(e.kind, e.date_source), qty: dq(r.material_id, e.qty),
@@ -285,7 +286,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         planning_eta: e.original_date !== undefined ? e.date : null,
         overdue: Boolean(e.date && e.date < calendar.asOf), no_eta: !e.date,
         movable: Boolean(e.reschedule_key),
-        engine_best_date: o && o.shift_days !== 0 ? o.best.eta : null, engine_reason: o?.reason ?? null,
+        engine_best_date: fed ? null : o && o.shift_days !== 0 ? o.best.eta : null,
+        engine_reason: fed ? "Lands in the transfer-source store, so it is not MTS supply. The waterfall asks the Store for a transfer when it needs stock." : o?.reason ?? null,
       };
     })).sort((a, b) => String(a.planning_eta ?? a.source_eta ?? "9999").localeCompare(String(b.planning_eta ?? b.source_eta ?? "9999")));
 

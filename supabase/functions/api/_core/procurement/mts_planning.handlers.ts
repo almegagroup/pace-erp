@@ -12,7 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
-import { buildCalendar, isIsoDate, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
+import { buildCalendar, isIsoDate, isTransferFed, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   cachedLoad,
   computeRequirement,
@@ -515,7 +515,17 @@ export async function computePlanning(p: PlanningParams) {
     if (r.group_id && r.candidates.length > 1) groupDemand.push({ group_id: r.group_id, candidates: r.candidates, required_by: r.day, qty_base: r.qty });
     else if (r.candidates[0]) ownDemand.push({ material_id: r.candidates[0], required_by: r.day, qty_base: r.qty });
   }
-  const familyArrivalCandidates = assembly.input.confirmed_arrivals;
+  // Owner 2026-10-27: a transfer-fed material (stock lives in the transfer-source store) gets no MTS supply from
+  // its CSN / PO: they land in that store. The waterfall asks only for what it needs; the Store transfers it.
+  const transferFed = new Set(req.output.rows.filter((r) => r.kind === "RM" && isTransferFed(r.stock)).map((r) => r.material_id));
+  const transferIncoming = new Map<string, { qty: number; label: string }>();
+  for (const arrival of assembly.input.confirmed_arrivals) {
+    if (!transferFed.has(arrival.material_id)) continue;
+    const seen = transferIncoming.get(arrival.material_id);
+    const when = arrival.eta_to_plant ?? "no ETA";
+    transferIncoming.set(arrival.material_id, { qty: (seen?.qty ?? 0) + arrival.qty_base, label: seen ? `${seen.label}, ${when}` : `ETA ${when}` });
+  }
+  const familyArrivalCandidates = assembly.input.confirmed_arrivals.filter((arrival) => !transferFed.has(arrival.material_id));
   const familyInput: FamilyPlannerInput = {
     as_of: assembly.input.as_of,
     horizon_end: assembly.input.horizon_end,
@@ -751,7 +761,7 @@ export async function computePlanning(p: PlanningParams) {
       remaining -= take;
     }
   }
-  const transferHint = storeTransferHints(req.output.rows, notBacked, (id) => locationLabels.get(id) ?? "—", uom);
+  const transferHint = storeTransferHints(req.output.rows, notBacked, (id) => locationLabels.get(id) ?? "—", uom, transferIncoming);
   const groupHint = storeTransferHints([...groupTransferNeed.keys()].map((id) => rowById.get(id)!).filter(Boolean), groupTransferNeed, (id) => locationLabels.get(id) ?? "—", uom);
   const prodshadesOf = (row: { kind: string; prodshade_ids: string[]; sku_ids: string[] }) =>
     unique(row.kind === "PM" ? row.sku_ids.map((sku) => req.masters.skus.get(sku)?.prodshade_material_id ?? "").filter(Boolean) : row.prodshade_ids);
@@ -893,6 +903,7 @@ export async function computePlanning(p: PlanningParams) {
     // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.
     display_units: buildDisplayUnits(universe, req.materials, (id) => policyOrderUom.get(id), new Map(universe.map((id) => [id, (vendorTerms.get(id) ?? []).map((t) => t.supply_uom_code ?? "")]))),
     // Owner 2026-10-27: Bulk RM is out of PO22 for now; the Action tab drops these materials and groups.
+    transfer_fed_material_ids: [...transferFed],
     bulk_material_ids: [...bulkMaterials],
     bulk_group_ids: bulkOnlyGroupIds(req.masters.groupMembers, bulkMaterials),
     store_rows: storeRowsByShelfLife.map((row) => ({

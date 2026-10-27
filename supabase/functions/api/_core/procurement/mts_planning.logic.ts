@@ -254,11 +254,14 @@ export function storeTransferHints(
   notBackedByMaterial: ReadonlyMap<string, number>,
   locationLabel: (id: string) => string,
   uomOf: (id: string) => string | null,
+  /** Transfer-fed material: open CSN / PO quantity that will land in the transfer-source store (owner 2026-10-27). */
+  incoming?: ReadonlyMap<string, { qty: number; label: string }>,
 ): Map<string, string> {
   const hints = new Map<string, string>();
   for (const row of rows) {
     const short = notBackedByMaterial.get(row.material_id) ?? 0;
-    const available = row.stock.other_sloc_unrestricted;
+    const coming = incoming?.get(row.material_id);
+    const available = row.stock.other_sloc_unrestricted + (coming?.qty ?? 0);
     if (short <= EPSILON || available <= EPSILON) continue;
     const route = rToRTransferRoute(
       row.stock.other_locations.map(locationLabel),
@@ -266,7 +269,16 @@ export function storeTransferHints(
     );
     if (!route) continue; // R→R only — stock outside R stores is never a transfer instruction
     const qty = Math.round(Math.min(short, available) * 1000) / 1000;
-    hints.set(row.material_id, `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${route.from} to ${route.to}`.replace(/\s+/g, " ").trim());
+    // The MTS location that needs the stock may be a shop floor (S001), not an R store: name it instead of "UNKNOWN".
+    const destinations = [...new Set([...row.stock.required_locations, ...row.pools.map((p) => p.storage_location_id).filter((x): x is string => !!x)].map(locationLabel))].filter((d) => d && !route.from.includes(d));
+    // Only for a transfer-fed material (owner rule); elsewhere an unknown destination stays UNKNOWN, never fabricated.
+    const to = coming && route.to.includes("UNKNOWN") && destinations.length > 0 ? destinations.join(" / ") : route.to;
+    const base = `Transfer ${qty} ${uomOf(row.material_id) ?? ""} from ${route.from} to ${to}`;
+    const unit = uomOf(row.material_id) ?? "";
+    const detail = coming && coming.qty > EPSILON
+      ? ` (${route.from} on hand ${Math.round(row.stock.other_sloc_unrestricted * 1000) / 1000} ${unit} + arriving ${Math.round(coming.qty * 1000) / 1000} ${unit}: ${coming.label})`
+      : "";
+    hints.set(row.material_id, `${base}${detail}`.replace(/\s+/g, " ").trim());
   }
   return hints;
 }

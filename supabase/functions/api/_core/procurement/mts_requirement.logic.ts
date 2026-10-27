@@ -1049,6 +1049,16 @@ export type MaterialStockPosition = {
   protection_used: number;
 };
 
+/**
+ * A material is transfer-fed when its stock sits in a TRANSFER_SOURCE store (e.g. CMP003 R003) at least as
+ * much as in the counted MTS locations: its purchases land in that store, so they are not MTS-location
+ * supply and cover is decided by what the waterfall needs, not by the CSN quantity (owner 2026-10-27,
+ * Sodium Gluconate). PO lines carry no receiving location yet (all NULL on PROD), so stock is the signal.
+ */
+export function isTransferFed(stock: { other_sloc_unrestricted: number; unrestricted_at_required: number }): boolean {
+  return stock.other_sloc_unrestricted > 0.000001 && stock.other_sloc_unrestricted >= stock.unrestricted_at_required;
+}
+
 /** Company planning role of a storage location (owner D1/D12). */
 export type LocationRole = "COUNTED" | "TRANSFER_SOURCE" | "EXCLUDED";
 

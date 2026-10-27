@@ -102,3 +102,9 @@ Deno.test("price unit: Supply UoM first, then the latest PO unit only for a GRN-
   equal(priceUnitCode({ supply_uom_code: null, last_grn_date: null, latest_po_uom: "MT", base_uom_code: "KG" }), "KG", "price unit");
   equal(priceUnitCode({ supply_uom_code: "", last_grn_date: "2026-10-26", latest_po_uom: null, base_uom_code: "KG" }), "KG", "price unit");
 });
+
+Deno.test("transfer hint counts the CSN quantity that lands in the transfer-source store", () => {
+  const row = { material_id: "G", stock: { other_sloc_unrestricted: 2937, other_locations: ["R003"], required_locations: ["S001"] }, pools: [] } as unknown as RequirementRow;
+  const hints = storeTransferHints([row], new Map([["G", 10000]]), (id) => id, () => "KG", new Map([["G", { qty: 42000, label: "ETA 2026-10-11, 2026-08-21" }]]));
+  equal(hints.get("G")?.startsWith("Transfer 10000 KG from R003 to S001 (R003 on hand 2937 KG + arriving 42000 KG"), true, "hint text");
+});
