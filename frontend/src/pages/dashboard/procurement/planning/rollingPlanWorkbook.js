@@ -156,10 +156,16 @@ function writePlan(sheet, companies) {
 const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Engine best date"];
 const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by"];
 
-/** Days of cover; empty because the stock outlasts the PO21 plan = "beyond plan" (owner 2026-10-28), not a long run of zero-demand days. */
-function beyondPlan(value, stock) {
+/**
+ * Days of cover. When the stock outlasts the PO21 plan the engine sends no day count but an estimate at the plan's average daily use:
+ * shown as "≈ 66 d (plan to 31 Jan)" so the number stays and nobody reads it as a promise (owner 2026-10-28).
+ */
+function coverCell(value, estimate, stock, planEnd) {
   const d = days(value);
-  return d === null && num(stock) > 0 ? "beyond plan" : d;
+  if (d !== null) return d;
+  const e = days(estimate);
+  if (e !== null) return `≈ ${e} d${planEnd ? ` (plan to ${String(planEnd).slice(0, 10)})` : ""}`;
+  return num(stock) > 0 ? "beyond plan" : d;
 }
 
 function writeBlocks(sheet, companies, kind) {
@@ -183,7 +189,7 @@ function writeBlocks(sheet, companies, kind) {
     // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
     // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
     if (b.is_family && (b.waterfall?.levels ?? []).length) {
-      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). beyond plan = stock outlasts the PO21 plan. Levels, narrow first:"]);
+      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). ≈ N d (plan to date) = the stock outlasts the PO21 plan; N is the days at the plan's average daily use. Levels, narrow first:"]);
       note.getCell(1).font = { italic: true };
       for (const l of b.waterfall.levels) {
         const line = sheet.addRow([`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${num(l.reserve_now) ?? 0} ${b.uom ?? ""} (covers ${days(l.cover_days_now) ?? "—"} d) · next Min ${l.next_min_day ?? "not in horizon"}`]);
@@ -193,7 +199,7 @@ function writeBlocks(sheet, companies, kind) {
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
-        day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), beyondPlan(r.max_days, r.closing), num(r.min_stock), beyondPlan(r.min_days, r.min_stock),
+        day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.min_stock, b.plan_end),
         r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
         r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"), r.best_dates.filter(Boolean).join("\n"),
       ]);
@@ -208,7 +214,7 @@ function writeBlocks(sheet, companies, kind) {
       styleHeader(sheet.addRow(PRED_HEAD));
       for (const x of b.prediction) {
         const row = sheet.addRow([
-          x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), days(x.max_days), days(x.min_days), x.material, x.supplier ?? "", day(x.po_by),
+          x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
           x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), x.trigger_kind === "GROUP" ? "Group free stock" : x.trigger_kind === "OWN" ? "Its own use" : "",
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
@@ -230,7 +236,7 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   const head = summary.addRow([`MTS Plan — as of ${asOf}`]);
   head.getCell(1).font = { bold: true, size: 14 };
   summary.addRow([`Generated ${new Date().toLocaleString("en-IN")} · Demand = PO21 effective plan: Final where a Final exists, else Rolling (+ Additional, Urgent Extra) · advisory: no PO is created by this file`]);
-  summary.addRow(["Stock is counted until its stated expiry date (GRN with a date or shelf life). Opening stock and GRN without an expiry are never dropped: cut-off or receipt + 120 days only decides which lot is used first. Days beyond the last PO21 demand day show as beyond plan."]);
+  summary.addRow(["Stock is counted until its stated expiry date (GRN with a date or shelf life). Opening stock and GRN without an expiry are never dropped: cut-off or receipt + 120 days only decides which lot is used first. Where stock outlasts the PO21 plan, days show as ≈ N d (plan to <date>), at the plan's average daily use."]);
   summary.addRow([]);
   addTable(summary, [
     { label: "Company", value: (c) => companyLabel(c) },

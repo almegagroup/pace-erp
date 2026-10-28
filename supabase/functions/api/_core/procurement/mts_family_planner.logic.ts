@@ -1147,6 +1147,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const policy = policyOf.get(id);
       if (m === undefined || !policy) return;
       let needIndex = -1;
+      let needBuyAt = 0;
       for (let i = from; i < N; i += 1) {
       const groupCoverage = groupCoverageAt(pool, i);
       if (groupCoverage.target === null || groupCoverage.critical === null) continue;
@@ -1154,7 +1155,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         // Owner 2026-10-28: the group refills from the pool at the GROUP's Min, but a member that has to be BOUGHT is connected
         // at its OWN Min (Gabrosa 20 days inside a 30-day group), not at the group's.
         const buyAt = targets[m][i].target ?? groupCoverage.target;
-        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= buyAt)) { needIndex = i; break; }
+        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= buyAt)) { needIndex = i; needBuyAt = buyAt; break; }
       }
       if (needIndex < 0) return;
       // This is a real authorization, not a cost preference: a member the
@@ -1166,6 +1167,13 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
       if (lead === null) return; // cannot be bought (no vendor / lead time)
       const late = lead !== null && needIndex < lead;
+      // Owner 2026-10-28: a LATE need (no lot can land before the shortage day) is only worth a lot if the group is still short when the
+      // earliest lot could land. If a lot already placed for a sibling group (or a confirmed arrival) lifts the group's cover above
+      // this member's Min by then, a second lot on the same date is not needed (CMP005 RDP: two Dairen lots on 20 Dec).
+      if (late && lead !== null) {
+        const arrivalCover = freeCover(Math.min(N - 1, lead));
+        if (arrivalCover === null || arrivalCover > needBuyAt) return;
+      }
       const rank: [number, number, number, number, number] = [
         late ? 1 : 0,
         late ? (lead ?? Number.POSITIVE_INFINITY) : (option?.option.unit_cost ?? Number.POSITIVE_INFINITY),

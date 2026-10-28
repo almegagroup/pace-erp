@@ -564,3 +564,9 @@ The family table's Max / Min Days and the item plan use their own cover function
 ## 26. The 120-day rule is only a FEFO rank (owner 2026-10-28)
 
 Opening stock (cut-off + 120 days) and a GRN with no stated expiry (receipt + 120 days) are never removed from the plan: the date only decides which lot is used first. Only a stated expiry (GRN expiry type DATE, or SPAN with a shelf life) removes stock. This ends the false "Runs out 2027-01-29" on items that hold months of stock. Receipts carry `no_expiry`; the planner skips them in the expiry step.
+
+## 27. CMP005 RDP: two Dairen lots on one date; "≈ N d (plan to date)" (2026-10-28)
+
+- Dairen lead time 53 d = Booking Time 37 (vendor-material master) + sail 7 + clearance 5 + inland 4 (CMP005 port-to-plant). Earliest arrival from 28 Oct is 20 Dec.
+- Reproduced on the real CMP005 data: lot 1 was placed for the narrow group RDP_TLA (need 27 Nov), lot 2 for the broad group RDP (need 19 Dec, one day before lot 1 can land). The second need was late and could not be cured by any lot, but lot 1 lands the next day and already lifts the group above its Min. One lot covers the whole plan (93 KG left on 31 Jan); two lots left 24,843 KG over. Rule now: a late need gets a lot only if the group is still short at the earliest arrival day (after lots already placed). Test added.
+- Stock that outlasts the PO21 plan is shown as "≈ 66 d (plan to 31 Jan)": the planned days it covers plus the rest at the plan's average daily use; zero-demand days after the plan are not counted (that was the 139 / 262 / 1,976).
