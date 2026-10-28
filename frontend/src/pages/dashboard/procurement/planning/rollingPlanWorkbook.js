@@ -305,9 +305,9 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
     { label: "ETA (CSN / PO)", value: (r) => day(r.source_eta) }, { label: "Planning ETA", value: (r) => day(r.planning_eta) },
     { label: "Issue", value: (r) => (r.no_eta ? "No ETA" : r.overdue ? "ETA passed" : "") },
-    { label: "Engine best date", value: (r) => day(r.engine_best_date) }, { label: "Why", key: "engine_reason" },
+    { label: "Engine best date", value: (r) => day(r.engine_best_date) }, { label: "Vendor can move it?", key: "vendor_window" }, { label: "Why", key: "engine_reason" },
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
-  widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 60]);
+  widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
 
   writeExplain(wb, companies, used);
 

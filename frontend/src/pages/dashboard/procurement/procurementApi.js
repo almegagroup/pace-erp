@@ -1885,6 +1885,14 @@ export function getMtsFinanceSettings(params) {
   return fetchProcurement("GET", "/api/procurement/mts-requirement/finance-settings", undefined, params);
 }
 
+export function getMtsRescheduleWindow(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/reschedule-window", undefined, params);
+}
+
+export function saveMtsRescheduleWindow(data) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/reschedule-window", data);
+}
+
 export function saveMtsFinanceSetting(data) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/finance-settings", data);
 }

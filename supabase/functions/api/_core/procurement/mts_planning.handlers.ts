@@ -38,6 +38,8 @@ import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, econ
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
+import { loadRescheduleContext } from "./mts_reschedule_window.handlers.ts";
+import { rescheduleVerdict } from "./mts_reschedule_window.logic.ts";
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -694,6 +696,10 @@ export async function computePlanning(p: PlanningParams) {
     return out;
   })();
   const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
+  // Owner 2026-10-28 (D9): a proposed move is only advice if the vendor can still move the shipment (ETD window).
+  const rescheduleContext = await loadRescheduleContext(p.companyId, req.output.rows
+    .filter((row) => !arrivalScope || arrivalScope.has(row.material_id))
+    .flatMap((row) => row.inbound_events.filter((event) => event.reschedule_key)));
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
   // `group_assignments` comes from the family planner and can include a group
@@ -891,13 +897,25 @@ export async function computePlanning(p: PlanningParams) {
       const input = familyInputFor(row.material_id);
       const keyOf = new Map(row.inbound_events.map((event, index) => [event, `A|${row.material_id}|${index}|${event.reference}`]));
       const optimum = new Map(pieces.map((event) => [event.reschedule_key as string, optimizeFamilyArrival(input, keyOf.get(event)!)]));
-      return pieces.map((event) => ({
-        material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
-        reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
-        eta_plant: event.original_date !== undefined ? event.original_date : event.date,
-        rescheduled_eta: event.original_date !== undefined ? event.date : null,
-        optimum: optimum.get(event.reschedule_key as string) ?? null,
-      }));
+      return pieces.map((event) => {
+        const facts = rescheduleContext.factsOf(event);
+        const best = optimum.get(event.reschedule_key as string) ?? null;
+        // Route time only (Booking Time excluded) of the piece's own vendor and route; the largest if several ports.
+        const routeDays = (row.lead_time?.configured_routes ?? [])
+          .filter((r) => r.route === facts.route && (!facts.vendor_id || r.vendor_id === facts.vendor_id) && r.route_days !== undefined)
+          .reduce<number | null>((max, r) => (max === null ? (r.route_days ?? null) : Math.max(max, r.route_days ?? 0)), null);
+        const currentEta = event.original_date !== undefined ? event.original_date : event.date;
+        return {
+          material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+          reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
+          eta_plant: currentEta,
+          rescheduled_eta: event.original_date !== undefined ? event.date : null,
+          optimum: best,
+          window: best && best.shift_days !== 0
+            ? rescheduleVerdict({ today: p.today, route: facts.route, routeDays, currentEta, proposedEta: best.best.eta, currentEtd: facts.etd, windows: rescheduleContext.windows })
+            : null,
+        };
+      });
     }).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
     // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.

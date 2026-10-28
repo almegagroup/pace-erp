@@ -478,12 +478,16 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     },
     {
       key: "advice", label: "Engine best date", width: "170px",
-      render: (a) => (a.advice ? (
+      render: (a) => (a.window?.state === "TALK_TO_VENDOR" && a.optimum?.shift_days ? (
+        <span className="text-xs font-semibold text-rose-700" title={a.window.message}>
+          {`Cannot schedule: talk to the vendor (${a.optimum.best.eta}, ${a.optimum.shift_days < 0 ? `prepone ${-a.optimum.shift_days} d` : `postpone ${a.optimum.shift_days} d`})`}
+        </span>
+      ) : a.advice ? (
         <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title={a.advice.reason}>
           {`${a.advice.suggested_eta} (${a.advice.shift_days < 0 ? `prepone ${-a.advice.shift_days} d` : `postpone ${a.advice.shift_days} d`})`}
         </button>
       ) : a.optimum ? <span className="text-xs text-emerald-700">Date is fine</span> : ""),
-      copyValue: (a) => (a.advice ? a.advice.suggested_eta : ""),
+      copyValue: (a) => (a.window?.state === "TALK_TO_VENDOR" ? "Talk to the vendor" : a.advice ? a.advice.suggested_eta : ""),
     },
     {
       key: "best_days", label: "At best date: Min / Max", width: "150px", align: "right",
@@ -492,8 +496,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     },
     {
       key: "why", label: "Why", width: "320px",
-      render: (a) => (a.optimum ? <span className="text-xs">{a.optimum.reason}</span> : ""),
-      copyValue: (a) => a.optimum?.reason ?? "",
+      render: (a) => (a.optimum ? <span className="text-xs">{a.window?.state === "TALK_TO_VENDOR" ? `${a.window.message} ` : ""}{a.optimum.reason}</span> : ""),
+      copyValue: (a) => `${a.window?.state === "TALK_TO_VENDOR" ? `${a.window.message} ` : ""}${a.optimum?.reason ?? ""}`,
     },
     {
       key: "reason", label: "Reason", width: "200px", filterable: false,

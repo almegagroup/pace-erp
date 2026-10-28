@@ -282,11 +282,15 @@ export async function buildItemPlan(
     // Owner 2026-10-21: best plant date per movable arrival, tried on every day of the horizon.
     // Owner 2026-10-22: judged on the whole family (computed once by the planning run).
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
+    const windowByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.window]));
     const adviceFor = (_id: string, key: string | null) => {
       const optimum = key ? optimumByKey.get(key) ?? null : null;
+      // Owner 2026-10-28 (D9): when the vendor can no longer move the shipment the date is not advised, the user is told to talk to the vendor.
+      const window = key ? windowByKey.get(key) ?? null : null;
       return {
         optimum,
-        advice: optimum && optimum.shift_days !== 0 ? { suggested_eta: optimum.best.eta, shift_days: optimum.shift_days, reason: optimum.reason } : null,
+        window,
+        advice: optimum && optimum.shift_days !== 0 && window?.state !== "TALK_TO_VENDOR" ? { suggested_eta: optimum.best.eta, shift_days: optimum.shift_days, reason: optimum.reason } : null,
       };
     };
 

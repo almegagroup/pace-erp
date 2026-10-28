@@ -114,10 +114,12 @@ import { getMtsGroupUsageOrderHandler, saveMtsGroupUsageOrderHandler } from "../
 import { getMtsGroupPolicyHandler, saveMtsGroupPolicyHandler } from "../_core/procurement/mts_group_policy.handlers.ts";
 import {
   getMtsFinanceSettingsHandler,
+  getMtsRescheduleWindowHandler,
   getMtsFxRatesHandler,
   getMtsLocationPolicyHandler,
   saveMtsLocationPolicyHandler,
   saveMtsFinanceSettingHandler,
+  saveMtsRescheduleWindowHandler,
   saveMtsFxRateHandler,
 } from "../_core/procurement/mts_planning_cost.handlers.ts";
 import {
@@ -861,6 +863,10 @@ export async function dispatchProcurementRoutes(
       return await getMtsFinanceSettingsHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/finance-settings":
       return await saveMtsFinanceSettingHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/reschedule-window":
+      return await getMtsRescheduleWindowHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/reschedule-window":
+      return await saveMtsRescheduleWindowHandler(req, ctx);
     case "GET:/api/procurement/mts-requirement/location-policy":
       return await getMtsLocationPolicyHandler(req, ctx);
     case "POST:/api/procurement/mts-requirement/location-policy":

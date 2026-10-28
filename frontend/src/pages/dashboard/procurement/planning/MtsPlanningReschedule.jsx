@@ -63,7 +63,7 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
     setDrafts((d) => ({ ...d, [a.reschedule_key]: { clear: true, reason: "Back to CSN / PO date" } }));
     setPreview(null);
   };
-  const engineMoves = (arrivals ?? []).filter((a) => a.optimum?.shift_days);
+  const engineMoves = (arrivals ?? []).filter((a) => a.optimum?.shift_days && a.window?.state !== "TALK_TO_VENDOR");
   const useAllEngineDates = () => {
     setDrafts((d) => ({ ...d, ...Object.fromEntries(engineMoves.map((a) => [a.reschedule_key, { ...(d[a.reschedule_key] ?? {}), date: a.optimum.best.eta, reason: a.optimum.reason }])) }));
     setPreview(null);
@@ -117,19 +117,23 @@ export default function MtsPlanningReschedule({ companyId, planMonth, asOf, dema
     },
     {
       key: "best", label: "Engine best date", width: "170px",
-      render: (a) => (a.optimum?.shift_days ? (
+      render: (a) => (a.window?.state === "TALK_TO_VENDOR" && a.optimum?.shift_days ? (
+        <span className="text-xs font-semibold text-rose-700" title={a.window.message}>
+          {`Cannot schedule: talk to the vendor (${a.optimum.best.eta}, ${a.optimum.shift_days < 0 ? `prepone ${-a.optimum.shift_days} d` : `postpone ${a.optimum.shift_days} d`})`}
+        </span>
+      ) : a.optimum?.shift_days ? (
         <button type="button" onClick={() => setDate(a, a.optimum.best.eta, a.optimum.reason)} title={a.optimum.reason} className={`text-left text-xs font-semibold hover:underline ${a.optimum.shift_days < 0 ? "text-rose-700" : "text-amber-700"}`}>
           {`${a.optimum.best.eta} (${a.optimum.shift_days < 0 ? `prepone ${-a.optimum.shift_days} d` : `postpone ${a.optimum.shift_days} d`})`}
         </button>
       ) : a.optimum ? <span className="text-xs text-emerald-700">Date is fine</span> : "—"),
-      copyValue: (a) => (a.optimum?.shift_days ? a.optimum.best.eta : ""),
+      copyValue: (a) => (a.window?.state === "TALK_TO_VENDOR" ? "Talk to the vendor" : a.optimum?.shift_days ? a.optimum.best.eta : ""),
     },
     {
       key: "best_days", label: "At best date: Min / Max", width: "150px", align: "right",
       render: (a) => (a.optimum?.shift_days ? `${fmtDays(a.optimum.best.min_days)} / ${fmtDays(a.optimum.best.max_days)}` : ""),
       copyValue: (a) => (a.optimum?.shift_days ? `${a.optimum.best.min_days ?? ""}/${a.optimum.best.max_days ?? ""}` : ""),
     },
-    { key: "why", label: "Why", width: "320px", render: (a) => (a.optimum ? <span className="text-xs">{a.optimum.reason}</span> : ""), copyValue: (a) => a.optimum?.reason ?? "" },
+    { key: "why", label: "Why", width: "320px", render: (a) => (a.optimum ? <span className="text-xs">{a.window?.state === "TALK_TO_VENDOR" ? `${a.window.message} ` : ""}{a.optimum.reason}</span> : ""), copyValue: (a) => `${a.window?.state === "TALK_TO_VENDOR" ? `${a.window.message} ` : ""}${a.optimum?.reason ?? ""}` },
     {
       key: "move", label: "Move", width: "150px", filterable: false,
       render: (a) => (

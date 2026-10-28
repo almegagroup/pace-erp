@@ -37,6 +37,7 @@ import {
   getMtsRequirementPolicyHistory,
   getMtsRequirementReport,
   getMtsFinanceSettings,
+  getMtsRescheduleWindow,
   getMtsFxRates,
   getMtsLocationPolicy,
   getMtsOptimizerSelections,
@@ -48,6 +49,7 @@ import {
   saveMtsOptimizerSelections,
   saveMtsPlanningRun,
   saveMtsFinanceSetting,
+  saveMtsRescheduleWindow,
   saveMtsFxRate,
   saveMtsRequirementPolicies,
 } from "../procurementApi.js";
@@ -1333,6 +1335,27 @@ function CostSettingsTab({ companyId, access, today }) {
     queryFn: () => getMtsFinanceSettings({ company_id: companyId }),
     enabled: Boolean(companyId),
   });
+  const windowQ = useQuery({
+    queryKey: ["procurement", "mts-requirement", "reschedule-window", companyId],
+    queryFn: () => getMtsRescheduleWindow({ company_id: companyId }),
+    enabled: Boolean(companyId),
+  });
+  const [windowDraft, setWindowDraft] = useState(null);
+  const windowValues = windowDraft ?? { import_min_days: windowQ.data?.import_min_days ?? "", domestic_min_days: windowQ.data?.domestic_min_days ?? "", remarks: windowQ.data?.remarks ?? "" };
+  async function saveWindow() {
+    setSaving("window");
+    try {
+      await saveMtsRescheduleWindow({ company_id: companyId, ...windowValues, import_min_days: Number(windowValues.import_min_days), domestic_min_days: Number(windowValues.domestic_min_days) });
+      pushToast({ message: "Reschedule window saved.", tone: "success" });
+      setWindowDraft(null);
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-requirement", "reschedule-window", companyId] });
+      await queryClient.invalidateQueries({ queryKey: ["procurement", "mts-planning"] });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    } finally {
+      setSaving("");
+    }
+  }
   const locationQ = useQuery({
     queryKey: ["procurement", "mts-requirement", "location-policy", companyId],
     queryFn: () => getMtsLocationPolicy({ company_id: companyId }),
@@ -1478,6 +1501,24 @@ function CostSettingsTab({ companyId, access, today }) {
           </div>
         ) : null}
         <ErpDenseGrid {...GRID_PROPS} columns={financeColumns} rows={financeRows} rowKey={(r) => r.effective_from} />
+      </section>
+
+      <section className="grid gap-2">
+        <h3 className="text-sm font-semibold text-slate-800">Reschedule window (not-yet-dispatched shipments)</h3>
+        <p className="text-xs text-slate-500">
+          The planner advises moving a shipment only if its ETD is MORE than this many days from today (both the current and the new ETD).
+          Otherwise it says &ldquo;Cannot be scheduled — talk to the vendor&rdquo;.{windowQ.data?.is_default ? " Not set for this company yet: the standard 15 / 7 days apply." : ""}
+        </p>
+        <div className="flex flex-wrap items-end gap-2 text-xs text-slate-600">
+          <label className="grid gap-1">Import: more than (days)<input type="text" inputMode="numeric" disabled={!canEdit} value={windowValues.import_min_days} onChange={(event) => setWindowDraft({ ...windowValues, import_min_days: event.target.value })} className={`${INPUT_CLASS} w-24`} /></label>
+          <label className="grid gap-1">Domestic: more than (days)<input type="text" inputMode="numeric" disabled={!canEdit} value={windowValues.domestic_min_days} onChange={(event) => setWindowDraft({ ...windowValues, domestic_min_days: event.target.value })} className={`${INPUT_CLASS} w-24`} /></label>
+          <label className="grid gap-1">Remarks<input disabled={!canEdit} value={windowValues.remarks ?? ""} maxLength={300} onChange={(event) => setWindowDraft({ ...windowValues, remarks: event.target.value })} className={`${INPUT_CLASS} w-56`} /></label>
+          {canEdit ? (
+            <button type="button" onClick={() => void saveWindow()} disabled={saving === "window" || windowValues.import_min_days === "" || windowValues.domestic_min_days === ""} className="h-8 border border-sky-600 bg-sky-600 px-3 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50">
+              {saving === "window" ? "Saving…" : "Save window"}
+            </button>
+          ) : null}
+        </div>
       </section>
     </div>
   );

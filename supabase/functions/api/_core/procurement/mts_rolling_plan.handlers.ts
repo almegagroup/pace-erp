@@ -140,6 +140,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     // Bulk delivery POs (purchase_order.delivery_type = BULK).
     const bulkRm = await loadBulkMaterialIds(companyId);
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
+    const windowByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.window]));
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
@@ -177,6 +178,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           statuses: today.map((e) => arrivalStatus(e.kind, e.date_source)),
           best_dates: today.map((e) => {
             const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
+            const w = e.reschedule_key ? windowByKey.get(e.reschedule_key) : null;
+            if (o && o.shift_days !== 0 && w?.state === "TALK_TO_VENDOR") return `Talk to the vendor (${o.best.eta}, ${o.shift_days < 0 ? "prepone" : "postpone"} ${Math.abs(o.shift_days)} d)`;
             return o && o.shift_days !== 0 ? `${o.best.eta} (${o.shift_days < 0 ? "prepone" : "postpone"} ${Math.abs(o.shift_days)} d)` : "";
           }),
         };
@@ -311,6 +314,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
 
     const arrivals = reqData.output.rows.filter((r) => !bulkRm.has(r.material_id)).flatMap((r) => r.inbound_events.map((e) => {
       const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
+      const w = e.reschedule_key ? windowByKey.get(e.reschedule_key) : null;
       const fed = r.kind === "RM" && isTransferFed(r.stock);
       return {
         material: nameOf(r.material_id), uom: uomOf(r.material_id), reference: e.reference, supplier: supplierOf(e.reference, e.csn_id),
@@ -319,8 +323,10 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         planning_eta: e.original_date !== undefined ? e.date : null,
         overdue: Boolean(e.date && e.date < calendar.asOf), no_eta: !e.date,
         movable: Boolean(e.reschedule_key),
-        engine_best_date: fed ? null : o && o.shift_days !== 0 ? o.best.eta : null,
-        engine_reason: fed ? "Lands in the transfer-source store, so it is not MTS supply. The waterfall asks the Store for a transfer when it needs stock." : o?.reason ?? null,
+        engine_best_date: fed ? null : o && o.shift_days !== 0 && w?.state !== "TALK_TO_VENDOR" ? o.best.eta : null,
+        engine_reason: fed ? "Lands in the transfer-source store, so it is not MTS supply. The waterfall asks the Store for a transfer when it needs stock."
+          : o && o.shift_days !== 0 && w?.message ? `${w.message} ${o.reason}` : o?.reason ?? null,
+        vendor_window: fed ? null : w?.state === "TALK_TO_VENDOR" ? "Talk to the vendor" : w?.state === "RESCHEDULE" ? "Can be rescheduled" : null,
       };
     })).sort((a, b) => String(a.planning_eta ?? a.source_eta ?? "9999").localeCompare(String(b.planning_eta ?? b.source_eta ?? "9999")));
 

@@ -391,6 +391,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/mts-requirement/fx-rates":          { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT_POLICY", action: "WRITE" },
   "GET:/api/procurement/mts-requirement/finance-settings":   { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "POST:/api/procurement/mts-requirement/finance-settings":  { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT_POLICY", action: "WRITE" },
+  "GET:/api/procurement/mts-requirement/reschedule-window":  { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+  "POST:/api/procurement/mts-requirement/reschedule-window": { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT_POLICY", action: "WRITE" },
   "GET:/api/procurement/mts-requirement/location-policy":    { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "POST:/api/procurement/mts-requirement/location-policy":   { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT_POLICY", action: "WRITE" },
   "GET:/api/procurement/mts-requirement/planning":           { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
