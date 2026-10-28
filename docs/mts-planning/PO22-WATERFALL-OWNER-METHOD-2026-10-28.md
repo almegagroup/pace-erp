@@ -341,3 +341,44 @@ days / cannot be scheduled, talk to the vendor).
 3. The numbers in the matrix come from the engine's pro-rata (saved order → FEFO → run-down → free-stock ratio with
    the small cost × credit tilt); none were pre-filled in this note.
 4. Readability of the Excel beyond this structure (language, reader) is discussed separately.
+
+---
+
+## 14. Audit: engine vs this method (2026-10-28, read-only, no code changed)
+
+How: read `mts_family_planner.logic.ts`, `mts_family_purpose_ledger.logic.ts`, `mts_group_policy.logic.ts`; ran the
+real `planFamily` on the §3/§7 example (3 materials, stock 17,300 / 75,000 / 26,000, flat daily demand
+111 / 45 / 1,406 KG for Exclusive / A / B, the seven CMP003 consignments of §5, no new buys) and read the PROD
+policy rows for CMP003 (members Target 30 / Critical 20, no saved group policy).
+
+### Matches the method
+1. Levels are served narrow → broad (pools sorted by member count; Exclusive handled first as protection).
+2. Day-0 reserve of Max for every level from today; the rest stays unreserved (the "pool").
+3. A level is refilled from free stock when it falls below Target; excess claims are released and re-waterfalled.
+4. Receipts count only on a valid ETA inside the horizon; a passed / missing ETA is risk only.
+5. Demand only where a PO21 plan exists (zero otherwise).
+6. Lot size: MOQ / multiple applied, surplus stays in stock; order date = need date − lead time.
+7. No stock went negative in the run (Gabrosa closing ≥ 3,597 KG up to 28 Mar).
+
+### Differences (engine ≠ method)
+| # | Method (owner) | Engine today | Evidence |
+|---|---|---|---|
+| D1 | A level claims from the pool only at its **own Min** (a waiting level first on a receipt) | **Every group is refilled to Max on every receipt day**, and on any breach | Group B reserve = 85,796 on 12 Nov, 17 Nov and 8 Dec (always full); so the 27 Nov / 27 Dec Min dates of §7 never occur |
+| D2 | Inside a group, **FEFO**: the earlier lot (TS) first, the newest (Gabrosa) last | FEFO only for **opening** receipts that carry an expiry; future CSN lots have no expiry; otherwise saved order, run-down, then free-stock ratio with cost / credit tilt | Day 0 Group B reserve = Combizell 57,255 / TS 20,512 / Gabrosa 8,030 (stock ratio); the 24,000 Gabrosa lot of 17 Nov is partly claimed by B at once (B:Gabrosa 6,999 → 9,839) |
+| D3 | **Exclusive** is a level with its own reserve, Min, top-up and "waiting" state | Exclusive is a rolling protection of the next Max days of its own demand, taken off the top every day; no Min / top-up / waiting | Exclusive never short in the run, but it has no Min date or top-up row to show |
+| D4 | Max = 60 days | Reserve = today's use + 60 days ahead (61 days) | B 85,797 vs 84,390; A 2,765 vs 2,720; Exclusive ≈ 6,781 vs 6,670 |
+| D5 | Group Critical 20 | No saved group policy for CMP003: group Target defaults to 30, **Critical to ceil(Target ÷ 2) = 15** | PROD `material_group_coverage_policy` has no row; members are 30 / 20 |
+| D6 | Group B short ≈ 38,930 KG on 27 Mar | Group B first below Target on **5 Apr**, below Critical **20 Apr**, no stock-out by 30 Apr | `group_actions` of the run; cause is D1–D4, not yet isolated |
+| D7 | Event log, pool by material, Material × Level matrix (§13) | No per-event pool or matrix output. Daily group reservations + closing stock + protection exist, so the pool is derivable | `group_bucket_reservations`, `rows`, `waterfall_reservations` (only after the horizon) |
+| D8 | "Excess left after each Min" reported | Not produced | — |
+| D9 | Reschedule only if ETD − today > 15 d (import) / 7 d (domestic), sail time = route days | `optimizeFamilyArrival` tries every 7 days across the horizon, scoring stock-out / below-Critical / below-Target days; **no ETD, no sail time, no import/domestic check** (`import_trade_type` is not used in planning code) | source of the misleading "postpone 59 d / prepone 41 d" |
+| D10 | Own-Min buy (Gabrosa 20 d inside a 30 d group) | Per-member Target is supported; a group buy is sized to the group Desired Max. Not exercised | unverified |
+| D11 | "Plan ends here" warning | `useAhead` beyond the horizon uses the average over the whole horizon including zero-demand months (the `coverDays` fix of 27 Oct was not applied here) | affects reserve windows near the end of the horizon only |
+
+### Suggested order of work (owner to approve)
+1. D5 data: save group Target 30 / Critical 20 for the MHEC groups (no code).
+2. D1 (claim only at own Min / waiting level first), D3 (Exclusive as a visible level), D2 (FEFO across arrival
+   lots, newest last), D4 (60 vs 61 days) — one engine change, then re-run this example and compare with §7.
+3. D9 reschedule feasibility window.
+4. D7 / D8 outputs (event log, Material × Level matrix, excess left) and then the 4A table / Excel of §13.
+5. D10, D11 checks.
