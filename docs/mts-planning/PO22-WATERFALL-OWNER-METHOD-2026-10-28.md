@@ -564,3 +564,19 @@ The family table's Max / Min Days and the item plan use their own cover function
 ## 26. The 120-day rule is only a FEFO rank (owner 2026-10-28)
 
 Opening stock (cut-off + 120 days) and a GRN with no stated expiry (receipt + 120 days) are never removed from the plan: the date only decides which lot is used first. Only a stated expiry (GRN expiry type DATE, or SPAN with a shelf life) removes stock. This ends the false "Runs out 2027-01-29" on items that hold months of stock. Receipts carry `no_expiry`; the planner skips them in the expiry step.
+
+## 27. CMP005 RDP: two Dairen lots on one date; "≈ N d (plan to date)" (2026-10-28)
+
+- Dairen lead time 53 d = Booking Time 37 (vendor-material master) + sail 7 + clearance 5 + inland 4 (CMP005 port-to-plant). Earliest arrival from 28 Oct is 20 Dec.
+- Reproduced on the real CMP005 data: lot 1 was placed for the narrow group RDP_TLA (need 27 Nov), lot 2 for the broad group RDP (need 19 Dec, one day before lot 1 can land). The second need was late and could not be cured by any lot, but lot 1 lands the next day and already lifts the group above its Min. One lot covers the whole plan (93 KG left on 31 Jan); two lots left 24,843 KG over. Rule now: a late need gets a lot only if the group is still short at the earliest arrival day (after lots already placed). Test added.
+- Stock that outlasts the PO21 plan is shown as "≈ 66 d (plan to 31 Jan)": the planned days it covers plus the rest at the plan's average daily use; zero-demand days after the plan are not counted (that was the 139 / 262 / 1,976).
+
+## 28. Simple Store report (owner 2026-10-28)
+
+The Store tab's default view and the STORE_INSTRUCTIONS Excel sheet: Use from · Use to (two date columns, e.g. 28 Oct / 31 Oct) · Item · Material group · PO21 parent group · Child group(s) · Issue now · Wait for receipt (CSN/PO not received + ETA passed or missing + unordered lot, together) · Keep aside after this period · UoM · Note. The item group and the product (SKU) groups stay as separate columns, as before. The note says in one sentence what depends on a receipt or is not covered. Max days, "Not yet backed" and the three separate waiting columns moved to the "Items — full detail" view. Keep is what is left for the group AFTER the period's use (it is not part of Issue now). Checked against the plan: Issue + Keep adds up to stock + arrivals for materials fully held in levels (e.g. VAE POWDER DA 1100: 43,331 KG).
+
+## 29. Action tab "Order today" with a PO already on its way; group Max never below Min (2026-10-28)
+
+- PM-00060 (20KG TILE ADHESIVE TOT WHITE WOVEN SACK, CMP003): stock 15,596, a confirmed PO of 10,000 landing 13 Nov. The planner saw the cover dip to Target 25 on 11 Nov (two days BEFORE the PO lands), found that no new lot could land before 24 Nov (lead 27 d) and still placed a "late" lot — quantity 0.000001, "PO-by 2026-10-15 has passed" — which the Action tab showed as "Order today". Reproduced exactly in a test. Rule (same as the group rule in section 27): a late own-use need gets a lot only if the item is still short when the earliest lot could land, counting what already arrives by then. The Action tab also ignores a "buy" of a rounding speck.
+- A group's Max is never below its own Min (RDP_TOT WHITE showed Min 30 / Max 27): Max = at least the group's Target.
+- Hand-table in section 7: not rewritten. Its receipts for 17 Nov (Gabrosa) and 16 Jan (Combizell) are Sub-CSNs for CMP005 / CMP011, not CMP003 stock, and flat daily rates were used; the engine's own figures (section 4 of the management doc) replace it.

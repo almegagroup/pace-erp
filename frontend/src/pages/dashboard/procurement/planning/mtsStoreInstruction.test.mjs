@@ -63,3 +63,17 @@ test("month plan rows: actual stock first, the rest told plainly as not issuable
   assert.equal(issueNote(rows[0]), "", "nothing waits on a receipt in October");
   assert.match(issueNote(rows[1]), /^Do not issue against: a CSN\/PO not received yet, a piece whose ETA passed or is missing\.$/);
 });
+
+test("simple Store view: one 'For' text, one wait quantity, one plain note", async () => {
+  const { storeForText, storeWaitQty, simpleStoreNote } = await import("./mtsStoreInstruction.js");
+  assert.equal(storeForText({ mother: "PUTTY", child: "TRUECARE+SUPREMA; WATERPROOF", group: "RDP" }), "PUTTY (TRUECARE+SUPREMA; WATERPROOF)");
+  assert.equal(storeForText({ mother: "TLA", child: "", group: "RDP_TLA" }), "TLA");
+  assert.equal(storeForText({ group: "RDP" }), "RDP");
+  assert.equal(storeWaitQty({ use_arrival: 5, use_assumed: 3, use_lot: 2 }), 10);
+  assert.equal(simpleStoreNote({ use_stock: 100 }), "");
+  const note = simpleStoreNote({ use_arrival: 5, use_assumed: 3, use_lot: 2, not_backed: 1 }, (q) => `${q} KG`);
+  assert.match(note, /5 KG only after its CSN\/PO is received/);
+  assert.match(note, /3 KG depends on a CSN\/PO whose ETA passed or is missing: do not issue/);
+  assert.match(note, /2 KG depends on a lot nobody has ordered/);
+  assert.match(note, /1 KG is not covered by any stock or order/);
+});

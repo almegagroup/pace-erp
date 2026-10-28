@@ -28,6 +28,7 @@ const round = (value: number) => Math.round(value * 1000) / 1000;
 /** Order UoM (owner 2026-10-22): the same quantity in the unit it is ordered in. */
 const inOrderUnit = (qty: number | null, unit: { base_per_order_unit: number } | null | undefined) =>
   qty === null || !unit ? null : round(qty / unit.base_per_order_unit);
+const EPSILON_USE = 1e-9;
 const addDaysIso = (day: string | null, n: number | null) => (day && n !== null ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : null);
 
 /**
@@ -181,7 +182,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const today = events.filter((e) => (e.date && e.date >= calendar.asOf ? e.date : calendar.asOf) === g.day);
         return {
           day: g.day, opening: inUnit(fu, g.opening), arrivals: inUnit(fu, g.arrivals), dispatch: inUnit(fu, ownByDay.get(g.day) ?? 0) || null,
-          use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), excess: excessAt(g.day), max_days: g.max_days, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days,
+          use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), excess: excessAt(g.day), max_days: g.max_days, max_days_est: g.max_days_est, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days, min_days_est: g.min_days_est,
           references: today.map((e) => e.reference),
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
@@ -228,6 +229,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const buy = p.source === "ENGINE" ? advisory.find((b) => memberSet.has(b.material_id) && nameOf(b.material_id) === p.material && b.lots.some((l) => l.plant_eta === p.date)) : undefined;
         return {
           ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null,
+          max_days_est: p.date ? gridByDay.get(p.date)?.max_days_est ?? null : null, min_days_est: p.date ? gridByDay.get(p.date)?.min_days_est ?? null : null,
           trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null,
         };
       })
@@ -245,6 +247,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         }),
         title: family.is_family ? family.group_ids.map((g) => groupLabel.get(g) ?? "—").sort().join(" / ") : nameOf(id),
         is_family: family.is_family,
+        // Last day the PO21 plan has demand for this family (days beyond it are estimates).
+        plan_end: [...grid].reverse().find((g) => g.use > EPSILON_USE)?.day ?? null,
         members: memberIds.map(nameOf).sort(),
         uom: fu?.uom_code ?? baseUomOf(id),
         target_days: selected?.policy?.target_cov_days ?? null,

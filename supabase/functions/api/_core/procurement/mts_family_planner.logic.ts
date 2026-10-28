@@ -623,7 +623,8 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     // looked below Target again the next day and created a duplicate buy.
     // If no candidate has a configured Max, the documented group Target
     // fallback still applies.
-    const desired = groupDesiredMaxDays(saved, memberMax) ?? target;
+    // Owner 2026-10-28: a group's Max is never below its own Min (RDP_TOT WHITE showed Min 30 / Max 27).
+    const desired = Math.max(target, groupDesiredMaxDays(saved, memberMax) ?? target);
     return { target, critical, desired };
   };
 
@@ -1129,6 +1130,19 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
         const earliest = lead === null ? null : Math.max(0, lead);
         const late = earliest !== null && i < earliest;
+        // Owner 2026-10-28: a LATE need (no lot can land before the shortage day) is only worth a lot if the item is still short when the
+        // earliest lot could land, counting what already arrives by then. A confirmed PO landing two days after the dip cures it
+        // (Action tab: PM-00060 asked "Order today" with a 10,000 PO arriving on 13 Nov).
+        if (late && earliest !== null) {
+          const ai = Math.min(N - 1, earliest);
+          const coverAtArrival = isSharedGroupMember[m]
+            ? coverDays(sim.ownBalance[m][ai], memberUse, ai)
+            : standaloneCoverageDays(sim.ownBalance[m][ai], own[m], ai, finalOwnDailyUse[m][ai]);
+          const floorAtArrival = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][ai] * t;
+          const coverOk = coverAtArrival === null || coverAtArrival > t;
+          const floorOk = floorAtArrival <= EPSILON || sim.ownBalance[m][ai] > floorAtArrival + EPSILON;
+          if (coverOk && floorOk) continue;
+        }
         return { kind: "OWN", index: i, material: id, option, late };
       }
     }
@@ -1147,6 +1161,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const policy = policyOf.get(id);
       if (m === undefined || !policy) return;
       let needIndex = -1;
+      let needBuyAt = 0;
       for (let i = from; i < N; i += 1) {
       const groupCoverage = groupCoverageAt(pool, i);
       if (groupCoverage.target === null || groupCoverage.critical === null) continue;
@@ -1154,7 +1169,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         // Owner 2026-10-28: the group refills from the pool at the GROUP's Min, but a member that has to be BOUGHT is connected
         // at its OWN Min (Gabrosa 20 days inside a 30-day group), not at the group's.
         const buyAt = targets[m][i].target ?? groupCoverage.target;
-        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= buyAt)) { needIndex = i; break; }
+        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= buyAt)) { needIndex = i; needBuyAt = buyAt; break; }
       }
       if (needIndex < 0) return;
       // This is a real authorization, not a cost preference: a member the
@@ -1166,6 +1181,13 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
       if (lead === null) return; // cannot be bought (no vendor / lead time)
       const late = lead !== null && needIndex < lead;
+      // Owner 2026-10-28: a LATE need (no lot can land before the shortage day) is only worth a lot if the group is still short when the
+      // earliest lot could land. If a lot already placed for a sibling group (or a confirmed arrival) lifts the group's cover above
+      // this member's Min by then, a second lot on the same date is not needed (CMP005 RDP: two Dairen lots on 20 Dec).
+      if (late && lead !== null) {
+        const arrivalCover = freeCover(Math.min(N - 1, lead));
+        if (arrivalCover === null || arrivalCover > needBuyAt) return;
+      }
       const rank: [number, number, number, number, number] = [
         late ? 1 : 0,
         late ? (lead ?? Number.POSITIVE_INFINITY) : (option?.option.unit_cost ?? Number.POSITIVE_INFINITY),

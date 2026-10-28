@@ -146,6 +146,8 @@ export type FamilyDayRow = {
    * audit aid only, not the forward-looking Max Days used by the engine.
    */
   prorata_max_days: number | null;
+  /** Owner 2026-10-28: when the stock outlasts the PO21 plan (days = null), days at the plan's average daily use — shown as "≈ N d (plan to <date>)". */
+  max_days_est: number | null; min_days_est: number | null;
   /** A real no-demand calendar gap: stock stays physically available, but it is not active-demand coverage. */
   carry_forward_days: number | null; next_demand_day: string | null;
 };
@@ -171,6 +173,27 @@ const PLAN_TAIL_DAYS = 7;
 export function planContinues(uses: readonly number[]): boolean {
   for (let i = Math.max(0, uses.length - PLAN_TAIL_DAYS); i < uses.length; i += 1) if (uses[i] > EPSILON) return true;
   return false;
+}
+
+/**
+ * Stock that outlasts the PO21 plan: the planned days it covers plus the rest at the average use of the days that actually use stock.
+ * Zero-demand days after the plan are not counted. null when there is nothing to estimate.
+ */
+export function estimateBeyondPlanDays(balance: number, uses: readonly number[], fromIndex: number): number | null {
+  if (balance <= EPSILON) return null;
+  const active = uses.filter((u) => u > EPSILON);
+  if (active.length === 0) return null;
+  const avg = active.reduce((sum, u) => sum + u, 0) / active.length;
+  let left = balance;
+  let days = 0;
+  for (let i = Math.max(0, fromIndex); i < uses.length; i += 1) {
+    const use = uses[i];
+    if (use <= EPSILON) continue;
+    if (use > left + EPSILON) return Math.round((days + left / use) * 100) / 100;
+    left -= use;
+    days += 1;
+  }
+  return Math.round((days + left / avg) * 100) / 100;
 }
 
 export function forwardCoverDays(balance: number, uses: readonly number[], fromIndex: number): number | null {
@@ -264,6 +287,8 @@ export function familyDayGrid(
       // Whole days, rounded down (sheet ROUNDDOWN): 49.7 days of stock is 49 full days.
       max_days: wholeDays(coverage(closing, uses, index + 1)), min_stock: round(minStock),
       min_days: wholeDays(coverage(minStock, uses, index + 1)),
+      max_days_est: coverage(closing, uses, index + 1) === null ? wholeDays(estimateBeyondPlanDays(closing, uses, index + 1)) : null,
+      min_days_est: coverage(minStock, uses, index + 1) === null ? wholeDays(estimateBeyondPlanDays(minStock, uses, index + 1)) : null,
       prorata_max_days: prorataMaxDays(closing, uses[index]),
       carry_forward_days: uses[index] > EPSILON ? null : (nextUseIndex[index] < 0 ? uses.length - index : nextUseIndex[index] - index),
       next_demand_day: nextUseIndex[index] < 0 ? null : days[nextUseIndex[index]],

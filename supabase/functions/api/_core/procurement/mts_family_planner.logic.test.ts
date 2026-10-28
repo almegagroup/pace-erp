@@ -892,3 +892,71 @@ Deno.test("owner 2026-10-28: the 120-day rule is only a FEFO rank; stock with no
   const lastDated = dated.rows.filter((r) => r.material_id === "X").at(-1)!;
   assert(lastDated.closing_qty_base < 1, `a real expiry date still removes the stock (closing ${lastDated.closing_qty_base})`);
 });
+
+Deno.test("owner 2026-10-28: CMP005 RDP — a late need already cured by a lot arriving the same day gets no second lot (one Dairen lot, not two)", () => {
+  // Real CMP005 shape (28 Oct 2026): Dairen (DA) lead 53 d, lot 24,750; RP-4099 domestic, lead 15 d, lot 25,000; PO21 plan ends 31 Jan.
+  const asOf = "2026-10-28";
+  const planDays: string[] = [];
+  for (let day = asOf; day <= "2027-01-31"; day = addDays(day, 1)) planDays.push(day);
+  const rate = (day: string, a: number, b: number, c: number, d: number) => (day < "2026-11-01" ? a : day < "2026-12-01" ? b : day < "2027-01-01" ? c : d);
+  const lot = (id: string, lead: number, cost: number, size: number) => ({
+    ...policy(id, id === "RP" ? 25 : 30, id === "RP" ? 13 : 15, [{ vendor: `V${id}`, lead, cost }]),
+    vendor_options: [{ vendor_id: `V${id}`, lead_time_days: lead, moq_qty_base: size, order_multiple_qty_base: size, delivery_lot_qty_base: size, unit_cost: cost, cycle_days: 30 }],
+  });
+  const result = planFamily({
+    as_of: asOf, horizon_end: "2027-03-31",
+    opening_qty_by_material: { DA: 28_968, RP: 3_355, EL: 24_000, VN: 8_658 },
+    own_demand: [],
+    group_demand: [
+      ...planDays.map((required_by) => ({ group_id: "RDP_TLA", candidates: ["DA", "VN"], required_by, qty_base: rate(required_by, 50.4, 62, 60, 60) })),
+      ...planDays.map((required_by) => ({ group_id: "RDP", candidates: ["DA", "EL", "RP", "VN"], required_by, qty_base: rate(required_by, 1889.4, 1921.2, 2001.7, 1818.2) })),
+    ],
+    confirmed_arrivals: [
+      { source_key: "A|DA", material_id: "DA", eta_to_plant: "2026-10-28", qty_base: 24_750 },
+      { source_key: "A|RP", material_id: "RP", eta_to_plant: "2026-11-01", qty_base: 25_000 },
+    ],
+    policies: [lot("DA", 53, 105, 24_750), lot("RP", 15, 118, 25_000), lot("EL", 73, 95, 24_000),
+      { material_id: "VN", target_days: 30, critical_days: 15, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null }],
+    group_coverage_policies: [
+      { group_id: "RDP_TLA", effective_from: asOf, target_days: 30, critical_days: 15, desired_max_days_override: 60 },
+      { group_id: "RDP", effective_from: asOf, target_days: 30, critical_days: 15, desired_max_days_override: 60 },
+    ],
+  });
+  const dairen = result.advisory_buys.filter((b) => b.material_id === "DA" && b.status !== "NO_BUY");
+  assert(dairen.length === 1, `one Dairen lot on 20 Dec, got ${dairen.map((b) => `${b.estimated_plant_eta} ${b.recommended_po_qty_base}`).join(" | ")}`);
+  assert(dairen[0].estimated_plant_eta === "2026-12-20", `earliest arrival is today + 53 days: ${dairen[0].estimated_plant_eta}`);
+});
+
+Deno.test("owner 2026-10-28: a late own-use need cured by a PO landing two days later gets no 'Order today' (PM-00060 shape)", () => {
+  const asOf = "2026-10-28";
+  const planDays: string[] = [];
+  for (let day = asOf; day <= "2027-01-31"; day = addDays(day, 1)) planDays.push(day);
+  const rate = (day: string) => (day < "2026-11-01" ? 737.5 : day < "2026-12-01" ? 350 : day < "2027-01-01" ? 330.6 : 74.2);
+  const rishi = {
+    ...policy("PM", 25, 13, [{ vendor: "RISHI", lead: 27, cost: 22.5 }]),
+    cycle_days: 30,
+  };
+  const result = planFamily({
+    as_of: asOf, horizon_end: "2027-03-31", opening_qty_by_material: { PM: 15_596 },
+    own_demand: planDays.map((required_by) => ({ material_id: "PM", required_by, qty_base: rate(required_by) })),
+    group_demand: [],
+    confirmed_arrivals: [{ source_key: "A|PM", material_id: "PM", eta_to_plant: "2026-11-13", qty_base: 10_000 }],
+    policies: [rishi],
+  });
+  const late = result.advisory_buys.filter((b) => b.material_id === "PM" && b.status === "ADVISORY_LATE");
+  assert(late.length === 0, `no 'Order today' while a PO lands on 13 Nov: ${JSON.stringify(late)}`);
+  assert(result.rows.filter((r) => r.material_id === "PM").every((r) => r.closing_qty_base >= -1e-6), "no stock-out");
+});
+
+Deno.test("owner 2026-10-28: a group's Max is never below its own Min", () => {
+  const days = daysTo("2026-12-31");
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: "2026-12-31", opening_qty_by_material: { X: 5_000, Y: 5_000 },
+    own_demand: [], group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["X", "Y"], required_by, qty_base: 100 })),
+    confirmed_arrivals: [],
+    policies: [{ ...policy("X", 5, 3, [{ vendor: "V", lead: 5, cost: 1 }]), cycle_days: 10 }, { ...policy("Y", 5, 3, [{ vendor: "V2", lead: 5, cost: 1 }]), cycle_days: 10 }],
+    group_coverage_policies: [{ group_id: "G", effective_from: AS_OF, target_days: 30, critical_days: 15 }],
+  });
+  const pol = result.level_policies.find((l) => l.level_id === "G");
+  assert(pol && pol.desired_days !== null && pol.desired_days >= 30, `group Max (${pol?.desired_days}) must not be below its Min 30`);
+});

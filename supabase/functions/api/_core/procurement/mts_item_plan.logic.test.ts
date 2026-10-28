@@ -10,6 +10,7 @@ import {
   buildForecastPlanLines,
   familyClosure,
   familyDayGrid,
+  estimateBeyondPlanDays,
   forecastSkuMonth,
   forwardCoverDays,
   activeDemandCoverDays,
@@ -251,4 +252,12 @@ Deno.test("owner 2026-10-28: stock that outlasts a PO21 plan which ended early i
   // A plan that runs to the horizon end keeps the old extrapolation.
   const running = Array.from({ length: 100 }, () => 10);
   near(forwardCoverDays(1500, running, 0) as number, 150, "plan to the end: extrapolated at the average");
+});
+
+Deno.test("owner 2026-10-28: stock that outlasts the plan gets an estimate at the plan's average use, with no zero-demand days counted", () => {
+  const uses = Array.from({ length: 100 }, (_, i) => (i < 60 ? 10 : 0));
+  near(estimateBeyondPlanDays(1000, uses, 0) as number, 100, "600 planned days-worth (60 d) + 400 at 10/day = 100 d");
+  assert(estimateBeyondPlanDays(0, uses, 0) === null, "no stock, no estimate");
+  const grid = familyDayGrid(["D1", "D2", "D3"], [], new Map());
+  assert(grid.every((g) => g.max_days_est === null), "nothing outlasts an empty plan");
 });
