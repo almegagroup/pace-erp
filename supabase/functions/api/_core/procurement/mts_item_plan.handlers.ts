@@ -37,6 +37,7 @@ import {
   requireRequirementViewAccess,
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
+import { buildWaterfallView } from "./mts_waterfall_view.ts";
 
 type JsonRecord = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "").trim();
@@ -418,6 +419,13 @@ export async function buildItemPlan(
         is_family: family.is_family,
         groups: family.group_ids.map((g) => ({ group_id: g, label: groupLabel.get(g) ?? "—" })),
       },
+      // Owner 2026-10-28 (docs/mts-planning/PO22-WATERFALL-OWNER-METHOD-2026-10-28.md §13): the waterfall as the user reads it.
+      waterfall: buildWaterfallView({
+        projection, asOf: calendar.asOf, memberSet, groupSet,
+        groupLabel: (id) => groupLabel.get(id) ?? "—",
+        materialLabel: (id) => `${codeOf(id) ?? ""} ${nameOf(id)}`.trim(),
+        uomOf: (id) => uomOf(id),
+      }),
       members,
       // Owner 2026-10-22: every row says what arrives that day — which member, consignment, vendor,
       // status, what it covers and why — so the whole family is readable in one table.

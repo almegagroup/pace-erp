@@ -134,6 +134,20 @@ export type FamilyLevelMatrix = {
   closing: Readonly<Record<string, number>>;
 };
 
+/** Block 1 of the family table: each level's Min / Max / Critical days, reserve and cover on the first day (the rest is `level_events`). */
+export type FamilyLevelPolicy = {
+  level_kind: "OWN" | "GROUP";
+  level_id: string;
+  /** Materials that may serve this level (a group's candidates; the material itself for Exclusive). */
+  members: readonly string[];
+  target_days: number | null;
+  critical_days: number | null;
+  desired_days: number | null;
+  reserve_now: number;
+  /** Days the reserve covers (walking the level's own plan demand); null = no demand. */
+  cover_days_now: number | null;
+};
+
 export type FamilyBuy = OptimizerAdvisoryBuy & {
   /** What the lot is for: "OWN" (the member's exclusive use) or the group ids it serves. */
   covers: readonly string[];
@@ -145,6 +159,7 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
   /** Event log of the waterfall (receipts, top-ups, waiting levels) and the Material × Level matrix on each event day. */
   level_events: readonly FamilyLevelEvent[];
   level_matrix: readonly FamilyLevelMatrix[];
+  level_policies: readonly FamilyLevelPolicy[];
   /** Per pool and day: group demand no member could meet (after protected stock). */
   group_unmet: ReadonlyArray<{ group_id: string; day: string; qty_base: number }>;
   /** Consumption ratio: per group and day, how much each member serves (Store instruction basis). */
@@ -290,8 +305,19 @@ function standaloneCoverageDays(balance: number, use: readonly number[], from: n
 }
 
 /** Use over the `n` days after index `from` (beyond the horizon: average). */
+const ACTIVE_AVERAGE = new WeakMap<readonly number[], { length: number; avg: number }>();
 function useAhead(use: readonly number[], from: number, n: number): number {
-  const avg = use.length ? use.reduce((s, q) => s + q, 0) / use.length : 0;
+  // Beyond the horizon: the average of the days that actually use stock. Averaging over the whole horizon let zero-demand
+  // months (no PO21 plan) dilute the rate (same as coverDays, owner 2026-10-27). Cached per series: this runs in the hot loop.
+  let cached = ACTIVE_AVERAGE.get(use);
+  if (!cached || cached.length !== use.length) {
+    let total = 0;
+    let active = 0;
+    for (const q of use) { total += q; if (q > EPSILON) active += 1; }
+    cached = { length: use.length, avg: active > 0 ? total / active : 0 };
+    ACTIVE_AVERAGE.set(use, cached);
+  }
+  const avg = cached.avg;
   let sum = 0;
   for (let k = 1; k <= Math.max(0, Math.floor(n)); k += 1) sum += from + k < use.length ? use[from + k] : avg;
   return sum;
@@ -419,6 +445,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     group_unmet: all("group_unmet"),
     level_events: [...all("level_events")].sort((a, b) => a.day.localeCompare(b.day)),
     level_matrix: [...all("level_matrix")].sort((a, b) => a.day.localeCompare(b.day)),
+    level_policies: all("level_policies"),
     allocation_rows: [...all("allocation_rows")].sort((a, b) => a.day.localeCompare(b.day)
       || a.destination_kind.localeCompare(b.destination_kind) || String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))
       || a.material_id.localeCompare(b.material_id)),
@@ -1085,7 +1112,10 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const groupCoverage = groupCoverageAt(pool, i);
       if (groupCoverage.target === null || groupCoverage.critical === null) continue;
         const cover = freeCover(i);
-        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= groupCoverage.target)) { needIndex = i; break; }
+        // Owner 2026-10-28: the group refills from the pool at the GROUP's Min, but a member that has to be BOUGHT is connected
+        // at its OWN Min (Gabrosa 20 days inside a 30-day group), not at the group's.
+        const buyAt = targets[m][i].target ?? groupCoverage.target;
+        if (sim.poolFreeShort[p][i] > EPSILON || (cover !== null && cover <= buyAt)) { needIndex = i; break; }
       }
       if (needIndex < 0) return;
       // This is a real authorization, not a cost preference: a member the
@@ -1556,6 +1586,24 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       pool: Object.fromEntries(snap.pool.map((qty, m) => [ids[m], qty])),
       closing: Object.fromEntries(snap.closing.map((qty, m) => [ids[m], qty])),
     })),
+    level_policies: (() => {
+      const first = sim.matrix[0];
+      if (!first) return [];
+      const rows: FamilyLevelPolicy[] = [];
+      ids.forEach((id, m) => {
+        if (!own[m].some((qty) => qty > EPSILON)) return;
+        rows.push({
+          level_kind: "OWN", level_id: id, members: [id], target_days: targets[m][0].target, critical_days: targets[m][0].critical, desired_days: memberDesiredMax[m][0],
+          reserve_now: first.own[m], cover_days_now: coverDays(first.own[m], own[m], -1),
+        });
+      });
+      pools.forEach((pool, p) => {
+        const coverage = groupCoverageAt(pool, 0);
+        const reserve = first.groups[p].reduce((sum, qty) => sum + qty, 0);
+        rows.push({ level_kind: "GROUP", level_id: pool.group_id, members: [...pool.candidates], target_days: coverage.target, critical_days: coverage.critical, desired_days: coverage.desired, reserve_now: roundQty(reserve), cover_days_now: coverDays(reserve, pool.demand, -1) });
+      });
+      return rows;
+    })(),
     allocation_rows: allocationRows.sort((a, b) => a.day.localeCompare(b.day)
       || a.destination_kind.localeCompare(b.destination_kind) || String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))
       || a.material_id.localeCompare(b.material_id)),

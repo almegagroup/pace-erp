@@ -19,6 +19,7 @@ import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
+import { buildWaterfallView } from "./mts_waterfall_view.ts";
 
 type JsonRecord = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "").trim();
@@ -216,6 +217,12 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const selected = rowById.get(id);
       blocks.push({
         kind,
+        waterfall: buildWaterfallView({
+          projection, asOf: calendar.asOf, memberSet, groupSet,
+          groupLabel: (g) => groupLabel.get(g) ?? "—",
+          materialLabel: (m) => nameOf(m),
+          uomOf: (m) => uomOf(m),
+        }),
         title: family.is_family ? family.group_ids.map((g) => groupLabel.get(g) ?? "—").sort().join(" / ") : nameOf(id),
         is_family: family.is_family,
         members: memberIds.map(nameOf).sort(),

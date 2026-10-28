@@ -422,3 +422,27 @@ File: `supabase/functions/api/_core/procurement/mts_family_planner.logic.ts` (+ 
 
 ### Not done yet
 D9 (reschedule feasibility window), D7 / D8 (event log, Material × Level matrix, excess left), D10 (a member's own Min when it is bought — not exercised), D11, the 4A table / Excel of §13, and the live PROD run (needs the real handler path).
+
+---
+
+## 16. D7–D11 and the 4A table / Excel — implemented 2026-10-28 on `agent/claude`
+
+| # | Done |
+|---|---|
+| D9 | Reschedule advice only when the vendor can still move the shipment. Pure rule `mts_reschedule_window.logic.ts` (8 tests); DB side `mts_reschedule_window.handlers.ts` (CSN ETD / vendor, PO `import_trade_type`); every `reschedulable_arrivals` row carries `window` (`RESCHEDULE` / `TALK_TO_VENDOR` / `UNKNOWN` / `NO_CHANGE`). `TALK_TO_VENDOR` removes the advised date and shows the message in Item Plan, the Planning tab and the Excel ("Vendor can move it?"). The two windows are a **company setting** (table `erp_planning.company_reschedule_window`, migration `20261028100000`, applied to **dev only**; GET / POST `/api/procurement/mts-requirement/reschedule-window`; edited on the Requirement → Settings tab). Defaults 15 / 7 apply only when a company has no row. |
+| D7 | The planner now returns `level_events` (opening reserve, receipt, top-up, waiting — a level that keeps waiting is logged once), `level_matrix` (Material × Level snapshot on every event day, checksummed against stock) and `level_policies` (Min / Max / Critical, reserve and cover now). `trace:false` keeps the arrival optimizer fast. |
+| D8 | "Excess left" = the pool columns of the matrix and the `pool_after` of each event. |
+| 4A | New panel "Waterfall" in the Item Plan (Block 1 levels, Block 2 flow, Block 2B Material × Level with a day picker and an Adds-up tick) and the one plain sentence above the day grid (`MtsWaterfallPanel.jsx`, `mtsWaterfall.js`, 4 tests). Server shape: `mts_waterfall_view.ts`, shared with the Excel. |
+| Excel | Four tabs: WATERFALL_SUMMARY (one sentence per family), WATERFALL_LEVELS, WATERFALL_FLOW, WATERFALL_WHO_HOLDS (long format: day × material × level). |
+| D10 | A member that has to be **bought** is connected at its **own** Min (`targets[m]`), not the group's: Gabrosa Target 20 inside a 30-day group → need date 25 Oct instead of 15 Oct, order date = need date − lead time. The group itself still refills from the pool at the group's Min. |
+| D11 | `useAhead` beyond the horizon averages over the days that use stock (cached per series), as `coverDays` already did. |
+| Engine | Members are ordered, when no saved order applies, by **levels served** (fewest first: TS → Combizell → Gabrosa), then FEFO age, then the stock ratio. Reason: with FEFO alone the opening stock of every member ties and Group B drained Gabrosa, leaving Exclusive short in March. A group never draws more than the physical balance (rounding residue). |
+
+### Verification
+- 260 pure procurement tests, 6 frontend test files, all CI guards, `deno check` (0 new errors), eslint: pass.
+- The §7 example (day 0): Exclusive 6,670 · A 2,720 · B 84,390 KG, **60 days each** — identical to the hand figures. Total stock on 26 Dec = 122,520 (identical).
+- With purchases on (Gabrosa lead 6 d, TS / Combizell 45 d): no stock-out and no group shortage in the horizon; the engine buys Combizell (order by 11 Feb) for Group B.
+
+### Still open
+- Live run on PROD data through the real handlers (needs deployment; the settings table must be created on PROD first).
+- The "narrow level first" guarantee is by order of use and by advice; an Exclusive level can still show a **WAITING** event when the shared material was drawn by a group earlier (see the 15 Dec top-up in the example run).

@@ -24,7 +24,7 @@ const company = (id, name, extra = {}) => ({
 test("rolling plan workbook: every tab, both companies, PLAN totals per group", async () => {
   const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings"), company("b", "Jayashree Industries")], asOf: "2026-10-21" });
   const names = wb.worksheets.map((s) => s.name);
-  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "ARRIVALS"]);
+  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
   const buffer = await wb.xlsx.writeBuffer();
   assert.ok(buffer.byteLength > 5000, "valid xlsx written");
   const rm = wb.getWorksheet("RM_PLANNING");
@@ -70,6 +70,7 @@ test("EXPLAIN tabs: README, daily waterfall, draws and group dates; a group-cove
   const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings", { explain, requirement: [covered] })], asOf: "2026-10-27" });
   const names = wb.worksheets.map((s) => s.name);
   assert.deepEqual(names.slice(-4), ["EXPLAIN_README", "EXPLAIN_DAILY", "EXPLAIN_DRAWS", "EXPLAIN_GROUPS"]);
+  assert.deepEqual(names.slice(-8, -4), ["WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
   const dailySheet = wb.getWorksheet("EXPLAIN_DAILY");
   assert.equal(dailySheet.rowCount, 3, "header + 2 daily rows");
   assert.equal(dailySheet.getRow(3).getCell(15).value, "STOCK-OUT");
@@ -77,5 +78,29 @@ test("EXPLAIN tabs: README, daily waterfall, draws and group dates; a group-cove
   let remark = "";
   summary.eachRow((row) => row.eachCell((cell) => { if (String(cell.value ?? "").startsWith("Its own stock runs out")) { remark = String(cell.value); assert.equal(cell.font?.color?.argb, "FFB45309", "group-covered alert is amber, not red"); } }));
   assert.ok(remark.includes("stays covered"), "the group-covered remark is on the Summary attention list");
+  await wb.xlsx.writeBuffer();
+});
+
+test("WATERFALL tabs: one sentence per family, the levels, the flow and who holds what — the same blocks as 4A", async () => {
+  const waterfall = {
+    levels: [{ level_kind: "OWN", label: "Exclusive — Gabrosa", members: ["Gabrosa"], target_days: 30, critical_days: 20, max_days: 60, cover_days_now: 60, reserve_now: 6670, next_min_day: "2026-11-27" },
+      { level_kind: "GROUP", label: "MHEC", members: ["Gabrosa", "Combizell", "TS U2121"], target_days: 30, critical_days: 15, max_days: 60, cover_days_now: 60, reserve_now: 84390, next_min_day: "2026-11-27" }],
+    events: [
+      { day: "2026-11-12", kind: "RECEIPT", level_kind: "POOL", level: "Pool", material: "TS U2121", qty: 25000, wanted: 0, shortfall: 0, pool_before: 0, pool_after: 0, by_material: [], references: ["PO ASC/PO123 · CSN 3000000229"] },
+      { day: "2027-03-19", kind: "TOP_UP", level_kind: "GROUP", level: "MHEC", material: null, qty: 14655, wanted: 43559, shortfall: 28904, pool_before: 14655, pool_after: 0, by_material: [{ material: "Gabrosa", qty: 12294 }], references: [] },
+    ],
+    matrix: [{ day: "2026-10-28", levels: [{ level: "Exclusive — Gabrosa", by_material: [{ material: "Gabrosa", qty: 6670 }] }, { level: "MHEC", by_material: [{ material: "Gabrosa", qty: 100 }] }], pool: [{ material: "Gabrosa", qty: 230 }], closing: [{ material: "Gabrosa", qty: 7000 }] }],
+  };
+  const base = company("a", "Almeha Coatings");
+  const withWaterfall = { ...base, blocks: [{ ...base.blocks[0], title: "MHEC", waterfall }] };
+  const wb = buildRollingPlanWorkbook({ companies: [withWaterfall], asOf: "2026-10-28" });
+  assert.equal(wb.getWorksheet("WATERFALL_SUMMARY").rowCount, 2, "header + one family");
+  assert.match(String(wb.getWorksheet("WATERFALL_SUMMARY").getRow(2).getCell(4).value), /MHEC will be short about 28,904 KG from 2027-03-19/);
+  assert.equal(wb.getWorksheet("WATERFALL_LEVELS").rowCount, 3, "header + two levels");
+  assert.equal(wb.getWorksheet("WATERFALL_FLOW").rowCount, 3, "header + receipt + top-up");
+  const holds = wb.getWorksheet("WATERFALL_WHO_HOLDS");
+  const heldFor = [];
+  holds.eachRow((row, n) => { if (n > 1) heldFor.push(String(row.getCell(5).value)); });
+  assert.deepEqual(heldFor, ["Exclusive — Gabrosa", "MHEC", "Pool (excess)", "TOTAL STOCK"]);
   await wb.xlsx.writeBuffer();
 });

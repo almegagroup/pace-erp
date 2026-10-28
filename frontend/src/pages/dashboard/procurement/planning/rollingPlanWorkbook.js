@@ -9,6 +9,7 @@
  * Names only, never PACE codes. Loaded with a dynamic import so exceljs stays out of the page bundle.
  */
 import ExcelJS from "exceljs";
+import { flowRows, matrixGrid, waterfallVerdict } from "./mtsWaterfall.js";
 
 const TITLE_FILL = "FFFBBC04";   // yellow block title, as in the old file
 const HEAD_FILL = "FFFFE699";    // light yellow column header
@@ -309,9 +310,60 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
   widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
 
+  writeWaterfall(wb, companies, used);
   writeExplain(wb, companies, used);
 
   return wb;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WATERFALL (owner 2026-10-28, docs/mts-planning/PO22-WATERFALL-OWNER-METHOD-2026-10-28.md §13): the same four blocks as the 4A table —
+// one plain sentence per family, each level's Min / Max days, the flow (receipts, top-ups, waiting levels) and who holds what.
+// ─────────────────────────────────────────────────────────────────────────────
+function writeWaterfall(wb, companies, used) {
+  const families = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.waterfall && b.is_family).map((b) => ({ company: companyLabel(c), title: b.title, kind: b.kind, waterfall: b.waterfall })));
+  const sentence = addSheetWithTable(wb, used, "WATERFALL_SUMMARY", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Type", key: "kind" },
+    { label: "What to know", value: (r) => waterfallVerdict(r.waterfall, null).text }, { label: "Worst level", value: (r) => waterfallVerdict(r.waterfall, null).tone },
+  ], families, { color: (r) => (waterfallVerdict(r.waterfall, null).tone === "ok" ? null : RED) });
+  widths(sentence, [26, 40, 8, 100, 12]);
+
+  const levels = addSheetWithTable(wb, used, "WATERFALL_LEVELS", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Level", key: "label" },
+    { label: "Members", value: (r) => r.members.join("; ") },
+    { label: "Min days", value: (r) => days(r.target_days), num: true }, { label: "Max days", value: (r) => days(r.max_days), num: true },
+    { label: "Critical days", value: (r) => days(r.critical_days), num: true }, { label: "Cover now (days)", value: (r) => days(r.cover_days_now), num: true },
+    { label: "Reserve now (KG)", value: (r) => num(r.reserve_now), num: true }, { label: "Next Min", value: (r) => r.next_min_day ?? "not in horizon" },
+  ], families.flatMap((f) => f.waterfall.levels.map((l) => ({ ...l, company: f.company, title: f.title }))));
+  widths(levels, [26, 40, 30, 60, 10, 10, 12, 16, 16, 14]);
+
+  const flow = addSheetWithTable(wb, used, "WATERFALL_FLOW", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Date", key: "day" }, { label: "What happened", key: "what" },
+    { label: "Level", key: "level" }, { label: "KG", value: (r) => num(r.qty), num: true }, { label: "From which material", key: "detail" },
+    { label: "Short (KG)", value: (r) => (r.short ? num(r.shortfall) : null), num: true },
+    { label: "Pool before", value: (r) => (r.what.startsWith("Receipt") ? null : num(r.pool_before)), num: true },
+    { label: "Pool after", value: (r) => (r.what.startsWith("Receipt") ? null : num(r.pool_after)), num: true },
+  ], families.flatMap((f) => flowRows(f.waterfall).map((r) => ({ ...r, company: f.company, title: f.title }))), { color: (r) => (r.short ? RED : null) });
+  widths(flow, [26, 40, 12, 56, 32, 12, 60, 12, 14, 14]);
+
+  const holds = addSheetWithTable(wb, used, "WATERFALL_WHO_HOLDS", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Date", key: "day" }, { label: "Material", key: "material" },
+    { label: "Held for", key: "held_for" }, { label: "KG", value: (r) => num(r.qty), num: true },
+  ], families.flatMap((f) => (f.waterfall.matrix ?? []).flatMap((snap) => {
+    const grid = matrixGrid(f.waterfall, snap.day);
+    return grid.rows.flatMap((row) => [
+      ...grid.levels.map((level, i) => ({ company: f.company, title: f.title, day: snap.day, material: row.material, held_for: level, qty: row.cells[i] })),
+      { company: f.company, title: f.title, day: snap.day, material: row.material, held_for: "Pool (excess)", qty: row.pool },
+      { company: f.company, title: f.title, day: snap.day, material: row.material, held_for: "TOTAL STOCK", qty: row.total },
+    ]).filter((r) => r.qty > 0.5 || r.held_for === "TOTAL STOCK");
+  })));
+  widths(holds, [26, 40, 12, 44, 34, 14]);
+}
+
+function addSheetWithTable(wb, used, name, columns, rows, options) {
+  const sheet = wb.addWorksheet(sheetName(name, used));
+  addTable(sheet, columns, rows, options);
+  return sheet;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

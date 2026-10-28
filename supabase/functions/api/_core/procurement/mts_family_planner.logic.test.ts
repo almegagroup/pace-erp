@@ -811,3 +811,18 @@ Deno.test("owner 2026-10-28: a waiting level is logged once, not every day it ke
   assert(levelRows[0].kind === "OPENING_RESERVE" && levelRows[0].shortfall > 0, "the level starts short: 120 of the 150 it wants");
   assert(levelRows.length <= 3, `a level that keeps waiting is not logged every day: ${levelRows.map((event) => `${event.day}:${event.kind}`).join(",")}`);
 });
+
+Deno.test("owner 2026-10-28 D10: a member that has to be bought is connected at its OWN Min, not the group's", () => {
+  const days = Array.from({ length: 150 }, (_, i) => addDays("2026-10-01", i));
+  const run = (gabrosaTarget: number) => planFamily({
+    as_of: "2026-10-01", horizon_end: days[149], opening_qty_by_material: { GAB: 4500, TS: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["GAB", "TS"], required_by, qty_base: 100 })),
+    confirmed_arrivals: [], group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 30, critical_days: 15, desired_max_days_override: null }],
+    policies: [policy("GAB", gabrosaTarget, 5, [{ vendor: "VG", lead: 6, cost: 100 }]), policy("TS", 30, 5, [])], plan_buys: true,
+  }).advisory_buys.find((buy) => buy.status === "ADVISORY" || buy.status === "ADVISORY_LATE");
+  const atGroupMin = run(30);
+  const atOwnMin = run(20);
+  assert(atGroupMin?.need_date === "2026-10-15", `Target 30 -> 30 days left on 15 Oct: ${atGroupMin?.need_date}`);
+  assert(atOwnMin?.need_date === "2026-10-25", `Gabrosa's own 20 days -> 25 Oct: ${atOwnMin?.need_date}`);
+  assert(atOwnMin.recommended_po_by === "2026-10-19", `order date = need date - lead time 6: ${atOwnMin.recommended_po_by}`);
+});

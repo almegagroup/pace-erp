@@ -24,6 +24,7 @@ import { TargetWhatIf, VendorDateCompare } from "./MtsItemPlanWhatIf.jsx";
 import { lotVendorFlags } from "./mtsItemPlanLots.js";
 import { makeDisplayUnits, orderQtyText, qtyInDisplayUnit } from "./mtsOrderUnit.js";
 import { PO22_LIVE_QUERY } from "./mtsLiveQuery.js";
+import MtsWaterfallPanel, { WaterfallVerdict } from "./MtsWaterfallPanel.jsx";
 
 // Owner 2026-10-21: FOR = freight inside the price; otherwise we pay it (AC01 landed cost).
 const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we pay)", EX_TRANSPORTER_GODOWN: "Ex godown (we pay)" };
@@ -68,6 +69,7 @@ const GAP_LABEL = {
 
 /** Owner 2026-10-22: the day grid gets the full width; everything else opens from a button. */
 const ITEM_PLAN_PANELS = [
+  { id: "waterfall", label: "Waterfall (levels, flow, who holds what)" },
   { id: "prediction", label: "Prediction" },
   { id: "allocation", label: "Family allocation report" },
   { id: "arrivals", label: "Arrivals / Future Orders" },
@@ -757,6 +759,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               </button>
             ))}
           </div>
+          <WaterfallVerdict waterfall={view.waterfall} futureOrders={view.future_orders} />
           <div className="grid gap-2">
             <section className="grid content-start gap-1">
               <h3 className="text-sm font-semibold text-slate-800">Day by day {plan.family.is_family ? "(whole family)" : ""} — click a date for each member{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
@@ -794,6 +797,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               width="min(1100px, calc(100vw - 24px))"
             >
             <div className="grid content-start gap-3">
+              {panel === "waterfall" ? <MtsWaterfallPanel waterfall={view.waterfall} futureOrders={view.future_orders} /> : null}
               {panel === "prediction" ? (
               <>
               <section className="grid gap-1 border border-amber-300 bg-amber-50 p-2">
