@@ -892,7 +892,7 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
         const clearance = Number(row.clearance_days ?? 0);
         const inlandDays = inland.get(text(row.port_of_discharge_id));
         const days = booking + sail + clearance + (inlandDays ?? 0);
-        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), ...(inlandDays !== undefined ? { inland_days: inlandDays } : {}), detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
       }
     }
     // Suggested safety days: how late received shipments arrived against their route time.

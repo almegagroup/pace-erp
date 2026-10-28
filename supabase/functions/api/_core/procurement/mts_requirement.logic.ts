@@ -1630,6 +1630,8 @@ export type ConfiguredLeadTime = {
   vendor_label: string; route: "DOMESTIC" | "IMPORT"; days: number; detail: string; vendor_id?: string;
   /** Route time only (transit / sail + clearance + inland), Booking Time excluded. */
   route_days?: number;
+  /** IMPORT only: port-to-plant days (the port's inland days); undefined = not configured. */
+  inland_days?: number;
 };
 export type LeadTimeResult = {
   configured_min: number | null;
