@@ -139,9 +139,19 @@ export async function getDispatchReportHandler(
     const dcLineIds = uniqueValues(invoiceLines.map((row) => row.dc_line_id));
     const dcLines = await fetchInChunks<JsonRecord>(dcLineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("delivery_challan_line")
-      .select("id, dc_id, so_line_id, sto_line_id, material_id, so_map_allocation_id, batch_number, packing_order_id, pack_qty, pack_uom_code")
+      .select("id, dc_id, so_line_id, sto_line_id, material_id, so_map_allocation_id, batch_number, packing_order_id, pack_qty, pack_uom_code, storage_location_id")
       .in("id", chunk));
     const dcLineById = new Map(dcLines.map((row) => [textValue(row.id), row]));
+
+    // Storage location the DO line actually issued from (code — name).
+    const storageLocationIds = uniqueValues(dcLines.map((row) => row.storage_location_id));
+    const storageLocations = await fetchInChunks<JsonRecord>(storageLocationIds, (chunk) => serviceRoleClient
+      .schema("erp_inventory").from("storage_location_master")
+      .select("id, code, name").in("id", chunk));
+    const storageLocationById = new Map(storageLocations.map((row) => [
+      textValue(row.id),
+      [textValue(row.code), textValue(row.name)].filter(Boolean).join(" — "),
+    ]));
 
     // Business owner ask (2026-09-05) -- every DO's own transporter/vehicle/
     // LR/driver header data, per item line.
@@ -393,6 +403,7 @@ export async function getDispatchReportHandler(
           ...lineDetails.map((entry) => entry.mapGroup.revised_external_fo_number || entry.mapGroup.external_fo_number || entry.feed.fo_number),
         ]),
         batch_number: joined(lineDetails.map((entry) => entry.dcLine.batch_number)),
+        storage_location: joined(lineDetails.map((entry) => storageLocationById.get(textValue(entry.dcLine.storage_location_id)))),
         packing_po_number: joined(lineDetails.map((entry) => entry.packing.po_number)),
         item: [textValue(material.pace_code), textValue(material.material_name)].filter(Boolean).join(" — "),
         document_name: textValue(material.document_name),
