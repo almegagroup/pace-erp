@@ -623,7 +623,8 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     // looked below Target again the next day and created a duplicate buy.
     // If no candidate has a configured Max, the documented group Target
     // fallback still applies.
-    const desired = groupDesiredMaxDays(saved, memberMax) ?? target;
+    // Owner 2026-10-28: a group's Max is never below its own Min (RDP_TOT WHITE showed Min 30 / Max 27).
+    const desired = Math.max(target, groupDesiredMaxDays(saved, memberMax) ?? target);
     return { target, critical, desired };
   };
 
@@ -1129,6 +1130,19 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         const lead = option?.option.lead_time_days ?? totalLeadTimeDays(policy);
         const earliest = lead === null ? null : Math.max(0, lead);
         const late = earliest !== null && i < earliest;
+        // Owner 2026-10-28: a LATE need (no lot can land before the shortage day) is only worth a lot if the item is still short when the
+        // earliest lot could land, counting what already arrives by then. A confirmed PO landing two days after the dip cures it
+        // (Action tab: PM-00060 asked "Order today" with a 10,000 PO arriving on 13 Nov).
+        if (late && earliest !== null) {
+          const ai = Math.min(N - 1, earliest);
+          const coverAtArrival = isSharedGroupMember[m]
+            ? coverDays(sim.ownBalance[m][ai], memberUse, ai)
+            : standaloneCoverageDays(sim.ownBalance[m][ai], own[m], ai, finalOwnDailyUse[m][ai]);
+          const floorAtArrival = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][ai] * t;
+          const coverOk = coverAtArrival === null || coverAtArrival > t;
+          const floorOk = floorAtArrival <= EPSILON || sim.ownBalance[m][ai] > floorAtArrival + EPSILON;
+          if (coverOk && floorOk) continue;
+        }
         return { kind: "OWN", index: i, material: id, option, late };
       }
     }

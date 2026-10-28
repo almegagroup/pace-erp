@@ -926,3 +926,37 @@ Deno.test("owner 2026-10-28: CMP005 RDP — a late need already cured by a lot a
   assert(dairen.length === 1, `one Dairen lot on 20 Dec, got ${dairen.map((b) => `${b.estimated_plant_eta} ${b.recommended_po_qty_base}`).join(" | ")}`);
   assert(dairen[0].estimated_plant_eta === "2026-12-20", `earliest arrival is today + 53 days: ${dairen[0].estimated_plant_eta}`);
 });
+
+Deno.test("owner 2026-10-28: a late own-use need cured by a PO landing two days later gets no 'Order today' (PM-00060 shape)", () => {
+  const asOf = "2026-10-28";
+  const planDays: string[] = [];
+  for (let day = asOf; day <= "2027-01-31"; day = addDays(day, 1)) planDays.push(day);
+  const rate = (day: string) => (day < "2026-11-01" ? 737.5 : day < "2026-12-01" ? 350 : day < "2027-01-01" ? 330.6 : 74.2);
+  const rishi = {
+    ...policy("PM", 25, 13, [{ vendor: "RISHI", lead: 27, cost: 22.5 }]),
+    cycle_days: 30,
+  };
+  const result = planFamily({
+    as_of: asOf, horizon_end: "2027-03-31", opening_qty_by_material: { PM: 15_596 },
+    own_demand: planDays.map((required_by) => ({ material_id: "PM", required_by, qty_base: rate(required_by) })),
+    group_demand: [],
+    confirmed_arrivals: [{ source_key: "A|PM", material_id: "PM", eta_to_plant: "2026-11-13", qty_base: 10_000 }],
+    policies: [rishi],
+  });
+  const late = result.advisory_buys.filter((b) => b.material_id === "PM" && b.status === "ADVISORY_LATE");
+  assert(late.length === 0, `no 'Order today' while a PO lands on 13 Nov: ${JSON.stringify(late)}`);
+  assert(result.rows.filter((r) => r.material_id === "PM").every((r) => r.closing_qty_base >= -1e-6), "no stock-out");
+});
+
+Deno.test("owner 2026-10-28: a group's Max is never below its own Min", () => {
+  const days = daysTo("2026-12-31");
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: "2026-12-31", opening_qty_by_material: { X: 5_000, Y: 5_000 },
+    own_demand: [], group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["X", "Y"], required_by, qty_base: 100 })),
+    confirmed_arrivals: [],
+    policies: [{ ...policy("X", 5, 3, [{ vendor: "V", lead: 5, cost: 1 }]), cycle_days: 10 }, { ...policy("Y", 5, 3, [{ vendor: "V2", lead: 5, cost: 1 }]), cycle_days: 10 }],
+    group_coverage_policies: [{ group_id: "G", effective_from: AS_OF, target_days: 30, critical_days: 15 }],
+  });
+  const pol = result.level_policies.find((l) => l.level_id === "G");
+  assert(pol && pol.desired_days !== null && pol.desired_days >= 30, `group Max (${pol?.desired_days}) must not be below its Min 30`);
+});

@@ -45,3 +45,12 @@ test("Bulk RM and groups made only of Bulk RM are left out", () => {
   assert.equal(rows.some((r) => r.group_id === "G"), false);
   assert.equal(rows.some((r) => r.material_id === "B"), true);
 });
+
+test("a late 'buy' of a rounding speck is not an order (PM-00060: PO lands two days after the dip)", () => {
+  const rows = buildActionRows({
+    calendar: { as_of: "2026-10-28" }, risks: [],
+    buys: [{ material_id: "P", material_name: "20KG TILE ADHESIVE TOT WHITE WOVEN SACK", status: "ADVISORY_LATE", sequence: 1, recommended_po_qty_base: 0.000001, recommended_po_by: "2026-10-28", estimated_plant_eta: "2026-11-24", need_date: "2026-11-11", total_lead_time_days: 27, vendor_label: "V" }],
+    group_assignments: [], group_actions: [], arrival_flags: [],
+  });
+  assert.equal(rows.length, 0);
+});
