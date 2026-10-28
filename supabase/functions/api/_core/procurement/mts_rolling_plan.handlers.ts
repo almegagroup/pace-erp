@@ -4,7 +4,7 @@
  * One company per call; the frontend joins all the user's companies into one Excel file (the old
  * "rolling_plan" workbook: PLAN, family / item planning blocks with Prediction, RM_PM requirement,
  * plus Summary, Buy Plan, Store Instructions and Arrivals).
- * One Engine run per company (CM + NM + 1 month, every saved user lot and reschedule included);
+ * One Engine run per company (CM + NM + 4 months = six months, every saved user lot and reschedule included);
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
@@ -29,8 +29,11 @@ const inOrderUnit = (qty: number | null, unit: { base_per_order_unit: number } |
   qty === null || !unit ? null : round(qty / unit.base_per_order_unit);
 const addDaysIso = (day: string | null, n: number | null) => (day && n !== null ? new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10) : null);
 
-/** Rolling plan horizon = CM + NM + 1 month (the old file's three months). */
-const ROLLING_EXTRA_MONTHS = 1;
+/**
+ * Rolling plan horizon = CM + NM + 4 months = six calendar months (owner 2026-10-28: "planning from today for 6 months,
+ * demand as far as the PO21 plan goes"). A month without a PO21 plan has zero demand. Same as the Item Plan.
+ */
+const ROLLING_EXTRA_MONTHS = 4;
 
 /** Every user lot of every item of the company (current plan versions). */
 async function loadAllCurrentLots(companyId: string): Promise<OptimizerManualLot[]> {
