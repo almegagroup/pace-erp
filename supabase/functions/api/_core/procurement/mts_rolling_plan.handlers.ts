@@ -161,6 +161,15 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const grid = familyDayGrid(days, memberRows, unmet);
       const fu = familyUnit(memberIds);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
+      // Owner 2026-10-28: what is left in the pool (held for no level) after each day's receipts — the latest Material x Level snapshot on or before the day.
+      const poolSnaps = (projection.level_matrix ?? []).filter((snap) => Object.keys(snap.pool).some((id) => memberSet.has(id)))
+        .map((snap) => ({ day: snap.day, qty: Object.entries(snap.pool).reduce((sum, [id, q]) => sum + (memberSet.has(id) ? Number(q) : 0), 0) }))
+        .sort((x, y) => x.day.localeCompare(y.day));
+      const excessAt = (dayIso: string) => {
+        let found: number | null = null;
+        for (const snap of poolSnaps) { if (snap.day > dayIso) break; found = snap.qty; }
+        return found === null ? null : inUnit(fu, found);
+      };
 
       // Left side: today + every day something arrives or you fixed a quantity.
       const events = memberIds.flatMap((m) => (rowById.get(m)?.inbound_events ?? []).map((e) => ({ ...e, member: m })));
@@ -172,7 +181,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const today = events.filter((e) => (e.date && e.date >= calendar.asOf ? e.date : calendar.asOf) === g.day);
         return {
           day: g.day, opening: inUnit(fu, g.opening), arrivals: inUnit(fu, g.arrivals), dispatch: inUnit(fu, ownByDay.get(g.day) ?? 0) || null,
-          use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), max_days: g.max_days, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days,
+          use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), excess: excessAt(g.day), max_days: g.max_days, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days,
           references: today.map((e) => e.reference),
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
@@ -190,9 +199,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const legs = (m: string, vendorId: string | null | undefined, date: string | null) => {
         const option = vendorId ? (vendorOptions.get(m) ?? []).find((o) => o.vendor_id === vendorId) : undefined;
         const transit = option && option.lead_time_days !== null ? option.lead_time_days - (option.booking_time_days ?? 0) : null;
-        const p2p = portToPlant.get(m) ?? null;
+        // Port-to-plant days: the median of this material's received CSNs, else the lead-time master's inland days for this vendor's IMPORT route.
+        const masterInland = (rowById.get(m)?.lead_time?.configured_routes ?? [])
+          .filter((r) => r.route === "IMPORT" && r.inland_days !== undefined && (!vendorId || r.vendor_id === vendorId))
+          .map((r) => r.inland_days as number);
+        const p2p = portToPlant.get(m) ?? (masterInland.length ? Math.max(...masterInland) : null);
         return { port_eta: p2p !== null ? addDaysIso(date, -p2p) : null, import_etd: transit !== null ? addDaysIso(date, -transit) : null };
       };
+      const nameToId = new Map(memberIds.map((m) => [nameOf(m), m]));
       const prediction = [
         ...advisory.filter((b) => memberSet.has(b.material_id)).flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }])
           .map((lot) => ({
@@ -210,7 +224,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           })(),
           po_by: null as string | null, ...legs(l.material_id, l.vendor_id, l.plant_eta),
         })),
-      ].map((p) => ({ ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null }))
+      ].map((p) => {
+        // Owner 2026-10-28: the bought material's OWN cover the day before the lot lands, and its own Min — what the lot is actually connected at.
+        const before = p.date ? projection.rows.find((r) => r.material_id === (nameToId.get(p.material) ?? "") && r.day === addDaysIso(p.date, -1)) : undefined;
+        return {
+          ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null,
+          own_cover_before: before?.max_cover_days ?? null, own_min_days: before?.target_days ?? null,
+        };
+      })
         .sort((a, b) => String(a.date ?? "9999").localeCompare(String(b.date ?? "9999")));
 
       const kind = rowById.get(id)?.kind ?? "RM";

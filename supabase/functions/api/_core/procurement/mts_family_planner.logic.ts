@@ -258,17 +258,36 @@ function targetAt(policy: OptimizerMaterialPlanningPolicy | undefined, day: stri
   };
 }
 
-/** Days `balance` covers after index `from`, walking `use`; beyond the horizon the average use. */
+/**
+ * Owner 2026-10-28: a PO21 plan that stops before the horizon end (no demand in its last days) says "no plan after here",
+ * not "no use". Beyond that point no demand is invented and days are not counted. A plan that runs to the horizon end
+ * keeps the old rule (average of the days that actually use stock).
+ */
+const PLAN_TAIL_DAYS = 7;
+function planContinues(use: readonly number[]): boolean {
+  for (let i = Math.max(0, use.length - PLAN_TAIL_DAYS); i < use.length; i += 1) if (use[i] > EPSILON) return true;
+  return false;
+}
+
+/**
+ * Days `balance` covers after index `from`, walking `use`. When the plan has ended and the stock outlasts it, the answer is
+ * null ("beyond the plan"), never a long run of zero-demand days. Within a plan that continues to the horizon end, the
+ * average use of the days that actually use stock is extrapolated.
+ */
 function coverDays(balance: number, use: readonly number[], from: number): number | null {
   const total = use.reduce((s, q) => s + q, 0);
   if (total <= EPSILON) return null;
   if (balance <= EPSILON) return 0;
+  let lastActive = -1;
+  for (let i = use.length - 1; i >= 0; i -= 1) if (use[i] > EPSILON) { lastActive = i; break; }
+  const continues = planContinues(use);
   let left = balance;
   let covered = 0;
   for (let i = from + 1; i < use.length; i += 1) {
     const need = use[i];
     if (need <= EPSILON) {
       if (left <= EPSILON) return covered;
+      if (!continues && i > lastActive) return null;
       covered += 1;
       continue;
     }
@@ -276,6 +295,7 @@ function coverDays(balance: number, use: readonly number[], from: number): numbe
     left = Math.max(0, left - need);
     covered += 1;
   }
+  if (!continues) return null;
   // Beyond the horizon, extrapolate at the average of the days that actually use stock. Averaging over
   // the whole horizon let zero-demand months (no PO21 plan) dilute the rate, so a few hundred kg looked
   // like 500+ days (owner 2026-10-27: DISPELAIR P 893 498 d, MECELLOSE FMC 1258 d).
@@ -306,17 +326,18 @@ function standaloneCoverageDays(balance: number, use: readonly number[], from: n
   return covered + Math.floor(left / finalApprovedDailyUse + EPSILON);
 }
 
-/** Use over the `n` days after index `from` (beyond the horizon: average). */
+/** Use over the `n` days after index `from`. Beyond the horizon: the average use if the plan runs to the end, else none (no plan = no invented demand). */
 const ACTIVE_AVERAGE = new WeakMap<readonly number[], { length: number; avg: number }>();
 function useAhead(use: readonly number[], from: number, n: number): number {
   // Beyond the horizon: the average of the days that actually use stock. Averaging over the whole horizon let zero-demand
   // months (no PO21 plan) dilute the rate (same as coverDays, owner 2026-10-27). Cached per series: this runs in the hot loop.
+  // A plan that ended before the horizon end gets rate 0 (owner 2026-10-28: no March buy from a demand nobody planned).
   let cached = ACTIVE_AVERAGE.get(use);
   if (!cached || cached.length !== use.length) {
     let total = 0;
     let active = 0;
     for (const q of use) { total += q; if (q > EPSILON) active += 1; }
-    cached = { length: use.length, avg: active > 0 ? total / active : 0 };
+    cached = { length: use.length, avg: active > 0 && planContinues(use) ? total / active : 0 };
     ACTIVE_AVERAGE.set(use, cached);
   }
   const avg = cached.avg;

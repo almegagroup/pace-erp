@@ -844,3 +844,20 @@ Deno.test("owner 2026-10-28 Store keep: a checkpoint day always carries a Materi
     assert(group && Object.values(group.by_material).reduce((s, q) => s + q, 0) > 0, `${day}: the group's reserve is reported`);
   }
 });
+
+Deno.test("owner 2026-10-28: a PO21 plan that ends before the horizon end invents no group demand and no buy after it", () => {
+  const planEnd = "2027-01-31";
+  const days = daysTo(planEnd);
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: END, opening_qty_by_material: { X: 60_000, Y: 50_000 },
+    own_demand: [],
+    // 110,000 KG covers the whole plan (102 days x 1,000) with 8,000 left — below Target only if March demand were invented.
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["X", "Y"], required_by, qty_base: 1000 })),
+    confirmed_arrivals: [],
+    policies: [policy("X", 30, 15, [{ vendor: "V", lead: 10, cost: 1 }]), policy("Y", 30, 15, [{ vendor: "V2", lead: 10, cost: 1 }])],
+    group_coverage_policies: [{ group_id: "G", effective_from: AS_OF, target_days: 30, critical_days: 15, desired_max_days_override: 60 }],
+  });
+  const lateBuys = result.advisory_buys.filter((b) => b.status !== "NO_BUY" && (b.need_date ?? "") > planEnd);
+  assert(lateBuys.length === 0, `no buy may be planned for days after the PO21 plan: ${JSON.stringify(lateBuys)}`);
+  assert(result.rows.every((r) => r.closing_qty_base >= -1e-6), "no stock-out inside the plan");
+});

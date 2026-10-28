@@ -528,3 +528,18 @@ Open: live run on PROD data through the handlers.
 - "Save Current As…" stores the visible columns under a name (per user). A saved layout can be chosen, set as default or deleted.
 - The Excel uses exactly the same visible columns as the screen (plus the "Column groups" quick switches), and the sheet header notes the layout name.
 - Storage: existing `erp_inventory.report_column_layout` / `report_layout_default` (report code `PO22_REQUIREMENT`); thin PO22 routes `/api/procurement/mts-requirement/layouts…` under ACL `PROC_MTS_REQUIREMENT` VIEW. No new migration.
+
+## 21. PO21 plan end, days of cover, Excess column — owner 2026-10-28
+
+- Found in the downloaded Excel: PO21 had no demand from Feb 2027, yet Max/Min Days showed 139 / 262 / 1,976 and the engine planned two buys for 1 Mar. Cause: days with no demand were counted as "covered", and the look-ahead beyond the horizon was filled with the average use.
+- Rule now: a PO21 plan that ends before the horizon end (no demand in its last 7 days) means "no plan", not "no use". No demand is invented after it, no buy is planned for it, and days of cover that outlast the plan are shown as `beyond plan` (never a long number). A plan that runs to the horizon end keeps the old average extrapolation.
+- Not changed: a standalone item's Target as a physical safety reserve across a no-demand gap (owner's Tot White rule) — it applies to items with no group; the plan-end rule applies to group members and the whole family table.
+- Family table (RM/PM_PLANNING) has a new `Excess (not needed yet)` column: stock in the pool after each arrival day, held for no level. A receipt is rarely all used at once; the rest is excess, not a problem.
+- Still open: the `Engine best date` advice (postpone 64 d / prepone 71 d) was not re-checked after this change.
+
+## 22. Prediction table: what a lot is connected at — owner 2026-10-28
+
+- The Prediction `Max Days / Min Days` are FAMILY-wide figures (renamed `Family Max/Min Days`); they are not the bought material's own Min.
+- New columns: `Its own cover before arrival (d)` and `Its own Min (d)` — the bought material's cover the day before the lot lands, against its own Target. This is the check for rule D10 (a bought member connects at its OWN Min).
+- Port ETA falls back to the lead-time master's inland days when the material has no received-CSN history; domestic vendors correctly show none. `Import ETD` header now reads `Import ETD / Dispatch date`.
+- OPEN, needs a real run: RP-4099 (own Min 20, Critical 10) showed ~10 days cover on arrival in the CMP003 RDP family; a synthetic test did not reproduce it. Re-check with the new columns after deploy. Also open: family Max Days 38 (< Max 60) on CMP005 RDP lots, and the `Engine best date` advice.

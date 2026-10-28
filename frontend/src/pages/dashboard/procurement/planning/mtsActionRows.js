@@ -16,6 +16,13 @@ export const ACTION_LEVELS = {
 export function buildActionRows(plan) {
   if (!plan) return [];
   const asOf = plan.calendar.as_of;
+  const onOrderOf = new Map((plan.on_order ?? []).map((o) => [o.material_id, o.pieces]));
+  const onOrderNote = (id) => {
+    const pieces = onOrderOf.get(id) ?? [];
+    if (pieces.length === 0) return "";
+    const total = pieces.reduce((sum, x) => sum + Number(x.qty ?? 0), 0);
+    return ` Already on order: ${Math.round(total * 1000) / 1000} (${pieces.slice(0, 3).map((x) => `${x.reference.split(" · ")[0]}${x.eta ? ` ETA ${x.eta}` : ""}`).join("; ")}${pieces.length > 3 ? "…" : ""}) — this buy is the balance beyond it.`;
+  };
   const riskOf = new Map((plan.risks ?? []).map((r) => [r.material_id, r]));
   // Owner 2026-10-27: Bulk RM (and groups made only of Bulk RM) stay out of PO22 for now.
   const bulkMaterials = new Set(plan.bulk_material_ids ?? []);
@@ -33,12 +40,12 @@ export function buildActionRows(plan) {
     const base = { material_id: buy.material_id, material: buy.material_name, code: buy.material_code, uom: buy.uom, order_unit: buy.order_unit ?? null, shortage_day: shortage, critical_day: critical };
     if (buy.status === "ADVISORY_LATE" && buy.sequence === 1) {
       push({ ...base, kind: "BUY", level: "URGENT", action: "Order today", by_when: asOf, qty: buy.recommended_po_qty_base, vendor: buy.vendor_label,
-        why: `Should have been ordered by ${buy.need_date ? addDays(buy.need_date, -(buy.total_lead_time_days ?? 0)) : "earlier"}; ordering today arrives ${buy.estimated_plant_eta}.${shortage ? ` Stock runs out ${shortage}.` : ""}` });
+        why: `Should have been ordered by ${buy.need_date ? addDays(buy.need_date, -(buy.total_lead_time_days ?? 0)) : "earlier"}; ordering today arrives ${buy.estimated_plant_eta}.${shortage ? ` Stock runs out ${shortage}.` : ""}${onOrderNote(buy.material_id)}` });
     } else if (buy.status === "ADVISORY") {
       const left = daysBetween(asOf, buy.recommended_po_by);
       push({ ...base, kind: "BUY", level: left <= 7 ? "SOON" : "PLAN", action: buy.sequence > 1 ? `Order (next order #${buy.sequence})` : "Order", by_when: buy.recommended_po_by,
         qty: buy.recommended_po_qty_base, vendor: buy.vendor_label,
-        why: `Cover falls to Target on ${buy.need_date}; arrives ${buy.estimated_plant_eta} if ordered by ${buy.recommended_po_by}.` });
+        why: `Cover falls to Target on ${buy.need_date}; arrives ${buy.estimated_plant_eta} if ordered by ${buy.recommended_po_by}.${onOrderNote(buy.material_id)}` });
     } else if (buy.status === "UNKNOWN_POLICY") {
       if (!shortage && !(buy.required_qty_base > 0)) continue;
       push({ ...base, kind: "DATA", level: shortage ? "URGENT" : "FIX_DATA", action: "Set Target / Critical days", by_when: shortage ?? null, qty: null, vendor: null,
