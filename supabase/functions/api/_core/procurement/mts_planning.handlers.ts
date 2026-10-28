@@ -12,7 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
-import { buildCalendar, isIsoDate, isTransferFed, monthEnd, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
+import { buildCalendar, isIsoDate, isTransferFed, monthEnd, moqInBase, orderUnitOf, preferredVendorOrderUom, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   cachedLoad,
   computeRequirement,
@@ -97,11 +97,13 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   const label = new Map(vendors.map((v) => [text(v.id), [text(v.vendor_code), text(v.vendor_name)].filter(Boolean).join(" — ")]));
   // Default payment term per vendor-material (D10: cash-out timing).
   const vmiIds = unique(rows.map((row) => text(row.id)));
-  const [termRows, currencyRows, recentPos] = vmiIds.length === 0 ? [[], [], []] : await Promise.all([
+  const [termRows, currencyRows, vendorUomRows, recentPos] = vmiIds.length === 0 ? [[], [], [], []] : await Promise.all([
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_payment_term").select("vmi_id, payment_term_id, is_default").in("vmi_id", chunk)),
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_currency").select("vmi_id, currency_code, is_default").in("vmi_id", chunk)),
+    fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
+      .from("vendor_material_uom").select("vmi_id, uom_code, is_default").in("vmi_id", chunk)),
     fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("purchase_order")
       .select("id, po_date, status").eq("company_id", companyId)
       .gte("po_date", new Date(Date.parse(`${today}T00:00:00Z`) - 730 * 86_400_000).toISOString().slice(0, 10)).order("po_date"), "MTS_PLANNING_PO_CURRENCY_READ_FAILED"),
@@ -155,15 +157,23 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     const seen = poUomByVmi.get(vmiId);
     if (!seen || date >= seen.po_date) poUomByVmi.set(vmiId, { uom, po_date: date });
   }
+  const vendorUomsByVmi = new Map<string, JsonRecord[]>();
+  for (const row of vendorUomRows) {
+    const vmiId = text(row.vmi_id);
+    vendorUomsByVmi.set(vmiId, [...(vendorUomsByVmi.get(vmiId) ?? []), row]);
+  }
   for (const row of rows) {
     const materialId = text(row.material_id);
     const vendorId = text(row.vendor_id);
     const material = materials.get(materialId);
-    const unit = text(row.supply_uom_code) || material?.base_uom_code || "";
+    // Supply UoM wins; otherwise use MM03's default vendor-material UoM. This
+    // shared value drives Order UoM display, MOQ/multiple conversion and price.
+    const supplyUom = preferredVendorOrderUom(text(row.supply_uom_code), vendorUomsByVmi.get(text(row.id)) ?? []);
+    const unit = supplyUom || material?.base_uom_code || "";
     const toBase = (value: unknown) => { const q = num(value); return q === null ? null : toMaterialBase(material, q, unit); };
     // The price unit (not the MOQ unit): Supply UoM, else the latest PO line UoM, else base.
     // Only a GRN writes the price in the PO unit; a price typed in MM03 (no GRN yet) is per base unit.
-    const priceUnit = priceUnitCode({ supply_uom_code: text(row.supply_uom_code), last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
+    const priceUnit = priceUnitCode({ supply_uom_code: supplyUom, last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
     const booking = num(row.booking_time_days);
     const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days - (booking ?? 0));
     result.set(materialId, [...(result.get(materialId) ?? []), {
@@ -177,7 +187,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
         vmi_last_purchase_currency: text(row.last_purchase_currency) || null,
         vmi_default_currency: currencyByVmi.get(text(row.id)) ?? null,
       }),
-      supply_uom_code: text(row.supply_uom_code) || null,
+      supply_uom_code: supplyUom,
       ...(() => {
         const term = termByVmi.get(text(row.id));
         if (!term) return { credit_days: null, advance: false };

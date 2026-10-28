@@ -25,6 +25,7 @@ import {
   suggestSafetyDays,
   computeMaterialMetrics,
   orderUnitOf,
+  preferredVendorOrderUom,
   consumptionFromConsBucket,
   coverageDays,
   effectivePlanAt,
@@ -1014,14 +1015,21 @@ Deno.test("What-if policy overrides: every effective row of the item, others unt
   assertEqual(applyPolicyOverrides(policies, new Map()).length, 3, "no overrides → same rows");
 });
 
-Deno.test("PO22 display unit: Material Settings Order UoM first, then a vendor Supply UoM, else base", () => {
+Deno.test("PO22 display unit: Material Settings Order UoM first, then a vendor Order UoM, else base", () => {
   const material = { material_id: "M", material_type: "RM", base_uom_code: "KG", status: "ACTIVE", to_base_factors: { BAG: 25, MT: 1000 } };
   const policyFirst = displayUnitOf(material, "BAG", ["MT"]);
   if (policyFirst?.uom_code !== "BAG" || policyFirst.base_per_unit !== 25) throw new Error(`policy order UoM wins: ${JSON.stringify(policyFirst)}`);
   const vendor = displayUnitOf(material, null, ["MT"]);
-  if (vendor?.uom_code !== "MT" || vendor.base_per_unit !== 1000) throw new Error(`vendor supply UoM next: ${JSON.stringify(vendor)}`);
+  if (vendor?.uom_code !== "MT" || vendor.base_per_unit !== 1000) throw new Error(`vendor order UoM next: ${JSON.stringify(vendor)}`);
   if (displayUnitOf(material, "KG", []) !== null) throw new Error("the base unit itself is no display unit");
   if (displayUnitOf(material, "DRUM", ["LTR"]) !== null) throw new Error("a unit without a verified conversion is never shown");
+});
+
+Deno.test("PO22 vendor Order UoM: Supply UoM wins, otherwise MM03 default vendor UoM", () => {
+  const options = [{ uom_code: "PKT", is_default: true }, { uom_code: "BOX", is_default: false }];
+  if (preferredVendorOrderUom("BAG", options) !== "BAG") throw new Error("explicit Supply UoM must win");
+  if (preferredVendorOrderUom(null, options) !== "PKT") throw new Error("default vendor UoM must fill a blank Supply UoM");
+  if (preferredVendorOrderUom(null, [{ uom_code: "BOX", is_default: false }]) !== null) throw new Error("non-default alternate must not be guessed");
 });
 
 Deno.test("PO21 cross-company production carries forward until a newer choice is saved", () => {

@@ -6944,3 +6944,31 @@ Open / blocked: Google Sheets not reachable (legacy formulas UNRESOLVED for Pror
 - **Dev note:** Dev contains no matching CMP003/CMP005 business fixture, so only the transaction
   shape/schema path could be validated there; the owner-authorised production repair and its
   production re-read are the authoritative operational evidence.
+
+---
+
+### 2026-10-28 — PO22 Order-UoM stock/display parity (Codex) — IMPLEMENTED ON AGENT BRANCH
+
+- **Reported symptom:** PO22 could show a stock quantity in the material's base UoM while the
+  adjacent UoM indicated the Order UoM; the same inconsistency reached tab exports.
+- **Production reproduction (read-only):** CMP003 has 16 active multi-UOM RM/PM materials whose
+  normal order unit exists in `erp_master.vendor_material_uom` but not in
+  `vendor_material_info.supply_uom_code`. The prior shared loader only used the latter. The
+  default rows include verified `BTL → PKT × 4`, `NOS → PKT × 100`, and `KG → MT × 1000`
+  conversions; no business data was changed.
+- **Implementation:** `preferredVendorOrderUom` now takes explicit MM03 Supply UoM first and,
+  only if blank, its default vendor-material UoM. Requirement and Planning use that same value
+  to build `display_units`, calculate the Order-UoM presentation and resolve vendor MOQ/multiple
+  and price-unit conversion. Item Plan now returns that exact `display_units` map with its own
+  result, so detail/preview/Excel all use one canonical conversion path. Non-default vendor UoM
+  options remain excluded; values stay in base UoM for all calculations.
+- **Downstream consumers covered:** Requirement grid/groups/source drill and Excel; Action;
+  Planning buys/lots/daily/groups; 4A Item Plan grid/trace/preview/Excel; Store report/Excel
+  (including old saved runs, overlaid with the live canonical unit map); rolling-plan export. The
+  4A AI average-stock clipboard now exports its converted displayed quantity with its UoM header.
+- **Verification:** `deno test --no-check supabase/functions/api/_core/procurement/mts_requirement.logic.test.ts`
+  passed **58/58**; `deno check --no-lock` passed for Requirement, Planning and Item Plan modules;
+  `node --test frontend/src/pages/dashboard/procurement/planning/mtsOrderUnit.test.mjs` passed
+  **3/3**; `npm.cmd run build` in `frontend/` passed (only the pre-existing duplicate GRN JSX
+  attribute and chunk-size warnings). No migration, production data write, ledger action, ACL
+  change or deployment occurred.
