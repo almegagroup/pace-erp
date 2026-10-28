@@ -395,3 +395,30 @@ policy rows for CMP003 (members Target 30 / Critical 20, no saved group policy).
   After the change, Exclusive and every group follow the same rule: run down to own Min, then claim from the pool
   up to own Max; nothing is refilled on a receipt day unless the level is at / below its Min (or is waiting).
   A member's own Target (Gabrosa 20) still governs when that member is bought.
+
+---
+
+## 15. Engine change D1–D3 (+ D2/D4 decisions) — implemented 2026-10-28 on `agent/claude`
+
+File: `supabase/functions/api/_core/procurement/mts_family_planner.logic.ts` (+ tests in the same folder).
+
+| # | Change |
+|---|---|
+| D1 | A group claims from the pool **only on day 0 or when its own reserve is below its own Min (Target)**. A receipt day no longer refills a group above Min. A group that reached Min while the pool was short stays below Min (**waiting**) and is served first, narrow → broad, when stock appears. The release and second-rotation of excess still run on a receipt day. |
+| D3 | **Exclusive / own use is a level**: persistent `ownReserve` per material with own demand, run down by its own use to its own Min, then claimed from that material's unreserved stock up to its own Max. The old rolling "next Max days" protection is gone (`protection` is only kept for `freeAfter`). |
+| D2 | **FEFO across lots** in the no-saved-order path (refill, second rotation, consumption): members are ordered by the age of their **oldest remaining receipt** (counted opening stock = −1, a confirmed ETA / lot = its landing day); members with equal age keep the stock-weighted ratio with the cost / credit tilt. Saved group order and short-life expiry priority are unchanged and still come first. |
+| D4 | **Not changed — by design.** The reserve is "today's use + Desired-Max days ahead", i.e. **exactly Max days remain after today's use**. The owner's 60 days is that post-use figure; 61 appears only because the reported number is the pre-use balance. |
+| D5 | Owner correction: the 20 days belongs to Gabrosa as a member, not to a group. No data change. |
+
+### Verification
+- New tests: D1 (receipt does not refill a group above Min; refill to Max below Min), D2 (older stock first, newer lot last), D3 (exclusive use never short, no group shortage). **D1 and D2 fail on the old engine and pass on the new one.** The existing W4 test now uses a 20 KG opening member so that the receipt is needed from its ETA (older stock is served first).
+- 249 pure procurement tests pass (21 files); all CI guards pass; `deno check` error count unchanged (25, pre-existing).
+- Planner benchmark (108 materials, 187 days): ≈ +20% time (2.3–2.5 s → 2.9 s); synthetic buys 830 → 701.
+- Re-ran the §7 example (same inputs as the audit):
+  - total stock on 26 Dec = **122,520 KG**, identical to the hand figure (75,630 pool + 46,890 reserves);
+  - Group B refills at Min on 27 Nov, 28 Dec, 28 Jan, 1 Mar, then only a **partial** refill on 1 Apr (+1,022 of ≈ 41,400 needed) — the hand figures were 27 Nov, 27 Dec, 26 Jan, 25 Feb, 27 Mar (short ≈ 38,930). The engine is later by one day per cycle because it claims when the reserve is **strictly below** Min (the "equal still serves today" rule; making it ≤ would rebuild a group daily when Desired Max = Target) and by the discrete 31 / 28-day months; Group A refills a day after B;
+  - Group B first below Target on **1 Apr** (was 5 Apr), below Critical on 16 Apr; no stock-out by 30 Apr;
+  - the newest lots are used last: Gabrosa is largely left in the pool for Exclusive / Group A.
+
+### Not done yet
+D9 (reschedule feasibility window), D7 / D8 (event log, Material × Level matrix, excess left), D10 (a member's own Min when it is bought — not exercised), D11, the 4A table / Excel of §13, and the live PROD run (needs the real handler path).

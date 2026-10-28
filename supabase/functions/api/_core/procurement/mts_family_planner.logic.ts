@@ -73,7 +73,8 @@ export type FamilyOpeningReceipt = {
 };
 
 type FamilyAllocationSourceKind = "OPENING" | "CONFIRMED_ETA" | "MANUAL_LOT" | "ENGINE_LOT";
-type SimReceipt = FamilyOpeningReceipt & { source_kind: FamilyAllocationSourceKind };
+/** `arrived_day`: -1 for counted opening stock, else the day index the confirmed ETA / lot lands (FEFO age). */
+type SimReceipt = FamilyOpeningReceipt & { source_kind: FamilyAllocationSourceKind; arrived_day: number };
 
 export type FamilyPlannerInput = {
   as_of: string;
@@ -561,7 +562,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
-    const receiptLeft: SimReceipt[][] = simulatedOpeningReceipts.map((rows) => rows.map((row) => ({ ...row, source_kind: "OPENING" })));
+    const receiptLeft: SimReceipt[][] = simulatedOpeningReceipts.map((rows) => rows.map((row) => ({ ...row, source_kind: "OPENING", arrived_day: -1 })));
     // A group reserve is a claim on real physical stock.  It is created on
     // the opening/receipt event, then reduced only by that group's draw.  It
     // must not be recreated from the whole balance on every calendar day.
@@ -572,6 +573,10 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     // below Target.  This makes an overlapping group see physical excess once,
     // not once per group.
     const excessReserve = pools.map(() => Array.from({ length: M }, () => 0));
+    // Owner 2026-10-28: Exclusive / own use is a level like any group: a persistent reserve, run down
+    // by its own use to its own Min (Target), then claimed from the pool up to its own Max. Before this
+    // it was a rolling "next Max days" protection that never had a Min or a top-up event.
+    const ownReserve = ids.map(() => 0);
     for (let i = 0; i < N; i += 1) {
       // A receipt is usable through valid_until.  Expired virtual stock is not
       // silently counted as cover; this is a planning warning, never a stock post.
@@ -601,6 +606,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
             excessReserve[p][m] = roundQty(reserved - released);
             expiredReserve = roundQty(expiredReserve - released);
           }
+          if (expiredReserve > EPSILON) ownReserve[m] = roundQty(Math.max(0, ownReserve[m] - expiredReserve));
           receipt.qty_base = 0;
         }
       }
@@ -608,18 +614,19 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         for (const source of confirmedSources.get(`${m}|${i}`) ?? []) {
           receiptLeft[m].push({
             material_id: ids[m], qty_base: source.qty, valid_until: "9999-12-31",
-            reference: source.reference, expiry_priority: false, source_kind: "CONFIRMED_ETA",
+            reference: source.reference, expiry_priority: false, source_kind: "CONFIRMED_ETA", arrived_day: i,
           });
         }
         for (const lot of lots.filter((row) => row.index === i && mIndex.get(row.material_id) === m)) {
           receiptLeft[m].push({
             material_id: ids[m], qty_base: lot.qty, valid_until: "9999-12-31",
-            reference: lot.source_reference, expiry_priority: false, source_kind: lot.source_kind,
+            reference: lot.source_reference, expiry_priority: false, source_kind: lot.source_kind, arrived_day: i,
           });
         }
         s.arrival[m][i] = confirmed[m][i];
         bal[m] += confirmed[m][i] + s.planned[m][i] - own[m][i];
         s.use[m][i] = own[m][i];
+        ownReserve[m] = roundQty(Math.max(0, ownReserve[m] - own[m][i]));
         // Existing receipts are consumed FEFO.  Future arrivals/engine lots
         // remain aggregate because Store cannot physically issue them yet.
         let ownLeft = own[m][i];
@@ -637,7 +644,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       // Direct/exclusive protection stays first.  Group reserves then persist
       // through days until their own group consumes them.
       const newlyAvailable = i === 0 || ids.some((_id, m) => confirmed[m][i] > EPSILON || s.planned[m][i] > EPSILON);
-      const unreserved = ids.map((_id, m) => Math.max(0, bal[m] - protection[m][i]
+      const unreserved = ids.map((_id, m) => Math.max(0, bal[m] - ownReserve[m]
         - purposeReserve.reduce((sum, reserve) => sum + reserve[m], 0)
         - excessReserve.reduce((sum, reserve) => sum + reserve[m], 0)));
       const takeBucket = (p: number, m: number, qty: number) => {
@@ -647,6 +654,14 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         unreserved[m] = roundQty(unreserved[m] - take);
         return take;
       };
+      // Owner 2026-10-28 (FEFO across lots): inside a group, the member holding the OLDEST remaining
+      // receipt is served first and the one whose stock is newest last (counted opening stock = -1, a
+      // confirmed ETA / lot = the day it lands). Members tied on age keep the stock-weighted ratio.
+      const oldestArrival = (m: number) => receiptLeft[m].reduce((min, r) => (r.qty_base > EPSILON ? Math.min(min, r.arrived_day) : min), Number.POSITIVE_INFINITY);
+      const ageTiers = (members: readonly number[]): number[][] => {
+        const ages = [...new Set(members.map((m) => oldestArrival(m)))].sort((a, b) => a - b);
+        return ages.map((age) => members.filter((m) => oldestArrival(m) === age));
+      };
       const releaseExcess = () => {
         excessReserve.forEach((reserve) => reserve.forEach((qty, m) => {
           if (qty <= EPSILON) return;
@@ -654,16 +669,40 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
           reserve[m] = 0;
         }));
       };
-      const hardTargetBreach = pools.some((pool, p) => {
+      // Owner 2026-10-28: a level (Exclusive or a group) claims from the pool only when it is at or
+      // below its OWN Min (Target) -- or on day 0 -- never merely because a receipt landed. A level that
+      // reached Min while the pool was short stays below Min, so it is "waiting" and is served first
+      // (narrow -> broad) as soon as stock appears.
+      const poolBreach = pools.map((pool, p) => {
         const targetQty = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).target);
-        // `targetQty` includes the current draw plus the configured forward
-        // Target window.  Therefore a carried balance exactly equal to this
-        // value still safely serves today; refill only once it falls below.
-        return purposeReserve[p].reduce((sum, qty) => sum + qty, 0) + EPSILON < targetQty;
+        // `targetQty` includes the current draw plus the configured forward Target window.  A carried balance
+        // exactly equal to it still serves today, so the claim is made once it falls BELOW it (strict: with
+        // Desired Max = Target an equal balance would otherwise rebuild every day).  Needs future demand.
+        return targetQty > EPSILON && purposeReserve[p].reduce((sum, qty) => sum + qty, 0) + EPSILON < targetQty;
       });
+      const ownBreach = ids.map((_id, m) => {
+        const target = targets[m][i].target;
+        if (target === null || memberDesiredMax[m][i] === null || own[m].every((qty) => qty <= EPSILON)) return false;
+        // Own use is already drawn at the top of the day, so the reserve is compared with the days still ahead.
+        const targetQty = useAhead(own[m], i, target);
+        return targetQty > EPSILON && ownReserve[m] + EPSILON < targetQty;
+      });
+      const hardTargetBreach = poolBreach.some(Boolean) || ownBreach.some(Boolean);
       const allocationEvent = newlyAvailable || hardTargetBreach;
       if (allocationEvent) releaseExcess();
+      // Exclusive / own use first: top its reserve up to its own Max from the unreserved stock of that material.
+      ids.forEach((_id, m) => {
+        const desired = memberDesiredMax[m][i];
+        if (desired === null || own[m].every((qty) => qty <= EPSILON)) return;
+        if (!(i === 0 || ownBreach[m])) return;
+        const wanted = Math.max(0, useAhead(own[m], i, desired) - ownReserve[m]);
+        const take = Math.min(wanted, unreserved[m]);
+        if (take <= EPSILON) return;
+        ownReserve[m] = roundQty(ownReserve[m] + take);
+        unreserved[m] = roundQty(unreserved[m] - take);
+      });
       if (allocationEvent) pools.forEach((pool, p) => {
+        if (!(i === 0 || poolBreach[p])) return;
         let wanted = pool.demand[i] + useAhead(pool.demand, i, groupCoverageAt(pool, i).desired);
         wanted = Math.max(0, wanted - purposeReserve[p].reduce((sum, qty) => sum + qty, 0));
         if (wanted <= EPSILON) return;
@@ -696,15 +735,17 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
           // The no-fixed-order bucket preserves Method C's stock-weighted
           // rotation.  FEFO and run-down have already received their explicit
           // priority share above; the remainder is shared over normal members.
-          for (let pass = 0; pass < 4 && wanted > EPSILON; pass += 1) {
-            const weights = cand.map((m) => unreserved[m] * costTilt[m]);
-            const total = weights.reduce((sum, qty) => sum + qty, 0);
-            if (total <= EPSILON) break;
-            const thisPass = wanted;
-            cand.forEach((m, k) => {
-              if (wanted <= EPSILON) return;
-              wanted = roundQty(wanted - takeBucket(p, m, thisPass * (weights[k] / total)));
-            });
+          for (const tier of ageTiers(cand)) {
+            for (let pass = 0; pass < 4 && wanted > EPSILON; pass += 1) {
+              const weights = tier.map((m) => unreserved[m] * costTilt[m]);
+              const total = weights.reduce((sum, qty) => sum + qty, 0);
+              if (total <= EPSILON) break;
+              const thisPass = wanted;
+              tier.forEach((m, k) => {
+                if (wanted <= EPSILON) return;
+                wanted = roundQty(wanted - takeBucket(p, m, thisPass * (weights[k] / total)));
+              });
+            }
           }
         }
       });
@@ -746,7 +787,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
               ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => unreserved[mIndex.get(id)!], order).map((id) => mIndex.get(id)!)
               : [];
             const runDown = order ? [] : [...cand].filter((m) => hasNoFutureReplenishment(ids[m], i)).sort((a, b) => ids[a].localeCompare(ids[b]));
-            const normal = [...cand].sort((a, b) => unreserved[b] * costTilt[b] - unreserved[a] * costTilt[a] || ids[a].localeCompare(ids[b]));
+            const normal = [...cand].sort((a, b) => oldestArrival(a) - oldestArrival(b) || unreserved[b] * costTilt[b] - unreserved[a] * costTilt[a] || ids[a].localeCompare(ids[b]));
             for (const m of [...new Set([...expiryFirst, ...saved, ...runDown, ...normal])]) {
               if (wanted <= EPSILON) break;
               const took = takeExcess(p, m, wanted);
@@ -838,15 +879,17 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
           // members in proportion to their free stock, tilted to the costlier stock (it ties up more
           // working capital). Every member rotates, none piles up, own use stays protected, and the
           // ratio changes by itself as arrivals change each member's free stock.
-          for (let pass = 0; pass < 4 && need > EPSILON; pass += 1) {
-            const weights = cand.map((m) => free(m) * costTilt[m]);
-            const total = weights.reduce((a, b) => a + b, 0);
-            if (total <= EPSILON) break;
-            const want = need;
-            cand.forEach((m, k) => {
-              const take = Math.min(free(m), want * (weights[k] / total), need);
-              if (take > EPSILON) takeFrom(m, take);
-            });
+          for (const tier of ageTiers(cand)) {
+            for (let pass = 0; pass < 4 && need > EPSILON; pass += 1) {
+              const weights = tier.map((m) => free(m) * costTilt[m]);
+              const total = weights.reduce((a, b) => a + b, 0);
+              if (total <= EPSILON) break;
+              const want = need;
+              tier.forEach((m, k) => {
+                const take = Math.min(free(m), want * (weights[k] / total), need);
+                if (take > EPSILON) takeFrom(m, take);
+              });
+            }
           }
         }
         if (need > EPSILON) s.poolFreeShort[p][i] = need;

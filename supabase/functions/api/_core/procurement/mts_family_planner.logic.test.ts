@@ -559,7 +559,7 @@ Deno.test("family waterfall: a group below Critical returns the ordered action c
 Deno.test("W4: a confirmed future arrival joins group allocation only from its ETA", () => {
   const days = Array.from({ length: 5 }, (_, i) => addDays("2026-10-01", i));
   const result = planFamily({
-    as_of: "2026-10-01", horizon_end: "2026-10-05", opening_qty_by_material: { BRIDGE: 100, INBOUND: 0 }, own_demand: [],
+    as_of: "2026-10-01", horizon_end: "2026-10-05", opening_qty_by_material: { BRIDGE: 20, INBOUND: 0 }, own_demand: [],
     group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["BRIDGE", "INBOUND"], required_by, qty_base: 10 })),
     confirmed_arrivals: [{ source_key: "INBOUND-ETA", material_id: "INBOUND", eta_to_plant: "2026-10-03", qty_base: 100 }],
     policies: [policy("BRIDGE", 0, 0, []), policy("INBOUND", 0, 0, [])], plan_buys: false,
@@ -724,4 +724,51 @@ Deno.test("smart consumption ratio: equal stock and price, the longer-credit mem
   assert(d.ADV > 0, `advance stock still rotates: ${JSON.stringify(d)}`);
   // Company average credit = 40 days → unknown sits between 30 and 90 days, i.e. neutral.
   assert(d.UNK > d.C30 && d.UNK < d.C90, `unknown credit is neutral: ${JSON.stringify(d)}`);
+});
+
+Deno.test("owner 2026-10-28 D1: a receipt does not refill a group that is above its own Min; the group refills when it falls below Min", () => {
+  const days = Array.from({ length: 40 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 39), opening_qty_by_material: { A: 800, B: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A", "B"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "B-ETA", material_id: "B", eta_to_plant: "2026-10-06", qty_base: 500 }],
+    group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 10, critical_days: 5, desired_max_days_override: 20 }],
+    policies: [policy("A", 10, 5, []), policy("B", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const reserve = (day: string) => result.group_bucket_reservations.filter((row) => row.group_id === "G" && row.day === day).reduce((s, row) => s + row.reserved_qty_base, 0);
+  // Target 10 + cycle 10 -> Max 20 days = 200 after today's use; the receipt on 10-06 must not top it up.
+  assert(reserve("2026-10-06") < reserve("2026-10-05"), `receipt day must not refill a group above Min: ${reserve("2026-10-05")} -> ${reserve("2026-10-06")}`);
+  // Below Min (10 days = 100 after use) the group claims again up to Max.
+  const refills = days.filter((day, i) => i > 0 && reserve(day) > reserve(days[i - 1]) + 1);
+  assert(refills.length >= 1, "the group must refill once it falls below its Min");
+  assert(reserve(refills[0]) >= 199, `refill goes to Max (200): ${reserve(refills[0])}`);
+});
+
+Deno.test("owner 2026-10-28 D2: FEFO across lots — the member holding the older stock is used first, the newer lot last", () => {
+  const days = Array.from({ length: 8 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 7), opening_qty_by_material: { OLD: 40, NEW: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["NEW", "OLD"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "NEW-ETA", material_id: "NEW", eta_to_plant: "2026-10-02", qty_base: 100 }],
+    policies: [policy("OLD", 0, 0, []), policy("NEW", 0, 0, [])], plan_buys: false,
+  });
+  const draw = (day: string, id: string) => result.group_mix.find((row) => row.group_id === "G" && row.day === day)?.draws[id] ?? 0;
+  for (const day of ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"]) assert(draw(day, "NEW") === 0 && draw(day, "OLD") > 0, `${day}: the older stock goes first`);
+  assert(draw("2026-10-05", "NEW") > 0, "the newer lot is used once the older stock is gone");
+});
+
+Deno.test("owner 2026-10-28 D3: Exclusive use is protected like a level — the shared pool can never leave it short", () => {
+  const days = Array.from({ length: 60 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 59), opening_qty_by_material: { X: 700, Y: 300 },
+    own_demand: days.map((required_by) => ({ material_id: "X", required_by, qty_base: 5 })),
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["X", "Y"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [], policies: [policy("X", 10, 5, []), policy("Y", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const x = result.rows.filter((row) => row.material_id === "X");
+  assert(x.every((row) => row.closing_qty_base >= -1e-6), "X never goes negative");
+  // 700 + 300 = 1000 against (5 + 10) * 60 = 900: the exclusive use of X is fully met while the group draws the rest.
+  assert(result.group_unmet.length === 0, `no group shortage: ${JSON.stringify(result.group_unmet.slice(0, 2))}`);
+  const exclusiveDays = x.filter((row) => row.demand_qty_base > 0).length;
+  assert(exclusiveDays === 60, "all 60 days of the exclusive use are served");
 });
