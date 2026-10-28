@@ -956,6 +956,16 @@ export async function computePlanning(p: PlanningParams) {
       group_label: row.group_id ? groupLabel.get(row.group_id) ?? "—" : null,
       qty: row.qty_base, available_after_qty: row.available_after_qty_base, stage: row.stage, rule: row.rule,
     })),
+    // Owner 2026-10-28: what is already ordered / on the way, per material, so the Action list can say
+    // "already on order" next to a buy (the planner counts these pieces; this only makes it visible).
+    on_order: req.output.rows
+      .filter((row) => !arrivalScope || arrivalScope.has(row.material_id))
+      .filter((row) => row.inbound_events.some((event) => event.kind !== "POSTED_GR"))
+      .map((row) => ({
+        material_id: row.material_id,
+        pieces: row.inbound_events.filter((event) => event.kind !== "POSTED_GR")
+          .map((event) => ({ reference: event.reference, qty: event.qty, eta: event.date, kind: event.kind })),
+      })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
     reschedulable_arrivals: req.output.rows.filter((row) => !arrivalScope || arrivalScope.has(row.material_id)).flatMap((row) => {
