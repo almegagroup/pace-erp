@@ -150,7 +150,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   };
   const uom = plan?.members?.find((m) => m.is_selected)?.uom ?? "";
   // Owner 2026-10-26: every quantity in the material's display (Order) UoM; calculations stay in base.
-  const du = useMemo(() => makeDisplayUnits(planningQ.data?.display_units), [planningQ.data]);
+  const du = useMemo(
+    () => makeDisplayUnits(view?.display_units ?? plan?.display_units ?? planningQ.data?.display_units),
+    [view, plan, planningQ.data],
+  );
   const familyIds = (view?.members ?? plan?.members ?? []).map((m) => m.material_id);
   // The family grid sums members: one unit only when every member shows the same one, else base.
   const familyUnit = familyIds.length > 1 ? du.groupUnit(familyIds) : du.unitOf(materialId);
@@ -1016,7 +1019,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                         { label: "Shortage days", key: "shortage_days" },
                         { label: "Days ≤ Target", key: "days_below_target" },
                         { label: "Lowest Max days", key: "lowest_max_days", copyValue: (r) => fmtDays(r.lowest_max_days) },
-                        { label: "Avg stock", key: "average_closing", copyValue: (r) => fmtQty(r.average_closing) },
+                        { label: `Avg stock (${familyUom})`, key: "average_closing", copyValue: (r) => fq(r.average_closing) },
                         { label: "Avg stock value", key: "average_stock_value", copyValue: (r) => r.average_stock_value === null ? "—" : `₹${fmtQty(r.average_stock_value)}` },
                       ], [["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]]
                         .filter(([, metrics]) => metrics)
@@ -1024,7 +1027,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                       className="h-7 w-max border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                     >Copy table + headers</button>
                     <table>
-                      <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th>Avg stock value</th></tr></thead>
+                      <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock ({familyUom})</th><th>Avg stock value</th></tr></thead>
                       <tbody>
                         {[["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]].filter(([, m]) => m).map(([label, m]) => (
                           <tr key={label}><td className="pr-3 font-semibold">{label}</td><td className="pr-3">{m.shortage_days}</td><td className="pr-3">{m.days_below_target}</td><td className="pr-3">{fmtDays(m.lowest_max_days)}</td><td className="pr-3">{fq(m.average_closing)} {familyUom}</td><td>{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td></tr>

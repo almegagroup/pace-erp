@@ -412,6 +412,9 @@ export async function buildItemPlan(
     return {
       company_id: companyId,
       material_id: materialId,
+      // The detail, its preview and its Excel export must not depend on a
+      // separate Planning-tab query being warm in the browser cache.
+      display_units: plan.display_units,
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
       month_sources: calendar.months.map((month) => ({ month, source: plannedMonths.has(month) ? "PLAN" : "NO_PO21_PLAN" })),
       forecast_count: reqData.forecast.forecasts.length,

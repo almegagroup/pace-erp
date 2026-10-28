@@ -1927,7 +1927,10 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
   const runQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-run", companyId, runId], queryFn: () => getMtsPlanningRun({ company_id: companyId, id: runId }), enabled: Boolean(companyId && runId) });
   const source = runId ? runQ.data?.run?.result ?? null : liveQ.data ?? null;
   // Owner 2026-10-26: quantities in the material's display (Order) UoM; a group line keeps base UoM.
-  const du = useMemo(() => makeDisplayUnits(source?.display_units ?? liveQ.data?.display_units), [source, liveQ.data]);
+  // A saved run may predate a new MM03 order-unit setup. Quantities are still
+  // base values, so overlay the live canonical map to keep old Store exports
+  // from pairing base quantities with a newly shown Order UoM.
+  const du = useMemo(() => makeDisplayUnits({ ...(source?.display_units ?? {}), ...(liveQ.data?.display_units ?? {}) }), [source, liveQ.data]);
   const sq = (materialId, value) => fmtQty(du.qty(value, materialId));
   // Owner: product rows grouped by parent → child product group, then product.
   const rows = useMemo(() => [...(source?.store_rows ?? [])].sort((a, b) =>
