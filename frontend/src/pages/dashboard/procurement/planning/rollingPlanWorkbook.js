@@ -154,7 +154,7 @@ function writePlan(sheet, companies) {
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
 const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Engine best date"];
-const PRED_HEAD = ["", "Import ETD", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Max Days", "Min Days", "Material", "Supplier", "PO by", "UoM"];
+const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Its own cover before arrival (d)", "Its own Min (d)"];
 
 /** Days of cover; empty because the stock outlasts the PO21 plan = "beyond plan" (owner 2026-10-28), not a long run of zero-demand days. */
 function beyondPlan(value, stock) {
@@ -209,7 +209,7 @@ function writeBlocks(sheet, companies, kind) {
       for (const x of b.prediction) {
         const row = sheet.addRow([
           x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), days(x.max_days), days(x.min_days), x.material, x.supplier ?? "", day(x.po_by),
-          x.uom ?? "",
+          x.uom ?? "", days(x.own_cover_before), days(x.own_min_days),
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
       }
