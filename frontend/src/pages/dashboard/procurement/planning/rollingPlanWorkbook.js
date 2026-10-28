@@ -230,6 +230,7 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   const head = summary.addRow([`MTS Plan — as of ${asOf}`]);
   head.getCell(1).font = { bold: true, size: 14 };
   summary.addRow([`Generated ${new Date().toLocaleString("en-IN")} · Demand = PO21 effective plan: Final where a Final exists, else Rolling (+ Additional, Urgent Extra) · advisory: no PO is created by this file`]);
+  summary.addRow(["Stock counted: opening stock for 120 days after its cut-off date, a GRN for 120 days after receipt (or its stated expiry). Older stock is not counted, so items can show Runs out around 28-29 Jan 2027. Days beyond the last PO21 demand day show as beyond plan."]);
   summary.addRow([]);
   addTable(summary, [
     { label: "Company", value: (c) => companyLabel(c) },

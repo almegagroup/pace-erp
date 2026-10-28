@@ -326,6 +326,9 @@ function standaloneCoverageDays(balance: number, use: readonly number[], from: n
     left = Math.max(0, left - need);
     covered += 1;
   }
+  // Owner 2026-10-28: a standalone item follows the same rule as the waterfall — stock that outlasts a PO21 plan which ended before
+  // the horizon end is "beyond plan", not a few leftover days.
+  if (!planContinues(use)) return null;
   return covered + Math.floor(left / finalApprovedDailyUse + EPSILON);
 }
 
@@ -530,9 +533,13 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
   // simulation still consumes the actual PO21 demand (zero means zero use).
   // Shared-group safety is deliberately deferred: one combined group reserve
   // must not be duplicated on every alternative member.
+  // Owner 2026-10-28: the reserve applies across a no-demand GAP (later demand exists), not after the plan's last demand day —
+  // a standalone item follows the same rule as the waterfall (no invented demand, no order after the plan).
   const finalOwnDailyUse = own.map((series) => {
     const finalRate = [...series].reverse().find((qty) => qty > EPSILON) ?? 0;
-    return series.map(() => finalRate);
+    let lastActive = -1;
+    series.forEach((qty, i) => { if (qty > EPSILON) lastActive = i; });
+    return series.map((_qty, i) => (i < lastActive ? finalRate : 0));
   });
 
   const arrivalFlags: OptimizerArrivalFlag[] = [...(input.arrival_risks ?? [])];

@@ -551,3 +551,8 @@ Open: live run on PROD data through the handlers.
 - `Engine best date` (prepone / postpone): tie-break chose the latest date in the horizon even when no demand remained. Candidate dates now stop at the PO21 plan's last demand day and the risk score ignores days after it.
 - "Runs out 2027-01-29" on ~15 items and Dispelair / Additive shortages: the plan expires every opening-stock lot 120 days after its cut-off (30 Sep 2026 + 120 = 28-29 Jan 2027) and every GRN without a stated expiry 120 days after receipt. In PROD 724 of 846 posted GRNs are expiry type N_A (no expiry). OPEN DECISION: should N_A / opening stock never expire?
 - Standalone items (no group) keep the Tot White rule (Target reserve at the last approved daily rate after the plan's last day). OPEN DECISION: should that stop at the plan's end like groups?
+
+## 24. Owner decisions on the open items (2026-10-28)
+
+- The 120-day rule is the owner's: opening stock counts for 120 days after its cut-off date, a GRN for 120 days after receipt (also when it says N_A). Not a bug. The Excel summary now says so, because it makes many items show "Runs out" around 28-29 Jan 2027.
+- A standalone item (no group) follows the same rule as the waterfall, only without distribution among members: no reserve and no order after the PO21 plan's last demand day. A reserve across a no-demand GAP (later demand exists) is kept. This replaces the earlier Tot White expectation for the tail of the plan; the test was changed accordingly.

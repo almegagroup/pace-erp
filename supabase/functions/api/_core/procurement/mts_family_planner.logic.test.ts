@@ -111,10 +111,9 @@ Deno.test("family planner: reaching Target again after an engine lot creates the
   assert(JSON.stringify(lots.slice(0, 2)) === JSON.stringify(["2026-11-27", "2026-12-07"]), `the second Target trigger must be a second projection, got ${JSON.stringify(lots)}`);
 });
 
-Deno.test("family planner: a standalone Target remains physical safety stock across a zero-demand gap", () => {
-  // Tot White shape: December has approved PO21 use; January has none.  The
-  // lack of January use must not turn a 25-day Target into zero stock or a
-  // hidden epsilon lot.  This deliberately does not apply to group members.
+Deno.test("family planner: a standalone Target is protected inside the PO21 plan and invents nothing after it (same rule as the waterfall)", () => {
+  // Tot White shape: December has approved PO21 use; January has none.  Owner 2026-10-28: no plan after December means no
+  // use and no order, exactly like a group member — the Target is protected only while the plan has demand.
   const asOf = "2026-12-01";
   const horizonEnd = "2027-01-31";
   const days: string[] = [];
@@ -135,9 +134,9 @@ Deno.test("family planner: a standalone Target remains physical safety stock acr
   assert(buys[0]?.recommended_po_qty_base === 10 * daily, `first safety refill must be 10 days, got ${JSON.stringify(buys[0])}`);
   assert(buys.every((buy) => (buy.recommended_po_qty_base ?? 0) > 0.001), `no epsilon/zero safety lot is allowed: ${JSON.stringify(buys)}`);
   const january = result.rows.find((row) => row.material_id === "TOT" && row.day === "2027-01-15");
-  assert(january?.closing_qty_base === 35 * daily, `zero-demand January must retain the physical safety reserve, got ${JSON.stringify(january)}`);
-  assert(january?.max_cover_days === 35 && january.min_cover_days === 35, `zero-demand January must retain 35 active-use days, not count calendar days: ${JSON.stringify(january)}`);
-  assert(result.rows.filter((row) => row.material_id === "TOT").every((row) => (row.max_cover_days ?? 0) <= 35), "a zero-demand month must not inflate standalone coverage days");
+  assert(january !== undefined && january.demand_qty_base === 0, "January has no demand");
+  assert(january.max_cover_days === null, `stock that outlasts the plan is "beyond plan" (null), got ${january.max_cover_days}`);
+  assert(buys.every((buy) => (buy.need_date ?? "") <= "2026-12-31"), `no order is planned for days after the plan: ${JSON.stringify(buys)}`);
 });
 
 Deno.test("family planner: known higher NM demand controls CM forward cover and MOQ projection", () => {
