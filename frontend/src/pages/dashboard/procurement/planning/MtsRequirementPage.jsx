@@ -1576,6 +1576,43 @@ function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
   const rows = useMemo(() => buildActionRows(planningQ.data ?? null), [planningQ.data]);
   const counts = useMemo(() => Object.fromEntries(Object.keys(ACTION_LEVELS).map((level) => [level, rows.filter((r) => r.level === level).length])), [rows]);
   const levelTone = { URGENT: "bg-rose-100 text-rose-800", SOON: "bg-amber-100 text-amber-800", PLAN: "bg-sky-100 text-sky-800", FIX_DATA: "bg-slate-100 text-slate-700" };
+  // Rows the grid currently shows after its own column filters (null until it reports) — the Excel matches the screen.
+  const filteredRef = useRef(null);
+  const onFilteredRowsChange = useCallback((visible) => { filteredRef.current = visible; }, []);
+  async function exportExcel() {
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      const unitOf = (r) => r.order_unit ?? du.unitOf(r.material_id);
+      const exportColumns = [
+        { key: "level", label: "Priority", width: 12, value: (r) => ACTION_LEVELS[r.level].label },
+        { key: "action", label: "What to do", width: 34, value: (r) => r.action },
+        { key: "material", label: "Material / Group", width: 40, value: (r) => r.material },
+        { key: "code", label: "Code", width: 14, value: (r) => r.code ?? "" },
+        { key: "by_when", label: "By when", width: 13, value: (r) => r.by_when ?? "" },
+        { key: "qty", label: "Qty", width: 22, align: "right", value: (r) => qtyInDisplayUnit(r.qty, r.uom, unitOf(r)) },
+        { key: "vendor", label: "Vendor", width: 36, value: (r) => r.vendor ?? "" },
+        { key: "shortage_day", label: "Runs out", width: 13, value: (r) => r.shortage_day ?? "" },
+        { key: "why", label: "Why", width: 90, value: (r) => r.why ?? "" },
+      ];
+      const exportRows = filteredRef.current ?? rows;
+      await downloadColoredExcelFile({
+        fileName: `po22_action_${planMonth}_${asOf}.xlsx`,
+        sheetName: "Action",
+        columns: exportColumns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align })),
+        rows: exportRows,
+        getCellValue: (row, column) => exportColumns.find((c) => c.key === column.key)?.value(row) ?? "",
+        preambleRows: [
+          ["Company", companyId],
+          ["Plan month (CM)", planMonth],
+          ["As-of date", asOf],
+          ["Rows", String(exportRows.length)],
+          ["Note", "Advisory only: nothing here creates a PO."],
+        ],
+      });
+    } catch (error) {
+      pushToast({ message: errorText(error), tone: "error" });
+    }
+  }
   const columns = [
     { key: "level", label: "Priority", width: "100px", render: (r) => <span className={`px-2 py-0.5 text-xs font-semibold ${levelTone[r.level]}`}>{ACTION_LEVELS[r.level].label}</span>, copyValue: (r) => ACTION_LEVELS[r.level].label },
     { key: "action", label: "What to do", width: "240px", render: (r) => <span className="font-semibold text-slate-800">{r.action}</span> },
@@ -1595,6 +1632,7 @@ function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
         ))}
         <span className="text-xs text-slate-500">Advisory only — never creates a PO. Details and vendor cost comparison are in 4. Planning.</span>
         <button type="button" onClick={() => onOpen("planning")} className="h-8 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Open Planning</button>
+        <button type="button" onClick={() => void exportExcel()} disabled={rows.length === 0} className="h-8 border border-emerald-600 bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Excel</button>
       </div>
       {planningQ.error ? <p className="text-sm text-rose-700">{errorText(planningQ.error)}</p> : null}
       <ErpDenseGrid
@@ -1602,6 +1640,7 @@ function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
         columns={columns}
         rows={rows}
         rowKey={(r) => r.id}
+        onFilteredRowsChange={onFilteredRowsChange}
         emptyMessage={planningQ.isLoading ? "Calculating…" : "Nothing to do — every material is covered through next month."}
         maxHeight="65vh"
       />
