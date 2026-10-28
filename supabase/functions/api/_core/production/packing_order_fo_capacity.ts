@@ -25,6 +25,7 @@ export type PackingOrderFoCapacity = {
   dispatched_qty_kg: number;
   free_qty_kg: number;
   reserved_by_plan_feed: Map<string, number>;
+  dispatched_by_plan_feed: Map<string, number>;
 };
 
 const QTY_TOL = 0.0001;
@@ -72,10 +73,34 @@ export function calculatePackingOrderFoCapacity(
     dispatched_qty_kg: dispatchedQtyKg,
     free_qty_kg: Math.max(0, physicalAvailableQty - reservedQty),
     reserved_by_plan_feed: reservedByFo,
+    dispatched_by_plan_feed: dispatchedByFo,
   };
 }
 
 export function availableForPlanFeed(capacity: PackingOrderFoCapacity, planFeedId: string): number {
   const ownReservation = capacity.reserved_by_plan_feed.get(String(planFeedId ?? "").trim()) ?? 0;
   return capacity.free_qty_kg + ownReservation;
+}
+
+// Allocation rows retain the quantity that has already dispatched so the FO
+// remains traceable. Only the part above that FO's dispatched quantity is a
+// live reservation of the Packing PO's remaining physical output.
+function outstandingReservationForPlanFeed(
+  capacity: PackingOrderFoCapacity,
+  planFeedId: string,
+  allocatedQty: unknown,
+): number {
+  const dispatchedQty = capacity.dispatched_by_plan_feed.get(String(planFeedId ?? "").trim()) ?? 0;
+  return Math.max(0, qty(allocatedQty) - dispatchedQty);
+}
+
+export function additionalReservationForPlanFeedAllocation(
+  capacity: PackingOrderFoCapacity,
+  planFeedId: string,
+  currentAllocatedQty: unknown,
+  requestedAllocatedQty: unknown,
+): number {
+  const currentReservation = outstandingReservationForPlanFeed(capacity, planFeedId, currentAllocatedQty);
+  const requestedReservation = outstandingReservationForPlanFeed(capacity, planFeedId, requestedAllocatedQty);
+  return Math.max(0, requestedReservation - currentReservation);
 }

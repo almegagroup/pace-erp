@@ -50,6 +50,52 @@ const DATE_FIELD_OPTIONS = [
   { value: "posting_date", label: "Posting date" },
 ];
 
+// The AC01 endpoint already supports offset pagination. Keep each request at
+// the established 200-row size because the handler resolves a sizeable set of
+// related GRN data per page, but assemble every page for this virtualized grid
+// and its Excel export. A single `limit: 200` request silently hid all later
+// GRNs (and exported only those same first 200 rows).
+const AC01_LIST_PAGE_SIZE = 200;
+
+function mergeComponents(componentPages) {
+  const byKey = new Map();
+  for (const components of componentPages) {
+    for (const component of components ?? []) {
+      if (component?.key && !byKey.has(component.key)) {
+        byKey.set(component.key, component);
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
+async function listAllAC01GRNs(params) {
+  const firstPage = await listAC01GRNs({
+    ...params,
+    limit: AC01_LIST_PAGE_SIZE,
+    offset: 1,
+  });
+  const items = Array.isArray(firstPage?.items) ? [...firstPage.items] : [];
+  const componentPages = [Array.isArray(firstPage?.components) ? firstPage.components : []];
+  const total = Number(firstPage?.total ?? items.length);
+
+  // Stop on an empty later page too: it prevents a bad/stale count from ever
+  // creating an endless loop, while returning every successfully read row.
+  for (let offset = items.length + 1; items.length < total; offset = items.length + 1) {
+    const page = await listAC01GRNs({
+      ...params,
+      limit: AC01_LIST_PAGE_SIZE,
+      offset,
+    });
+    const pageItems = Array.isArray(page?.items) ? page.items : [];
+    if (pageItems.length === 0) break;
+    items.push(...pageItems);
+    componentPages.push(Array.isArray(page?.components) ? page.components : []);
+  }
+
+  return { items, total, components: mergeComponents(componentPages) };
+}
+
 const DUTY_COST_TYPES = new Set([
   "IMPORT_DUTY", "EXCISE_DUTY", "CST", "CUSTOMS_EDN_CESS", "ADDITIONAL_DUTY_IGST", "DUTY_SETOFF",
   "ENTRY_TAX", "CUSTOMS_DUTY",
@@ -563,14 +609,13 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const listQuery = useQuery({
     queryKey: ["ac01", "grns", { companyId, search, dateField, dateFrom, dateTo, rateStatus }],
     queryFn: () =>
-      listAC01GRNs({
+      listAllAC01GRNs({
         company_id: companyId || undefined,
         search: search || undefined,
         date_field: dateField,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         rate_status: rateStatus || undefined,
-        limit: 200,
       }),
     enabled: Boolean(companyId),
   });
