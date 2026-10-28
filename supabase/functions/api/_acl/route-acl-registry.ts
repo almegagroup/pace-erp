@@ -437,6 +437,9 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/stock-ledger/movement-types": { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/batch-search":   { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   "GET:/api/procurement/stock-ledger/po-search":      { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
+  // PO22 column layouts (owner 2026-10-28): same shared handlers, gated by the PO22 Requirement VIEW right; only PO22* report codes are accepted.
+  "GET:/api/procurement/mts-requirement/layouts":     { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+  "POST:/api/procurement/mts-requirement/layouts":    { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
   "GET:/api/procurement/report-layouts":              { skipAcl: false, resourceCode: "PROC_STOCK_LEDGER",   action: "VIEW" },
   // VIEW, not WRITE: this single route handles both personal (USER-scope,
   // anyone with VIEW may save their own layout) and Global-scope creation —
@@ -1073,6 +1076,19 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/dispatch-qty\/confirm$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/mts-requirement\/layouts\/[^/]+$/,
+    methods: {
+      PATCH: { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+      DELETE: { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/mts-requirement\/layouts\/[^/]+\/set-default$/,
+    methods: {
+      POST: { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
+    },
   },
   {
     // VIEW here too, same reasoning as the create route above — ownership

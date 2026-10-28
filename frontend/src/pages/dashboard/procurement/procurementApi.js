@@ -1746,6 +1746,23 @@ export function searchStockLedgerPackingPoNumbers(params) {
   return fetchProcurement("GET", "/api/procurement/stock-ledger/po-search", undefined, params);
 }
 
+// PO22 column layouts (owner 2026-10-28): same storage, gated by the PO22 Requirement right; report codes start with PO22.
+export function listMtsReportLayouts(params) {
+  return fetchProcurement("GET", "/api/procurement/mts-requirement/layouts", undefined, params);
+}
+
+export function createMtsReportLayout(payload) {
+  return fetchProcurement("POST", "/api/procurement/mts-requirement/layouts", payload);
+}
+
+export function deleteMtsReportLayout(id) {
+  return fetchProcurement("DELETE", `/api/procurement/mts-requirement/layouts/${encodeURIComponent(id)}`);
+}
+
+export function setDefaultMtsReportLayout(id) {
+  return fetchProcurement("POST", `/api/procurement/mts-requirement/layouts/${encodeURIComponent(id)}/set-default`);
+}
+
 export function listReportLayouts(params) {
   return fetchProcurement("GET", "/api/procurement/report-layouts", undefined, params);
 }

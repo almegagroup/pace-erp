@@ -520,3 +520,11 @@ Built (`mts_store_plan.logic.ts`, payload `store_plan`, Store Report views *Item
 - A saved run from before this change keeps the older CM + NM figures and says so on screen.
 
 Open: live run on PROD data through the handlers.
+
+## 20. Column picker + named layouts (Requirement tab) — owner 2026-10-28
+
+- A "Columns" button on the PO22 Requirement report opens the shared column drawer. Unticking a column hides it at once.
+- Identity columns (material etc.) are always shown and not offered. A column added later is shown even in an old saved layout.
+- "Save Current As…" stores the visible columns under a name (per user). A saved layout can be chosen, set as default or deleted.
+- The Excel uses exactly the same visible columns as the screen (plus the "Column groups" quick switches), and the sheet header notes the layout name.
+- Storage: existing `erp_inventory.report_column_layout` / `report_layout_default` (report code `PO22_REQUIREMENT`); thin PO22 routes `/api/procurement/mts-requirement/layouts…` under ACL `PROC_MTS_REQUIREMENT` VIEW. No new migration.

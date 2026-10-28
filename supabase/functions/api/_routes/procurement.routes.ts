@@ -147,6 +147,13 @@ import {
   updateReportLayoutHandler,
 } from "../_core/procurement/report_layout.handlers.ts";
 import {
+  createMtsReportLayoutHandler,
+  deleteMtsReportLayoutHandler,
+  listMtsReportLayoutsHandler,
+  setDefaultMtsReportLayoutHandler,
+  updateMtsReportLayoutHandler,
+} from "../_core/procurement/mts_report_layout.handlers.ts";
+import {
   getCurrentStockHandler,
   getCurrentStockMachineWiseHandler,
   getStockHistoryHandler,
@@ -923,6 +930,10 @@ export async function dispatchProcurementRoutes(
       return await searchStockLedgerBatchNumbersHandler(req, ctx);
     case "GET:/api/procurement/stock-ledger/po-search":
       return await searchStockLedgerPackingPoNumbersHandler(req, ctx);
+    case "GET:/api/procurement/mts-requirement/layouts":
+      return await listMtsReportLayoutsHandler(req, ctx);
+    case "POST:/api/procurement/mts-requirement/layouts":
+      return await createMtsReportLayoutHandler(req, ctx);
     case "GET:/api/procurement/report-layouts":
       return await listReportLayoutsHandler(req, ctx);
     case "POST:/api/procurement/report-layouts":
@@ -1253,6 +1264,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/tracker\/layouts\/[^/]+$/.test(pathname) && req.method === "DELETE") {
     return await deleteTrackerLayoutHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/mts-requirement\/layouts\/[^/]+\/set-default$/.test(pathname) && req.method === "POST") {
+    return await setDefaultMtsReportLayoutHandler(req, ctx);
+  }
+  if (/^\/api\/procurement\/mts-requirement\/layouts\/[^/]+$/.test(pathname)) {
+    if (req.method === "PATCH") return await updateMtsReportLayoutHandler(req, ctx);
+    if (req.method === "DELETE") return await deleteMtsReportLayoutHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/report-layouts\/[^/]+\/set-default$/.test(pathname) && req.method === "POST") {
