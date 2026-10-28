@@ -1739,15 +1739,32 @@ export function coverageDays(
 ): CoverageResult {
   let balance = opening;
   let covered = 0;
-  for (let day = calendar.asOf; day <= (calendar.horizonEnd ?? calendar.nmEnd); day = addDays(day, 1)) {
+  const horizonEnd = calendar.horizonEnd ?? calendar.nmEnd;
+  // Owner 2026-10-28: a PO21 plan that stops before the horizon end (no demand in its last 7 days) means "no plan", not "no use":
+  // stock that outlasts it is "beyond plan" (days = null), not a run of zero-demand days plus an average.
+  let lastDemandDay: string | null = null;
+  let tailHasDemand = false;
+  for (const [day, qty] of demandByDay) {
+    if (qty > EPSILON && day >= calendar.asOf) {
+      if (lastDemandDay === null || day > lastDemandDay) lastDemandDay = day;
+      if (day > addDays(horizonEnd, -7)) tailHasDemand = true;
+    }
+  }
+  const planEnded = lastDemandDay !== null && !tailHasDemand;
+  for (let day = calendar.asOf; day <= horizonEnd; day = addDays(day, 1)) {
     balance += inboundByDay?.get(day) ?? 0;
     const demand = demandByDay.get(day) ?? 0;
-    if (demand <= EPSILON) { covered += 1; continue; }
+    if (demand <= EPSILON) {
+      if (planEnded && lastDemandDay !== null && day > lastDemandDay && balance > EPSILON) return { days: null, stockout_date: null, extrapolated: false };
+      covered += 1;
+      continue;
+    }
     if (balance >= demand - EPSILON) { balance -= demand; covered += 1; continue; }
     const fraction = balance > 0 ? balance / demand : 0;
     return { days: round2(covered + fraction), stockout_date: day, extrapolated: false };
   }
   const totalDemand = [...demandByDay.entries()].filter(([day]) => day >= calendar.asOf).reduce((s, [, q]) => s + q, 0);
+  if (planEnded) return { days: null, stockout_date: null, extrapolated: false };
   if (totalDemand <= EPSILON && extrapolationRate <= EPSILON) return { days: null, stockout_date: null, extrapolated: false };
   // Demand exists only in CM and stock outlasts it: covered through NM end, no rate to extrapolate.
   if (extrapolationRate <= EPSILON) return { days: covered, stockout_date: null, extrapolated: false };

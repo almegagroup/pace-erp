@@ -241,3 +241,14 @@ Deno.test("poNumberOfReference: PO numbers with slashes, line, CSN suffix; none 
   assertEqual(poNumberOfReference("PO 9300000123/2 (BULK)"), "9300000123", "bulk");
   assertEqual(poNumberOfReference("STO 123 · CSN 9"), null, "not a PO");
 });
+
+Deno.test("owner 2026-10-28: stock that outlasts a PO21 plan which ended early is 'beyond plan' (null), not hundreds of days", () => {
+  // 100 days of horizon; demand 10/day for the first 60 days only, none in the last 40.
+  const uses = Array.from({ length: 100 }, (_, i) => (i < 60 ? 10 : 0));
+  assert(forwardCoverDays(1000, uses, 0) === null, "1,000 outlasts the 600 planned: beyond plan");
+  near(forwardCoverDays(300, uses, 0), 30, "300 covers 30 planned days and runs out inside the plan");
+  assert(activeDemandCoverDays(1000, uses, 0) === null, "standalone grid: beyond plan too");
+  // A plan that runs to the horizon end keeps the old extrapolation.
+  const running = Array.from({ length: 100 }, () => 10);
+  near(forwardCoverDays(1500, running, 0) as number, 150, "plan to the end: extrapolated at the average");
+});
