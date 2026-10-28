@@ -556,3 +556,11 @@ Open: live run on PROD data through the handlers.
 
 - The 120-day rule is the owner's: opening stock counts for 120 days after its cut-off date, a GRN for 120 days after receipt (also when it says N_A). Not a bug. The Excel summary now says so, because it makes many items show "Runs out" around 28-29 Jan 2027.
 - A standalone item (no group) follows the same rule as the waterfall, only without distribution among members: no reserve and no order after the PO21 plan's last demand day. A reserve across a no-demand GAP (later demand exists) is kept. This replaces the earlier Tot White expectation for the tail of the plan; the test was changed accordingly.
+
+## 25. Why "beyond plan" did not show in the first downloaded Excel (2026-10-28)
+
+The family table's Max / Min Days and the item plan use their own cover functions (`forwardCoverDays`, `activeDemandCoverDays` in `mts_item_plan.logic.ts`) and the requirement report its own (`coverageDays` in `mts_requirement.logic.ts`). The first plan-end fix only changed the planner's `coverDays`, so 138 / 171 / 261 / 1,968 still showed. All three now return `null` (shown as `beyond plan`) when the stock outlasts a PO21 plan that ended before the horizon end.
+
+## 26. The 120-day rule is only a FEFO rank (owner 2026-10-28)
+
+Opening stock (cut-off + 120 days) and a GRN with no stated expiry (receipt + 120 days) are never removed from the plan: the date only decides which lot is used first. Only a stated expiry (GRN expiry type DATE, or SPAN with a shelf life) removes stock. This ends the false "Runs out 2027-01-29" on items that hold months of stock. Receipts carry `no_expiry`; the planner skips them in the expiry step.

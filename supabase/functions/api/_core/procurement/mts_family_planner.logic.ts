@@ -70,6 +70,11 @@ export type FamilyOpeningReceipt = {
   reference: string;
   /** A dated GRN/Opening-stock receipt with an earlier expiry may override Group Settings locally. */
   expiry_priority: boolean;
+  /**
+   * Owner 2026-10-28: the 120-day rule only decides which lot is used first (FEFO). A receipt with no real expiry date
+   * (opening stock, GRN with expiry type N_A) is never removed from the plan; `valid_until` is then only its FEFO rank.
+   */
+  no_expiry?: boolean;
 };
 
 type FamilyAllocationSourceKind = "OPENING" | "CONFIRMED_ETA" | "MANUAL_LOT" | "ENGINE_LOT";
@@ -652,7 +657,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     // Backward-compatible pure callers that do not provide receipt sources still
     // receive one virtual opening receipt.  The handler provides the real opening
     // import/GRN basis in production.
-    if (left > EPSILON) receipts.push({ material_id: id, qty_base: left, valid_until: addDays(input.as_of, 120), reference: "Opening stock (planning assumption)", expiry_priority: false });
+    if (left > EPSILON) receipts.push({ material_id: id, qty_base: left, valid_until: addDays(input.as_of, 120), reference: "Opening stock (planning assumption)", expiry_priority: false, no_expiry: true });
     return receipts;
   });
 
@@ -694,7 +699,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       // silently counted as cover; this is a planning warning, never a stock post.
       for (let m = 0; m < M; m += 1) {
         for (const receipt of receiptLeft[m]) {
-          if (receipt.qty_base <= EPSILON || receipt.valid_until >= allDays[i]) continue;
+          if (receipt.qty_base <= EPSILON || receipt.valid_until >= allDays[i] || receipt.no_expiry === true) continue;
           const expired = Math.min(Math.max(0, bal[m]), receipt.qty_base);
           bal[m] = roundQty(bal[m] - expired);
           s.expired[m] = roundQty(s.expired[m] + expired);

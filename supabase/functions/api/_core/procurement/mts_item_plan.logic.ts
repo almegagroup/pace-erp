@@ -163,24 +163,39 @@ export function prorataMaxDays(closing: number, dailyUse: number): number | null
   return wholeDays(Math.max(0, closing) / dailyUse);
 }
 
+/**
+ * Owner 2026-10-28: a PO21 plan that stops before the horizon end (no demand in its last 7 days) means "no plan", not "no use".
+ * Cover that outlasts such a plan is null ("beyond plan"), never a long run of zero-demand days or a made-up average.
+ */
+const PLAN_TAIL_DAYS = 7;
+export function planContinues(uses: readonly number[]): boolean {
+  for (let i = Math.max(0, uses.length - PLAN_TAIL_DAYS); i < uses.length; i += 1) if (uses[i] > EPSILON) return true;
+  return false;
+}
+
 export function forwardCoverDays(balance: number, uses: readonly number[], fromIndex: number): number | null {
   const tail = uses.slice(fromIndex);
+  const continues = planContinues(uses);
+  let lastActive = -1;
+  tail.forEach((u, i) => { if (u > EPSILON) lastActive = i; });
   const total = tail.reduce((s, u) => s + u, 0);
   if (!(total > EPSILON)) return null;
   let left = balance; let days = 0;
   if (left <= EPSILON) return 0;
-  for (const use of tail) {
+  for (const [tailIndex, use] of tail.entries()) {
     // A calendar day with no use only extends cover while stock remains.  Without
     // this guard an exact depletion followed by zero-demand days was reported as
     // dozens of extra days of stock (the TOT White 24-Dec jump).
     if (use <= EPSILON) {
       if (left <= EPSILON) return days;
+      if (!continues && tailIndex > lastActive) return null;
       days += 1;
       continue;
     }
     if (left + EPSILON >= use) { left = Math.max(0, left - use); days += 1; continue; }
     return Math.round((days + left / use) * 100) / 100;
   }
+  if (!continues) return null;
   const avg = total / tail.length; // beyond the horizon: average daily use
   return Math.round((days + left / avg) * 100) / 100;
 }
@@ -208,6 +223,7 @@ export function activeDemandCoverDays(balance: number, uses: readonly number[], 
     left = Math.max(0, left - use);
     days += 1;
   }
+  if (!planContinues(uses)) return null;
   return Math.round((days + left / dailyUse) * 100) / 100;
 }
 
