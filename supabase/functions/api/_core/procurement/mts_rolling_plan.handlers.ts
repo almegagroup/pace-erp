@@ -206,7 +206,6 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const p2p = portToPlant.get(m) ?? (masterInland.length ? Math.max(...masterInland) : null);
         return { port_eta: p2p !== null ? addDaysIso(date, -p2p) : null, import_etd: transit !== null ? addDaysIso(date, -transit) : null };
       };
-      const nameToId = new Map(memberIds.map((m) => [nameOf(m), m]));
       const prediction = [
         ...advisory.filter((b) => memberSet.has(b.material_id)).flatMap((b) => (b.lots.length ? b.lots : [{ lot_no: 1, plant_eta: b.estimated_plant_eta, qty_base: b.recommended_po_qty_base ?? 0 }])
           .map((lot) => ({
@@ -225,11 +224,11 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           po_by: null as string | null, ...legs(l.material_id, l.vendor_id, l.plant_eta),
         })),
       ].map((p) => {
-        // Owner 2026-10-28: the bought material's OWN cover the day before the lot lands, and its own Min — what the lot is actually connected at.
-        const before = p.date ? projection.rows.find((r) => r.material_id === (nameToId.get(p.material) ?? "") && r.day === addDaysIso(p.date, -1)) : undefined;
+        // Owner 2026-10-28: what an engine lot is connected at — the cover that triggered it (the group's free stock for a group need) and the item's own Min it was compared with.
+        const buy = p.source === "ENGINE" ? advisory.find((b) => memberSet.has(b.material_id) && nameOf(b.material_id) === p.material && b.lots.some((l) => l.plant_eta === p.date)) : undefined;
         return {
           ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null,
-          own_cover_before: before?.max_cover_days ?? null, own_min_days: before?.target_days ?? null,
+          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null,
         };
       })
         .sort((a, b) => String(a.date ?? "9999").localeCompare(String(b.date ?? "9999")));

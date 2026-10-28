@@ -861,3 +861,18 @@ Deno.test("owner 2026-10-28: a PO21 plan that ends before the horizon end invent
   assert(lateBuys.length === 0, `no buy may be planned for days after the PO21 plan: ${JSON.stringify(lateBuys)}`);
   assert(result.rows.every((r) => r.closing_qty_base >= -1e-6), "no stock-out inside the plan");
 });
+
+Deno.test("owner 2026-10-28: a group lot reports the cover that triggered it and the member's own Min (D10)", () => {
+  const days = daysTo("2027-01-31");
+  const result = planFamily({
+    as_of: AS_OF, horizon_end: "2027-01-31", opening_qty_by_material: { X: 30_000, Y: 20_000 },
+    own_demand: [], group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["X", "Y"], required_by, qty_base: 1000 })),
+    confirmed_arrivals: [],
+    policies: [policy("X", 20, 10, [{ vendor: "V", lead: 5, cost: 1 }]), { ...policy("Y", 30, 15, []), vendor_options: [] }],
+    group_coverage_policies: [{ group_id: "G", effective_from: AS_OF, target_days: 30, critical_days: 15, desired_max_days_override: 60 }],
+  });
+  const buy = result.advisory_buys.find((b) => b.material_id === "X" && b.status !== "NO_BUY");
+  assert(buy, "X is bought for the group");
+  assert(buy.need_kind === "GROUP" && buy.trigger_min_days === 20, `connected at the member's own Min 20, not the group's 30: ${JSON.stringify(buy)}`);
+  assert(buy.trigger_cover_days !== null && buy.trigger_cover_days !== undefined && buy.trigger_cover_days <= 20, `group cover at the trigger is at or below 20: ${buy.trigger_cover_days}`);
+});

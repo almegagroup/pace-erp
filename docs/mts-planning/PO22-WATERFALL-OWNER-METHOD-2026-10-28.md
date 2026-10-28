@@ -543,3 +543,11 @@ Open: live run on PROD data through the handlers.
 - New columns: `Its own cover before arrival (d)` and `Its own Min (d)` — the bought material's cover the day before the lot lands, against its own Target. This is the check for rule D10 (a bought member connects at its OWN Min).
 - Port ETA falls back to the lead-time master's inland days when the material has no received-CSN history; domestic vendors correctly show none. `Import ETD` header now reads `Import ETD / Dispatch date`.
 - OPEN, needs a real run: RP-4099 (own Min 20, Critical 10) showed ~10 days cover on arrival in the CMP003 RDP family; a synthetic test did not reproduce it. Re-check with the new columns after deploy. Also open: family Max Days 38 (< Max 60) on CMP005 RDP lots, and the `Engine best date` advice.
+
+## 23. Investigation of the open items (2026-10-28, on the CMP003 / CMP005 export + PROD data)
+
+- RP-4099 "10 days cover": by design (D10). A group lot is triggered when the GROUP's free stock falls to the item's OWN Min (20), not when the item alone does. The item's own stock is low because it is the first member used. The order reason text now says so, and Prediction shows `Cover that triggered the order` / `Item's own Min` / `Triggered by` instead of the item's own cover.
+- CMP005 family Max Days 38 (< 60): the family total, not a level. Each lot is capped at the 25 t delivery lot (~13 days of 1,940 KG/day), so the family settles around 20-38 days and cannot reach 60 in this plan.
+- `Engine best date` (prepone / postpone): tie-break chose the latest date in the horizon even when no demand remained. Candidate dates now stop at the PO21 plan's last demand day and the risk score ignores days after it.
+- "Runs out 2027-01-29" on ~15 items and Dispelair / Additive shortages: the plan expires every opening-stock lot 120 days after its cut-off (30 Sep 2026 + 120 = 28-29 Jan 2027) and every GRN without a stated expiry 120 days after receipt. In PROD 724 of 846 posted GRNs are expiry type N_A (no expiry). OPEN DECISION: should N_A / opening stock never expire?
+- Standalone items (no group) keep the Tot White rule (Target reserve at the last approved daily rate after the plan's last day). OPEN DECISION: should that stop at the plan's end like groups?
