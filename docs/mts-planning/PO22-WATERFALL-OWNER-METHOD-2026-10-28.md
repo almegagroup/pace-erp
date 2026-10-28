@@ -498,3 +498,25 @@ Done (this change):
    groups it is shared in proportion to the quantity each uses, so it is never counted twice.
 
 Still open: a live PROD run (the downloaded file is the only PROD output seen); "Keep" for an item that has no reserve in a level is shown as 0.
+
+---
+
+## 19. Store plan for the whole horizon, on ACTUAL stock only (owner 2026-10-28)
+
+Owner: with a six-month plan the Store must get the coming months, not only this month, with the excess that stays. And a CSN / PO piece that is not yet
+connected (not received) must not be counted: Store gets instructions on actual stock. A piece whose ETA passed or is missing is taken as arriving today by
+the planner (so it is not bought again — owner rule D5), but it has not come into stock.
+
+Built (`mts_store_plan.logic.ts`, payload `store_plan`, Store Report views *Items by period · Excess left · Transfers*, Excel `STORE_INSTRUCTIONS`,
+`STORE_EXCESS`, `STORE_TRANSFERS`):
+- **Periods:** the current month from today, then every month of the planning horizon (Planning tab: CM + NM; the Excel / rolling plan: six months).
+- **Use is split by where the stock comes from** (the planner's draws, per source): **Issue from stock now** = actual counted stock (the only part Store may
+  issue) · **After receipt (CSN/PO, ETA valid)** · **ETA passed / none (not received)** · **Planned lot (not ordered)**. A note says "Do not issue against: …".
+- **Keep at end of period (up to Max days)** and the level's **Max days** from the Material × Level snapshot at each month end (`checkpoints`); the
+  **Excess left** in the pool at each period end per item, with today's stock beside it. Keep and excess are planning figures: they include receipts that
+  are expected by that date.
+- **Transfers (R003 → R001 / R002, R001 ↔ R002) use the actual-stock part only**, month by month, "by" = the first day of the period.
+- Group items only; the child groups of one parent that use the same item share one row. Not-yet-backed quantity of a group is its own row.
+- A saved run from before this change keeps the older CM + NM figures and says so on screen.
+
+Open: live run on PROD data through the handlers.

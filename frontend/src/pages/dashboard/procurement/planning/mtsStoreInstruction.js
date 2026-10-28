@@ -72,3 +72,29 @@ export function normaliseStoreRows(storeRows) {
 export function transferRows(transfers) {
   return [...(transfers ?? [])].sort((a, b) => String(a.by).localeCompare(String(b.by)) || String(a.material_name).localeCompare(String(b.material_name)) || String(a.from).localeCompare(String(b.from)) || String(a.to).localeCompare(String(b.to)));
 }
+
+/**
+ * The month-by-month Store plan (backend `store_plan.rows`): one row per Period x Item x Material group x PO21 parent group, child groups together.
+ * Only ACTUAL stock may be issued; the other three parts are planning information (not received yet).
+ */
+export function planItemRows(planRows) {
+  return [...(planRows ?? [])].map((r) => ({
+    key: [r.period_order, r.material_id ?? r.material_key ?? r.item, r.group_id ?? r.group ?? "", r.mother_group ?? "", r.level_kind ?? ""].join("|"),
+    period: r.period_label ?? r.period, period_order: r.period_order ?? 0, period_from: r.period_from, period_to: r.period_to,
+    item: r.material_name ?? r.item, key_id: r.material_id ?? r.material_key ?? `group:${r.group_id ?? r.group}`, group: r.group_label ?? r.group ?? "",
+    mother: r.mother_group ?? "", child: r.child_group ?? "", uom: r.uom ?? "", material_id: r.material_id ?? null,
+    use_stock: r.use_stock ?? 0, use_arrival: r.use_arrival ?? 0, use_assumed: r.use_assumed ?? 0, use_lot: r.use_lot ?? 0,
+    keep: r.keep_qty ?? null, keep_days: r.keep_max_days ?? null, not_backed: r.not_backed_qty ?? r.not_backed ?? 0,
+  })).sort((a, b) => a.period_order - b.period_order || String(a.mother || "~").localeCompare(String(b.mother || "~")) || String(a.item).localeCompare(String(b.item)) || String(a.group).localeCompare(String(b.group)));
+}
+
+/** Plain sentence for a row: how much Store may issue now and what still depends on a receipt. */
+export function issueNote(row) {
+  const waiting = (row.use_arrival ?? 0) + (row.use_assumed ?? 0) + (row.use_lot ?? 0);
+  if (waiting <= 0.0005) return "";
+  const parts = [];
+  if (row.use_arrival > 0.0005) parts.push("a CSN/PO not received yet");
+  if (row.use_assumed > 0.0005) parts.push("a piece whose ETA passed or is missing");
+  if (row.use_lot > 0.0005) parts.push("a lot nobody has ordered");
+  return `Do not issue against: ${parts.join(", ")}.`;
+}

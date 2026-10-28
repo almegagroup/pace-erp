@@ -24,7 +24,7 @@ const company = (id, name, extra = {}) => ({
 test("rolling plan workbook: every tab, both companies, PLAN totals per group", async () => {
   const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings"), company("b", "Jayashree Industries")], asOf: "2026-10-21" });
   const names = wb.worksheets.map((s) => s.name);
-  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
+  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_EXCESS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
   const buffer = await wb.xlsx.writeBuffer();
   assert.ok(buffer.byteLength > 5000, "valid xlsx written");
   const rm = wb.getWorksheet("RM_PLANNING");
@@ -135,5 +135,27 @@ test("RM_PLANNING family block: whole-family note and each level (Exclusive and 
   assert.ok(lines.some((l) => l.includes("WHOLE family")), "the whole-family note");
   assert.ok(lines.some((l) => l.includes("Exclusive — Gabrosa: Min 30 / Max 60 / Critical 20 d · reserve 6670 KG (covers 60 d) · next Min 2026-11-27")), "the Exclusive level line");
   assert.ok(lines.some((l) => l.includes("MHEC: Min 30 / Max 60 / Critical 15 d") && l.includes("not in horizon")), "the group level line");
+  await wb.xlsx.writeBuffer();
+});
+
+test("STORE tabs from the month-by-month plan: actual stock apart from unreceived pieces, and the excess left", async () => {
+  const base = company("a", "Almeha Coatings");
+  const store_plan = {
+    rows: [
+      { period: "October 2026 (from 28)", period_order: 0, period_from: "2026-10-28", period_to: "2026-10-31", item: "TS U2121", material_key: "m1", group: "MHEC", mother_group: "PUTTY", child_group: "EXT PUTTY; INT PUTTY", uom: "KG", use_stock: 400, use_arrival: 0, use_assumed: 0, use_lot: 0, keep_qty: 900, keep_max_days: 60, not_backed: 0 },
+      { period: "November 2026", period_order: 1, period_from: "2026-11-01", period_to: "2026-11-30", item: "TS U2121", material_key: "m1", group: "MHEC", mother_group: "PUTTY", child_group: "EXT PUTTY; INT PUTTY", uom: "KG", use_stock: 0, use_arrival: 600, use_assumed: 150, use_lot: 50, keep_qty: 700, keep_max_days: 60, not_backed: 0 },
+    ],
+    excess: [{ period: "October 2026 (from 28)", period_order: 0, item: "TS U2121", uom: "KG", stock_now: 26000, excess_qty: 12000, closing_qty: 25600 }],
+  };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, store_plan }], asOf: "2026-10-28" });
+  const items = wb.getWorksheet("STORE_INSTRUCTIONS");
+  assert.equal(items.rowCount, 3);
+  assert.equal(items.getRow(1).getCell(7).value, "Issue from stock now");
+  assert.deepEqual([items.getRow(2).getCell(7).value, items.getRow(2).getCell(8).value], [400, 0], "October is actual stock");
+  assert.deepEqual([items.getRow(3).getCell(7).value, items.getRow(3).getCell(8).value, items.getRow(3).getCell(9).value, items.getRow(3).getCell(10).value], [0, 600, 150, 50], "November depends on receipts");
+  assert.match(String(items.getRow(3).getCell(17).value), /Do not issue against: a CSN\/PO not received yet, a piece whose ETA passed or is missing, a lot nobody has ordered/);
+  const excess = wb.getWorksheet("STORE_EXCESS");
+  assert.equal(excess.rowCount, 2);
+  assert.equal(excess.getRow(2).getCell(5).value, 12000);
   await wb.xlsx.writeBuffer();
 });

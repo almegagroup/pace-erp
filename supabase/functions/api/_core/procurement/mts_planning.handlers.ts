@@ -12,7 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
-import { buildCalendar, isIsoDate, isTransferFed, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
+import { buildCalendar, isIsoDate, isTransferFed, monthEnd, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   cachedLoad,
   computeRequirement,
@@ -40,6 +40,7 @@ import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
 import { loadRescheduleContext } from "./mts_reschedule_window.handlers.ts";
 import { rStoreKey, scheduleStoreTransfers } from "./mts_store_instruction.logic.ts";
+import { buildStorePlan, type StorePlanPeriod, type StorePlanRecord } from "./mts_store_plan.logic.ts";
 import { rescheduleVerdict } from "./mts_reschedule_window.logic.ts";
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 
@@ -551,7 +552,7 @@ export async function computePlanning(p: PlanningParams) {
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     // The Store "keep" quantity is read at the end of each period (owner 2026-10-28).
-    checkpoints: [calendar.cmEnd, calendar.nmEnd],
+    checkpoints: calendar.months.map((month) => monthEnd(month)),
     group_orders: req.input.groupOrders,
     selections: selections.map,
     // The month selector is shown for every active group member. Selection is
@@ -779,18 +780,35 @@ export async function computePlanning(p: PlanningParams) {
 
   // Owner 2026-10-28 — Store instructions cover GROUP items only; a member that also has an exclusive use is part of its group.
   const groupMemberIds = new Set(req.output.groups.flatMap((g) => g.member_ids));
-  // Owner 2026-10-28 — Store transfers: R003 (transfer-source store) -> R001 / R002 and R001 <-> R002, how much and by when.
-  // Need of a store in a period = what the lines located there use (shop floor S00n is fed from R00n); stock = UNRESTRICTED per location.
+  // Owner 2026-10-28 — the Store plan for the WHOLE horizon, month by month, from the waterfall: use (split by where the stock comes from — only
+  // ACTUAL stock may be issued), what to keep at each period end, the excess left. Group items only.
+  const monthLabel = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+  const storePeriods: StorePlanPeriod[] = calendar.months.map((month, index) => {
+    const from = index === 0 ? calendar.asOf : month;
+    return { key: month.slice(0, 7), label: index === 0 ? `${monthLabel(month)} (from ${Number(calendar.asOf.slice(8))})` : monthLabel(month), from, to: monthEnd(month), order: index };
+  });
+  const prodshadeOfRecord = (r: { kind: string; prodshade_material_id: string; sku_material_id: string | null }) =>
+    (r.kind === "PM" && r.sku_material_id ? req.masters.skus.get(r.sku_material_id)?.prodshade_material_id ?? "" : r.prodshade_material_id);
+  const storePlan = buildStorePlan({
+    periods: storePeriods,
+    draws: projection.allocation_rows.map((d) => ({ day: d.day, material_id: d.material_id, destination_kind: d.destination_kind, group_id: d.group_id, qty_base: d.qty_base, source_kind: d.source_kind, source_reference: d.source_reference })),
+    assumedSources: new Set(projection.arrival_flags.filter((f) => f.reason === "ETA_PASSED" || f.reason === "ETA_MISSING").map((f) => f.source_key)),
+    groupUnmet: projection.group_unmet,
+    records: req.output.records.map((r): StorePlanRecord => ({ day: r.day, candidates: r.candidates, group_id: r.group_id, storage_location_id: r.storage_location_id, qty: r.qty, prodshade_material_id: prodshadeOfRecord(r), sku_material_id: r.sku_material_id, kind: r.kind })),
+    matrix: projection.level_matrix,
+    maxDays: new Map(projection.level_policies.map((l) => [`${l.level_kind}|${l.level_id}`, l.desired_days])),
+    openingByMaterial: assembly.input.opening_qty_by_material,
+    groupMemberIds,
+    productGroupOf: (r) => {
+      const group = productGroups.get(prodshadeOfRecord(r));
+      return { mother: group?.mother ?? "", child: group?.child ?? "" };
+    },
+  });
+  // Store transfers: R003 (transfer-source store) -> R001 / R002 and R001 <-> R002, how much and by when — only for stock that is really there.
   const storeTransfers = await (async () => {
-    const poolStore = new Map<string, string>();
-    for (const row of req.output.rows) for (const pool of row.pools) {
-      const store = pool.storage_location_id ? rStoreKey(locationLabels.get(pool.storage_location_id) ?? "") : null;
-      if (store) poolStore.set(pool.pool_key, store);
-    }
-    const needs = req.output.store_rows.filter((row) => Boolean(row.group_id) || Boolean(row.material_id && groupMemberIds.has(row.material_id))).flatMap((row) => {
-      const store = poolStore.get(row.pool_key);
-      const qty = row.executable_qty + row.not_backed_qty;
-      return row.material_id && store && qty > 0.000001 ? [{ material_id: row.material_id, period: row.period, store, qty }] : [];
+    const needs = storePlan.needs.flatMap((n) => {
+      const store = rStoreKey(locationLabels.get(n.location_id) ?? "");
+      return store ? [{ material_id: n.material_id, period: n.period, store, qty: n.qty }] : [];
     });
     if (needs.length === 0) return [];
     const materialIds = unique(needs.map((n) => n.material_id));
@@ -807,10 +825,9 @@ export async function computePlanning(p: PlanningParams) {
       const store = storeOfLocation(text(r.storage_location_id));
       return store ? [{ material_id: text(r.material_id), store, qty: Number(r.quantity ?? 0) }] : [];
     });
-    return scheduleStoreTransfers({
-      needs, stocks, sourceStores,
-      periods: [{ period: "CM", start: calendar.asOf }, { period: "NM", start: calendar.nmStart }],
-    }).map((t2) => ({ ...t2, material_name: nameOf(t2.material_id), material_code: codeOf(t2.material_id), uom: uom(t2.material_id), period_label: storePeriodLabel(t2.period as "CM" | "NM", calendar) }));
+    const labelOf = new Map(storePeriods.map((period) => [period.key, period.label]));
+    return scheduleStoreTransfers({ needs, stocks, sourceStores, periods: storePeriods.map((period) => ({ period: period.key, start: period.from })) })
+      .map((t2) => ({ ...t2, material_name: nameOf(t2.material_id), material_code: codeOf(t2.material_id), uom: uom(t2.material_id), period_label: labelOf.get(t2.period) ?? t2.period }));
   })();
   // Owner 2026-10-28 — Store instructions are only for GROUP items (a group's member that also has an exclusive use is included).
   // For each item and period: where the period runs, and how much must be KEPT at its end (the level's reserve, up to its Max days).
@@ -976,6 +993,14 @@ export async function computePlanning(p: PlanningParams) {
     bulk_material_ids: [...bulkMaterials],
     bulk_group_ids: bulkOnlyGroupIds(req.masters.groupMembers, bulkMaterials),
     store_transfers: storeTransfers,
+    store_plan: {
+      periods: storePeriods,
+      rows: storePlan.rows.map((r) => ({
+        ...r, material_name: r.material_id ? nameOf(r.material_id) : "Group — not assigned", material_code: codeOf(r.material_id), uom: uom(r.material_id),
+        group_label: r.group_id ? groupLabel.get(r.group_id) ?? "—" : null,
+      })),
+      excess: storePlan.excess.map((e) => ({ ...e, material_name: nameOf(e.material_id), material_code: codeOf(e.material_id), uom: uom(e.material_id) })),
+    },
     store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),

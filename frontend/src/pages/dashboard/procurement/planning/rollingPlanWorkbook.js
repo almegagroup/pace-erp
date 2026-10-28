@@ -10,7 +10,7 @@
  */
 import ExcelJS from "exceljs";
 import { flowRows, matrixGrid, waterfallVerdict } from "./mtsWaterfall.js";
-import { aggregateStoreItems } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, issueNote } from "./mtsStoreInstruction.js";
 
 const TITLE_FILL = "FFFBBC04";   // yellow block title, as in the old file
 const HEAD_FILL = "FFFFE699";    // light yellow column header
@@ -297,8 +297,24 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
 
   // STORE_INSTRUCTIONS (owner 2026-10-28): Period · Item · Group · Quantity · PO21 parent group · child group(s) — the child groups of
   // one parent that use the same item share ONE row. STORE_TRANSFERS: R003 -> R001 / R002 and R001 <-> R002. STORE_DETAIL = the old product-wise rows.
+  // Owner 2026-10-28: for the WHOLE horizon, month by month; only ACTUAL stock may be issued (CSN / PO not yet received, an ETA that passed or is
+  // missing, and an unordered lot are listed apart as "do not issue against"). Companies without the month plan fall back to the CM + NM rows.
   const storeItems = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
-  addTable(storeItems, [
+  const planRows = companies.flatMap((c) => (c.store_plan?.rows ?? []).map((r) => ({ ...r, company: companyLabel(c) })));
+  if (planRows.length > 0) {
+    addTable(storeItems, [
+      { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
+      { label: "Item", key: "item" }, { label: "Material group", key: "group" },
+      { label: "Issue from stock now", value: (r) => num(r.use_stock), num: true },
+      { label: "After receipt (CSN/PO, ETA valid)", value: (r) => num(r.use_arrival), num: true },
+      { label: "ETA passed / none (not received)", value: (r) => num(r.use_assumed), num: true },
+      { label: "Planned lot (not ordered)", value: (r) => num(r.use_lot), num: true },
+      { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep_qty), num: true }, { label: "Max days", value: (r) => days(r.keep_max_days), num: true },
+      { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
+      { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" }, { label: "Note", value: (r) => issueNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot }) },
+    ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
+    widths(storeItems, [26, 24, 12, 12, 40, 28, 16, 18, 18, 16, 20, 10, 14, 7, 24, 40, 50]);
+  } else addTable(storeItems, [
     { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
     { label: "Item", key: "item" }, { label: "Material group", key: "group" },
     { label: "Use in this period", value: (r) => num(r.qty), num: true }, { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep), num: true },
@@ -308,7 +324,14 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     period: s.period, period_order: String(s.period).startsWith("CM") ? 0 : 1, period_from: s.period_from, period_to: s.period_to, item: s.material, key_id: s.material_key ?? s.material,
     group: s.group ?? "", mother: s.mother_group ?? "", child: s.child_group ?? "", qty: s.from_stock, not_backed: s.not_backed, uom: s.uom, keep: s.keep_qty ?? null, keep_days: s.keep_max_days ?? null,
   }))).map((r) => ({ ...r, company: companyLabel(c) }))), { color: (r) => (r.not_backed > 0 ? RED : null) });
-  widths(storeItems, [26, 16, 12, 12, 40, 28, 16, 22, 10, 14, 7, 24, 40]);
+  if (planRows.length === 0) widths(storeItems, [26, 16, 12, 12, 40, 28, 16, 22, 10, 14, 7, 24, 40]);
+  const excessRows = companies.flatMap((c) => (c.store_plan?.excess ?? []).map((e) => ({ ...e, company: companyLabel(c) })));
+  const storeExcess = wb.addWorksheet(sheetName("STORE_EXCESS", used));
+  addTable(storeExcess, [
+    { label: "Company", key: "company" }, { label: "At the end of", key: "period" }, { label: "Item", key: "item" }, { label: "Stock today", value: (r) => num(r.stock_now), num: true },
+    { label: "Excess left in the pool", value: (r) => num(r.excess_qty), num: true }, { label: "Total stock then (planned)", value: (r) => num(r.closing_qty), num: true }, { label: "UoM", key: "uom" },
+  ], excessRows);
+  widths(storeExcess, [26, 26, 44, 16, 22, 24, 7]);
   const storeTransfers = wb.addWorksheet(sheetName("STORE_TRANSFERS", used));
   addTable(storeTransfers, [
     { label: "Company", key: "company" }, { label: "Transfer by", value: (r) => day(r.by) }, { label: "For period", key: "period" }, { label: "Item", key: "material" },

@@ -394,6 +394,19 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       bulk_rm_excluded: bulkRm.size,
       summary, blocks, requirement, buys, store, arrivals, explain,
       // Owner 2026-10-28: R003 -> R001 / R002 and R001 <-> R002, how much and by when.
+      // Owner 2026-10-28: Store plan for the whole horizon, month by month (group items; only ACTUAL stock may be issued).
+      store_plan: {
+        rows: plan.store_plan.rows.map((r) => ({
+          period: r.period_label, period_order: r.period_order, period_from: r.period_from, period_to: r.period_to, item: r.material_name, material_key: r.material_id ?? `group:${r.group_id}`,
+          group: r.group_label, mother_group: r.mother_group, child_group: r.child_group, uom: r.uom ?? (r.material_id ? uomOf(r.material_id) : null),
+          use_stock: dq(r.material_id, r.use_stock), use_arrival: dq(r.material_id, r.use_arrival), use_assumed: dq(r.material_id, r.use_assumed), use_lot: dq(r.material_id, r.use_lot),
+          keep_qty: r.keep_qty === null ? null : dq(r.material_id, r.keep_qty), keep_max_days: r.keep_max_days, not_backed: dq(r.material_id, r.not_backed_qty),
+        })),
+        excess: plan.store_plan.excess.map((e) => ({
+          period: e.period_label, period_order: e.period_order, item: e.material_name, uom: uomOf(e.material_id),
+          stock_now: dq(e.material_id, e.stock_now), excess_qty: dq(e.material_id, e.excess_qty), closing_qty: dq(e.material_id, e.closing_qty),
+        })),
+      },
       store_transfers: plan.store_transfers.map((t) => ({
         material: t.material_name, uom: t.uom, period: t.period_label, from: t.from, to: t.to, qty: dq(t.material_id, t.qty), by: t.by,
       })),

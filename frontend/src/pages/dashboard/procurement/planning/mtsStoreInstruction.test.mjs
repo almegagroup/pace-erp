@@ -52,3 +52,14 @@ test("the period shows from and to", () => {
   assert.equal(periodSpan("2026-10-28", "2026-10-31"), "28 Oct → 31 Oct");
   assert.equal(periodSpan(null, null), "");
 });
+
+test("month plan rows: actual stock first, the rest told plainly as not issuable", async () => {
+  const { planItemRows, issueNote } = await import("./mtsStoreInstruction.js");
+  const rows = planItemRows([
+    { period_label: "November 2026", period_order: 1, material_id: "m1", material_name: "TS U2121", group_label: "MHEC", mother_group: "PUTTY", child_group: "EXT", use_stock: 0, use_arrival: 10, use_assumed: 5, use_lot: 0, keep_qty: 100, keep_max_days: 60, not_backed_qty: 0, level_kind: "GROUP" },
+    { period_label: "October 2026 (from 28)", period_order: 0, material_id: "m1", material_name: "TS U2121", group_label: "MHEC", mother_group: "PUTTY", child_group: "EXT", use_stock: 40, use_arrival: 0, use_assumed: 0, use_lot: 0, keep_qty: 100, keep_max_days: 60, not_backed_qty: 0, level_kind: "GROUP" },
+  ]);
+  assert.equal(rows[0].period, "October 2026 (from 28)", "earlier period first");
+  assert.equal(issueNote(rows[0]), "", "nothing waits on a receipt in October");
+  assert.match(issueNote(rows[1]), /^Do not issue against: a CSN\/PO not received yet, a piece whose ETA passed or is missing\.$/);
+});
