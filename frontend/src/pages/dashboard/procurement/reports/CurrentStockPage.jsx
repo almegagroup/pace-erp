@@ -538,6 +538,7 @@ export default function CurrentStockPage() {
   const [showZero, setShowZero] = useState(false);
   const [rows, setRows] = useState([]);
   const [planningAlertsOnly, setPlanningAlertsOnly] = useState(false);
+  const [allColumnSearch, setAllColumnSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
@@ -607,6 +608,23 @@ export default function CurrentStockPage() {
     () => (planningAlertsOnly ? buildPlanningAlertReviewRows(rows) : mainRows),
     [mainRows, planningAlertsOnly, rows],
   );
+  const filteredDisplayedRows = useMemo(() => {
+    const searchTerm = allColumnSearch.trim().toLocaleLowerCase();
+    if (!searchTerm) return displayedRows;
+
+    // Search the full output record, rather than only the columns the user
+    // has currently chosen to show. A hidden column must remain searchable.
+    const searchableKeys = [
+      ...columnDefinitions.map((column) => column.key),
+      "planning_status",
+      "planning_item_group_name",
+    ];
+    return displayedRows.filter((row) =>
+      searchableKeys.some((key) =>
+        String(row?.[key] ?? "").toLocaleLowerCase().includes(searchTerm),
+      ),
+    );
+  }, [allColumnSearch, columnDefinitions, displayedRows]);
 
   async function handleSearch() {
     if (!companyId) {
@@ -617,6 +635,7 @@ export default function CurrentStockPage() {
     setError("");
     setSearched(true);
     setPlanningAlertsOnly(false);
+    setAllColumnSearch("");
     // Captured once here so the "Machine wise stock" drawer (§138.8) re-runs
     // the EXACT same criteria this search was executed with, even if the
     // filter panel is changed afterwards without re-searching.
@@ -670,7 +689,7 @@ export default function CurrentStockPage() {
         fileName: `current_stock_${new Date().toISOString().slice(0, 10)}.xlsx`,
         sheetName: "Current Stock",
         columns: exportColumns,
-        rows: displayedRows,
+        rows: filteredDisplayedRows,
         getCellValue: (row, column) =>
           column.key === "planning_status"
             ? planningStatusLabel(row?.planning_status)
@@ -744,7 +763,7 @@ export default function CurrentStockPage() {
                 key: "export",
                 label: exporting ? "Exporting..." : "Export Excel",
                 onClick: () => void handleExportExcel(),
-                disabled: exporting || displayedRows.length === 0,
+                disabled: exporting || filteredDisplayedRows.length === 0,
               },
               // §138.8 -- hidden entirely (not just disabled) for a company
               // with no MTS machines mapped, per business owner's own words.
@@ -887,6 +906,23 @@ export default function CurrentStockPage() {
               <span>Critical / Replenishment only ({planningAlertRowCount})</span>
             </label>
           </div>
+          {searched ? (
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+              <label className="min-w-[260px] flex-1 text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">
+                Search all columns
+                <input
+                  type="search"
+                  value={allColumnSearch}
+                  onChange={(event) => setAllColumnSearch(event.target.value)}
+                  placeholder="Material, document, SLoc, batch, quantity..."
+                  className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm font-normal normal-case tracking-normal text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                />
+              </label>
+              <span className="pb-2 text-sm text-slate-500">
+                {filteredDisplayedRows.length} of {displayedRows.length} rows
+              </span>
+            </div>
+          ) : null}
           {!searched ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Set filters and click Search to view current stock.
@@ -894,7 +930,7 @@ export default function CurrentStockPage() {
           ) : (
             <ErpDenseGrid
               columns={gridColumns}
-              rows={displayedRows}
+              rows={filteredDisplayedRows}
               rowKey={(row) => row.row_key}
               getRowProps={(row) => {
                 const planningStatus = planningStatusPresentation(row.planning_status);
@@ -902,7 +938,9 @@ export default function CurrentStockPage() {
               }}
               emptyMessage={loading
                 ? "Searching current stock..."
-                : planningAlertsOnly
+                : allColumnSearch.trim()
+                  ? "No current-stock row matches this search."
+                  : planningAlertsOnly
                   ? "No critical or replenishment item is present in this result."
                   : "No current stock matched the selected filters."}
             />
