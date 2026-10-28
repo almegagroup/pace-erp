@@ -132,6 +132,7 @@ const GRID_COLUMNS = [
   { key: "external_code", label: "External Code", width: "130px", render: (r) => r.external_code || "—" },
   { key: "item_category", label: "Item Category", width: "120px", render: (r) => r.item_category || "—" },
   { key: "batch_number", label: "Batch #", width: "110px", render: (r) => r.batch_number || "—" },
+  { key: "storage_location", label: "Storage Location", width: "180px", render: (r) => r.storage_location || "—" },
   { key: "packing_po_number", label: "Packing PO #", width: "120px", render: (r) => r.packing_po_number || "—" },
   {
     key: "so_stroke", label: "SO Stroke", width: "110px",
