@@ -21,7 +21,7 @@ import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../_shared/manualDocumentDateWindow.ts";
-import { availableForPlanFeed } from "./packing_order_fo_capacity.ts";
+import { additionalReservationForPlanFeedAllocation, availableForPlanFeed } from "./packing_order_fo_capacity.ts";
 import { fetchPackingOrderFoCapacities } from "./packing_order_fo_capacity.reader.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import {
@@ -328,6 +328,13 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
         // to) its reservation. This prevents the remaining balance barrel
         // from disappearing after a partial FO dispatch.
         available_qty_kg_excl_this_fo: capacity ? availableForPlanFeed(capacity, planFeedId) : 0,
+        // Allocated KG is the gross FO traceability quantity, including what
+        // has already dispatched. Its editable ceiling must therefore add
+        // that dispatched portion back to the remaining reservation capacity.
+        max_allocated_qty_kg: capacity
+          ? availableForPlanFeed(capacity, planFeedId)
+            + (capacity.dispatched_by_plan_feed.get(planFeedId) ?? 0)
+          : 0,
       } : null,
     };
   });
@@ -1194,15 +1201,20 @@ async function upsertFoAllocation(req: Request, ctx: ProdHandlerContext, mtestOn
 
     const capacity = (await fetchPackingOrderFoCapacities([po as JsonRecord & { id: string }])).get(packingOrderId);
     if (!capacity) throw new Error("PROD_PLAN_FEED_ALLOCATION_FETCH_FAILED");
-    const availableQty = availableForPlanFeed(capacity, planFeedId);
     const otherReservedQty = [...capacity.reserved_by_plan_feed.entries()]
       .filter(([otherPlanFeedId]) => otherPlanFeedId !== planFeedId)
       .reduce((sum, [, quantity]) => sum + quantity, 0);
+    const additionalReservationQty = additionalReservationForPlanFeedAllocation(
+      capacity,
+      planFeedId,
+      currentRowQty,
+      requestedQty,
+    );
 
-    if (requestedQty > availableQty + QTY_TOL) {
+    if (additionalReservationQty > capacity.free_qty_kg + QTY_TOL) {
       const dispatchNote = capacity.dispatched_qty_kg > QTY_TOL ? `, already dispatched/on an active Delivery Order: ${capacity.dispatched_qty_kg}` : "";
       return foErr(req, ctx, "PROD_PLAN_FEED_ALLOCATION_EXCEEDS_STOCK", 422,
-        `Allocation exceeds this Packing PO's available qty (${availableQty}, still reserved by other FOs: ${otherReservedQty}${dispatchNote})`);
+        `Allocation needs ${additionalReservationQty} KG more than this Packing PO's available qty (${capacity.free_qty_kg}, still reserved by other FOs: ${otherReservedQty}${dispatchNote})`);
     }
 
     const now = new Date().toISOString();

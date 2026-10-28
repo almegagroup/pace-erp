@@ -1711,6 +1711,7 @@ export default function PlanFeedPage() {
                     <tbody>
                       {(editData.allocations ?? []).map((a) => {
                         const po = a.packing_order ?? {};
+                        const maxAllocatedQty = Number(po.max_allocated_qty_kg ?? po.available_qty_kg_excl_this_fo ?? 0);
                         return (
                           <tr key={a.id} className="border-b border-slate-100">
                       <td className="py-2 px-3 font-mono">{po.po_number}</td>
@@ -1724,7 +1725,7 @@ export default function PlanFeedPage() {
                             <td className="py-2 px-3 text-right">
                               <input
                                 type="number" step="0.01" defaultValue={a.allocated_qty_kg}
-                                max={po.available_qty_kg_excl_this_fo}
+                                max={maxAllocatedQty}
                                 className="w-28 border border-slate-300 rounded px-2 py-1 text-sm font-mono text-right"
                                 onBlur={(e) => {
                                   if (Number(e.target.value) !== Number(a.allocated_qty_kg)) {
@@ -1734,7 +1735,7 @@ export default function PlanFeedPage() {
                               />
                             </td>
                             <td className="py-2 px-3 text-right font-mono text-emerald-700">
-                              {fmt(Math.max(0, (po.available_qty_kg_excl_this_fo ?? 0) - Number(a.allocated_qty_kg)))}
+                              {fmt(Math.max(0, maxAllocatedQty - Number(a.allocated_qty_kg)))}
                             </td>
                             <td className="py-2 px-3">
                               <button type="button" onClick={() => handleAllocationQtyChange(a, 0)} className="text-rose-600 text-xs underline">Unmap</button>
