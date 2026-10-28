@@ -875,3 +875,20 @@ Deno.test("owner 2026-10-28: a group lot reports the cover that triggered it and
   assert(buy.need_kind === "GROUP" && buy.trigger_min_days === 20, `connected at the member's own Min 20, not the group's 30: ${JSON.stringify(buy)}`);
   assert(buy.trigger_cover_days !== null && buy.trigger_cover_days !== undefined && buy.trigger_cover_days <= 20, `group cover at the trigger is at or below 20: ${buy.trigger_cover_days}`);
 });
+
+Deno.test("owner 2026-10-28: the 120-day rule is only a FEFO rank; stock with no real expiry is never removed from the plan", () => {
+  const days = daysTo("2026-12-31");
+  const base = (receipt: { valid_until: string; no_expiry?: boolean }): FamilyPlannerInput => ({
+    as_of: AS_OF, horizon_end: "2026-12-31", opening_qty_by_material: { X: 1000 },
+    own_demand: days.map((required_by) => ({ material_id: "X", required_by, qty_base: 1 })),
+    group_demand: [], confirmed_arrivals: [],
+    opening_receipts: [{ material_id: "X", qty_base: 1000, reference: "Opening stock", expiry_priority: false, ...receipt }],
+    policies: [{ ...policy("X", 10, 5, []), vendor_options: [] }],
+  });
+  const noExpiry = planFamily(base({ valid_until: addDays(AS_OF, 30), no_expiry: true }));
+  const lastNoExpiry = noExpiry.rows.filter((r) => r.material_id === "X").at(-1)!;
+  assert(lastNoExpiry.closing_qty_base > 900, `no real expiry: the stock stays (closing ${lastNoExpiry.closing_qty_base})`);
+  const dated = planFamily(base({ valid_until: addDays(AS_OF, 30) }));
+  const lastDated = dated.rows.filter((r) => r.material_id === "X").at(-1)!;
+  assert(lastDated.closing_qty_base < 1, `a real expiry date still removes the stock (closing ${lastDated.closing_qty_base})`);
+});

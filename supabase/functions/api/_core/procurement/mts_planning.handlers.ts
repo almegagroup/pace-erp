@@ -262,12 +262,9 @@ async function loadOpeningReceiptAdvice(
     const date = text(doc?.cut_off_date);
     const materialId = text(line.material_id);
     if (!doc || qty <= 0 || !materialId || !isIsoDate(date)) continue;
+    // Owner 2026-10-28: opening stock has no real expiry; cut-off + 120 days is only its FEFO rank (older counts are used first), never a reason to drop it.
     const validUntil = addCalendarDays(date, 120);
-    // Without a physical issue ledger an already-expired historical receipt
-    // cannot be asserted to be today's counted stock.  Do not allocate it to
-    // the opening balance; only currently valid sources may back Store advice.
-    if (validUntil < asOf) continue;
-    put({ material_id: materialId, qty_base: qty, valid_until: validUntil, reference: `Opening stock ${text(doc.document_number)}`, expiry_priority: validUntil < addCalendarDays(asOf, 120) });
+    put({ material_id: materialId, qty_base: qty, valid_until: validUntil, reference: `Opening stock ${text(doc.document_number)}`, expiry_priority: validUntil < addCalendarDays(asOf, 120), no_expiry: true });
   }
   for (const grn of grnPages.flat()) {
     const materialId = text(grn.material_id);
@@ -277,18 +274,21 @@ async function loadOpeningReceiptAdvice(
     if (!materialId || !isIsoDate(grnDate) || qty === null || qty <= 0) continue;
     const explicitDate = text(grn.expiry_date);
     const span = num(grn.shelf_life_months);
+    const realExpiry = isIsoDate(explicitDate) || (text(grn.expiry_type).toUpperCase() === "SPAN" && span !== null && span > 0);
     const validUntil = isIsoDate(explicitDate)
       ? explicitDate
       : text(grn.expiry_type).toUpperCase() === "SPAN" && span !== null && span > 0
         ? addCalendarMonths(grnDate, Math.floor(span))
         : addCalendarDays(grnDate, 120);
-    if (validUntil < asOf) continue;
+    // Owner 2026-10-28: only a stated expiry (date or span) removes stock; GRN + 120 days is just the FEFO rank.
+    if (realExpiry && validUntil < asOf) continue;
     put({
       material_id: materialId,
       qty_base: qty,
       valid_until: validUntil,
       reference: `GRN ${text(grn.grn_number) || text(grn.id)}`,
       expiry_priority: validUntil < addCalendarDays(asOf, 120),
+      ...(realExpiry ? {} : { no_expiry: true }),
     });
   }
   const out: FamilyOpeningReceipt[] = [];
@@ -305,7 +305,7 @@ async function loadOpeningReceiptAdvice(
     }
     // A source gap must remain visible, never be dressed up as a GRN.  This
     // fallback only keeps existing planning behaviour while Store fixes source data.
-    if (left > 0.000001) out.push({ material_id: materialId, qty_base: left, valid_until: addCalendarDays(asOf, 120), reference: "Unattributed counted stock", expiry_priority: false });
+    if (left > 0.000001) out.push({ material_id: materialId, qty_base: left, valid_until: addCalendarDays(asOf, 120), reference: "Unattributed counted stock", expiry_priority: false, no_expiry: true });
   }
   return out;
 }
@@ -674,7 +674,7 @@ export async function computePlanning(p: PlanningParams) {
       // The family projection has already removed it.  Store must never be
       // instructed to issue an expired planning receipt merely because the
       // aggregate counted-stock reader still contains the quantity.
-      if (receipt.valid_until < calendar.asOf) continue;
+      if (receipt.valid_until < calendar.asOf && receipt.no_expiry !== true) continue;
       remaining.set(receipt.material_id, [...(remaining.get(receipt.material_id) ?? []), { ...receipt }]);
     }
     for (const rows of remaining.values()) rows.sort((a, b) => a.valid_until.localeCompare(b.valid_until) || a.reference.localeCompare(b.reference));
