@@ -826,3 +826,21 @@ Deno.test("owner 2026-10-28 D10: a member that has to be bought is connected at 
   assert(atOwnMin?.need_date === "2026-10-25", `Gabrosa's own 20 days -> 25 Oct: ${atOwnMin?.need_date}`);
   assert(atOwnMin.recommended_po_by === "2026-10-19", `order date = need date - lead time 6: ${atOwnMin.recommended_po_by}`);
 });
+
+Deno.test("owner 2026-10-28 Store keep: a checkpoint day always carries a Material × Level snapshot (the quantity to keep at the end of a period)", () => {
+  const days = Array.from({ length: 40 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 39), opening_qty_by_material: { A: 800, X: 300 },
+    own_demand: days.map((required_by) => ({ material_id: "X", required_by, qty_base: 5 })),
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A", "X"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [], checkpoints: ["2026-10-20", "2026-10-31"],
+    group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 10, critical_days: 5, desired_max_days_override: 20 }],
+    policies: [policy("A", 10, 5, []), policy("X", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  for (const day of ["2026-10-20", "2026-10-31"]) {
+    const snapshot = result.level_matrix.find((snap) => snap.day === day);
+    assert(snapshot, `${day} has a snapshot`);
+    const group = snapshot.levels.find((level) => level.level_kind === "GROUP" && level.level_id === "G");
+    assert(group && Object.values(group.by_material).reduce((s, q) => s + q, 0) > 0, `${day}: the group's reserve is reported`);
+  }
+});

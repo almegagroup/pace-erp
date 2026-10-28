@@ -101,6 +101,8 @@ export type FamilyPlannerInput = {
   plan_buys?: boolean;
   /** false = skip the event log / Material × Level matrix (the arrival optimizer re-runs the family many times). */
   trace?: boolean;
+  /** Days (YYYY-MM-DD) that always get a Material × Level snapshot — e.g. the end of the current / next month for the Store "keep" quantity. */
+  checkpoints?: readonly string[];
 };
 
 /**
@@ -604,6 +606,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     return Math.min(2, Math.max(0.5, byCost * byCredit));
   });
   const candIdx = pools.map((pool) => pool.candidates.filter((c) => mIndex.has(c)).map((c) => mIndex.get(c)!));
+  const checkpointDays = new Set(input.checkpoints ?? []);
   const simulatedOpeningReceipts = ids.map((id) => {
     const opening = Math.max(0, Number(input.opening_qty_by_material[id] ?? 0));
     let left = opening;
@@ -1030,7 +1033,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         s.freeAfter[m][i] = Math.max(0, bal[m] - protection[m][i]);
       }
       // Owner 2026-10-28: a Material × Level snapshot on every event day (and the first / last day) for the 4A table / Excel.
-      if (input.trace !== false && (i === 0 || i === N - 1 || s.levelEvents.length > eventsAtDayStart)) {
+      if (input.trace !== false && (i === 0 || i === N - 1 || s.levelEvents.length > eventsAtDayStart || checkpointDays.has(allDays[i]))) {
         s.matrix.push({
           day: i, own: ids.map((_x, m) => roundQty(ownReserve[m])), groups: pools.map((_pool, p) => purposeReserve[p].map((qty) => roundQty(Math.max(0, qty)))),
           pool: ids.map((_x, m) => roundQty(Math.max(0, bal[m] - ownReserve[m] - purposeReserve.reduce((sum, reserve) => sum + Math.max(0, reserve[m]), 0)))),

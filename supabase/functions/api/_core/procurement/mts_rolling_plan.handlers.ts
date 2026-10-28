@@ -317,6 +317,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       period: r.period_label, mother_group: r.mother_group, child_group: r.child_group, product: r.product, source: r.source, line_type: r.line_type, group: r.group_label,
       reason: r.planned_consumption_reason ?? null, use_first: r.receipt_reference ?? null,
       material: r.material_name, uom: r.material_id ? uomOf(r.material_id) : r.uom, demand_qty: dq(r.material_id, r.demand_qty), from_stock: dq(r.material_id, r.executable_qty), not_backed: dq(r.material_id, r.not_backed_qty), transfer: r.transfer_hint,
+      // Owner 2026-10-28: Store instructions are for group items; period from-to and the reserve to keep at its end (up to Max days).
+      period_from: r.period_from, period_to: r.period_to, group_related: r.group_related, material_key: r.material_id ?? `group:${r.group_id ?? r.group_label}`,
+      keep_qty: r.keep_qty === null ? null : dq(r.material_id, r.keep_qty), keep_max_days: r.keep_max_days,
     }));
 
     const arrivals = reqData.output.rows.filter((r) => !bulkRm.has(r.material_id)).flatMap((r) => r.inbound_events.map((e) => {

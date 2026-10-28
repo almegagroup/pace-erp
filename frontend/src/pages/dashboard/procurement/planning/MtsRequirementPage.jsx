@@ -19,7 +19,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
-import { aggregateStoreItems, normaliseStoreRows, transferRows } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, normaliseStoreRows, periodSpan, transferRows } from "./mtsStoreInstruction.js";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -1936,9 +1936,12 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
   const transfers = useMemo(() => transferRows(source?.store_transfers), [source]);
   const itemColumns = [
     { key: "period", label: "Period", width: "130px" },
+    { key: "span", label: "Use from → to", width: "130px", render: (r) => periodSpan(r.period_from, r.period_to), copyValue: (r) => periodSpan(r.period_from, r.period_to) },
     { key: "item", label: "Item", width: "280px", render: (r) => (r.key_id?.startsWith("group:") ? <span className="text-rose-700">{r.item}</span> : r.item), copyValue: (r) => r.item },
     { key: "group", label: "Material group", width: "200px", render: (r) => dash(r.group) },
-    { key: "qty", label: "Quantity", width: "120px", align: "right", render: (r) => <span className="font-semibold text-emerald-800">{sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.qty)}</span>, copyValue: (r) => sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.qty) },
+    { key: "qty", label: "Use in this period", width: "130px", align: "right", render: (r) => <span className="font-semibold text-emerald-800">{sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.qty)}</span>, copyValue: (r) => sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.qty) },
+    { key: "keep", label: "Keep at end of period (up to Max days)", width: "200px", align: "right", render: (r) => (r.keep === null || r.keep === undefined ? "—" : <span className="font-semibold text-sky-800">{sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.keep)}</span>), copyValue: (r) => (r.keep === null || r.keep === undefined ? "" : sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.keep)) },
+    { key: "keep_days", label: "Max days", width: "80px", align: "right", render: (r) => (r.keep_days === null || r.keep_days === undefined ? "—" : Math.round(r.keep_days)), copyValue: (r) => r.keep_days ?? "" },
     { key: "not_backed", label: "Not yet backed", width: "120px", align: "right", render: (r) => (r.not_backed ? <span className="text-rose-700">{sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.not_backed)}</span> : ""), copyValue: (r) => (r.not_backed ? sq(r.key_id?.startsWith("group:") ? null : r.key_id, r.not_backed) : "") },
     { key: "uom", label: "UoM", width: "60px", render: (r) => dash(du.uom(r.key_id?.startsWith("group:") ? null : r.key_id, r.uom)), copyValue: (r) => du.uom(r.key_id?.startsWith("group:") ? null : r.key_id, r.uom) },
     { key: "mother", label: "PO21 parent group", width: "180px", render: (r) => dash(r.mother) },

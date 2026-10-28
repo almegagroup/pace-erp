@@ -115,11 +115,25 @@ test("STORE tabs: items by period with the child groups of one parent on ONE row
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, store, store_transfers }], asOf: "2026-10-28" });
   const items = wb.getWorksheet("STORE_INSTRUCTIONS");
   assert.equal(items.rowCount, 2, "header + ONE row for both child groups");
-  assert.equal(items.getRow(2).getCell(5).value, 140);
-  assert.equal(items.getRow(2).getCell(9).value, "EXT PUTTY; INT PUTTY");
+  assert.equal(items.getRow(2).getCell(7).value, 140);
+  assert.equal(items.getRow(2).getCell(13).value, "EXT PUTTY; INT PUTTY");
   const transfers = wb.getWorksheet("STORE_TRANSFERS");
   assert.equal(transfers.rowCount, 3);
   assert.deepEqual([transfers.getRow(2).getCell(5).value, transfers.getRow(2).getCell(6).value, transfers.getRow(2).getCell(7).value], ["R003", "R001", 600]);
   assert.ok(wb.getWorksheet("STORE_DETAIL"), "the old product-wise rows stay as STORE_DETAIL");
+  await wb.xlsx.writeBuffer();
+});
+
+test("RM_PLANNING family block: whole-family note and each level (Exclusive and groups) with its own Min / Max / Critical", async () => {
+  const base = company("a", "Almeha Coatings");
+  const waterfall = { levels: [
+    { level_kind: "OWN", label: "Exclusive — Gabrosa", members: ["Gabrosa"], target_days: 30, critical_days: 20, max_days: 60, cover_days_now: 60, reserve_now: 6670, next_min_day: "2026-11-27" },
+    { level_kind: "GROUP", label: "MHEC", members: ["Gabrosa", "Combizell"], target_days: 30, critical_days: 15, max_days: 60, cover_days_now: 60, reserve_now: 84390, next_min_day: null }], events: [], matrix: [] };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], waterfall }] }], asOf: "2026-10-28" });
+  const lines = [];
+  wb.getWorksheet("RM_PLANNING").eachRow((row) => lines.push(String(row.getCell(1).value ?? "")));
+  assert.ok(lines.some((l) => l.includes("WHOLE family")), "the whole-family note");
+  assert.ok(lines.some((l) => l.includes("Exclusive — Gabrosa: Min 30 / Max 60 / Critical 20 d · reserve 6670 KG (covers 60 d) · next Min 2026-11-27")), "the Exclusive level line");
+  assert.ok(lines.some((l) => l.includes("MHEC: Min 30 / Max 60 / Critical 15 d") && l.includes("not in horizon")), "the group level line");
   await wb.xlsx.writeBuffer();
 });

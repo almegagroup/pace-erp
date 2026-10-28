@@ -550,6 +550,8 @@ export async function computePlanning(p: PlanningParams) {
       .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of)),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
+    // The Store "keep" quantity is read at the end of each period (owner 2026-10-28).
+    checkpoints: [calendar.cmEnd, calendar.nmEnd],
     group_orders: req.input.groupOrders,
     selections: selections.map,
     // The month selector is shown for every active group member. Selection is
@@ -775,6 +777,8 @@ export async function computePlanning(p: PlanningParams) {
   const eventRef = new Map<string, string>();
   for (const row of req.output.rows) row.inbound_events.forEach((event, index) => eventRef.set(`A|${row.material_id}|${index}|${event.reference}`, event.reference));
 
+  // Owner 2026-10-28 — Store instructions cover GROUP items only; a member that also has an exclusive use is part of its group.
+  const groupMemberIds = new Set(req.output.groups.flatMap((g) => g.member_ids));
   // Owner 2026-10-28 — Store transfers: R003 (transfer-source store) -> R001 / R002 and R001 <-> R002, how much and by when.
   // Need of a store in a period = what the lines located there use (shop floor S00n is fed from R00n); stock = UNRESTRICTED per location.
   const storeTransfers = await (async () => {
@@ -783,7 +787,7 @@ export async function computePlanning(p: PlanningParams) {
       const store = pool.storage_location_id ? rStoreKey(locationLabels.get(pool.storage_location_id) ?? "") : null;
       if (store) poolStore.set(pool.pool_key, store);
     }
-    const needs = req.output.store_rows.flatMap((row) => {
+    const needs = req.output.store_rows.filter((row) => Boolean(row.group_id) || Boolean(row.material_id && groupMemberIds.has(row.material_id))).flatMap((row) => {
       const store = poolStore.get(row.pool_key);
       const qty = row.executable_qty + row.not_backed_qty;
       return row.material_id && store && qty > 0.000001 ? [{ material_id: row.material_id, period: row.period, store, qty }] : [];
@@ -808,6 +812,19 @@ export async function computePlanning(p: PlanningParams) {
       periods: [{ period: "CM", start: calendar.asOf }, { period: "NM", start: calendar.nmStart }],
     }).map((t2) => ({ ...t2, material_name: nameOf(t2.material_id), material_code: codeOf(t2.material_id), uom: uom(t2.material_id), period_label: storePeriodLabel(t2.period as "CM" | "NM", calendar) }));
   })();
+  // Owner 2026-10-28 — Store instructions are only for GROUP items (a group's member that also has an exclusive use is included).
+  // For each item and period: where the period runs, and how much must be KEPT at its end (the level's reserve, up to its Max days).
+  const maxDaysOf = new Map(projection.level_policies.map((l) => [`${l.level_kind}|${l.level_id}`, l.desired_days]));
+  const keepAt = (period: string, materialId: string | null, groupId: string | null) => {
+    if (!materialId) return { qty: null as number | null, days: null as number | null };
+    const day = period === "CM" ? calendar.cmEnd : calendar.nmEnd;
+    const snapshot = [...projection.level_matrix].reverse().find((snap) => snap.day <= day);
+    if (!snapshot) return { qty: null, days: null };
+    const level = groupId
+      ? snapshot.levels.find((l) => l.level_kind === "GROUP" && l.level_id === groupId)
+      : snapshot.levels.find((l) => l.level_kind === "OWN" && l.level_id === materialId);
+    return { qty: level ? Math.round((level.by_material[materialId] ?? 0) * 1000) / 1000 : 0, days: maxDaysOf.get(`${groupId ? "GROUP" : "OWN"}|${groupId ?? materialId}`) ?? null };
+  };
   const activeMaterials = new Set(projection.rows.filter((r) => r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0).map((r) => r.material_id));
   const payload = {
     company_id: p.companyId,
@@ -962,6 +979,11 @@ export async function computePlanning(p: PlanningParams) {
     store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),
+      period_from: row.period === "CM" ? calendar.asOf : calendar.nmStart,
+      period_to: row.period === "CM" ? calendar.cmEnd : calendar.nmEnd,
+      group_related: Boolean(row.group_id) || Boolean(row.material_id && groupMemberIds.has(row.material_id)),
+      keep_qty: keepAt(row.period, row.material_id, row.group_id).qty,
+      keep_max_days: keepAt(row.period, row.material_id, row.group_id).days,
       mother_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.mother ?? "")).filter(Boolean).join("; ") || null,
       child_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.child ?? "")).filter(Boolean).join("; ") || null,
       material_document_name: documentName(row.material_id),

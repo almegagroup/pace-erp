@@ -174,6 +174,16 @@ function writeBlocks(sheet, companies, kind) {
       stockRow.getCell(1).font = { italic: true };
     }
     if (b.first_shortage_day || (b.gaps ?? []).length) factRow.getCell(1).font = { bold: true, color: { argb: RED } };
+    // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
+    // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
+    if (b.is_family && (b.waterfall?.levels ?? []).length) {
+      const note = sheet.addRow(["Opening / Pro-rata / Closing / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. Levels, narrow first:"]);
+      note.getCell(1).font = { italic: true };
+      for (const l of b.waterfall.levels) {
+        const line = sheet.addRow([`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${num(l.reserve_now) ?? 0} ${b.uom ?? ""} (covers ${days(l.cover_days_now) ?? "—"} d) · next Min ${l.next_min_day ?? "not in horizon"}`]);
+        line.getCell(1).font = { italic: true };
+      }
+    }
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
@@ -289,14 +299,16 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   // one parent that use the same item share ONE row. STORE_TRANSFERS: R003 -> R001 / R002 and R001 <-> R002. STORE_DETAIL = the old product-wise rows.
   const storeItems = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
   addTable(storeItems, [
-    { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Item", key: "item" }, { label: "Material group", key: "group" },
-    { label: "Quantity", value: (r) => num(r.qty), num: true }, { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
+    { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
+    { label: "Item", key: "item" }, { label: "Material group", key: "group" },
+    { label: "Use in this period", value: (r) => num(r.qty), num: true }, { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep), num: true },
+    { label: "Max days", value: (r) => days(r.keep_days), num: true }, { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
     { label: "PO21 parent group", key: "mother" }, { label: "Child group(s)", key: "child" },
-  ], companies.flatMap((c) => aggregateStoreItems((c.store ?? []).map((s) => ({
-    period: s.period, period_order: String(s.period).startsWith("CM") ? 0 : 1, item: s.material, key_id: s.material, group: s.group ?? "",
-    mother: s.mother_group ?? "", child: s.child_group ?? "", qty: s.from_stock, not_backed: s.not_backed, uom: s.uom,
+  ], companies.flatMap((c) => aggregateStoreItems((c.store ?? []).filter((s) => s.group_related !== false).map((s) => ({
+    period: s.period, period_order: String(s.period).startsWith("CM") ? 0 : 1, period_from: s.period_from, period_to: s.period_to, item: s.material, key_id: s.material_key ?? s.material,
+    group: s.group ?? "", mother: s.mother_group ?? "", child: s.child_group ?? "", qty: s.from_stock, not_backed: s.not_backed, uom: s.uom, keep: s.keep_qty ?? null, keep_days: s.keep_max_days ?? null,
   }))).map((r) => ({ ...r, company: companyLabel(c) }))), { color: (r) => (r.not_backed > 0 ? RED : null) });
-  widths(storeItems, [26, 16, 40, 28, 14, 14, 7, 24, 40]);
+  widths(storeItems, [26, 16, 12, 12, 40, 28, 16, 22, 10, 14, 7, 24, 40]);
   const storeTransfers = wb.addWorksheet(sheetName("STORE_TRANSFERS", used));
   addTable(storeTransfers, [
     { label: "Company", key: "company" }, { label: "Transfer by", value: (r) => day(r.by) }, { label: "For period", key: "period" }, { label: "Item", key: "material" },

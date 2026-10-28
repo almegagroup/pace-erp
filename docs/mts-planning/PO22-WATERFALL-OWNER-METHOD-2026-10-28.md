@@ -472,3 +472,29 @@ the demand of the lines located there (backed + not yet backed). Advisory only: 
 
 Not done yet: a live run on PROD data through the handlers (stock by location, location roles); finer dates than the period start (the first day the
 store would run out inside a period) — to be added if Store wants it.
+
+---
+
+## 18. Owner's review of the downloaded Excel `mts_plan_20261027_2.xlsx` → Store and RM/PM_PLANNING (2026-10-28)
+
+Findings in that file (generated before the waterfall changes were deployed, so it has no WATERFALL / STORE_TRANSFERS tabs):
+- **RM_PLANNING / PM_PLANNING already report a family as ONE block** — every group and the exclusive use of its members together
+  (e.g. CMP003 "MC 60 OTHERS / MHEC / MHEC PLC": Opening 119,109.966 KG = Combizell 75,509.92 + TS 26,027.65 + Gabrosa 17,366.30 + FMC 206.1 + MC 60 0;
+  Pro-rata 1,646.275 KG/day = the whole family's daily use; Closing = Opening + ETA − use). The arithmetic of the rows adds up.
+- What was missing for a correct reading: the block gave **one blended Max/Min days** and no view of the levels inside it.
+- Data gaps visible in the file: "ENGINE CANNOT PLAN — MECELLOSE FMC 25002: no Target/Critical" (owner to enter Target / Critical); engine advice such as
+  "postpone 23 d / prepone 34 d" predates the ETD window of §10.
+
+Done (this change):
+1. **RM_PLANNING / PM_PLANNING** keep the combined family block (group + exclusive together) and now add, under the block title, a line stating that the
+   figures are the whole family and **one line per level, narrow first** (Exclusive — item, then each group): its own Min / Max / Critical days, reserve now,
+   days it covers, next Min date.
+2. **Store instructions only for group items.** A row is kept when it names a material group, or when its material is a member of any group (so a group
+   member's **exclusive** use is included). Straight items are left out of *Items by period* and of the transfers; the old product-wise detail
+   (`STORE_DETAIL`) still lists everything.
+3. **Items by period** now also shows **Use from → to** (the period's dates) and **Keep at end of period (up to Max days)** with the level's **Max days**:
+   the reserve the waterfall holds for that item at the last day of the period (current month = end of this month, next month = its last day), read from the
+   Material × Level snapshot (`checkpoints` in the planner). The keep belongs to Period × Item × Group; when the same item is listed for several parent
+   groups it is shared in proportion to the quantity each uses, so it is never counted twice.
+
+Still open: a live PROD run (the downloaded file is the only PROD output seen); "Keep" for an item that has no reserve in a level is shown as 0.

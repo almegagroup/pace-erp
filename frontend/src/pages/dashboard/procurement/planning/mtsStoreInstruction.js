@@ -7,32 +7,53 @@
 const split = (value) => String(value ?? "").split(";").map((s) => s.trim()).filter(Boolean);
 const round = (value) => Math.round((Number(value) || 0) * 1000) / 1000;
 
-/** rows: { period, period_order, item, group, mother, child, qty, not_backed, uom, key_id } (normalised by the caller). */
+/**
+ * rows: { period, period_order, period_from, period_to, item, group, mother, child, qty, not_backed, uom, key_id, keep, keep_days } (normalised by the caller).
+ * `keep` = what must be KEPT at the end of the period (the level's reserve of this item, up to its Max days). It belongs to Period × Item × Group,
+ * not to a parent group, so when one item is shown for several parent groups it is shared in proportion to the quantity each uses.
+ */
 export function aggregateStoreItems(rows) {
   const map = new Map();
+  const keepOf = new Map();
   for (const r of rows) {
-    const key = [r.period, r.key_id ?? r.item, r.group ?? "", r.mother ?? ""].join("|");
-    const seen = map.get(key) ?? { key, period: r.period, period_order: r.period_order ?? 0, item: r.item, group: r.group ?? "", mother: r.mother ?? "", children: new Set(), qty: 0, not_backed: 0, uom: r.uom ?? "", key_id: r.key_id ?? null };
+    const base = [r.period, r.key_id ?? r.item, r.group ?? ""].join("|");
+    if (r.keep !== null && r.keep !== undefined) keepOf.set(base, { keep: Number(r.keep) || 0, days: r.keep_days ?? null });
+    const key = `${base}|${r.mother ?? ""}`;
+    const seen = map.get(key) ?? { key, base, period: r.period, period_order: r.period_order ?? 0, period_from: r.period_from ?? null, period_to: r.period_to ?? null, item: r.item, group: r.group ?? "", mother: r.mother ?? "", children: new Set(), qty: 0, not_backed: 0, uom: r.uom ?? "", key_id: r.key_id ?? null };
     split(r.child).forEach((c) => seen.children.add(c));
     seen.qty += Number(r.qty) || 0;
     seen.not_backed += Number(r.not_backed) || 0;
     map.set(key, seen);
   }
+  const totalUse = new Map();
+  for (const r of map.values()) totalUse.set(r.base, (totalUse.get(r.base) ?? 0) + r.qty);
   return [...map.values()]
     .map((r) => {
       const child = [...r.children].sort().join("; ");
-      const rest = { ...r, child, qty: round(r.qty), not_backed: round(r.not_backed) };
+      const kept = keepOf.get(r.base);
+      const share = kept ? (totalUse.get(r.base) > 0 ? r.qty / totalUse.get(r.base) : 1) : 0;
+      const rest = { ...r, child, qty: round(r.qty), not_backed: round(r.not_backed), keep: kept ? round(kept.keep * share) : null, keep_days: kept?.days ?? null };
       delete rest.children;
+      delete rest.base;
       return rest;
     })
     .sort((a, b) => a.period_order - b.period_order || String(a.mother || "~").localeCompare(String(b.mother || "~")) || String(a.item).localeCompare(String(b.item)) || String(a.group).localeCompare(String(b.group)));
 }
 
-/** Backend `store_rows` (UI shape) -> the normalised rows above. A group remainder with no material is listed as "Group — not assigned". */
+/** "28 Oct → 31 Oct" */
+export function periodSpan(from, to) {
+  if (!from || !to) return "";
+  const show = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+  return `${show(from)} → ${show(to)}`;
+}
+
+/** Backend `store_rows` (UI shape) -> the normalised rows above; only GROUP items (a group's member with an exclusive use included). */
 export function normaliseStoreRows(storeRows) {
-  return (storeRows ?? []).map((r) => ({
+  return (storeRows ?? []).filter((r) => r.group_related !== false).map((r) => ({
     period: r.period_label ?? (r.period === "CM" ? "CM (rest)" : "NM"),
     period_order: r.period === "CM" ? 0 : 1,
+    period_from: r.period_from ?? null,
+    period_to: r.period_to ?? null,
     item: r.material_id ? r.material_name : `${r.group_label ?? "Group"} — not assigned`,
     key_id: r.material_id ?? `group:${r.group_id ?? r.group_label}`,
     group: r.group_label ?? "",
@@ -42,6 +63,8 @@ export function normaliseStoreRows(storeRows) {
     not_backed: r.not_backed_qty,
     uom: r.uom ?? "",
     material_id: r.material_id ?? null,
+    keep: r.keep_qty ?? null,
+    keep_days: r.keep_max_days ?? null,
   }));
 }
 

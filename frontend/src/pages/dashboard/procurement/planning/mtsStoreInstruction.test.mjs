@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aggregateStoreItems, normaliseStoreRows, transferRows } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, normaliseStoreRows, periodSpan, transferRows } from "./mtsStoreInstruction.js";
 
 test("child groups of one parent that use the same item share ONE row; a different parent stays a separate row", () => {
   const rows = normaliseStoreRows([
@@ -32,4 +32,23 @@ test("transfers read by date, then item", () => {
     { by: "2026-10-28", material_name: "A", from: "R003", to: "R002" },
   ]);
   assert.deepEqual(rows.map((r) => r.material_name), ["A", "Z", "B"]);
+});
+
+test("only group items are listed; the reserve to keep is shared over the parent-group rows by use and never counted twice", () => {
+  const rows = normaliseStoreRows([
+    { period: "CM", period_label: "CM (rest)", period_from: "2026-10-28", period_to: "2026-10-31", material_id: "m1", material_name: "TS U2121", group_id: "g", group_label: "MHEC", mother_group: "PUTTY", child_group: "EXT", executable_qty: 300, not_backed_qty: 0, uom: "KG", group_related: true, keep_qty: 1000, keep_max_days: 60 },
+    { period: "CM", period_label: "CM (rest)", period_from: "2026-10-28", period_to: "2026-10-31", material_id: "m1", material_name: "TS U2121", group_id: "g", group_label: "MHEC", mother_group: "PAINT", child_group: "PRIMER", executable_qty: 100, not_backed_qty: 0, uom: "KG", group_related: true, keep_qty: 1000, keep_max_days: 60 },
+    { period: "CM", period_label: "CM (rest)", material_id: "x", material_name: "Straight item", group_id: null, group_label: null, mother_group: "PUTTY", child_group: "EXT", executable_qty: 5, not_backed_qty: 0, uom: "KG", group_related: false, keep_qty: 0, keep_max_days: null },
+  ]);
+  assert.equal(rows.length, 2, "the straight item is not part of the Store group instructions");
+  const items = aggregateStoreItems(rows);
+  assert.equal(items.length, 2);
+  assert.equal(items.reduce((s, i) => s + i.keep, 0), 1000, "keep 1000 is split 750 / 250, not repeated");
+  assert.equal(items.find((i) => i.mother === "PUTTY").keep, 750);
+  assert.equal(items[0].keep_days, 60);
+});
+
+test("the period shows from and to", () => {
+  assert.equal(periodSpan("2026-10-28", "2026-10-31"), "28 Oct → 31 Oct");
+  assert.equal(periodSpan(null, null), "");
 });
