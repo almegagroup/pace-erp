@@ -195,3 +195,101 @@ feasibility check (`optimizeFamilyArrival` ignored lead time).
 6. Implement §10 (feasibility window on reschedule advice) and re-check against §5 and the Excel "Engine best
    date" column.
 7. Excel readability redesign (plain "what to do" first) — separate item, owner has not decided on it yet.
+
+---
+
+## 12. Later in the same session: Gabrosa at its own Min, lot size, delays, source order (owner 2026-10-28)
+
+### 12.1 A member that is bought at its own Min (Gabrosa 20 days vs Group B 30 days)
+
+- Group B Min = 30 days. Gabrosa can be bought locally and lands in about 6 days, so the owner set Gabrosa's own
+  Min to **20 days**.
+- If the procurement plan finds that buying Gabrosa is the best way to cover the gap, **Gabrosa is connected at
+  its own Min days (20), with its lot size**. Group B's 30 days does not force the order earlier.
+- The order date is derived from **lead time** (booking + route days): the date the shortage appears minus lead
+  time. It is not "when the group reaches 30".
+- Between day 30 and day 20 the group's cover falls from 30 to 20 days. **The other members (Combizell, TS) cover
+  that gap** — the group reserve is one quantity, not tied to one material. This is planned, so it is **not shown
+  red**. It becomes red only when the group's cover is **below Critical** and no confirmed lot arrives in time.
+- When the lot lands, the group must refill from where it stands to Max. That gap is now bigger (20 → 60 = 40
+  days, instead of 30 → 60 = 30 days). Group B at ≈ 1,406 KG/day: 40 days ≈ 56,260 KG instead of 30 days ≈ 42,195
+  KG, i.e. ≈ 14,065 KG more taken from the Excess Pool. The pool is therefore smaller, and **the next rotation is
+  calculated automatically from this new state**; nothing is adjusted by hand.
+- If the pool plus the new lot is smaller than that gap, the group stays below Max and the **next receipt** closes
+  the rest. Example: lot 24,000 + earlier excess 20,000 = 44,000 against 56,260 → short ≈ 12,260 KG; the group
+  reaches about 20 + 44,000 ÷ 1,406 ≈ 51 days, not 60. The system must report how much excess remains in the pool
+  after each Min.
+
+### 12.2 A lot that serves more than one level
+
+- Gabrosa serves **Exclusive, Group A and Group B**; the lot enters the **Excess Pool**.
+- Only a level that has reached its own Min claims; a level that is nearly full does not. Example: Exclusive at 55
+  days on the day the lot lands claims nothing, so the lot goes to the level that is waiting (B). Exclusive claims
+  only when it falls to its own Min (about 25 days later).
+- A level that already reached Min and could not be filled (pool was short) is **waiting**; when new stock lands,
+  waiting levels take it first, in the order Exclusive → A → B.
+- Gabrosa is the only material the **Exclusive** level can use. If Gabrosa runs out, the Exclusive flat stops and
+  no other material can replace it. The order timing and size for Gabrosa must therefore be decided for **all
+  three levels together**, not for Group B alone.
+
+### 12.3 Owner's hard requirement: no level may fall short
+
+- **Exclusive or any Group must never be short, in any situation** (owner: "ami chai kono abosthatei exclusive or
+  Group, kothao jeno ghatti na pore").
+- This is achieved by: narrow levels are served first at their Min; inside a group the **FEFO order** means the
+  newest lot (the newly arrived Gabrosa) is used last, so it stays in the pool; and the planner runs ahead day by
+  day and raises a purchase / reschedule advice when a shortfall appears. Any shortfall is shown on the broad
+  level (B), never taken from the narrow levels.
+- **No hold-back.** An earlier proposal in the same session to earmark Gabrosa for Exclusive's next claim was
+  **withdrawn by the owner**: a level takes what it needs on its own Min date, and FEFO already keeps the newest
+  lot for last. Caveat recorded: Gabrosa is last only when it is the newest / latest-expiring lot; an older
+  Gabrosa lot would be consumed earlier under FEFO.
+- **No extra ETA margin** is added: stock is always kept above Target, and Target is the margin. If a lot slips,
+  the system recomputes and advises.
+
+### 12.4 Lot size
+
+- The **quantity needed** is decided from the shortfall. What **arrives** is decided by lot size (MOQ and multiple):
+  need rounded up to the lot size, never below MOQ. A need larger than one lot gives several lots.
+- Whatever is more than the need becomes **excess** in the pool and is picked up by the next rotation
+  automatically. Example: need 14,000 KG, lot 24,000 KG → 10,000 KG excess.
+- A lot lands whole, on one date. Lot size also drives cost (interest, space) and is part of the vendor / lot
+  comparison already done by the procurement plan.
+
+### 12.5 A delayed shipment
+
+- Example: a lot expected when the group is at 30 days lands at 15 days instead. The group's cover drops below
+  Critical (20) in between, so it is shown **red**.
+- On landing the **same rule** applies. The lot enters the pool; waiting levels take it in the order
+  Exclusive → A → B; the group refills **up to Max** (15 → 60 = 45 days ≈ 63,290 KG for B). If the lot is
+  smaller, the group stays below Max and the next receipt closes it. If it is bigger, **the rest stays as excess**.
+- The rest of the lot does **not** push other levels to fill early: each other level claims from the pool only on
+  its own Min date (unless it is already waiting).
+
+### 12.6 Source order for filling a level
+
+1. The level's own reserve.
+2. The **Excess Pool** (today's spare stock), Exclusive → A → B, up to Max.
+3. **Confirmed incoming** stock (CSN / PO already raised), entering the pool on its ETA.
+4. **New procurement**, only for what 1–3 cannot cover: quantity rounded by lot size, order date = shortage date
+   minus lead time, vendor / material chosen by the procurement plan.
+
+In the worked example the first need for a new order is the Group B shortfall of ≈ 38,930 KG on 27 Mar 2027
+(after the pool and every confirmed receipt are used), not before.
+
+### 12.7 Reporting rules the owner asked for
+
+- After each Min the system states **how much excess is left** in the pool (by material).
+- When the PO21 plan ends, the system says "plan ends here, protection beyond is unknown" rather than assuming
+  zero silently.
+- The owner decided that **the engine must be aligned to this method** (not the other way round). How readable
+  the Excel / output is will be discussed separately, after this record.
+
+### 12.8 Additions to the unverified list (§11)
+
+8. Engine behaviour for: member buy at its own Min (12.1), claim only on own Min / waiting-level priority (12.2),
+   FEFO keeping the newest lot last inside a group (12.3), lot-size rounding with surplus into the pool (12.4),
+   delay handling (12.5), source order (12.6).
+9. Confirm in the settings that "Max = Target + order cycle" holds for each item of the family (§2).
+10. Whether the planner's day-by-day run is enough to raise the shortage advice early (12.3) or needs an
+    iterative "add order, run again" pass.
