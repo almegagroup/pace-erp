@@ -21,7 +21,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import { usePo22ColumnLayouts } from "./usePo22ColumnLayouts.js";
-import { aggregateStoreItems, issueNote, normaliseStoreRows, periodSpan, planItemRows, simpleStoreNote, storeForText, storeWaitQty, transferRows } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, dayShort, issueNote, normaliseStoreRows, periodSpan, planItemRows, simpleStoreNote, storeWaitQty, transferRows } from "./mtsStoreInstruction.js";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -2007,9 +2007,12 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
   // Owner 2026-10-28: the default Store view is SIMPLE — Period · Item · For · Issue now · Wait for receipt · Keep after this period · Note.
   const keyOf = (r) => (r.key_id?.startsWith("group:") ? null : r.key_id);
   const simpleColumns = [
-    { key: "span", label: "Period", width: "130px", render: (r) => periodSpan(r.period_from, r.period_to), copyValue: (r) => periodSpan(r.period_from, r.period_to) },
+    { key: "use_from", label: "Use from", width: "90px", render: (r) => dayShort(r.period_from), copyValue: (r) => dayShort(r.period_from) },
+    { key: "use_to", label: "Use to", width: "90px", render: (r) => dayShort(r.period_to), copyValue: (r) => dayShort(r.period_to) },
     { key: "item", label: "Item", width: "280px", render: (r) => (r.key_id?.startsWith("group:") ? <span className="text-rose-700">{r.item}</span> : r.item), copyValue: (r) => r.item },
-    { key: "for", label: "For (product group)", width: "280px", render: (r) => dash(storeForText(r)), copyValue: (r) => storeForText(r) },
+    { key: "group", label: "Material group", width: "200px", render: (r) => dash(r.group) },
+    { key: "mother", label: "PO21 parent group", width: "180px", render: (r) => dash(r.mother) },
+    { key: "child", label: "Child group(s)", width: "260px", render: (r) => dash(r.child) },
     { key: "issue_now", label: "Issue now", width: "120px", align: "right", render: (r) => <span className="font-semibold text-emerald-800">{sq(keyOf(r), r.use_stock)}</span>, copyValue: (r) => sq(keyOf(r), r.use_stock) },
     { key: "wait", label: "Wait for receipt", width: "130px", align: "right", render: (r) => (storeWaitQty(r) > 0.0005 ? <span className="text-amber-800">{sq(keyOf(r), storeWaitQty(r))}</span> : ""), copyValue: (r) => (storeWaitQty(r) > 0.0005 ? sq(keyOf(r), storeWaitQty(r)) : "") },
     { key: "keep", label: "Keep aside after this period", width: "180px", align: "right", render: (r) => (r.keep === null || r.keep === undefined ? "—" : <span className="font-semibold text-sky-800">{sq(keyOf(r), r.keep)}</span>), copyValue: (r) => (r.keep === null || r.keep === undefined ? "" : sq(keyOf(r), r.keep)) },

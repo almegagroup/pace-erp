@@ -47,6 +47,12 @@ export function periodSpan(from, to) {
   return `${show(from)} → ${show(to)}`;
 }
 
+/** One date as "28 Oct" (Use from / Use to are two columns). */
+export function dayShort(iso) {
+  if (!iso) return "";
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
 /** Backend `store_rows` (UI shape) -> the normalised rows above; only GROUP items (a group's member with an exclusive use included). */
 export function normaliseStoreRows(storeRows) {
   return (storeRows ?? []).filter((r) => r.group_related !== false).map((r) => ({

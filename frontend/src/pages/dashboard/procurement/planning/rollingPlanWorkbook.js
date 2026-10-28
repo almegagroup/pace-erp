@@ -10,7 +10,7 @@
  */
 import ExcelJS from "exceljs";
 import { flowRows, matrixGrid, waterfallVerdict } from "./mtsWaterfall.js";
-import { aggregateStoreItems, periodSpan, simpleStoreNote, storeForText, storeWaitQty } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, dayShort, simpleStoreNote, storeWaitQty } from "./mtsStoreInstruction.js";
 
 const TITLE_FILL = "FFFBBC04";   // yellow block title, as in the old file
 const HEAD_FILL = "FFFFE699";    // light yellow column header
@@ -317,14 +317,15 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   if (planRows.length > 0) {
     // Owner 2026-10-28: the Store sheet is SIMPLE — Period · Item · For · Issue now · Wait for receipt · Keep aside after this period · Note.
     addTable(storeItems, [
-      { label: "Company", key: "company" }, { label: "Period", value: (r) => periodSpan(r.period_from, r.period_to) },
-      { label: "Item", key: "item" }, { label: "For (product group)", value: (r) => storeForText({ mother: r.mother_group, child: r.child_group, group: r.group }) },
+      { label: "Company", key: "company" }, { label: "Use from", value: (r) => dayShort(r.period_from) }, { label: "Use to", value: (r) => dayShort(r.period_to) },
+      { label: "Item", key: "item" }, { label: "Material group", key: "group" },
+      { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" },
       { label: "Issue now", value: (r) => num(r.use_stock), num: true },
       { label: "Wait for receipt", value: (r) => num(storeWaitQty(r)) || null, num: true },
       { label: "Keep aside after this period", value: (r) => num(r.keep_qty), num: true }, { label: "UoM", key: "uom" },
       { label: "Note", value: (r) => simpleStoreNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot, not_backed: r.not_backed }) },
     ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
-    widths(storeItems, [26, 18, 40, 40, 14, 16, 18, 7, 80]);
+    widths(storeItems, [26, 11, 11, 40, 28, 24, 40, 14, 16, 18, 7, 80]);
   } else addTable(storeItems, [
     { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
     { label: "Item", key: "item" }, { label: "Material group", key: "group" },
