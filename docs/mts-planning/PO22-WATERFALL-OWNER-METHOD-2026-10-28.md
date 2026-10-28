@@ -367,7 +367,7 @@ policy rows for CMP003 (members Target 30 / Critical 20, no saved group policy).
 | D2 | Inside a group, **FEFO**: the earlier lot (TS) first, the newest (Gabrosa) last | FEFO only for **opening** receipts that carry an expiry; future CSN lots have no expiry; otherwise saved order, run-down, then free-stock ratio with cost / credit tilt | Day 0 Group B reserve = Combizell 57,255 / TS 20,512 / Gabrosa 8,030 (stock ratio); the 24,000 Gabrosa lot of 17 Nov is partly claimed by B at once (B:Gabrosa 6,999 → 9,839) |
 | D3 | **Exclusive** is a level with its own reserve, Min, top-up and "waiting" state | Exclusive is a rolling protection of the next Max days of its own demand, taken off the top every day; no Min / top-up / waiting | Exclusive never short in the run, but it has no Min date or top-up row to show |
 | D4 | Max = 60 days | Reserve = today's use + 60 days ahead (61 days) | B 85,797 vs 84,390; A 2,765 vs 2,720; Exclusive ≈ 6,781 vs 6,670 |
-| D5 | Group Critical 20 | No saved group policy for CMP003: group Target defaults to 30, **Critical to ceil(Target ÷ 2) = 15** | PROD `material_group_coverage_policy` has no row; members are 30 / 20 |
+| D5 | Group Target 30 stays. **The 20 days belongs to one member (Gabrosa), not to the group** (owner correction 2026-10-28): if Gabrosa has to be bought it is connected at its own 20 days, not at the group's 30 | PROD: no saved group policy for CMP003 (group default Target 30, Critical ceil(Target ÷ 2) = 15, which the owner has not asked to change); all four members are 30 / 20, i.e. Gabrosa's own Min is **not** 20 in the data yet. Nothing to change in data until the owner decides the member values |
 | D6 | Group B short ≈ 38,930 KG on 27 Mar | Group B first below Target on **5 Apr**, below Critical **20 Apr**, no stock-out by 30 Apr | `group_actions` of the run; cause is D1–D4, not yet isolated |
 | D7 | Event log, pool by material, Material × Level matrix (§13) | No per-event pool or matrix output. Daily group reservations + closing stock + protection exist, so the pool is derivable | `group_bucket_reservations`, `rows`, `waterfall_reservations` (only after the horizon) |
 | D8 | "Excess left after each Min" reported | Not produced | — |
@@ -376,9 +376,22 @@ policy rows for CMP003 (members Target 30 / Critical 20, no saved group policy).
 | D11 | "Plan ends here" warning | `useAhead` beyond the horizon uses the average over the whole horizon including zero-demand months (the `coverDays` fix of 27 Oct was not applied here) | affects reserve windows near the end of the horizon only |
 
 ### Suggested order of work (owner to approve)
-1. D5 data: save group Target 30 / Critical 20 for the MHEC groups (no code).
+1. D5: no data change now. Owner will set member values (e.g. Gabrosa 20) himself; the engine must honour a member's own Min when that member is bought (D10).
 2. D1 (claim only at own Min / waiting level first), D3 (Exclusive as a visible level), D2 (FEFO across arrival
    lots, newest last), D4 (60 vs 61 days) — one engine change, then re-run this example and compare with §7.
 3. D9 reschedule feasibility window.
 4. D7 / D8 outputs (event log, Material × Level matrix, excess left) and then the 4A table / Excel of §13.
 5. D10, D11 checks.
+
+### 14.1 Owner's clarifications after the audit (2026-10-28)
+
+- D2, D3, D4 approved. D5 corrected as above (the 20 days is Gabrosa's own, not a group value).
+- **Nothing is hard-coded.** Days, ETAs, windows, Target / Min / Max are always read from settings and data.
+  The 15-day (import) and 7-day (domestic) reschedule windows of §10 are therefore to be settings with these
+  values as defaults, not constants in code.
+- **Where the "refill to Max on every receipt day" of D1 applies today:** only to **groups**. Exclusive / own use is
+  a continuous protection of its next Max days, so it never gets a Min / top-up event. The owner's point:
+  **Target (Min) days must apply to every level — Exclusive, Group A, Group B and members — not to groups only.**
+  After the change, Exclusive and every group follow the same rule: run down to own Min, then claim from the pool
+  up to own Max; nothing is refilled on a receipt day unless the level is at / below its Min (or is waiting).
+  A member's own Target (Gabrosa 20) still governs when that member is bought.
