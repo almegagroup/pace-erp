@@ -41,7 +41,7 @@ const CALL_PATTERN = /\.rpc\(\s*["']post_stock_movement["']/g;
  * সংখ্যা কমাও (বা লাইনটা মুছে দাও)। **কখনো বাড়িও না।**
  */
 const BASELINE = {
-  "supabase/functions/api/_core/procurement/grn.handlers.ts": 3,
+  "supabase/functions/api/_core/procurement/grn.handlers.ts": 1,
   "supabase/functions/api/_core/procurement/inward_qa.handlers.ts": 1,
   "supabase/functions/api/_core/procurement/opening_stock.handlers.ts": 1,
   // physical_inventory.handlers.ts migrated to post_document (§119.9, complete_pid_post) — no

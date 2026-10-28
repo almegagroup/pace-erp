@@ -216,28 +216,9 @@ async function updatePoLineReceipt(poLineId: string, deltaQty: number): Promise<
   if (error) throw new Error("PO_LINE_RECEIPT_UPDATE_FAILED");
 }
 
-async function reversePoLineReceipt(poLineId: string, deltaQty: number): Promise<void> {
-  const { poLine } = await fetchPoLineBundle(poLineId);
-  const orderedQty = parsePositiveNumber(poLine.ordered_qty) ?? 0;
-  const currentOpenQty = parseNullableNumber(poLine.open_qty) ?? 0;
-  const nextOpenQty = Number(Math.min(orderedQty, currentOpenQty + deltaQty).toFixed(6));
-  const lineStatus = nextOpenQty >= orderedQty
-    ? "OPEN"
-    : nextOpenQty > 0
-    ? "PARTIALLY_RECEIVED"
-    : "FULLY_RECEIVED";
-
-  const { error } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("purchase_order_line")
-    .update({ open_qty: nextOpenQty, line_status: lineStatus, last_updated_at: new Date().toISOString() })
-    .eq("id", poLineId);
-  if (error) throw new Error("PO_LINE_RECEIPT_REVERSE_FAILED");
-}
-
 // §133 gap found 2026-09-11 (Codex root-cause audit): an STO-sourced GRN
 // never updated the STO line's own receipt balance at all -- mirrors
-// updatePoLineReceipt/reversePoLineReceipt above, one difference being the
+// updatePoLineReceipt above (reversal: complete_grn_reverse, SQL), one difference being the
 // STO line CHECK constraint has no PARTIALLY_RECEIVED status (only
 // OPEN/RECEIVED/KNOCKED_OFF), so a partial receipt simply stays OPEN --
 // that already matches listOpenSTOsForGEHandler's own OPEN-only picker
@@ -309,21 +290,6 @@ async function updateStoLineReceipt(stoLineId: string, deltaQty: number): Promis
     .update({ received_qty: nextReceivedQty, balance_qty: nextBalanceQty, line_status: lineStatus, last_updated_at: new Date().toISOString() })
     .eq("id", stoLineId);
   if (error) throw new Error("STO_LINE_RECEIPT_UPDATE_FAILED");
-}
-
-async function reverseStoLineReceipt(stoLineId: string, deltaQty: number): Promise<void> {
-  const { stoLine } = await fetchStoLineBundle(stoLineId);
-  const quantity = parsePositiveNumber(stoLine.quantity) ?? 0;
-  const currentReceivedQty = parseNullableNumber(stoLine.received_qty) ?? 0;
-  const nextReceivedQty = Number(Math.max(0, currentReceivedQty - deltaQty).toFixed(6));
-  const nextBalanceQty = Number(Math.min(quantity, quantity - nextReceivedQty).toFixed(6));
-  const lineStatus = nextBalanceQty <= 0 ? "RECEIVED" : "OPEN";
-
-  const { error } = await serviceRoleClient
-    .schema("erp_procurement").from("stock_transfer_order_line")
-    .update({ received_qty: nextReceivedQty, balance_qty: nextBalanceQty, line_status: lineStatus, last_updated_at: new Date().toISOString() })
-    .eq("id", stoLineId);
-  if (error) throw new Error("STO_LINE_RECEIPT_REVERSE_FAILED");
 }
 
 // §133 -- vendor_id has no FK, and for an STO-sourced (inter-company) GRN
@@ -1603,6 +1569,25 @@ export async function getGRNHandler(
 }
 
 // ── POST /api/procurement/grns/:id/reverse ───────────────────────────────────
+// GRN reverse is one post_document() call (CLAUDE.md §8D, migration
+// 20261028140000): the P102 and every business write -- PO/STO balance, QA
+// delete, landed cost removal (records + WAR uplift), GE/CSN reopen, GRN
+// header -- commit together or not at all. The blocking rules live in
+// complete_grn_reverse() so they hold inside the same row lock.
+const GRN_REVERSE_ERRORS: Record<string, { status: number; message: string }> = {
+  GRN_NOT_FOUND: { status: 404, message: "GRN not found." },
+  GRN_NOT_POSTED: { status: 400, message: "Only POSTED GRNs can be reversed." },
+  GRN_SPLIT_CANNOT_REVERSE: { status: 422, message: "This GRN's invoices were split into separate invoice GRNs. A split GRN cannot be reversed." },
+  GRN_SPLIT_CHILD_CANNOT_REVERSE: { status: 422, message: "This is an invoice GRN created by an invoice split. It cannot be reversed on its own." },
+  GRN_LEGACY_REVERSE_UNSUPPORTED: { status: 422, message: "This is a legacy multi-line GRN and cannot be reversed here." },
+  GRN_REVERSE_SETTLEMENT_EXISTS: { status: 409, message: "A settlement invoice covers this GRN. Reverse the settlement invoice first." },
+  GRN_REVERSE_QA_DECIDED: { status: 409, message: "QA has already taken a usage decision on this GRN, so its stock has left Quality Inspection. Use Return to Vendor instead." },
+  GRN_REVERSE_RTV_EXISTS: { status: 409, message: "A Return to Vendor exists against this GRN. Cancel it first." },
+  GRN_REVERSE_INVOICE_VERIFICATION_EXISTS: { status: 409, message: "An invoice verification line exists against this GRN. Remove it first." },
+  GRN_REVERSE_EXCHANGE_EXISTS: { status: 409, message: "This GRN is the replacement receipt of an exchange and cannot be reversed." },
+  GRN_REVERSAL_REASON_REQUIRED: { status: 400, message: "reversal_reason is required." },
+};
+
 export async function reverseGRNHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1618,7 +1603,8 @@ export async function reverseGRNHandler(
 
     const { data: grn, error: grnError } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
-      .select("*").eq("id", grnId).single();
+      .select("id, grn_number, company_id, status, stock_document_id, stock_ledger_id")
+      .eq("id", grnId).single();
     if (grnError || !grn) {
       return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
     }
@@ -1627,169 +1613,64 @@ export async function reverseGRNHandler(
     } catch {
       return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    if (toUpperTrimmedString(grn.status) === "SPLIT") {
-      return procurementErrorResponse(req, ctx, "GRN_SPLIT_CANNOT_REVERSE", 422, "This GRN's invoices were split into separate invoice GRNs. A split GRN cannot be reversed.");
-    }
-    if (toUpperTrimmedString(grn.status) !== "POSTED") {
-      return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be reversed.");
-    }
-    // An invoice GRN of a split carries no stock of its own -- the physical receipt is the
-    // SPLIT source GRN -- so reversing it alone would break the receipt-to-invoice chain.
-    if (toTrimmedString(grn.split_source_grn_id)) {
-      return procurementErrorResponse(req, ctx, "GRN_SPLIT_CHILD_CANNOT_REVERSE", 422, "This is an invoice GRN created by an invoice split. It cannot be reversed on its own.");
+    const grnStatus = toUpperTrimmedString(grn.status);
+    const preCheckCode = grnStatus === "SPLIT" ? "GRN_SPLIT_CANNOT_REVERSE"
+      : grnStatus !== "POSTED" ? "GRN_NOT_POSTED"
+      : !grn.stock_ledger_id ? "GRN_LEGACY_REVERSE_UNSUPPORTED"
+      : "";
+    if (preCheckCode) {
+      const blocked = GRN_REVERSE_ERRORS[preCheckCode];
+      return procurementErrorResponse(req, ctx, preCheckCode, blocked.status, blocked.message);
     }
 
-    const isNewStyle = Boolean(grn.gate_entry_line_id);
-
-    if (isNewStyle) {
-      // New-style: data on header
-      const material = await fetchMaterial(String(grn.material_id));
-      const receivedQty = parsePositiveNumber(grn.received_qty) ?? 0;
-      const stockTypeCode = toUpperTrimmedString(grn.target_stock_type) || "UNRESTRICTED";
-
-      // Mirror the same PO-UOM -> base-UOM conversion used at posting time
-      // (createAndPostGRNFromLineHandler) — otherwise the reversal moves the
-      // wrong quantity/value when the GRN was received in a pack UOM
-      // (e.g. PKT) that differs from the material's base UOM (e.g. NOS).
-      const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(grn.uom_code) || "PCS";
-      const grnUomMismatch = toTrimmedString(grn.uom_code) !== baseUomCode;
-      const grnPerPackQty = parseNullableNumber(grn.per_pack_qty);
-      const reversalStockQty = grnUomMismatch && grnPerPackQty && grnPerPackQty > 0
-        ? Number((receivedQty * grnPerPackQty).toFixed(6))
-        : receivedQty;
-      const reversalBaseUomRate = grnUomMismatch && grnPerPackQty && grnPerPackQty > 0
-        ? Number(((parseNullableNumber(grn.grn_rate) ?? 0) / grnPerPackQty).toFixed(6))
-        : (parseNullableNumber(grn.grn_rate) ?? 0);
-
-      // §106: the reversal is its own Material Document (no more "-REV" suffix hack);
-      // grn_number is the reference, and reversal_of_id links back to the original posting.
-      const revMatDoc = await generateMaterialDocNumber(String(grn.company_id));
-      const reversalResp = await serviceRoleClient.schema("erp_inventory")
-        .rpc("post_stock_movement", {
-          p_document_number: grn.grn_number,
-          p_document_date: todayIsoDate(),
-          p_posting_date: todayIsoDate(),
-          p_movement_type_code: "P102",
-          p_company_id: grn.company_id,
-          p_storage_location_id: grn.storage_location_id,
-          p_material_id: grn.material_id,
-          p_quantity: reversalStockQty,
-          p_base_uom_code: baseUomCode,
-          p_unit_value: reversalBaseUomRate,
-          p_stock_type_code: stockTypeCode,
-          p_direction: "OUT",
-          p_posted_by: ctx.auth_user_id,
-          p_reversal_of_id: grn.stock_document_id,
-          p_material_doc_number: revMatDoc.docNumber,
-          p_material_doc_year: revMatDoc.docYear,
-          p_reference_document_number: grn.grn_number,
-          p_reference_document_type: "GRN",
-          p_reference_document_id: grn.id ?? null,
-        });
-      if (reversalResp.error) {
-        return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "Stock reversal failed.");
-      }
-
-      if (grn.po_line_id) await reversePoLineReceipt(String(grn.po_line_id), receivedQty);
-      if (grn.sto_line_id) await reverseStoLineReceipt(String(grn.sto_line_id), receivedQty);
-
-      await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
-        .update({ grn_posted: false }).eq("id", String(grn.gate_entry_line_id));
-
-      // Void QA documents for this GRN
-      await serviceRoleClient.schema("erp_procurement").from("inward_qa_document")
-        .delete().eq("grn_id", grnId);
-
-      // Reset CSN
-      const { data: geLine } = await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
-        .select("csn_id").eq("id", String(grn.gate_entry_line_id)).maybeSingle();
-      const csnId = toTrimmedString(geLine?.csn_id);
-      if (csnId) {
-        await serviceRoleClient.schema("erp_procurement").from("consignment_note")
-          .update({ status: "GED", grn_id: null, grn_date: null, received_qty: null, last_updated_at: new Date().toISOString() })
-          .eq("id", csnId);
-      }
-    } else {
-      // Old-style: iterate goods_receipt_line
-      const { data: lines, error: linesError } = await serviceRoleClient
-        .schema("erp_procurement").from("goods_receipt_line")
-        .select("*").eq("grn_id", grnId).order("line_number", { ascending: true });
-      if (linesError) {
-        return procurementErrorResponse(req, ctx, "GRN_LINE_FETCH_FAILED", 500, "Unable to fetch GRN lines.");
-      }
-
-      // §106: one Material Document for the whole (multi-line) reversal event; grn_number
-      // is the reference. Generated once, shared by every line's reversal item.
-      const revLoopMatDoc = await generateMaterialDocNumber(String(grn.company_id));
-
-      // DEPENDENT: each reversal mutates stock, PO, GE, and CSN state that later line checks must see in committed order.
-      for (const line of (lines ?? []) as GrnLineRow[]) {
-        const material = await fetchMaterial(String(line.material_id));
-        const receivedQty = parsePositiveNumber(line.received_qty) ?? 0;
-        const stockTypeCode = toUpperTrimmedString(line.target_stock_type) || "UNRESTRICTED";
-
-        const reversalResp = await serviceRoleClient.schema("erp_inventory")
-          .rpc("post_stock_movement", {
-            p_document_number: grn.grn_number,
-            p_document_date: todayIsoDate(),
-            p_posting_date: todayIsoDate(),
-            p_movement_type_code: "P102",
-            p_company_id: grn.company_id,
-            p_storage_location_id: line.storage_location_id,
-            p_material_id: line.material_id,
-            p_quantity: receivedQty,
-            p_base_uom_code: material.base_uom_code ?? line.uom_code,
-            p_unit_value: parseNullableNumber(line.grn_rate) ?? 0,
-            p_stock_type_code: stockTypeCode,
-            p_direction: "OUT",
-            p_posted_by: ctx.auth_user_id,
-            p_reversal_of_id: line.stock_document_id,
-            p_material_doc_number: revLoopMatDoc.docNumber,
-            p_material_doc_year: revLoopMatDoc.docYear,
-            p_reference_document_number: grn.grn_number,
-            p_reference_document_type: "GRN",
-            p_reference_document_id: grn.id ?? null,
-          });
-        if (reversalResp.error) {
-          return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "Stock reversal failed.");
-        }
-
-        if (line.po_line_id) await reversePoLineReceipt(String(line.po_line_id), receivedQty);
-
-        await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
-          .update({ grn_posted: false }).eq("id", String(line.gate_entry_line_id));
-
-        const geLineResp = await serviceRoleClient.schema("erp_procurement").from("gate_entry_line")
-          .select("csn_id").eq("id", String(line.gate_entry_line_id)).maybeSingle();
-        const csnId = toTrimmedString(geLineResp.data?.csn_id);
-        if (csnId) {
-          await serviceRoleClient.schema("erp_procurement").from("consignment_note")
-            .update({ status: "GED", grn_id: null, grn_date: null, received_qty: null, last_updated_at: new Date().toISOString() })
-            .eq("id", csnId);
-        }
-
-        await serviceRoleClient.schema("erp_procurement").from("inward_qa_document")
-          .delete().eq("grn_id", grnId).eq("grn_line_id", String(line.id));
-      }
+    // Reverse exactly what the receipt posted (base qty/UoM, location, stock
+    // type, posted rate) rather than re-deriving it from the GRN's PO-UoM fields.
+    const { data: receiptLeg, error: legError } = await serviceRoleClient
+      .schema("erp_inventory").from("stock_ledger")
+      .select("company_id, storage_location_id, material_id, stock_type_code, quantity, base_uom_code, valuation_rate")
+      .eq("id", String(grn.stock_ledger_id)).single();
+    if (legError || !receiptLeg) {
+      return procurementErrorResponse(req, ctx, "GRN_RECEIPT_LEG_NOT_FOUND", 500, "The GRN's stock posting could not be found.");
     }
 
-    // Update GRN header
-    await serviceRoleClient.schema("erp_procurement").from("goods_receipt")
-      .update({
-        status: "REVERSED",
-        movement_type_code: "P102",
-        reversal_grn_id: grnId,
-        reversal_approved_by: ctx.auth_user_id,
-        reversal_approved_at: new Date().toISOString(),
-        reversal_reason: reversalReason,
-        last_updated_at: new Date().toISOString(),
-      })
-      .eq("id", grnId);
-
-    // Revert GE status to OPEN
-    await serviceRoleClient.schema("erp_procurement").from("gate_entry")
-      .update({ status: "OPEN", last_updated_at: new Date().toISOString() })
-      .eq("id", String(grn.gate_entry_id));
+    const revMatDoc = await generateMaterialDocNumber(String(grn.company_id));
+    const today = todayIsoDate();
+    const { error: postError } = await serviceRoleClient
+      .schema("erp_inventory").rpc("post_document", {
+        p_reference_document_type: "GRN",
+        p_reference_document_id: grnId,
+        p_posted_by: ctx.auth_user_id,
+        p_movements: [{
+          line_ref: "GRN_REVERSAL",
+          document_number: grn.grn_number,
+          document_date: today,
+          posting_date: today,
+          movement_type_code: "P102",
+          company_id: receiptLeg.company_id,
+          storage_location_id: receiptLeg.storage_location_id,
+          material_id: receiptLeg.material_id,
+          quantity: receiptLeg.quantity,
+          base_uom_code: receiptLeg.base_uom_code,
+          unit_value: receiptLeg.valuation_rate ?? 0,
+          stock_type_code: receiptLeg.stock_type_code,
+          direction: "OUT",
+          reversal_of_id: grn.stock_document_id,
+          material_doc_number: revMatDoc.docNumber,
+          material_doc_year: revMatDoc.docYear,
+          reference_document_number: grn.grn_number,
+        }],
+        p_context: { action: "REVERSE", actor: ctx.auth_user_id, reversal_reason: reversalReason },
+      });
+    if (postError) {
+      const code = (String(postError.message ?? "").match(/^[A-Z][A-Z0-9_]+/) ?? [""])[0];
+      const known = GRN_REVERSE_ERRORS[code];
+      if (known) return procurementErrorResponse(req, ctx, code, known.status, known.message);
+      if (code === "INSUFFICIENT_STOCK") {
+        return procurementErrorResponse(req, ctx, "GRN_REVERSE_STOCK_SHORT", 409, "The received stock is no longer available at this location to reverse.");
+      }
+      console.error("[reverseGRNHandler] post_document failed:", JSON.stringify(postError));
+      return procurementErrorResponse(req, ctx, "GRN_REVERSE_RPC_FAILED", 500, "GRN reversal failed. Nothing was changed.");
+    }
 
     return okResponse(await hydrateGrn(grnId), ctx.request_id, req);
   } catch (error) {

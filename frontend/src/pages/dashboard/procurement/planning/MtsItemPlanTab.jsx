@@ -90,7 +90,7 @@ function copyTable(columns, rows) {
   });
 }
 
-export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt }) {
+export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const queryClient = useQueryClient();
   const [materialId, setMaterialId] = useState("");
   const [search, setSearch] = useState("");
@@ -647,12 +647,14 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     try {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
       await downloadColoredExcelFile({
-        fileName: `po22_item_plan_${materialId}_${asOf}.xlsx`,
+        // File name carries the material code, never its UUID.
+        fileName: `po22_item_plan_${String(memberName.get(materialId) ?? "item").split(" ")[0].replace(/[^A-Za-z0-9_-]/g, "") || "item"}_${asOf}.xlsx`,
         sheetName: "Item Plan",
         columns: gridColumns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align })),
         rows: plan?.grid ?? [],
         getCellValue: (row, column) => gridColumns.find((c) => c.key === column.key)?.copyValue?.(row) ?? row[column.key] ?? "",
         preambleRows: [
+          ["Company", companyText ?? ""],
           ["Item", memberName.get(materialId) ?? ""],
           ["Family members", (plan?.members ?? []).map((m) => `${m.material_code ?? ""} ${m.material_name}`.trim()).join("; ")],
           ["As-of", plan?.calendar?.as_of ?? asOf],

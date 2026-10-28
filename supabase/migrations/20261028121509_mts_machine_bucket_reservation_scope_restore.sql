@@ -48,6 +48,10 @@ BEGIN
   -- 20261024072327 was applied from a CRLF copy, so the stored body
   -- has \r\n; normalise before matching the LF clause below.
   v_function_definition := replace(v_function_definition, E'\r\n', E'\n');
+  -- Idempotent: already scoped (e.g. applied earlier via MCP) -> nothing to do.
+  IF position('reservation_process_order.machine_id IS NOT DISTINCT FROM v_need.machine_id' IN v_function_definition) > 0 THEN
+    RETURN;
+  END IF;
   IF position(v_old_clause IN v_function_definition) = 0 THEN
     RAISE EXCEPTION 'MTS machine-bucket reservation clause was not found; refusing an incomplete upgrade';
   END IF;
