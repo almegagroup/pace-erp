@@ -161,6 +161,15 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const grid = familyDayGrid(days, memberRows, unmet);
       const fu = familyUnit(memberIds);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
+      // Owner 2026-10-28: what is left in the pool (held for no level) after each day's receipts — the latest Material x Level snapshot on or before the day.
+      const poolSnaps = (projection.level_matrix ?? []).filter((snap) => Object.keys(snap.pool).some((id) => memberSet.has(id)))
+        .map((snap) => ({ day: snap.day, qty: Object.entries(snap.pool).reduce((sum, [id, q]) => sum + (memberSet.has(id) ? Number(q) : 0), 0) }))
+        .sort((x, y) => x.day.localeCompare(y.day));
+      const excessAt = (dayIso: string) => {
+        let found: number | null = null;
+        for (const snap of poolSnaps) { if (snap.day > dayIso) break; found = snap.qty; }
+        return found === null ? null : inUnit(fu, found);
+      };
 
       // Left side: today + every day something arrives or you fixed a quantity.
       const events = memberIds.flatMap((m) => (rowById.get(m)?.inbound_events ?? []).map((e) => ({ ...e, member: m })));
@@ -172,7 +181,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const today = events.filter((e) => (e.date && e.date >= calendar.asOf ? e.date : calendar.asOf) === g.day);
         return {
           day: g.day, opening: inUnit(fu, g.opening), arrivals: inUnit(fu, g.arrivals), dispatch: inUnit(fu, ownByDay.get(g.day) ?? 0) || null,
-          use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), max_days: g.max_days, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days,
+          use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), excess: excessAt(g.day), max_days: g.max_days, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days,
           references: today.map((e) => e.reference),
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),

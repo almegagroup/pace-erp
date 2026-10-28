@@ -153,8 +153,14 @@ function writePlan(sheet, companies) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
-const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Engine best date"];
+const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Engine best date"];
 const PRED_HEAD = ["", "Import ETD", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Max Days", "Min Days", "Material", "Supplier", "PO by", "UoM"];
+
+/** Days of cover; empty because the stock outlasts the PO21 plan = "beyond plan" (owner 2026-10-28), not a long run of zero-demand days. */
+function beyondPlan(value, stock) {
+  const d = days(value);
+  return d === null && num(stock) > 0 ? "beyond plan" : d;
+}
 
 function writeBlocks(sheet, companies, kind) {
   const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind).map((b) => ({ ...b, company: c })))
@@ -177,7 +183,7 @@ function writeBlocks(sheet, companies, kind) {
     // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
     // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
     if (b.is_family && (b.waterfall?.levels ?? []).length) {
-      const note = sheet.addRow(["Opening / Pro-rata / Closing / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. Levels, narrow first:"]);
+      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). beyond plan = stock outlasts the PO21 plan. Levels, narrow first:"]);
       note.getCell(1).font = { italic: true };
       for (const l of b.waterfall.levels) {
         const line = sheet.addRow([`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${num(l.reserve_now) ?? 0} ${b.uom ?? ""} (covers ${days(l.cover_days_now) ?? "—"} d) · next Min ${l.next_min_day ?? "not in horizon"}`]);
@@ -187,14 +193,14 @@ function writeBlocks(sheet, companies, kind) {
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
-        day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), days(r.max_days), num(r.min_stock), days(r.min_days),
+        day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), beyondPlan(r.max_days, r.closing), num(r.min_stock), beyondPlan(r.min_days, r.min_stock),
         r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
         r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"), r.best_dates.filter(Boolean).join("\n"),
       ]);
-      row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 2 && i <= 9) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i >= 10 }; });
+      row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 2 && i <= 10) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i >= 11 }; });
       if (r.closing < 0) row.getCell(6).font = { bold: true, color: { argb: RED } };
-      if (b.critical_days !== null && r.min_days !== null && r.min_days < b.critical_days) row.getCell(9).font = { bold: true, color: { argb: RED } };
-      else if (b.target_days !== null && r.min_days !== null && r.min_days < b.target_days) row.getCell(9).font = { bold: true, color: { argb: AMBER } };
+      if (b.critical_days !== null && r.min_days !== null && r.min_days < b.critical_days) row.getCell(10).font = { bold: true, color: { argb: RED } };
+      else if (b.target_days !== null && r.min_days !== null && r.min_days < b.target_days) row.getCell(10).font = { bold: true, color: { argb: AMBER } };
     }
     if (b.prediction.length) {
       const p = sheet.addRow(["Prediction"]);
@@ -210,7 +216,7 @@ function writeBlocks(sheet, companies, kind) {
     }
     sheet.addRow([]);
   }
-  widths(sheet, [12, 12, 12, 14, 11, 12, 9, 12, 9, 34, 11, 30, 16, 22]);
+  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 22]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

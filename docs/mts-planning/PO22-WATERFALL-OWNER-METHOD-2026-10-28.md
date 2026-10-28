@@ -528,3 +528,11 @@ Open: live run on PROD data through the handlers.
 - "Save Current As…" stores the visible columns under a name (per user). A saved layout can be chosen, set as default or deleted.
 - The Excel uses exactly the same visible columns as the screen (plus the "Column groups" quick switches), and the sheet header notes the layout name.
 - Storage: existing `erp_inventory.report_column_layout` / `report_layout_default` (report code `PO22_REQUIREMENT`); thin PO22 routes `/api/procurement/mts-requirement/layouts…` under ACL `PROC_MTS_REQUIREMENT` VIEW. No new migration.
+
+## 21. PO21 plan end, days of cover, Excess column — owner 2026-10-28
+
+- Found in the downloaded Excel: PO21 had no demand from Feb 2027, yet Max/Min Days showed 139 / 262 / 1,976 and the engine planned two buys for 1 Mar. Cause: days with no demand were counted as "covered", and the look-ahead beyond the horizon was filled with the average use.
+- Rule now: a PO21 plan that ends before the horizon end (no demand in its last 7 days) means "no plan", not "no use". No demand is invented after it, no buy is planned for it, and days of cover that outlast the plan are shown as `beyond plan` (never a long number). A plan that runs to the horizon end keeps the old average extrapolation.
+- Not changed: a standalone item's Target as a physical safety reserve across a no-demand gap (owner's Tot White rule) — it applies to items with no group; the plan-end rule applies to group members and the whole family table.
+- Family table (RM/PM_PLANNING) has a new `Excess (not needed yet)` column: stock in the pool after each arrival day, held for no level. A receipt is rarely all used at once; the rest is excess, not a problem.
+- Still open: the `Engine best date` advice (postpone 64 d / prepone 71 d) was not re-checked after this change.
