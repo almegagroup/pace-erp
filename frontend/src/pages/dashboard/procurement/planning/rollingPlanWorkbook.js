@@ -154,7 +154,7 @@ function writePlan(sheet, companies) {
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
 const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Engine best date"];
-const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Its own cover before arrival (d)", "Its own Min (d)"];
+const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by"];
 
 /** Days of cover; empty because the stock outlasts the PO21 plan = "beyond plan" (owner 2026-10-28), not a long run of zero-demand days. */
 function beyondPlan(value, stock) {
@@ -209,7 +209,7 @@ function writeBlocks(sheet, companies, kind) {
       for (const x of b.prediction) {
         const row = sheet.addRow([
           x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), days(x.max_days), days(x.min_days), x.material, x.supplier ?? "", day(x.po_by),
-          x.uom ?? "", days(x.own_cover_before), days(x.own_min_days),
+          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), x.trigger_kind === "GROUP" ? "Group free stock" : x.trigger_kind === "OWN" ? "Its own use" : "",
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
       }
@@ -230,6 +230,7 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   const head = summary.addRow([`MTS Plan — as of ${asOf}`]);
   head.getCell(1).font = { bold: true, size: 14 };
   summary.addRow([`Generated ${new Date().toLocaleString("en-IN")} · Demand = PO21 effective plan: Final where a Final exists, else Rolling (+ Additional, Urgent Extra) · advisory: no PO is created by this file`]);
+  summary.addRow(["Stock counted: opening stock for 120 days after its cut-off date, a GRN for 120 days after receipt (or its stated expiry). Older stock is not counted, so items can show Runs out around 28-29 Jan 2027. Days beyond the last PO21 demand day show as beyond plan."]);
   summary.addRow([]);
   addTable(summary, [
     { label: "Company", value: (c) => companyLabel(c) },

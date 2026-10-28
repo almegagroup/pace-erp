@@ -154,6 +154,9 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
   /** What the lot is for: "OWN" (the member's exclusive use) or the group ids it serves. */
   covers: readonly string[];
   need_kind: "OWN" | "GROUP";
+  /** Owner 2026-10-28: the cover (days) that triggered this lot — the group's free stock for a group need, the item's own use for an own need — and the Min it was compared with (the item's own Target for a group need, D10). */
+  trigger_cover_days?: number | null;
+  trigger_min_days?: number | null;
 };
 
 export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
@@ -323,6 +326,9 @@ function standaloneCoverageDays(balance: number, use: readonly number[], from: n
     left = Math.max(0, left - need);
     covered += 1;
   }
+  // Owner 2026-10-28: a standalone item follows the same rule as the waterfall — stock that outlasts a PO21 plan which ended before
+  // the horizon end is "beyond plan", not a few leftover days.
+  if (!planContinues(use)) return null;
   return covered + Math.floor(left / finalApprovedDailyUse + EPSILON);
 }
 
@@ -527,9 +533,13 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
   // simulation still consumes the actual PO21 demand (zero means zero use).
   // Shared-group safety is deliberately deferred: one combined group reserve
   // must not be duplicated on every alternative member.
+  // Owner 2026-10-28: the reserve applies across a no-demand GAP (later demand exists), not after the plan's last demand day —
+  // a standalone item follows the same rule as the waterfall (no invented demand, no order after the plan).
   const finalOwnDailyUse = own.map((series) => {
     const finalRate = [...series].reverse().find((qty) => qty > EPSILON) ?? 0;
-    return series.map(() => finalRate);
+    let lastActive = -1;
+    series.forEach((qty, i) => { if (qty > EPSILON) lastActive = i; });
+    return series.map((_qty, i) => (i < lastActive ? finalRate : 0));
   });
 
   const arrivalFlags: OptimizerArrivalFlag[] = [...(input.arrival_risks ?? [])];
@@ -1275,12 +1285,17 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const covers = [...new Set(needsForLot.flatMap((candidate) => candidate.kind === "OWN"
         ? [usesGroupAsIndividualDemand ? "MEMBER_GUARD" : "OWN"]
         : [candidate.pool!.group_id]))];
+      const groupTrigger = need.kind === "GROUP";
+      const triggerMin = groupTrigger ? (targets[m][need.index].target ?? t) : t;
+      const triggerCover = groupTrigger
+        ? coverDays(sim.poolFree[pools.indexOf(need.pool!)][need.index], need.pool!.demand, need.index)
+        : (isSharedGroupMember[m] ? coverDays(sim.ownBalance[m][need.index], own[m], need.index) : standaloneCoverageDays(sim.ownBalance[m][need.index], own[m], need.index, finalOwnDailyUse[m][need.index]));
       const why = needsForLot.length === 1
         ? (need.kind === "OWN"
           ? (usesGroupAsIndividualDemand
             ? `Member guard: its allocated eligible-group use falls to its individual Target ${t} days on ${allDays[need.index]}.`
             : `Own use: cover of its own (exclusive) use falls to Target ${t} days on ${allDays[need.index]}.`)
-          : `Group ${need.pool!.group_id}: free stock of its members falls to Target ${t} days on ${allDays[need.index]}; refill is sized to Group Desired Max ${window} days; ${need.late ? "fastest member to arrive" : "cheapest member that arrives in time"}.`)
+          : `Group ${need.pool!.group_id}: free stock of its members falls to ${triggerMin} days (this member's own Min) on ${allDays[need.index]}; refill is sized to Group Desired Max ${window} days; ${need.late ? "fastest member to arrive" : "cheapest member that arrives in time"}.`)
         : `One physical ${id} lot nets ${covers.map((cover) => cover === "OWN" ? "own use" : cover === "MEMBER_GUARD" ? "member guard" : `group ${cover}`).join(" + ")} on the same arrival date; MOQ / multiple applied once, then the event-day waterfall allocates it.`;
       buys.push({
         material_id: id, sequence: seq, required_qty_base: roundQty(Math.max(0, combinedRequired)), recommended_po_qty_base: orderQty,
@@ -1292,6 +1307,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         vendor_id: need.option?.option.vendor_id ?? null, max_cover_days: roundQty(window),
         bridge: need.option?.bridge ?? false, cheapest_vendor_id: need.option?.cheapest ?? null,
         covers, need_kind: needsForLot.some((candidate) => candidate.kind === "GROUP") ? "GROUP" : "OWN",
+        trigger_cover_days: triggerCover, trigger_min_days: triggerMin,
       });
       engineLots.push({
         material_id: id,
@@ -1668,14 +1684,23 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
 }
 
 /** Family-wide risk of a projection: stock-out / below-Critical / below-Target member-days + unmet group days. */
+function lastFamilyDemandDay(result: FamilyResult): string | null {
+  let last: string | null = null;
+  for (const r of result.rows) if (r.demand_qty_base > EPSILON && (last === null || r.day > last)) last = r.day;
+  return last;
+}
+
 function familyScore(result: FamilyResult): [number, number, number] {
   let short = 0; let critical = 0; let target = 0;
+  // Owner 2026-10-28: days after the PO21 plan's last demand day carry no risk (no plan, not no use).
+  const planEnd = lastFamilyDemandDay(result);
   for (const r of result.rows) {
+    if (planEnd !== null && r.day > planEnd) continue;
     if (r.closing_qty_base < -EPSILON) short += 1;
     if (r.critical_days !== null && r.max_cover_days !== null && r.max_cover_days < r.critical_days) critical += 1;
     if (r.target_days !== null && r.max_cover_days !== null && r.max_cover_days < r.target_days) target += 1;
   }
-  short += new Set(result.group_unmet.map((u) => `${u.group_id}|${u.day}`)).size;
+  short += new Set(result.group_unmet.filter((u) => planEnd === null || u.day <= planEnd).map((u) => `${u.group_id}|${u.day}`)).size;
   return [short, critical, target];
 }
 
@@ -1730,7 +1755,10 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
   const current = familyScore(at(currentEta));
   let bestEta = currentEta;
   let best = current;
-  const all = dayList(input.as_of, input.horizon_end);
+  const allHorizon = dayList(input.as_of, input.horizon_end);
+  // Owner 2026-10-28: advice never moves a piece to a day after the PO21 plan's last demand day (a tie there is meaningless).
+  const planEndDay = lastFamilyDemandDay(at(currentEta));
+  const all = planEndDay === null ? allHorizon : allHorizon.filter((d) => d <= planEndDay || d <= currentEta);
   const consider = (day: string) => {
     if (day === currentEta) return;
     const score = familyScore(at(day));
