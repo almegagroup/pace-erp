@@ -772,3 +772,42 @@ Deno.test("owner 2026-10-28 D3: Exclusive use is protected like a level — the 
   const exclusiveDays = x.filter((row) => row.demand_qty_base > 0).length;
   assert(exclusiveDays === 60, "all 60 days of the exclusive use are served");
 });
+
+Deno.test("owner 2026-10-28 D7: the waterfall is logged as events and a Material × Level matrix that always adds up", () => {
+  const days = Array.from({ length: 40 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 39), opening_qty_by_material: { A: 800, B: 0, X: 300 },
+    own_demand: days.map((required_by) => ({ material_id: "X", required_by, qty_base: 5 })),
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A", "B", "X"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "B-ETA", material_id: "B", eta_to_plant: "2026-10-06", qty_base: 500 }],
+    group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 10, critical_days: 5, desired_max_days_override: 20 }],
+    policies: [policy("A", 10, 5, []), policy("B", 10, 5, []), policy("X", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const opening = result.level_events.filter((event) => event.kind === "OPENING_RESERVE");
+  assert(opening.some((event) => event.level_kind === "OWN" && event.level_id === "X") && opening.some((event) => event.level_kind === "GROUP" && event.level_id === "G"), "day 0: Exclusive and the group reserve to their Max");
+  const receipt = result.level_events.find((event) => event.kind === "RECEIPT");
+  assert(receipt?.day === "2026-10-06" && receipt.material_id === "B" && receipt.qty === 500 && receipt.references.includes("B-ETA"), `the receipt is an event with its document: ${JSON.stringify(receipt)}`);
+  const topUps = result.level_events.filter((event) => event.kind === "TOP_UP" && event.level_kind === "GROUP");
+  assert(topUps.length >= 1 && topUps.every((event) => event.day > "2026-10-06" || event.qty > 0), "a group top-up is an event with the KG it took");
+  assert(topUps.every((event) => event.pool_after <= event.pool_before + 1e-6), "a top-up never increases the pool");
+  assert(result.level_matrix.length >= 3, "a snapshot on the event days");
+  for (const snapshot of result.level_matrix) {
+    for (const material of Object.keys(snapshot.closing)) {
+      const held = snapshot.levels.reduce((sum, level) => sum + (level.by_material[material] ?? 0), 0) + (snapshot.pool[material] ?? 0);
+      assert(Math.abs(held - snapshot.closing[material]) < 0.01, `${snapshot.day} ${material}: levels + pool ${held} must equal stock ${snapshot.closing[material]}`);
+    }
+  }
+});
+
+Deno.test("owner 2026-10-28: a waiting level is logged once, not every day it keeps waiting", () => {
+  const days = Array.from({ length: 30 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 29), opening_qty_by_material: { A: 120 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [], group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 5, critical_days: 2, desired_max_days_override: 15 }],
+    policies: [policy("A", 5, 2, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const levelRows = result.level_events.filter((event) => event.level_id === "G");
+  assert(levelRows[0].kind === "OPENING_RESERVE" && levelRows[0].shortfall > 0, "the level starts short: 120 of the 150 it wants");
+  assert(levelRows.length <= 3, `a level that keeps waiting is not logged every day: ${levelRows.map((event) => `${event.day}:${event.kind}`).join(",")}`);
+});
