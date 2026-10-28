@@ -293,3 +293,51 @@ In the worked example the first need for a new order is the Group B shortfall of
 9. Confirm in the settings that "Max = Target + order cycle" holds for each item of the family (§2).
 10. Whether the planner's day-by-day run is enough to raise the shortage advice early (12.3) or needs an
     iterative "add order, run again" pass.
+
+---
+
+## 13. How the family must be shown (PO22 4A family table and the Excel) — owner 2026-10-28
+
+Goal (owner): anyone who looks at the family table must understand the whole flow — each level's Min / Max days,
+when and how much goes from the pool to which level, how each material is shared (pro-rata) between levels and
+inside a level, and the procurement projections with the ETA to the plant. No raw mock-ups were built; this is the
+agreed structure. The Excel carries the **same blocks, same words, same numbers** as 4A.
+
+**One plain sentence on top**, for example: "Group B will be short ≈ 38,930 KG on 27 Mar. Order TS or Combizell
+by mid-Jan. Exclusive and Group A have no problem." Whoever reads only the first line knows what to do.
+
+**Block 1 — each level's state now.** One **row per level** (never one column per level, so a family with many
+groups stays narrow): level, members, Min / Max / Critical days, cover now (days), reserve (KG), date of the next
+Min.
+
+**Block 2 — the flow: when, how much, from the pool to where.** One row per **event day**, not per calendar day
+(receipt lands, a level reaches Min and is topped up to Max, a shortfall, an order is due): date, what happened,
+level, KG, pool before → after. Example rows: 28 Oct initial reserves 93,780 (pool 118,300 → 24,520); 12 Nov TS
++25,000; 17 Nov Gabrosa +24,000; 27 Nov Exclusive +3,335, A +1,360, B +42,195 (pool 73,520 → 26,630); …; 27 Mar
+B gets 3,265 of the 42,195 it needs (short ≈ 38,930, pool 7,960 → 0).
+
+**Block 2B — Material × Level matrix (pro-rata).** One grid, rows = materials, columns = Exclusive, Group A,
+Group B, Pool (excess), total stock.
+- Each cell = KG of that material held for that level; "—" where the material is not a member of the level (TS
+  shows "—" under Exclusive and Group A, so the user sees TS is Group-B only).
+- Row total = the material's whole stock; column total = the level's reserve. The system shows a **checksum**
+  that rows and columns agree, red if they do not.
+- Beside each cell: its share (% of the level's reserve) and the **reason for the split** — saved order, FEFO
+  (expiring first), run-down, or free-stock ratio.
+- It is shown once after Block 1 (today) and, expandable, on each event row of Block 2 (the matrix after that
+  event, e.g. after B is topped up on 27 Nov).
+- This covers **both** pro-rata directions the owner asked for: how a material is divided between the levels,
+  and how a level is made up of its materials. The separate "pool by material" block is not needed; the Pool column
+  of this matrix is that block.
+
+**Block 4 — procurement and ETA to plant.** Only for shortfalls the pool and the confirmed receipts cannot cover:
+shortage date, level, KG, order-by date (shortage date minus lead time), material and vendor, lot size, ETD → ETA to
+plant. Together with it, every **open CSN** with ETA, ETD, dispatched or not, and the §10 verdict (reschedule by N
+days / cannot be scheduled, talk to the vendor).
+
+**Still to decide with the owner**
+1. Whether the 4A family table is replaced by these blocks, or kept and these blocks go in a new tab.
+2. Block 2 shows event days only (recommended; per-day would be ≈ 180 rows for six months).
+3. The numbers in the matrix come from the engine's pro-rata (saved order → FEFO → run-down → free-stock ratio with
+   the small cost × credit tilt); none were pre-filled in this note.
+4. Readability of the Excel beyond this structure (language, reader) is discussed separately.
