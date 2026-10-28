@@ -19,6 +19,7 @@ import {
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
 import { type FxRateRow, parseProviderRate, pickFxRate } from "./mts_planning_cost.logic.ts";
+import { resolveRescheduleWindows } from "./mts_reschedule_window.logic.ts";
 
 type JsonRecord = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "").trim();
@@ -179,6 +180,50 @@ export async function saveMtsFinanceSettingHandler(req: Request, ctx: ReqHandler
     return okResponse({ data }, ctx.request_id, req);
   } catch (error) {
     return handleError(req, ctx, error, "MTS_FINANCE_SAVE_FAILED", "Could not save the interest %.");
+  }
+}
+
+/** PO22 D9: days before ETD within which a vendor can no longer be asked to move a shipment (company setting, defaults 15 / 7). */
+export async function getMtsRescheduleWindowHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const companyId = text(url.searchParams.get("company_id"));
+    if (!companyId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id is required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementViewAccess(req, ctx, companyId);
+    if (denied) return denied;
+    const { data, error } = await serviceRoleClient.schema("erp_planning").from("company_reschedule_window")
+      .select("import_min_days, domestic_min_days, remarks, updated_at").eq("company_id", companyId).maybeSingle();
+    if (error) throw new Error("MTS_RESCHEDULE_WINDOW_LOAD_FAILED");
+    const windows = resolveRescheduleWindows(data ? { import_min_days: Number(data.import_min_days), domestic_min_days: Number(data.domestic_min_days) } : null);
+    return okResponse({ ...windows, is_default: !data, remarks: (data as JsonRecord | null)?.remarks ?? null }, ctx.request_id, req);
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_RESCHEDULE_WINDOW_LOAD_FAILED", "Could not load the reschedule window.");
+  }
+}
+
+export async function saveMtsRescheduleWindowHandler(req: Request, ctx: ReqHandlerContext): Promise<Response> {
+  try {
+    const body = await req.json().catch(() => ({} as JsonRecord)) as JsonRecord;
+    const companyId = text(body.company_id);
+    if (!companyId) return fail(req, ctx, "MTS_REQ_COMPANY_REQUIRED", 400, "company_id is required.");
+    await assertCompanyScope(ctx, companyId);
+    const denied = await requireRequirementPolicyAccess(req, ctx, companyId);
+    if (denied) return denied;
+    const importDays = Number(body.import_min_days);
+    const domesticDays = Number(body.domestic_min_days);
+    const whole = (value: number) => Number.isInteger(value) && value >= 0 && value <= 365;
+    if (!whole(importDays) || !whole(domesticDays)) {
+      return fail(req, ctx, "MTS_RESCHEDULE_WINDOW_INVALID_INPUT", 400, "Import and domestic days must be whole numbers between 0 and 365.");
+    }
+    const { data, error } = await serviceRoleClient.schema("erp_planning").from("company_reschedule_window").upsert({
+      company_id: companyId, import_min_days: importDays, domestic_min_days: domesticDays,
+      remarks: text(body.remarks).slice(0, 300) || null, created_by: ctx.auth_user_id, updated_at: new Date().toISOString(),
+    }, { onConflict: "company_id" }).select("import_min_days, domestic_min_days, remarks").single();
+    if (error) throw new Error("MTS_RESCHEDULE_WINDOW_SAVE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (error) {
+    return handleError(req, ctx, error, "MTS_RESCHEDULE_WINDOW_SAVE_FAILED", "Could not save the reschedule window.");
   }
 }
 

@@ -88,6 +88,7 @@ import {
   type StrokePeriod,
   toMaterialBase,
   displayUnitOf,
+  preferredVendorOrderUom,
   effectiveProductionAssignments,
   groupCoveredBy,
   type DisplayUnit,
@@ -1172,20 +1173,34 @@ export async function computeRequirement(
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/procurement/mts-requirement/report?company_id&plan_month=YYYY-MM&as_of=YYYY-MM-DD[&demand_at=ISO]
 // ─────────────────────────────────────────────────────────────────────────────
-/** MM03 Supply UoMs of this company's active vendors, per material (display unit fallback). */
+/**
+ * MM03 order UoMs of this company's active vendors, per material (display-unit
+ * fallback).  Some MM03 cards keep Supply UoM blank and their actual default
+ * in vendor_material_uom, so both sources must be read.
+ */
 export async function loadVendorSupplyUoms(companyId: string, materialIds: string[]): Promise<Map<string, string[]>> {
   const result = new Map<string, string[]>();
   if (materialIds.length === 0) return result;
   const [vmiRows, mapRes] = await Promise.all([
     fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_material_info")
-      .select("vendor_id, material_id, supply_uom_code").eq("status", "ACTIVE").in("material_id", chunk)),
+      .select("id, vendor_id, material_id, supply_uom_code").eq("status", "ACTIVE").in("material_id", chunk)),
     serviceRoleClient.schema("erp_master").from("vendor_company_map").select("vendor_id").eq("company_id", companyId).eq("active", true).limit(5000),
   ]);
   const companyVendors = new Set(((mapRes.data ?? []) as JsonRecord[]).map((row) => text(row.vendor_id)));
-  for (const row of vmiRows) {
-    if (!companyVendors.has(text(row.vendor_id)) || !text(row.supply_uom_code)) continue;
+  const activeRows = vmiRows.filter((row) => companyVendors.has(text(row.vendor_id)));
+  const vmiIds = unique(activeRows.map((row) => text(row.id)));
+  const vendorUomRows = vmiIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
+    .from("vendor_material_uom").select("vmi_id, uom_code, is_default").in("vmi_id", chunk));
+  const vendorUomsByVmi = new Map<string, JsonRecord[]>();
+  for (const row of vendorUomRows) {
+    const id = text(row.vmi_id);
+    vendorUomsByVmi.set(id, [...(vendorUomsByVmi.get(id) ?? []), row]);
+  }
+  for (const row of activeRows) {
+    const orderUom = preferredVendorOrderUom(text(row.supply_uom_code), vendorUomsByVmi.get(text(row.id)) ?? []);
+    if (!orderUom) continue;
     const id = text(row.material_id);
-    result.set(id, [...(result.get(id) ?? []), text(row.supply_uom_code)]);
+    result.set(id, [...(result.get(id) ?? []), orderUom]);
   }
   return result;
 }

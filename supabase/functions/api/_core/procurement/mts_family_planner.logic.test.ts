@@ -559,7 +559,7 @@ Deno.test("family waterfall: a group below Critical returns the ordered action c
 Deno.test("W4: a confirmed future arrival joins group allocation only from its ETA", () => {
   const days = Array.from({ length: 5 }, (_, i) => addDays("2026-10-01", i));
   const result = planFamily({
-    as_of: "2026-10-01", horizon_end: "2026-10-05", opening_qty_by_material: { BRIDGE: 100, INBOUND: 0 }, own_demand: [],
+    as_of: "2026-10-01", horizon_end: "2026-10-05", opening_qty_by_material: { BRIDGE: 20, INBOUND: 0 }, own_demand: [],
     group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["BRIDGE", "INBOUND"], required_by, qty_base: 10 })),
     confirmed_arrivals: [{ source_key: "INBOUND-ETA", material_id: "INBOUND", eta_to_plant: "2026-10-03", qty_base: 100 }],
     policies: [policy("BRIDGE", 0, 0, []), policy("INBOUND", 0, 0, [])], plan_buys: false,
@@ -724,4 +724,123 @@ Deno.test("smart consumption ratio: equal stock and price, the longer-credit mem
   assert(d.ADV > 0, `advance stock still rotates: ${JSON.stringify(d)}`);
   // Company average credit = 40 days → unknown sits between 30 and 90 days, i.e. neutral.
   assert(d.UNK > d.C30 && d.UNK < d.C90, `unknown credit is neutral: ${JSON.stringify(d)}`);
+});
+
+Deno.test("owner 2026-10-28 D1: a receipt does not refill a group that is above its own Min; the group refills when it falls below Min", () => {
+  const days = Array.from({ length: 40 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 39), opening_qty_by_material: { A: 800, B: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A", "B"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "B-ETA", material_id: "B", eta_to_plant: "2026-10-06", qty_base: 500 }],
+    group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 10, critical_days: 5, desired_max_days_override: 20 }],
+    policies: [policy("A", 10, 5, []), policy("B", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const reserve = (day: string) => result.group_bucket_reservations.filter((row) => row.group_id === "G" && row.day === day).reduce((s, row) => s + row.reserved_qty_base, 0);
+  // Target 10 + cycle 10 -> Max 20 days = 200 after today's use; the receipt on 10-06 must not top it up.
+  assert(reserve("2026-10-06") < reserve("2026-10-05"), `receipt day must not refill a group above Min: ${reserve("2026-10-05")} -> ${reserve("2026-10-06")}`);
+  // Below Min (10 days = 100 after use) the group claims again up to Max.
+  const refills = days.filter((day, i) => i > 0 && reserve(day) > reserve(days[i - 1]) + 1);
+  assert(refills.length >= 1, "the group must refill once it falls below its Min");
+  assert(reserve(refills[0]) >= 199, `refill goes to Max (200): ${reserve(refills[0])}`);
+});
+
+Deno.test("owner 2026-10-28 D2: FEFO across lots — the member holding the older stock is used first, the newer lot last", () => {
+  const days = Array.from({ length: 8 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 7), opening_qty_by_material: { OLD: 40, NEW: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["NEW", "OLD"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "NEW-ETA", material_id: "NEW", eta_to_plant: "2026-10-02", qty_base: 100 }],
+    policies: [policy("OLD", 0, 0, []), policy("NEW", 0, 0, [])], plan_buys: false,
+  });
+  const draw = (day: string, id: string) => result.group_mix.find((row) => row.group_id === "G" && row.day === day)?.draws[id] ?? 0;
+  for (const day of ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"]) assert(draw(day, "NEW") === 0 && draw(day, "OLD") > 0, `${day}: the older stock goes first`);
+  assert(draw("2026-10-05", "NEW") > 0, "the newer lot is used once the older stock is gone");
+});
+
+Deno.test("owner 2026-10-28 D3: Exclusive use is protected like a level — the shared pool can never leave it short", () => {
+  const days = Array.from({ length: 60 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 59), opening_qty_by_material: { X: 700, Y: 300 },
+    own_demand: days.map((required_by) => ({ material_id: "X", required_by, qty_base: 5 })),
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["X", "Y"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [], policies: [policy("X", 10, 5, []), policy("Y", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const x = result.rows.filter((row) => row.material_id === "X");
+  assert(x.every((row) => row.closing_qty_base >= -1e-6), "X never goes negative");
+  // 700 + 300 = 1000 against (5 + 10) * 60 = 900: the exclusive use of X is fully met while the group draws the rest.
+  assert(result.group_unmet.length === 0, `no group shortage: ${JSON.stringify(result.group_unmet.slice(0, 2))}`);
+  const exclusiveDays = x.filter((row) => row.demand_qty_base > 0).length;
+  assert(exclusiveDays === 60, "all 60 days of the exclusive use are served");
+});
+
+Deno.test("owner 2026-10-28 D7: the waterfall is logged as events and a Material × Level matrix that always adds up", () => {
+  const days = Array.from({ length: 40 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 39), opening_qty_by_material: { A: 800, B: 0, X: 300 },
+    own_demand: days.map((required_by) => ({ material_id: "X", required_by, qty_base: 5 })),
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A", "B", "X"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [{ source_key: "B-ETA", material_id: "B", eta_to_plant: "2026-10-06", qty_base: 500 }],
+    group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 10, critical_days: 5, desired_max_days_override: 20 }],
+    policies: [policy("A", 10, 5, []), policy("B", 10, 5, []), policy("X", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const opening = result.level_events.filter((event) => event.kind === "OPENING_RESERVE");
+  assert(opening.some((event) => event.level_kind === "OWN" && event.level_id === "X") && opening.some((event) => event.level_kind === "GROUP" && event.level_id === "G"), "day 0: Exclusive and the group reserve to their Max");
+  const receipt = result.level_events.find((event) => event.kind === "RECEIPT");
+  assert(receipt?.day === "2026-10-06" && receipt.material_id === "B" && receipt.qty === 500 && receipt.references.includes("B-ETA"), `the receipt is an event with its document: ${JSON.stringify(receipt)}`);
+  const topUps = result.level_events.filter((event) => event.kind === "TOP_UP" && event.level_kind === "GROUP");
+  assert(topUps.length >= 1 && topUps.every((event) => event.day > "2026-10-06" || event.qty > 0), "a group top-up is an event with the KG it took");
+  assert(topUps.every((event) => event.pool_after <= event.pool_before + 1e-6), "a top-up never increases the pool");
+  assert(result.level_matrix.length >= 3, "a snapshot on the event days");
+  for (const snapshot of result.level_matrix) {
+    for (const material of Object.keys(snapshot.closing)) {
+      const held = snapshot.levels.reduce((sum, level) => sum + (level.by_material[material] ?? 0), 0) + (snapshot.pool[material] ?? 0);
+      assert(Math.abs(held - snapshot.closing[material]) < 0.01, `${snapshot.day} ${material}: levels + pool ${held} must equal stock ${snapshot.closing[material]}`);
+    }
+  }
+});
+
+Deno.test("owner 2026-10-28: a waiting level is logged once, not every day it keeps waiting", () => {
+  const days = Array.from({ length: 30 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 29), opening_qty_by_material: { A: 120 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [], group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 5, critical_days: 2, desired_max_days_override: 15 }],
+    policies: [policy("A", 5, 2, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  const levelRows = result.level_events.filter((event) => event.level_id === "G");
+  assert(levelRows[0].kind === "OPENING_RESERVE" && levelRows[0].shortfall > 0, "the level starts short: 120 of the 150 it wants");
+  assert(levelRows.length <= 3, `a level that keeps waiting is not logged every day: ${levelRows.map((event) => `${event.day}:${event.kind}`).join(",")}`);
+});
+
+Deno.test("owner 2026-10-28 D10: a member that has to be bought is connected at its OWN Min, not the group's", () => {
+  const days = Array.from({ length: 150 }, (_, i) => addDays("2026-10-01", i));
+  const run = (gabrosaTarget: number) => planFamily({
+    as_of: "2026-10-01", horizon_end: days[149], opening_qty_by_material: { GAB: 4500, TS: 0 }, own_demand: [],
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["GAB", "TS"], required_by, qty_base: 100 })),
+    confirmed_arrivals: [], group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 30, critical_days: 15, desired_max_days_override: null }],
+    policies: [policy("GAB", gabrosaTarget, 5, [{ vendor: "VG", lead: 6, cost: 100 }]), policy("TS", 30, 5, [])], plan_buys: true,
+  }).advisory_buys.find((buy) => buy.status === "ADVISORY" || buy.status === "ADVISORY_LATE");
+  const atGroupMin = run(30);
+  const atOwnMin = run(20);
+  assert(atGroupMin?.need_date === "2026-10-15", `Target 30 -> 30 days left on 15 Oct: ${atGroupMin?.need_date}`);
+  assert(atOwnMin?.need_date === "2026-10-25", `Gabrosa's own 20 days -> 25 Oct: ${atOwnMin?.need_date}`);
+  assert(atOwnMin.recommended_po_by === "2026-10-19", `order date = need date - lead time 6: ${atOwnMin.recommended_po_by}`);
+});
+
+Deno.test("owner 2026-10-28 Store keep: a checkpoint day always carries a Material × Level snapshot (the quantity to keep at the end of a period)", () => {
+  const days = Array.from({ length: 40 }, (_, i) => addDays("2026-10-01", i));
+  const result = planFamily({
+    as_of: "2026-10-01", horizon_end: addDays("2026-10-01", 39), opening_qty_by_material: { A: 800, X: 300 },
+    own_demand: days.map((required_by) => ({ material_id: "X", required_by, qty_base: 5 })),
+    group_demand: days.map((required_by) => ({ group_id: "G", candidates: ["A", "X"], required_by, qty_base: 10 })),
+    confirmed_arrivals: [], checkpoints: ["2026-10-20", "2026-10-31"],
+    group_coverage_policies: [{ material_group_id: "G", effective_from: "2026-01-01", target_days: 10, critical_days: 5, desired_max_days_override: 20 }],
+    policies: [policy("A", 10, 5, []), policy("X", 10, 5, [])].map((p) => ({ ...p, cycle_days: 10 })), plan_buys: false,
+  });
+  for (const day of ["2026-10-20", "2026-10-31"]) {
+    const snapshot = result.level_matrix.find((snap) => snap.day === day);
+    assert(snapshot, `${day} has a snapshot`);
+    const group = snapshot.levels.find((level) => level.level_kind === "GROUP" && level.level_id === "G");
+    assert(group && Object.values(group.by_material).reduce((s, q) => s + q, 0) > 0, `${day}: the group's reserve is reported`);
+  }
 });

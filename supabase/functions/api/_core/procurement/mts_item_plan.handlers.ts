@@ -37,6 +37,7 @@ import {
   requireRequirementViewAccess,
   todayInIndia,
 } from "./mts_requirement.handlers.ts";
+import { buildWaterfallView } from "./mts_waterfall_view.ts";
 
 type JsonRecord = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "").trim();
@@ -282,11 +283,15 @@ export async function buildItemPlan(
     // Owner 2026-10-21: best plant date per movable arrival, tried on every day of the horizon.
     // Owner 2026-10-22: judged on the whole family (computed once by the planning run).
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
+    const windowByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.window]));
     const adviceFor = (_id: string, key: string | null) => {
       const optimum = key ? optimumByKey.get(key) ?? null : null;
+      // Owner 2026-10-28 (D9): when the vendor can no longer move the shipment the date is not advised, the user is told to talk to the vendor.
+      const window = key ? windowByKey.get(key) ?? null : null;
       return {
         optimum,
-        advice: optimum && optimum.shift_days !== 0 ? { suggested_eta: optimum.best.eta, shift_days: optimum.shift_days, reason: optimum.reason } : null,
+        window,
+        advice: optimum && optimum.shift_days !== 0 && window?.state !== "TALK_TO_VENDOR" ? { suggested_eta: optimum.best.eta, shift_days: optimum.shift_days, reason: optimum.reason } : null,
       };
     };
 
@@ -407,6 +412,9 @@ export async function buildItemPlan(
     return {
       company_id: companyId,
       material_id: materialId,
+      // The detail, its preview and its Excel export must not depend on a
+      // separate Planning-tab query being warm in the browser cache.
+      display_units: plan.display_units,
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
       month_sources: calendar.months.map((month) => ({ month, source: plannedMonths.has(month) ? "PLAN" : "NO_PO21_PLAN" })),
       forecast_count: reqData.forecast.forecasts.length,
@@ -414,6 +422,13 @@ export async function buildItemPlan(
         is_family: family.is_family,
         groups: family.group_ids.map((g) => ({ group_id: g, label: groupLabel.get(g) ?? "—" })),
       },
+      // Owner 2026-10-28 (docs/mts-planning/PO22-WATERFALL-OWNER-METHOD-2026-10-28.md §13): the waterfall as the user reads it.
+      waterfall: buildWaterfallView({
+        projection, asOf: calendar.asOf, memberSet, groupSet,
+        groupLabel: (id) => groupLabel.get(id) ?? "—",
+        materialLabel: (id) => `${codeOf(id) ?? ""} ${nameOf(id)}`.trim(),
+        uomOf: (id) => uomOf(id),
+      }),
       members,
       // Owner 2026-10-22: every row says what arrives that day — which member, consignment, vendor,
       // status, what it covers and why — so the whole family is readable in one table.

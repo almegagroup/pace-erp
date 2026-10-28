@@ -24,6 +24,7 @@ import { TargetWhatIf, VendorDateCompare } from "./MtsItemPlanWhatIf.jsx";
 import { lotVendorFlags } from "./mtsItemPlanLots.js";
 import { makeDisplayUnits, orderQtyText, qtyInDisplayUnit } from "./mtsOrderUnit.js";
 import { PO22_LIVE_QUERY } from "./mtsLiveQuery.js";
+import MtsWaterfallPanel, { WaterfallVerdict } from "./MtsWaterfallPanel.jsx";
 
 // Owner 2026-10-21: FOR = freight inside the price; otherwise we pay it (AC01 landed cost).
 const FREIGHT_LABEL = { FOR: "FOR (in price)", FREIGHT_SEPARATE: "Separate (we pay)", EX_TRANSPORTER_GODOWN: "Ex godown (we pay)" };
@@ -68,6 +69,7 @@ const GAP_LABEL = {
 
 /** Owner 2026-10-22: the day grid gets the full width; everything else opens from a button. */
 const ITEM_PLAN_PANELS = [
+  { id: "waterfall", label: "Waterfall (levels, flow, who holds what)" },
   { id: "prediction", label: "Prediction" },
   { id: "allocation", label: "Family allocation report" },
   { id: "arrivals", label: "Arrivals / Future Orders" },
@@ -148,7 +150,10 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
   };
   const uom = plan?.members?.find((m) => m.is_selected)?.uom ?? "";
   // Owner 2026-10-26: every quantity in the material's display (Order) UoM; calculations stay in base.
-  const du = useMemo(() => makeDisplayUnits(planningQ.data?.display_units), [planningQ.data]);
+  const du = useMemo(
+    () => makeDisplayUnits(view?.display_units ?? plan?.display_units ?? planningQ.data?.display_units),
+    [view, plan, planningQ.data],
+  );
   const familyIds = (view?.members ?? plan?.members ?? []).map((m) => m.material_id);
   // The family grid sums members: one unit only when every member shows the same one, else base.
   const familyUnit = familyIds.length > 1 ? du.groupUnit(familyIds) : du.unitOf(materialId);
@@ -478,12 +483,16 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     },
     {
       key: "advice", label: "Engine best date", width: "170px",
-      render: (a) => (a.advice ? (
+      render: (a) => (a.window?.state === "TALK_TO_VENDOR" && a.optimum?.shift_days ? (
+        <span className="text-xs font-semibold text-rose-700" title={a.window.message}>
+          {`Cannot schedule: talk to the vendor (${a.optimum.best.eta}, ${a.optimum.shift_days < 0 ? `prepone ${-a.optimum.shift_days} d` : `postpone ${a.optimum.shift_days} d`})`}
+        </span>
+      ) : a.advice ? (
         <button type="button" onClick={() => setDrafts((d) => ({ ...d, [a.reschedule_key]: { ...(d[a.reschedule_key] ?? {}), date: a.advice.suggested_eta, reason: a.advice.reason, row: a } }))} className={`text-left text-xs font-semibold ${a.advice.shift_days < 0 ? "text-rose-700" : "text-amber-700"} hover:underline`} title={a.advice.reason}>
           {`${a.advice.suggested_eta} (${a.advice.shift_days < 0 ? `prepone ${-a.advice.shift_days} d` : `postpone ${a.advice.shift_days} d`})`}
         </button>
       ) : a.optimum ? <span className="text-xs text-emerald-700">Date is fine</span> : ""),
-      copyValue: (a) => (a.advice ? a.advice.suggested_eta : ""),
+      copyValue: (a) => (a.window?.state === "TALK_TO_VENDOR" ? "Talk to the vendor" : a.advice ? a.advice.suggested_eta : ""),
     },
     {
       key: "best_days", label: "At best date: Min / Max", width: "150px", align: "right",
@@ -492,8 +501,8 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
     },
     {
       key: "why", label: "Why", width: "320px",
-      render: (a) => (a.optimum ? <span className="text-xs">{a.optimum.reason}</span> : ""),
-      copyValue: (a) => a.optimum?.reason ?? "",
+      render: (a) => (a.optimum ? <span className="text-xs">{a.window?.state === "TALK_TO_VENDOR" ? `${a.window.message} ` : ""}{a.optimum.reason}</span> : ""),
+      copyValue: (a) => `${a.window?.state === "TALK_TO_VENDOR" ? `${a.window.message} ` : ""}${a.optimum?.reason ?? ""}`,
     },
     {
       key: "reason", label: "Reason", width: "200px", filterable: false,
@@ -753,6 +762,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               </button>
             ))}
           </div>
+          <WaterfallVerdict waterfall={view.waterfall} futureOrders={view.future_orders} />
           <div className="grid gap-2">
             <section className="grid content-start gap-1">
               <h3 className="text-sm font-semibold text-slate-800">Day by day {plan.family.is_family ? "(whole family)" : ""} — click a date for each member{preview ? <span className="ml-2 text-indigo-700">(PREVIEW)</span> : null}</h3>
@@ -790,6 +800,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
               width="min(1100px, calc(100vw - 24px))"
             >
             <div className="grid content-start gap-3">
+              {panel === "waterfall" ? <MtsWaterfallPanel waterfall={view.waterfall} futureOrders={view.future_orders} /> : null}
               {panel === "prediction" ? (
               <>
               <section className="grid gap-1 border border-amber-300 bg-amber-50 p-2">
@@ -1008,7 +1019,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                         { label: "Shortage days", key: "shortage_days" },
                         { label: "Days ≤ Target", key: "days_below_target" },
                         { label: "Lowest Max days", key: "lowest_max_days", copyValue: (r) => fmtDays(r.lowest_max_days) },
-                        { label: "Avg stock", key: "average_closing", copyValue: (r) => fmtQty(r.average_closing) },
+                        { label: `Avg stock (${familyUom})`, key: "average_closing", copyValue: (r) => fq(r.average_closing) },
                         { label: "Avg stock value", key: "average_stock_value", copyValue: (r) => r.average_stock_value === null ? "—" : `₹${fmtQty(r.average_stock_value)}` },
                       ], [["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]]
                         .filter(([, metrics]) => metrics)
@@ -1016,7 +1027,7 @@ export default function MtsItemPlanTab({ companyId, planMonth, asOf, demandAt })
                       className="h-7 w-max border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                     >Copy table + headers</button>
                     <table>
-                      <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock</th><th>Avg stock value</th></tr></thead>
+                      <thead><tr className="text-left text-slate-600"><th className="pr-3" /><th className="pr-3">Shortage days</th><th className="pr-3">Days ≤ Target</th><th className="pr-3">Lowest Max days</th><th className="pr-3">Avg stock ({familyUom})</th><th>Avg stock value</th></tr></thead>
                       <tbody>
                         {[["Now", aiResult.metrics_before], ["With AI lots", aiResult.metrics_after]].filter(([, m]) => m).map(([label, m]) => (
                           <tr key={label}><td className="pr-3 font-semibold">{label}</td><td className="pr-3">{m.shortage_days}</td><td className="pr-3">{m.days_below_target}</td><td className="pr-3">{fmtDays(m.lowest_max_days)}</td><td className="pr-3">{fq(m.average_closing)} {familyUom}</td><td>{m.average_stock_value === null ? "—" : `₹${fmtQty(m.average_stock_value)}`}</td></tr>

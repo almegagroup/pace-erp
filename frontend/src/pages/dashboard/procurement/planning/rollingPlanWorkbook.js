@@ -9,6 +9,8 @@
  * Names only, never PACE codes. Loaded with a dynamic import so exceljs stays out of the page bundle.
  */
 import ExcelJS from "exceljs";
+import { flowRows, matrixGrid, waterfallVerdict } from "./mtsWaterfall.js";
+import { aggregateStoreItems, issueNote } from "./mtsStoreInstruction.js";
 
 const TITLE_FILL = "FFFBBC04";   // yellow block title, as in the old file
 const HEAD_FILL = "FFFFE699";    // light yellow column header
@@ -172,6 +174,16 @@ function writeBlocks(sheet, companies, kind) {
       stockRow.getCell(1).font = { italic: true };
     }
     if (b.first_shortage_day || (b.gaps ?? []).length) factRow.getCell(1).font = { bold: true, color: { argb: RED } };
+    // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
+    // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
+    if (b.is_family && (b.waterfall?.levels ?? []).length) {
+      const note = sheet.addRow(["Opening / Pro-rata / Closing / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. Levels, narrow first:"]);
+      note.getCell(1).font = { italic: true };
+      for (const l of b.waterfall.levels) {
+        const line = sheet.addRow([`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${num(l.reserve_now) ?? 0} ${b.uom ?? ""} (covers ${days(l.cover_days_now) ?? "—"} d) · next Min ${l.next_min_day ?? "not in horizon"}`]);
+        line.getCell(1).font = { italic: true };
+      }
+    }
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
@@ -283,8 +295,50 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   ], companies.flatMap((c) => c.buys.map((b) => ({ ...b, company: companyLabel(c) }))), { color: (r) => (r.late ? RED : null) });
   widths(buy, [26, 36, 6, 12, 12, 7, 12, 30, 30, 14, 14, 30, 7, 60]);
 
-  // STORE_INSTRUCTIONS
-  const store = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
+  // STORE_INSTRUCTIONS (owner 2026-10-28): Period · Item · Group · Quantity · PO21 parent group · child group(s) — the child groups of
+  // one parent that use the same item share ONE row. STORE_TRANSFERS: R003 -> R001 / R002 and R001 <-> R002. STORE_DETAIL = the old product-wise rows.
+  // Owner 2026-10-28: for the WHOLE horizon, month by month; only ACTUAL stock may be issued (CSN / PO not yet received, an ETA that passed or is
+  // missing, and an unordered lot are listed apart as "do not issue against"). Companies without the month plan fall back to the CM + NM rows.
+  const storeItems = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
+  const planRows = companies.flatMap((c) => (c.store_plan?.rows ?? []).map((r) => ({ ...r, company: companyLabel(c) })));
+  if (planRows.length > 0) {
+    addTable(storeItems, [
+      { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
+      { label: "Item", key: "item" }, { label: "Material group", key: "group" },
+      { label: "Issue from stock now", value: (r) => num(r.use_stock), num: true },
+      { label: "After receipt (CSN/PO, ETA valid)", value: (r) => num(r.use_arrival), num: true },
+      { label: "ETA passed / none (not received)", value: (r) => num(r.use_assumed), num: true },
+      { label: "Planned lot (not ordered)", value: (r) => num(r.use_lot), num: true },
+      { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep_qty), num: true }, { label: "Max days", value: (r) => days(r.keep_max_days), num: true },
+      { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
+      { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" }, { label: "Note", value: (r) => issueNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot }) },
+    ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
+    widths(storeItems, [26, 24, 12, 12, 40, 28, 16, 18, 18, 16, 20, 10, 14, 7, 24, 40, 50]);
+  } else addTable(storeItems, [
+    { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
+    { label: "Item", key: "item" }, { label: "Material group", key: "group" },
+    { label: "Use in this period", value: (r) => num(r.qty), num: true }, { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep), num: true },
+    { label: "Max days", value: (r) => days(r.keep_days), num: true }, { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
+    { label: "PO21 parent group", key: "mother" }, { label: "Child group(s)", key: "child" },
+  ], companies.flatMap((c) => aggregateStoreItems((c.store ?? []).filter((s) => s.group_related !== false).map((s) => ({
+    period: s.period, period_order: String(s.period).startsWith("CM") ? 0 : 1, period_from: s.period_from, period_to: s.period_to, item: s.material, key_id: s.material_key ?? s.material,
+    group: s.group ?? "", mother: s.mother_group ?? "", child: s.child_group ?? "", qty: s.from_stock, not_backed: s.not_backed, uom: s.uom, keep: s.keep_qty ?? null, keep_days: s.keep_max_days ?? null,
+  }))).map((r) => ({ ...r, company: companyLabel(c) }))), { color: (r) => (r.not_backed > 0 ? RED : null) });
+  if (planRows.length === 0) widths(storeItems, [26, 16, 12, 12, 40, 28, 16, 22, 10, 14, 7, 24, 40]);
+  const excessRows = companies.flatMap((c) => (c.store_plan?.excess ?? []).map((e) => ({ ...e, company: companyLabel(c) })));
+  const storeExcess = wb.addWorksheet(sheetName("STORE_EXCESS", used));
+  addTable(storeExcess, [
+    { label: "Company", key: "company" }, { label: "At the end of", key: "period" }, { label: "Item", key: "item" }, { label: "Stock today", value: (r) => num(r.stock_now), num: true },
+    { label: "Excess left in the pool", value: (r) => num(r.excess_qty), num: true }, { label: "Total stock then (planned)", value: (r) => num(r.closing_qty), num: true }, { label: "UoM", key: "uom" },
+  ], excessRows);
+  widths(storeExcess, [26, 26, 44, 16, 22, 24, 7]);
+  const storeTransfers = wb.addWorksheet(sheetName("STORE_TRANSFERS", used));
+  addTable(storeTransfers, [
+    { label: "Company", key: "company" }, { label: "Transfer by", value: (r) => day(r.by) }, { label: "For period", key: "period" }, { label: "Item", key: "material" },
+    { label: "From", key: "from" }, { label: "To", key: "to" }, { label: "Quantity", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+  ], companies.flatMap((c) => (c.store_transfers ?? []).map((t) => ({ ...t, company: companyLabel(c) }))));
+  widths(storeTransfers, [26, 14, 18, 44, 8, 8, 14, 7]);
+  const store = wb.addWorksheet(sheetName("STORE_DETAIL", used));
   addTable(store, [
     { label: "Company", value: (r) => r.company }, { label: "Period", key: "period" },
     { label: "Parent group", value: (r) => r.mother_group ?? "" }, { label: "Child group", value: (r) => r.child_group ?? "" },
@@ -305,13 +359,64 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
     { label: "ETA (CSN / PO)", value: (r) => day(r.source_eta) }, { label: "Planning ETA", value: (r) => day(r.planning_eta) },
     { label: "Issue", value: (r) => (r.no_eta ? "No ETA" : r.overdue ? "ETA passed" : "") },
-    { label: "Engine best date", value: (r) => day(r.engine_best_date) }, { label: "Why", key: "engine_reason" },
+    { label: "Engine best date", value: (r) => day(r.engine_best_date) }, { label: "Vendor can move it?", key: "vendor_window" }, { label: "Why", key: "engine_reason" },
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
-  widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 60]);
+  widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
 
+  writeWaterfall(wb, companies, used);
   writeExplain(wb, companies, used);
 
   return wb;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WATERFALL (owner 2026-10-28, docs/mts-planning/PO22-WATERFALL-OWNER-METHOD-2026-10-28.md §13): the same four blocks as the 4A table —
+// one plain sentence per family, each level's Min / Max days, the flow (receipts, top-ups, waiting levels) and who holds what.
+// ─────────────────────────────────────────────────────────────────────────────
+function writeWaterfall(wb, companies, used) {
+  const families = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.waterfall && b.is_family).map((b) => ({ company: companyLabel(c), title: b.title, kind: b.kind, waterfall: b.waterfall })));
+  const sentence = addSheetWithTable(wb, used, "WATERFALL_SUMMARY", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Type", key: "kind" },
+    { label: "What to know", value: (r) => waterfallVerdict(r.waterfall, null).text }, { label: "Worst level", value: (r) => waterfallVerdict(r.waterfall, null).tone },
+  ], families, { color: (r) => (waterfallVerdict(r.waterfall, null).tone === "ok" ? null : RED) });
+  widths(sentence, [26, 40, 8, 100, 12]);
+
+  const levels = addSheetWithTable(wb, used, "WATERFALL_LEVELS", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Level", key: "label" },
+    { label: "Members", value: (r) => r.members.join("; ") },
+    { label: "Min days", value: (r) => days(r.target_days), num: true }, { label: "Max days", value: (r) => days(r.max_days), num: true },
+    { label: "Critical days", value: (r) => days(r.critical_days), num: true }, { label: "Cover now (days)", value: (r) => days(r.cover_days_now), num: true },
+    { label: "Reserve now (KG)", value: (r) => num(r.reserve_now), num: true }, { label: "Next Min", value: (r) => r.next_min_day ?? "not in horizon" },
+  ], families.flatMap((f) => f.waterfall.levels.map((l) => ({ ...l, company: f.company, title: f.title }))));
+  widths(levels, [26, 40, 30, 60, 10, 10, 12, 16, 16, 14]);
+
+  const flow = addSheetWithTable(wb, used, "WATERFALL_FLOW", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Date", key: "day" }, { label: "What happened", key: "what" },
+    { label: "Level", key: "level" }, { label: "KG", value: (r) => num(r.qty), num: true }, { label: "From which material", key: "detail" },
+    { label: "Short (KG)", value: (r) => (r.short ? num(r.shortfall) : null), num: true },
+    { label: "Pool before", value: (r) => (r.what.startsWith("Receipt") ? null : num(r.pool_before)), num: true },
+    { label: "Pool after", value: (r) => (r.what.startsWith("Receipt") ? null : num(r.pool_after)), num: true },
+  ], families.flatMap((f) => flowRows(f.waterfall).map((r) => ({ ...r, company: f.company, title: f.title }))), { color: (r) => (r.short ? RED : null) });
+  widths(flow, [26, 40, 12, 56, 32, 12, 60, 12, 14, 14]);
+
+  const holds = addSheetWithTable(wb, used, "WATERFALL_WHO_HOLDS", [
+    { label: "Company", key: "company" }, { label: "Family", key: "title" }, { label: "Date", key: "day" }, { label: "Material", key: "material" },
+    { label: "Held for", key: "held_for" }, { label: "KG", value: (r) => num(r.qty), num: true },
+  ], families.flatMap((f) => (f.waterfall.matrix ?? []).flatMap((snap) => {
+    const grid = matrixGrid(f.waterfall, snap.day);
+    return grid.rows.flatMap((row) => [
+      ...grid.levels.map((level, i) => ({ company: f.company, title: f.title, day: snap.day, material: row.material, held_for: level, qty: row.cells[i] })),
+      { company: f.company, title: f.title, day: snap.day, material: row.material, held_for: "Pool (excess)", qty: row.pool },
+      { company: f.company, title: f.title, day: snap.day, material: row.material, held_for: "TOTAL STOCK", qty: row.total },
+    ]).filter((r) => r.qty > 0.5 || r.held_for === "TOTAL STOCK");
+  })));
+  widths(holds, [26, 40, 12, 44, 34, 14]);
+}
+
+function addSheetWithTable(wb, used, name, columns, rows, options) {
+  const sheet = wb.addWorksheet(sheetName(name, used));
+  addTable(sheet, columns, rows, options);
+  return sheet;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

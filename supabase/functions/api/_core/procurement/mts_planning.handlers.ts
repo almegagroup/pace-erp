@@ -12,7 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
-import { buildCalendar, isIsoDate, isTransferFed, moqInBase, orderUnitOf, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
+import { buildCalendar, isIsoDate, isTransferFed, monthEnd, moqInBase, orderUnitOf, preferredVendorOrderUom, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   cachedLoad,
   computeRequirement,
@@ -38,6 +38,10 @@ import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, econ
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
+import { loadRescheduleContext } from "./mts_reschedule_window.handlers.ts";
+import { rStoreKey, scheduleStoreTransfers } from "./mts_store_instruction.logic.ts";
+import { buildStorePlan, type StorePlanPeriod, type StorePlanRecord } from "./mts_store_plan.logic.ts";
+import { rescheduleVerdict } from "./mts_reschedule_window.logic.ts";
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -93,11 +97,13 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
   const label = new Map(vendors.map((v) => [text(v.id), [text(v.vendor_code), text(v.vendor_name)].filter(Boolean).join(" — ")]));
   // Default payment term per vendor-material (D10: cash-out timing).
   const vmiIds = unique(rows.map((row) => text(row.id)));
-  const [termRows, currencyRows, recentPos] = vmiIds.length === 0 ? [[], [], []] : await Promise.all([
+  const [termRows, currencyRows, vendorUomRows, recentPos] = vmiIds.length === 0 ? [[], [], [], []] : await Promise.all([
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_payment_term").select("vmi_id, payment_term_id, is_default").in("vmi_id", chunk)),
     fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
       .from("vendor_material_currency").select("vmi_id, currency_code, is_default").in("vmi_id", chunk)),
+    fetchInChunks<JsonRecord>(vmiIds, (chunk) => serviceRoleClient.schema("erp_master")
+      .from("vendor_material_uom").select("vmi_id, uom_code, is_default").in("vmi_id", chunk)),
     fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("purchase_order")
       .select("id, po_date, status").eq("company_id", companyId)
       .gte("po_date", new Date(Date.parse(`${today}T00:00:00Z`) - 730 * 86_400_000).toISOString().slice(0, 10)).order("po_date"), "MTS_PLANNING_PO_CURRENCY_READ_FAILED"),
@@ -151,15 +157,23 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     const seen = poUomByVmi.get(vmiId);
     if (!seen || date >= seen.po_date) poUomByVmi.set(vmiId, { uom, po_date: date });
   }
+  const vendorUomsByVmi = new Map<string, JsonRecord[]>();
+  for (const row of vendorUomRows) {
+    const vmiId = text(row.vmi_id);
+    vendorUomsByVmi.set(vmiId, [...(vendorUomsByVmi.get(vmiId) ?? []), row]);
+  }
   for (const row of rows) {
     const materialId = text(row.material_id);
     const vendorId = text(row.vendor_id);
     const material = materials.get(materialId);
-    const unit = text(row.supply_uom_code) || material?.base_uom_code || "";
+    // Supply UoM wins; otherwise use MM03's default vendor-material UoM. This
+    // shared value drives Order UoM display, MOQ/multiple conversion and price.
+    const supplyUom = preferredVendorOrderUom(text(row.supply_uom_code), vendorUomsByVmi.get(text(row.id)) ?? []);
+    const unit = supplyUom || material?.base_uom_code || "";
     const toBase = (value: unknown) => { const q = num(value); return q === null ? null : toMaterialBase(material, q, unit); };
     // The price unit (not the MOQ unit): Supply UoM, else the latest PO line UoM, else base.
     // Only a GRN writes the price in the PO unit; a price typed in MM03 (no GRN yet) is per base unit.
-    const priceUnit = priceUnitCode({ supply_uom_code: text(row.supply_uom_code), last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
+    const priceUnit = priceUnitCode({ supply_uom_code: supplyUom, last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
     const booking = num(row.booking_time_days);
     const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days - (booking ?? 0));
     result.set(materialId, [...(result.get(materialId) ?? []), {
@@ -173,7 +187,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
         vmi_last_purchase_currency: text(row.last_purchase_currency) || null,
         vmi_default_currency: currencyByVmi.get(text(row.id)) ?? null,
       }),
-      supply_uom_code: text(row.supply_uom_code) || null,
+      supply_uom_code: supplyUom,
       ...(() => {
         const term = termByVmi.get(text(row.id));
         if (!term) return { credit_days: null, advance: false };
@@ -547,6 +561,8 @@ export async function computePlanning(p: PlanningParams) {
       .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of)),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
+    // The Store "keep" quantity is read at the end of each period (owner 2026-10-28).
+    checkpoints: calendar.months.map((month) => monthEnd(month)),
     group_orders: req.input.groupOrders,
     selections: selections.map,
     // The month selector is shown for every active group member. Selection is
@@ -694,6 +710,10 @@ export async function computePlanning(p: PlanningParams) {
     return out;
   })();
   const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
+  // Owner 2026-10-28 (D9): a proposed move is only advice if the vendor can still move the shipment (ETD window).
+  const rescheduleContext = await loadRescheduleContext(p.companyId, req.output.rows
+    .filter((row) => !arrivalScope || arrivalScope.has(row.material_id))
+    .flatMap((row) => row.inbound_events.filter((event) => event.reschedule_key)));
   const nameOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.material_name) || "—" : "—");
   const codeOf = (id: string | null) => (id ? text(req.materialRows.get(id)?.pace_code) || null : null);
   // `group_assignments` comes from the family planner and can include a group
@@ -768,6 +788,70 @@ export async function computePlanning(p: PlanningParams) {
   const eventRef = new Map<string, string>();
   for (const row of req.output.rows) row.inbound_events.forEach((event, index) => eventRef.set(`A|${row.material_id}|${index}|${event.reference}`, event.reference));
 
+  // Owner 2026-10-28 — Store instructions cover GROUP items only; a member that also has an exclusive use is part of its group.
+  const groupMemberIds = new Set(req.output.groups.flatMap((g) => g.member_ids));
+  // Owner 2026-10-28 — the Store plan for the WHOLE horizon, month by month, from the waterfall: use (split by where the stock comes from — only
+  // ACTUAL stock may be issued), what to keep at each period end, the excess left. Group items only.
+  const monthLabel = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+  const storePeriods: StorePlanPeriod[] = calendar.months.map((month, index) => {
+    const from = index === 0 ? calendar.asOf : month;
+    return { key: month.slice(0, 7), label: index === 0 ? `${monthLabel(month)} (from ${Number(calendar.asOf.slice(8))})` : monthLabel(month), from, to: monthEnd(month), order: index };
+  });
+  const prodshadeOfRecord = (r: { kind: string; prodshade_material_id: string; sku_material_id: string | null }) =>
+    (r.kind === "PM" && r.sku_material_id ? req.masters.skus.get(r.sku_material_id)?.prodshade_material_id ?? "" : r.prodshade_material_id);
+  const storePlan = buildStorePlan({
+    periods: storePeriods,
+    draws: projection.allocation_rows.map((d) => ({ day: d.day, material_id: d.material_id, destination_kind: d.destination_kind, group_id: d.group_id, qty_base: d.qty_base, source_kind: d.source_kind, source_reference: d.source_reference })),
+    assumedSources: new Set(projection.arrival_flags.filter((f) => f.reason === "ETA_PASSED" || f.reason === "ETA_MISSING").map((f) => f.source_key)),
+    groupUnmet: projection.group_unmet,
+    records: req.output.records.map((r): StorePlanRecord => ({ day: r.day, candidates: r.candidates, group_id: r.group_id, storage_location_id: r.storage_location_id, qty: r.qty, prodshade_material_id: prodshadeOfRecord(r), sku_material_id: r.sku_material_id, kind: r.kind })),
+    matrix: projection.level_matrix,
+    maxDays: new Map(projection.level_policies.map((l) => [`${l.level_kind}|${l.level_id}`, l.desired_days])),
+    openingByMaterial: assembly.input.opening_qty_by_material,
+    groupMemberIds,
+    productGroupOf: (r) => {
+      const group = productGroups.get(prodshadeOfRecord(r));
+      return { mother: group?.mother ?? "", child: group?.child ?? "" };
+    },
+  });
+  // Store transfers: R003 (transfer-source store) -> R001 / R002 and R001 <-> R002, how much and by when — only for stock that is really there.
+  const storeTransfers = await (async () => {
+    const needs = storePlan.needs.flatMap((n) => {
+      const store = rStoreKey(locationLabels.get(n.location_id) ?? "");
+      return store ? [{ material_id: n.material_id, period: n.period, store, qty: n.qty }] : [];
+    });
+    if (needs.length === 0) return [];
+    const materialIds = unique(needs.map((n) => n.material_id));
+    const stockRows = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
+      .select("material_id, storage_location_id, quantity").eq("company_id", p.companyId).eq("stock_type_code", "UNRESTRICTED").in("material_id", chunk));
+    const stockLabels = await loadLocationLabels(unique(stockRows.map((r) => text(r.storage_location_id))));
+    const storeOfLocation = (id: string) => rStoreKey(stockLabels.get(id) ?? locationLabels.get(id) ?? "");
+    const sourceStores = new Set<string>();
+    for (const [locationId, role] of req.locationRoles ?? []) {
+      const store = role === "TRANSFER_SOURCE" ? storeOfLocation(locationId) : null;
+      if (store) sourceStores.add(store);
+    }
+    const stocks = stockRows.flatMap((r) => {
+      const store = storeOfLocation(text(r.storage_location_id));
+      return store ? [{ material_id: text(r.material_id), store, qty: Number(r.quantity ?? 0) }] : [];
+    });
+    const labelOf = new Map(storePeriods.map((period) => [period.key, period.label]));
+    return scheduleStoreTransfers({ needs, stocks, sourceStores, periods: storePeriods.map((period) => ({ period: period.key, start: period.from })) })
+      .map((t2) => ({ ...t2, material_name: nameOf(t2.material_id), material_code: codeOf(t2.material_id), uom: uom(t2.material_id), period_label: labelOf.get(t2.period) ?? t2.period }));
+  })();
+  // Owner 2026-10-28 — Store instructions are only for GROUP items (a group's member that also has an exclusive use is included).
+  // For each item and period: where the period runs, and how much must be KEPT at its end (the level's reserve, up to its Max days).
+  const maxDaysOf = new Map(projection.level_policies.map((l) => [`${l.level_kind}|${l.level_id}`, l.desired_days]));
+  const keepAt = (period: string, materialId: string | null, groupId: string | null) => {
+    if (!materialId) return { qty: null as number | null, days: null as number | null };
+    const day = period === "CM" ? calendar.cmEnd : calendar.nmEnd;
+    const snapshot = [...projection.level_matrix].reverse().find((snap) => snap.day <= day);
+    if (!snapshot) return { qty: null, days: null };
+    const level = groupId
+      ? snapshot.levels.find((l) => l.level_kind === "GROUP" && l.level_id === groupId)
+      : snapshot.levels.find((l) => l.level_kind === "OWN" && l.level_id === materialId);
+    return { qty: level ? Math.round((level.by_material[materialId] ?? 0) * 1000) / 1000 : 0, days: maxDaysOf.get(`${groupId ? "GROUP" : "OWN"}|${groupId ?? materialId}`) ?? null };
+  };
   const activeMaterials = new Set(projection.rows.filter((r) => r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0).map((r) => r.material_id));
   const payload = {
     company_id: p.companyId,
@@ -891,13 +975,25 @@ export async function computePlanning(p: PlanningParams) {
       const input = familyInputFor(row.material_id);
       const keyOf = new Map(row.inbound_events.map((event, index) => [event, `A|${row.material_id}|${index}|${event.reference}`]));
       const optimum = new Map(pieces.map((event) => [event.reschedule_key as string, optimizeFamilyArrival(input, keyOf.get(event)!)]));
-      return pieces.map((event) => ({
-        material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
-        reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
-        eta_plant: event.original_date !== undefined ? event.original_date : event.date,
-        rescheduled_eta: event.original_date !== undefined ? event.date : null,
-        optimum: optimum.get(event.reschedule_key as string) ?? null,
-      }));
+      return pieces.map((event) => {
+        const facts = rescheduleContext.factsOf(event);
+        const best = optimum.get(event.reschedule_key as string) ?? null;
+        // Route time only (Booking Time excluded) of the piece's own vendor and route; the largest if several ports.
+        const routeDays = (row.lead_time?.configured_routes ?? [])
+          .filter((r) => r.route === facts.route && (!facts.vendor_id || r.vendor_id === facts.vendor_id) && r.route_days !== undefined)
+          .reduce<number | null>((max, r) => (max === null ? (r.route_days ?? null) : Math.max(max, r.route_days ?? 0)), null);
+        const currentEta = event.original_date !== undefined ? event.original_date : event.date;
+        return {
+          material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
+          reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
+          eta_plant: currentEta,
+          rescheduled_eta: event.original_date !== undefined ? event.date : null,
+          optimum: best,
+          window: best && best.shift_days !== 0
+            ? rescheduleVerdict({ today: p.today, route: facts.route, routeDays, currentEta, proposedEta: best.best.eta, currentEtd: facts.etd, windows: rescheduleContext.windows })
+            : null,
+        };
+      });
     }).sort((x, y) => String(x.rescheduled_eta ?? x.eta_plant ?? "9999").localeCompare(String(y.rescheduled_eta ?? y.eta_plant ?? "9999")) || x.material_name.localeCompare(y.material_name)),
     arrival_flags: projection.arrival_flags.map((f) => ({ ...f, material_name: nameOf(f.material_id), document: eventRef.get(f.source_key) ?? f.source_key })),
     // Owner 2026-10-26: every quantity is shown in this unit (Order UoM); absent = base UoM.
@@ -906,9 +1002,23 @@ export async function computePlanning(p: PlanningParams) {
     transfer_fed_material_ids: [...transferFed],
     bulk_material_ids: [...bulkMaterials],
     bulk_group_ids: bulkOnlyGroupIds(req.masters.groupMembers, bulkMaterials),
+    store_transfers: storeTransfers,
+    store_plan: {
+      periods: storePeriods,
+      rows: storePlan.rows.map((r) => ({
+        ...r, material_name: r.material_id ? nameOf(r.material_id) : "Group — not assigned", material_code: codeOf(r.material_id), uom: uom(r.material_id),
+        group_label: r.group_id ? groupLabel.get(r.group_id) ?? "—" : null,
+      })),
+      excess: storePlan.excess.map((e) => ({ ...e, material_name: nameOf(e.material_id), material_code: codeOf(e.material_id), uom: uom(e.material_id) })),
+    },
     store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),
+      period_from: row.period === "CM" ? calendar.asOf : calendar.nmStart,
+      period_to: row.period === "CM" ? calendar.cmEnd : calendar.nmEnd,
+      group_related: Boolean(row.group_id) || Boolean(row.material_id && groupMemberIds.has(row.material_id)),
+      keep_qty: keepAt(row.period, row.material_id, row.group_id).qty,
+      keep_max_days: keepAt(row.period, row.material_id, row.group_id).days,
       mother_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.mother ?? "")).filter(Boolean).join("; ") || null,
       child_group: unique(prodshadesOf(row).map((id) => productGroups.get(id)?.child ?? "")).filter(Boolean).join("; ") || null,
       material_document_name: documentName(row.material_id),

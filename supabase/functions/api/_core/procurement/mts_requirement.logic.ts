@@ -619,6 +619,25 @@ export function groupCoveredBy(
 export type DisplayUnit = { uom_code: string; base_per_unit: number };
 
 /**
+ * MM03 may leave Supply UoM blank while its default vendor-material UoM is
+ * maintained separately.  Both describe the normal order unit; an explicitly
+ * entered Supply UoM remains authoritative.  Do not use a non-default option.
+ */
+export function preferredVendorOrderUom(
+  supplyUom: string | null | undefined,
+  vendorUoms: readonly { uom_code?: string | null; is_default?: boolean | null }[],
+): string | null {
+  const supply = String(supplyUom ?? "").trim().toUpperCase();
+  if (supply) return supply;
+  const defaults = vendorUoms
+    .filter((row) => row.is_default === true)
+    .map((row) => String(row.uom_code ?? "").trim().toUpperCase())
+    .filter(Boolean)
+    .sort();
+  return defaults[0] ?? null;
+}
+
+/**
  * Display unit of a material: Material Settings Order UoM, else a company vendor's MM03 Supply
  * UoM (first with a verified conversion, in code order), else none = base UoM. Only a unit with a
  * fixed master conversion counts, so a displayed number always converts back exactly.
