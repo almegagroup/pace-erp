@@ -313,30 +313,29 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   // Owner 2026-10-28: for the WHOLE horizon, month by month; only ACTUAL stock may be issued (CSN / PO not yet received, an ETA that passed or is
   // missing, and an unordered lot are listed apart as "do not issue against"). Companies without the month plan fall back to the CM + NM rows.
   const storeItems = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
-  const planRows = companies.flatMap((c) => (c.store_plan?.rows ?? []).map((r) => ({ ...r, company: companyLabel(c) })));
-  if (planRows.length > 0) {
-    // Owner 2026-10-28: the Store sheet is SIMPLE — Period · Item · For · Issue now · Wait for receipt · Keep aside after this period · Note.
-    addTable(storeItems, [
-      { label: "Company", key: "company" }, { label: "Use from", value: (r) => dayShort(r.period_from) }, { label: "Use to", value: (r) => dayShort(r.period_to) },
-      { label: "Item", key: "item" }, { label: "Material group", key: "group" },
-      { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" },
-      { label: "Issue now", value: (r) => num(r.use_stock), num: true },
-      { label: "Wait for receipt", value: (r) => num(storeWaitQty(r)) || null, num: true },
-      { label: "Keep aside after this period", value: (r) => num(r.keep_qty), num: true }, { label: "UoM", key: "uom" },
-      { label: "Note", value: (r) => simpleStoreNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot, not_backed: r.not_backed }) },
-    ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
-    widths(storeItems, [26, 11, 11, 40, 28, 24, 40, 14, 16, 18, 7, 80]);
-  } else addTable(storeItems, [
-    { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
+  // Owner 2026-10-28: EVERY company gets its rows. A company without the month-by-month plan falls back to its CM + NM rows, shaped like the
+  // plan rows (it used to be dropped whenever another company had the month plan).
+  const planRows = companies.flatMap((c) => {
+    if ((c.store_plan?.rows ?? []).length > 0) return c.store_plan.rows.map((r) => ({ ...r, company: companyLabel(c) }));
+    return aggregateStoreItems((c.store ?? []).filter((x) => x.group_related !== false).map((x) => ({
+      period: x.period, period_order: String(x.period).startsWith("CM") ? 0 : 1, period_from: x.period_from, period_to: x.period_to, item: x.material, key_id: x.material_key ?? x.material,
+      group: x.group ?? "", mother: x.mother_group ?? "", child: x.child_group ?? "", qty: x.from_stock, not_backed: x.not_backed, uom: x.uom, keep: x.keep_qty ?? null, keep_days: x.keep_max_days ?? null,
+    }))).map((r) => ({
+      company: companyLabel(c), period: r.period, period_from: r.period_from, period_to: r.period_to, item: r.item, group: r.group, mother_group: r.mother, child_group: r.child,
+      uom: r.uom, use_stock: r.qty, use_arrival: 0, use_assumed: 0, use_lot: 0, keep_qty: r.keep, keep_max_days: r.keep_days, not_backed: r.not_backed,
+    }));
+  });
+  // The Store sheet is SIMPLE — Use from · Use to · Item · groups · Issue now · Wait for receipt · Keep aside after this period · Note.
+  addTable(storeItems, [
+    { label: "Company", key: "company" }, { label: "Use from", value: (r) => dayShort(r.period_from) }, { label: "Use to", value: (r) => dayShort(r.period_to) },
     { label: "Item", key: "item" }, { label: "Material group", key: "group" },
-    { label: "Use in this period", value: (r) => num(r.qty), num: true }, { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep), num: true },
-    { label: "Max days", value: (r) => days(r.keep_days), num: true }, { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
-    { label: "PO21 parent group", key: "mother" }, { label: "Child group(s)", key: "child" },
-  ], companies.flatMap((c) => aggregateStoreItems((c.store ?? []).filter((s) => s.group_related !== false).map((s) => ({
-    period: s.period, period_order: String(s.period).startsWith("CM") ? 0 : 1, period_from: s.period_from, period_to: s.period_to, item: s.material, key_id: s.material_key ?? s.material,
-    group: s.group ?? "", mother: s.mother_group ?? "", child: s.child_group ?? "", qty: s.from_stock, not_backed: s.not_backed, uom: s.uom, keep: s.keep_qty ?? null, keep_days: s.keep_max_days ?? null,
-  }))).map((r) => ({ ...r, company: companyLabel(c) }))), { color: (r) => (r.not_backed > 0 ? RED : null) });
-  if (planRows.length === 0) widths(storeItems, [26, 16, 12, 12, 40, 28, 16, 22, 10, 14, 7, 24, 40]);
+    { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" },
+    { label: "Issue now", value: (r) => num(r.use_stock), num: true },
+    { label: "Wait for receipt", value: (r) => num(storeWaitQty(r)) || null, num: true },
+    { label: "Keep aside after this period", value: (r) => num(r.keep_qty), num: true }, { label: "UoM", key: "uom" },
+    { label: "Note", value: (r) => simpleStoreNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot, not_backed: r.not_backed }) },
+  ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
+  widths(storeItems, [26, 11, 11, 40, 28, 24, 40, 14, 16, 18, 7, 80]);
   const excessRows = companies.flatMap((c) => (c.store_plan?.excess ?? []).map((e) => ({ ...e, company: companyLabel(c) })));
   const storeExcess = wb.addWorksheet(sheetName("STORE_EXCESS", used));
   addTable(storeExcess, [

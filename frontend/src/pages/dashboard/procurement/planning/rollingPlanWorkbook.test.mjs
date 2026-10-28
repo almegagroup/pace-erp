@@ -115,8 +115,8 @@ test("STORE tabs: items by period with the child groups of one parent on ONE row
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, store, store_transfers }], asOf: "2026-10-28" });
   const items = wb.getWorksheet("STORE_INSTRUCTIONS");
   assert.equal(items.rowCount, 2, "header + ONE row for both child groups");
-  assert.equal(items.getRow(2).getCell(7).value, 140);
-  assert.equal(items.getRow(2).getCell(13).value, "EXT PUTTY; INT PUTTY");
+  assert.equal(items.getRow(2).getCell(8).value, 140, "Issue now");
+  assert.equal(items.getRow(2).getCell(7).value, "EXT PUTTY; INT PUTTY", "child groups on one row");
   const transfers = wb.getWorksheet("STORE_TRANSFERS");
   assert.equal(transfers.rowCount, 3);
   assert.deepEqual([transfers.getRow(2).getCell(5).value, transfers.getRow(2).getCell(6).value, transfers.getRow(2).getCell(7).value], ["R003", "R001", 600]);
@@ -162,5 +162,21 @@ test("STORE tabs from the month-by-month plan: actual stock apart from unreceive
   const excess = wb.getWorksheet("STORE_EXCESS");
   assert.equal(excess.rowCount, 2);
   assert.equal(excess.getRow(2).getCell(5).value, 12000);
+  await wb.xlsx.writeBuffer();
+});
+
+test("STORE_INSTRUCTIONS: every company gets its rows, also when only another company has the month plan", async () => {
+  const withPlan = { ...company("a", "Almeha Coatings"), store_plan: { rows: [
+    { period: "October 2026 (from 28)", period_order: 0, period_from: "2026-10-28", period_to: "2026-10-31", item: "TS U2121", material_key: "m1", group: "MHEC", mother_group: "PUTTY", child_group: "EXT PUTTY", uom: "KG", use_stock: 400, use_arrival: 0, use_assumed: 0, use_lot: 0, keep_qty: 900, keep_max_days: 60, not_backed: 0 },
+  ], excess: [] } };
+  const fallbackOnly = { ...company("b", "Jayashree Industries"), store_plan: { rows: [], excess: [] },
+    store: [{ period: "CM (rest)", period_from: "2026-10-28", period_to: "2026-10-31", product: "Putty", group: "ACID", mother_group: "PUTTY", child_group: "EXT PUTTY", material: "Tartaric Acid", material_key: "m2", uom: "KG", from_stock: 120, not_backed: 5, keep_qty: 300, keep_max_days: 55, group_related: true }] };
+  const wb = buildRollingPlanWorkbook({ companies: [withPlan, fallbackOnly], asOf: "2026-10-28" });
+  const items = wb.getWorksheet("STORE_INSTRUCTIONS");
+  const companies = [];
+  items.eachRow((row, n) => { if (n > 1) companies.push(String(row.getCell(1).value)); });
+  assert.deepEqual(companies, ["Almeha Coatings", "Jayashree Industries"], "both companies are listed");
+  assert.equal(items.getRow(3).getCell(8).value, 120, "the fallback company's Issue now");
+  assert.equal(items.getRow(3).getCell(10).value, 300, "and its Keep aside");
   await wb.xlsx.writeBuffer();
 });
