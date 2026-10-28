@@ -10,7 +10,7 @@
  */
 import ExcelJS from "exceljs";
 import { flowRows, matrixGrid, waterfallVerdict } from "./mtsWaterfall.js";
-import { aggregateStoreItems, issueNote } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, periodSpan, simpleStoreNote, storeForText, storeWaitQty } from "./mtsStoreInstruction.js";
 
 const TITLE_FILL = "FFFBBC04";   // yellow block title, as in the old file
 const HEAD_FILL = "FFFFE699";    // light yellow column header
@@ -315,18 +315,16 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   const storeItems = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
   const planRows = companies.flatMap((c) => (c.store_plan?.rows ?? []).map((r) => ({ ...r, company: companyLabel(c) })));
   if (planRows.length > 0) {
+    // Owner 2026-10-28: the Store sheet is SIMPLE — Period · Item · For · Issue now · Wait for receipt · Keep aside after this period · Note.
     addTable(storeItems, [
-      { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
-      { label: "Item", key: "item" }, { label: "Material group", key: "group" },
-      { label: "Issue from stock now", value: (r) => num(r.use_stock), num: true },
-      { label: "After receipt (CSN/PO, ETA valid)", value: (r) => num(r.use_arrival), num: true },
-      { label: "ETA passed / none (not received)", value: (r) => num(r.use_assumed), num: true },
-      { label: "Planned lot (not ordered)", value: (r) => num(r.use_lot), num: true },
-      { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep_qty), num: true }, { label: "Max days", value: (r) => days(r.keep_max_days), num: true },
-      { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
-      { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" }, { label: "Note", value: (r) => issueNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot }) },
+      { label: "Company", key: "company" }, { label: "Period", value: (r) => periodSpan(r.period_from, r.period_to) },
+      { label: "Item", key: "item" }, { label: "For (product group)", value: (r) => storeForText({ mother: r.mother_group, child: r.child_group, group: r.group }) },
+      { label: "Issue now", value: (r) => num(r.use_stock), num: true },
+      { label: "Wait for receipt", value: (r) => num(storeWaitQty(r)) || null, num: true },
+      { label: "Keep aside after this period", value: (r) => num(r.keep_qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Note", value: (r) => simpleStoreNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot, not_backed: r.not_backed }) },
     ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
-    widths(storeItems, [26, 24, 12, 12, 40, 28, 16, 18, 18, 16, 20, 10, 14, 7, 24, 40, 50]);
+    widths(storeItems, [26, 18, 40, 40, 14, 16, 18, 7, 80]);
   } else addTable(storeItems, [
     { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
     { label: "Item", key: "item" }, { label: "Material group", key: "group" },

@@ -98,3 +98,31 @@ export function issueNote(row) {
   if (row.use_lot > 0.0005) parts.push("a lot nobody has ordered");
   return `Do not issue against: ${parts.join(", ")}.`;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Simple Store view (owner 2026-10-28: the full table confused users).
+// One row: Period · Item · For (PO21 group) · Issue now · Wait for receipt · Keep after this period · UoM · Note.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** "PUTTY (TRUECARE+SUPREMA; WATERPROOF)": the PO21 parent group with its child groups, else the planning group. */
+export function storeForText(row) {
+  const mother = row.mother ?? row.mother_group ?? "";
+  const child = row.child ?? row.child_group ?? "";
+  if (mother) return child ? `${mother} (${child})` : mother;
+  return row.group ?? "";
+}
+
+/** Quantity that must wait for a receipt: a CSN/PO not yet received, an ETA that passed or is missing, an unordered lot. */
+export function storeWaitQty(row) {
+  return (row.use_arrival ?? 0) + (row.use_assumed ?? 0) + (row.use_lot ?? 0);
+}
+
+/** One plain sentence per row, quantities formatted by `fmt`. Empty when Store can issue everything now. */
+export function simpleStoreNote(row, fmt = (q) => String(q)) {
+  const parts = [];
+  if ((row.use_arrival ?? 0) > 0.0005) parts.push(`${fmt(row.use_arrival)} only after its CSN/PO is received`);
+  if ((row.use_assumed ?? 0) > 0.0005) parts.push(`${fmt(row.use_assumed)} depends on a CSN/PO whose ETA passed or is missing: do not issue`);
+  if ((row.use_lot ?? 0) > 0.0005) parts.push(`${fmt(row.use_lot)} depends on a lot nobody has ordered: do not issue`);
+  if ((row.not_backed ?? 0) > 0.0005) parts.push(`${fmt(row.not_backed)} is not covered by any stock or order`);
+  return parts.join(" · ");
+}

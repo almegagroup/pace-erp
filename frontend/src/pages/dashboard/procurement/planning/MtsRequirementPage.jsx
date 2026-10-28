@@ -21,7 +21,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import { usePo22ColumnLayouts } from "./usePo22ColumnLayouts.js";
-import { aggregateStoreItems, issueNote, normaliseStoreRows, periodSpan, planItemRows, transferRows } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, issueNote, normaliseStoreRows, periodSpan, planItemRows, simpleStoreNote, storeForText, storeWaitQty, transferRows } from "./mtsStoreInstruction.js";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -2004,6 +2004,18 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
   const itemRows = useMemo(() => (source?.store_plan?.rows ? planItemRows(source.store_plan.rows) : aggregateStoreItems(normaliseStoreRows(source?.store_rows)).map((r) => ({ ...r, use_stock: r.qty, use_arrival: 0, use_assumed: 0, use_lot: 0 }))), [source]);
   const excessRows = useMemo(() => [...(source?.store_plan?.excess ?? [])].sort((a, b) => a.period_order - b.period_order || String(a.material_name).localeCompare(String(b.material_name))), [source]);
   const transfers = useMemo(() => transferRows(source?.store_transfers), [source]);
+  // Owner 2026-10-28: the default Store view is SIMPLE — Period · Item · For · Issue now · Wait for receipt · Keep after this period · Note.
+  const keyOf = (r) => (r.key_id?.startsWith("group:") ? null : r.key_id);
+  const simpleColumns = [
+    { key: "span", label: "Period", width: "130px", render: (r) => periodSpan(r.period_from, r.period_to), copyValue: (r) => periodSpan(r.period_from, r.period_to) },
+    { key: "item", label: "Item", width: "280px", render: (r) => (r.key_id?.startsWith("group:") ? <span className="text-rose-700">{r.item}</span> : r.item), copyValue: (r) => r.item },
+    { key: "for", label: "For (product group)", width: "280px", render: (r) => dash(storeForText(r)), copyValue: (r) => storeForText(r) },
+    { key: "issue_now", label: "Issue now", width: "120px", align: "right", render: (r) => <span className="font-semibold text-emerald-800">{sq(keyOf(r), r.use_stock)}</span>, copyValue: (r) => sq(keyOf(r), r.use_stock) },
+    { key: "wait", label: "Wait for receipt", width: "130px", align: "right", render: (r) => (storeWaitQty(r) > 0.0005 ? <span className="text-amber-800">{sq(keyOf(r), storeWaitQty(r))}</span> : ""), copyValue: (r) => (storeWaitQty(r) > 0.0005 ? sq(keyOf(r), storeWaitQty(r)) : "") },
+    { key: "keep", label: "Keep aside after this period", width: "180px", align: "right", render: (r) => (r.keep === null || r.keep === undefined ? "—" : <span className="font-semibold text-sky-800">{sq(keyOf(r), r.keep)}</span>), copyValue: (r) => (r.keep === null || r.keep === undefined ? "" : sq(keyOf(r), r.keep)) },
+    { key: "uom", label: "UoM", width: "60px", render: (r) => dash(du.uom(keyOf(r), r.uom)), copyValue: (r) => du.uom(keyOf(r), r.uom) },
+    { key: "note", label: "Note", width: "420px", render: (r) => simpleStoreNote(r, (q) => sq(keyOf(r), q)), copyValue: (r) => simpleStoreNote(r, (q) => sq(keyOf(r), q)) },
+  ];
   const itemColumns = [
     { key: "period", label: "Period", width: "130px" },
     { key: "span", label: "Use from → to", width: "130px", render: (r) => periodSpan(r.period_from, r.period_to), copyValue: (r) => periodSpan(r.period_from, r.period_to) },
@@ -2072,8 +2084,8 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
     { key: "executable_qty", label: "From physical stock", width: "140px", align: "right", render: (g) => fmtQty(g.executable_qty), copyValue: (g) => g.executable_qty },
     { key: "not_backed_qty", label: "Not yet backed", width: "140px", align: "right", render: (g) => fmtQty(g.not_backed_qty), copyValue: (g) => g.not_backed_qty },
   ];
-  const columns = view === "ITEMS" ? itemColumns : view === "EXCESS" ? excessColumns : view === "TRANSFERS" ? transferColumns : view === "PRODUCT" ? productColumns : view === "MATERIAL" ? materialColumns : groupColumnsSummary;
-  const gridRows = view === "ITEMS" ? itemRows : view === "EXCESS" ? excessRows : view === "TRANSFERS" ? transfers : view === "PRODUCT" ? rows : view === "MATERIAL" ? materialSummary : groupSummary;
+  const columns = view === "ITEMS" ? simpleColumns : view === "ITEMS_FULL" ? itemColumns : view === "EXCESS" ? excessColumns : view === "TRANSFERS" ? transferColumns : view === "PRODUCT" ? productColumns : view === "MATERIAL" ? materialColumns : groupColumnsSummary;
+  const gridRows = view === "ITEMS" || view === "ITEMS_FULL" ? itemRows : view === "EXCESS" ? excessRows : view === "TRANSFERS" ? transfers : view === "PRODUCT" ? rows : view === "MATERIAL" ? materialSummary : groupSummary;
 
   async function exportExcel() {
     try {
@@ -2111,20 +2123,26 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
             {(runsQ.data?.rows ?? []).map((r) => <option key={r.id} value={r.id}>{new Date(r.created_at).toLocaleString()} · as-of {r.as_of} · {r.created_by_name}</option>)}
           </select>
         </label>
-        {["ITEMS", "EXCESS", "TRANSFERS", "PRODUCT", "MATERIAL", "GROUP"].map((option) => (
+        {["ITEMS", "ITEMS_FULL", "EXCESS", "TRANSFERS", "PRODUCT", "MATERIAL", "GROUP"].map((option) => (
           <button key={option} type="button" onClick={() => setView(option)} className={`h-8 border px-3 text-xs font-semibold ${view === option ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"}`}>
-            {option === "ITEMS" ? "Items by period" : option === "EXCESS" ? "Excess left" : option === "TRANSFERS" ? `Transfers (${transfers.length})` : option === "PRODUCT" ? "Product-wise (detail)" : option === "MATERIAL" ? "Material summary" : "Group summary"}
+            {option === "ITEMS" ? "Items by period" : option === "ITEMS_FULL" ? "Items — full detail" : option === "EXCESS" ? "Excess left" : option === "TRANSFERS" ? `Transfers (${transfers.length})` : option === "PRODUCT" ? "Product-wise (detail)" : option === "MATERIAL" ? "Material summary" : "Group summary"}
           </button>
         ))}
         <button type="button" onClick={() => void exportExcel()} disabled={!source} className="h-8 border border-emerald-600 bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Excel</button>
       </div>
+      {view === "ITEMS" ? (
+        <p className="text-xs text-slate-600">
+          <strong>Issue now</strong> = Store may issue this from stock it has today. <strong>Wait for receipt</strong> = do not issue yet; it depends on stock still to arrive.
+          <strong> Keep aside</strong> = what must stay reserved for that group after this period&apos;s use (it is not part of Issue now); it covers up to the group&apos;s Max days of its demand.
+        </p>
+      ) : null}
       <p className="text-xs text-slate-500">
         &quot;Use first from&quot; is a planning-only FEFO instruction: Opening Stock is valid for 120 days from its opening-stock date; GRN uses its recorded expiry/life or GRN date + 120 days. It does not post or verify a physical issue. &quot;Not yet backed&quot; depends on future arrivals or is short: never issue against it. If the production mix changes, follow the row of the product actually produced; shared stock cannot serve every product in full.
       </p>
-      {source && !hasPlan && (view === "ITEMS" || view === "EXCESS") ? (
+      {source && !hasPlan && (view === "ITEMS" || view === "ITEMS_FULL" || view === "EXCESS") ? (
         <p className="border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">This saved run is older than the month-by-month Store plan: it shows only this month and next, and its quantities are the older &quot;from physical stock&quot; figures. Calculate live for the whole horizon.</p>
       ) : null}
-      <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={gridRows} rowKey={(r) => (view === "ITEMS" ? r.key : view === "EXCESS" ? `${r.period}|${r.material_id}` : view === "TRANSFERS" ? `${r.by}|${r.material_id}|${r.from}|${r.to}` : view === "PRODUCT" ? `${r.pool_key}|${r.period}|${r.material_id ?? "rest"}|${r.receipt_reference ?? "none"}|${r.receipt_valid_until ?? ""}` : view === "MATERIAL" ? r.key : r.group_id)} emptyMessage={(runId ? runQ.isLoading : liveQ.isLoading) ? "Loading…" : "No demand in CM + NM."} maxHeight="calc(100vh - 340px)" />
+      <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={gridRows} rowKey={(r) => (view === "ITEMS" || view === "ITEMS_FULL" ? r.key : view === "EXCESS" ? `${r.period}|${r.material_id}` : view === "TRANSFERS" ? `${r.by}|${r.material_id}|${r.from}|${r.to}` : view === "PRODUCT" ? `${r.pool_key}|${r.period}|${r.material_id ?? "rest"}|${r.receipt_reference ?? "none"}|${r.receipt_valid_until ?? ""}` : view === "MATERIAL" ? r.key : r.group_id)} emptyMessage={(runId ? runQ.isLoading : liveQ.isLoading) ? "Loading…" : "No demand in CM + NM."} maxHeight="calc(100vh - 340px)" />
     </div>
   );
 }

@@ -150,10 +150,14 @@ test("STORE tabs from the month-by-month plan: actual stock apart from unreceive
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, store_plan }], asOf: "2026-10-28" });
   const items = wb.getWorksheet("STORE_INSTRUCTIONS");
   assert.equal(items.rowCount, 3);
-  assert.equal(items.getRow(1).getCell(7).value, "Issue from stock now");
-  assert.deepEqual([items.getRow(2).getCell(7).value, items.getRow(2).getCell(8).value], [400, 0], "October is actual stock");
-  assert.deepEqual([items.getRow(3).getCell(7).value, items.getRow(3).getCell(8).value, items.getRow(3).getCell(9).value, items.getRow(3).getCell(10).value], [0, 600, 150, 50], "November depends on receipts");
-  assert.match(String(items.getRow(3).getCell(17).value), /Do not issue against: a CSN\/PO not received yet, a piece whose ETA passed or is missing, a lot nobody has ordered/);
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map((c) => items.getRow(1).getCell(c).value),
+    ["Company", "Period", "Item", "For (product group)", "Issue now", "Wait for receipt", "Keep aside after this period", "UoM", "Note"]);
+  assert.equal(items.getRow(2).getCell(4).value, "PUTTY (EXT PUTTY; INT PUTTY)", "parent group with its children on one row");
+  assert.deepEqual([items.getRow(2).getCell(5).value, items.getRow(2).getCell(6).value, items.getRow(2).getCell(7).value], [400, null, 900], "October is actual stock; 900 stays aside");
+  assert.deepEqual([items.getRow(3).getCell(5).value, items.getRow(3).getCell(6).value], [0, 800], "November: nothing now, 800 waits for receipts");
+  assert.match(String(items.getRow(3).getCell(9).value), /600 only after its CSN\/PO is received/);
+  assert.match(String(items.getRow(3).getCell(9).value), /150 depends on a CSN\/PO whose ETA passed or is missing: do not issue/);
+  assert.match(String(items.getRow(3).getCell(9).value), /50 depends on a lot nobody has ordered/);
   const excess = wb.getWorksheet("STORE_EXCESS");
   assert.equal(excess.rowCount, 2);
   assert.equal(excess.getRow(2).getCell(5).value, 12000);
