@@ -6919,3 +6919,28 @@ Open / blocked: Google Sheets not reachable (legacy formulas UNRESOLVED for Pror
 - Verification: PO22 Deno tests 20/20 (including Pack BOM outer-pack trace); `deno check` logic and
   handler clean; focused PO22 frontend ESLint clean; Vite production build passes. No DB action,
   deployment, ACL action, or merge was performed.
+
+---
+
+### 2026-10-28 — CMP003/CMP005 *209 CTG Label 85X70 operational correction (Codex) — PROD COMPLETE
+
+- **Rule applied:** this was an operational business-data repair, so it was performed through
+  direct MCP SQL in production under R-04; no migration was created or applied. The production
+  transaction was all-or-nothing and retained the immutable `stock_ledger` guard.
+- **Scope:** exactly 18 active Pack BOM INPUT rows — 9 in CMP003 and 9 in CMP005 — for `Label
+  85X70 MM` on active `*209` CTG SKUs were changed from `0.11 NOS` to `20 NOS`. The ribbon line
+  (PM-00025) was explicitly re-read as unchanged at `0.11 MTR` in all 18 BOMs.
+- **Historic CMP003 repair:** 18 finalized PMTS Packing POs were affected. Their live Packing PO
+  label lines now carry `qty_per_pack=20`, standard total `36,000`, and actual total `36,000`.
+  The old linked immutable ledger issues totalled `79.2` labels, so 18 traceable P261 correction
+  items for `35,920.8` labels were appended under Material Document `00002970/2026-27`, each
+  referencing its original `PACK_PO`; their stock-document remarks identify this correction.
+  Net ledger issue is therefore exactly `36,000` labels.
+- **Verification:** the affected CMP003 issue-location snapshot is `13,931.2`; direct
+  ledger-to-snapshot reconciliation returns variance `0`. The global health check has seven
+  unrelated pre-existing snapshot-versus-ledger exceptions, but the corrected material/location
+  is a verified match; no negative stock, orphan ledger row, or document-without-ledger finding
+  was reported.
+- **Dev note:** Dev contains no matching CMP003/CMP005 business fixture, so only the transaction
+  shape/schema path could be validated there; the owner-authorised production repair and its
+  production re-read are the authoritative operational evidence.
