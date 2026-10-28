@@ -446,3 +446,29 @@ D9 (reschedule feasibility window), D7 / D8 (event log, Material × Level matrix
 ### Still open
 - Live run on PROD data through the real handlers (needs deployment; the settings table must be created on PROD first).
 - The "narrow level first" guarantee is by order of use and by advice; an Exclusive level can still show a **WAITING** event when the shared material was drawn by a group earlier (see the 15 Dec top-up in the example run).
+
+---
+
+## 17. Store instructions — what Store sees (owner 2026-10-28)
+
+Store needs two things only:
+
+1. **Items by period** — columns **Period · Item · Material group · Quantity · PO21 parent group · Child group(s)**. The child groups of ONE parent
+   group that use the same item are shown **together on one row** (not one row per child group). Quantity is the amount to issue from
+   physical stock; "Not yet backed" sits beside it (never issue against it). Rows follow the waterfall: the item/lot order inside a group is the
+   engine's (least-shared material first, FEFO), so Store does not need to know about levels or the pool.
+2. **Transfers** — **Transfer by · For period · Item · From · To · Quantity**: `R003` (the transfer-source store) → `R001` / `R002`, and
+   `R001` ↔ `R002`, how much and by when.
+
+Implementation: `mts_store_instruction.logic.ts` (`scheduleStoreTransfers`, 4 tests; a shop floor `S00n` is fed from `R00n`; P stores and others are
+not part of the R advice), payload `store_transfers` (planning + rolling plan), `mtsStoreInstruction.js` (`aggregateStoreItems`, 3 tests),
+Store Report tab views *Items by period* (default) · *Transfers* · Product-wise (detail) · Material summary · Group summary, Excel tabs
+`STORE_INSTRUCTIONS` (items), `STORE_TRANSFERS`, `STORE_DETAIL` (the old product-wise rows).
+
+Transfer rule, per material, period by period (current month's rest, then next month): a store whose stock does not cover its need receives first
+from the TRANSFER-SOURCE stores (role in the company location policy), then from a peer R store's **spare** (its stock minus what it still needs
+itself in this and later periods); each store's stock falls by its need after each period; "by" = the first day of the period. Need of a store =
+the demand of the lines located there (backed + not yet backed). Advisory only: nothing is posted.
+
+Not done yet: a live run on PROD data through the handlers (stock by location, location roles); finer dates than the period start (the first day the
+store would run out inside a period) — to be added if Store wants it.

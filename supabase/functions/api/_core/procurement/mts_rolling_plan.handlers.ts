@@ -390,6 +390,10 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       demand_label: plan.demand_version.label,
       bulk_rm_excluded: bulkRm.size,
       summary, blocks, requirement, buys, store, arrivals, explain,
+      // Owner 2026-10-28: R003 -> R001 / R002 and R001 <-> R002, how much and by when.
+      store_transfers: plan.store_transfers.map((t) => ({
+        material: t.material_name, uom: t.uom, period: t.period_label, from: t.from, to: t.to, qty: dq(t.material_id, t.qty), by: t.by,
+      })),
       generated_at: new Date().toISOString(),
     }, ctx.request_id, req);
   } catch (error) {

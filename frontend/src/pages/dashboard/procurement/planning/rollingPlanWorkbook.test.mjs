@@ -24,7 +24,7 @@ const company = (id, name, extra = {}) => ({
 test("rolling plan workbook: every tab, both companies, PLAN totals per group", async () => {
   const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings"), company("b", "Jayashree Industries")], asOf: "2026-10-21" });
   const names = wb.worksheets.map((s) => s.name);
-  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
+  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
   const buffer = await wb.xlsx.writeBuffer();
   assert.ok(buffer.byteLength > 5000, "valid xlsx written");
   const rm = wb.getWorksheet("RM_PLANNING");
@@ -102,5 +102,24 @@ test("WATERFALL tabs: one sentence per family, the levels, the flow and who hold
   const heldFor = [];
   holds.eachRow((row, n) => { if (n > 1) heldFor.push(String(row.getCell(5).value)); });
   assert.deepEqual(heldFor, ["Exclusive — Gabrosa", "MHEC", "Pool (excess)", "TOTAL STOCK"]);
+  await wb.xlsx.writeBuffer();
+});
+
+test("STORE tabs: items by period with the child groups of one parent on ONE row, and the R-store transfers", async () => {
+  const base = company("a", "Almeha Coatings");
+  const store = [
+    { period: "CM (rest)", mother_group: "PUTTY", child_group: "EXT PUTTY", product: "P1", source: "S1", line_type: "GROUP", group: "ACID", material: "Tartaric Acid", uom: "KG", demand_qty: 100, from_stock: 100, not_backed: 0 },
+    { period: "CM (rest)", mother_group: "PUTTY", child_group: "INT PUTTY", product: "P2", source: "S2", line_type: "GROUP", group: "ACID", material: "Tartaric Acid", uom: "KG", demand_qty: 50, from_stock: 40, not_backed: 10 },
+  ];
+  const store_transfers = [{ material: "Tartaric Acid", uom: "KG", period: "CM (rest)", from: "R003", to: "R001", qty: 600, by: "2026-10-28" }, { material: "Tartaric Acid", uom: "KG", period: "NM", from: "R001", to: "R002", qty: 150, by: "2026-11-01" }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, store, store_transfers }], asOf: "2026-10-28" });
+  const items = wb.getWorksheet("STORE_INSTRUCTIONS");
+  assert.equal(items.rowCount, 2, "header + ONE row for both child groups");
+  assert.equal(items.getRow(2).getCell(5).value, 140);
+  assert.equal(items.getRow(2).getCell(9).value, "EXT PUTTY; INT PUTTY");
+  const transfers = wb.getWorksheet("STORE_TRANSFERS");
+  assert.equal(transfers.rowCount, 3);
+  assert.deepEqual([transfers.getRow(2).getCell(5).value, transfers.getRow(2).getCell(6).value, transfers.getRow(2).getCell(7).value], ["R003", "R001", 600]);
+  assert.ok(wb.getWorksheet("STORE_DETAIL"), "the old product-wise rows stay as STORE_DETAIL");
   await wb.xlsx.writeBuffer();
 });

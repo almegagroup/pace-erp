@@ -39,6 +39,7 @@ import { interestPctAt } from "./mts_planning_cost.logic.ts";
 import { resolveFxRate } from "./mts_planning_cost.handlers.ts";
 import { buildPlanningAiPrompt, PO22_AI_MAX_PROMPT_CHARS } from "./mts_planning_ai.logic.ts";
 import { loadRescheduleContext } from "./mts_reschedule_window.handlers.ts";
+import { rStoreKey, scheduleStoreTransfers } from "./mts_store_instruction.logic.ts";
 import { rescheduleVerdict } from "./mts_reschedule_window.logic.ts";
 import { AiProviderError, generateAiText } from "../ai/ai.provider.ts";
 
@@ -774,6 +775,39 @@ export async function computePlanning(p: PlanningParams) {
   const eventRef = new Map<string, string>();
   for (const row of req.output.rows) row.inbound_events.forEach((event, index) => eventRef.set(`A|${row.material_id}|${index}|${event.reference}`, event.reference));
 
+  // Owner 2026-10-28 — Store transfers: R003 (transfer-source store) -> R001 / R002 and R001 <-> R002, how much and by when.
+  // Need of a store in a period = what the lines located there use (shop floor S00n is fed from R00n); stock = UNRESTRICTED per location.
+  const storeTransfers = await (async () => {
+    const poolStore = new Map<string, string>();
+    for (const row of req.output.rows) for (const pool of row.pools) {
+      const store = pool.storage_location_id ? rStoreKey(locationLabels.get(pool.storage_location_id) ?? "") : null;
+      if (store) poolStore.set(pool.pool_key, store);
+    }
+    const needs = req.output.store_rows.flatMap((row) => {
+      const store = poolStore.get(row.pool_key);
+      const qty = row.executable_qty + row.not_backed_qty;
+      return row.material_id && store && qty > 0.000001 ? [{ material_id: row.material_id, period: row.period, store, qty }] : [];
+    });
+    if (needs.length === 0) return [];
+    const materialIds = unique(needs.map((n) => n.material_id));
+    const stockRows = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
+      .select("material_id, storage_location_id, quantity").eq("company_id", p.companyId).eq("stock_type_code", "UNRESTRICTED").in("material_id", chunk));
+    const stockLabels = await loadLocationLabels(unique(stockRows.map((r) => text(r.storage_location_id))));
+    const storeOfLocation = (id: string) => rStoreKey(stockLabels.get(id) ?? locationLabels.get(id) ?? "");
+    const sourceStores = new Set<string>();
+    for (const [locationId, role] of req.locationRoles ?? []) {
+      const store = role === "TRANSFER_SOURCE" ? storeOfLocation(locationId) : null;
+      if (store) sourceStores.add(store);
+    }
+    const stocks = stockRows.flatMap((r) => {
+      const store = storeOfLocation(text(r.storage_location_id));
+      return store ? [{ material_id: text(r.material_id), store, qty: Number(r.quantity ?? 0) }] : [];
+    });
+    return scheduleStoreTransfers({
+      needs, stocks, sourceStores,
+      periods: [{ period: "CM", start: calendar.asOf }, { period: "NM", start: calendar.nmStart }],
+    }).map((t2) => ({ ...t2, material_name: nameOf(t2.material_id), material_code: codeOf(t2.material_id), uom: uom(t2.material_id), period_label: storePeriodLabel(t2.period as "CM" | "NM", calendar) }));
+  })();
   const activeMaterials = new Set(projection.rows.filter((r) => r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0).map((r) => r.material_id));
   const payload = {
     company_id: p.companyId,
@@ -924,6 +958,7 @@ export async function computePlanning(p: PlanningParams) {
     transfer_fed_material_ids: [...transferFed],
     bulk_material_ids: [...bulkMaterials],
     bulk_group_ids: bulkOnlyGroupIds(req.masters.groupMembers, bulkMaterials),
+    store_transfers: storeTransfers,
     store_rows: storeRowsByShelfLife.map((row) => ({
       ...row,
       period_label: storePeriodLabel(row.period, calendar),

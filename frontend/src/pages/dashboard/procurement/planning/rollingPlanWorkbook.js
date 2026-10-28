@@ -10,6 +10,7 @@
  */
 import ExcelJS from "exceljs";
 import { flowRows, matrixGrid, waterfallVerdict } from "./mtsWaterfall.js";
+import { aggregateStoreItems } from "./mtsStoreInstruction.js";
 
 const TITLE_FILL = "FFFBBC04";   // yellow block title, as in the old file
 const HEAD_FILL = "FFFFE699";    // light yellow column header
@@ -284,8 +285,25 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   ], companies.flatMap((c) => c.buys.map((b) => ({ ...b, company: companyLabel(c) }))), { color: (r) => (r.late ? RED : null) });
   widths(buy, [26, 36, 6, 12, 12, 7, 12, 30, 30, 14, 14, 30, 7, 60]);
 
-  // STORE_INSTRUCTIONS
-  const store = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
+  // STORE_INSTRUCTIONS (owner 2026-10-28): Period · Item · Group · Quantity · PO21 parent group · child group(s) — the child groups of
+  // one parent that use the same item share ONE row. STORE_TRANSFERS: R003 -> R001 / R002 and R001 <-> R002. STORE_DETAIL = the old product-wise rows.
+  const storeItems = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
+  addTable(storeItems, [
+    { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Item", key: "item" }, { label: "Material group", key: "group" },
+    { label: "Quantity", value: (r) => num(r.qty), num: true }, { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
+    { label: "PO21 parent group", key: "mother" }, { label: "Child group(s)", key: "child" },
+  ], companies.flatMap((c) => aggregateStoreItems((c.store ?? []).map((s) => ({
+    period: s.period, period_order: String(s.period).startsWith("CM") ? 0 : 1, item: s.material, key_id: s.material, group: s.group ?? "",
+    mother: s.mother_group ?? "", child: s.child_group ?? "", qty: s.from_stock, not_backed: s.not_backed, uom: s.uom,
+  }))).map((r) => ({ ...r, company: companyLabel(c) }))), { color: (r) => (r.not_backed > 0 ? RED : null) });
+  widths(storeItems, [26, 16, 40, 28, 14, 14, 7, 24, 40]);
+  const storeTransfers = wb.addWorksheet(sheetName("STORE_TRANSFERS", used));
+  addTable(storeTransfers, [
+    { label: "Company", key: "company" }, { label: "Transfer by", value: (r) => day(r.by) }, { label: "For period", key: "period" }, { label: "Item", key: "material" },
+    { label: "From", key: "from" }, { label: "To", key: "to" }, { label: "Quantity", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+  ], companies.flatMap((c) => (c.store_transfers ?? []).map((t) => ({ ...t, company: companyLabel(c) }))));
+  widths(storeTransfers, [26, 14, 18, 44, 8, 8, 14, 7]);
+  const store = wb.addWorksheet(sheetName("STORE_DETAIL", used));
   addTable(store, [
     { label: "Company", value: (r) => r.company }, { label: "Period", key: "period" },
     { label: "Parent group", value: (r) => r.mother_group ?? "" }, { label: "Child group", value: (r) => r.child_group ?? "" },
