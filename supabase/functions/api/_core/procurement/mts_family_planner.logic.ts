@@ -131,6 +131,9 @@ export type FamilyLevelEvent = {
   pool_before: number;
   pool_after: number;
   references: readonly string[];
+  /** Owner 2026-10-29: days the level's own reserve covers after this event, and the level's Min (Target) days then. Null = no demand ahead / no Min. */
+  cover_days_after?: number | null;
+  min_days?: number | null;
 };
 
 /** Material × Level snapshot after the events of a day: KG of each material held for each level, and what is left in the pool. */
@@ -170,6 +173,8 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
   level_events: readonly FamilyLevelEvent[];
   level_matrix: readonly FamilyLevelMatrix[];
   level_policies: readonly FamilyLevelPolicy[];
+  /** Owner 2026-10-29: every day a level's own reserve covers fewer days than its Min (Target) — the level is being run below its protection. */
+  level_risk: ReadonlyArray<{ day: string; level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number; min_days: number; critical_days: number | null }>;
   /** Per pool and day: group demand no member could meet (after protected stock). */
   group_unmet: ReadonlyArray<{ group_id: string; day: string; qty_base: number }>;
   /** Consumption ratio: per group and day, how much each member serves (Store instruction basis). */
@@ -383,8 +388,11 @@ type Sim = {
   levelEvents: Array<{
     day: number; kind: FamilyLevelEvent["kind"]; level_kind: FamilyLevelEvent["level_kind"]; level: number | null; material: number | null;
     qty: number; by_material: number[]; wanted: number; shortfall: number; pool_before: number; pool_after: number; references: string[];
+    cover_days_after?: number | null; min_days?: number | null;
   }>;
   matrix: Array<{ day: number; own: number[]; groups: number[][]; pool: number[]; closing: number[] }>;
+  /** Per day and level: the level's own reserve covers fewer days than its Min (Target). */
+  risk: Array<{ day: number; kind: "OWN" | "GROUP"; level: number; cover: number; min: number; critical: number | null }>;
 };
 
 /** Every material the planner sees in this input (same set the per-family run builds). */
@@ -480,6 +488,7 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     level_events: [...all("level_events")].sort((a, b) => a.day.localeCompare(b.day)),
     level_matrix: [...all("level_matrix")].sort((a, b) => a.day.localeCompare(b.day)),
     level_policies: all("level_policies"),
+    level_risk: [...all("level_risk")].sort((a, b) => a.day.localeCompare(b.day)),
     allocation_rows: [...all("allocation_rows")].sort((a, b) => a.day.localeCompare(b.day)
       || a.destination_kind.localeCompare(b.destination_kind) || String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))
       || a.material_id.localeCompare(b.material_id)),
@@ -673,6 +682,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       expired: ids.map(() => 0),
       levelEvents: [],
       matrix: [],
+      risk: [],
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
@@ -840,6 +850,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
             day: i, kind: take <= EPSILON ? "WAITING" : i === 0 ? "OPENING_RESERVE" : "TOP_UP", level_kind: "OWN", level: m, material: m,
             qty: roundQty(Math.max(0, take)), by_material: ids.map((_x, k) => (k === m ? roundQty(Math.max(0, take)) : 0)),
             wanted: roundQty(wanted), shortfall: roundQty(Math.max(0, wanted - Math.max(0, take))), pool_before: roundQty(poolBefore), pool_after: roundQty(poolOf()), references: [],
+            cover_days_after: coverDays(ownReserve[m], own[m], i), min_days: targets[m][i].target,
           });
         }
       });
@@ -903,6 +914,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
           day: i, kind: took <= EPSILON ? "WAITING" : i === 0 ? "OPENING_RESERVE" : "TOP_UP", level_kind: "GROUP", level: p, material: null,
           qty: roundQty(Math.max(0, took)), by_material: byMaterial, wanted: roundQty(wantedAtStart), shortfall: roundQty(Math.max(0, wantedAtStart - Math.max(0, took))),
           pool_before: roundQty(poolBeforeRefill), pool_after: roundQty(poolOf()), references: [],
+          cover_days_after: coverDays(purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0), pool.demand, i), min_days: groupCoverageAt(pool, i).target,
         });
       });
       // Second rotation: every genuine residual unit receives one, and only
@@ -1057,6 +1069,19 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         }
         if (need > EPSILON) s.poolFreeShort[p][i] = need;
         if (need > EPSILON) s.poolUnmet[p][i] = need;
+      });
+      // Owner 2026-10-29: end of day, how many days each level's OWN reserve still covers against its Min (Target).
+      // A level left below its Min (the pool could not refill it) is the risk a lot must prevent, day by day.
+      pools.forEach((pool, p) => {
+        const cover = coverDays(purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0), pool.demand, i);
+        const policy = groupCoverageAt(pool, i);
+        if (cover !== null && cover + 1e-9 < policy.target) s.risk.push({ day: i, kind: "GROUP", level: p, cover, min: policy.target, critical: policy.critical });
+      });
+      ids.forEach((_id, m) => {
+        const target = targets[m][i].target;
+        if (target === null || own[m].every((qty) => qty <= EPSILON)) return;
+        const cover = coverDays(ownReserve[m], own[m], i);
+        if (cover !== null && cover + 1e-9 < target) s.risk.push({ day: i, kind: "OWN", level: m, cover, min: target, critical: targets[m][i].critical });
       });
       pools.forEach((_pool, p) => {
         const bucketFree = purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0)
@@ -1644,7 +1669,13 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       material_id: event.material !== null ? ids[event.material] : null, qty: event.qty,
       by_material: Object.fromEntries(event.by_material.map((qty, m) => [ids[m], qty]).filter(([, qty]) => (qty as number) > EPSILON)),
       wanted: event.wanted, shortfall: event.shortfall, pool_before: event.pool_before, pool_after: event.pool_after, references: event.references,
+      cover_days_after: event.cover_days_after ?? null, min_days: event.min_days ?? null,
     })).sort((a, b) => a.day.localeCompare(b.day)),
+    level_risk: sim.risk.map((r) => ({
+      day: allDays[r.day], level_kind: r.kind,
+      level_id: r.kind === "OWN" ? ids[r.level] : pools[r.level].group_id,
+      cover_days: r.cover, min_days: r.min, critical_days: r.critical,
+    })),
     level_matrix: sim.matrix.map((snap) => ({
       day: allDays[snap.day],
       levels: [
@@ -1721,21 +1752,23 @@ function lastFamilyDemandDay(result: FamilyResult): string | null {
   return last;
 }
 
+/**
+ * Family-wide risk of a projection (owner 2026-10-29, the PDF's waterfall): [stock-out + unserved group days,
+ * level-days below Critical, level-days below Min]. A level-day is a day a level's OWN reserve covers fewer days than its own
+ * Min (Target) — the pool could not refill it. Falling short of Max is normal (the early warning) and is not counted.
+ * Days after the PO21 plan's last demand day carry no risk (no plan, not no use).
+ */
 function familyScore(result: FamilyResult): [number, number, number] {
-  // Owner 2026-10-29: a lot is judged by the owner's waterfall, not by member cover days. Risk = (1) stock-out or a group demand
-  // no member can serve, (2) a level that asks the pool for its top-up and the pool cannot fill it to Max (the PDF's "receipt or
-  // new order is needed" signal). Days after the PO21 plan's last demand day carry no risk (no plan, not no use).
-  let short = 0;
   const planEnd = lastFamilyDemandDay(result);
+  let short = 0;
   for (const r of result.rows) {
     if (planEnd !== null && r.day > planEnd) continue;
     if (r.closing_qty_base < -EPSILON) short += 1;
   }
   short += new Set(result.group_unmet.filter((u) => planEnd === null || u.day <= planEnd).map((u) => `${u.group_id}|${u.day}`)).size;
-  const notFilled = new Set(
-    result.level_events.filter((e) => e.shortfall > 1 && e.kind !== "OPENING_RESERVE" && (planEnd === null || e.day <= planEnd)).map((e) => `${e.level_kind}|${e.level_id}|${e.day}`),
-  ).size;
-  return [short, notFilled, 0];
+  const inPlan = result.level_risk.filter((r) => planEnd === null || r.day <= planEnd);
+  const critical = inPlan.filter((r) => r.critical_days !== null && r.cover_days + 1e-9 < r.critical_days).length;
+  return [short, critical, inPlan.length];
 }
 
 /** Family Min / Max days on a day: whole family stock before / after that day's arrivals, against the family use ahead. */
@@ -1772,15 +1805,12 @@ export type FamilyArrivalOptimum = {
    * Owner 2026-10-29: the top-up that makes the advised date the limit. For a later / right date it is the first level the pool cannot
    * fill one day after the advised date; for a prepone it is the one the current date leaves unfilled. Null when no date is advised.
    */
-  binding: { day: string; level_kind: "OWN" | "GROUP"; level_id: string; wanted: number; shortfall: number; pool_before: number; target_days: number | null; desired_days: number | null } | null;
+  binding: { day: string; min_day: string; level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number; min_days: number; critical_days: number | null; desired_days: number | null; topup: { day: string; wanted: number; shortfall: number; pool_before: number } | null } | null;
 } | null;
 
 /**
- * Owner 2026-10-22: when is a not-yet-shipped piece really needed? Dates across the horizon are
- * tried with the WHOLE family simulated (no new engine buys), so moving one member's arrival
- * shows its effect on the groups and the other members. Fewest stock-out / below-Critical /
- * below-Target member-days wins; on a tie the latest date (least money held); a prepone only when
- * strictly safer; shifts under 3 days are ignored. Min / Max days shown are the family's.
+ * Owner 2026-10-29, the PDF's rule: a level may sit below its Min (it keeps asking the pool) but must stay above its Critical.
+ * A piece is "needed" when, without it, a level goes below Critical (or stock runs out / group demand is unserved) inside the plan.
  */
 export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: string): FamilyArrivalOptimum {
   const piece = input.confirmed_arrivals.find((a) => a.source_key === pieceKey);
@@ -1788,75 +1818,82 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
   const currentEta = piece.eta_to_plant;
   const base = { ...input, plan_buys: false, trace: false };
   const runs = new Map<string, FamilyResult>();
+  const withPiece = (patch: (a: FamilyPlannerInput["confirmed_arrivals"][number]) => FamilyPlannerInput["confirmed_arrivals"][number]) =>
+    planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? patch(a) : a)) });
   const at = (eta: string) => {
     let r = runs.get(eta);
-    if (!r) {
-      r = planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? { ...a, eta_to_plant: eta } : a)) });
-      runs.set(eta, r);
-    }
+    if (!r) { r = withPiece((a) => ({ ...a, eta_to_plant: eta })); runs.set(eta, r); }
     return r;
   };
-  const cmp = (a: [number, number, number], b: [number, number, number]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-  const current = familyScore(at(currentEta));
-  let bestEta = currentEta;
-  let best = current;
-  const allHorizon = dayList(input.as_of, input.horizon_end);
-  // Owner 2026-10-28: advice never moves a piece to a day after the PO21 plan's last demand day (a tie there is meaningless).
-  const planEndDay = lastFamilyDemandDay(at(currentEta));
-  const all = planEndDay === null ? allHorizon : allHorizon.filter((d) => d <= planEndDay || d <= currentEta);
-  const consider = (day: string) => {
-    if (day === currentEta) return;
-    const score = familyScore(at(day));
-    const c = cmp(score, best);
-    if (c < 0 || (c === 0 && day > bestEta)) {
-      // A prepone is taken only when strictly safer than the current date.
-      if (day < currentEta && cmp(score, current) >= 0) return;
-      best = score; bestEta = day;
-    }
+  const cur = at(currentEta);
+  const planEndDay = lastFamilyDemandDay(cur);
+  const without = withPiece((a) => ({ ...a, qty_base: 0 }));
+  const earliest = at(input.as_of);
+  const inPlan = (day: string) => planEndDay === null || day <= planEndDay;
+  const riskDays = (r: FamilyResult) => {
+    const keys = new Map<string, { day: string; key: string }>();
+    for (const row of r.rows) if (inPlan(row.day) && row.closing_qty_base < -EPSILON) keys.set(`STOCK|${row.day}`, { day: row.day, key: `STOCK|${row.day}` });
+    for (const u of r.group_unmet) if (inPlan(u.day)) keys.set(`UNMET|${u.group_id}|${u.day}`, { day: u.day, key: `UNMET|${u.group_id}|${u.day}` });
+    for (const x of r.level_risk) if (inPlan(x.day)) keys.set(`${x.level_kind}|${x.level_id}|${x.day}`, { day: x.day, key: `${x.level_kind}|${x.level_id}|${x.day}` });
+    return keys;
   };
-  // Coarse pass every 7 days, then every day within ±7 of the best (each try is a full family run).
-  for (let k = 0; k < all.length; k += 7) consider(all[k]);
-  const centre = all.indexOf(bestEta);
-  for (let k = Math.max(0, centre - 7); k <= Math.min(all.length - 1, centre + 7); k += 1) consider(all[k]);
+  const withoutRisk = riskDays(without);
+  const earlyRisk = riskDays(earliest);
+  const isCritical = (x: { critical_days: number | null; cover_days: number }) => x.critical_days !== null && x.cover_days + 1e-9 < x.critical_days;
+  const prevented = [
+    ...without.rows.filter((row) => inPlan(row.day) && row.closing_qty_base < -EPSILON && !earlyRisk.has(`STOCK|${row.day}`)).map((row) => ({ day: row.day, level: null as null | { level_kind: "OWN" | "GROUP"; level_id: string } })),
+    ...without.group_unmet.filter((u) => inPlan(u.day) && !earlyRisk.has(`UNMET|${u.group_id}|${u.day}`)).map((u) => ({ day: u.day, level: { level_kind: "GROUP" as const, level_id: u.group_id } })),
+    ...without.level_risk.filter((x) => inPlan(x.day) && isCritical(x) && !earlyRisk.has(`${x.level_kind}|${x.level_id}|${x.day}`)).map((x) => ({ day: x.day, level: { level_kind: x.level_kind, level_id: x.level_id } })),
+  ].sort((a, b) => a.day.localeCompare(b.day));
+  const needed = prevented.length > 0;
+  const firstDay = prevented[0]?.day ?? null;
+  let bestEta = currentEta;
+  if (needed && firstDay !== null) {
+    bestEta = addDays(firstDay, -1);
+    if (bestEta < input.as_of) bestEta = input.as_of;
+  }
   let shift = Math.round((Date.parse(`${bestEta}T00:00:00Z`) - Date.parse(`${currentEta}T00:00:00Z`)) / 86_400_000);
-  if (Math.abs(shift) < 3) { shift = 0; bestEta = currentEta; best = current; }
-  const view = (eta: string, score: [number, number, number]): FamilyArrivalScore => ({
-    eta, ...familyDays(at(eta), eta), shortage_days: score[0], days_below_critical: 0, days_below_target: score[1], first_below_target_day: null,
-  });
-  const notNeededInPlan = planEndDay !== null && best[0] === 0 && cmp(familyScore(at(planEndDay)), best) === 0 && cmp(current, best) === 0;
+  if (!needed || Math.abs(shift) < 3) { shift = 0; bestEta = currentEta; }
+  const notNeededInPlan = !needed && planEndDay !== null;
+  const best = bestEta === currentEta ? cur : at(bestEta);
+  const view = (eta: string, r: FamilyResult): FamilyArrivalScore => {
+    const sc = familyScore(r);
+    return { eta, ...familyDays(r, eta), shortage_days: sc[0], days_below_critical: sc[1], days_below_target: sc[2], first_below_target_day: null };
+  };
   const reason = notNeededInPlan
-    ? `Not needed inside the PO21 plan (it ends ${planEndDay}): every level can still be filled whenever this lot lands before then.`
+    ? `Not needed inside the PO21 plan (it ends ${planEndDay}): without this lot no level goes below its Critical before the plan ends.`
     : shift === 0
-      ? "Current date is right: every level can be filled and no later date is safe."
-      : cmp(best, current) < 0
-        ? `Current date leaves ${current[0]} stock-out day(s) and ${current[1]} level top-up(s) the pool cannot fill to Max; this date leaves ${best[0]} and ${best[1]}.`
-        : `Every level is still filled to Max if the lot lands on ${bestEta}; later than that a level cannot be topped up.`;
-  // Owner 2026-10-29: when no ETA can be fixed because the plan has no use after its last day, say why — the days the stock
-  // already covers, and how much of the family stock is left over (excess) when the plan ends, with and without this lot.
+      ? `Current date is right: without this lot a level first goes below its Critical on ${firstDay ?? "—"}.`
+      : shift > 0
+        ? `Can wait: without this lot a level first goes below its Critical on ${firstDay}.`
+        : `Too late: without this lot a level first goes below its Critical on ${firstDay}.`;
+  // Why this piece is needed: the level that first depends on it, in the run without the piece.
+  let binding: NonNullable<FamilyArrivalOptimum>["binding"] = null;
+  const first = prevented[0];
+  const hit = first?.level ? without.level_risk.filter((x) => x.level_kind === first.level!.level_kind && x.level_id === first.level!.level_id && x.day <= first.day && !earlyRisk.has(`${x.level_kind}|${x.level_id}|${x.day}`)).sort((a, b) => a.day.localeCompare(b.day))[0] : undefined;
+  if (first?.level && hit) {
+    const atFirst = without.level_risk.find((x) => x.level_kind === hit.level_kind && x.level_id === hit.level_id && x.day === first.day) ?? hit;
+    const policy = without.level_policies.find((l) => l.level_kind === hit.level_kind && l.level_id === hit.level_id);
+    const prior = [...without.level_events].reverse().find((e) => e.level_kind === hit.level_kind && e.level_id === hit.level_id && (e.kind === "TOP_UP" || e.kind === "WAITING") && e.day <= hit.day);
+    binding = {
+      day: first.day, min_day: hit.day, level_kind: hit.level_kind, level_id: hit.level_id, cover_days: atFirst.cover_days, min_days: hit.min_days, critical_days: hit.critical_days,
+      desired_days: policy?.desired_days ?? null,
+      topup: prior ? { day: prior.day, wanted: prior.wanted, shortfall: prior.shortfall, pool_before: prior.pool_before } : null,
+    };
+  }
+  // When no ETA can be fixed because the plan has no use after its last day, say why — the days the stock already covers, and how much of
+  // the family stock is left over (excess) when the plan ends, with and without this lot.
   let planCover: NonNullable<FamilyArrivalOptimum>["plan_cover"] = null;
   if (notNeededInPlan && planEndDay !== null) {
     const stockAt = (r: FamilyResult) => r.rows.filter((x) => x.day === planEndDay).reduce((sum, x) => sum + x.closing_qty_base, 0);
-    const without = planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? { ...a, qty_base: 0 } : a)) });
-    const withoutOk = familyScore(without)[0] === 0;
-    const current0 = at(currentEta);
     const tail = dayList(addDays(planEndDay, -29), planEndDay);
-    const use = current0.rows.filter((x) => tail.includes(x.day)).reduce((sum, x) => sum + x.demand_qty_base, 0);
+    const use = cur.rows.filter((x) => tail.includes(x.day)).reduce((sum, x) => sum + x.demand_qty_base, 0);
     planCover = {
       plan_days: dayList(input.as_of, planEndDay).length,
-      stock_at_plan_end_with: roundQty(stockAt(current0)),
-      stock_at_plan_end_without: withoutOk ? roundQty(stockAt(without)) : null,
+      stock_at_plan_end_with: roundQty(stockAt(cur)),
+      stock_at_plan_end_without: withoutRisk.size === 0 ? roundQty(stockAt(without)) : null,
       avg_daily_use: roundQty(use / tail.length),
     };
   }
-  let binding: NonNullable<FamilyArrivalOptimum>["binding"] = null;
-  if (!notNeededInPlan) {
-    const unsafeEta = shift < 0 ? currentEta : addDays(bestEta, 1);
-    const unsafe = at(unsafeEta);
-    const hit = unsafe.level_events.find((e) => (e.kind === "TOP_UP" || e.kind === "WAITING") && e.shortfall > 1 && e.level_id !== null && (planEndDay === null || e.day <= planEndDay));
-    if (hit && hit.level_id !== null && hit.level_kind !== "POOL") {
-      const policy = unsafe.level_policies.find((l) => l.level_kind === hit.level_kind && l.level_id === hit.level_id);
-      binding = { day: hit.day, level_kind: hit.level_kind, level_id: hit.level_id, wanted: hit.wanted, shortfall: hit.shortfall, pool_before: hit.pool_before, target_days: policy?.target_days ?? null, desired_days: policy?.desired_days ?? null };
-    }
-  }
-  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding };
+  return { current: view(currentEta, cur), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding };
 }

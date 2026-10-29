@@ -993,6 +993,10 @@ export async function computePlanning(p: PlanningParams) {
           .filter((r) => r.route === facts.route && (!facts.vendor_id || r.vendor_id === facts.vendor_id) && r.route_days !== undefined)
           .reduce<number | null>((max, r) => (max === null ? (r.route_days ?? null) : Math.max(max, r.route_days ?? 0)), null);
         const currentEta = event.original_date !== undefined ? event.original_date : event.date;
+        // The vendor / route master may hold no route time (e.g. a local vendor on a high-sea-sale PO): then the piece's own ETD-to-plant span is the route time.
+        const routeDaysEff = routeDays !== null ? routeDays
+          : facts.etd && currentEta && /^\d{4}-\d{2}-\d{2}$/.test(String(facts.etd).slice(0, 10)) && /^\d{4}-\d{2}-\d{2}$/.test(String(currentEta))
+            ? Math.round((Date.parse(`${currentEta}T00:00:00Z`) - Date.parse(`${String(facts.etd).slice(0, 10)}T00:00:00Z`)) / 86_400_000) : null;
         // Import only: port-to-plant days of the piece's own route; the best plant date minus these is the date it must reach the port.
         const inlandDays = facts.route === "IMPORT"
           ? (row.lead_time?.configured_routes ?? [])
@@ -1000,7 +1004,7 @@ export async function computePlanning(p: PlanningParams) {
             .reduce<number | null>((max, r) => (max === null ? (r.inland_days ?? null) : Math.max(max, r.inland_days ?? 0)), null)
           : null;
         const bestPortEta = best && inlandDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - inlandDays * 86_400_000).toISOString().slice(0, 10) : null;
-        const bestEtd = best && routeDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - routeDays * 86_400_000).toISOString().slice(0, 10) : null;
+        const bestEtd = best && routeDaysEff !== null && routeDaysEff >= 0 ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - routeDaysEff * 86_400_000).toISOString().slice(0, 10) : null;
         return {
           best_port_eta: bestPortEta,
           best_etd: bestEtd,
@@ -1012,7 +1016,7 @@ export async function computePlanning(p: PlanningParams) {
           rescheduled_eta: event.original_date !== undefined ? event.date : null,
           optimum: best,
           window: best && best.shift_days !== 0 && !best.not_needed_in_plan
-            ? rescheduleVerdict({ today: p.today, route: facts.route, routeDays, currentEta, proposedEta: best.best.eta, currentEtd: facts.etd, windows: rescheduleContext.windows })
+            ? rescheduleVerdict({ today: p.today, route: facts.route, routeDays: routeDaysEff, currentEta, proposedEta: best.best.eta, currentEtd: facts.etd, windows: rescheduleContext.windows })
             : null,
         };
       });

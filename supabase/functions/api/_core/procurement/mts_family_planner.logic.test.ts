@@ -962,7 +962,7 @@ Deno.test("owner 2026-10-28: a group's Max is never below its own Min", () => {
 });
 
 // Owner 2026-10-29: the PDF "How PO22 plans RM purchases" (CMP003 MHEC family). Best date = the LATEST plant date at which every level still fills to Max.
-Deno.test("PDF alignment: daily use comes from the level's own reserve, the pool moves only on receipts and top-ups; only the 12 Nov TS lot is time-critical", () => {
+Deno.test("PDF alignment: daily use comes from the level's own reserve, the pool moves only on receipts and top-ups; levels may sit below Min but not below Critical", () => {
   const AS_OF = "2026-10-28";
   const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
   const days: string[] = []; for (let d = AS_OF; d <= "2027-01-31"; d = add(d, 1)) days.push(d);
@@ -982,8 +982,10 @@ Deno.test("PDF alignment: daily use comes from the level's own reserve, the pool
   assert(topUps.includes("2026-11-27") && topUps.includes("2026-11-28"), `top-up days ${topUps.slice(0, 6).join(",")}`);
   const firstB = r.level_events.find((e) => e.kind === "TOP_UP" && e.level_id === "B")!;
   assert(firstB.day === "2026-11-28" && firstB.pool_before > 40_000, `Group B top-up on ${firstB.day}, pool before ${firstB.pool_before}`);
+  // PDF rule: a level may sit below its Min but must stay above its Critical. The 12 Nov TS lot may wait (levels run down to Critical first);
+  // the later lots are not needed inside the plan (no level goes below Critical without them); the Combizell lot is right where it is.
   const ts1 = optimizeFamilyArrival(input, "TS1")!;
-  assert(!ts1.not_needed_in_plan && ts1.best.eta >= "2026-11-27" && ts1.best.eta <= "2026-11-30", `TS1 best ${ts1.best.eta}`);
+  assert(!ts1.not_needed_in_plan && ts1.shift_days > 0 && ts1.binding !== null && ts1.binding.min_day >= "2026-11-27", `TS1 best ${ts1.best.eta} ${JSON.stringify(ts1.binding)}`);
   for (const k of ["G2", "TS2", "TS3"]) {
     const o = optimizeFamilyArrival(input, k)!;
     assert(o.not_needed_in_plan && o.plan_cover !== null && o.plan_cover.stock_at_plan_end_with > 0, `${k} should not be needed inside the plan`);

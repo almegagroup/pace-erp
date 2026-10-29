@@ -638,3 +638,21 @@ the pool holds, the shortfall; for a lot not needed inside the plan: the cover d
 The "Talk to the vendor" ETD-window message (§10) is appended when it applies.
 
 **Not verified:** a full run of the handler on PROD data (the planner was run on the PDF example and a CMP005 shape built from PROD numbers).
+
+## 33. Real PROD run and what it changed (2026-10-29)
+
+The real `getMtsRollingPlanHandler` was run locally against a read-only PROD snapshot (CMP003, MHEC family scope; 44 tables, ~3,200 rows,
+md5-verified; the PROD plan had been extended to March 2027 that same morning). Day-one reserves matched the PDF (Exclusive 7,159 /
+Group A 2,714 / Group B 84,326 vs the PDF's 7,211 / 2,718 / 84,356; top-ups 28-29 Nov vs the PDF's 27-28 Nov). It also found three real defects:
+
+1. **Excess column wrong on day one (195 KG instead of ~19,859 KG).** One planned part's snapshot hid the family's pool on the same day; the pool is now
+   the sum of each member's own latest pool quantity. (The "195.3" in the 28 Oct Excel was this.)
+2. **Lot advice was driven by "can the pool fill every level to Max"**. With a deficit later in the plan this produced "prepone 25-61 days" to
+   a date whose ETD was already in the past. The PDF's own rule is that a level may sit below Min but must stay above Critical, so a lot is now judged
+   one at a time: run without it and with it landing today; the first day a level would go below Critical (or stock-out / unserved group demand) that the lot
+   prevents is D, and the lot must land by D - 1. No such day inside the plan: no date, only the reason (§31).
+3. **ETD blank for a local vendor on a high-sea-sale PO** (no route time in the master): the piece's own ETD-to-plant span is used. This was also why
+   CSN 3000000329 (ETD 1 Nov, 3 days away) showed a plain "postpone" instead of "Talk to the vendor".
+
+Limits: only the MHEC family of CMP003 was run on PROD data; CMP005 / CMP011 and the RDP family were not; lots are judged one at a time
+(two interchangeable lots can each look "not needed" while at least one is).

@@ -20,10 +20,10 @@ Deno.test("not needed inside the plan says why: cover days and the excess left",
 });
 
 import { bestDateWhy } from "./mts_best_date_text.logic.ts";
-Deno.test("why: later date names the group that falls to Min and what the pool lacks", () => {
+Deno.test("why: the level, its Min / Max, the pool at its top-up, and the day it falls below Critical", () => {
   const t = bestDateWhy({
-    current_eta: "2026-11-12", best_eta: "2026-11-28", shift_days: 16, uom: "KG", vendor_message: null,
-    binding: { day: "2026-11-29", level_label: "MHEC", wanted: 45339, shortfall: 22800, pool_before: 23300, target_days: 30, desired_days: 60 },
+    current_eta: "2026-11-12", best_eta: "2026-12-20", shift_days: 38, uom: "KG", vendor_message: null,
+    binding: { day: "2026-12-21", min_day: "2026-11-29", level_label: "MHEC", cover_days: 14.6, min_days: 30, critical_days: 15, desired_days: 60, topup: { day: "2026-11-29", wanted: 45339, shortfall: 22800, pool_before: 23300 } },
   });
-  assertEquals(t, "Can wait until 2026-11-28 (16 d later than now). One day later, on 2026-11-29, MHEC falls to its Min (30 d) and asks the pool to refill it to Max (60 d): needs 45,339 KG, the pool holds 23,300 KG, short by 22,800 KG.");
+  assertEquals(t, "Can wait until 2026-12-20 (38 d later than now): without it MHEC (Min 30 d / Max 60 d) is below its Min from 2026-11-29 (at its 2026-11-29 top-up it asked the pool for 45,339 KG, the pool held 23,300 KG, short by 22,800 KG) and falls below its Critical (15 d) on 2026-12-21, down to 14 d of cover.");
 });

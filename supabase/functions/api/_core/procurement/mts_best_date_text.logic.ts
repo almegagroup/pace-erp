@@ -39,22 +39,28 @@ export type BestDateWhyInput = {
   current_eta: string | null;
   best_eta: string;
   shift_days: number;
-  binding: { day: string; level_label: string; wanted: number; shortfall: number; pool_before: number; target_days: number | null; desired_days: number | null } | null;
+  binding: {
+    day: string; min_day: string; level_label: string; cover_days: number; min_days: number; critical_days: number | null; desired_days: number | null;
+    topup: { day: string; wanted: number; shortfall: number; pool_before: number } | null;
+  } | null;
   uom: string;
   /** The ETD window verdict (docs §10), when the vendor can no longer move the shipment. */
   vendor_message: string | null;
 };
 
-/** Plain reason for the advised date: which group falls to its Min on which day, what it asks for up to Max, what the pool holds. */
+/**
+ * Plain reason for the advised date, in the PDF's terms: without this lot the level reaches its Min and the pool cannot refill it
+ * (what it asked for, what the pool held), the level keeps running down, and falls below its Critical on a day — the lot must land before.
+ */
 export function bestDateWhy(i: BestDateWhyInput): string {
   const b = i.binding;
   const level = b
-    ? `${b.level_label} falls to its Min${b.target_days !== null ? ` (${b.target_days} d)` : ""} and asks the pool to refill it to Max${b.desired_days !== null ? ` (${b.desired_days} d)` : ""}: needs ${fmt(b.wanted)} ${i.uom}, the pool holds ${fmt(b.pool_before)} ${i.uom}, short by ${fmt(b.shortfall)} ${i.uom}`
-    : "";
+    ? `without it ${b.level_label} (Min ${b.min_days} d${b.desired_days !== null ? ` / Max ${b.desired_days} d` : ""}) is below its Min from ${b.min_day}${b.topup ? ` (at its ${b.topup.day} top-up it asked the pool for ${fmt(b.topup.wanted)} ${i.uom}, the pool held ${fmt(b.topup.pool_before)} ${i.uom}, short by ${fmt(b.topup.shortfall)} ${i.uom})` : ""} and falls below its Critical${b.critical_days !== null ? ` (${b.critical_days} d)` : ""} on ${b.day}, down to ${Math.floor(b.cover_days)} d of cover`
+    : "without it stock runs out or a group's demand is not served";
   const lead = i.shift_days < 0
-    ? `Now ${i.current_eta ?? "?"} is too late: on ${b?.day ?? "a later day"} ${level || "a level cannot be refilled"}. It must land by ${i.best_eta} (${-i.shift_days} d earlier).`
+    ? `Now ${i.current_eta ?? "?"} is too late: ${level}. It must land by ${i.best_eta} (${-i.shift_days} d earlier).`
     : i.shift_days > 0
-      ? `Can wait until ${i.best_eta} (${i.shift_days} d later than now). One day later, on ${b?.day ?? "that day"}, ${level || "a level cannot be refilled"}.`
-      : `${i.current_eta ?? i.best_eta} is the latest safe date. One day later, on ${b?.day ?? "that day"}, ${level || "a level cannot be refilled"}.`;
+      ? `Can wait until ${i.best_eta} (${i.shift_days} d later than now): ${level}.`
+      : `${i.current_eta ?? i.best_eta} is the latest safe date: ${level}.`;
   return i.vendor_message ? `${lead} ${i.vendor_message}` : lead;
 }

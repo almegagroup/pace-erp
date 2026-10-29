@@ -161,7 +161,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom) };
       const w = key ? windowByKey.get(key) : null;
       const q = (n: number) => inUnit(unit, n) ?? 0;
-      const binding = a.binding ? { ...a.binding, wanted: q(a.binding.wanted), shortfall: q(a.binding.shortfall), pool_before: q(a.binding.pool_before) } : null;
+      const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
       return {
         etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
         why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null }),
@@ -187,13 +187,28 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const fu = familyUnit(memberIds);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
       // Owner 2026-10-28: what is left in the pool (held for no level) after each day's receipts — the latest Material x Level snapshot on or before the day.
-      const poolSnaps = (projection.level_matrix ?? []).filter((snap) => Object.keys(snap.pool).some((id) => memberSet.has(id)))
-        .map((snap) => ({ day: snap.day, qty: Object.entries(snap.pool).reduce((sum, [id, q]) => sum + (memberSet.has(id) ? Number(q) : 0), 0) }))
-        .sort((x, y) => x.day.localeCompare(y.day));
+      // A snapshot belongs to one planned part (a family, or a lone item), so several snapshots can share a day: take each member's own
+      // latest pool quantity and add them up (the last snapshot of the day alone would show only one part, e.g. 195 KG instead of the pool).
+      const poolByMember = new Map<string, Array<{ day: string; qty: number }>>();
+      for (const snap of projection.level_matrix ?? []) {
+        for (const [id, q] of Object.entries(snap.pool)) {
+          if (!memberSet.has(id)) continue;
+          const list = poolByMember.get(id) ?? [];
+          list.push({ day: snap.day, qty: Number(q) });
+          poolByMember.set(id, list);
+        }
+      }
+      for (const list of poolByMember.values()) list.sort((x, y) => x.day.localeCompare(y.day));
       const excessAt = (dayIso: string) => {
-        let found: number | null = null;
-        for (const snap of poolSnaps) { if (snap.day > dayIso) break; found = snap.qty; }
-        return found === null ? null : inUnit(fu, found);
+        if (poolByMember.size === 0) return null;
+        let total = 0;
+        let any = false;
+        for (const list of poolByMember.values()) {
+          let found: number | null = null;
+          for (const snap of list) { if (snap.day > dayIso) break; found = snap.qty; }
+          if (found !== null) { total += found; any = true; }
+        }
+        return any ? inUnit(fu, total) : null;
       };
 
       // Left side: today + every day something arrives or you fixed a quantity.
