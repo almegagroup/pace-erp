@@ -166,6 +166,8 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
   need_kind: "OWN" | "GROUP";
   /** Owner 2026-10-28: the cover (days) that triggered this lot — the group's free stock for a group need, the item's own use for an own need — and the Min it was compared with (the item's own Target for a group need, D10). */
   trigger_cover_days?: number | null;
+  /** Owner 2026-10-29: the group whose free stock triggered this lot (null for an own-use trigger). */
+  trigger_group_id?: string | null;
   trigger_min_days?: number | null;
 };
 
@@ -1388,7 +1390,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         vendor_id: need.option?.option.vendor_id ?? null, max_cover_days: roundQty(window),
         bridge: need.option?.bridge ?? false, cheapest_vendor_id: need.option?.cheapest ?? null,
         covers, need_kind: needsForLot.some((candidate) => candidate.kind === "GROUP") ? "GROUP" : "OWN",
-        trigger_cover_days: triggerCover, trigger_min_days: triggerMin,
+        trigger_cover_days: triggerCover, trigger_min_days: triggerMin, trigger_group_id: groupTrigger ? need.pool!.group_id : null,
       });
       engineLots.push({
         material_id: id,
