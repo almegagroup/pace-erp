@@ -40,6 +40,7 @@ Deno.test("domestic uses the 7-day window and an ETD already in the past can nev
   assert(ok.state === "RESCHEDULE", JSON.stringify(ok));
   const past = rescheduleVerdict({ today, route: "DOMESTIC", routeDays: 5, currentEta: "2026-11-01", proposedEta: "2026-11-10", currentEtd: "2026-10-24", windows: W });
   assert(past.state === "TALK_TO_VENDOR" && (past.days_to_current_etd ?? 0) < 0, JSON.stringify(past));
+  assert(past.message.includes("passed") && past.message.includes("no shipment is recorded") && !/postpone|prepone/.test(past.message), past.message);
 });
 
 Deno.test("no shift, unknown route or missing route days are said plainly", () => {

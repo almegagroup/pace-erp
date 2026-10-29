@@ -145,11 +145,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const windowByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.window]));
     const portByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.best_port_eta]));
+    /** Days the recorded plant date is already past while nothing is shipped (owner 2026-10-29). */
+    const overdueOf = (eta: string | null): number | null => (eta && /^\d{4}-\d{2}-\d{2}$/.test(eta) && eta < calendar.asOf
+      ? Math.round((Date.parse(`${calendar.asOf}T00:00:00Z`) - Date.parse(`${eta}T00:00:00Z`)) / 86_400_000) : null);
     const bestText = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number; uom_code?: string } | null = null, uom = "KG"): string => {
       const o = key ? optimumByKey.get(key) : null;
-      if (!o || (o.shift_days === 0 && !o.not_needed_in_plan)) return o ? bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: 0, not_needed_in_plan: false, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: false }) : "";
+      if (!o || (o.shift_days === 0 && !o.not_needed_in_plan)) return o ? bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: 0, not_needed_in_plan: false, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: false, overdue_days: overdueOf(currentEta) }) : "";
       const w = key ? windowByKey.get(key) : null;
-      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR",
+      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR", overdue_days: overdueOf(currentEta),
         cover: o.plan_cover ? { plan_days: o.plan_cover.plan_days, left_with: inUnit(unit, o.plan_cover.stock_at_plan_end_with) ?? 0, left_without: o.plan_cover.stock_at_plan_end_without === null ? null : inUnit(unit, o.plan_cover.stock_at_plan_end_without), avg_daily_use: inUnit(unit, o.plan_cover.avg_daily_use) ?? 0, uom } : null });
     };
     const arrivalByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a]));
@@ -158,14 +161,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const o = key ? optimumByKey.get(key) : null;
       const a = key ? arrivalByKey.get(key) : null;
       if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "" };
-      const absent = ifAbsentText(a.if_absent ?? [], currentEta);
+      const absent = ifAbsentText(a.if_absent ?? [], currentEta, overdueOf(currentEta));
       if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent };
       const w = key ? windowByKey.get(key) : null;
       const q = (n: number) => inUnit(unit, n) ?? 0;
       const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
       return {
         absent, etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
-        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null }),
+        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta) }),
       };
     };
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
