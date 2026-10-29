@@ -91,6 +91,8 @@ export type FamilyPlannerInput = {
   group_demand: readonly FamilyGroupDemand[];
   /** Effective-dated family group guardrails; missing group Target defaults to 30 days. */
   group_coverage_policies?: readonly GroupCoveragePolicyVersion[];
+  /** Narrow levels keep their next refill when a broad level tops up (default on). Only a test switches it off, to prove the rule. */
+  hold_back?: boolean;
   confirmed_arrivals: readonly FamilyArrival[];
   /** Dated-inbound risks retained for explanation; they never become simulated stock. */
   arrival_risks?: readonly OptimizerArrivalFlag[];
@@ -783,7 +785,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       // level (an Exclusive material, or a group listed before this one) its headroom up to its own Max is kept in the pool: for an
       // Exclusive level on its material, for a group on the member that serves the most levels (the shared material is used last).
       const holdBackFor = (p: number, m: number) => {
-        if (i === 0 || Deno.env.get("NO_HOLD_BACK")) return 0;
+        if (i === 0 || input.hold_back === false) return 0;
         let held = 0;
         const own0 = memberDesiredMax[m][i];
         if (own0 !== null && own[m].some((qty) => qty > EPSILON)) held += Math.max(0, useAhead(own[m], i, own0) - ownReserve[m]);

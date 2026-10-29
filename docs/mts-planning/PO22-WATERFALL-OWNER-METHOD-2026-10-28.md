@@ -689,3 +689,10 @@ Each order's date is first judged alone. The family's orders are then moved toge
 Critical, the order that moves the most is pulled back to its current date and the run is repeated until no extra level-day falls below Critical. The advised dates are therefore
 jointly safe, and the Why column says "Alone it could wait until X; together with the other orders the safe date is Y". An order that is "not needed" alone but needed together keeps its current date.
 PROD, three companies (CMP003 / CMP005 / CMP011, MHEC and RDP families): before this, moving all orders at once added 60 level-days below Critical (CMP005 RDP) and 29 (CMP011 MHEC); after it no family adds any.
+
+## 37. Live bug after #733 deployed: "Deno is not defined" (2026-10-29)
+
+The hold-back switch used `Deno.env.get("NO_HOLD_BACK")` inside the planner. It worked under Deno (tests, local PROD-snapshot runs) but Render runs the API on **Node**, so the
+rolling plan and the planning page both returned 500 (`MTS_ROLLING_PLAN_FAILED` / `MTS_PLANNING_FAILED`, "Deno is not defined"; Excel said "not included — A system error occurred").
+Fix: the switch is now the input field `hold_back` (default on; only a test sets it to false). New CI guard `scripts/no-deno-in-procurement-guard.mjs` fails any bare `Deno.` in
+production procurement files. Lesson: local runs under Deno cannot show Node-only crashes; anything that touches a runtime global must be guarded by a script.
