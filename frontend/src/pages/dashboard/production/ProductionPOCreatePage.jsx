@@ -2471,7 +2471,22 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
     setOverrides((current) => ({ ...current, [group.stroke_line_id]: rows }));
   }
 
-  const shortGroups = groups.filter((g) => g.short);
+  // The server's group-level `short` is only true when the formulation AND every
+  // alternate are individually short, so it never blocks an operator who picks
+  // one specific material that cannot cover the Standard Qty (found live
+  // 2026-10-29, prod CMP005: Page 4 passed, create then failed
+  // PROD_MTS_INSUFFICIENT_STOCK). Also check what is actually going to be issued.
+  function selectionIsShort(g) {
+    if (g.auto_derive_applicable) {
+      return g.rows.some((r) => Number(r.actual_qty) > EPSILON_FRONTEND
+        && Number(r.actual_qty) > Number(r.available_qty ?? 0) + EPSILON_FRONTEND);
+    }
+    const pick = g.manual_material_selection_required === false ? g.stroke_line_material_id : manualPicks[g.stroke_line_id];
+    if (!pick) return false;
+    const row = g.rows.find((r) => r.actual_material_id === pick);
+    return row ? Number(row.available_qty ?? 0) < Number(g.standard_qty) - EPSILON_FRONTEND : false;
+  }
+  const shortGroups = groups.filter((g) => g.short || selectionIsShort(g));
   const manualPickMissing = groups.some((g) => !g.auto_derive_applicable
     && g.manual_material_selection_required !== false
     && !manualPicks[g.stroke_line_id]
@@ -2605,7 +2620,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
 
       {shortGroups.length > 0 && (
         <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          Insufficient stock (formulation + alternates combined) for: {shortGroups.map((g) => materialLabel(g.stroke_line_material_id)).join(", ")}.
+          Insufficient stock for the selected material(s) of: {shortGroups.map((g) => materialLabel(g.stroke_line_material_id)).join(", ")}. Pick another material or arrange stock.
         </div>
       )}
 
@@ -2655,7 +2670,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
                   }));
                   const isFirstRow = rowIndex === 0;
                   return (
-                    <tr key={rowKey} className={group.short ? "bg-rose-50" : "border-b border-slate-100"}>
+                    <tr key={rowKey} className={shortGroups.includes(group) ? "bg-rose-50" : "border-b border-slate-100"}>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? groupIndex + 1 : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">RM</td>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? materialLabel(group.stroke_line_material_id) : ""}</td>
@@ -2698,7 +2713,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
                       <td className="border-b border-slate-100 px-3 py-2">Yes</td>
                       <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(displayedActualQty, "0.###")}</td>
                       <td className="border-b border-slate-100 px-3 py-2">
-                        {group.short ? <span className="text-rose-600">Short</span> : ""}
+                        {shortGroups.includes(group) ? <span className="text-rose-600">Short</span> : ""}
                         {group.auto_derive_applicable && isEditable && rows.length > 1 && (
                           <button
                             type="button"
